@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "streamlib"
+version = "0.1.0"
+description = "A composable streaming library for Python with network-transparent operations"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0",
+    "skia-python>=87.5",
+    "aiohttp>=3.9.0",
+    "gtts>=2.5.4",
+    "opencv-python-headless>=4.11.0.86",
+    "pillow>=11.3.0",
+    "av>=10.0.0",  # PyAV for streamlib video I/O without GStreamer
+]
+
+[project.optional-dependencies]
+audio = [
+    "gtts>=2.5.0",
+]
+ai = [
+    "opencv-python>=4.8.0",
+    "mediapipe>=0.10.0",
+]
+ml = [
+    "torch>=2.0.0",  # For ML layer support in streamlib
+    "torchvision>=0.15.0",
+]
+network = [
+    "aiortc>=1.5.0",  # For WebRTC network sources/sinks in streamlib
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/streamlib"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]  # Line too long
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # Allow for now during development
