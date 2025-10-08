@@ -53,6 +53,27 @@ class DrawingLayer(Layer):
         ```
     """
 
+    # Shared GPU context for all drawing layers
+    _gpu_context = None
+    _gpu_context_initialized = False
+
+    @classmethod
+    def _get_gpu_context(cls):
+        """Get or create shared GPU context."""
+        if not cls._gpu_context_initialized:
+            try:
+                # Try OpenGL first (more compatible than Metal via Python bindings)
+                cls._gpu_context = skia.GrDirectContext.MakeGL()
+                if cls._gpu_context:
+                    print(f"[DrawingLayer] GPU context created successfully (OpenGL)")
+                else:
+                    print(f"[DrawingLayer] GPU context creation returned None, using CPU")
+            except Exception as e:
+                print(f"[DrawingLayer] GPU context error: {e}, using CPU")
+                cls._gpu_context = None
+            cls._gpu_context_initialized = True
+        return cls._gpu_context
+
     def __init__(
         self,
         name: str,
@@ -61,7 +82,8 @@ class DrawingLayer(Layer):
         visible: bool = True,
         opacity: float = 1.0,
         width: int = 1920,
-        height: int = 1080
+        height: int = 1080,
+        use_gpu: bool = False  # GPU not available in Python bindings, CPU is faster
     ):
         """
         Initialize drawing layer.
@@ -74,6 +96,7 @@ class DrawingLayer(Layer):
             opacity: Layer opacity (0.0 to 1.0)
             width: Layer width
             height: Layer height
+            use_gpu: Whether to use GPU acceleration (default: False, GPU->CPU transfer overhead makes CPU faster)
         """
         super().__init__(name, z_index, visible, opacity)
         self.width = width
@@ -81,6 +104,7 @@ class DrawingLayer(Layer):
         self.draw_function = None
         self.context = DrawingContext()
         self.code_namespace = {}
+        self.use_gpu = use_gpu
         self.set_draw_code(draw_code)
 
     def set_draw_code(self, code: str) -> Dict[str, Any]:
@@ -166,7 +190,7 @@ class DrawingLayer(Layer):
             for key, value in self.context.custom.items():
                 setattr(self.context, key, value)
 
-            # Create Skia surface
+            # Create Skia surface (CPU is faster than GPU due to transfer overhead)
             surface = skia.Surface(width, height)
             canvas = surface.getCanvas()
 

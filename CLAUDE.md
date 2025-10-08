@@ -2,7 +2,7 @@
 
 ## Project Vision
 
-streamlib is a **composable streaming library for Python** with network-transparent operations. It's designed to provide Unix-pipe-style primitives for video streaming that AI agents (and humans) can orchestrate.
+streamlib is a **composable streaming library for Python** based on the **Actor Pattern**. It provides Unix-pipe-style primitives for realtime streams (video, audio, events, data) that AI agents can orchestrate.
 
 ## Why This Exists
 
@@ -12,194 +12,262 @@ Most streaming/visual tools are **large, stateful, monolithic applications** (Un
 
 ### The Solution
 
-**Stateless visual primitives that can be orchestrated** - like Unix tools but for video/image processing:
+**Independent actors that communicate via messages** - like Unix tools but for realtime streams:
 
 ```bash
-# Unix philosophy (works great):
+# Unix philosophy (text):
 cat file.txt | grep "error" | sed 's/ERROR/WARNING/' | awk '{print $1}'
 
-# Visual operations (what we're building):
-WebcamSource() → DrawingLayer(code) → HLSSink()
+# streamlib (realtime streams):
+VideoGeneratorActor() >> CompositorActor() >> DisplayActor()
+AudioGeneratorActor() >> MixerActor() >> SpeakerActor()
+DisplayActor().outputs['keyboard'] >> KeyHandlerActor()
 ```
 
 ### Core Philosophy
 
-1. **Intention over implementation**: Tools express *what* you want, not *how* to do it
-2. **Composable primitives**: Small, single-purpose components that chain together
-3. **Network-transparent**: Operations work seamlessly locally or remotely
-4. **Distributed**: Chain operations across machines (phone → edge → cloud)
-5. **Zero-dependency**: No GStreamer installation required (uses PyAV)
-6. **Tool-first, not product**: Like Claude Code - provide tools, let use cases emerge
+1. **Actor-based**: Each component is an independent actor processing messages
+2. **Message-passing only**: No shared state, communication via mailboxes
+3. **Composable primitives**: Small, single-purpose actors that connect together
+4. **Network-transparent**: Operations work seamlessly locally or remotely
+5. **Distributed**: Chain operations across machines (phone → edge → cloud)
+6. **Zero-dependency core**: No GStreamer required (uses PyAV for codecs)
+7. **Tool-first**: Provide tools, let use cases emerge
+8. **AI-orchestratable**: Agents can dynamically create and connect actors
 
-## Key Design Insight
+## Key Design Insights
 
-> "You don't need to invent AI-specific tools for most domains. The tools already exist. You just need to make them accessible to something that can reason about orchestrating them."
+### Actor Pattern
 
-We're not building "yet another streaming platform." We're building **composable visual primitives that AI can orchestrate**.
+> "The stream (clock) always flows, whether your boat (actor) participates or not."
 
-## Architecture Inspiration
+**Actors are like boats in a river:**
+- Stream = Always flowing (clock ticks continuously)
+- Boat = Actor (drops in, floats along, processes messages)
+- Bathtub = Isolated actor (creates own clock when not connected)
+- Upstream/Downstream = Message flow (actors affect downstream, unaware of upstream)
 
-### From the Conversation
+### Emergent Capabilities
 
-**Similar to Unix Tools**: `grep` doesn't maintain state. It takes input, produces output, done. Claude manages the context and chains them together.
+> "You don't need to invent AI-specific tools. The tools already exist. You just need to make them accessible to something that can reason about orchestrating them."
 
-**Visual tools should work the same way**:
-- `render-object --position 2,0,3` → returns image
-- `measure-depth --image input.jpg` → returns depth map
-- `check-collision --objects scene.json` → returns boolean
+We're not building "yet another streaming platform." We're building **composable primitives that AI can orchestrate**.
 
-Each tool: stateless, single-purpose, fast. Claude maintains the "scene" as data in context, calls these tools as needed.
+> "Anthropic didn't build Claude Code thinking 'users will debug React.' They gave tools (read, write, bash, grep) and use cases emerged."
 
-### Why Not Just Use Existing Tools?
+Same approach here: give tools for stream processing, let use cases emerge.
 
-**Existing tools** (OpenCV, GStreamer, etc.) provide the underlying capabilities, but:
-- Require writing code to use them
-- Not designed for composition
-- Not AI-agent friendly
+### Unix Philosophy Applied
 
-**streamlib** wraps these capabilities in a composable interface:
-- Simple API that AI can reason about
-- Chain-able operations
-- Network-transparent for distributed processing
+**Similar to Unix Tools**: `grep` doesn't maintain state. It takes input, produces output, done.
 
-## What We've Built (Phase 1 Complete)
+**streamlib actors work the same way:**
+- Independent, continuously running
+- Read from inputs (mailboxes)
+- Process internally
+- Write to outputs (send messages)
+- Don't know or care what's upstream/downstream
 
-### Core Infrastructure ✅
+## Architecture
 
-- **Base classes**: StreamSource, StreamSink, Layer, Compositor, TimestampedFrame
-- **Timing**: Frame timing, PTP client stub, multi-stream synchronization
-- **Plugin system**: Decorator-based registration for extensibility
-- **Drawing layers**: Skia-based drawing with Python code execution
-- **Compositor**: Zero-copy alpha blending with numpy
-- **Tests**: 9/9 passing, all core functionality verified
+**Actor Pattern** - See `docs/architecture.md` for complete details.
 
-### What Makes It Different
+Key principles:
+1. **Actors run continuously** - Created and immediately processing (no start/stop)
+2. **Message-based communication** - No shared state, only async messages
+3. **Mailbox processing** - Each input is a queue, messages processed sequentially
+4. **Encapsulated state** - Private to each actor
+5. **Concurrent execution** - All actors run independently
 
-1. **Network-Transparent by Design**: NetworkSource/NetworkSink (Phase 4) will enable:
-   - Phone → Edge → Cloud → Display chains
-   - Distributed processing across machines
-   - Mesh-capable parallel processing
+### Core Abstractions
 
-2. **Zero-Copy Pipeline**: NumPy arrays throughout
-   - Efficient ML integration
-   - Direct tensor conversions
-   - Minimal memory overhead
+```python
+# Actor - base class for all components
+class Actor(ABC):
+    inputs: Dict[str, StreamInput]   # Mailboxes (receive messages)
+    outputs: Dict[str, StreamOutput] # Send messages
+    clock: Clock                     # Time synchronization
 
-3. **Composable**: Like Unix pipes
-   - Each component does one thing well
-   - Chain components together
-   - Run on any machine
+    async def process(self, tick: TimedTick):
+        """Override: process one tick"""
+        pass
 
-## Development Principles
+# Message types
+VideoFrame, AudioBuffer, KeyEvent, MouseEvent, DataMessage
 
-### From the Conversation
+# Connection (pipe operator)
+upstream.outputs['video'] >> downstream.inputs['video']
+```
 
-1. **Build then optimize**: Don't imagine performance problems, find them through testing
-2. **Start simple**: Begin with basic primitives, add complexity as needed
-3. **Visual inspection**: Save frames to files, verify visually
-4. **Iterate rapidly**: Test each change quickly
+### Automatic Behavior
 
-### Testing Philosophy
+**Actors auto-start when created:**
+```python
+# Wrong - old pattern
+actor = SomeActor()
+await actor.start()  # ❌ No start()
+await actor.run()    # ❌ No run()
+await actor.stop()   # ❌ No stop()
 
-- **Fast feedback loops**: Tests run in < 1 second
-- **Visual verification**: Save PNGs to verify output
-- **Progressive validation**: Test each component in isolation first
-- **Integration tests**: Verify components work together
+# Right - actor pattern
+actor = SomeActor()  # ✅ Created and immediately processing
+```
 
-## Next Steps (Current Phase)
+**Clock syncs automatically:**
+```python
+# Isolated actor (bathtub mode)
+actor = VideoGeneratorActor()  # Creates own SoftwareClock
 
-### Phase 2: Basic Sources & Sinks
+# Connected actors
+gen >> display  # display syncs to gen's clock automatically
+```
 
-Need to implement:
-- `FileSource` - Read video files with PyAV
-- `TestSource` - Test patterns (color bars, gradients)
-- `FileSink` - Write video files
-- `HLSSink` - HTTP Live Streaming
-- `DisplaySink` - Preview window
+### Concurrent Execution & Dispatchers
 
-### Phase 4: Network-Transparent Operations (Critical)
+**Actors run on different execution models based on workload:**
 
-This enables the distributed processing vision:
-- `NetworkSource` - Receive from remote machines
-- `NetworkSink` - Send to remote machines
-- Serializable stream format
-- Compression options (JPEG, H.264)
+```python
+# I/O-bound (default): Network, file, events
+rtp_recv = RTPReceiveActor()  # AsyncioDispatcher (default)
 
-## Key Conversations
+# CPU-bound: Encoding, audio DSP
+encoder = H264EncoderActor(
+    dispatcher=ThreadPoolDispatcher(workers=4)
+)
 
-### On Tool Augmentation vs Products
+# GPU-accelerated: ML inference, shaders, GPU encoding
+face_detect = FaceDetectorActor(
+    dispatcher=GPUDispatcher(device='cuda:0', streams=4)
+)
+shader = ShaderEffectActor(
+    'bloom.glsl',
+    dispatcher=GPUDispatcher(device='cuda:0')
+)
 
-> "Most 'AI features' are essentially pre-solved use cases. Tool-augmented models are different because you're expanding the reasoning substrate itself. You're not deciding what I should do with visual information - you're giving me vision and letting me figure out what's useful."
+# Chain: I/O → CPU → GPU → GPU → I/O
+rtp_recv >> encoder >> face_detect >> shader >> display
+```
 
-### On Emergent Capabilities
+**Four dispatcher types:**
+1. **AsyncioDispatcher** (I/O-bound) - Network, file, events - Default
+2. **ThreadPoolDispatcher** (CPU-bound) - Video encoding, audio DSP
+3. **ProcessPoolDispatcher** (Heavy CPU) - Multi-pass encoding
+4. **GPUDispatcher** (GPU) - ML inference, shaders, GPU encoding
 
-> "Anthropic didn't build Claude Code thinking 'users will need to debug React components.' They gave me tools (read, write, bash, grep) and the use cases emerged from people actually using it."
+**GPU optimization:**
+- Keep data on GPU across actors (minimize CPU↔GPU transfers)
+- CUDA streams for concurrent GPU execution
+- Shader support (OpenGL/Vulkan/Metal) for realtime effects
 
-This is the same approach - give tools for video/image pipelines, let use cases emerge.
+See `docs/architecture.md` "Concurrent Execution & Dispatchers" section for full details.
 
-### On Universal Interfaces
+## Current Status
 
-> "If it's just CLI tools, I can use them, Python scripts can use them, shell scripts can chain them. Universal interface means zero lock-in."
+### Phase 1-2: COMPLETE ✅
+- Base infrastructure (clocks, timing, layers, compositor)
+- Sources & sinks (test patterns, file I/O, display, HLS)
+- 17/17 tests passing
+
+### Phase 3: Actor Refactor 🚧 IN PROGRESS
+- Converting pipeline pattern to Actor pattern
+- See `docs/project.md` TODO section for details
+
+### Phase 4: Network-Transparent 📋 PLANNED
+- NetworkSendActor / NetworkReceiveActor
+- Distributed stream processing
 
 ## Important Files
 
-### Design Documents
-- `docs/markdown/standalone-library-design.md` - Complete architecture design
-- `docs/markdown/streamlib-implementation-progress.md` - Current progress tracking
-- `streamlib/README.md` - Library documentation
+### Documentation
+- **`docs/architecture.md`** - Complete Actor-based architecture
+- **`docs/project.md`** - Project overview, status, TODOs
+- **`docs/markdown/conversation-history.md`** - Original vision (session 23245f82)
 
 ### Code
-- `streamlib/` - Main library package
-- `tests/test_streamlib_core.py` - Core functionality tests
-- `pyproject.toml` - Dependencies and configuration
+- `src/streamlib/` - Main library package
+- `demo.py` - Visual demos
+- `tests/` - Test suite
+- `pyproject.toml` - Dependencies
 
-## Usage Example
+## Usage Example (Target API)
 
 ```python
-import asyncio
-from streamlib import DrawingLayer, DefaultCompositor
+# Actors auto-start when created
+video_gen = VideoGeneratorActor(pattern='smpte_bars', fps=60)
+compositor = CompositorActor(width=1920, height=1080)
+display = DisplayActor(window_name='Output')
 
-# Define drawing code
-draw_code = """
-def draw(canvas, ctx):
-    import skia
-    paint = skia.Paint()
-    paint.setColor(skia.Color(255, 0, 0, 255))
+# Add layers to compositor
+compositor.add_layer(CircleLayer())
+compositor.add_layer(TextLayer("streamlib"))
 
-    # Animated circle
-    radius = 50 + 30 * np.sin(ctx.time * 2)
-    canvas.drawCircle(ctx.width / 2, ctx.height / 2, radius, paint)
-"""
+# Connect (pipe operator)
+video_gen.outputs['video'] >> compositor.inputs['base']
+compositor.outputs['video'] >> display.inputs['video']
 
-# Create layer and compositor
-layer = DrawingLayer("animated", draw_code=draw_code, width=1920, height=1080)
-compositor = DefaultCompositor(width=1920, height=1080)
-compositor.add_layer(layer)
+# Handle events
+display.outputs['keyboard'] >> key_logger.inputs['events']
 
-# Generate frame
-async def main():
-    frame = await compositor.composite()
-    print(f"Generated frame: {frame.frame.shape}")
-
-asyncio.run(main())
+# Already running! Just wait
+await asyncio.Event().wait()
 ```
+
+## Multi-Stream Example
+
+```python
+# Video path
+video_gen >> compositor >> display
+
+# Audio path
+audio_gen >> mixer >> speaker
+
+# Event paths
+display.outputs['keyboard'] >> key_handler
+display.outputs['mouse'] >> mouse_tracker
+
+# All running concurrently, synchronized by clock
+```
+
+## Development Principles
+
+1. **Build then optimize** - Don't imagine performance problems
+2. **Actor pattern** - Everything is an independent actor
+3. **Message passing** - No shared state, only messages
+4. **Network-transparent** - Design for distributed from day one
+5. **Visual verification** - Save frames, verify output
+6. **Test incrementally** - Test each actor in isolation
+7. **Let use cases emerge** - Don't predict, discover
 
 ## When Working on This Project
 
-1. **Remember the vision**: Composable primitives, not monolithic platform
-2. **Keep it stateless**: Each component should be simple and single-purpose
-3. **Think distributed**: Design for network-transparent operations
-4. **Test visually**: Save frames, verify they look correct
-5. **Use PyAV not GStreamer**: No system dependencies
-6. **Document discoveries**: Update progress docs as we learn
+1. **Remember**: Actors, not pipelines
+2. **Think**: Independent actors running continuously
+3. **Design**: Message-passing only (no shared state)
+4. **Ensure**: Actors auto-start in `__init__`
+5. **Verify**: Works locally AND over network
+6. **Ask**: Can an AI agent create and connect this dynamically?
 
-## Original Session
+## Philosophy Checks
 
-The vision for this project emerged from session `23245f82-5c95-42d4-9018-665fd44b614f`, documented in `docs/markdown/conversation-history.md`. The full conversation explored:
-- Emergent behaviors with tool-augmented AI
-- Why visual primitives should be composable
-- Why CLI tools vs frameworks
-- Why this is different from existing solutions
-- How to make it AI-agent friendly
+Before implementing any feature:
+- ✅ Is it an independent actor?
+- ✅ Does it run continuously from creation?
+- ✅ Does it communicate only via messages?
+- ✅ Is state fully encapsulated?
+- ✅ Can agents create and connect it dynamically?
+- ✅ Does it work locally and over network?
+- ✅ Is it like `grep | sed | awk` for streams?
+- ✅ Does it use the right dispatcher (I/O, CPU, GPU)?
+- ✅ For GPU actors, does it minimize CPU↔GPU transfers?
 
-Read that document for the complete context and philosophical foundation.
+If any answer is "no", the design is wrong.
+
+## References
+
+- **Project docs**: `docs/project.md` (complete overview + TODOs)
+- **Architecture**: `docs/architecture.md` (Actor pattern details)
+- **Original vision**: `docs/markdown/conversation-history.md`
+- Actor Model: https://en.wikipedia.org/wiki/Actor_model
+- Akka: https://doc.akka.io/
+- WebRTC: https://webrtc.org/
+- Unix Philosophy: https://en.wikipedia.org/wiki/Unix_philosophy

@@ -5,7 +5,9 @@ A composable streaming library for Python with network-transparent operations.
 ## Project Status
 
 **Phase 1: Core Infrastructure** - ✅ Complete (9/9 tests passing)
-**Next**: Phase 2 - Basic Sources & Sinks
+**Phase 2: Basic Sources & Sinks** - ✅ Complete (8/8 tests passing)
+**Performance**: 26.9 FPS compositing @ 1280×720 (2.3x optimization from initial implementation)
+**Next**: Phase 3 - Hardware I/O
 
 ## What Is This?
 
@@ -145,11 +147,14 @@ docs/markdown/          # Design documents
 - Drawing layers with Skia
 - Compositor with zero-copy blending
 
-### Phase 2: Basic Sources & Sinks (Next)
-- FileSource, TestSource
-- FileSink, HLSSink, DisplaySink
+### Phase 2: Basic Sources & Sinks ✅
+- ✅ FileSource - Read video files
+- ✅ TestSource - Generate test patterns
+- ✅ FileSink - Write video files
+- ✅ HLSSink - HTTP Live Streaming
+- ✅ DisplaySink - Preview window
 
-### Phase 3: Hardware I/O
+### Phase 3: Hardware I/O (Next)
 - WebcamSource, ScreenCaptureSource
 - Audio support
 

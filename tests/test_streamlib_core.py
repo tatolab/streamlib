@@ -173,7 +173,7 @@ def draw(canvas, ctx):
 
     # Verify output
     assert isinstance(result, TimestampedFrame)
-    assert result.frame.shape == (480, 640, 4)
+    assert result.frame.shape == (480, 640, 3)  # RGB output
     assert result.frame.dtype == np.uint8
 
     # Verify the red box was drawn

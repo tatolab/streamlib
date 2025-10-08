@@ -25,12 +25,20 @@ from .base import (
 
 # Timing infrastructure
 from .timing import (
+    TimedTick,
+    Clock,
+    SoftwareClock,
     FrameTimer,
     PTPClient,
     MultiStreamSynchronizer,
     SyncedFrame,
     estimate_fps,
     align_timestamps,
+)
+
+# Stream orchestration
+from .stream import (
+    Stream,
 )
 
 # Plugin system
@@ -55,6 +63,19 @@ from .compositor import (
     DefaultCompositor,
 )
 
+# Sources
+from .sources import (
+    FileSource,
+    TestSource,
+)
+
+# Sinks
+from .sinks import (
+    FileSink,
+    DisplaySink,
+    HLSSink,
+)
+
 __version__ = "0.1.0"
 
 __all__ = [
@@ -64,7 +85,12 @@ __all__ = [
     "Layer",
     "Compositor",
     "TimestampedFrame",
+    # Stream orchestration
+    "Stream",
     # Timing
+    "TimedTick",
+    "Clock",
+    "SoftwareClock",
     "FrameTimer",
     "PTPClient",
     "MultiStreamSynchronizer",
@@ -84,4 +110,11 @@ __all__ = [
     "VideoLayer",
     # Compositor
     "DefaultCompositor",
+    # Sources
+    "FileSource",
+    "TestSource",
+    # Sinks
+    "FileSink",
+    "DisplaySink",
+    "HLSSink",
 ]

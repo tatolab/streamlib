@@ -2,6 +2,7 @@
 Timing infrastructure for precise time synchronization.
 
 This module provides:
+- Clock abstraction for driving stream processing
 - PTP (IEEE 1588) client for sub-millisecond synchronization
 - Frame timing utilities
 - Multi-stream temporal alignment
@@ -9,10 +10,112 @@ This module provides:
 
 import time
 import asyncio
-from typing import Optional, Dict, List
+from abc import ABC, abstractmethod
+from typing import Optional, Dict, List, AsyncIterator
 from dataclasses import dataclass
 import numpy as np
 from .base import TimestampedFrame
+
+
+@dataclass
+class TimedTick:
+    """
+    A single clock tick with timing information.
+
+    Attributes:
+        frame_number: Sequential tick/frame number
+        timestamp: Wall clock time (seconds since epoch)
+        drift: Time drift from expected tick time (seconds)
+        ptp_time: Optional PTP synchronized time
+        clock_source: Optional clock source identifier
+    """
+    frame_number: int
+    timestamp: float
+    drift: float = 0.0
+    ptp_time: Optional[float] = None
+    clock_source: Optional[str] = None
+
+
+class Clock(ABC):
+    """
+    Abstract base class for all clock sources.
+
+    A clock produces ticks that drive stream processing. Clocks can be:
+    - Software (CPU-driven timing)
+    - Hardware (genlock signals, PTP)
+    - Network (synchronized to upstream sources)
+    """
+
+    @abstractmethod
+    def tick(self) -> AsyncIterator[TimedTick]:
+        """
+        Generate ticks at the clock's rate.
+
+        Yields:
+            TimedTick with timing information
+        """
+        pass
+
+
+class SoftwareClock(Clock):
+    """
+    Software-driven clock using CPU timing.
+
+    Provides precise frame pacing using asyncio.sleep() with drift correction.
+    """
+
+    def __init__(self, fps: float = 60):
+        """
+        Initialize software clock.
+
+        Args:
+            fps: Target frames per second
+        """
+        self.fps = fps
+        self.frame_time = 1.0 / fps
+        self.frame_number = 0
+        self.start_time: Optional[float] = None
+        self._running = False
+
+    async def tick(self) -> AsyncIterator[TimedTick]:
+        """
+        Yield ticks at precise intervals.
+
+        Maintains target FPS by tracking drift and adjusting sleep times.
+        """
+        self._running = True
+        self.start_time = time.time()
+        self.frame_number = 0
+
+        while self._running:
+            # Calculate expected time for this frame
+            expected_time = self.start_time + (self.frame_number * self.frame_time)
+            current_time = time.time()
+
+            # Calculate drift
+            drift = current_time - expected_time
+
+            # Sleep until next frame (accounting for drift)
+            sleep_time = self.frame_time - drift
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+
+            # Yield tick
+            actual_time = time.time()
+            actual_drift = actual_time - expected_time
+
+            yield TimedTick(
+                frame_number=self.frame_number,
+                timestamp=actual_time,
+                drift=actual_drift,
+                clock_source="software"
+            )
+
+            self.frame_number += 1
+
+    def stop(self) -> None:
+        """Stop the clock."""
+        self._running = False
 
 
 class FrameTimer:

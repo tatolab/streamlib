@@ -7,11 +7,14 @@ primitives that can be chained together.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Optional, Literal, Dict
+from typing import Any, AsyncIterator, Optional, Literal, Dict, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 from dataclasses import dataclass
 import time
+
+if TYPE_CHECKING:
+    from .timing import TimedTick
 
 
 @dataclass
@@ -25,6 +28,8 @@ class TimestampedFrame:
         frame_number: Sequential frame number
         ptp_time: Optional PTP (IEEE 1588) synchronized time
         source_id: Optional identifier for the source that produced this frame
+        clock_source_id: Optional clock source identifier for synchronization
+        clock_rate: Optional clock rate in frames per second
         metadata: Optional additional metadata
     """
     frame: NDArray[np.uint8]
@@ -32,6 +37,8 @@ class TimestampedFrame:
     frame_number: int
     ptp_time: Optional[float] = None
     source_id: Optional[str] = None
+    clock_source_id: Optional[str] = None
+    clock_rate: Optional[float] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -50,7 +57,7 @@ class StreamSource(ABC):
         self,
         width: int = 1920,
         height: int = 1080,
-        fps: int = 30,
+        fps: int = 60,
         format: Literal['rgb24', 'bgr24', 'rgba', 'bgra', 'yuv420p'] = 'rgb24'
     ):
         self.width = width
@@ -116,7 +123,7 @@ class StreamSink(ABC):
         self,
         width: int = 1920,
         height: int = 1080,
-        fps: int = 30,
+        fps: int = 60,
         format: Literal['rgb24', 'bgr24', 'rgba', 'bgra', 'yuv420p'] = 'rgb24'
     ):
         self.width = width
@@ -265,13 +272,15 @@ class Compositor(ABC):
     @abstractmethod
     async def composite(
         self,
-        input_frame: Optional[TimestampedFrame] = None
+        input_frame: Optional[TimestampedFrame] = None,
+        tick: Optional['TimedTick'] = None
     ) -> TimestampedFrame:
         """
         Composite all layers into a single output frame.
 
         Args:
             input_frame: Optional input frame to pass to layers
+            tick: Optional clock tick with timing information
 
         Returns:
             Composited frame with all layers blended

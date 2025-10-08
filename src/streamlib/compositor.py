@@ -7,10 +7,13 @@ zero-copy numpy operations and alpha blending.
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import skia
 from .base import Compositor, Layer, TimestampedFrame
 from .plugins import register_compositor
+
+if TYPE_CHECKING:
+    from .timing import TimedTick
 
 
 @register_compositor('default')
@@ -45,17 +48,38 @@ class DefaultCompositor(Compositor):
 
     async def composite(
         self,
-        input_frame: Optional[TimestampedFrame] = None
+        input_frame: Optional[TimestampedFrame] = None,
+        tick: Optional['TimedTick'] = None
     ) -> TimestampedFrame:
         """
         Composite all layers into a single output frame.
 
         Args:
             input_frame: Optional input frame to pass to layers
+            tick: Optional clock tick with timing information
 
         Returns:
             Composited TimestampedFrame with all layers blended
         """
+        import time
+
+        # Get timing from tick or create default
+        if tick:
+            timestamp = tick.timestamp
+            frame_number = tick.frame_number
+        else:
+            timestamp = time.time()
+            frame_number = self.frame_number
+            self.frame_number += 1
+
+        # Create synthetic frame if no input (for timing)
+        if input_frame is None:
+            input_frame = TimestampedFrame(
+                frame=np.zeros((self.height, self.width, 3), dtype=np.uint8),
+                timestamp=timestamp,
+                frame_number=frame_number,
+            )
+
         # Start with background
         background = self._generate_background()
 
@@ -64,13 +88,15 @@ class DefaultCompositor(Compositor):
 
         # If no layers, show placeholder
         if not sorted_layers:
-            background = self._add_placeholder(background)
+            background = self._add_placeholder(background, frame_number)
+            # Convert RGBA to RGB for output
+            background_rgb = background[:, :, :3]
             return TimestampedFrame(
-                frame=background,
-                timestamp=input_frame.timestamp if input_frame else 0.0,
-                frame_number=self.frame_number,
-                ptp_time=input_frame.ptp_time if input_frame else None,
-                source_id=input_frame.source_id if input_frame else None
+                frame=background_rgb,
+                timestamp=input_frame.timestamp,
+                frame_number=frame_number,
+                ptp_time=input_frame.ptp_time,
+                source_id=input_frame.source_id
             )
 
         # Composite each layer
@@ -86,14 +112,15 @@ class DefaultCompositor(Compositor):
             # Alpha blend onto result
             result = self._alpha_blend(result, overlay)
 
-        self.frame_number += 1
+        # Convert RGBA to RGB for output
+        result_rgb = result[:, :, :3]
 
         return TimestampedFrame(
-            frame=result,
-            timestamp=input_frame.timestamp if input_frame else 0.0,
-            frame_number=self.frame_number,
-            ptp_time=input_frame.ptp_time if input_frame else None,
-            source_id=input_frame.source_id if input_frame else None
+            frame=result_rgb,
+            timestamp=input_frame.timestamp,
+            frame_number=frame_number,
+            ptp_time=input_frame.ptp_time,
+            source_id=input_frame.source_id
         )
 
     def _generate_background(self) -> NDArray[np.uint8]:
@@ -103,26 +130,26 @@ class DefaultCompositor(Compositor):
         Returns:
             RGBA background frame
         """
-        frame = np.zeros((self.height, self.width, 4), dtype=np.uint8)
+        frame = np.empty((self.height, self.width, 4), dtype=np.uint8)
 
-        # Dark gradient background
-        for y in range(self.height):
-            intensity = int(self.background_color[0] + (y / self.height) * 30)
-            frame[y, :] = [
-                intensity,
-                intensity,
-                self.background_color[2] + int(y / self.height * 10),
-                self.background_color[3]
-            ]
+        # Dark gradient background using vectorized operations
+        y_gradient = np.linspace(0, 1, self.height, dtype=np.float32)[:, np.newaxis]
+
+        # RGB channels with gradient
+        frame[:, :, 0] = (self.background_color[0] + y_gradient * 30).astype(np.uint8)
+        frame[:, :, 1] = (self.background_color[1] + y_gradient * 30).astype(np.uint8)
+        frame[:, :, 2] = (self.background_color[2] + y_gradient * 10).astype(np.uint8)
+        frame[:, :, 3] = self.background_color[3]  # Constant alpha
 
         return frame
 
-    def _add_placeholder(self, frame: NDArray[np.uint8]) -> NDArray[np.uint8]:
+    def _add_placeholder(self, frame: NDArray[np.uint8], frame_number: int) -> NDArray[np.uint8]:
         """
         Add placeholder graphic when no layers are present.
 
         Args:
             frame: Background frame
+            frame_number: Current frame number for animation
 
         Returns:
             Frame with placeholder graphic
@@ -165,7 +192,7 @@ class DefaultCompositor(Compositor):
         paint.setStyle(skia.Paint.kFill_Style)
 
         # Animated pulsing circle
-        pulse = 0.8 + 0.2 * np.sin(self.frame_number / 15.0 * np.pi)
+        pulse = 0.8 + 0.2 * np.sin(frame_number / 15.0 * np.pi)
         circle_radius = 40 * pulse
         circle_x = self.width / 2
         circle_y = box_y + 100
@@ -202,7 +229,7 @@ class DefaultCompositor(Compositor):
         # Frame counter (subtle)
         paint.setColor(skia.Color(100, 100, 110, 150))
         font_counter = skia.Font(None, 18)
-        counter_text = f"Frame {self.frame_number}"
+        counter_text = f"Frame {frame_number}"
         canvas.drawString(
             counter_text,
             box_x + 20,
@@ -240,7 +267,7 @@ class DefaultCompositor(Compositor):
         overlay: NDArray[np.uint8]
     ) -> NDArray[np.uint8]:
         """
-        Alpha blend overlay onto background using zero-copy numpy operations.
+        Alpha blend overlay onto background using optimized numpy operations.
 
         Args:
             background: Background RGBA frame
@@ -254,26 +281,28 @@ class DefaultCompositor(Compositor):
             import cv2
             overlay = cv2.resize(overlay, (self.width, self.height))
 
-        # Extract alpha channel and normalize to 0.0-1.0
-        # Using in-place operations and views to minimize copies
-        alpha = overlay[:, :, 3:4].astype(np.float32) / 255.0
+        # Pre-allocate result array (avoids dstack allocation)
+        result = np.empty_like(background)
 
-        # Blend RGB channels
-        # Formula: result = overlay_rgb * alpha + background_rgb * (1 - alpha)
-        overlay_rgb = overlay[:, :, :3].astype(np.float32)
-        background_rgb = background[:, :, :3].astype(np.float32)
+        # Extract alpha as uint16 to avoid overflow in intermediate calculations
+        # This avoids expensive float32 conversions
+        overlay_alpha = overlay[:, :, 3].astype(np.uint16)
+        bg_alpha = background[:, :, 3].astype(np.uint16)
 
-        blended_rgb = (
-            overlay_rgb * alpha + background_rgb * (1.0 - alpha)
+        # Compute blended alpha first (uint16 arithmetic, then back to uint8)
+        # Formula: result_alpha = overlay_alpha + bg_alpha * (255 - overlay_alpha) / 255
+        result[:, :, 3] = (
+            overlay_alpha + (bg_alpha * (255 - overlay_alpha)) // 255
         ).astype(np.uint8)
 
-        # Composite alpha channels
-        # Formula: result_alpha = overlay_alpha + background_alpha * (1 - overlay_alpha)
-        bg_alpha = background[:, :, 3:4].astype(np.float32) / 255.0
-        result_alpha = (alpha + bg_alpha * (1.0 - alpha)) * 255.0
-        result_alpha = result_alpha.astype(np.uint8)
-
-        # Combine RGB and alpha
-        result = np.dstack([blended_rgb, result_alpha])
+        # Blend RGB channels using uint16 to avoid overflow
+        # Loop is faster than vectorizing all channels due to smaller intermediate arrays
+        # Formula: result = (overlay * alpha + background * (255 - alpha)) / 255
+        for c in range(3):  # RGB channels
+            overlay_c = overlay[:, :, c].astype(np.uint16)
+            bg_c = background[:, :, c].astype(np.uint16)
+            result[:, :, c] = (
+                (overlay_c * overlay_alpha + bg_c * (255 - overlay_alpha)) // 255
+            ).astype(np.uint8)
 
         return result
