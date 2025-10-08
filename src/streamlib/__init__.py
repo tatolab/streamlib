@@ -1,120 +1,82 @@
 """
-streamlib - A composable streaming library for Python
+streamlib - Composable realtime streaming library for Python
 
-This library provides Unix-pipe-style composable primitives for video streaming:
-- Sources: Webcam, files, screen capture, network streams, generated content
-- Sinks: HLS, files, display, network
-- Layers: Video, drawing (Skia), ML models
-- Compositor: Zero-copy numpy pipeline for layer composition
+Actor-based streaming library with SMPTE ST 2110 alignment.
+Network-transparent operations for distributed realtime processing.
 
-The library is designed to be:
-- Network-transparent: Operations work locally or remotely
-- Distributed: Chain operations across machines
-- Mesh-capable: Multiple machines collaborate on processing
-- Zero-dependency: No GStreamer or system packages required (uses PyAV)
+Architecture:
+- Actors: Independent components processing ticks
+- Ring buffers: Fixed-size circular buffers (latest-read semantics)
+- Clocks: Swappable sync sources (Software, PTP, Genlock)
+- Dispatchers: Execution contexts (Asyncio, ThreadPool, ProcessPool, GPU)
+
+Example:
+    from streamlib import TestPatternActor, DisplayActor
+
+    # Create actors (auto-start)
+    gen = TestPatternActor(pattern='smpte_bars', fps=60)
+    display = DisplayActor(window_name='Output')
+
+    # Connect (pipe operator)
+    gen.outputs['video'] >> display.inputs['video']
+
+    # Already running!
+    await asyncio.Event().wait()  # Run forever
 """
 
-# Core base classes
-from .base import (
-    StreamSource,
-    StreamSink,
-    Layer,
-    Compositor,
-    TimestampedFrame,
+# Core infrastructure
+from .buffers import RingBuffer, GPURingBuffer
+from .clocks import Clock, SoftwareClock, PTPClock, GenlockClock, TimedTick
+from .dispatchers import (
+    Dispatcher,
+    AsyncioDispatcher,
+    ThreadPoolDispatcher,
+    ProcessPoolDispatcher,
+    GPUDispatcher,
+)
+from .actor import Actor, StreamInput, StreamOutput
+
+# Message types
+from .messages import (
+    VideoFrame,
+    AudioBuffer,
+    KeyEvent,
+    MouseEvent,
+    DataMessage,
 )
 
-# Timing infrastructure
-from .timing import (
-    TimedTick,
-    Clock,
-    SoftwareClock,
-    FrameTimer,
-    PTPClient,
-    MultiStreamSynchronizer,
-    SyncedFrame,
-    estimate_fps,
-    align_timestamps,
+# Actors
+from .actors import (
+    TestPatternActor,
+    DisplayActor,
 )
 
-# Stream orchestration
-from .stream import (
-    Stream,
-)
-
-# Plugin system
-from .plugins import (
-    PluginRegistry,
-    get_registry,
-    register_source,
-    register_sink,
-    register_layer,
-    register_compositor,
-)
-
-# Drawing layers
-from .drawing import (
-    DrawingContext,
-    DrawingLayer,
-    VideoLayer,
-)
-
-# Compositor
-from .compositor import (
-    DefaultCompositor,
-)
-
-# Sources
-from .sources import (
-    FileSource,
-    TestSource,
-)
-
-# Sinks
-from .sinks import (
-    FileSink,
-    DisplaySink,
-    HLSSink,
-)
-
-__version__ = "0.1.0"
+__version__ = "0.2.0"  # Phase 3: Actor implementation
 
 __all__ = [
-    # Base classes
-    "StreamSource",
-    "StreamSink",
-    "Layer",
-    "Compositor",
-    "TimestampedFrame",
-    # Stream orchestration
-    "Stream",
-    # Timing
-    "TimedTick",
+    # Core infrastructure
+    "RingBuffer",
+    "GPURingBuffer",
     "Clock",
     "SoftwareClock",
-    "FrameTimer",
-    "PTPClient",
-    "MultiStreamSynchronizer",
-    "SyncedFrame",
-    "estimate_fps",
-    "align_timestamps",
-    # Plugins
-    "PluginRegistry",
-    "get_registry",
-    "register_source",
-    "register_sink",
-    "register_layer",
-    "register_compositor",
-    # Drawing
-    "DrawingContext",
-    "DrawingLayer",
-    "VideoLayer",
-    # Compositor
-    "DefaultCompositor",
-    # Sources
-    "FileSource",
-    "TestSource",
-    # Sinks
-    "FileSink",
-    "DisplaySink",
-    "HLSSink",
+    "PTPClock",
+    "GenlockClock",
+    "TimedTick",
+    "Dispatcher",
+    "AsyncioDispatcher",
+    "ThreadPoolDispatcher",
+    "ProcessPoolDispatcher",
+    "GPUDispatcher",
+    "Actor",
+    "StreamInput",
+    "StreamOutput",
+    # Messages
+    "VideoFrame",
+    "AudioBuffer",
+    "KeyEvent",
+    "MouseEvent",
+    "DataMessage",
+    # Actors
+    "TestPatternActor",
+    "DisplayActor",
 ]
