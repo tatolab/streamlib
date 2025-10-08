@@ -1318,6 +1318,120 @@ This is similar to GStreamer's queue elements but with explicit control.
 ### Error Handling
 Actor exceptions are contained. Other actors continue running. Supervisor actors can monitor and restart failed actors (future).
 
+## Performance Profiling & Testing
+
+### Design Philosophy
+
+**Python implementation with Rust migration path:**
+
+- **Phase 3**: Pure Python implementation
+  - NumPy arrays (zero-copy, C backend)
+  - PyAV (FFmpeg C library)
+  - Skia/Cairo (C++ rendering)
+  - PyTorch/CUDA (GPU work in C++/CUDA)
+  - Actors in separate processes (bypass GIL)
+
+- **If bottlenecks found**: Migrate actor runtime to Rust (PyO3)
+  - Keep Python API (like Pydantic V2, Polars)
+  - Rust core (ring buffers, RTP stack, actor runtime)
+  - Python wrapper for business logic
+
+### Opt-In Profiling System
+
+**Zero overhead when disabled:**
+
+```python
+# Enable profiling via environment variable
+STREAMLIB_PROFILE=1 python demo.py
+
+# Disabled (default): No measurements, no overhead
+python demo.py
+```
+
+**Profiling points:**
+
+```python
+from streamlib.profiling import profile
+
+class VideoActor:
+    async def process(self, frame):
+        with profile('actor.process', actor_id=self.id, frame_number=frame.num):
+            # Profile specific operations
+            with profile('actor.decode'):
+                decoded = await self.decode(frame)
+
+            with profile('actor.ml_inference'):
+                result = await self.model.infer(decoded)
+
+            return result
+```
+
+**Built-in profiling for core components:**
+- `compositor.composite` - Total composition time
+- `compositor.blend` - Alpha blending
+- `layer.{name}.draw` - Per-layer rendering
+- `actor.{name}.process` - Actor processing
+- `network.send/receive` - Network I/O
+
+**Output format:**
+
+```
+=== Profiling Results ===
+
+Operation                   Count      Mean      P50      P95      P99     Max
+------------------------------------------------------------------------------
+frame.total                  1000   16.2ms   16.1ms   17.5ms   18.2ms  19.1ms
+frame.decode                 1000    5.1ms    5.1ms    5.5ms    5.8ms   6.2ms
+frame.process                1000    8.5ms    8.4ms    9.1ms    9.5ms  10.1ms
+compositor.composite         1000   14.6ms   14.5ms   15.2ms   15.7ms  16.2ms
+```
+
+### Performance Targets
+
+**Frame latency:**
+
+| Resolution | Target | Acceptable | Too Slow |
+|-----------|--------|------------|----------|
+| 1080p60   | < 16ms | < 20ms     | > 20ms   |
+| 1080p30   | < 33ms | < 40ms     | > 40ms   |
+| 4K30      | < 33ms | < 40ms     | > 40ms   |
+| 4K60      | < 16ms | < 20ms     | > 20ms   |
+
+**Jitter target:** < 1ms variance (P99 - P50)
+
+**Why these targets:**
+- Frame time = 1000ms / fps
+- Need some headroom for system variance
+- Jitter causes visible stutter
+
+### What to Profile
+
+1. **Frame processing latency** - End-to-end time per frame
+2. **Jitter** - Variance in frame times (P99 - P50)
+3. **Per-actor overhead** - CPU/memory per actor instance
+4. **Network latency** - RTP packet send/receive times
+5. **Memory copies** - Ring buffer should be zero-copy
+6. **GPU transfer** - CPU→GPU and GPU→CPU times
+
+### When to Migrate to Rust
+
+**Python works for:**
+- Up to 4K30 on modern hardware
+- < 10 concurrent actors
+- NumPy/PyAV/CUDA doing heavy lifting
+
+**Migrate to Rust if:**
+- Frame latency > 1 frame time
+- Jitter > 2ms consistently
+- Actor overhead > 5% CPU per actor
+- Profiling shows Python as bottleneck (not NumPy/FFmpeg)
+
+**Hybrid approach** (like Pydantic V2):
+- Python API (actor definitions, business logic, AI orchestration)
+- Rust core (runtime, ring buffers, RTP stack, timing)
+- PyO3 bindings for zero-copy data transfer
+- Best of both worlds: AI-friendly API + realtime performance
+
 ## Philosophy Checks
 
 Before implementing any feature, ask:
