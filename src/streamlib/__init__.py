@@ -36,6 +36,10 @@ from .dispatchers import (
 )
 from .actor import Actor, StreamInput, StreamOutput
 
+# Registry and stubs (network transparency)
+from .registry import ActorURI, ActorRegistry, PortAllocator
+from .stubs import ActorStub, LocalActorStub, RemoteActorStub, connect_actor
+
 # Message types
 from .messages import (
     VideoFrame,
@@ -70,6 +74,14 @@ __all__ = [
     "Actor",
     "StreamInput",
     "StreamOutput",
+    # Registry and stubs
+    "ActorURI",
+    "ActorRegistry",
+    "PortAllocator",
+    "ActorStub",
+    "LocalActorStub",
+    "RemoteActorStub",
+    "connect_actor",
     # Messages
     "VideoFrame",
     "AudioBuffer",

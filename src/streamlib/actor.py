@@ -215,7 +215,8 @@ class Actor(ABC):
         self,
         actor_id: str,
         clock: Optional[Clock] = None,
-        dispatcher: Optional[Dispatcher] = None
+        dispatcher: Optional[Dispatcher] = None,
+        auto_register: bool = True
     ):
         """
         Initialize actor.
@@ -224,6 +225,7 @@ class Actor(ABC):
             actor_id: Unique identifier for this actor
             clock: Clock source (default: SoftwareClock(60fps))
             dispatcher: Execution dispatcher (default: AsyncioDispatcher)
+            auto_register: Automatically register in global registry (default: True)
 
         Note: Actors don't auto-start in __init__. Subclasses must call
         self.start() explicitly (usually at end of their __init__).
@@ -239,6 +241,17 @@ class Actor(ABC):
         # Internal state
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._registry_uri: Optional[str] = None
+
+        # Auto-register in global registry
+        if auto_register:
+            try:
+                from .registry import ActorRegistry
+                registry = ActorRegistry.get()
+                self._registry_uri = registry.register(self)
+            except Exception as e:
+                # Don't fail if registration fails
+                print(f"[{actor_id}] Warning: Failed to register in registry: {e}")
 
     def start(self) -> None:
         """
@@ -324,12 +337,23 @@ class Actor(ABC):
         Stop actor (stop processing ticks).
 
         Waits for current tick to complete, then stops.
+        Also unregisters from global registry if registered.
 
         Note: Usually not needed (actors run until program exit).
         """
         self._running = False
         if self._task:
             await self._task
+
+        # Unregister from global registry
+        if self._registry_uri is not None:
+            try:
+                from .registry import ActorRegistry
+                registry = ActorRegistry.get()
+                registry.unregister(self._registry_uri)
+                self._registry_uri = None
+            except Exception as e:
+                print(f"[{self.actor_id}] Warning: Failed to unregister from registry: {e}")
 
     def is_running(self) -> bool:
         """
