@@ -53,6 +53,7 @@ from .messages import (
 from .actors import (
     TestPatternActor,
     DisplayActor,
+    CompositorActor,
 )
 
 __version__ = "0.2.0"  # Phase 3: Actor implementation
@@ -91,4 +92,5 @@ __all__ = [
     # Actors
     "TestPatternActor",
     "DisplayActor",
+    "CompositorActor",
 ]

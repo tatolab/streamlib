@@ -333,5 +333,87 @@ class TestActorConnection:
         await consumer.stop()
 
 
+class TestCompositorActor:
+    """Test CompositorActor."""
+
+    @pytest.mark.asyncio
+    async def test_create_compositor(self):
+        """Test creating a compositor actor."""
+        from streamlib import CompositorActor
+
+        compositor = CompositorActor(
+            actor_id='compositor-test',
+            width=640,
+            height=480,
+            fps=30,
+            num_inputs=2
+        )
+
+        assert compositor.actor_id == 'compositor-test'
+        assert compositor.width == 640
+        assert compositor.height == 480
+        assert compositor.is_running()
+
+        # Should have 2 inputs
+        assert 'input0' in compositor.inputs
+        assert 'input1' in compositor.inputs
+
+        # Should have video output
+        assert 'video' in compositor.outputs
+
+        await compositor.stop()
+
+    @pytest.mark.asyncio
+    async def test_compositor_with_sources(self):
+        """Test compositor with multiple video sources."""
+        from streamlib import CompositorActor, TestPatternActor
+
+        # Create two test pattern generators
+        gen1 = TestPatternActor(
+            actor_id='gen1',
+            width=320,
+            height=240,
+            pattern='smpte_bars',
+            fps=60
+        )
+
+        gen2 = TestPatternActor(
+            actor_id='gen2',
+            width=320,
+            height=240,
+            pattern='gradient',
+            fps=60
+        )
+
+        # Create compositor
+        compositor = CompositorActor(
+            actor_id='compositor',
+            width=320,
+            height=240,
+            fps=60,
+            num_inputs=2
+        )
+
+        # Connect generators to compositor
+        gen1.outputs['video'] >> compositor.inputs['input0']
+        gen2.outputs['video'] >> compositor.inputs['input1']
+
+        # Wait for frames to be composited
+        await asyncio.sleep(0.1)
+
+        # Read composited frame
+        frame = compositor.outputs['video'].buffer.read_latest()
+        assert frame is not None
+        assert frame.width == 320
+        assert frame.height == 240
+        assert frame.data.shape == (240, 320, 3)
+        assert frame.data.dtype == np.uint8
+
+        # Clean up
+        await gen1.stop()
+        await gen2.stop()
+        await compositor.stop()
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
