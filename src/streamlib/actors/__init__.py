@@ -12,9 +12,11 @@ This package contains concrete actor implementations organized by type:
 
 from .video import TestPatternActor, DisplayActor
 from .compositor import CompositorActor
+from .drawing import DrawingActor
 
 __all__ = [
     'TestPatternActor',
     'DisplayActor',
     'CompositorActor',
+    'DrawingActor',
 ]

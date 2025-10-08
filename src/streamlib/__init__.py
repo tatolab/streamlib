@@ -54,6 +54,7 @@ from .actors import (
     TestPatternActor,
     DisplayActor,
     CompositorActor,
+    DrawingActor,
 )
 
 __version__ = "0.2.0"  # Phase 3: Actor implementation
@@ -93,4 +94,5 @@ __all__ = [
     "TestPatternActor",
     "DisplayActor",
     "CompositorActor",
+    "DrawingActor",
 ]

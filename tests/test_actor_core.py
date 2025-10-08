@@ -415,5 +415,89 @@ class TestCompositorActor:
         await compositor.stop()
 
 
+class TestDrawingActor:
+    """Test DrawingActor."""
+
+    @pytest.mark.asyncio
+    async def test_create_drawing_actor(self):
+        """Test creating a drawing actor."""
+        from streamlib import DrawingActor
+
+        draw_code = """
+def draw(canvas, ctx):
+    import skia
+    paint = skia.Paint()
+    paint.setColor(skia.Color(255, 0, 0, 255))
+    canvas.drawCircle(100, 100, 50, paint)
+"""
+
+        actor = DrawingActor(
+            actor_id='drawing-test',
+            draw_code=draw_code,
+            width=640,
+            height=480,
+            fps=30
+        )
+
+        assert actor.actor_id == 'drawing-test'
+        assert actor.width == 640
+        assert actor.height == 480
+        assert actor.is_running()
+
+        # Wait for frame generation
+        await asyncio.sleep(0.05)
+
+        # Read frame
+        frame = actor.outputs['video'].buffer.read_latest()
+        assert frame is not None
+        assert frame.width == 640
+        assert frame.height == 480
+        assert frame.data.shape == (480, 640, 3)
+        assert frame.data.dtype == np.uint8
+
+        await actor.stop()
+
+    @pytest.mark.asyncio
+    async def test_drawing_actor_animated(self):
+        """Test animated drawing actor."""
+        from streamlib import DrawingActor
+
+        draw_code = """
+def draw(canvas, ctx):
+    import skia
+    import numpy as np
+
+    # Animated radius
+    radius = 30 + 20 * np.sin(ctx.time * 2)
+
+    paint = skia.Paint()
+    paint.setColor(skia.Color(0, 255, 0, 255))
+    paint.setAntiAlias(True)
+    canvas.drawCircle(ctx.width / 2, ctx.height / 2, radius, paint)
+"""
+
+        actor = DrawingActor(
+            actor_id='animated',
+            draw_code=draw_code,
+            width=320,
+            height=240,
+            fps=60
+        )
+
+        # Wait for several frames
+        await asyncio.sleep(0.1)
+
+        # Read frame
+        frame = actor.outputs['video'].buffer.read_latest()
+        assert frame is not None
+        assert frame.width == 320
+        assert frame.height == 240
+
+        # Frame should not be all black (has content)
+        assert frame.data.max() > 0
+
+        await actor.stop()
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
