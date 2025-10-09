@@ -58,6 +58,9 @@ from .transfers import CPUtoGPUTransferHandler, GPUtoCPUTransferHandler
 # Phase 3.2: Basic Handlers (NEW)
 from .handlers import TestPatternHandler, DisplayHandler
 
+# Phase 3.3: Advanced Handlers (NEW)
+from .handlers import BlurFilter, CompositorHandler, DrawingHandler, DrawingContext
+
 # Ring buffers
 from .buffers import RingBuffer, GPURingBuffer
 
@@ -99,6 +102,12 @@ __all__ = [
     # Phase 3.2: Basic Handlers (NEW)
     'TestPatternHandler',
     'DisplayHandler',
+
+    # Phase 3.3: Advanced Handlers (NEW)
+    'BlurFilter',
+    'CompositorHandler',
+    'DrawingHandler',
+    'DrawingContext',
 
     # Ring buffers
     'RingBuffer',
