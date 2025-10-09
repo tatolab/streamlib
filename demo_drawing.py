@@ -105,9 +105,9 @@ async def main():
     drawing = DrawingActor(
         actor_id='drawing',
         draw_code=DRAW_CODE,
-        width=1920,
-        height=1080,
-        fps=60,
+        width=640,
+        height=480,
+        fps=30,
         background_color=(20, 20, 40, 255)
     )
     print(f"  ✓ DrawingActor with animated Skia code")

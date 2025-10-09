@@ -99,28 +99,28 @@ async def main():
 
     test_pattern = TestPatternActor(
         actor_id='smpte-source',
-        width=1920,
-        height=1080,
+        width=640,
+        height=480,
         pattern='smpte_bars',
-        fps=60
+        fps=30
     )
-    print(f"  ✓ TestPatternActor: SMPTE color bars (1920x1080 @ 60 FPS)")
+    print(f"  ✓ TestPatternActor: SMPTE color bars (640x480 @ 30 FPS)")
 
     drawing = DrawingActor(
         actor_id='overlay',
         draw_code=OVERLAY_CODE,
-        width=1920,
-        height=1080,
-        fps=60,
+        width=640,
+        height=480,
+        fps=30,
         background_color=(0, 0, 0, 0)  # Transparent background
     )
     print(f"  ✓ DrawingActor: Animated overlay graphics")
 
     compositor = CompositorActor(
         actor_id='main-compositor',
-        width=1920,
-        height=1080,
-        fps=60,
+        width=640,
+        height=480,
+        fps=30,
         num_inputs=2
     )
     print(f"  ✓ CompositorActor: 2-input alpha blender")

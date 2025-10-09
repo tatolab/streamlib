@@ -26,13 +26,13 @@ python demo_actor.py
 ```
 
 **What you'll see:**
-- 1920x1080 window with SMPTE color bars (7 vertical stripes)
-- 60 FPS smooth playback
+- 640x480 window with SMPTE color bars (7 vertical stripes)
+- 30 FPS smooth playback
 - Status updates in terminal
 
 **Architecture:**
 ```
-TestPatternActor (SMPTE bars, 60 FPS)
+TestPatternActor (SMPTE bars, 30 FPS, 640x480)
     >> DisplayActor (OpenCV window)
 ```
 
@@ -59,7 +59,7 @@ python demo_compositor.py
 **What you'll see:**
 - Two video sources blended together
 - SMPTE bars + gradient pattern
-- Real-time alpha compositing at 60 FPS
+- Real-time alpha compositing at 30 FPS
 
 **Architecture:**
 ```
@@ -92,7 +92,7 @@ python demo_drawing.py
 - Pulsing red circle with glow effect
 - Rotating line animation
 - Live time and frame counter
-- 60 FPS smooth animation
+- 30 FPS smooth animation
 
 **Architecture:**
 ```
@@ -222,13 +222,13 @@ compositor.outputs['video'] >> display.inputs['video']
 
 ## Performance
 
-**Target:** 1080p60 < 16ms per frame, jitter < 1ms
-
 **Current Performance:**
-- All demos run at 60 FPS on modern hardware
-- Compositor handles 2-4 inputs at 60 FPS
-- Drawing actor with complex Skia code: 60 FPS
+- All demos run smoothly at 30 FPS @ 640x480
+- Compositor handles 2-4 inputs at 30 FPS
+- Drawing actor with complex Skia code: 30 FPS
 - Memory stable (ring buffers prevent leaks)
+
+**Note:** Higher resolutions (>640x480) or frame rates (>30 FPS) may cause performance issues on some systems. For production use, consider optimizing the compositor's alpha blending algorithm or using lower resolutions.
 
 **Optimizations:**
 - Zero-copy ring buffers
@@ -262,10 +262,10 @@ All demos respond to **Ctrl+C**:
 - Check if OpenCV is installed: `pip install opencv-python`
 - macOS: May need to grant Terminal screen recording permission
 
-**Low FPS:**
-- Reduce resolution: `width=1280, height=720`
-- Reduce FPS: `fps=30`
-- Close other applications
+**Low FPS or hanging:**
+- All demos are configured for 640x480 @ 30 FPS for best compatibility
+- If you modified the demos to use higher resolution/FPS and experience issues, reduce back to 640x480 @ 30 FPS
+- Close other applications to free up CPU
 
 **Import errors:**
 - Install package: `pip install -e .`
@@ -278,6 +278,10 @@ All demos respond to **Ctrl+C**:
 - **Tests:** 55/55 passing ✅
 - **Actors:** 4 types (TestPattern, Display, Compositor, Drawing)
 - **Lines of Code:** ~3,700 (Phase 3 only)
-- **Performance:** 60 FPS @ 1080p
+- **Performance:** 30 FPS @ 640x480
 
 **Phase 3 Status:** Substantially Complete ✅
+
+**Known Limitations:**
+- Performance issues at resolutions above 640x480 or FPS above 30
+- Compositor alpha blending could be optimized for higher resolutions

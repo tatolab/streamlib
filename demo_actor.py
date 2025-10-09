@@ -19,13 +19,13 @@ async def main():
     print()
     print("Creating actors...")
 
-    # Create test pattern generator (60 FPS, SMPTE bars)
+    # Create test pattern generator (30 FPS, SMPTE bars)
     generator = TestPatternActor(
         actor_id='test-pattern',
-        width=1920,
-        height=1080,
+        width=640,
+        height=480,
         pattern='smpte_bars',
-        fps=60.0
+        fps=30.0
     )
     print(f"  ✓ Created {generator}")
 

@@ -23,33 +23,33 @@ async def main():
 
     source1 = TestPatternActor(
         actor_id='source1',
-        width=960,
-        height=540,
+        width=640,
+        height=480,
         pattern='smpte_bars',
-        fps=60
+        fps=30
     )
-    print(f"  ✓ Source 1: SMPTE bars (960x540)")
+    print(f"  ✓ Source 1: SMPTE bars (640x480)")
 
     source2 = TestPatternActor(
         actor_id='source2',
-        width=960,
-        height=540,
+        width=640,
+        height=480,
         pattern='gradient',
-        fps=60
+        fps=30
     )
-    print(f"  ✓ Source 2: Gradient (960x540)")
+    print(f"  ✓ Source 2: Gradient (640x480)")
 
     # Create compositor
     print()
     print("Creating compositor...")
     compositor = CompositorActor(
         actor_id='compositor',
-        width=1920,
-        height=1080,
-        fps=60,
+        width=640,
+        height=480,
+        fps=30,
         num_inputs=2
     )
-    print(f"  ✓ Compositor (1920x1080, 2 inputs)")
+    print(f"  ✓ Compositor (640x480, 2 inputs)")
 
     # Create display
     display = DisplayActor(

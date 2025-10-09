@@ -13,6 +13,9 @@ from ..actor import Actor, StreamOutput, StreamInput
 from ..clocks import SoftwareClock, TimedTick
 from ..messages import VideoFrame
 
+# Global flag to track if cv2.startWindowThread() has been called
+_cv2_thread_started = False
+
 
 class TestPatternActor(Actor):
     """
@@ -228,8 +231,23 @@ class DisplayActor(Actor):
 
         # Create window on first frame
         if not self.window_created:
-            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+            # Start window thread once globally for macOS compatibility
+            global _cv2_thread_started
+            if not _cv2_thread_started:
+                cv2.startWindowThread()
+                _cv2_thread_started = True
+
+            # Create window with AUTOSIZE for better cross-platform compatibility
+            cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
+
+            # Bring window to front (macOS specific)
+            try:
+                cv2.setWindowProperty(self.window_name, cv2.WND_PROP_TOPMOST, 1)
+            except:
+                pass  # Not all OpenCV builds support this
+
             self.window_created = True
+            print(f"[{self.actor_id}] Window '{self.window_name}' created")
 
         # Convert RGB to BGR (OpenCV uses BGR)
         bgr_frame = cv2.cvtColor(frame.data, cv2.COLOR_RGB2BGR)
@@ -237,10 +255,10 @@ class DisplayActor(Actor):
         # Display
         cv2.imshow(self.window_name, bgr_frame)
 
-        # Non-blocking waitKey (1ms)
-        # Yield to event loop first to prevent blocking
+        # Give OpenCV time to process events (10ms instead of 1ms)
+        # This is important for macOS window visibility
         await asyncio.sleep(0)
-        cv2.waitKey(1)
+        cv2.waitKey(10)
 
     async def stop(self) -> None:
         """Clean up window on stop."""
