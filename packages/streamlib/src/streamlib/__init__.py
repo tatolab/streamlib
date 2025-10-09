@@ -61,6 +61,13 @@ from .handlers import TestPatternHandler, DisplayHandler
 # Phase 3.3: Advanced Handlers (NEW)
 from .handlers import BlurFilter, CompositorHandler, DrawingHandler, DrawingContext
 
+# Phase 3.4: GPU Support (NEW - conditional)
+try:
+    from .handlers import BlurFilterGPU
+    _HAS_GPU_BLUR = True
+except (ImportError, AttributeError):
+    _HAS_GPU_BLUR = False
+
 # Ring buffers
 from .buffers import RingBuffer, GPURingBuffer
 
@@ -144,5 +151,9 @@ __all__ = [
     'RemoteActorStub',
     'connect_actor',
 ]
+
+# Phase 3.4: Add GPU handlers if available
+if _HAS_GPU_BLUR:
+    __all__.append('BlurFilterGPU')
 
 __version__ = '0.2.0'  # Phase 3.1: StreamHandler + Runtime

@@ -13,6 +13,13 @@ from .blur import BlurFilter
 from .compositor import CompositorHandler
 from .drawing import DrawingHandler, DrawingContext
 
+# Phase 3.4: GPU Support
+try:
+    from .blur_gpu import BlurFilterGPU
+    _HAS_GPU_BLUR = True
+except ImportError:
+    _HAS_GPU_BLUR = False
+
 __all__ = [
     # Phase 3.2
     'TestPatternHandler',
@@ -24,3 +31,7 @@ __all__ = [
     'DrawingHandler',
     'DrawingContext',
 ]
+
+# Phase 3.4 (conditional)
+if _HAS_GPU_BLUR:
+    __all__.append('BlurFilterGPU')
