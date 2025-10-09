@@ -7,12 +7,18 @@ Tests:
 - Dispatchers (Asyncio)
 - Actor base class
 - StreamInput/StreamOutput connections
-- Basic actors (TestPatternActor, DisplayActor stub)
+- Example actors (TestPatternActor from examples)
 """
 
 import pytest
 import asyncio
 import numpy as np
+import sys
+from pathlib import Path
+
+# Add project root to path for examples imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from streamlib import (
     RingBuffer,
     SoftwareClock,
@@ -21,7 +27,12 @@ from streamlib import (
     StreamInput,
     StreamOutput,
     VideoFrame,
+)
+
+from examples.actors import (
     TestPatternActor,
+    CompositorActor,
+    DrawingActor,
 )
 
 
@@ -339,7 +350,7 @@ class TestCompositorActor:
     @pytest.mark.asyncio
     async def test_create_compositor(self):
         """Test creating a compositor actor."""
-        from streamlib import CompositorActor
+        from examples.actors import CompositorActor
 
         compositor = CompositorActor(
             actor_id='compositor-test',
@@ -366,7 +377,7 @@ class TestCompositorActor:
     @pytest.mark.asyncio
     async def test_compositor_with_sources(self):
         """Test compositor with multiple video sources."""
-        from streamlib import CompositorActor, TestPatternActor
+        from examples.actors import CompositorActor, TestPatternActor
 
         # Create two test pattern generators
         gen1 = TestPatternActor(
@@ -421,7 +432,7 @@ class TestDrawingActor:
     @pytest.mark.asyncio
     async def test_create_drawing_actor(self):
         """Test creating a drawing actor."""
-        from streamlib import DrawingActor
+        from examples.actors import DrawingActor
 
         draw_code = """
 def draw(canvas, ctx):
@@ -460,7 +471,7 @@ def draw(canvas, ctx):
     @pytest.mark.asyncio
     async def test_drawing_actor_animated(self):
         """Test animated drawing actor."""
-        from streamlib import DrawingActor
+        from examples.actors import DrawingActor
 
         draw_code = """
 def draw(canvas, ctx):

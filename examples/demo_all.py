@@ -17,13 +17,18 @@ Shows:
 """
 
 import asyncio
-from streamlib import (
+import sys
+from pathlib import Path
+
+# Add parent directory to path for examples.actors imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from streamlib import connect_actor, ActorRegistry
+from examples.actors import (
     TestPatternActor,
     DrawingActor,
     CompositorActor,
     DisplayActor,
-    connect_actor,
-    ActorRegistry
 )
 
 

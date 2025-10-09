@@ -1,213 +1,160 @@
 # streamlib
 
-A composable streaming library for Python with network-transparent operations.
+**Minimal actor-based streaming framework for Python.**
 
-## Project Status
+streamlib is an SDK for building composable streaming pipelines using the actor model. It provides the core primitives - you build the implementations.
 
-**Phase 1: Core Infrastructure** - ✅ Complete (9/9 tests passing)
-**Phase 2: Basic Sources & Sinks** - ✅ Complete (8/8 tests passing)
-**Performance**: 26.9 FPS compositing @ 1280×720 (2.3x optimization from initial implementation)
-**Next**: Phase 3 - Hardware I/O
+## 🎯 Philosophy
 
-## What Is This?
+streamlib is a **framework, not a batteries-included library**. Like Cloudflare Actors or PyTorch core, we provide the primitives and let you build on top.
 
-streamlib provides Unix-pipe-style composable primitives for video streaming:
+**What we provide:**
+- ✅ Actor base class and lifecycle management
+- ✅ Ring buffers with latest-read semantics
+- ✅ Clocks (Software, PTP, Genlock)
+- ✅ Actor registry with network-transparent addressing
+- ✅ Zero dependencies (just Python stdlib)
 
-```python
-# Like Unix pipes:
-# cat file.txt | grep "error" | sed 's/ERROR/WARNING/'
+**What we DON'T provide:**
+- ❌ Video processing implementations
+- ❌ Drawing/graphics implementations
+- ❌ Codec implementations
 
-# But for video:
-WebcamSource() → DrawingLayer(code) → HLSSink()
-```
+You build those using whatever libraries you want (OpenCV, Skia, PIL, FFmpeg, etc.).
 
-### Key Features
-
-- **Composable**: Small, single-purpose components that chain together
-- **Network-transparent**: Operations work locally or remotely (Phase 4)
-- **Distributed**: Chain operations across machines (phone → edge → cloud)
-- **Zero-dependency**: Uses PyAV (no GStreamer installation required)
-- **ML-ready**: Zero-copy numpy pipeline for efficient ML integration
-- **Plugin system**: Easy to extend with custom sources, sinks, and layers
-
-## Installation
+## 📦 Installation
 
 ```bash
-# Basic installation
-pip install -e .
+# Install core framework only (zero dependencies)
+pip install ./packages/streamlib
 
-# With ML support
-pip install -e ".[ml]"
-
-# With network streaming (WebRTC)
-pip install -e ".[network]"
-
-# Development
-pip install -e ".[dev]"
+# Or for development (includes example dependencies)
+uv sync
 ```
 
-## Quick Start
+## 🚀 Quick Start
 
 ```python
 import asyncio
-from streamlib import DrawingLayer, DefaultCompositor
+from streamlib import Actor, StreamInput, StreamOutput, VideoFrame
 
-# Define drawing code
-draw_code = """
-def draw(canvas, ctx):
-    import skia
-    paint = skia.Paint()
-    paint.setColor(skia.Color(255, 0, 0, 255))
+class MyActor(Actor):
+    """You implement the actor logic."""
 
-    # Animated circle
-    radius = 50 + 30 * np.sin(ctx.time * 2)
-    canvas.drawCircle(ctx.width / 2, ctx.height / 2, radius, paint)
-"""
+    def __init__(self):
+        super().__init__('my-actor')
+        self.inputs['video'] = StreamInput('video')
+        self.outputs['video'] = StreamOutput('video')
+        self.start()
 
-# Create layer and compositor
-layer = DrawingLayer("animated", draw_code=draw_code)
-compositor = DefaultCompositor(width=1920, height=1080)
-compositor.add_layer(layer)
+    async def process(self, tick):
+        """Process each tick from the clock."""
+        frame = self.inputs['video'].read_latest()
+        if frame is None:
+            return
 
-# Generate frame
-async def main():
-    frame = await compositor.composite()
-    print(f"Generated frame: {frame.frame.shape}")
+        # Your processing logic here
+        processed = your_processing_function(frame.data)
 
-asyncio.run(main())
+        output_frame = VideoFrame(
+            data=processed,
+            timestamp=tick.timestamp,
+            frame_number=tick.frame_number,
+            width=frame.width,
+            height=frame.height
+        )
+        self.outputs['video'].write(output_frame)
 ```
 
-## Development
+## 📚 Examples
 
-### Running Tests
+See `examples/` directory for reference implementations:
+
+- **`examples/actors/`** - Example actor implementations (video, compositor, drawing)
+- **`examples/demo_*.py`** - Complete demos showing how to use the framework
+
+These are **reference implementations**, not part of the core library. Use them as starting points for your own implementations.
+
+## 🏗️ Architecture
+
+### Core Framework (`packages/streamlib/`)
+
+Minimal SDK with zero dependencies:
+- `Actor` - Base class for building actors
+- `RingBuffer` - Latest-read ring buffers (3 slots)
+- `Clock` - Timing abstraction (Software, PTP, Genlock)
+- `Registry` - Network-transparent actor addressing
+- `StreamInput`/`StreamOutput` - Connection ports
+
+### Examples (`examples/`)
+
+Reference implementations showing how to build actors:
+- `TestPatternActor` - Generate test patterns (uses NumPy)
+- `CompositorActor` - Alpha blending (uses NumPy)
+- `DrawingActor` - Graphics (uses Skia)
+- `DisplayActor` - Display window (uses OpenCV)
+
+**These are NOT maintained as part of core** - they demonstrate patterns.
+
+## 🔧 Building Your Own Actors
+
+streamlib is designed to be extended. Build actors for:
+- Video processing (OpenCV, PyAV, FFmpeg)
+- Graphics (Skia, PIL, Cairo, Manim)
+- Audio (PyAudio, sounddevice)
+- ML (PyTorch, TensorFlow, ONNX)
+- Network (WebRTC, HLS, RTMP)
+
+Use whatever libraries make sense for your use case.
+
+## 🌐 Network-Transparent Design
+
+All actors have URIs:
+```python
+actor://local/MyActor/instance-id
+actor://192.168.1.100/MyActor/instance-id
+```
+
+This enables distributed processing (Phase 4):
+```python
+source = connect_actor('actor://local/TestPatternActor/test1')
+compositor = connect_actor('actor://edge-server/CompositorActor/main')
+display = connect_actor('actor://local/DisplayActor/output')
+
+source >> compositor >> display
+```
+
+## 🧪 Testing
 
 ```bash
-# All tests
-pytest tests/ -v
+# Run tests
+uv run pytest
 
-# Specific test
-pytest tests/test_streamlib_core.py -v
-
-# With coverage
-pytest tests/ --cov=streamlib
+# All tests use core framework + example actors
+# 55/55 tests passing ✅
 ```
 
-### Code Style
+## 📖 Documentation
 
-```bash
-# Format
-black streamlib/
+- `packages/streamlib/README.md` - Core framework documentation
+- `examples/DEMOS.md` - Demo documentation (moved to examples/)
+- `FIXES.md` - Recent fixes and improvements
 
-# Lint
-ruff check streamlib/
+## 🎨 Design Inspiration
 
-# Type check
-mypy streamlib/
-```
+- **Cloudflare Actors** - Minimal framework, you build on top
+- **PyTorch** - Core tensor operations, ecosystem builds plugins
+- **Unix philosophy** - Composable primitives, not monoliths
 
-## Architecture
+## 🤝 Contributing
 
-### Core Components
+Contributions welcome! We maintain:
+- Core framework (minimal, stable, zero dependencies)
+- Example actors (reference implementations)
+- Documentation
 
-- **Sources**: Produce frames (webcam, file, screen, network, generated)
-- **Sinks**: Consume frames (HLS, file, display, network)
-- **Layers**: Process/generate visual content (video, drawing, ML)
-- **Compositor**: Combines layers using alpha blending
+We do NOT maintain specific implementations - that's for the ecosystem.
 
-### Design Principles
-
-1. **Network-Transparent**: Operations work locally or across machines
-2. **Zero-Copy**: NumPy arrays throughout for efficiency
-3. **Async-First**: Built with asyncio for streaming pipelines
-4. **Plugin System**: Easy to extend with custom components
-
-## Project Structure
-
-```
-streamlib/              # Main library
-├── base.py            # Abstract base classes
-├── timing.py          # Timing and synchronization
-├── plugins.py         # Plugin registration
-├── drawing.py         # Drawing layers
-├── compositor.py      # Video compositor
-├── sources/           # Source implementations (Phase 2+)
-├── sinks/             # Sink implementations (Phase 2+)
-└── layers/            # Layer implementations (Phase 2+)
-
-tests/                  # Test suite
-docs/markdown/          # Design documents
-```
-
-## Roadmap
-
-### Phase 1: Core Infrastructure ✅
-- Abstract base classes
-- Timing infrastructure
-- Plugin system
-- Drawing layers with Skia
-- Compositor with zero-copy blending
-
-### Phase 2: Basic Sources & Sinks ✅
-- ✅ FileSource - Read video files
-- ✅ TestSource - Generate test patterns
-- ✅ FileSink - Write video files
-- ✅ HLSSink - HTTP Live Streaming
-- ✅ DisplaySink - Preview window
-
-### Phase 3: Hardware I/O (Next)
-- WebcamSource, ScreenCaptureSource
-- Audio support
-
-### Phase 4: Network-Transparent Operations (Critical)
-- NetworkSource, NetworkSink
-- Serializable stream format
-- Distributed processing
-
-### Phase 5-7: Advanced Features
-- Full PTP time sync
-- ML layers with GPU acceleration
-- 3D tracking examples
-
-## Vision
-
-Unlike traditional streaming platforms, streamlib is designed as **composable primitives for AI orchestration**:
-
-- **Not a product**: A tool that enables emergent use cases
-- **Network-transparent**: Operations work across machines seamlessly
-- **Unix philosophy**: Do one thing well, compose easily
-- **AI-friendly**: Simple enough for agents to reason about
-
-This approach follows the same philosophy as Claude Code - provide powerful primitives, let capabilities emerge through use.
-
-## Documentation
-
-- [CLAUDE.md](CLAUDE.md) - Context for AI assistants
-- [Design Document](docs/markdown/standalone-library-design.md) - Complete architecture
-- [Implementation Progress](docs/markdown/streamlib-implementation-progress.md) - Current status
-- [Library README](streamlib/README.md) - Detailed API docs
-- [Conversation History](docs/markdown/conversation-history.md) - Original vision
-
-## Why PyAV?
-
-- No system dependencies (unlike GStreamer)
-- Pure Python installation via pip
-- Well-maintained FFmpeg bindings
-- Used successfully by [fastrtc](https://github.com/gradio-app/fastrtc)
-
-## Inspiration
-
-- [fastrtc](https://github.com/gradio-app/fastrtc) - WebRTC streaming architecture
-- Unix philosophy - Composable tools
-- Claude Code - Tool-augmented AI capabilities
-
-## License
+## 📄 License
 
 MIT
-
-## Contributing
-
-This is an early-stage project exploring composable visual primitives. Contributions welcome as we discover what works.
-
-## Original Vision
-
-This project emerged from exploring how AI agents could work with visual/spatial data through composable primitives, rather than monolithic applications. See [conversation-history.md](docs/markdown/conversation-history.md) for the complete philosophical foundation.

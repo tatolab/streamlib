@@ -9,7 +9,13 @@ Shows:
 """
 
 import asyncio
-from streamlib import DrawingActor, DisplayActor
+import sys
+from pathlib import Path
+
+# Add parent directory to path for examples.actors imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from examples.actors import DrawingActor, DisplayActor
 
 
 # Drawing code with animation
