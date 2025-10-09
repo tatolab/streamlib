@@ -41,7 +41,7 @@ class MyActor(Actor):
         super().__init__('my-actor')
         self.inputs['video'] = StreamInput('video')
         self.outputs['video'] = StreamOutput('video')
-        self.start()
+        # Actor begins processing automatically
 
     async def process(self, tick):
         """Process each tick from the clock."""
@@ -61,12 +61,14 @@ class MyActor(Actor):
         )
         self.outputs['video'].write(output_frame)
 
-# Connect actors
+# Actors start processing immediately when created
 source = MySourceActor()
 processor = MyActor()
 sink = MySinkActor()
 
-source >> processor >> sink
+# Connect actors (creates data flow paths)
+source.outputs['video'] >> processor.inputs['video']
+processor.outputs['video'] >> sink.inputs['video']
 ```
 
 ## Core Concepts

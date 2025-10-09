@@ -12,7 +12,7 @@ Example:
             super().__init__('my-actor')
             self.inputs['data'] = StreamInput('data')
             self.outputs['data'] = StreamOutput('data')
-            self.start()
+            # Actor begins processing automatically
 
         async def process(self, tick):
             data = self.inputs['data'].read_latest()

@@ -86,9 +86,7 @@ class CompositorActor(Actor):
 
         # Create output port
         self.outputs['video'] = StreamOutput('video')
-
-        # Start processing
-        self.start()
+        # ✅ Actor auto-starts here
 
     async def process(self, tick: TimedTick) -> None:
         """

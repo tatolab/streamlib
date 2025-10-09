@@ -45,7 +45,7 @@ class MyActor(Actor):
         super().__init__('my-actor')
         self.inputs['video'] = StreamInput('video')
         self.outputs['video'] = StreamOutput('video')
-        self.start()
+        # ✅ Actor auto-starts here (no start() call needed!)
 
     async def process(self, tick):
         """Process each tick from the clock."""

@@ -1,376 +1,756 @@
 # streamlib Architecture
 
-## Core Philosophy
+## Purpose
 
-**streamlib is a composable streaming library based on the Actor Pattern.**
+**streamlib is a Python SDK for building realtime stream processing applications.**
 
-Like Unix tools (`grep | sed | awk`) but for realtime streams (video, audio, events, data). Each component is an **Actor (Node)** that:
-- Runs continuously and independently
-- Processes messages from mailboxes (input streams)
-- Sends messages to other actors (output streams)
-- Maintains private encapsulated state
-- Requires no shared memory or locks
+Target users: broadcasters, app developers, ML engineers building realtime video/audio/data pipelines.
 
-**Key Metaphor: Water and Boats**
-- **Stream = Always flowing** (clock ticks continuously whether anyone participates or not)
-- **Boat = Actor/Node** (drops into stream, floats along, processes as it goes)
-- **Bathtub = Isolated actor** (creates own clock when not connected to upstream)
-- **Upstream/Downstream = Message flow** (actors affect downstream, unaware of upstream)
+## Design Philosophy
 
-## Actor Pattern Principles
+### SDK, Not Framework
 
-### 1. Actors Are Always Running
+Like **PyTorch core** (provides tensors, not pre-built models) or **Cloudflare Actors** (provides runtime, not applications):
+
+- ✅ **We provide**: Core abstractions (StreamHandler, Runtime, RingBuffer, Clock)
+- ✅ **Users build**: Their own handlers with their own libraries
+- ✅ **Zero dependencies**: Core SDK uses only Python stdlib
+- ✅ **Great DX**: Simple API, powerful composition, type hints everywhere
+
+### Unix Philosophy for Streams
+
+Like `grep | sed | awk` but for realtime streams:
+
 ```python
-# Wrong - manual lifecycle
-node = VideoNode()
-await node.start()  # ❌ No start()
-await node.run()    # ❌ No run()
-await node.stop()   # ❌ No stop()
+# Text processing (Unix)
+cat file.txt | grep "error" | sed 's/ERROR/WARNING/'
 
-# Right - actor exists and runs
-node = VideoNode()  # ✅ Created and immediately processing
+# Stream processing (streamlib)
+runtime.connect(source.outputs['video'], processor.inputs['video'])
+runtime.connect(processor.outputs['video'], sink.inputs['video'])
 ```
 
-When an actor is created, it immediately begins processing messages. The stream (clock) flows whether the actor has anything to do or not. Empty mailbox? Actor just waits for next tick.
+Each handler: single purpose, composable, independent.
 
-### 2. Message-Based Communication Only
-```python
-# Wrong - shared state
-compositor.frame = frame  # ❌ Direct state access
+### Broadcast-Quality Requirements
 
-# Right - send message
-upstream.output >> downstream.input  # ✅ Messages only
+**Zero-copy architecture:**
+- Ring buffers hold references, not data
+- GPU tensors stay on GPU throughout pipeline
+- No CPU↔GPU transfers except at boundaries
+- Capability negotiation handles memory space transitions
+
+**Clock-driven realtime:**
+- Fixed-rate ticks drive processing
+- Automatic frame dropping when can't keep up
+- No backpressure, no queueing
+- Predictable, deterministic timing
+
+**Professional timing:**
+- PTP (Precision Time Protocol) support
+- Genlock hardware sync
+- SMPTE ST 2110 alignment
+- Multi-camera synchronization
+
+---
+
+## Core Architecture
+
+### Three-Layer Design
+
+```
+StreamRuntime (lifecycle, clock, dispatchers, supervision, negotiation)
+    ↓
+    Manages multiple Streams
+    ↓
+Stream (config: handler + dispatcher + transport [optional])
+    ↓
+    Wraps StreamHandler
+    ↓
+StreamHandler (processing logic)
+    ↓
+    inputs/outputs → Capability-Based Ports → RingBuffers (zero-copy references)
 ```
 
-Actors never share state. All communication via asynchronous messages through input/output streams.
+**StreamRuntime** = Cloudflare Wrangler (manages lifecycle + negotiates capabilities)
+**Stream** = Configuration wrapper (handler + dispatcher + transport)
+**StreamHandler** = Durable Object (inert until activated)
 
-### 3. Mailbox (Queue) Processing
-```python
-class Actor:
-    def __init__(self):
-        self.inputs = {
-            'video': StreamInput('video', VideoFrame),  # Mailbox
-            'audio': StreamInput('audio', AudioBuffer)   # Mailbox
-        }
+---
 
-    async def _process_loop(self):
-        """Internal loop - processes messages sequentially."""
-        async for tick in self.clock.tick():
-            # Process messages from mailboxes
-            for input in self.inputs.values():
-                while not input.queue.empty():
-                    msg = await input.read()
-                    await self._handle_message(msg, tick)
-```
+## StreamHandler (Processing Logic)
 
-Each input is a mailbox. Messages arrive asynchronously but are processed sequentially, one at a time.
-
-### 4. Encapsulated State
-```python
-class CompositorActor(Actor):
-    def __init__(self):
-        super().__init__()
-        self._layers = []        # Private state
-        self._background = None  # Private state
-        # Nobody can access these except this actor
-```
-
-State is private. Only the actor can modify its own state.
-
-### 5. Concurrent and Independent
-```python
-# Actors run concurrently, independently
-video_gen = VideoGeneratorActor()
-audio_gen = AudioGeneratorActor()
-compositor = CompositorActor()
-display = DisplayActor()
-
-# All running concurrently from creation
-# No asyncio.gather() needed - they're already running
-```
-
-## Core Abstractions
-
-### Actor (Base Class)
+**Base class for all stream processing.**
 
 ```python
 from abc import ABC, abstractmethod
-from enum import Enum
+from typing import Dict, List, Optional
 
-class LifecycleState(Enum):
-    """Actor lifecycle states."""
-    RUNNING = "running"
-    STOPPED = "stopped"
-    FAILED = "failed"
-
-class Actor(ABC):
+class StreamHandler(ABC):
     """
-    Base class for all actors in the system.
+    Base class for stream processing handlers.
 
-    An actor:
-    - Runs continuously from creation
-    - Processes messages from input mailboxes
-    - Sends messages to output streams
-    - Maintains private state
-    - Syncs to upstream clock or creates own
+    Handlers are pure processing logic - reusable across execution contexts.
+    Runtime manages lifecycle, clock, and dispatcher assignment.
+
+    Handlers are INERT until added to StreamRuntime.
     """
 
-    def __init__(self, parent: Optional['Actor'] = None, dispatcher: Optional['Dispatcher'] = None):
-        # Lifecycle
-        self.state = LifecycleState.RUNNING
-        self.parent = parent
-        self.children: List['Actor'] = []
+    def __init__(self, handler_id: str = None):
+        self.handler_id = handler_id or f"{self.__class__.__name__}-{id(self)}"
 
-        # Register with parent
-        if parent:
-            parent.children.append(self)
-
-        # Named inputs (mailboxes)
+        # Input/output ports (backed by ring buffers)
+        # Ports declare capabilities (what memory spaces they support)
         self.inputs: Dict[str, StreamInput] = {}
-
-        # Named outputs (message sending)
         self.outputs: Dict[str, StreamOutput] = {}
 
-        # Clock (synced or own)
-        self.clock: Optional[Clock] = None
-
-        # Dispatcher (execution model)
-        self.dispatcher = dispatcher or AsyncioDispatcher()
-
-        # Start processing immediately
-        asyncio.create_task(self._run())
-
-    async def _run(self):
-        """
-        Internal processing loop - runs until stopped/failed.
-        DO NOT override this. Override process() instead.
-        """
-        try:
-            # Initialize dispatcher
-            await self.dispatcher.start()
-
-            # Call user hook
-            await self.on_start()
-
-            # Get clock (synced from upstream or create own)
-            if not self.clock:
-                self.clock = await self._acquire_clock()
-
-            # Process until stopped
-            async for tick in self.clock.tick():
-                if self.state != LifecycleState.RUNNING:
-                    break
-
-                # Schedule via dispatcher (enables concurrent execution)
-                await self.dispatcher.schedule(self, tick)
-
-            # Stopped gracefully
-            if self.state == LifecycleState.RUNNING:
-                self.state = LifecycleState.STOPPED
-
-        except Exception as e:
-            # Failed
-            self.state = LifecycleState.FAILED
-            raise
-
-        finally:
-            # Cleanup
-            await self._cleanup_children()
-            await self.on_stop()
-            await self.dispatcher.stop()
-
-    async def _acquire_clock(self) -> Clock:
-        """
-        Acquire clock - either from upstream or create own.
-
-        If any input has received a message with clock metadata,
-        sync to that clock. Otherwise create own (bathtub mode).
-        """
-        # Check if any input has clock metadata
-        for input in self.inputs.values():
-            if input.queue.qsize() > 0:
-                # Peek at first message (don't remove)
-                msg = await input.queue.get()
-                await input.queue.put(msg)  # Put back
-
-                if hasattr(msg, 'clock_source_id') and msg.clock_source_id:
-                    # Sync to upstream clock
-                    return UpstreamClock(input)
-
-        # No upstream clock, create own (bathtub)
-        return SoftwareClock(fps=self.default_fps)
-
-    async def _cleanup_children(self):
-        """Stop all children when parent stops."""
-        for child in self.children:
-            child.stop()
-
-    # ===== REQUIRED: Override in subclass =====
+        # Runtime-managed (set by runtime)
+        self._runtime = None
+        self._clock = None
+        self._dispatcher = None
+        self._running = False
 
     @abstractmethod
-    async def process(self, tick: TimedTick):
+    async def process(self, tick: TimedTick) -> None:
         """
-        Process one tick - OVERRIDE THIS.
+        Process one clock tick.
 
-        Read from self.inputs (mailboxes)
-        Do computation
-        Write to self.outputs (send messages)
+        1. Read latest data from inputs (zero-copy)
+        2. Process data (check negotiated_memory if handler adapts)
+        3. Write results to outputs (zero-copy)
 
-        Called every tick while actor is RUNNING.
-        """
-        pass
-
-    # ===== OPTIONAL: Override if needed =====
-
-    async def on_start(self):
-        """
-        Called once when actor starts - OVERRIDE if needed.
-
-        Initialize resources, open files, etc.
-        """
-        pass
-
-    async def on_stop(self):
-        """
-        Called when actor stops - OVERRIDE if needed.
-
-        Cleanup resources, close files, etc.
+        Example:
+            async def process(self, tick: TimedTick):
+                frame = self.inputs['video'].read_latest()  # Zero-copy reference
+                if frame:
+                    # Check negotiated memory space if handler adapts
+                    if self.inputs['video'].negotiated_memory == 'gpu':
+                        result = self.gpu_process(frame)  # GPU tensor stays on GPU
+                    else:
+                        result = self.cpu_process(frame)  # CPU numpy array
+                    self.outputs['video'].write(result)  # Zero-copy write
         """
         pass
 
-    @property
-    def default_fps(self) -> float:
-        """
-        Default FPS for bathtub mode - OVERRIDE if needed.
+    # Optional lifecycle hooks
+    async def on_start(self) -> None:
+        """Called once when runtime starts this handler."""
+        pass
 
-        Only used when actor has no upstream clock.
-        """
-        return 60.0
-
-    # ===== PROVIDED: Don't override =====
-
-    def spawn(self, actor_class, *args, supervisor=None, **kwargs):
-        """
-        Spawn child actor. Parent death → children stop.
-
-        Args:
-            actor_class: Actor class to instantiate
-            supervisor: Optional supervisor for child
-            *args, **kwargs: Arguments to actor_class
-
-        Returns:
-            Child actor instance
-        """
-        child = actor_class(*args, parent=self, **kwargs)
-
-        # Optional supervision
-        if supervisor:
-            supervisor.monitor(child)
-
-        return child
-
-    def stop(self):
-        """
-        Request actor to stop gracefully.
-
-        Sets state to STOPPED, which exits processing loop.
-        """
-        self.state = LifecycleState.STOPPED
+    async def on_stop(self) -> None:
+        """Called once when runtime stops this handler."""
+        pass
 ```
 
-### StreamInput (Mailbox)
+**Key points:**
+- Handlers are **pure processing logic** (no lifecycle awareness)
+- **Inert until runtime starts them** (no auto-start)
+- **Reusable** across different dispatchers
+- **Zero-copy** ring buffer reads/writes
+- **Clock-driven** via `process(tick)` calls
+- **Capability-aware** ports for CPU/GPU flexibility
 
-```python
-class StreamInput:
-    """
-    Mailbox for receiving messages of a specific type.
+---
 
-    For realtime systems, mailboxes have bounded capacity.
-    When full, upstream messages are dropped (not queued).
-    """
-    def __init__(self, name: str, msg_type: Type, maxsize: int = 2):
-        self.name = name
-        self.msg_type = msg_type
-        # Small queue for realtime - prefer dropping old messages
-        # over buffering (which adds latency)
-        self.queue = asyncio.Queue(maxsize=maxsize)
+## Capability-Based Ports (GStreamer-Inspired)
 
-    async def read(self) -> Any:
-        """Read next message (blocks if empty)."""
-        return await self.queue.get()
-
-    async def try_read(self) -> Optional[Any]:
-        """Try to read (returns None if empty)."""
-        try:
-            return self.queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
-
-    def has_messages(self) -> bool:
-        """Check if mailbox has messages."""
-        return self.queue.qsize() > 0
-```
-
-### StreamOutput (Message Sender)
+**Ports declare what memory spaces they CAN work with.**
 
 ```python
 class StreamOutput:
     """
-    Output that sends messages to connected mailboxes.
+    Output port with capability negotiation.
+
+    Capabilities list memory spaces this port can produce:
+    - ['cpu'] - CPU memory only (numpy arrays)
+    - ['gpu'] - GPU memory only (torch tensors)
+    - ['cpu', 'gpu'] - Flexible, can produce either
     """
-    def __init__(self, name: str, msg_type: Type):
+
+    def __init__(
+        self,
+        name: str,
+        port_type: str,  # 'video', 'audio', 'data'
+        capabilities: List[str],  # ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        slots: int = 3
+    ):
         self.name = name
-        self.msg_type = msg_type
-        self.subscribers: List[StreamInput] = []  # Connected mailboxes
+        self.port_type = port_type
+        self.capabilities = capabilities
+        self.buffer = RingBuffer(slots=slots)
+        self.negotiated_memory: Optional[str] = None  # Set during connect
 
-    async def send(self, message: Any):
-        """
-        Send message to all subscribers.
+    def write(self, data) -> None:
+        """Write reference to ring buffer (zero-copy)."""
+        self.buffer.write(data)
 
-        In realtime mode, drops messages if mailbox is full (no blocking).
-        This prevents upstream actors from stalling on slow downstream actors.
-        """
-        for subscriber in self.subscribers:
-            try:
-                subscriber.queue.put_nowait(message)
-            except asyncio.QueueFull:
-                # Drop message for realtime - old data is worthless
-                # Can add metrics/logging here if needed
-                pass
 
-    def connect(self, mailbox: StreamInput):
-        """Connect to another actor's mailbox."""
-        if mailbox.msg_type != self.msg_type:
-            raise TypeError(f"Type mismatch: {self.msg_type} vs {mailbox.msg_type}")
-        self.subscribers.append(mailbox)
+class StreamInput:
+    """
+    Input port with capability negotiation.
 
-    def __rshift__(self, mailbox: StreamInput):
-        """Pipe operator: output >> input"""
-        self.connect(mailbox)
-        return mailbox
+    Capabilities list memory spaces this port can accept:
+    - ['cpu'] - CPU memory only
+    - ['gpu'] - GPU memory only
+    - ['cpu', 'gpu'] - Flexible, can accept either
+    """
+
+    def __init__(
+        self,
+        name: str,
+        port_type: str,  # 'video', 'audio', 'data'
+        capabilities: List[str]  # ['cpu'], ['gpu'], or ['cpu', 'gpu']
+    ):
+        self.name = name
+        self.port_type = port_type
+        self.capabilities = capabilities
+        self.buffer: Optional[RingBuffer] = None
+        self.negotiated_memory: Optional[str] = None  # Set during connect
+
+    def connect(self, buffer: RingBuffer) -> None:
+        """Connect to ring buffer."""
+        self.buffer = buffer
+
+    def read_latest(self):
+        """Read latest reference (zero-copy)."""
+        if self.buffer is None:
+            return None
+        return self.buffer.read_latest()
+
+
+# Convenience factory functions
+def VideoInput(name: str, capabilities: List[str] = ['cpu']) -> StreamInput:
+    """Create video input port with capabilities."""
+    return StreamInput(name, port_type='video', capabilities=capabilities)
+
+def VideoOutput(name: str, capabilities: List[str] = ['cpu'], slots: int = 3) -> StreamOutput:
+    """Create video output port with capabilities."""
+    return StreamOutput(name, port_type='video', capabilities=capabilities, slots=slots)
+
+def AudioInput(name: str, capabilities: List[str] = ['cpu']) -> StreamInput:
+    """Create audio input port with capabilities."""
+    return StreamInput(name, port_type='audio', capabilities=capabilities)
+
+def AudioOutput(name: str, capabilities: List[str] = ['cpu'], slots: int = 3) -> StreamOutput:
+    """Create audio output port with capabilities."""
+    return StreamOutput(name, port_type='audio', capabilities=capabilities, slots=slots)
 ```
 
+---
+
+## Capability Negotiation (Runtime)
+
+**Runtime negotiates compatible memory space when connecting ports.**
+
+```python
+class StreamRuntime:
+    def connect(
+        self,
+        output_port: StreamOutput,
+        input_port: StreamInput,
+        auto_transfer: bool = True
+    ) -> None:
+        """
+        Connect output to input with capability negotiation.
+
+        Negotiation rules:
+        1. Port types must match (video→video, audio→audio)
+        2. Find intersection of capabilities
+        3. If intersection exists, negotiate that memory space
+        4. If no intersection, auto-insert transfer handler (or error)
+        """
+
+        # Check port type compatibility
+        if output_port.port_type != input_port.port_type:
+            raise TypeError(
+                f"Cannot connect {output_port.port_type} output to "
+                f"{input_port.port_type} input"
+            )
+
+        # Find capability intersection
+        common_caps = set(output_port.capabilities) & set(input_port.capabilities)
+
+        if common_caps:
+            # Negotiate: prefer upstream's actual memory space
+            # (minimizes transfers, lets upstream decide)
+            negotiated = output_port.capabilities[0]  # Prefer first declared
+
+            output_port.negotiated_memory = negotiated
+            input_port.negotiated_memory = negotiated
+            input_port.connect(output_port.buffer)
+
+            print(f"✅ Connected {output_port.name} → {input_port.name} "
+                  f"(negotiated: {negotiated})")
+        else:
+            # No common capabilities - need transfer handler
+            if not auto_transfer:
+                raise TypeError(
+                    f"Memory space mismatch: output supports {output_port.capabilities}, "
+                    f"input supports {input_port.capabilities}. "
+                    f"Use explicit transfer handler or set auto_transfer=True"
+                )
+
+            # Auto-insert transfer handler
+            self._insert_transfer_handler(output_port, input_port)
+
+    def _insert_transfer_handler(
+        self,
+        output_port: StreamOutput,
+        input_port: StreamInput
+    ) -> None:
+        """Auto-insert transfer handler between incompatible ports."""
+
+        # Determine transfer direction
+        out_mem = output_port.capabilities[0]
+        in_mem = input_port.capabilities[0]
+
+        print(
+            f"⚠️  WARNING: Auto-inserting {out_mem}→{in_mem} transfer "
+            f"for {output_port.port_type} (performance cost ~2ms). "
+            f"Consider explicit placement for control."
+        )
+
+        # Create appropriate transfer handler
+        if out_mem == 'cpu' and in_mem == 'gpu':
+            transfer = CPUtoGPUTransferHandler()
+            dispatcher = 'gpu'
+        elif out_mem == 'gpu' and in_mem == 'cpu':
+            transfer = GPUtoCPUTransferHandler()
+            dispatcher = 'asyncio'
+        else:
+            raise ValueError(f"Unknown transfer: {out_mem}→{in_mem}")
+
+        # Add transfer handler to runtime
+        transfer_stream = Stream(transfer, dispatcher=dispatcher)
+        self.add_stream(transfer_stream)
+
+        # Wire: output → transfer → input
+        transfer.inputs['in'].connect(output_port.buffer)
+        input_port.connect(transfer.outputs['out'].buffer)
+
+        # Set negotiated memory spaces
+        output_port.negotiated_memory = out_mem
+        transfer.inputs['in'].negotiated_memory = out_mem
+        transfer.outputs['out'].negotiated_memory = in_mem
+        input_port.negotiated_memory = in_mem
+
+        self._transfer_handlers.append(transfer)
+```
+
+---
+
+## Transfer Handlers
+
+**Explicit handlers for CPU↔GPU memory transfers.**
+
+```python
+class CPUtoGPUTransferHandler(StreamHandler):
+    """Transfer video frames from CPU to GPU memory."""
+
+    def __init__(self, device='cuda:0'):
+        super().__init__()
+        self.device = device
+        # Input: CPU only, Output: GPU only
+        self.inputs['in'] = VideoInput('in', capabilities=['cpu'])
+        self.outputs['out'] = VideoOutput('out', capabilities=['gpu'])
+
+    async def process(self, tick: TimedTick):
+        frame = self.inputs['in'].read_latest()
+        if frame:
+            # Explicit CPU → GPU transfer
+            gpu_data = torch.from_numpy(frame.data).to(self.device)
+            self.outputs['out'].write(VideoFrame(gpu_data, frame.timestamp, ...))
+
+
+class GPUtoCPUTransferHandler(StreamHandler):
+    """Transfer video frames from GPU to CPU memory."""
+
+    def __init__(self):
+        super().__init__()
+        # Input: GPU only, Output: CPU only
+        self.inputs['in'] = VideoInput('in', capabilities=['gpu'])
+        self.outputs['out'] = VideoOutput('out', capabilities=['cpu'])
+
+    async def process(self, tick: TimedTick):
+        frame = self.inputs['in'].read_latest()
+        if frame:
+            # Explicit GPU → CPU transfer
+            cpu_data = frame.data.cpu().numpy()
+            self.outputs['out'].write(VideoFrame(cpu_data, frame.timestamp, ...))
+```
+
+---
+
+## Stream (Configuration Wrapper)
+
+**Wraps handler with dispatcher and optional transport.**
+
+```python
+class Stream:
+    """
+    Configuration wrapper for StreamHandler.
+
+    Stream = Handler + Dispatcher + Transport (optional)
+
+    Dispatcher determines execution context:
+    - 'asyncio' - AsyncioDispatcher (I/O-bound, default)
+    - 'threadpool' - ThreadPoolDispatcher (CPU-bound)
+    - 'gpu' - GPUDispatcher (GPU-accelerated)
+    - 'processpool' - ProcessPoolDispatcher (heavy compute)
+    - Or pass custom Dispatcher instance
+
+    Transport is optional (only for I/O handlers):
+    - Internal processing handlers don't need transport
+    - I/O handlers (camera, display, network) use transport for metadata
+    """
+
+    def __init__(
+        self,
+        handler: StreamHandler,
+        dispatcher: str | Dispatcher = 'asyncio',  # Dispatcher name or instance
+        transport: Optional[Dict] = None,  # Optional, for I/O handlers only
+
+        # Lifecycle policies (Phase 4)
+        restart_policy: str = 'never',  # 'never', 'on-failure', 'always'
+        concurrency_limit: Optional[int] = None,
+        time_limit: Optional[int] = None,
+        **kwargs
+    ):
+        self.handler = handler
+        self.dispatcher = dispatcher
+        self.transport = transport
+        self.config = {
+            'dispatcher': dispatcher,
+            'transport': transport,
+            'restart_policy': restart_policy,
+            'concurrency_limit': concurrency_limit,
+            'time_limit': time_limit,
+            **kwargs
+        }
+```
+
+**Transport examples (optional, metadata only):**
+```python
+# Internal processing (no transport)
+filter_stream = Stream(FilterHandler(), dispatcher='asyncio')
+
+# Camera I/O (transport for metadata/registry)
+camera_stream = Stream(
+    CameraHandler(device_id=0),
+    dispatcher='asyncio',
+    transport={'type': 'camera', 'device': 0}
+)
+
+# Display I/O
+display_stream = Stream(
+    DisplayHandler(window='preview'),
+    dispatcher='asyncio',
+    transport={'type': 'display', 'window': 'preview'}
+)
+
+# RTP network I/O (Phase 4)
+rtp_stream = Stream(
+    RTPSendHandler(host='239.0.0.1', port=5004),
+    dispatcher='asyncio',
+    transport={'type': 'rtp', 'host': '239.0.0.1', 'port': 5004}
+)
+```
+
+---
+
+## StreamRuntime (Lifecycle Manager)
+
+**Central runtime that manages all handlers.**
+
+```python
+class StreamRuntime:
+    """
+    Runtime for managing StreamHandler lifecycle.
+
+    Inspired by Cloudflare Wrangler + GStreamer capability negotiation.
+
+    Responsibilities:
+    - Provide shared clock for all handlers
+    - Manage dispatcher pool
+    - Start/stop handlers
+    - Negotiate port capabilities and insert transfer handlers
+    - Supervise handlers (Phase 4: restart policies)
+    - Manage flat handler registry
+    """
+
+    def __init__(
+        self,
+        fps: float = 60.0,
+        clock: Optional[Clock] = None
+    ):
+        self.fps = fps
+        self.clock = clock or SoftwareClock(fps=fps)
+
+        # Flat handler registry (all handlers are siblings)
+        self.handlers: Dict[str, StreamHandler] = {}
+        self.streams: Dict[str, Stream] = {}
+
+        # Dispatcher pool (reusable dispatchers)
+        self.dispatchers: Dict[str, Dispatcher] = {
+            'asyncio': AsyncioDispatcher(),
+            'threadpool': ThreadPoolDispatcher(workers=4),
+            'gpu': GPUDispatcher(device='cuda:0'),
+            'processpool': ProcessPoolDispatcher(workers=2),
+        }
+
+        # Track auto-inserted transfer handlers
+        self._transfer_handlers: List[StreamHandler] = []
+
+    def add_stream(self, stream: Stream) -> None:
+        """
+        Add stream to runtime.
+
+        Handler remains inert until runtime.start().
+        """
+        handler = stream.handler
+        handler._runtime = self
+        handler._clock = self.clock
+
+        # Get dispatcher from pool or use custom instance
+        if isinstance(stream.dispatcher, str):
+            handler._dispatcher = self.dispatchers[stream.dispatcher]
+        else:
+            handler._dispatcher = stream.dispatcher
+
+        # Register in flat registry
+        self.handlers[handler.handler_id] = handler
+        self.streams[handler.handler_id] = stream
+
+    async def start(self) -> None:
+        """
+        Start runtime and all handlers.
+
+        - Starts shared clock
+        - Spawns handler tasks
+        - Begins supervision (Phase 4)
+        """
+        # Call on_start hooks
+        for handler in self.handlers.values():
+            await handler.on_start()
+
+        # Spawn handler tasks (clock-driven)
+        for handler in self.handlers.values():
+            handler._running = True
+            task = asyncio.create_task(self._run_handler(handler))
+
+    async def _run_handler(self, handler: StreamHandler) -> None:
+        """Run handler processing loop (clock-driven)."""
+        while handler._running:
+            tick = await self.clock.next_tick()
+
+            try:
+                # Schedule via dispatcher
+                await handler._dispatcher.schedule(handler.process(tick))
+            except Exception as e:
+                # Phase 4: Handle restart policy
+                # For now: crash runtime
+                raise
+```
+
+---
+
+## Ring Buffers (Zero-Copy)
+
+**Fixed-size circular buffers with latest-read semantics.**
+
+```python
+from typing import Generic, TypeVar, Optional
+import threading
+
+T = TypeVar('T')
+
+class RingBuffer(Generic[T]):
+    """
+    Fixed-size circular buffer (3 slots, broadcast standard).
+
+    Latest-read semantics:
+    - No queueing, no backpressure
+    - Always get most recent data
+    - Old data automatically skipped
+
+    Zero-copy:
+    - Stores references, not data copies
+    - GPU tensors stay on GPU
+    - CPU arrays stay in place
+    """
+
+    def __init__(self, slots: int = 3):
+        self.slots = slots
+        self.buffer: List[Optional[T]] = [None] * slots
+        self.write_idx = 0
+        self.lock = threading.Lock()
+        self.has_data = False
+
+    def write(self, data: T) -> None:
+        """Write reference to ring buffer (zero-copy)."""
+        with self.lock:
+            self.buffer[self.write_idx] = data  # Just store reference
+            self.write_idx = (self.write_idx + 1) % self.slots
+            self.has_data = True
+
+    def read_latest(self) -> Optional[T]:
+        """Read latest reference from ring buffer (zero-copy)."""
+        with self.lock:
+            if not self.has_data:
+                return None
+            idx = (self.write_idx - 1) % self.slots
+            return self.buffer[idx]  # Return reference, not copy
+```
+
+**Why 3 slots?**
+- Matches professional broadcast practice
+- Writer, reader, and one spare
+- Minimal latency, minimal memory
+
+**GPU ring buffers (pre-allocated):**
+```python
+class GPURingBuffer:
+    """Pre-allocated GPU memory ring buffer."""
+
+    def __init__(self, slots: int = 3, shape: tuple = (1920, 1080, 3)):
+        # Pre-allocate GPU buffers (avoid malloc during runtime)
+        self.buffers = [
+            torch.zeros(shape, device='cuda', dtype=torch.uint8)
+            for _ in range(slots)
+        ]
+        self.write_idx = 0
+        self.lock = threading.Lock()
+
+    def get_write_buffer(self) -> torch.Tensor:
+        """Get GPU buffer to write into (zero-copy)."""
+        with self.lock:
+            return self.buffers[self.write_idx]
+
+    def advance(self) -> None:
+        """Mark current buffer as ready."""
+        with self.lock:
+            self.write_idx = (self.write_idx + 1) % len(self.buffers)
+
+    def get_read_buffer(self) -> torch.Tensor:
+        """Get latest GPU buffer (zero-copy)."""
+        with self.lock:
+            idx = (self.write_idx - 1) % len(self.buffers)
+            return self.buffers[idx]
+```
+
+---
+
+## Clock Abstraction
+
+**Swappable clock sources for professional timing.**
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class TimedTick:
+    """Clock tick with timing metadata."""
+    timestamp: float      # PTP or wall clock time
+    frame_number: int     # Monotonic frame counter
+    clock_source_id: str  # Clock ID for sync
+    fps: float           # Clock rate
+
+class Clock(ABC):
+    """Abstract clock interface."""
+
+    @abstractmethod
+    async def next_tick(self) -> TimedTick:
+        """Wait for next tick."""
+        pass
+
+    @abstractmethod
+    def get_fps(self) -> float:
+        """Get nominal frame rate."""
+        pass
+
+# Implementations:
+# - SoftwareClock(fps=60) - Free-running software timer
+# - PTPClock(ptp_client) - IEEE 1588 Precision Time Protocol
+# - GenlockClock(sdi_device) - Hardware sync (SDI genlock)
+```
+
+**Runtime provides single clock for entire session:**
+- All handlers tick at same rate
+- Synchronized processing
+- Multi-camera alignment
+- Professional broadcast timing
+
+---
+
+## Dispatchers (Execution Contexts)
+
+**Four dispatcher types for different workload characteristics.**
+
+```python
+class Dispatcher(ABC):
+    """Abstract dispatcher for handler execution."""
+
+    @abstractmethod
+    async def schedule(self, coro):
+        """Execute handler coroutine in appropriate context."""
+        pass
+
+# 1. AsyncioDispatcher - I/O-bound (network, file, display)
+class AsyncioDispatcher(Dispatcher):
+    async def schedule(self, coro):
+        await coro  # Direct execution on event loop
+
+# 2. ThreadPoolDispatcher - CPU-bound (encoding, audio DSP)
+class ThreadPoolDispatcher(Dispatcher):
+    def __init__(self, workers: int = 4):
+        self.executor = ThreadPoolExecutor(max_workers=workers)
+
+    async def schedule(self, coro):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self.executor,
+                                    lambda: asyncio.run(coro))
+
+# 3. ProcessPoolDispatcher - Heavy CPU (multi-pass encoding)
+class ProcessPoolDispatcher(Dispatcher):
+    def __init__(self, workers: int = 2):
+        self.executor = ProcessPoolExecutor(max_workers=workers)
+    # (Implementation details...)
+
+# 4. GPUDispatcher - GPU-accelerated (ML inference, shaders)
+class GPUDispatcher(Dispatcher):
+    def __init__(self, device: str = 'cuda:0'):
+        self.device = torch.device(device)
+
+    async def schedule(self, coro):
+        await coro  # GPU work happens within coroutine
+```
+
+---
+
 ## Message Types
+
+**Standard message types for ring buffers.**
 
 ```python
 @dataclass
 class VideoFrame:
-    """Video frame message."""
-    data: NDArray[np.uint8]  # RGB or RGBA
+    """Video frame message (CPU or GPU)."""
+    data: np.ndarray | torch.Tensor  # CPU numpy or GPU tensor
     timestamp: float
     frame_number: int
-    clock_source_id: Optional[str] = None  # For clock sync
-    clock_rate: Optional[float] = None
+    width: int
+    height: int
 
+    def is_gpu(self) -> bool:
+        return isinstance(self.data, torch.Tensor) and self.data.is_cuda
 
 @dataclass
 class AudioBuffer:
     """Audio buffer message."""
-    data: NDArray[np.float32]  # Audio samples
+    data: np.ndarray  # Shape: (samples, channels), dtype: float32
     sample_rate: int
     timestamp: float
-    clock_source_id: Optional[str] = None
-
+    channels: int
 
 @dataclass
 class KeyEvent:
@@ -379,7 +759,6 @@ class KeyEvent:
     timestamp: float
     modifiers: int = 0
 
-
 @dataclass
 class MouseEvent:
     """Mouse event message."""
@@ -387,1069 +766,913 @@ class MouseEvent:
     y: int
     button: int
     timestamp: float
-
-
-@dataclass
-class DataMessage:
-    """Generic data message."""
-    data: bytes
-    timestamp: float
 ```
 
-## Clock Synchronization
+---
 
-### Bathtub Mode (Isolated Actor)
+## Example Usage
+
+### Simple CPU Handler
+
 ```python
-# Actor with no inputs creates own clock
-actor = VideoGeneratorActor()
-# Automatically creates SoftwareClock at default_fps
-# Runs independently
-```
+class BlurFilter(StreamHandler):
+    """CPU blur filter (single capability)."""
 
-### Stream Mode (Connected Actors)
-```python
-# Upstream actor
-generator = VideoGeneratorActor()  # Creates own clock
-
-# Downstream actor
-display = DisplayActor()  # No clock yet
-
-# Connect
-generator.outputs['video'] >> display.inputs['video']
-
-# When display receives first frame, it syncs to generator's clock
-# Clock metadata travels with VideoFrame messages
-```
-
-### Multiple Upstreams
-```python
-compositor = CompositorActor()
-
-# Connect multiple inputs
-gen1.outputs['video'] >> compositor.inputs['video']
-gen2.outputs['video'] >> compositor.inputs['layer1']
-
-# Compositor syncs to first input that sends a message
-# Others are sampled as available
-```
-
-## Example Actors
-
-### Video Generator Actor
-```python
-class VideoGeneratorActor(Actor):
-    """
-    Generates test pattern video frames.
-
-    Inputs: None
-    Outputs:
-        - 'video': VideoFrame stream
-    """
-
-    def __init__(self, pattern='smpte_bars', width=1920, height=1080, fps=60):
-        super().__init__()
-        self.pattern = pattern
-        self.width = width
-        self.height = height
-        self._fps = fps
-
-        # Register outputs
-        self.outputs['video'] = StreamOutput('video', VideoFrame)
-
-    @property
-    def default_fps(self) -> float:
-        return self._fps
-
-    async def process(self, tick: TimedTick):
-        # Generate frame
-        frame_data = self._generate_pattern(tick)
-
-        # Create message
-        msg = VideoFrame(
-            data=frame_data,
-            timestamp=tick.timestamp,
-            frame_number=tick.frame_number,
-            clock_source_id=id(self.clock),
-            clock_rate=self._fps
-        )
-
-        # Send to all subscribers
-        await self.outputs['video'].send(msg)
-
-    def _generate_pattern(self, tick: TimedTick) -> NDArray:
-        # Pattern generation logic
-        ...
-```
-
-### Display Actor
-```python
-class DisplayActor(Actor):
-    """
-    Displays video and emits input events.
-
-    Inputs:
-        - 'video': VideoFrame to display
-    Outputs:
-        - 'keyboard': KeyEvent stream
-        - 'mouse': MouseEvent stream
-    """
-
-    def __init__(self, window_name='Display'):
-        super().__init__()
-        self.window_name = window_name
-
-        # Inputs (mailboxes)
-        self.inputs['video'] = StreamInput('video', VideoFrame)
-
-        # Outputs (event emission)
-        self.outputs['keyboard'] = StreamOutput('keyboard', KeyEvent)
-        self.outputs['mouse'] = StreamOutput('mouse', MouseEvent)
-
-        # Initialize display
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-
-    async def process(self, tick: TimedTick):
-        # Read video frame from mailbox
-        frame = await self.inputs['video'].try_read()
-
-        if frame:
-            # Display it
-            cv2.imshow(self.window_name, frame.data)
-
-        # Check for input events
-        await asyncio.sleep(0)  # Yield to event loop
-        key = cv2.waitKey(1)
-
-        if key != -1:
-            # Send keyboard event
-            event = KeyEvent(key=key, timestamp=tick.timestamp)
-            await self.outputs['keyboard'].send(event)
-```
-
-### Compositor Actor
-```python
-class CompositorActor(Actor):
-    """
-    Composites video layers.
-
-    Inputs:
-        - 'base' (optional): Base video layer
-        - 'layer_*' (dynamic): Additional layers
-    Outputs:
-        - 'video': Composited result
-    """
-
-    def __init__(self, width=1920, height=1080):
-        super().__init__()
-        self.width = width
-        self.height = height
-        self._layers = []
-
-        # Register default inputs/outputs
-        self.inputs['base'] = StreamInput('base', VideoFrame)
-        self.outputs['video'] = StreamOutput('video', VideoFrame)
-
-    def add_layer(self, layer):
-        """Add drawing layer (private state)."""
-        self._layers.append(layer)
-
-    async def process(self, tick: TimedTick):
-        # Read base frame (optional)
-        base = await self.inputs['base'].try_read()
-
-        # Composite layers
-        result = await self._composite(base, tick)
-
-        # Send output
-        msg = VideoFrame(
-            data=result,
-            timestamp=tick.timestamp,
-            frame_number=tick.frame_number,
-            clock_source_id=tick.clock_source,
-            clock_rate=tick.clock_rate
-        )
-
-        await self.outputs['video'].send(msg)
-
-    async def _composite(self, base, tick):
-        # Compositing logic
-        ...
-```
-
-## Composition Patterns
-
-### Direct Connection
-```python
-# Create actors (immediately running)
-gen = VideoGeneratorActor()
-comp = CompositorActor()
-disp = DisplayActor()
-
-# Connect (pipe operator)
-gen.outputs['video'] >> comp.inputs['base']
-comp.outputs['video'] >> disp.inputs['video']
-
-# That's it - already running
-```
-
-### Event Handling
-```python
-class LoggerActor(Actor):
-    """Logs keyboard events."""
     def __init__(self):
         super().__init__()
-        self.inputs['keys'] = StreamInput('keys', KeyEvent)
+        # CPU-only ports
+        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
 
     async def process(self, tick: TimedTick):
-        event = await self.inputs['keys'].try_read()
-        if event:
-            print(f"Key pressed: {event.key}")
+        frame = self.inputs['video'].read_latest()
+        if frame:
+            blurred = cv2.GaussianBlur(frame.data, (5, 5), 0)  # CPU numpy
+            self.outputs['video'].write(VideoFrame(blurred, tick.timestamp, ...))
 
-# Connect display events to logger
-display.outputs['keyboard'] >> logger.inputs['keys']
+# Usage
+blur = Stream(BlurFilter(), dispatcher='asyncio')
+runtime = StreamRuntime(fps=30)
+runtime.add_stream(blur)
+await runtime.start()
 ```
 
-### Multi-Stream
+### Flexible Handler (CPU or GPU)
+
 ```python
-# Video path
-video_gen >> compositor >> display
+class AdaptiveFilter(StreamHandler):
+    """Filter that works on CPU or GPU (flexible capabilities)."""
 
-# Audio path
-audio_gen >> audio_mixer >> audio_output
-
-# Event path
-display.outputs['keyboard'] >> key_handler
-display.outputs['mouse'] >> mouse_handler
-```
-
-### Explicit Buffering
-```python
-# By default, messages drop when downstream is slow (realtime)
-fast_gen >> slow_processor  # Frames will be dropped
-
-# Add explicit buffer actor when needed
-class BufferActor(Actor):
-    """Buffers messages between fast upstream and slow downstream."""
-    def __init__(self, capacity: int = 30):
+    def __init__(self):
         super().__init__()
-        self.inputs['in'] = StreamInput('in', VideoFrame, maxsize=capacity)
-        self.outputs['out'] = StreamOutput('out', VideoFrame)
+        # Flexible ports - can work with either
+        self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
+        self.outputs['video'] = VideoOutput('video', capabilities=['cpu', 'gpu'])
 
     async def process(self, tick: TimedTick):
-        # Pass through with larger queue
-        msg = await self.inputs['in'].try_read()
-        if msg:
-            await self.outputs['out'].send(msg)
+        frame = self.inputs['video'].read_latest()
+        if frame:
+            # Check negotiated memory space
+            if self.inputs['video'].negotiated_memory == 'gpu':
+                # GPU path
+                result = torch_filter(frame.data)  # GPU tensor operations
+            else:
+                # CPU path
+                result = cv2.GaussianBlur(frame.data, (5, 5), 0)  # numpy
 
-# Use buffer for processing that can't keep up
-fast_gen >> BufferActor(capacity=30) >> slow_ml_processor >> display
+            self.outputs['video'].write(VideoFrame(result, tick.timestamp, ...))
+
+# Runtime negotiates based on connections
+adaptive = Stream(AdaptiveFilter(), dispatcher='asyncio')
 ```
 
-### Network-Transparent (SMPTE ST 2110)
+### Mixed CPU/GPU Pipeline with Auto-Transfer
 
-**Design Philosophy:**
-- Align with professional broadcast standards (SMPTE ST 2110)
-- Minimal, embeddable core (for agent chips on edge devices)
-- Interoperable with real broadcast equipment
-- Discovery/registry is higher-layer convenience (Phase 5+)
-
-**OSI Model Alignment:**
-```
-Layer 7: Actor system, composition, orchestration
-Layer 6: SMPTE 2110 payload formats (video, audio, data)
-Layer 5: RTP (Real-time Transport Protocol)
-Layer 4: UDP (connectionless, low latency)
-Layer 3: IP (routing)
-Layer 2: Ethernet (MAC)
-Layer 1: Physical (cables, radio)
-```
-
-**Implementation:**
 ```python
-# Minimal RTP actors - just UDP + SMPTE 2110
-class RTPSendActor(Actor):
-    """
-    Send SMPTE ST 2110 RTP stream.
+# Create handlers
+camera = CameraHandler(device_id=0)
+ml_model = MLInferenceHandler(model)  # GPU-only
+display = DisplayHandler()
 
-    Encodes VideoFrame/AudioBuffer to SMPTE 2110 RTP packets.
-    Sends via UDP to specified host:port.
-    """
-    def __init__(self, host: str, port: int, payload_type: str = 'video'):
+# Create streams
+camera_stream = Stream(camera, dispatcher='asyncio')
+ml_stream = Stream(ml_model, dispatcher='gpu')
+display_stream = Stream(display, dispatcher='asyncio')
+
+# Add to runtime
+runtime = StreamRuntime(fps=30)
+runtime.add_stream(camera_stream)
+runtime.add_stream(ml_stream)
+runtime.add_stream(display_stream)
+
+# Connect (runtime auto-inserts transfers)
+runtime.connect(camera.outputs['video'], ml_model.inputs['video'])
+# ⚠️ WARNING: Auto-inserting cpu→gpu transfer for video (performance cost ~2ms)
+
+runtime.connect(ml_model.outputs['video'], display.inputs['video'])
+# ⚠️ WARNING: Auto-inserting gpu→cpu transfer for video (performance cost ~2ms)
+
+await runtime.start()
+```
+
+### Explicit Transfer Control
+
+```python
+# Create handlers
+camera = CameraHandler(device_id=0)
+to_gpu = CPUtoGPUTransferHandler(device='cuda:0')
+ml_model = MLInferenceHandler(model)
+to_cpu = GPUtoCPUTransferHandler()
+display = DisplayHandler()
+
+# Create streams with explicit dispatchers
+camera_stream = Stream(camera, dispatcher='asyncio')
+to_gpu_stream = Stream(to_gpu, dispatcher='gpu')  # Transfer on GPU thread
+ml_stream = Stream(ml_model, dispatcher='gpu')
+to_cpu_stream = Stream(to_cpu, dispatcher='asyncio')
+display_stream = Stream(display, dispatcher='asyncio')
+
+# Add to runtime
+runtime = StreamRuntime(fps=30)
+for stream in [camera_stream, to_gpu_stream, ml_stream, to_cpu_stream, display_stream]:
+    runtime.add_stream(stream)
+
+# Connect explicitly (no auto-transfers)
+runtime.connect(camera.outputs['video'], to_gpu.inputs['in'])
+runtime.connect(to_gpu.outputs['out'], ml_model.inputs['video'])
+runtime.connect(ml_model.outputs['video'], to_cpu.inputs['in'])
+runtime.connect(to_cpu.outputs['out'], display.inputs['video'])
+# ✅ All connections negotiated successfully (no warnings)
+
+await runtime.start()
+```
+
+### Multi-Input Compositor
+
+```python
+class VideoCompositor(StreamHandler):
+    """Multi-input compositor (CPU-only for simplicity)."""
+
+    def __init__(self):
         super().__init__()
-        self.inputs['stream'] = StreamInput('stream', VideoFrame)
+        # Multiple inputs
+        self.inputs['background'] = VideoInput('background', capabilities=['cpu'])
+        self.inputs['overlay1'] = VideoInput('overlay1', capabilities=['cpu'])
+        self.inputs['overlay2'] = VideoInput('overlay2', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+
+    async def process(self, tick: TimedTick):
+        # Clock-synchronized reads
+        bg = self.inputs['background'].read_latest()
+        ov1 = self.inputs['overlay1'].read_latest()
+        ov2 = self.inputs['overlay2'].read_latest()
+
+        if bg:
+            result = self.composite(bg, ov1, ov2)
+            self.outputs['video'].write(result)
+
+# Build pipeline
+camera1 = CameraHandler(device_id=0)
+camera2 = CameraHandler(device_id=1)
+camera3 = CameraHandler(device_id=2)
+compositor = VideoCompositor()
+display = DisplayHandler()
+
+# Create streams
+streams = [
+    Stream(camera1, dispatcher='asyncio'),
+    Stream(camera2, dispatcher='asyncio'),
+    Stream(camera3, dispatcher='asyncio'),
+    Stream(compositor, dispatcher='asyncio'),
+    Stream(display, dispatcher='asyncio'),
+]
+
+# Add to runtime
+runtime = StreamRuntime(fps=60)
+for stream in streams:
+    runtime.add_stream(stream)
+
+# Connect
+runtime.connect(camera1.outputs['video'], compositor.inputs['background'])
+runtime.connect(camera2.outputs['video'], compositor.inputs['overlay1'])
+runtime.connect(camera3.outputs['video'], compositor.inputs['overlay2'])
+runtime.connect(compositor.outputs['video'], display.inputs['video'])
+
+await runtime.start()
+```
+
+---
+
+## Flat Handler Registry
+
+**All handlers are siblings in runtime registry.**
+
+No handler spawning in Phase 3. All streams added upfront:
+
+```python
+runtime = StreamRuntime(fps=60)
+runtime.add_stream(camera_stream)
+runtime.add_stream(filter_stream)
+runtime.add_stream(display_stream)
+runtime.start()  # No new streams after this (Phase 3)
+```
+
+**Phase 4+:** May add `runtime.spawn_stream(stream)` for dynamic topology.
+
+**Why flat registry?**
+- Maintains handler independence (realtime requirement)
+- No parent-child ownership
+- Easier supervision and restart
+- Simpler lifecycle management
+
+---
+
+## Network-Transparent Design
+
+**Network is just another I/O type - handler concern, not runtime concern.**
+
+Runtime doesn't know about network addressing. Handlers handle their own I/O:
+
+```python
+class RTPSendHandler(StreamHandler):
+    """Send SMPTE ST 2110 RTP stream."""
+
+    def __init__(self, host: str, port: int):
+        super().__init__()
+        self.inputs['stream'] = VideoInput('stream', capabilities=['cpu'])
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.dest = (host, port)
         self.sequence = 0
 
-    async def process(self, tick: TimedTick):
-        frame = await self.inputs['stream'].try_read()
+    async def process(self, tick):
+        frame = self.inputs['stream'].read_latest()
         if frame:
             # Encode to SMPTE 2110 RTP packet
-            rtp_packet = encode_smpte_2110_rtp(
-                payload=frame.data,
-                timestamp=frame.timestamp,
-                sequence=self.sequence,
-                ptp_time=frame.ptp_time,
-                clock_source=frame.clock_source_id
-            )
+            rtp_packet = encode_smpte_2110_rtp(frame, self.sequence)
             self.socket.sendto(rtp_packet, self.dest)
             self.sequence += 1
 
-
-class RTPReceiveActor(Actor):
-    """
-    Receive SMPTE ST 2110 RTP stream.
-
-    Receives RTP packets via UDP on specified port.
-    Decodes to VideoFrame/AudioBuffer.
-    """
-    def __init__(self, port: int, payload_type: str = 'video'):
-        super().__init__()
-        self.outputs['stream'] = StreamOutput('stream', VideoFrame)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.bind(('0.0.0.0', port))
-        self.socket.setblocking(False)  # Non-blocking
-
-    async def process(self, tick: TimedTick):
-        try:
-            # Non-blocking receive
-            rtp_packet, addr = self.socket.recvfrom(65536)
-
-            # Decode SMPTE 2110 RTP packet
-            frame = decode_smpte_2110_rtp(rtp_packet)
-
-            await self.outputs['stream'].send(frame)
-        except BlockingIOError:
-            # No packet available, continue
-            pass
-
-
-# Usage - manual addressing (no discovery)
-# Local machine
-video_gen = VideoGeneratorActor()
-rtp_send = RTPSendActor(host='192.168.1.100', port=5004)
-
-video_gen >> rtp_send
-
-# Remote machine (or real SMPTE equipment!)
-rtp_recv = RTPReceiveActor(port=5004)
-display = DisplayActor()
-
-rtp_recv >> display
-
-# Clock and PTP timestamps flow automatically in RTP headers
+# Usage - manual addressing (Phase 3)
+rtp_send = RTPSendHandler(host='192.168.1.100', port=5004)
+rtp_stream = Stream(rtp_send, dispatcher='asyncio')
+runtime.add_stream(rtp_stream)
 ```
 
-**SMPTE 2110 Payload Formats (Phase 4):**
-- ST 2110-20: Uncompressed video (raw pixels)
-- ST 2110-22: Compressed video (H.264, JPEG XS)
-- ST 2110-30: PCM audio (uncompressed)
-- ST 2110-40: Ancillary data (metadata, subtitles)
+**Network addressing/discovery is Phase 4+ feature.**
 
-**Network Configuration:**
-AI agents can retrieve IP/port information and configure RTP actors directly. Manual addressing is simple and explicit.
+---
 
-### Actor Addressing & Discovery
+## SMPTE ST 2110 Alignment
 
-**URI-based addressing (Durable Objects-style):**
+**Professional broadcast standards:**
 
-Actors referenced by URIs, automatically created on demand:
+- **RTP/UDP transport** - SMPTE ST 2110-20/22/30/40
+- **PTP timestamps** - IEEE 1588 microsecond accuracy
+- **Jitter buffers** - 1-10ms for packet reordering
+- **Ring buffers** - Match broadcast triple-buffer practice
+- **Port-per-output** - One UDP port per stream output
+- **Control/data plane separation** - URIs for control, RTP for data
 
-```
-actor://host/ActorClass/instance-id
-```
+---
 
-**Control plane vs data plane:**
-- **Layer 7 (Control)**: Actor URIs for lifecycle, control messages, registry lookup
-- **Layers 4-6 (Data)**: SMPTE ST 2110 RTP/UDP for media streams
+## Performance Considerations
 
-**One UDP port per output:**
+### Zero-Copy Pipeline
+
+**Bad (copies data):**
 ```python
-# Get or create actor by URI
-camera = get_actor('actor://edge/VideoCapture/cam-1')
-# Actor output bound to: edge:5004
-
-# Stereo camera (multiple outputs)
-stereo = get_actor('actor://edge/StereoCam/stereo-1')
-stereo.outputs['left_video']   # → edge:5004
-stereo.outputs['right_video']  # → edge:5006
-stereo.outputs['audio']        # → edge:5008
-# Each output = separate SMPTE ST 2110 RTP stream = unique UDP port
+def process(self, tick):
+    frame = self.inputs['video'].read_latest().copy()  # ❌ Copy
+    result = transform(frame.copy())  # ❌ Another copy
+    self.outputs['video'].write(result.copy())  # ❌ Another copy
 ```
 
-**Registry maps outputs to ports:**
+**Good (zero-copy):**
 ```python
-{
-    'cam-1.video': 'edge:5004',
-    'stereo-1.left_video': 'edge:5004',
-    'stereo-1.right_video': 'edge:5006',
-    'stereo-1.audio': 'edge:5008',
-    'proc-1.video': 'gpu:5010'
-}
+async def process(self, tick):
+    frame = self.inputs['video'].read_latest()  # Reference only
+    if frame:
+        result = transform(frame)  # In-place or new allocation
+        self.outputs['video'].write(result)  # Reference only
 ```
 
-**Connection flow:**
+### GPU Efficiency
+
+**Keep data on GPU (explicit transfers):**
 ```python
-# 1. Get/create actors (allocates UDP ports)
-camera = get_actor('actor://edge/VideoCapture/cam-1')
-processor = get_actor('actor://gpu/FaceDetect/proc-1')
-
-# 2. Connect (sets up RTP streams)
-camera >> processor
-
-# Behind the scenes:
-# - Registry lookup: cam-1.video → edge:5004
-# - Registry lookup: proc-1.video → gpu:5010
-# - Configure: edge:5004 sends RTP to gpu:5010
+# Pipeline: CPU → GPU → GPU → GPU → CPU
+camera >> to_gpu >> detector >> overlay >> to_cpu >> display
+# Only 2 transfers (boundaries), GPU work stays on GPU
 ```
 
-**Location transparency:**
+**Ring buffers hold GPU tensor references:**
 ```python
-# Local actor (same process)
-display = get_actor('actor://local/Display/main')
-# Returns: Direct Python object reference
-
-# Remote actor (different host)
-camera = get_actor('actor://edge/VideoCapture/cam-1')
-# Returns: Remote stub (proxy object)
-# Control messages sent over network
-# Media streams use SMPTE ST 2110 RTP/UDP
+ring_buffer = RingBuffer[torch.Tensor]()
+gpu_tensor = torch.zeros((1920, 1080, 3), device='cuda')
+ring_buffer.write(gpu_tensor)  # Just stores reference
+frame = ring_buffer.read_latest()  # Returns reference, stays on GPU
 ```
 
-**SMPTE interoperability:**
+### Realtime Guarantees
+
+**Frame dropping (not queueing):**
 ```python
-# Connect to real SMPTE equipment (no URI, just IP:port)
-processor = get_actor('actor://gpu/Processor/proc-1')
-processor.inputs['video'].receive_from('192.168.1.50:5004')  # Real camera
-processor.outputs['video'].send_to('192.168.1.60:5006')      # Real display
+# Tick 1: Write frame_A
+# Tick 2: Write frame_B (overwrites oldest)
+# Tick 3: Write frame_C
+# Tick 4: Handler finally reads → Gets frame_C (latest)
+#         Frames A and B automatically dropped
 ```
 
-### Agent-Generated Actors
-```python
-# Agent generates code for custom actor
-code = await agent.generate("""
-Create an actor that:
-- Reads video frames
-- Detects faces
-- Emits bounding box data
-""")
-
-# Execute code to create actor class
-CustomActor = eval(code)
-
-# Instantiate and connect
-detector = CustomActor()
-video_gen >> detector
-detector.outputs['boxes'] >> overlay_actor
-```
-
-## Concurrent Execution & Dispatchers
-
-### Why Concurrency Matters
-
-Realtime streams (video, audio, events, data) have different processing characteristics:
-- **I/O-bound**: Network streams, file reading, display rendering
-- **CPU-bound**: Video encoding, audio processing, data transformation
-- **GPU-bound**: ML inference, face detection, shader effects, image processing
-
-A single-threaded asyncio event loop works well for I/O-bound actors but becomes a bottleneck for CPU/GPU-intensive work. **Dispatchers** abstract the execution model, allowing actors to run on the most appropriate executor.
-
-### Dispatcher Abstraction
-
-```python
-from abc import ABC, abstractmethod
-
-class Dispatcher(ABC):
-    """
-    Dispatchers schedule actor message processing on different executors.
-
-    Each actor can specify its preferred dispatcher based on its workload.
-    """
-    @abstractmethod
-    async def schedule(self, actor: Actor, tick: TimedTick):
-        """Schedule actor to process one tick."""
-        pass
-
-    @abstractmethod
-    async def start(self):
-        """Initialize dispatcher resources."""
-        pass
-
-    @abstractmethod
-    async def stop(self):
-        """Cleanup dispatcher resources."""
-        pass
-```
-
-### AsyncioDispatcher (Default - I/O Bound)
-
-**Use for:** Network streams, file I/O, display rendering, event handling
-
-**Characteristics:**
-- Single asyncio event loop (one thread)
-- Thousands of actors with minimal overhead
-- Efficient for I/O wait (network, disk, display)
-- **Not suitable** for CPU-intensive work (blocks event loop)
-
-```python
-class AsyncioDispatcher(Dispatcher):
-    """Default dispatcher for I/O-bound actors."""
-
-    async def schedule(self, actor: Actor, tick: TimedTick):
-        """Execute directly on event loop."""
-        await actor.process(tick)
-
-    async def start(self):
-        pass  # Uses existing event loop
-
-    async def stop(self):
-        pass
-
-# Usage (default)
-video_stream = RTPReceiveActor()  # I/O-bound, uses AsyncioDispatcher
-display = DisplayActor()  # I/O-bound, uses AsyncioDispatcher
-```
-
-### ThreadPoolDispatcher (CPU-Bound)
-
-**Use for:** Video encoding/decoding, audio processing, data transformation, compression
-
-**Characteristics:**
-- Multiple Python threads (typically 4-8)
-- Subject to GIL (Global Interpreter Lock)
-- **Good for C extensions** (numpy, OpenCV, PyAV bypass GIL)
-- Lower overhead than ProcessPoolDispatcher
-
-```python
-class ThreadPoolDispatcher(Dispatcher):
-    """Dispatcher for CPU-bound actors using thread pool."""
-
-    def __init__(self, workers: int = 4):
-        self.executor = ThreadPoolExecutor(max_workers=workers)
-        self.loop = None
-
-    async def schedule(self, actor: Actor, tick: TimedTick):
-        """Execute on thread pool."""
-        self.loop = self.loop or asyncio.get_event_loop()
-
-        # Run actor.process() on thread pool
-        await self.loop.run_in_executor(
-            self.executor,
-            lambda: asyncio.run(actor.process(tick))
-        )
-
-    async def start(self):
-        pass
-
-    async def stop(self):
-        self.executor.shutdown(wait=True)
-
-# Usage
-encoder = VideoEncoderActor(
-    dispatcher=ThreadPoolDispatcher(workers=4)
-)
-
-# Chain with I/O actors
-video_stream >> encoder >> rtp_send
-```
-
-### ProcessPoolDispatcher (Heavy CPU)
-
-**Use for:** Heavy encoding (H.264, H.265), complex ML models (if not GPU), batch processing
-
-**Characteristics:**
-- Multiple Python processes (typically 2-4)
-- Bypasses GIL (true parallelism)
-- Higher overhead (process spawn, IPC)
-- **Best for compute-heavy actors** with large per-message processing time
-
-```python
-class ProcessPoolDispatcher(Dispatcher):
-    """Dispatcher for heavy CPU-bound actors using process pool."""
-
-    def __init__(self, workers: int = 2):
-        self.executor = ProcessPoolExecutor(max_workers=workers)
-        self.loop = None
-
-    async def schedule(self, actor: Actor, tick: TimedTick):
-        """Execute on process pool."""
-        self.loop = self.loop or asyncio.get_event_loop()
-
-        # Serialize message, execute in process, deserialize result
-        await self.loop.run_in_executor(
-            self.executor,
-            _process_in_worker,
-            actor, tick
-        )
-
-    async def start(self):
-        pass
-
-    async def stop(self):
-        self.executor.shutdown(wait=True)
-
-# Usage
-heavy_encoder = H265EncoderActor(
-    dispatcher=ProcessPoolDispatcher(workers=2)
-)
-```
-
-### GPUDispatcher (GPU-Accelerated)
-
-**Use for:** ML inference, face detection, shader effects, image processing, GPU-accelerated encoding
-
-**Characteristics:**
-- Manages GPU execution contexts (CUDA streams, etc.)
-- Minimizes CPU↔GPU memory transfers
-- **Critical for realtime**: Keep data on GPU as long as possible
-- Multiple actors can share GPU, scheduled via CUDA streams
-
-**GPU Memory Transfer Patterns:**
-
-1. **CPU → GPU → CPU** (BAD for realtime)
-   ```python
-   # Slow: Transfer every frame
-   cpu_frame = await input.read()
-   gpu_frame = torch.tensor(cpu_frame).cuda()  # CPU→GPU
-   result = model(gpu_frame)
-   cpu_result = result.cpu().numpy()  # GPU→CPU
-   ```
-
-2. **Keep on GPU** (GOOD for realtime)
-   ```python
-   # Fast: Stay on GPU across actors
-   gpu_frame = await input.read()  # Already on GPU
-   result = model(gpu_frame)  # GPU→GPU (fast)
-   await output.send(result)  # Still on GPU
-   ```
-
-**Implementation:**
-
-```python
-class GPUDispatcher(Dispatcher):
-    """
-    Dispatcher for GPU-accelerated actors.
-
-    Manages CUDA streams for concurrent GPU execution.
-    Minimizes CPU↔GPU transfers by keeping data on device.
-    """
-
-    def __init__(self, device: str = 'cuda:0', streams: int = 4):
-        self.device = torch.device(device)
-        self.streams = [torch.cuda.Stream() for _ in range(streams)]
-        self.stream_idx = 0
-
-    async def schedule(self, actor: Actor, tick: TimedTick):
-        """Execute on GPU with CUDA stream."""
-        stream = self.streams[self.stream_idx]
-        self.stream_idx = (self.stream_idx + 1) % len(self.streams)
-
-        with torch.cuda.stream(stream):
-            await actor.process(tick)
-
-        # Don't block - allow overlap with CPU work
-        # torch.cuda.synchronize() only if needed
-
-    async def start(self):
-        # Warm up GPU, allocate memory pools
-        torch.cuda.set_device(self.device)
-
-    async def stop(self):
-        # Sync all streams before shutdown
-        for stream in self.streams:
-            stream.synchronize()
-
-# Usage
-face_detector = FaceDetectorActor(
-    dispatcher=GPUDispatcher(device='cuda:0', streams=4),
-    model='yolov8'
-)
-
-# Chain: GPU stays on GPU across actors
-video_stream >> face_detector >> gpu_overlay >> gpu_encoder >> rtp_send
-```
-
-### GPU-Accelerated Pipeline Example
-
-```python
-class GPUVideoProcessingActor(Actor):
-    """
-    GPU-accelerated video processing actor.
-
-    Keeps frames on GPU throughout pipeline:
-    - Decode with NVDEC (GPU decoder)
-    - Process with ML model (GPU inference)
-    - Encode with NVENC (GPU encoder)
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.inputs['video'] = StreamInput('video', VideoFrame)
-        self.outputs['encoded'] = StreamOutput('encoded', bytes)
-
-        # Use GPU dispatcher
-        self.dispatcher = GPUDispatcher(device='cuda:0', streams=2)
-
-        # Initialize GPU resources
-        self.model = torch.jit.load('model.pt').cuda()
-        self.decoder = NvDecoder()  # GPU decoder
-        self.encoder = NvEncoder()  # GPU encoder
-
-    async def process(self, tick: TimedTick):
-        frame = await self.inputs['video'].try_read()
-        if not frame:
-            return
-
-        # Decode on GPU (CPU→GPU transfer happens here)
-        gpu_frame = self.decoder.decode(frame.data)  # Returns GPU tensor
-
-        # ML inference on GPU (no transfer)
-        with torch.no_grad():
-            result = self.model(gpu_frame)  # GPU→GPU
-
-        # Encode on GPU (no transfer)
-        encoded = self.encoder.encode(result)  # GPU→GPU
-
-        # Send encoded bytes (GPU→CPU transfer happens here)
-        await self.outputs['encoded'].send(encoded.cpu())
-
-# Usage
-rtp_recv >> GPUVideoProcessingActor() >> rtp_send
-```
-
-### Shader-Based GPU Processing
-
-For shader effects (OpenGL/Vulkan/Metal), actors can render directly to GPU textures:
-
-```python
-class ShaderEffectActor(Actor):
-    """
-    Apply GPU shader effects to video frames.
-
-    Uses OpenGL/Vulkan for realtime effects.
-    Keeps data on GPU as textures.
-    """
-
-    def __init__(self, shader_path: str):
-        super().__init__()
-        self.inputs['video'] = StreamInput('video', GPUTexture)
-        self.outputs['video'] = StreamOutput('video', GPUTexture)
-
-        self.dispatcher = GPUDispatcher(device='cuda:0')
-
-        # Initialize OpenGL context and shader
-        self.ctx = moderngl.create_context()
-        self.shader = self.ctx.program(
-            vertex_shader=load_shader(f"{shader_path}.vert"),
-            fragment_shader=load_shader(f"{shader_path}.frag")
-        )
-
-    async def process(self, tick: TimedTick):
-        texture = await self.inputs['video'].try_read()
-        if not texture:
-            return
-
-        # Render shader effect (GPU→GPU, no CPU transfer)
-        output_texture = self.shader.render(texture)
-
-        await self.outputs['video'].send(output_texture)
-
-# Usage - all GPU, no CPU transfers
-video_stream >> ShaderEffectActor('bloom.glsl') >> ShaderEffectActor('vignette.glsl') >> display
-```
-
-### Realtime Event Processing
-
-Events (keyboard, mouse, OSC, MIDI) are I/O-bound but may trigger GPU work:
-
-```python
-# I/O-bound event listener
-osc_listener = OSCListenerActor()  # AsyncioDispatcher
-
-# GPU-bound effect actor
-shader_effect = ShaderEffectActor('distortion.glsl')  # GPUDispatcher
-
-# Connect events to GPU work
-osc_listener.outputs['params'] >> shader_effect.inputs['params']
-
-# Video pipeline stays on GPU
-video_stream >> shader_effect >> display
-```
-
-### Audio Processing
-
-Audio is typically CPU-bound (DSP) but can be GPU-accelerated:
-
-```python
-# CPU-bound audio DSP
-audio_mixer = AudioMixerActor(
-    dispatcher=ThreadPoolDispatcher(workers=2)
-)
-
-# GPU-accelerated audio ML (e.g., source separation)
-audio_ml = AudioSourceSeparationActor(
-    dispatcher=GPUDispatcher(device='cuda:0')
-)
-
-# Chain
-rtp_recv_audio >> audio_ml >> audio_mixer >> audio_output
-```
-
-### Dispatcher Selection Guidelines
-
-| Workload | Dispatcher | Example Actors |
-|----------|-----------|---------------|
-| Network I/O | AsyncioDispatcher | RTPReceiveActor, RTPSendActor, DisplayActor |
-| File I/O | AsyncioDispatcher | FileReadActor, FileSinkActor |
-| Event handling | AsyncioDispatcher | KeyboardActor, MouseActor, OSCListenerActor |
-| Video encoding | ThreadPoolDispatcher | H264EncoderActor (ffmpeg/PyAV) |
-| Audio DSP | ThreadPoolDispatcher | AudioMixerActor, EQActor |
-| Data transformation | ThreadPoolDispatcher | ResizeActor, ColorConvertActor |
-| Heavy encoding | ProcessPoolDispatcher | H265EncoderActor (multi-pass) |
-| ML inference | GPUDispatcher | FaceDetectorActor, PoseEstimationActor |
-| Shader effects | GPUDispatcher | BloomActor, DistortionActor |
-| GPU encoding | GPUDispatcher | NvencActor (NVIDIA GPU encoder) |
-
-### Actor with Dispatcher
-
-```python
-class Actor(ABC):
-    def __init__(self, parent: Optional['Actor'] = None, dispatcher: Optional[Dispatcher] = None):
-        # ...
-        self.dispatcher = dispatcher or AsyncioDispatcher()  # Default
-        # ...
-
-    async def _run(self):
-        """Internal loop - uses dispatcher for scheduling."""
-        try:
-            await self.on_start()
-
-            if not self.clock:
-                self.clock = await self._acquire_clock()
-
-            async for tick in self.clock.tick():
-                if self.state != LifecycleState.RUNNING:
-                    break
-
-                # Schedule via dispatcher
-                await self.dispatcher.schedule(self, tick)
-
-            # ...
-```
-
-### Multi-Dispatcher Pipeline
-
-```python
-# I/O actors (AsyncioDispatcher)
-rtp_recv = RTPReceiveActor()
-display = DisplayActor()
-
-# CPU actors (ThreadPoolDispatcher)
-decoder = VideoDecoderActor(dispatcher=ThreadPoolDispatcher(workers=4))
-
-# GPU actors (GPUDispatcher)
-face_detect = FaceDetectorActor(dispatcher=GPUDispatcher(device='cuda:0'))
-overlay = OverlayActor(dispatcher=GPUDispatcher(device='cuda:0'))
-
-# Chain: automatic dispatcher transitions
-rtp_recv >> decoder >> face_detect >> overlay >> display
-#  I/O     →   CPU   →    GPU      →   GPU   →   I/O
-
-# Efficient: Each actor runs on optimal executor
-```
+**Performance targets:**
+- 1080p60: < 16ms per frame (P99)
+- Jitter: < 1ms (P99 - P50)
+- CPU: < 5% per handler
+- Memory: Fixed (ring buffers pre-allocated)
+
+---
 
 ## Benefits
 
-1. **Composable**: Like Unix pipes - any output >> any input
-2. **Concurrent**: Actors run independently, no coordination needed
-3. **Resilient**: Actor failures don't cascade (mailbox isolation)
-4. **Scalable**: Thousands of lightweight actors
-5. **Distributed**: Network-transparent, works locally or remotely
-6. **Emergent**: Don't predict use cases, let them emerge
-7. **AI-Orchestratable**: Agents can dynamically create and connect actors
+1. **Composable** - Like Unix pipes for streams
+2. **Zero-copy** - References flow, not data copies
+3. **GPU-efficient** - Data stays on GPU with explicit transfers
+4. **Realtime** - Clock-driven, automatic frame dropping
+5. **Professional** - SMPTE/PTP/genlock support
+6. **Concurrent** - Handlers run independently
+7. **Flexible** - Capability negotiation handles CPU/GPU
+8. **Type-safe** - Runtime checks port type + memory space compatibility
+9. **SDK-appropriate** - Explicit dispatchers, visible costs
+10. **GStreamer-proven** - Capability-based negotiation works
 
-## Implementation Notes
+---
 
-### Actor Spawning
-**Anyone can spawn actors at any time.** Actors are not just created at initialization - they can be spawned:
-- By application code at startup
-- By other actors during processing
-- Dynamically by agents generating code
-- In response to events or messages
+## Philosophy
 
-When spawned, actors immediately begin running. Internally, `__init__()` spawns `asyncio.create_task(self._run())`.
+**Core insight:** Handlers are pure processing logic. Runtime provides execution context and negotiates capabilities.
 
-**Example - Actor spawning another actor:**
-```python
-class SupervisorActor(Actor):
-    async def process(self, tick: TimedTick):
-        # Spawn worker actor on demand
-        if self.needs_worker():
-            worker = WorkerActor()  # Spawns and runs immediately
-            self.outputs['tasks'] >> worker.inputs['work']
-```
+This separation enables:
+- Handler reusability across contexts
+- Simple, predictable API
+- Easy testing (handlers are just functions)
+- Runtime controls everything (lifecycle, timing, execution, negotiation)
 
-### No Lifecycle Management
-Actors are created running. No `start()`, `run()`, `stop()` methods visible to users. Once spawned, actors run until:
-- They choose to stop themselves
-- Their process completes (for finite actors)
-- A supervisor actor terminates them
+**Inspired by:**
+- **Cloudflare Actors** - Runtime manages lifecycle
+- **GStreamer** - Capability-based negotiation
+- **Unix pipes** - Composable primitives
+- **SMPTE ST 2110** - Professional broadcast standards
 
-### Automatic Clock Sync
-Actors automatically sync to upstream clocks by reading clock metadata from first received message. No manual sync needed.
-
-### Realtime Message Dropping (Not Backpressure)
-**For realtime systems, messages are DROPPED when mailboxes fill up, not queued.**
-
-If a downstream actor's mailbox is full:
-- Upstream `send()` drops the message (does NOT block)
-- This prevents upstream actors from stalling
-- Old frames/data are discarded in favor of new
-
-**Why:** In realtime (video, audio, events), old data is worthless. Better to drop old frames than block the pipeline.
-
-**If buffering is needed:** Place an explicit `BufferActor` between upstream and downstream:
-```python
-upstream >> BufferActor(capacity=30) >> slow_downstream
-```
-
-This is similar to GStreamer's queue elements but with explicit control.
-
-### Error Handling
-Actor exceptions are contained. Other actors continue running. Supervisor actors can monitor and restart failed actors (future).
-
-## Performance Profiling & Testing
-
-### Design Philosophy
-
-**Python implementation with Rust migration path:**
-
-- **Phase 3**: Pure Python implementation
-  - NumPy arrays (zero-copy, C backend)
-  - PyAV (FFmpeg C library)
-  - Skia/Cairo (C++ rendering)
-  - PyTorch/CUDA (GPU work in C++/CUDA)
-  - Actors in separate processes (bypass GIL)
-
-- **If bottlenecks found**: Migrate actor runtime to Rust (PyO3)
-  - Keep Python API (like Pydantic V2, Polars)
-  - Rust core (ring buffers, RTP stack, actor runtime)
-  - Python wrapper for business logic
-
-### Opt-In Profiling System
-
-**Zero overhead when disabled:**
-
-```python
-# Enable profiling via environment variable
-STREAMLIB_PROFILE=1 python demo.py
-
-# Disabled (default): No measurements, no overhead
-python demo.py
-```
-
-**Profiling points:**
-
-```python
-from streamlib.profiling import profile
-
-class VideoActor:
-    async def process(self, frame):
-        with profile('actor.process', actor_id=self.id, frame_number=frame.num):
-            # Profile specific operations
-            with profile('actor.decode'):
-                decoded = await self.decode(frame)
-
-            with profile('actor.ml_inference'):
-                result = await self.model.infer(decoded)
-
-            return result
-```
-
-**Built-in profiling for core components:**
-- `compositor.composite` - Total composition time
-- `compositor.blend` - Alpha blending
-- `layer.{name}.draw` - Per-layer rendering
-- `actor.{name}.process` - Actor processing
-- `network.send/receive` - Network I/O
-
-**Output format:**
-
-```
-=== Profiling Results ===
-
-Operation                   Count      Mean      P50      P95      P99     Max
-------------------------------------------------------------------------------
-frame.total                  1000   16.2ms   16.1ms   17.5ms   18.2ms  19.1ms
-frame.decode                 1000    5.1ms    5.1ms    5.5ms    5.8ms   6.2ms
-frame.process                1000    8.5ms    8.4ms    9.1ms    9.5ms  10.1ms
-compositor.composite         1000   14.6ms   14.5ms   15.2ms   15.7ms  16.2ms
-```
-
-### Performance Targets
-
-**Frame latency:**
-
-| Resolution | Target | Acceptable | Too Slow |
-|-----------|--------|------------|----------|
-| 1080p60   | < 16ms | < 20ms     | > 20ms   |
-| 1080p30   | < 33ms | < 40ms     | > 40ms   |
-| 4K30      | < 33ms | < 40ms     | > 40ms   |
-| 4K60      | < 16ms | < 20ms     | > 20ms   |
-
-**Jitter target:** < 1ms variance (P99 - P50)
-
-**Why these targets:**
-- Frame time = 1000ms / fps
-- Need some headroom for system variance
-- Jitter causes visible stutter
-
-### What to Profile
-
-1. **Frame processing latency** - End-to-end time per frame
-2. **Jitter** - Variance in frame times (P99 - P50)
-3. **Per-actor overhead** - CPU/memory per actor instance
-4. **Network latency** - RTP packet send/receive times
-5. **Memory copies** - Ring buffer should be zero-copy
-6. **GPU transfer** - CPU→GPU and GPU→CPU times
-
-### When to Migrate to Rust
-
-**Python works for:**
-- Up to 4K30 on modern hardware
-- < 10 concurrent actors
-- NumPy/PyAV/CUDA doing heavy lifting
-
-**Migrate to Rust if:**
-- Frame latency > 1 frame time
-- Jitter > 2ms consistently
-- Actor overhead > 5% CPU per actor
-- Profiling shows Python as bottleneck (not NumPy/FFmpeg)
-
-**Hybrid approach** (like Pydantic V2):
-- Python API (actor definitions, business logic, AI orchestration)
-- Rust core (runtime, ring buffers, RTP stack, timing)
-- PyO3 bindings for zero-copy data transfer
-- Best of both worlds: AI-friendly API + realtime performance
-
-## Philosophy Checks
-
-Before implementing any feature, ask:
-
-1. ✅ Is each component an independent actor?
-2. ✅ Does it run continuously from creation?
-3. ✅ Does it communicate only via messages?
-4. ✅ Is state fully encapsulated?
-5. ✅ Can agents dynamically create and connect it?
-6. ✅ Does it work the same locally and over network?
-7. ✅ Is it like `grep | sed | awk` for streams?
-
-If any answer is "no", the design is wrong.
+---
 
 ## References
 
 - Actor Model: https://en.wikipedia.org/wiki/Actor_model
-- Akka (Actor framework): https://doc.akka.io/
-- Erlang OTP: https://www.erlang.org/
-- WebRTC: https://webrtc.org/
-- Unix Philosophy: https://en.wikipedia.org/wiki/Unix_philosophy
+- SMPTE ST 2110: https://www.smpte.org/
+- PTP (IEEE 1588): https://en.wikipedia.org/wiki/Precision_Time_Protocol
+- GStreamer Capabilities: https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/negotiation.html
+- Cloudflare Durable Objects: https://developers.cloudflare.com/durable-objects/
+
+---
+
+# Addendum: GStreamer Interoperability
+
+**Note:** This section describes a future addon package (`streamlib-gstreamer`) that is NOT part of core streamlib. This would be an optional integration for users who want to leverage GStreamer's 100+ plugins within streamlib pipelines.
+
+## Why GStreamer Interop Works Naturally
+
+Our capability-based port design was inspired by GStreamer, making interop a natural fit:
+
+| GStreamer | streamlib |
+|-----------|-----------|
+| `memory:SystemMemory` caps | `capabilities=['cpu']` |
+| `memory:GLMemory` caps | `capabilities=['gpu']` |
+| Element pads | StreamInput/StreamOutput ports |
+| Caps negotiation | Runtime capability negotiation |
+| GstBuffer | VideoFrame with numpy/torch |
+
+## Three Interop Approaches
+
+### Approach A: Wrap Individual GStreamer Elements
+
+Wrap any GStreamer element as a StreamHandler:
+
+```python
+from streamlib.addons.gstreamer import GstElementHandler
+from gi.repository import Gst
+import numpy as np
+
+class GstElementHandler(StreamHandler):
+    """Wrap any GStreamer element as StreamHandler."""
+
+    def __init__(self, element_name: str, **properties):
+        super().__init__()
+
+        # Create GStreamer element
+        self.gst_element = Gst.ElementFactory.make(element_name, None)
+
+        # Set properties
+        for key, value in properties.items():
+            self.gst_element.set_property(key, value)
+
+        # Map GStreamer caps to our capabilities
+        # GstCaps with memory:SystemMemory → ['cpu']
+        # GstCaps with memory:GLMemory → ['gpu']
+        src_caps = self._parse_gst_caps('src')
+        self.outputs['src'] = VideoOutput('src', capabilities=src_caps)
+
+        sink_caps = self._parse_gst_caps('sink')
+        if sink_caps:
+            self.inputs['sink'] = VideoInput('sink', capabilities=sink_caps)
+
+        # Setup appsrc/appsink bridge
+        self.appsrc = Gst.ElementFactory.make('appsrc', None)
+        self.appsink = Gst.ElementFactory.make('appsink', None)
+
+        # Mini pipeline: appsrc → element → appsink
+        self.pipeline = Gst.Pipeline.new(None)
+        self.pipeline.add(self.appsrc)
+        self.pipeline.add(self.gst_element)
+        self.pipeline.add(self.appsink)
+
+        self.appsrc.link(self.gst_element)
+        self.gst_element.link(self.appsink)
+
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+    def _parse_gst_caps(self, pad_name):
+        """Map GStreamer caps to streamlib capabilities."""
+        pad = self.gst_element.get_static_pad(pad_name)
+        if not pad:
+            return None
+
+        caps = pad.query_caps(None)
+
+        # Check for GPU memory in caps
+        for i in range(caps.get_size()):
+            features = caps.get_features(i)
+
+            if features and features.contains('memory:GLMemory'):
+                return ['gpu']
+            elif features and features.contains('memory:SystemMemory'):
+                return ['cpu']
+
+        return ['cpu']  # Default to CPU
+
+    async def process(self, tick: TimedTick):
+        # Read from streamlib ring buffer
+        frame = self.inputs['sink'].read_latest()
+        if frame:
+            # Convert numpy/torch to GstBuffer
+            gst_buffer = self._to_gst_buffer(frame.data)
+            self.appsrc.emit('push-buffer', gst_buffer)
+
+        # Pull from GStreamer appsink
+        sample = self.appsink.emit('try-pull-sample', 0)
+        if sample:
+            gst_buffer = sample.get_buffer()
+            output_data = self._from_gst_buffer(gst_buffer)
+
+            # Write to streamlib ring buffer
+            self.outputs['src'].write(VideoFrame(
+                output_data,
+                tick.timestamp,
+                tick.frame_number,
+                frame.width,
+                frame.height
+            ))
+
+    def _to_gst_buffer(self, array):
+        """Convert numpy/torch to GstBuffer (zero-copy when possible)."""
+        if isinstance(array, torch.Tensor):
+            array = array.cpu().numpy()
+
+        gst_buffer = Gst.Buffer.new_allocate(None, array.nbytes, None)
+        gst_buffer.fill(0, array.tobytes())
+        return gst_buffer
+
+    def _from_gst_buffer(self, gst_buffer):
+        """Convert GstBuffer to numpy (zero-copy with memoryview)."""
+        success, map_info = gst_buffer.map(Gst.MapFlags.READ)
+        if not success:
+            return None
+
+        # Zero-copy via memoryview
+        array = np.frombuffer(map_info.data, dtype=np.uint8)
+        gst_buffer.unmap(map_info)
+
+        # TODO: Parse caps to get actual dimensions
+        return array.reshape((1080, 1920, 3))
+
+
+# Usage - wrap videotestsrc
+videotestsrc = GstElementHandler('videotestsrc', pattern='smpte')
+videotestsrc_stream = Stream(videotestsrc, dispatcher='asyncio')
+
+# Mix with pure streamlib handlers
+blur = BlurFilter()  # Pure streamlib handler
+blur_stream = Stream(blur, dispatcher='asyncio')
+
+runtime = StreamRuntime(fps=30)
+runtime.add_stream(videotestsrc_stream)
+runtime.add_stream(blur_stream)
+
+# Connect GStreamer element to streamlib handler
+runtime.connect(videotestsrc.outputs['src'], blur.inputs['video'])
+# ✅ Capabilities negotiated automatically!
+
+await runtime.start()
+```
+
+### Approach B: Wrap Entire GStreamer Pipeline
+
+Wrap a complete GStreamer pipeline as a single handler:
+
+```python
+from streamlib.addons.gstreamer import GstPipelineHandler
+
+class GstPipelineHandler(StreamHandler):
+    """Wrap entire GStreamer pipeline as single handler."""
+
+    def __init__(self, pipeline_str: str):
+        super().__init__()
+
+        # Parse GStreamer pipeline string
+        # e.g., "videotestsrc ! videoconvert ! videoscale"
+        self.pipeline = Gst.parse_launch(pipeline_str + " ! appsink name=sink")
+
+        self.appsink = self.pipeline.get_by_name('sink')
+        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+    async def process(self, tick: TimedTick):
+        # Pull frame from GStreamer pipeline
+        sample = self.appsink.emit('try-pull-sample', 0)
+        if sample:
+            gst_buffer = sample.get_buffer()
+            array = self._from_gst_buffer(gst_buffer)
+
+            self.outputs['video'].write(VideoFrame(
+                array, tick.timestamp, tick.frame_number, 1920, 1080
+            ))
+
+    def _from_gst_buffer(self, gst_buffer):
+        success, map_info = gst_buffer.map(Gst.MapFlags.READ)
+        if not success:
+            return None
+
+        array = np.frombuffer(map_info.data, dtype=np.uint8)
+        gst_buffer.unmap(map_info)
+        return array.reshape((1080, 1920, 3))
+
+
+# Usage - entire pipeline as handler
+gst_pipeline = GstPipelineHandler(
+    "videotestsrc pattern=smpte ! videoconvert ! videoscale width=1920 height=1080"
+)
+gst_stream = Stream(gst_pipeline, dispatcher='asyncio')
+
+# Connect to streamlib display
+display = DisplayHandler()
+display_stream = Stream(display, dispatcher='asyncio')
+
+runtime = StreamRuntime(fps=30)
+runtime.add_stream(gst_stream)
+runtime.add_stream(display_stream)
+runtime.connect(gst_pipeline.outputs['video'], display.inputs['video'])
+
+await runtime.start()
+```
+
+### Approach C: Bidirectional (Input + Output)
+
+Use GStreamer as a filter in the middle of a streamlib pipeline:
+
+```python
+from streamlib.addons.gstreamer import GstBidirectionalHandler
+
+class GstBidirectionalHandler(StreamHandler):
+    """GStreamer pipeline with both input and output."""
+
+    def __init__(self, pipeline_str: str):
+        super().__init__()
+
+        # Parse pipeline with named appsrc/appsink
+        # e.g., "appsrc name=src ! videoconvert ! videoscale ! appsink name=sink"
+        self.pipeline = Gst.parse_launch(pipeline_str)
+
+        self.appsrc = self.pipeline.get_by_name('src')
+        self.appsink = self.pipeline.get_by_name('sink')
+
+        # Detect capabilities from pipeline elements
+        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+    async def process(self, tick: TimedTick):
+        # Pull from streamlib, push to GStreamer
+        frame = self.inputs['video'].read_latest()
+        if frame:
+            gst_buffer = self._to_gst_buffer(frame.data)
+            self.appsrc.emit('push-buffer', gst_buffer)
+
+        # Pull from GStreamer, push to streamlib
+        sample = self.appsink.emit('try-pull-sample', 0)
+        if sample:
+            gst_buffer = sample.get_buffer()
+            array = self._from_gst_buffer(gst_buffer)
+            self.outputs['video'].write(VideoFrame(
+                array, tick.timestamp, tick.frame_number, 1920, 1080
+            ))
+
+    def _to_gst_buffer(self, array):
+        if isinstance(array, torch.Tensor):
+            array = array.cpu().numpy()
+        gst_buffer = Gst.Buffer.new_allocate(None, array.nbytes, None)
+        gst_buffer.fill(0, array.tobytes())
+        return gst_buffer
+
+    def _from_gst_buffer(self, gst_buffer):
+        success, map_info = gst_buffer.map(Gst.MapFlags.READ)
+        if not success:
+            return None
+        array = np.frombuffer(map_info.data, dtype=np.uint8)
+        gst_buffer.unmap(map_info)
+        return array.reshape((1080, 1920, 3))
+
+
+# Usage - GStreamer as filter in streamlib pipeline
+camera = CameraHandler(device_id=0)
+gst_filter = GstBidirectionalHandler(
+    "appsrc name=src ! videoconvert ! videoscale width=640 height=480 ! appsink name=sink"
+)
+display = DisplayHandler()
+
+# Create streams
+camera_stream = Stream(camera, dispatcher='asyncio')
+filter_stream = Stream(gst_filter, dispatcher='asyncio')
+display_stream = Stream(display, dispatcher='asyncio')
+
+# Build pipeline
+runtime = StreamRuntime(fps=30)
+runtime.add_stream(camera_stream)
+runtime.add_stream(filter_stream)
+runtime.add_stream(display_stream)
+
+# Wire: camera → GStreamer filter → display
+runtime.connect(camera.outputs['video'], gst_filter.inputs['video'])
+runtime.connect(gst_filter.outputs['video'], display.inputs['video'])
+
+await runtime.start()
+```
+
+## Memory Sharing Optimization
+
+**CPU memory (zero-copy):**
+```python
+# numpy array → GstBuffer via memoryview (zero-copy)
+mv = memoryview(numpy_array)
+gst_buffer = Gst.Buffer.new_wrapped(mv)
+
+# GstBuffer → numpy array via memoryview (zero-copy)
+success, map_info = gst_buffer.map(Gst.MapFlags.READ)
+numpy_array = np.frombuffer(map_info.data, dtype=np.uint8)
+```
+
+**GPU memory (zero-copy with GstGLMemory):**
+```python
+# torch tensor → GstGLMemory (share OpenGL texture)
+gl_context = GstGL.Context.new()
+gl_memory = GstGL.GLMemory.wrapped(
+    gl_context,
+    torch_tensor.data_ptr(),  # OpenGL texture ID
+    torch_tensor.numel()
+)
+gst_buffer = Gst.Buffer.new()
+gst_buffer.append_memory(gl_memory)
+
+# Both GStreamer and PyTorch point to same GPU memory
+```
+
+## Clock Synchronization
+
+**Option 1: Use streamlib clock to drive GStreamer:**
+```python
+class GstElementHandler(StreamHandler):
+    async def process(self, tick: TimedTick):
+        # Set GstBuffer timestamp from streamlib tick
+        gst_buffer.pts = int(tick.timestamp * Gst.SECOND)
+        gst_buffer.dts = gst_buffer.pts
+```
+
+**Option 2: Use GStreamer clock as streamlib Clock:**
+```python
+from streamlib.addons.gstreamer import GstClockAdapter
+
+class GstClockAdapter(Clock):
+    """Wrap GstClock as streamlib Clock."""
+
+    def __init__(self, gst_clock: Gst.Clock, fps: float = 60.0):
+        self.gst_clock = gst_clock
+        self.fps = fps
+        self.period = 1.0 / fps
+        self.frame_number = 0
+
+    async def next_tick(self) -> TimedTick:
+        # Wait until next frame time
+        gst_time = self.gst_clock.get_time()
+        target_time = (self.frame_number + 1) * self.period * Gst.SECOND
+
+        if gst_time < target_time:
+            wait_time = (target_time - gst_time) / Gst.SECOND
+            await asyncio.sleep(wait_time)
+
+        tick = TimedTick(
+            timestamp=self.gst_clock.get_time() / Gst.SECOND,
+            frame_number=self.frame_number,
+            clock_source_id='gstreamer',
+            fps=self.fps
+        )
+        self.frame_number += 1
+        return tick
+
+# Use GStreamer's clock for entire runtime
+gst_clock = Gst.SystemClock.obtain()
+runtime = StreamRuntime(clock=GstClockAdapter(gst_clock, fps=30))
+```
+
+## Benefits of GStreamer Interop
+
+1. **Access 100+ GStreamer plugins** - codecs, filters, sources, sinks
+2. **Hardware acceleration** - VA-API, NVENC, QuickSync via GStreamer
+3. **Mature codecs** - H.264/H.265/VP9/AV1 encoding/decoding
+4. **RTP/RTSP support** - GStreamer's battle-tested network stack
+5. **Mix and match** - Use GStreamer plugins where needed, streamlib elsewhere
+6. **Easy migration** - Existing GStreamer pipelines can be wrapped
+7. **Type-safe** - Capability negotiation catches CPU/GPU mismatches
+
+## Use Cases
+
+**Use streamlib handlers when:**
+- Writing custom processing logic in Python
+- Integrating ML models (PyTorch, ONNX)
+- Need explicit control over memory transfers
+- Building custom compositors/effects
+- Prototyping new algorithms
+
+**Use GStreamer elements when:**
+- Need hardware codec acceleration
+- Using proven plugins (x264enc, nvh264enc)
+- RTP/RTSP networking
+- File format support (MP4, MKV, WebM)
+- Camera capture with V4L2
+
+**Mix both when:**
+- GStreamer for I/O, streamlib for processing
+- Custom ML in streamlib, encoding in GStreamer
+- Rapid prototyping with GStreamer, optimize with streamlib
+
+## Package Structure
+
+```
+streamlib-gstreamer/
+├── pyproject.toml
+├── README.md
+└── src/
+    └── streamlib_gstreamer/
+        ├── __init__.py
+        ├── element_handler.py      # GstElementHandler
+        ├── pipeline_handler.py     # GstPipelineHandler
+        ├── bidirectional.py        # GstBidirectionalHandler
+        ├── clock.py                # GstClockAdapter
+        └── utils.py                # Caps parsing, buffer conversion
+```
+
+**Dependencies:**
+```toml
+[project]
+name = "streamlib-gstreamer"
+dependencies = [
+    "streamlib>=0.1.0",
+    "PyGObject>=3.42.0",  # GStreamer Python bindings
+]
+```
+
+**Installation:**
+```bash
+# Core streamlib (no GStreamer)
+pip install streamlib
+
+# With GStreamer addon
+pip install streamlib-gstreamer
+```
+
+This addon would unlock GStreamer's ecosystem while maintaining streamlib's clean SDK design!
+
+---
+
+## Performance & Implementation Notes
+
+### Display Sink Implementation (OpenCV)
+
+When implementing DisplaySink with OpenCV on macOS, these fixes are required:
+
+**Required for macOS compatibility:**
+```python
+import cv2
+
+# Call once at module import (not per-instance)
+cv2.startWindowThread()
+
+class DisplaySink(StreamHandler):
+    def __init__(self, window_name: str = "streamlib"):
+        super().__init__()
+        self.window_name = window_name
+        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
+
+        # Create window
+        cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)  # Not WINDOW_NORMAL
+
+        # Bring to foreground on macOS
+        cv2.setWindowProperty(
+            self.window_name,
+            cv2.WND_PROP_TOPMOST,
+            1
+        )
+
+    async def process(self, tick: TimedTick):
+        frame = self.inputs['video'].read_latest()
+        if frame:
+            # Convert RGB → BGR for OpenCV
+            bgr = cv2.cvtColor(frame.data, cv2.COLOR_RGB2BGR)
+            cv2.imshow(self.window_name, bgr)
+
+            # Longer delay for better event processing
+            cv2.waitKey(10)  # Not 1ms
+```
+
+**Key fixes:**
+- `cv2.startWindowThread()` - Required for macOS window event loop
+- `cv2.WINDOW_AUTOSIZE` - Better cross-platform compatibility than `WINDOW_NORMAL`
+- `cv2.setWindowProperty(WND_PROP_TOPMOST)` - Brings window to foreground
+- `cv2.waitKey(10)` - Longer delay (10ms) for reliable event processing
+
+### Current Performance Constraints
+
+**Python implementation limitations:**
+
+| Resolution | FPS | Status |
+|------------|-----|--------|
+| 640×480 | 30 | ✅ Works reliably |
+| 1280×720 | 30 | ⚠️ May drop frames |
+| 1920×1080 | 30 | ❌ Performance issues |
+| 640×480 | 60 | ⚠️ Borderline |
+| 1920×1080 | 60 | ❌ Too slow |
+
+**Bottlenecks identified:**
+1. **Compositor alpha blending** - NumPy operations become expensive at high resolutions
+2. **Event loop contention** - AsyncIO struggles with high-frequency ticks
+3. **Frame copying** - Python overhead for buffer management
+
+**For prototyping and development:**
+- Use **640×480 @ 30 FPS** as baseline
+- Test at target resolution/FPS early to identify bottlenecks
+- Profile before optimizing (don't assume what's slow)
+
+### Future Optimization Paths
+
+**When you need higher performance:**
+
+1. **Optimize compositor with Numba JIT:**
+   ```python
+   import numba
+
+   @numba.jit(nopython=True, parallel=True)
+   def blend_layers_fast(base, overlay, alpha):
+       # Vectorized operations compiled to machine code
+       ...
+   ```
+
+2. **GPU acceleration (CUDA/OpenCL):**
+   ```python
+   import torch
+
+   class GPUCompositor(StreamHandler):
+       def __init__(self):
+           self.inputs['layer0'] = VideoInput('layer0', capabilities=['gpu'])
+           self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+
+       async def process(self, tick):
+           # All operations stay on GPU
+           layers = [self.inputs[f'layer{i}'].read_latest() for i in range(4)]
+           blended = torch_alpha_blend(layers)  # GPU kernel
+           self.outputs['video'].write(blended)
+   ```
+
+3. **Move heavy work to thread pool:**
+   ```python
+   runtime.add_stream(Stream(
+       CompositorHandler(...),
+       dispatcher='threadpool'  # Not asyncio
+   ))
+   ```
+
+4. **Consider Rust/C++ for critical paths:**
+   - Write Python extension modules for hot loops
+   - Keep Python for orchestration, Rust for processing
+   - Use PyO3 for seamless Python↔Rust integration
+
+5. **Use GStreamer for hardware acceleration:**
+   ```python
+   # Let GStreamer handle codec acceleration
+   encoder = GstElementHandler('nvh264enc')  # NVIDIA GPU encoder
+   ```
+
+**Performance targets (Phase 4):**
+- 1080p60: < 16ms per frame
+- Jitter: < 1ms
+- Zero frame drops under normal load
+
+**Profile first, optimize second** - Don't prematurely optimize based on assumptions. The Python implementation may be sufficient for many use cases, especially with selective GPU acceleration.

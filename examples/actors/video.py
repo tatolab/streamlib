@@ -78,9 +78,7 @@ class TestPatternActor(Actor):
 
         # Create output port
         self.outputs['video'] = StreamOutput('video')
-
-        # Auto-start
-        self.start()
+        # ✅ Actor auto-starts here
 
     async def process(self, tick: TimedTick) -> None:
         """
@@ -210,9 +208,7 @@ class DisplayActor(Actor):
 
         # Create window (lazy - create on first frame)
         self.window_created = False
-
-        # Auto-start
-        self.start()
+        # ✅ Actor auto-starts here
 
     async def process(self, tick: TimedTick) -> None:
         """

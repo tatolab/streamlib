@@ -6,7 +6,7 @@ matching professional broadcast practice (SMPTE ST 2110).
 """
 
 import threading
-from typing import Any, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Optional, Tuple, TYPE_CHECKING, TypeVar, Generic
 
 if TYPE_CHECKING:
     import torch
@@ -18,7 +18,10 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 
-class RingBuffer:
+T = TypeVar('T')
+
+
+class RingBuffer(Generic[T]):
     """
     Fixed-size circular buffer for CPU data.
 
@@ -49,19 +52,19 @@ class RingBuffer:
         self.lock = threading.Lock()
         self.has_data = False
 
-    def write(self, data: Any) -> None:
+    def write(self, data: T) -> None:
         """
         Write data to ring buffer, overwriting oldest slot.
 
         Args:
-            data: Data to write (any type)
+            data: Data to write
         """
         with self.lock:
             self.buffer[self.write_idx] = data
             self.write_idx = (self.write_idx + 1) % self.slots
             self.has_data = True
 
-    def read_latest(self) -> Optional[Any]:
+    def read_latest(self) -> Optional[T]:
         """
         Read most recent data from ring buffer.
 

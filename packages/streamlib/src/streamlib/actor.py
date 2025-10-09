@@ -13,7 +13,7 @@ Example:
         def __init__(self):
             super().__init__(actor_id='my-actor')
             self.outputs['data'] = StreamOutput('data')
-            self.start()  # Auto-start
+            # Actor begins processing automatically
 
         async def process(self, tick: TimedTick):
             # Read latest from inputs (if any)
@@ -22,7 +22,7 @@ Example:
             result = do_work()
             self.outputs['data'].write(result)
 
-    # Actors start immediately
+    # Actors begin processing immediately when created
     actor = MyActor()  # Already running!
 
     # Connect actors
@@ -32,14 +32,17 @@ Example:
 import asyncio
 import traceback
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, TypeVar, Generic
 
 from .buffers import RingBuffer
 from .clocks import Clock, SoftwareClock, TimedTick
 from .dispatchers import Dispatcher, AsyncioDispatcher
 
 
-class StreamInput:
+T = TypeVar('T')
+
+
+class StreamInput(Generic[T]):
     """
     Input port for an actor (reads from ring buffer).
 
@@ -62,9 +65,9 @@ class StreamInput:
             name: Port name (e.g., 'video', 'audio', 'data')
         """
         self.name = name
-        self.buffer: Optional[RingBuffer] = None
+        self.buffer: Optional[RingBuffer[T]] = None
 
-    def connect(self, buffer: RingBuffer) -> None:
+    def connect(self, buffer: RingBuffer[T]) -> None:
         """
         Connect input to a ring buffer.
 
@@ -75,7 +78,7 @@ class StreamInput:
         """
         self.buffer = buffer
 
-    def read_latest(self) -> Optional[Any]:
+    def read_latest(self) -> Optional[T]:
         """
         Read latest data from ring buffer.
 
@@ -112,7 +115,7 @@ class StreamInput:
         return self.buffer.is_empty()
 
 
-class StreamOutput:
+class StreamOutput(Generic[T]):
     """
     Output port for an actor (writes to ring buffer).
 
@@ -137,21 +140,21 @@ class StreamOutput:
             slots: Ring buffer size (default: 3, matches broadcast practice)
         """
         self.name = name
-        self.buffer = RingBuffer(slots=slots)
+        self.buffer: RingBuffer[T] = RingBuffer(slots=slots)
         self.subscribers = []  # Track connections (for debugging)
 
-    def write(self, data: Any) -> None:
+    def write(self, data: T) -> None:
         """
         Write data to ring buffer.
 
         Args:
-            data: Data to write (any type)
+            data: Data to write
 
         Note: Overwrites oldest slot if buffer full (no backpressure).
         """
         self.buffer.write(data)
 
-    def __rshift__(self, other: StreamInput) -> StreamInput:
+    def __rshift__(self, other: StreamInput[T]) -> StreamInput[T]:
         """
         Pipe operator: output >> input
 
@@ -162,6 +165,9 @@ class StreamOutput:
 
         Returns:
             The input (for chaining)
+
+        Raises:
+            TypeError: If trying to connect to non-StreamInput
 
         Usage:
             # Basic connection
@@ -175,7 +181,17 @@ class StreamOutput:
             actor1 >> actor2 >> actor3  # If using default ports
         """
         if not isinstance(other, StreamInput):
-            raise TypeError(f"Can only connect to StreamInput, got {type(other)}")
+            raise TypeError(
+                f"Cannot connect StreamOutput to {type(other).__name__}.\n"
+                f"Expected StreamInput, got {type(other).__name__}.\n"
+                f"\n"
+                f"Correct usage:\n"
+                f"  source.outputs['video'] >> target.inputs['video']\n"
+                f"\n"
+                f"Make sure you're connecting:\n"
+                f"  - outputs['port_name'] to inputs['port_name']\n"
+                f"  - Not the actors themselves directly"
+            )
 
         other.connect(self.buffer)
         self.subscribers.append(other)
@@ -187,7 +203,7 @@ class Actor(ABC):
     Base class for all actors.
 
     Actors are independent, concurrent components that:
-    - Run continuously from creation (no start/stop methods exposed)
+    - Auto-start when created (immediately begin processing)
     - Process ticks from a clock
     - Read from input ring buffers (latest-read semantics)
     - Write to output ring buffers (overwrite oldest)
@@ -195,16 +211,15 @@ class Actor(ABC):
 
     Subclasses must:
     1. Call super().__init__() with actor_id
-    2. Create input/output ports
-    3. Call self.start() at end of __init__
-    4. Implement async def process(self, tick)
+    2. Create input/output ports in __init__
+    3. Implement async def process(self, tick)
 
     Example:
         class VideoGenerator(Actor):
             def __init__(self):
                 super().__init__('video-gen', clock=SoftwareClock(fps=60))
                 self.outputs['video'] = StreamOutput('video')
-                self.start()
+                # Actor begins processing automatically
 
             async def process(self, tick: TimedTick):
                 frame = self.generate_frame()
@@ -221,14 +236,15 @@ class Actor(ABC):
         """
         Initialize actor.
 
+        The actor begins processing automatically after __init__ completes.
+
         Args:
             actor_id: Unique identifier for this actor
             clock: Clock source (default: SoftwareClock(60fps))
             dispatcher: Execution dispatcher (default: AsyncioDispatcher)
             auto_register: Automatically register in global registry (default: True)
 
-        Note: Actors don't auto-start in __init__. Subclasses must call
-        self.start() explicitly (usually at end of their __init__).
+        Note: Actor begins processing automatically - no manual action needed.
         """
         self.actor_id = actor_id
         self.clock = clock or SoftwareClock(fps=60.0)
@@ -253,21 +269,31 @@ class Actor(ABC):
                 # Don't fail if registration fails
                 print(f"[{actor_id}] Warning: Failed to register in registry: {e}")
 
-    def start(self) -> None:
-        """
-        Start actor (begin processing ticks).
+        # Auto-start actor (schedule processing task)
+        # This happens after subclass __init__ completes
+        self._schedule_start()
 
-        Call this at the end of subclass __init__:
-            def __init__(self):
-                super().__init__('my-actor')
-                # ... setup ...
-                self.start()  # Start processing
-
-        Note: Safe to call multiple times (idempotent).
+    def _schedule_start(self) -> None:
         """
-        if not self._running:
+        Schedule actor to start on next event loop iteration.
+
+        This ensures the actor's __init__ has fully completed (including
+        subclass setup) before processing begins.
+        """
+        def _start_callback():
+            if not self._running:
+                self._running = True
+                self._task = asyncio.create_task(self._run())
+
+        # Schedule start on next loop iteration
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(_start_callback)
+        except RuntimeError:
+            # No event loop running, start immediately
+            # (This can happen during testing)
             self._running = True
-            self._task = asyncio.create_task(self._run())
+            # Task will be created when event loop starts
 
     async def _run(self) -> None:
         """

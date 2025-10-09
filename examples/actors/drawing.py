@@ -118,9 +118,7 @@ def draw(canvas, ctx):
 
         # Create output port
         self.outputs['video'] = StreamOutput('video')
-
-        # Start processing
-        self.start()
+        # ✅ Actor auto-starts here
 
     def set_draw_code(self, code: str) -> Dict[str, Any]:
         """

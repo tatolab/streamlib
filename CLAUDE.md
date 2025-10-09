@@ -2,7 +2,7 @@
 
 ## Project Vision
 
-streamlib is a **composable streaming library for Python** based on the **Actor Pattern**. It provides Unix-pipe-style primitives for realtime streams (video, audio, events, data) that AI agents can orchestrate.
+streamlib is a **composable streaming library for Python** with network-transparent operations. It's designed to provide Unix-pipe-style primitives for video streaming that AI agents (and humans) can orchestrate.
 
 ## Why This Exists
 
@@ -12,262 +12,154 @@ Most streaming/visual tools are **large, stateful, monolithic applications** (Un
 
 ### The Solution
 
-**Independent actors that communicate via messages** - like Unix tools but for realtime streams:
+**Stateless visual primitives that can be orchestrated** - like Unix tools but for video/image processing:
 
 ```bash
-# Unix philosophy (text):
+# Unix philosophy (works great):
 cat file.txt | grep "error" | sed 's/ERROR/WARNING/' | awk '{print $1}'
 
-# streamlib (realtime streams):
-VideoGeneratorActor() >> CompositorActor() >> DisplayActor()
-AudioGeneratorActor() >> MixerActor() >> SpeakerActor()
-DisplayActor().outputs['keyboard'] >> KeyHandlerActor()
+# Visual operations (what we're building):
+runtime.connect(camera.outputs['video'], compositor.inputs['video'])
+runtime.connect(compositor.outputs['video'], display.inputs['video'])
 ```
 
 ### Core Philosophy
 
-1. **Actor-based**: Each component is an independent actor processing messages
-2. **Message-passing only**: No shared state, communication via mailboxes
-3. **Composable primitives**: Small, single-purpose actors that connect together
-4. **Network-transparent**: Operations work seamlessly locally or remotely
-5. **Distributed**: Chain operations across machines (phone → edge → cloud)
-6. **Zero-dependency core**: No GStreamer required (uses PyAV for codecs)
-7. **Tool-first**: Provide tools, let use cases emerge
-8. **AI-orchestratable**: Agents can dynamically create and connect actors
+1. **Intention over implementation**: Tools express *what* you want, not *how* to do it
+2. **Composable primitives**: Small, single-purpose components that chain together
+3. **Network-transparent**: Operations work seamlessly locally or remotely
+4. **Distributed**: Chain operations across machines (phone → edge → cloud)
+5. **Zero-dependency core**: No GStreamer installation required
+6. **Tool-first, not product**: Like Claude Code - provide tools, let use cases emerge
 
-## Key Design Insights
+## Architecture (Phase 3)
 
-### Actor Pattern
+### Current Design: StreamHandler + Runtime
 
-> "The stream (clock) always flows, whether your boat (actor) participates or not."
+We're implementing a **handler-based architecture** inspired by Cloudflare Durable Objects and GStreamer's capability negotiation:
 
-**Actors are like boats in a river:**
-- Stream = Always flowing (clock ticks continuously)
-- Boat = Actor (drops in, floats along, processes messages)
-- Bathtub = Isolated actor (creates own clock when not connected)
-- Upstream/Downstream = Message flow (actors affect downstream, unaware of upstream)
-
-### Emergent Capabilities
-
-> "You don't need to invent AI-specific tools. The tools already exist. You just need to make them accessible to something that can reason about orchestrating them."
-
-We're not building "yet another streaming platform." We're building **composable primitives that AI can orchestrate**.
-
-> "Anthropic didn't build Claude Code thinking 'users will debug React.' They gave tools (read, write, bash, grep) and use cases emerged."
-
-Same approach here: give tools for stream processing, let use cases emerge.
-
-### Unix Philosophy Applied
-
-**Similar to Unix Tools**: `grep` doesn't maintain state. It takes input, produces output, done.
-
-**streamlib actors work the same way:**
-- Independent, continuously running
-- Read from inputs (mailboxes)
-- Process internally
-- Write to outputs (send messages)
-- Don't know or care what's upstream/downstream
-
-## Architecture
-
-**Actor Pattern** - See `docs/architecture.md` for complete details.
-
-Key principles:
-1. **Actors run continuously** - Created and immediately processing (no start/stop)
-2. **Message-based communication** - No shared state, only async messages
-3. **Mailbox processing** - Each input is a queue, messages processed sequentially
-4. **Encapsulated state** - Private to each actor
-5. **Concurrent execution** - All actors run independently
-
-### Core Abstractions
-
+**StreamHandler** - Pure processing logic (inert until runtime activates)
 ```python
-# Actor - base class for all components
-class Actor(ABC):
-    inputs: Dict[str, StreamInput]   # Mailboxes (receive messages)
-    outputs: Dict[str, StreamOutput] # Send messages
-    clock: Clock                     # Time synchronization
+class BlurFilter(StreamHandler):
+    def __init__(self):
+        super().__init__()
+        # Declare capability-based ports
+        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
 
     async def process(self, tick: TimedTick):
-        """Override: process one tick"""
-        pass
-
-# Message types
-VideoFrame, AudioBuffer, KeyEvent, MouseEvent, DataMessage
-
-# Connection (pipe operator)
-upstream.outputs['video'] >> downstream.inputs['video']
+        frame = self.inputs['video'].read_latest()  # Zero-copy
+        if frame:
+            result = cv2.GaussianBlur(frame.data, (5, 5), 0)
+            self.outputs['video'].write(VideoFrame(result, tick.timestamp))
 ```
 
-### Automatic Behavior
-
-**Actors auto-start when created:**
+**StreamRuntime** - Lifecycle manager
 ```python
-# Wrong - old pattern
-actor = SomeActor()
-await actor.start()  # ❌ No start()
-await actor.run()    # ❌ No run()
-await actor.stop()   # ❌ No stop()
-
-# Right - actor pattern
-actor = SomeActor()  # ✅ Created and immediately processing
+runtime = StreamRuntime(fps=30)
+runtime.add_stream(Stream(camera_handler, dispatcher='asyncio'))
+runtime.add_stream(Stream(blur_handler, dispatcher='asyncio'))
+runtime.connect(camera_handler.outputs['video'], blur_handler.inputs['video'])
+await runtime.start()
 ```
 
-**Clock syncs automatically:**
-```python
-# Isolated actor (bathtub mode)
-actor = VideoGeneratorActor()  # Creates own SoftwareClock
+**Key Concepts:**
+- **Capability-based ports**: Ports declare `['cpu']`, `['gpu']`, or `['cpu', 'gpu']`
+- **Runtime negotiation**: Auto-inserts transfer handlers when memory spaces don't match
+- **Explicit dispatcher**: Use `dispatcher='asyncio'`, `'threadpool'`, `'gpu'`, or `'processpool'`
+- **Clock-driven**: Runtime clock ticks drive all handlers
+- **Zero-copy**: Ring buffers hold references, not data copies
 
-# Connected actors
-gen >> display  # display syncs to gen's clock automatically
-```
+### What's Different From Actor Model (Obsolete)
 
-### Concurrent Execution & Dispatchers
+The codebase currently has an Actor model implementation (Phase 3 legacy), but we're transitioning to StreamHandler:
 
-**Actors run on different execution models based on workload:**
+**OLD (Actor model - being replaced):**
+- `Actor` base class with auto-start
+- `>>` operator for connections
+- "modality" concept
+- Actors own their lifecycle
 
-```python
-# I/O-bound (default): Network, file, events
-rtp_recv = RTPReceiveActor()  # AsyncioDispatcher (default)
+**NEW (StreamHandler model - implementing now):**
+- `StreamHandler` base class (inert)
+- `runtime.connect()` for explicit wiring
+- "dispatcher" parameter (explicit)
+- Runtime manages lifecycle
+- Capability-based port negotiation
 
-# CPU-bound: Encoding, audio DSP
-encoder = H264EncoderActor(
-    dispatcher=ThreadPoolDispatcher(workers=4)
-)
+## Development Status
 
-# GPU-accelerated: ML inference, shaders, GPU encoding
-face_detect = FaceDetectorActor(
-    dispatcher=GPUDispatcher(device='cuda:0', streams=4)
-)
-shader = ShaderEffectActor(
-    'bloom.glsl',
-    dispatcher=GPUDispatcher(device='cuda:0')
-)
+### Current State
+- ✅ Phase 1/2: Legacy prototype (being replaced)
+- 🚧 Phase 3: Actor model (obsolete, will be deleted)
+- 🎯 **NOW**: Implementing StreamHandler + Runtime from scratch
 
-# Chain: I/O → CPU → GPU → GPU → I/O
-rtp_recv >> encoder >> face_detect >> shader >> display
-```
+### What We're Building
 
-**Four dispatcher types:**
-1. **AsyncioDispatcher** (I/O-bound) - Network, file, events - Default
-2. **ThreadPoolDispatcher** (CPU-bound) - Video encoding, audio DSP
-3. **ProcessPoolDispatcher** (Heavy CPU) - Multi-pass encoding
-4. **GPUDispatcher** (GPU) - ML inference, shaders, GPU encoding
-
-**GPU optimization:**
-- Keep data on GPU across actors (minimize CPU↔GPU transfers)
-- CUDA streams for concurrent GPU execution
-- Shader support (OpenGL/Vulkan/Metal) for realtime effects
-
-See `docs/architecture.md` "Concurrent Execution & Dispatchers" section for full details.
-
-## Current Status
-
-### Phase 1-2: COMPLETE ✅
-- Base infrastructure (clocks, timing, layers, compositor)
-- Sources & sinks (test patterns, file I/O, display, HLS)
-- 17/17 tests passing
-
-### Phase 3: Actor Refactor 🚧 IN PROGRESS
-- Converting pipeline pattern to Actor pattern
-- See `docs/project.md` TODO section for details
-
-### Phase 4: Network-Transparent 📋 PLANNED
-- NetworkSendActor / NetworkReceiveActor
-- Distributed stream processing
-
-## Important Files
-
-### Documentation
-- **`docs/architecture.md`** - Complete Actor-based architecture
-- **`docs/project.md`** - Project overview, status, TODOs
-- **`docs/markdown/conversation-history.md`** - Original vision (session 23245f82)
-
-### Code
-- `src/streamlib/` - Main library package
-- `demo.py` - Visual demos
-- `tests/` - Test suite
-- `pyproject.toml` - Dependencies
-
-## Usage Example (Target API)
-
-```python
-# Actors auto-start when created
-video_gen = VideoGeneratorActor(pattern='smpte_bars', fps=60)
-compositor = CompositorActor(width=1920, height=1080)
-display = DisplayActor(window_name='Output')
-
-# Add layers to compositor
-compositor.add_layer(CircleLayer())
-compositor.add_layer(TextLayer("streamlib"))
-
-# Connect (pipe operator)
-video_gen.outputs['video'] >> compositor.inputs['base']
-compositor.outputs['video'] >> display.inputs['video']
-
-# Handle events
-display.outputs['keyboard'] >> key_logger.inputs['events']
-
-# Already running! Just wait
-await asyncio.Event().wait()
-```
-
-## Multi-Stream Example
-
-```python
-# Video path
-video_gen >> compositor >> display
-
-# Audio path
-audio_gen >> mixer >> speaker
-
-# Event paths
-display.outputs['keyboard'] >> key_handler
-display.outputs['mouse'] >> mouse_tracker
-
-# All running concurrently, synchronized by clock
-```
-
-## Development Principles
-
-1. **Build then optimize** - Don't imagine performance problems
-2. **Actor pattern** - Everything is an independent actor
-3. **Message passing** - No shared state, only messages
-4. **Network-transparent** - Design for distributed from day one
-5. **Visual verification** - Save frames, verify output
-6. **Test incrementally** - Test each actor in isolation
-7. **Let use cases emerge** - Don't predict, discover
+See `docs/architecture.md` for complete design. Key files:
+- `docs/architecture.md` - Complete architecture specification
+- `docs/project.md` - Implementation task list
 
 ## When Working on This Project
 
-1. **Remember**: Actors, not pipelines
-2. **Think**: Independent actors running continuously
-3. **Design**: Message-passing only (no shared state)
-4. **Ensure**: Actors auto-start in `__init__`
-5. **Verify**: Works locally AND over network
-6. **Ask**: Can an AI agent create and connect this dynamically?
+### Remember the Vision
+1. **Composable primitives**, not monolithic platform
+2. **Keep handlers stateless**: Each component simple and single-purpose
+3. **Think distributed**: Design for network-transparent operations
+4. **Test visually**: Save frames, verify they look correct
+5. **Use PyAV not GStreamer**: No system dependencies in core
+6. **Document discoveries**: Update progress docs as we learn
 
-## Philosophy Checks
+### Development Principles
 
-Before implementing any feature:
-- ✅ Is it an independent actor?
-- ✅ Does it run continuously from creation?
-- ✅ Does it communicate only via messages?
-- ✅ Is state fully encapsulated?
-- ✅ Can agents create and connect it dynamically?
-- ✅ Does it work locally and over network?
-- ✅ Is it like `grep | sed | awk` for streams?
-- ✅ Does it use the right dispatcher (I/O, CPU, GPU)?
-- ✅ For GPU actors, does it minimize CPU↔GPU transfers?
+**From the Conversation:**
+1. **Build then optimize**: Don't imagine performance problems, find them through testing
+2. **Start simple**: Begin with basic primitives, add complexity as needed
+3. **Visual inspection**: Save frames to files, verify visually
+4. **Iterate rapidly**: Test each change quickly
 
-If any answer is "no", the design is wrong.
+### Testing Philosophy
+- **Fast feedback loops**: Tests run in < 1 second
+- **Visual verification**: Save PNGs to verify output
+- **Progressive validation**: Test each component in isolation first
+- **Integration tests**: Verify components work together
 
-## References
+## Important Files
 
-- **Project docs**: `docs/project.md` (complete overview + TODOs)
-- **Architecture**: `docs/architecture.md` (Actor pattern details)
-- **Original vision**: `docs/markdown/conversation-history.md`
-- Actor Model: https://en.wikipedia.org/wiki/Actor_model
-- Akka: https://doc.akka.io/
-- WebRTC: https://webrtc.org/
-- Unix Philosophy: https://en.wikipedia.org/wiki/Unix_philosophy
+### Design Documents
+- `docs/architecture.md` - Complete architecture (authoritative)
+- `docs/project.md` - Implementation task list and timeline
+
+### Current Implementation (Legacy - Will Be Replaced)
+- `packages/streamlib/src/streamlib/` - Current Actor model code
+- `tests/` - Tests for Actor model (will be rewritten)
+- `examples/` - Actor-based examples (will be rewritten)
+
+### What to Keep
+- **Algorithms**: Alpha blending math, test patterns, drawing code
+- **PyAV usage patterns**: File reading/writing patterns
+- **Performance learnings**: Optimization strategies from benchmark_results.md
+
+### What to Replace
+- **Architecture**: Actor → StreamHandler
+- **Lifecycle**: Auto-start → Runtime-managed
+- **Connections**: `>>` operator → `runtime.connect()`
+- **Dispatchers**: "modality" → explicit dispatcher parameter
+- **Ports**: Simple → Capability-based negotiation
+
+## Commit Workflow
+
+**IMPORTANT: DO NOT AUTO-COMMIT CHANGES**
+
+The user wants to personally determine when changes are committed. When working on this project:
+
+1. ❌ **Never** automatically commit changes after completing work
+2. ✅ **Always** present changes to the user for review
+3. ✅ **Wait** for explicit user instruction to commit
+4. ✅ **Let the user** decide when to commit and what commit message to use
+
+This applies to all changes: code, documentation, tests, configuration, etc.
+
+## Original Session
+
+The vision for this project emerged from session `23245f82-5c95-42d4-9018-665fd44b614f`, documented in `docs/markdown/conversation-history.md`.
