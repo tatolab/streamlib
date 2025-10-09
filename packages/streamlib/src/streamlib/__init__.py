@@ -55,6 +55,9 @@ from .ports import (
 # Transfer handlers (NEW)
 from .transfers import CPUtoGPUTransferHandler, GPUtoCPUTransferHandler
 
+# Phase 3.2: Basic Handlers (NEW)
+from .handlers import TestPatternHandler, DisplayHandler
+
 # Ring buffers
 from .buffers import RingBuffer, GPURingBuffer
 
@@ -92,6 +95,10 @@ __all__ = [
     # Transfer handlers (NEW)
     'CPUtoGPUTransferHandler',
     'GPUtoCPUTransferHandler',
+
+    # Phase 3.2: Basic Handlers (NEW)
+    'TestPatternHandler',
+    'DisplayHandler',
 
     # Ring buffers
     'RingBuffer',
