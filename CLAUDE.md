@@ -31,6 +31,29 @@ runtime.connect(compositor.outputs['video'], display.inputs['video'])
 4. **Distributed**: Chain operations across machines (phone → edge → cloud)
 5. **Zero-dependency core**: No GStreamer installation required
 6. **Tool-first, not product**: Like Claude Code - provide tools, let use cases emerge
+7. **🔥 GPU-first, opinionated optimization**: Automatically stay on GPU, never bounce to CPU unnecessarily
+
+### The streamlib Superpower: Automatic GPU Optimization
+
+**This is what differentiates streamlib from GStreamer:**
+
+GStreamer pipelines constantly bounce between CPU/GPU because they're not opinionated.
+streamlib **automatically chooses the fastest path** and **stays on GPU as long as possible**.
+
+```python
+# User writes simple code
+runtime.connect(camera.outputs['video'], display.inputs['video'])
+
+# streamlib automatically:
+# 1. Detects camera outputs GPU
+# 2. Negotiates GPU path
+# 3. Selects optimal display backend (Metal/CUDA/OpenGL)
+# 4. Zero-copy GPU → screen
+#
+# Result: NO CPU TRANSFERS!
+```
+
+See `docs/gpu-optimization-philosophy.md` for complete explanation.
 
 ## Architecture (Phase 3)
 
@@ -58,7 +81,7 @@ class BlurFilter(StreamHandler):
 ```python
 runtime = StreamRuntime(fps=30)
 runtime.add_stream(Stream(camera_handler, dispatcher='asyncio'))
-runtime.add_stream(Stream(blur_handler, dispatcher='asyncio'))
+runtime.add_stream(Stream(blur_handler, dispatcher='threadpool'))  # CPU-intensive!
 runtime.connect(camera_handler.outputs['video'], blur_handler.inputs['video'])
 await runtime.start()
 ```
@@ -69,6 +92,19 @@ await runtime.start()
 - **Explicit dispatcher**: Use `dispatcher='asyncio'`, `'threadpool'`, `'gpu'`, or `'processpool'`
 - **Clock-driven**: Runtime clock ticks drive all handlers
 - **Zero-copy**: Ring buffers hold references, not data copies
+
+**⚠️ CRITICAL: Dispatcher Selection**
+
+Choosing the correct dispatcher is **essential** for pipeline performance:
+
+- **`asyncio`**: Non-blocking I/O, lightweight operations (TestPatternHandler)
+- **`threadpool`**: Blocking calls, CPU-intensive work (DisplayHandler, BlurFilter, CompositorHandler)
+- **`gpu`**: GPU operations (stub, not implemented)
+- **`processpool`**: Heavy compute (stub, not implemented)
+
+**Common mistake**: Using `asyncio` for DisplayHandler - `cv2.imshow()` is blocking and will freeze the entire pipeline!
+
+See `docs/dispatcher-guidelines.md` for complete decision tree and examples.
 
 ### What's Different From Actor Model (Obsolete)
 
@@ -129,6 +165,8 @@ See `docs/architecture.md` for complete design. Key files:
 ### Design Documents
 - `docs/architecture.md` - Complete architecture (authoritative)
 - `docs/project.md` - Implementation task list and timeline
+- `docs/dispatcher-guidelines.md` - **CRITICAL**: Dispatcher selection rules (read this!)
+- `docs/gpu-optimization-philosophy.md` - **CORE DIFFERENTIATOR**: GPU-first philosophy (read this!)
 
 ### Current Implementation (Legacy - Will Be Replaced)
 - `packages/streamlib/src/streamlib/` - Current Actor model code
