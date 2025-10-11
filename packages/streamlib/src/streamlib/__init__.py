@@ -40,6 +40,16 @@ from .runtime import StreamRuntime
 from .handler import StreamHandler
 from .stream import Stream
 
+# Event bus for communication (NEW - Phase 3.6)
+from .events import (
+    EventBus,
+    Event,
+    ClockTickEvent,
+    ErrorEvent,
+    HandlerStartedEvent,
+    HandlerStoppedEvent,
+)
+
 # Capability-based ports (NEW)
 from .ports import (
     StreamInput,
@@ -68,6 +78,14 @@ try:
 except (ImportError, AttributeError):
     _HAS_GPU_BLUR = False
 
+# Phase 3.5: Metal Support (NEW - macOS only, conditional)
+try:
+    from .handlers import BlurFilterMetal
+    from .transfers import CPUtoMetalTransferHandler, MetalToCPUTransferHandler
+    _HAS_METAL = True
+except (ImportError, AttributeError, RuntimeError):
+    _HAS_METAL = False
+
 # Ring buffers
 from .buffers import RingBuffer, GPURingBuffer
 
@@ -91,6 +109,14 @@ __all__ = [
     'StreamRuntime',
     'StreamHandler',
     'Stream',
+
+    # Event bus (NEW - Phase 3.6)
+    'EventBus',
+    'Event',
+    'ClockTickEvent',
+    'ErrorEvent',
+    'HandlerStartedEvent',
+    'HandlerStoppedEvent',
 
     # Capability-based ports (NEW)
     'StreamInput',
@@ -155,5 +181,9 @@ __all__ = [
 # Phase 3.4: Add GPU handlers if available
 if _HAS_GPU_BLUR:
     __all__.append('BlurFilterGPU')
+
+# Phase 3.5: Add Metal handlers if available
+if _HAS_METAL:
+    __all__.extend(['BlurFilterMetal', 'CPUtoMetalTransferHandler', 'MetalToCPUTransferHandler'])
 
 __version__ = '0.2.0'  # Phase 3.1: StreamHandler + Runtime

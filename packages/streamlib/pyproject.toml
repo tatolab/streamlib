@@ -32,6 +32,19 @@ dev = [
     "ruff>=0.1.0",
 ]
 
+# GPU display - OpenGL texture rendering (cross-platform)
+gpu-display = [
+    "moderngl>=5.8.0",
+    "glfw>=2.6.0",
+    "PyOpenGL>=3.1.0",
+]
+
+# GPU acceleration - PyTorch backends
+gpu = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/streamlib"]
 

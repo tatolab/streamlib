@@ -14,8 +14,15 @@ dev-dependencies = [
     # Dependencies for running examples
     "numpy>=1.24.0",
     "skia-python>=87.5",
-    "opencv-python-headless>=4.11.0.86",
+    "opencv-python>=4.11.0.86",  # Changed from opencv-python-headless for GPU demos
     "av>=10.0.0",
+    # GPU support (optional but recommended)
+    "torch>=2.0.0",
+    # Metal support (macOS only - zero-copy GPU operations)
+    "pyobjc-framework-Metal>=10.0",
+    "pyobjc-framework-MetalPerformanceShaders>=10.0",
+    "pyobjc-framework-MetalKit>=10.0",
+    "pyobjc-framework-Quartz>=10.0",  # For CAMetalLayer
 ]
 
 [tool.uv.sources]

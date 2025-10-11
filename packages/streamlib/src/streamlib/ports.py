@@ -51,10 +51,10 @@ class StreamOutput:
         if not capabilities:
             raise ValueError("Output port must declare at least one capability")
 
-        valid_capabilities = {'cpu', 'gpu'}
+        valid_capabilities = {'cpu', 'gpu', 'metal'}
         for cap in capabilities:
             if cap not in valid_capabilities:
-                raise ValueError(f"Invalid capability '{cap}'. Must be 'cpu' or 'gpu'")
+                raise ValueError(f"Invalid capability '{cap}'. Must be 'cpu', 'gpu', or 'metal'")
 
         self.name = name
         self.port_type = port_type
@@ -112,10 +112,10 @@ class StreamInput:
         if not capabilities:
             raise ValueError("Input port must declare at least one capability")
 
-        valid_capabilities = {'cpu', 'gpu'}
+        valid_capabilities = {'cpu', 'gpu', 'metal'}
         for cap in capabilities:
             if cap not in valid_capabilities:
-                raise ValueError(f"Invalid capability '{cap}'. Must be 'cpu' or 'gpu'")
+                raise ValueError(f"Invalid capability '{cap}'. Must be 'cpu', 'gpu', or 'metal'")
 
         self.name = name
         self.port_type = port_type

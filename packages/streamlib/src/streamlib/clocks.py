@@ -34,10 +34,12 @@ class TimedTick:
         timestamp: Absolute time in seconds (since epoch or relative)
         frame_number: Monotonic frame counter (starts at 0)
         clock_id: Identifier for clock source (e.g., 'software', 'ptp:0')
+        delta_time: Time since last tick in seconds (for frame-rate independent movement)
     """
     timestamp: float
     frame_number: int
     clock_id: str
+    delta_time: float = 0.0  # Time since last tick (seconds)
 
 
 class Clock(ABC):
@@ -99,7 +101,7 @@ class SoftwareClock(Clock):
         Initialize software clock.
 
         Args:
-            fps: Frames per second (ticks per second)
+            fps: Frames per second (ticks per second) - TARGET, not guaranteed
             clock_id: Optional clock identifier (default: 'software')
         """
         if fps <= 0:
@@ -110,32 +112,54 @@ class SoftwareClock(Clock):
         self._clock_id = clock_id or 'software'
         self.frame_number = 0
         self.start_time = time.monotonic()
+        self.last_tick_time = None  # For delta time calculation
 
     async def next_tick(self) -> TimedTick:
         """
-        Generate next tick at fixed rate.
+        Generate next tick at target rate.
 
         Returns:
-            TimedTick with current timing info
+            TimedTick with current timing info including delta_time
 
-        Note: Uses time.monotonic() for timing to avoid issues with
-        system clock adjustments.
+        Note:
+        - Uses time.monotonic() for timing to avoid system clock adjustments
+        - FPS is a TARGET - actual frame time may vary based on workload
+        - delta_time is the actual time since last tick (for frame-rate independent movement)
+        - Always enforces minimum sleep to prevent tick flooding when behind schedule
         """
         # Calculate target time for this frame
         target_time = self.start_time + (self.frame_number * self.period)
         now = time.monotonic()
         sleep_time = target_time - now
 
-        # Sleep until target time (if not already late)
-        if sleep_time > 0:
-            await asyncio.sleep(sleep_time)
+        # ALWAYS enforce minimum sleep to prevent tick flooding
+        # Even when behind schedule, we need to yield control to handlers
+        min_sleep = self.period * 0.5  # At least 50% of target period
+        if sleep_time < min_sleep:
+            sleep_time = min_sleep
+            # When severely behind (more than 2 frames), reset the schedule
+            # to avoid infinite catch-up that causes dt=0 flooding
+            if target_time < now - self.period * 2:
+                self.start_time = now
+                self.frame_number = 0
+
+        await asyncio.sleep(sleep_time)
+
+        # Calculate actual delta time (time since last tick)
+        current_time = time.monotonic()
+        if self.last_tick_time is not None:
+            delta_time = current_time - self.last_tick_time
+        else:
+            delta_time = self.period  # First tick uses target period
 
         tick = TimedTick(
             timestamp=time.time(),  # Absolute time
             frame_number=self.frame_number,
-            clock_id=self._clock_id
+            clock_id=self._clock_id,
+            delta_time=delta_time  # Actual time since last tick
         )
 
+        self.last_tick_time = current_time
         self.frame_number += 1
         return tick
 
@@ -151,6 +175,7 @@ class SoftwareClock(Clock):
         """Reset clock to frame 0."""
         self.frame_number = 0
         self.start_time = time.monotonic()
+        self.last_tick_time = None
 
 
 class PTPClock(Clock):

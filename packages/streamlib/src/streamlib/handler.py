@@ -23,10 +23,13 @@ Example:
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 from .ports import StreamInput, StreamOutput
-from .clocks import Clock, TimedTick
+from .clocks import TimedTick
 from .dispatchers import Dispatcher
+
+if TYPE_CHECKING:
+    from .events import EventBus, ClockTickEvent
 
 
 class StreamHandler(ABC):
@@ -73,10 +76,11 @@ class StreamHandler(ABC):
 
         # Runtime-managed (not user-accessible)
         self._runtime = None
-        self._clock: Optional[Clock] = None
+        self._event_bus = None  # EventBus for tick subscription
         self._dispatcher: Optional[Dispatcher] = None
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._tick_subscription = None  # Event subscription
 
     @abstractmethod
     async def process(self, tick: TimedTick) -> None:
@@ -138,52 +142,65 @@ class StreamHandler(ABC):
 
     async def _run(self) -> None:
         """
-        Internal run loop - processes ticks from clock.
+        Internal run loop - receives ticks from event bus.
 
-        Called by runtime after activation. Runs until _running is set to False.
+        Subscribes to ClockTickEvent and processes each tick.
+        All handlers receive the same tick concurrently (fixes sequential tick bug).
         """
+        from .events import ClockTickEvent  # Import here to avoid circular dependency
+
         try:
             # Call on_start hook
             await self.on_start()
 
+            # Subscribe to clock tick events from runtime
+            self._tick_subscription = self._event_bus.subscribe(ClockTickEvent)
+
             # Process ticks until stopped
-            async for tick in self._tick_generator():
+            async for event in self._tick_subscription:
                 if not self._running:
                     break
-                await self.process(tick)
 
+                # Extract tick from event
+                tick = event.tick
+
+                # Process tick
+                try:
+                    await self.process(tick)
+                except Exception as e:
+                    # Propagate error to runtime via event bus (non-blocking)
+                    from .events import ErrorEvent
+                    self._event_bus.publish(ErrorEvent(
+                        handler_id=self.handler_id,
+                        exception=e,
+                        tick=tick
+                    ))
+                    print(f"[{self.handler_id}] Error processing tick {tick.frame_number}: {e}")
+
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             print(f"[{self.handler_id}] Error in run loop: {e}")
             import traceback
             traceback.print_exc()
         finally:
+            # Unsubscribe from events
+            if self._tick_subscription:
+                self._tick_subscription.unsubscribe()
+
             # Call on_stop hook
             try:
                 await self.on_stop()
             except Exception as e:
                 print(f"[{self.handler_id}] Error in on_stop: {e}")
 
-    async def _tick_generator(self):
-        """
-        Generate ticks from runtime clock.
-
-        Yields ticks until handler is stopped.
-        """
-        while self._running:
-            try:
-                tick = await self._clock.next_tick()
-                yield tick
-            except Exception as e:
-                print(f"[{self.handler_id}] Error getting tick: {e}")
-                break
-
-    def _activate(self, runtime, clock: Clock, dispatcher: Dispatcher) -> None:
+    def _activate(self, runtime, event_bus, dispatcher: Dispatcher) -> None:
         """
         Activate handler - called by runtime.
 
         Args:
             runtime: StreamRuntime that owns this handler
-            clock: Clock to use for ticks
+            event_bus: EventBus for tick subscription and error propagation
             dispatcher: Dispatcher for execution context
 
         Note: This starts the handler's run loop as an async task.
@@ -192,7 +209,7 @@ class StreamHandler(ABC):
             raise RuntimeError(f"Handler {self.handler_id} is already running")
 
         self._runtime = runtime
-        self._clock = clock
+        self._event_bus = event_bus
         self._dispatcher = dispatcher
         self._running = True
 

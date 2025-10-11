@@ -21,13 +21,28 @@ Example:
 """
 
 import asyncio
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Any
 from .handler import StreamHandler
 from .stream import Stream
-from .clocks import Clock, SoftwareClock
+from .clocks import Clock, SoftwareClock, TimedTick
 from .dispatchers import Dispatcher, AsyncioDispatcher, ThreadPoolDispatcher
 from .ports import StreamOutput, StreamInput
 from .transfers import CPUtoGPUTransferHandler, GPUtoCPUTransferHandler
+from .events import EventBus, ClockTickEvent, ErrorEvent
+
+# GPU utilities for runtime-level optimizations
+try:
+    from .gpu_utils import create_gpu_context
+    HAS_GPU_UTILS = True
+except ImportError:
+    HAS_GPU_UTILS = False
+
+# Metal transfer handlers (macOS only, optional)
+try:
+    from .transfers import CPUtoMetalTransferHandler, MetalToCPUTransferHandler
+    HAS_METAL_TRANSFERS = True
+except (ImportError, RuntimeError):
+    HAS_METAL_TRANSFERS = False
 
 
 class StreamRuntime:
@@ -45,18 +60,22 @@ class StreamRuntime:
         dispatchers: Pool of dispatcher instances
     """
 
-    def __init__(self, fps: float = 30.0, clock: Optional[Clock] = None):
+    def __init__(self, fps: float = 30.0, clock: Optional[Clock] = None, enable_gpu: bool = True):
         """
         Initialize stream runtime.
 
         Args:
             fps: Frames per second for default software clock
             clock: Optional custom clock (defaults to SoftwareClock)
+            enable_gpu: Enable GPU optimizations (auto-detect backend)
 
         Example:
             runtime = StreamRuntime(fps=30)
         """
         self.clock = clock or SoftwareClock(fps=fps)
+
+        # Event bus for tick broadcast and error propagation
+        self.event_bus = EventBus(buffer_size=100)
 
         # Flat registry (all handlers are siblings)
         self.handlers: Dict[str, StreamHandler] = {}
@@ -66,10 +85,20 @@ class StreamRuntime:
         self.dispatchers: Dict[str, Dispatcher] = {}
         self._init_dispatchers()
 
+        # GPU context (provides memory pooling, batching, transfer optimization)
+        self.gpu_context: Optional[Dict[str, Any]] = None
+        if enable_gpu and HAS_GPU_UTILS:
+            try:
+                self.gpu_context = create_gpu_context(backend='auto')
+                print(f"[Runtime] GPU context initialized: {self.gpu_context['backend']}")
+            except Exception as e:
+                print(f"[Runtime] GPU context initialization failed: {e}")
+
         # Auto-inserted transfer handlers
         self._transfer_handlers: Set[StreamHandler] = set()
 
         self._running = False
+        self._clock_task: Optional[asyncio.Task] = None
 
     def _init_dispatchers(self) -> None:
         """Initialize dispatcher pool."""
@@ -102,8 +131,8 @@ class StreamRuntime:
         else:
             dispatcher = stream.dispatcher
 
-        # Activate handler (sets clock and dispatcher, starts run loop)
-        handler._activate(self, self.clock, dispatcher)
+        # Activate handler (passes event bus for tick subscription)
+        handler._activate(self, self.event_bus, dispatcher)
         self.handlers[handler.handler_id] = handler
 
         print(f"[Runtime] Added stream '{stream_id}' with handler '{handler.handler_id}'")
@@ -198,7 +227,7 @@ class StreamRuntime:
         """
         Auto-insert transfer handler between incompatible ports.
 
-        Determines direction (CPU→GPU or GPU→CPU) and inserts appropriate handler.
+        Determines direction (CPU↔GPU or CPU↔Metal) and inserts appropriate handler.
 
         Args:
             output_port: Source output port
@@ -213,6 +242,24 @@ class StreamRuntime:
             # GPU → CPU transfer
             transfer = GPUtoCPUTransferHandler()
             direction = "GPU → CPU"
+        elif 'cpu' in output_port.capabilities and 'metal' in input_port.capabilities:
+            # CPU → Metal transfer
+            if not HAS_METAL_TRANSFERS:
+                raise RuntimeError(
+                    "Metal transfers not available. Install Metal frameworks: "
+                    "pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders"
+                )
+            transfer = CPUtoMetalTransferHandler()
+            direction = "CPU → Metal"
+        elif 'metal' in output_port.capabilities and 'cpu' in input_port.capabilities:
+            # Metal → CPU transfer
+            if not HAS_METAL_TRANSFERS:
+                raise RuntimeError(
+                    "Metal transfers not available. Install Metal frameworks: "
+                    "pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders"
+                )
+            transfer = MetalToCPUTransferHandler()
+            direction = "Metal → CPU"
         else:
             raise RuntimeError(
                 f"Cannot determine transfer direction: "
@@ -220,7 +267,7 @@ class StreamRuntime:
             )
 
         # Add transfer handler to runtime
-        transfer_stream = Stream(transfer, dispatcher='asyncio')
+        transfer_stream = Stream(transfer, dispatcher='threadpool')  # Metal ops use threadpool
         self.add_stream(transfer_stream)
         self._transfer_handlers.add(transfer)
 
@@ -237,15 +284,18 @@ class StreamRuntime:
 
     def start(self) -> None:
         """
-        Start runtime.
+        Start runtime with central clock loop.
 
-        Handlers have already been activated when added via add_stream().
-        This just sets the running flag.
+        Starts clock loop that broadcasts ticks to all handlers concurrently.
 
         Example:
             runtime.start()
         """
         self._running = True
+
+        # Start central clock loop (broadcasts ticks to all handlers)
+        self._clock_task = asyncio.create_task(self._clock_loop())
+
         print(f"[Runtime] Started with {len(self.handlers)} handlers")
 
     async def run(self) -> None:
@@ -274,15 +324,60 @@ class StreamRuntime:
         print("[Runtime] Stopping...")
         self._running = False
 
+        # Stop clock loop
+        if self._clock_task:
+            self._clock_task.cancel()
+            try:
+                await self._clock_task
+            except asyncio.CancelledError:
+                pass
+
         # Deactivate all handlers
         for handler in self.handlers.values():
             await handler._deactivate()
+
+        # Clear event bus
+        await self.event_bus.clear()
 
         # Shutdown dispatchers
         for dispatcher in self.dispatchers.values():
             await dispatcher.shutdown()
 
+        # Clean up GPU resources
+        if self.gpu_context and 'memory_pool' in self.gpu_context:
+            self.gpu_context['memory_pool'].clear()
+
         print("[Runtime] Stopped")
+
+    async def _clock_loop(self) -> None:
+        """
+        Central clock loop - broadcasts ticks to all handlers.
+
+        This fixes the sequential tick bug by broadcasting the same tick
+        to all handlers concurrently via the event bus.
+
+        Each tick is generated by the runtime clock and published to the
+        event bus. All handlers receive the same tick and process it
+        concurrently.
+        """
+        try:
+            # Reset clock to start now (fixes start_time initialization bug)
+            if hasattr(self.clock, 'reset'):
+                self.clock.reset()
+
+            while self._running:
+                # Generate next tick from runtime clock
+                tick = await self.clock.next_tick()
+
+                # Broadcast to ALL handlers simultaneously (non-blocking)
+                self.event_bus.publish(ClockTickEvent(tick))
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"[Runtime] Clock loop error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def __repr__(self) -> str:
         return (
