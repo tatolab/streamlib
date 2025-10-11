@@ -35,9 +35,9 @@ async def main():
     # Create runtime
     runtime = StreamRuntime(fps=30)
     
-    # Add streams
-    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-    runtime.add_stream(Stream(display, dispatcher='asyncio'))
+    # Add streams with appropriate dispatchers
+    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))  # Lightweight pattern generation
+    runtime.add_stream(Stream(display, dispatcher='threadpool'))  # Blocking OpenCV calls
     
     # Connect: TestPattern → Display
     runtime.connect(pattern.outputs['video'], display.inputs['video'])

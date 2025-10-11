@@ -98,12 +98,12 @@ async def main():
     # Create runtime
     runtime = StreamRuntime(fps=30)
 
-    # Add streams
-    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-    runtime.add_stream(Stream(blur, dispatcher='asyncio'))
-    runtime.add_stream(Stream(drawing, dispatcher='asyncio'))
-    runtime.add_stream(Stream(compositor, dispatcher='asyncio'))
-    runtime.add_stream(Stream(display, dispatcher='asyncio'))
+    # Add streams with appropriate dispatchers
+    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))  # Lightweight pattern generation
+    runtime.add_stream(Stream(blur, dispatcher='threadpool'))  # CPU-intensive cv2.GaussianBlur
+    runtime.add_stream(Stream(drawing, dispatcher='threadpool'))  # CPU-intensive cv2 drawing
+    runtime.add_stream(Stream(compositor, dispatcher='threadpool'))  # CPU-intensive numpy operations
+    runtime.add_stream(Stream(display, dispatcher='threadpool'))  # Blocking OpenCV calls
 
     # Connect pipeline
     # TestPattern → Blur → Compositor layer0
