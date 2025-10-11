@@ -51,12 +51,18 @@ class StreamHandler(ABC):
         handler_id: Unique identifier for this handler
         inputs: Dictionary of input ports
         outputs: Dictionary of output ports
+        preferred_dispatcher: Suggested dispatcher type (class attribute)
         _runtime: Runtime that activated this handler (internal)
         _clock: Clock provided by runtime (internal)
         _dispatcher: Dispatcher assigned by runtime (internal)
         _running: Whether handler is currently running (internal)
         _task: Async task for handler's run loop (internal)
     """
+
+    # Class attribute: preferred dispatcher for this handler type
+    # Subclasses can override to declare their dispatcher requirements
+    # Options: 'asyncio', 'threadpool', 'gpu', 'processpool'
+    preferred_dispatcher: str = 'asyncio'
 
     def __init__(self, handler_id: str = None):
         """

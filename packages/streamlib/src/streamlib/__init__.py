@@ -39,6 +39,7 @@ Example:
 from .runtime import StreamRuntime
 from .handler import StreamHandler
 from .stream import Stream
+from .function_handler import FunctionHandler, stream_handler
 
 # Event bus for communication (NEW - Phase 3.6)
 from .events import (
@@ -109,6 +110,8 @@ __all__ = [
     'StreamRuntime',
     'StreamHandler',
     'Stream',
+    'FunctionHandler',
+    'stream_handler',
 
     # Event bus (NEW - Phase 3.6)
     'EventBus',
