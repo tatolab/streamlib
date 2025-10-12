@@ -234,6 +234,7 @@ class DisplayGPUHandler(StreamHandler):
         width: int = 640,
         height: int = 480,
         fps_window: int = 30,
+        show_fps: bool = True,
     ):
         if not DEPS_AVAILABLE:
             raise ImportError(
@@ -246,6 +247,7 @@ class DisplayGPUHandler(StreamHandler):
         self.width = width
         self.height = height
         self.fps_window = fps_window
+        self.show_fps = show_fps
 
         # Declare GPU input port
         self.inputs['video'] = VideoInput('video', capabilities=['gpu', 'cpu'])
@@ -257,6 +259,9 @@ class DisplayGPUHandler(StreamHandler):
         self.vao: Optional[moderngl.VertexArray] = None
         self.program: Optional[moderngl.Program] = None
 
+        # GPU text renderer for FPS overlay
+        self.text_renderer: Optional[GPUTextRenderer] = None
+
         # PBO for async texture uploads (double-buffered)
         self.pbo_1: Optional[moderngl.Buffer] = None
         self.pbo_2: Optional[moderngl.Buffer] = None
@@ -265,6 +270,7 @@ class DisplayGPUHandler(StreamHandler):
         # FPS tracking
         self.frame_times = deque(maxlen=fps_window)
         self.last_frame_time = None
+        self.current_fps = 0.0
 
         # Timing measurements
         self.transfer_times = deque(maxlen=100)
@@ -366,6 +372,15 @@ class DisplayGPUHandler(StreamHandler):
                 self.use_zero_copy = True
                 print(f"[{self.handler_id}] Zero-copy mode enabled ({self.backend})")
 
+        # Initialize GPU text renderer for FPS overlay
+        if self.show_fps and PIL_AVAILABLE:
+            try:
+                self.text_renderer = GPUTextRenderer(self.ctx, self.width, self.height)
+                print(f"[{self.handler_id}] FPS overlay enabled (GPU-accelerated)")
+            except Exception as e:
+                print(f"[{self.handler_id}] Failed to initialize text renderer: {e}")
+                self.text_renderer = None
+
         print(f"[{self.handler_id}] GPU display initialized: {self.width}x{self.height}")
         print(f"[{self.handler_id}] OpenGL: {self.ctx.version_code}")
         print(f"[{self.handler_id}] PBO async upload: enabled")
@@ -441,21 +456,28 @@ class DisplayGPUHandler(StreamHandler):
         self.program['texture0'] = 0
         self.vao.render(moderngl.TRIANGLE_STRIP)
 
-        glfw.swap_buffers(self.window)
-        glfw.poll_events()
-        render_time = (time.perf_counter() - render_start) * 1000
-        self.render_times.append(render_time)
-
         # FPS tracking
         current_time = time.perf_counter()
         if self.last_frame_time is not None:
             dt = current_time - self.last_frame_time
             self.frame_times.append(dt)
+            # Update current FPS
+            if len(self.frame_times) > 0:
+                self.current_fps = 1.0 / (sum(self.frame_times) / len(self.frame_times))
         self.last_frame_time = current_time
+
+        # Draw FPS overlay using GPU text renderer
+        if self.text_renderer:
+            fps_text = f"FPS: {self.current_fps:.1f}"
+            self.text_renderer.draw_text_overlay(fps_text, 10, 10, font_size='large')
+
+        glfw.swap_buffers(self.window)
+        glfw.poll_events()
+        render_time = (time.perf_counter() - render_start) * 1000
+        self.render_times.append(render_time)
 
         # Log timing every 60 frames
         if tick.frame_number % 60 == 0 and len(self.frame_times) > 0:
-            avg_fps = 1.0 / (sum(self.frame_times) / len(self.frame_times))
             avg_transfer = sum(self.transfer_times) / len(self.transfer_times)
             avg_upload = sum(self.upload_times) / len(self.upload_times)
             avg_render = sum(self.render_times) / len(self.render_times)
@@ -463,7 +485,7 @@ class DisplayGPUHandler(StreamHandler):
 
             print(
                 f"[{self.handler_id}] "
-                f"FPS: {avg_fps:.1f} | "
+                f"FPS: {self.current_fps:.1f} | "
                 f"Transfer: {avg_transfer:.2f}ms | "
                 f"Upload: {avg_upload:.2f}ms | "
                 f"Render: {avg_render:.2f}ms | "
@@ -472,6 +494,8 @@ class DisplayGPUHandler(StreamHandler):
 
     async def on_stop(self):
         """Cleanup OpenGL resources."""
+        if self.text_renderer:
+            self.text_renderer.release()
         if self.pbo_1:
             self.pbo_1.release()
         if self.pbo_2:

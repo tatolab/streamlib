@@ -84,6 +84,9 @@ class BlurFilter(StreamHandler):
     - Speedup: 25x fewer operations, ~3.3x faster in practice (due to memory access patterns)
     """
 
+    # Preferred dispatcher: threadpool for CPU blur, asyncio would block event loop
+    preferred_dispatcher = 'threadpool'
+
     def __init__(
         self,
         kernel_size: int = 5,
@@ -336,13 +339,17 @@ class BlurFilter(StreamHandler):
             raise RuntimeError(f"Unknown backend: {self.backend}")
 
         # Create output frame
+        metadata = frame.metadata.copy() if frame.metadata else {}
+        metadata['blur_kernel'] = self.kernel_size
+        metadata['blur_backend'] = self.backend.value
+
         blurred_frame = VideoFrame(
             data=blurred_data,
             timestamp=frame.timestamp,
             frame_number=frame.frame_number,
             width=frame.width,
             height=frame.height,
-            metadata={**frame.metadata, 'blur_kernel': self.kernel_size, 'blur_backend': self.backend.value}
+            metadata=metadata
         )
 
         # Write to output

@@ -67,10 +67,10 @@ from .ports import (
 from .transfers import CPUtoGPUTransferHandler, GPUtoCPUTransferHandler
 
 # Phase 3.2: Basic Handlers (NEW)
-from .handlers import TestPatternHandler, DisplayHandler
+from .handlers import TestPatternHandler, DisplayHandler, CameraHandler
 
 # Phase 3.3: Advanced Handlers (NEW)
-from .handlers import BlurFilter, CompositorHandler, DrawingHandler, DrawingContext
+from .handlers import BlurFilter, CompositorHandler, DrawingHandler, DrawingContext, LowerThirdsHandler
 
 # Phase 3.4: GPU Support (NEW - conditional)
 try:
@@ -138,12 +138,14 @@ __all__ = [
     # Phase 3.2: Basic Handlers (NEW)
     'TestPatternHandler',
     'DisplayHandler',
+    'CameraHandler',
 
     # Phase 3.3: Advanced Handlers (NEW)
     'BlurFilter',
     'CompositorHandler',
     'DrawingHandler',
     'DrawingContext',
+    'LowerThirdsHandler',
 
     # Ring buffers
     'RingBuffer',

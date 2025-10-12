@@ -84,6 +84,9 @@ class DisplayHandler(StreamHandler):
     stays on GPU as long as possible and only transfers when absolutely required.
     """
 
+    # Preferred dispatcher: threadpool because cv2.imshow() is blocking
+    preferred_dispatcher = 'threadpool'
+
     def __init__(
         self,
         window_name: str = "streamlib",
