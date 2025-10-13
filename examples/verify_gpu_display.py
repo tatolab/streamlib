@@ -20,7 +20,7 @@ from streamlib.clocks import TimedTick
 from streamlib.messages import VideoFrame
 
 try:
-    from streamlib.handlers import DisplayGPUHandler
+    from streamlib_extras import DisplayGPUHandler
 except ImportError:
     print("Error: DisplayGPUHandler not available")
     sys.exit(1)

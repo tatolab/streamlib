@@ -129,8 +129,8 @@ class GPUTextOverlayHandler(StreamHandler):
         super().__init__(name)
 
         # Ports
-        self.inputs['video'] = VideoInput('video', capabilities=['gpu', 'cpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu', 'cpu'])
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         # Text renderer
         self.text_renderer = GPUTextRenderer()

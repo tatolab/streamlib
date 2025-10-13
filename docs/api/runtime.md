@@ -95,7 +95,7 @@ class StreamRuntime:
 ```python
 import asyncio
 from streamlib import StreamRuntime, Stream
-from streamlib.handlers import TestPatternHandler, DisplayGPUHandler
+from streamlib_extras import TestPatternHandler, DisplayGPUHandler
 
 async def main():
     # Create runtime
@@ -131,7 +131,7 @@ asyncio.run(main())
 
 ```python
 from streamlib import StreamRuntime, Stream
-from streamlib.handlers import CameraHandlerGPU, BlurFilterGPU, DisplayGPUHandler
+from streamlib_extras import CameraHandlerGPU, BlurFilterGPU, DisplayGPUHandler
 
 runtime = StreamRuntime(fps=30)
 

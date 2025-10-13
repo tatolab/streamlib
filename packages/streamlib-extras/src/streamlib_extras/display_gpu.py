@@ -250,7 +250,7 @@ class DisplayGPUHandler(StreamHandler):
         self.show_fps = show_fps
 
         # Declare GPU input port
-        self.inputs['video'] = VideoInput('video', capabilities=['gpu', 'cpu'])
+        self.inputs['video'] = VideoInput('video')
 
         # OpenGL resources (initialized in on_start)
         self.window: Optional[glfw._GLFWwindow] = None

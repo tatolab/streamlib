@@ -157,106 +157,118 @@ class StreamInput:
 
 # Typed port helpers for common use cases
 
-def VideoOutput(name: str, capabilities: List[str], slots: int = 3) -> StreamOutput:
+def VideoOutput(name: str, capabilities: Optional[List[str]] = None, slots: int = 3) -> StreamOutput:
     """
     Helper to create a video output port.
 
     Args:
         name: Port name (e.g., 'video', 'out')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu'] (GPU-first)
         slots: Ring buffer size (default: 3)
 
     Returns:
         StreamOutput configured for video
 
     Example:
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video')  # GPU by default
     """
+    if capabilities is None:
+        capabilities = ['gpu']  # GPU-first by default
     return StreamOutput(name, port_type='video', capabilities=capabilities, slots=slots)
 
 
-def VideoInput(name: str, capabilities: List[str]) -> StreamInput:
+def VideoInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInput:
     """
     Helper to create a video input port.
 
     Args:
         name: Port name (e.g., 'video', 'in')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu'] (GPU-first)
 
     Returns:
         StreamInput configured for video
 
     Example:
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
+        self.inputs['video'] = VideoInput('video')  # GPU by default
     """
+    if capabilities is None:
+        capabilities = ['gpu']  # GPU-first by default
     return StreamInput(name, port_type='video', capabilities=capabilities)
 
 
-def AudioOutput(name: str, capabilities: List[str], slots: int = 3) -> StreamOutput:
+def AudioOutput(name: str, capabilities: Optional[List[str]] = None, slots: int = 3) -> StreamOutput:
     """
     Helper to create an audio output port.
 
     Args:
         name: Port name (e.g., 'audio', 'out')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
         slots: Ring buffer size (default: 3)
 
     Returns:
         StreamOutput configured for audio
 
     Example:
-        self.outputs['audio'] = AudioOutput('audio', capabilities=['cpu'])
+        self.outputs['audio'] = AudioOutput('audio')  # GPU by default
     """
+    if capabilities is None:
+        capabilities = ['gpu']
     return StreamOutput(name, port_type='audio', capabilities=capabilities, slots=slots)
 
 
-def AudioInput(name: str, capabilities: List[str]) -> StreamInput:
+def AudioInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInput:
     """
     Helper to create an audio input port.
 
     Args:
         name: Port name (e.g., 'audio', 'in')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
 
     Returns:
         StreamInput configured for audio
 
     Example:
-        self.inputs['audio'] = AudioInput('audio', capabilities=['cpu'])
+        self.inputs['audio'] = AudioInput('audio')  # GPU by default
     """
+    if capabilities is None:
+        capabilities = ['gpu']
     return StreamInput(name, port_type='audio', capabilities=capabilities)
 
 
-def DataOutput(name: str, capabilities: List[str], slots: int = 3) -> StreamOutput:
+def DataOutput(name: str, capabilities: Optional[List[str]] = None, slots: int = 3) -> StreamOutput:
     """
     Helper to create a generic data output port.
 
     Args:
         name: Port name (e.g., 'data', 'out')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
         slots: Ring buffer size (default: 3)
 
     Returns:
         StreamOutput configured for data
 
     Example:
-        self.outputs['data'] = DataOutput('data', capabilities=['cpu'])
+        self.outputs['data'] = DataOutput('data')  # GPU by default
     """
+    if capabilities is None:
+        capabilities = ['gpu']
     return StreamOutput(name, port_type='data', capabilities=capabilities, slots=slots)
 
 
-def DataInput(name: str, capabilities: List[str]) -> StreamInput:
+def DataInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInput:
     """
     Helper to create a generic data input port.
 
     Args:
         name: Port name (e.g., 'data', 'in')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
 
     Returns:
         StreamInput configured for data
 
     Example:
-        self.inputs['data'] = DataInput('data', capabilities=['cpu'])
+        self.inputs['data'] = DataInput('data')  # GPU by default
     """
+    if capabilities is None:
+        capabilities = ['gpu']
     return StreamInput(name, port_type='data', capabilities=capabilities)

@@ -26,7 +26,11 @@ Most video tools are **monolithic applications** (Unity, OBS, complex streaming 
 ## Quick Start
 
 ```bash
+# Install core SDK
 pip install streamlib
+
+# Install reference handlers
+pip install streamlib-extras
 ```
 
 **Your First Pipeline (30 seconds):**
@@ -34,7 +38,7 @@ pip install streamlib
 ```python
 import asyncio
 from streamlib import StreamRuntime, Stream
-from streamlib.handlers import TestPatternHandler, DisplayGPUHandler
+from streamlib_extras import TestPatternHandler, DisplayGPUHandler
 
 async def main():
     runtime = StreamRuntime(fps=30)

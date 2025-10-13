@@ -7,10 +7,10 @@ Generates various test patterns for pipeline testing and debugging.
 import numpy as np
 from typing import Optional, Literal
 
-from ..handler import StreamHandler
-from ..ports import VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 
 PatternType = Literal['smpte_bars', 'gradient', 'solid', 'checkerboard']
@@ -60,8 +60,8 @@ class TestPatternHandler(StreamHandler):
         self.pattern = pattern
         self.color = color or (255, 255, 255)
 
-        # Output: CPU-only (numpy arrays)
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        # Output: Generates numpy arrays (runtime handles GPU transfer if needed)
+        self.outputs['video'] = VideoOutput('video')
 
         # Frame counter
         self._frame_number = 0

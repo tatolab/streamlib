@@ -24,17 +24,17 @@ from streamlib import (
 
 # Smart GPU handlers - auto-select GPU when available
 try:
-    from streamlib.handlers import CameraHandlerGPU as CameraHandler
+    from streamlib_extras import CameraHandlerGPU as CameraHandler
     HAS_GPU_CAMERA = True
     print("✅ GPU camera available (zero-copy AVFoundation → Metal)")
 except ImportError:
-    from streamlib import CameraHandler
-    from streamlib import CPUtoGPUTransferHandler
+    from streamlib_extras import CameraHandler
+    from streamlib_extras import CPUtoGPUTransferHandler
     HAS_GPU_CAMERA = False
     print("⚠️  Using CPU camera (GPU camera not available)")
 
 try:
-    from streamlib.handlers import BlurFilterGPU as BlurFilter
+    from streamlib_extras import BlurFilterGPU as BlurFilter
     HAS_GPU_BLUR = True
 except ImportError:
     from streamlib import BlurFilter
@@ -42,18 +42,18 @@ except ImportError:
     print("⚠️  GPU blur not available")
 
 try:
-    from streamlib.handlers import LowerThirdsGPUHandler as LowerThirdsHandler
+    from streamlib_extras import LowerThirdsGPUHandler as LowerThirdsHandler
     HAS_GPU_LOWER_THIRDS = True
 except ImportError:
-    from streamlib.handlers import LowerThirdsHandler
+    from streamlib_extras import LowerThirdsHandler
     HAS_GPU_LOWER_THIRDS = False
     print("⚠️  GPU lower thirds not available")
 
 try:
-    from streamlib.handlers import DisplayGPUHandler as DisplayHandler
+    from streamlib_extras import DisplayGPUHandler as DisplayHandler
     HAS_GPU_DISPLAY = True
 except ImportError:
-    from streamlib import DisplayHandler
+    from streamlib_extras import DisplayHandler
     HAS_GPU_DISPLAY = False
     print("⚠️  GPU display not available")
 

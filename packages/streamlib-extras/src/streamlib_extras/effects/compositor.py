@@ -7,10 +7,10 @@ Implements optimized alpha blending from benchmark_results.md learnings.
 import numpy as np
 from typing import List
 
-from ..handler import StreamHandler
-from ..ports import VideoInput, VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput, VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 
 class CompositorHandler(StreamHandler):
@@ -74,10 +74,10 @@ class CompositorHandler(StreamHandler):
 
         # Create N input ports
         for i in range(num_layers):
-            self.inputs[f'layer{i}'] = VideoInput(f'layer{i}', capabilities=['cpu'])
+            self.inputs[f'layer{i}'] = VideoInput(f'layer{i}')
 
         # Single output port
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video')
 
         # Accumulator buffer (reused across frames)
         self._accumulator = np.zeros((height, width, 3), dtype=np.float32)

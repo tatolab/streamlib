@@ -8,10 +8,10 @@ Forces GPU processing to demonstrate transfer handler insertion.
 import numpy as np
 from typing import Optional, Any
 
-from ..handler import StreamHandler
-from ..ports import VideoInput, VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput, VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 # Import torch for GPU blur
 try:
@@ -115,8 +115,8 @@ class BlurFilterGPU(StreamHandler):
         self.backend = 'CUDA' if 'cuda' in device else 'MPS' if device == 'mps' else device
 
         # GPU-only ports
-        self.inputs['video'] = VideoInput('video', capabilities=['gpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         # Frame counter
         self._frame_count = 0

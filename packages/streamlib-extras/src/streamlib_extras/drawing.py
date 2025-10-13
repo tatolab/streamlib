@@ -7,10 +7,10 @@ Executes user-provided Python code with drawing context.
 import numpy as np
 from typing import Dict, Any, Optional, Callable
 
-from ..handler import StreamHandler
-from ..ports import VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 # Import drawing backend (cv2 preferred, fallback to basic numpy)
 try:
@@ -150,7 +150,7 @@ class DrawingHandler(StreamHandler):
         self.variables = variables or {}
 
         # Output: CPU-only
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video')
 
         # Frame counter
         self._frame_count = 0

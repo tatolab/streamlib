@@ -12,10 +12,10 @@ import cv2
 import numpy as np
 from typing import Optional, Tuple
 
-from ..handler import StreamHandler
-from ..ports import VideoInput, VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput, VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 
 class LowerThirdsHandler(StreamHandler):
@@ -93,8 +93,8 @@ class LowerThirdsHandler(StreamHandler):
         self.position = position
 
         # Flexible capabilities: accept both CPU and GPU
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu', 'gpu'])
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         # Animation state
         self._start_time: Optional[float] = None

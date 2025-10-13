@@ -9,10 +9,10 @@ import torch
 from typing import List, Literal, Optional, Tuple
 from enum import Enum
 
-from ..handler import StreamHandler
-from ..ports import VideoInput, VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput, VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 
 class CompositeMode(Enum):
@@ -104,10 +104,10 @@ class MultiInputCompositor(StreamHandler):
         # Create input ports dynamically
         for i in range(num_inputs):
             port_name = f'input_{i}'
-            self.inputs[port_name] = VideoInput(port_name, capabilities=['gpu', 'cpu'])
+            self.inputs[port_name] = VideoInput(port_name)
 
         # Output port
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+        self.outputs['video'] = VideoOutput('video')
 
         # GPU device (detected at runtime)
         self.device = None

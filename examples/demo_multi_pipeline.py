@@ -17,10 +17,7 @@ import asyncio
 import argparse
 
 # GPU handlers required for this demo
-from streamlib.handlers import CameraHandlerGPU, TestPatternHandler
-from streamlib.handlers.blur_gpu import BlurFilterGPU
-from streamlib.handlers.compositor_multi import MultiInputCompositor
-from streamlib.handlers.display_gpu import DisplayGPUHandler
+from streamlib_extras import CameraHandlerGPU, TestPatternHandler, BlurFilterGPU, MultiInputCompositor, DisplayGPUHandler
 from streamlib import StreamRuntime, Stream
 
 

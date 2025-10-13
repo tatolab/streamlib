@@ -189,7 +189,7 @@ Let's build a multi-camera broadcast setup:
 
 ```python
 from streamlib import StreamRuntime, Stream
-from streamlib.handlers import (
+from streamlib_extras import (
     CameraHandlerGPU,
     BlurFilterGPU,
     LowerThirdsGPUHandler,

@@ -52,10 +52,10 @@ try:
 except ImportError:
     AVFOUNDATION_AVAILABLE = False
 
-from ..handler import StreamHandler
-from ..ports import VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 
 # Metal shader source for YUV→RGB conversion (ITU-R BT.601)
@@ -254,7 +254,7 @@ class CameraHandlerGPU(StreamHandler):
         self.fps = fps
 
         # Output port (GPU)
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+        self.outputs['video'] = VideoOutput('video')
 
         # AVFoundation resources
         self.session: Optional[AVCaptureSession] = None

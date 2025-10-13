@@ -16,9 +16,9 @@ import numpy as np
 from typing import Optional, Literal
 from enum import Enum
 
-from ..handler import StreamHandler
-from ..ports import VideoInput
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput
+from streamlib.clocks import TimedTick
 
 # Import optional GPU libraries
 try:
@@ -108,7 +108,7 @@ class DisplayHandler(StreamHandler):
 
         # Flexible capabilities: accept both CPU and GPU
         # Runtime will negotiate which path to use
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
+        self.inputs['video'] = VideoInput('video')
 
         # Frame counter
         self._frame_count = 0

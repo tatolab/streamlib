@@ -8,10 +8,10 @@ Performance: ~0.4ms per frame (2,000+ FPS capable!)
 from typing import Optional
 import sys
 
-from ..handler import StreamHandler
-from ..ports import VideoInput, VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput, VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 # Metal is macOS-only
 HAS_METAL = False
@@ -87,8 +87,8 @@ class BlurFilterMetal(StreamHandler):
         self.sigma = sigma
 
         # Metal-only ports (will negotiate 'metal' capability)
-        self.inputs['video'] = VideoInput('video', capabilities=['metal'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['metal'])
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         # Frame counter
         self._frame_count = 0

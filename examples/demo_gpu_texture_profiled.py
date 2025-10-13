@@ -25,7 +25,7 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from streamlib.handlers import DisplayGPUHandler, GPUTextOverlayHandler
+    from streamlib_extras import DisplayGPUHandler, GPUTextOverlayHandler
 except ImportError:
     print("Error: GPU display handler not available")
     print("Install with: pip install 'streamlib[gpu-display,gpu]'")

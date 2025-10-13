@@ -19,10 +19,10 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-from ..handler import StreamHandler
-from ..ports import VideoInput, VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput, VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 
 class LowerThirdsGPUHandler(StreamHandler):
@@ -105,8 +105,8 @@ class LowerThirdsGPUHandler(StreamHandler):
         self.position = position
 
         # GPU-capable ports
-        self.inputs['video'] = VideoInput('video', capabilities=['gpu', 'cpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu', 'cpu'])
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         # Animation state
         self._start_time: Optional[float] = None

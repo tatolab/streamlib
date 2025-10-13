@@ -31,7 +31,7 @@ from streamlib.messages import VideoFrame
 
 # Try to import GPU display handler
 try:
-    from streamlib.handlers import DisplayGPUHandler
+    from streamlib_extras import DisplayGPUHandler
     HAS_GPU_DISPLAY = True
 except ImportError:
     HAS_GPU_DISPLAY = False

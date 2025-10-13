@@ -30,7 +30,7 @@ from streamlib.handler import StreamHandler
 from streamlib.ports import VideoInput, VideoOutput
 from streamlib.clocks import TimedTick
 from streamlib.messages import VideoFrame
-from streamlib.handlers import DisplayGPUHandler
+from streamlib_extras import DisplayGPUHandler
 
 
 # Simple test pattern handler

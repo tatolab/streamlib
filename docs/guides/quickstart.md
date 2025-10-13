@@ -5,7 +5,11 @@ Build your first streamlib pipeline in 5 minutes.
 ## Installation
 
 ```bash
+# Install core SDK
 pip install streamlib
+
+# Install reference handlers
+pip install streamlib-extras
 ```
 
 ## Your First Pipeline
@@ -17,7 +21,7 @@ Let's create the simplest possible pipeline: Generate a test pattern and display
 ```python
 import asyncio
 from streamlib import StreamRuntime, Stream
-from streamlib.handlers import TestPatternHandler, DisplayGPUHandler
+from streamlib_extras import TestPatternHandler, DisplayGPUHandler
 ```
 
 ### Step 2: Create Handlers
@@ -82,7 +86,7 @@ asyncio.run(main())
 
 import asyncio
 from streamlib import StreamRuntime, Stream
-from streamlib.handlers import TestPatternHandler, DisplayGPUHandler
+from streamlib_extras import TestPatternHandler, DisplayGPUHandler
 
 async def main():
     # Create runtime
@@ -137,7 +141,7 @@ You should see an OpenGL window displaying SMPTE color bars at 30 FPS!
 Replace the test pattern with a real camera:
 
 ```python
-from streamlib.handlers import CameraHandlerGPU
+from streamlib_extras import CameraHandlerGPU
 
 # Replace pattern with camera
 camera = CameraHandlerGPU(
@@ -157,7 +161,7 @@ runtime.connect(camera.outputs['video'], display.inputs['video'])
 Insert a blur filter between camera and display:
 
 ```python
-from streamlib.handlers import BlurFilterGPU
+from streamlib_extras import BlurFilterGPU
 
 # Create handlers
 camera = CameraHandlerGPU(device_name="Live Camera", width=1280, height=720)
@@ -211,7 +215,7 @@ runtime.stop()
 
 ## Available Handlers
 
-streamlib includes several built-in handlers:
+streamlib-extras provides several reference handler implementations:
 
 ### Sources
 - **`TestPatternHandler`** - Generate test patterns (SMPTE bars, gradients, etc.)

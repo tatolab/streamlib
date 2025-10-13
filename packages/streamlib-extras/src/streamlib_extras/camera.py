@@ -6,10 +6,10 @@ Captures video from webcam or other camera devices using OpenCV.
 
 import cv2
 import numpy as np
-from ..handler import StreamHandler
-from ..ports import VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 
 class CameraHandler(StreamHandler):
@@ -55,7 +55,7 @@ class CameraHandler(StreamHandler):
         self.fps = fps
 
         # Output port
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video')
 
         # Camera state
         self.capture = None

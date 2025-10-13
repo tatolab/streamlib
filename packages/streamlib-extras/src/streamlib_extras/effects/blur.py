@@ -15,10 +15,10 @@ import numpy as np
 from typing import Optional, Any
 from enum import Enum
 
-from ..handler import StreamHandler
-from ..ports import VideoInput, VideoOutput
-from ..messages import VideoFrame
-from ..clocks import TimedTick
+from streamlib.handler import StreamHandler
+from streamlib.ports import VideoInput, VideoOutput
+from streamlib.messages import VideoFrame
+from streamlib.clocks import TimedTick
 
 # Import cv2 for CPU blur
 try:
@@ -109,22 +109,16 @@ class BlurFilter(StreamHandler):
         self.kernel_size = kernel_size
         self.sigma = sigma
 
-        # Flexible capabilities: accept both CPU and GPU
-        # Runtime will negotiate which path to use
-        capabilities = []
-        if HAS_CV2:
-            capabilities.append('cpu')
-        if HAS_TORCH:
-            capabilities.append('gpu')
-
-        if not capabilities:
+        # Check that at least one backend is available
+        if not HAS_CV2 and not HAS_TORCH:
             raise RuntimeError(
                 "BlurFilter requires either OpenCV (CPU) or PyTorch (GPU). "
                 "Neither is available."
             )
 
-        self.inputs['video'] = VideoInput('video', capabilities=capabilities)
-        self.outputs['video'] = VideoOutput('video', capabilities=capabilities)
+        # GPU-first ports - runtime handles everything
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         # Frame counter
         self._frame_count = 0

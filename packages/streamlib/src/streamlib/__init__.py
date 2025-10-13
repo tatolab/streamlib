@@ -1,38 +1,47 @@
 """
 streamlib: Composable streaming library for Python.
 
-Phase 3: StreamHandler + Runtime Architecture
-
 Core framework for building handler-based streaming pipelines with
-capability negotiation and runtime-managed lifecycle.
+GPU-first optimization and runtime-managed lifecycle.
 
 Example:
-    from streamlib import StreamRuntime, Stream, StreamHandler, VideoInput, VideoOutput
+    from streamlib import StreamRuntime, Stream, StreamHandler, VideoInput, VideoOutput, VideoFrame
 
     class BlurFilter(StreamHandler):
         def __init__(self):
             super().__init__()
-            self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-            self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+            # GPU-first by default - runtime handles everything
+            self.inputs['video'] = VideoInput('video')
+            self.outputs['video'] = VideoOutput('video')
 
         async def process(self, tick):
             frame = self.inputs['video'].read_latest()
             if frame:
                 result = cv2.GaussianBlur(frame.data, (5, 5), 0)
-                self.outputs['video'].write(VideoFrame(result, tick.timestamp, ...))
+                self.outputs['video'].write(VideoFrame(
+                    data=result,
+                    timestamp=tick.timestamp,
+                    frame_number=frame.frame_number,
+                    width=frame.width,
+                    height=frame.height
+                ))
 
     # Create runtime
     runtime = StreamRuntime(fps=30)
 
-    # Add streams
-    runtime.add_stream(Stream(camera_handler, dispatcher='asyncio'))
-    runtime.add_stream(Stream(blur_handler, dispatcher='threadpool'))
+    # Add streams (runtime infers execution context)
+    runtime.add_stream(Stream(camera_handler))
+    runtime.add_stream(Stream(blur_handler))
 
-    # Connect with capability negotiation
+    # Connect (runtime handles capability negotiation and memory transfers)
     runtime.connect(camera_handler.outputs['video'], blur_handler.inputs['video'])
 
     # Start
     await runtime.start()
+
+For concrete handler implementations, see streamlib-extras:
+    pip install streamlib-extras
+    from streamlib_extras import TestPatternHandler, DisplayGPUHandler
 """
 
 # Phase 3.1: Core Infrastructure (NEW)
@@ -66,26 +75,9 @@ from .ports import (
 # Transfer handlers (NEW)
 from .transfers import CPUtoGPUTransferHandler, GPUtoCPUTransferHandler
 
-# Phase 3.2: Basic Handlers (NEW)
-from .handlers import TestPatternHandler, DisplayHandler, CameraHandler
-
-# Phase 3.3: Advanced Handlers (NEW)
-from .handlers import BlurFilter, CompositorHandler, DrawingHandler, DrawingContext, LowerThirdsHandler
-
-# Phase 3.4: GPU Support (NEW - conditional)
-try:
-    from .handlers import BlurFilterGPU
-    _HAS_GPU_BLUR = True
-except (ImportError, AttributeError):
-    _HAS_GPU_BLUR = False
-
-# Phase 3.5: Metal Support (NEW - macOS only, conditional)
-try:
-    from .handlers import BlurFilterMetal
-    from .transfers import CPUtoMetalTransferHandler, MetalToCPUTransferHandler
-    _HAS_METAL = True
-except (ImportError, AttributeError, RuntimeError):
-    _HAS_METAL = False
+# Note: Concrete handler implementations have moved to streamlib-extras
+# Install with: pip install streamlib-extras
+# Import from: from streamlib_extras import TestPatternHandler, DisplayGPUHandler
 
 # Ring buffers
 from .buffers import RingBuffer, GPURingBuffer
@@ -100,14 +92,14 @@ from .dispatchers import Dispatcher, AsyncioDispatcher, ThreadPoolDispatcher
 from .messages import VideoFrame, AudioBuffer, KeyEvent, MouseEvent, DataMessage
 
 __all__ = [
-    # Phase 3.1: StreamHandler + Runtime (NEW)
+    # Core framework
     'StreamRuntime',
     'StreamHandler',
     'Stream',
     'FunctionHandler',
     'stream_handler',
 
-    # Event bus (NEW - Phase 3.6)
+    # Event bus
     'EventBus',
     'Event',
     'ClockTickEvent',
@@ -115,7 +107,7 @@ __all__ = [
     'HandlerStartedEvent',
     'HandlerStoppedEvent',
 
-    # Capability-based ports (NEW)
+    # Ports
     'StreamInput',
     'StreamOutput',
     'VideoInput',
@@ -125,21 +117,9 @@ __all__ = [
     'DataInput',
     'DataOutput',
 
-    # Transfer handlers (NEW)
+    # Transfer handlers
     'CPUtoGPUTransferHandler',
     'GPUtoCPUTransferHandler',
-
-    # Phase 3.2: Basic Handlers (NEW)
-    'TestPatternHandler',
-    'DisplayHandler',
-    'CameraHandler',
-
-    # Phase 3.3: Advanced Handlers (NEW)
-    'BlurFilter',
-    'CompositorHandler',
-    'DrawingHandler',
-    'DrawingContext',
-    'LowerThirdsHandler',
 
     # Ring buffers
     'RingBuffer',
@@ -164,13 +144,5 @@ __all__ = [
     'MouseEvent',
     'DataMessage',
 ]
-
-# Phase 3.4: Add GPU handlers if available
-if _HAS_GPU_BLUR:
-    __all__.append('BlurFilterGPU')
-
-# Phase 3.5: Add Metal handlers if available
-if _HAS_METAL:
-    __all__.extend(['BlurFilterMetal', 'CPUtoMetalTransferHandler', 'MetalToCPUTransferHandler'])
 
 __version__ = '0.2.0'  # Phase 3.1: StreamHandler + Runtime
