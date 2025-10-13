@@ -4,16 +4,19 @@ Ports are the connection points between handlers. Like Unix pipes, they define h
 
 ## Philosophy
 
-**Ports declare capabilities, runtime negotiates memory space.**
+**GPU-first by default. Runtime handles everything automatically.**
 
-Instead of hardcoding CPU or GPU, handlers declare what they *can* support, and the runtime finds the optimal path:
+streamlib takes an opinionated approach: all ports are GPU by default unless explicitly configured otherwise:
 
 ```python
-# Traditional approach (rigid)
-video_input = VideoInput(format='RGB', memory='GPU')  # ❌ Too specific
+# streamlib approach (GPU-first, automatic)
+video_input = VideoInput('video')  # ✅ GPU by default, runtime handles the rest
 
-# streamlib approach (flexible)
-video_input = VideoInput('video', capabilities=['cpu', 'gpu'])  # ✅ Runtime decides
+# Rare case: explicitly allow CPU fallback
+video_input = VideoInput('video', allow_cpu=True)  # For compatibility
+
+# Very rare: force CPU only
+video_input = VideoInput('video', cpu_only=True)  # When GPU not possible
 ```
 
 ## Port Types
@@ -118,47 +121,46 @@ def AudioOutput(name: str, capabilities: List[str], slots: int = 3) -> StreamOut
     return StreamOutput(name, port_type='audio', capabilities=capabilities, slots=slots)
 ```
 
-## Capabilities
+## GPU-First Architecture
 
-Capabilities declare which memory spaces a handler supports:
+All handlers are GPU-first by default. You rarely need to think about memory management:
 
-### CPU-Only
+### Standard (GPU by Default)
 
 ```python
-# Handler only works with CPU memory
-self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+# GPU by default - no explicit declaration needed
+self.inputs['video'] = VideoInput('video')
+self.outputs['video'] = VideoOutput('video')
 ```
 
 Use for:
-- Pure Python/NumPy processing
-- Legacy CPU-only libraries
-- Simple transformations
+- **All new handlers** (recommended)
+- GPU operations (Metal shaders, WebGPU compute, CUDA kernels)
+- Maximum performance
 
-### GPU-Only
+### With CPU Fallback (Rare)
 
 ```python
-# Handler only works with GPU memory
-self.inputs['video'] = VideoInput('video', capabilities=['gpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+# Explicitly allow CPU fallback if needed
+self.inputs['video'] = VideoInput('video', allow_cpu=True)
+self.outputs['video'] = VideoOutput('video', allow_cpu=True)
 ```
 
 Use for:
-- GPU-only operations (Metal shaders, CUDA kernels)
-- When CPU fallback would be too slow
+- Compatibility with legacy CPU-only handlers
+- Debugging GPU issues
 
-### Flexible (CPU + GPU)
+### CPU-Only (Very Rare)
 
 ```python
-# Handler works with both
-self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+# Force CPU-only processing
+self.inputs['video'] = VideoInput('video', cpu_only=True)
+self.outputs['video'] = VideoOutput('video', cpu_only=True)
 ```
 
 Use for:
-- Handlers with GPU fast path, CPU fallback
-- Maximum composability
-- **Recommended default** for new handlers
+- Legacy CPU-only libraries that can't be ported
+- Very simple transformations where GPU overhead exceeds benefit
 
 ## Negotiation
 
@@ -290,14 +292,14 @@ self.outputs['composited'] = VideoOutput('composited', ...)
 Output ports use ring buffers to store recent items:
 
 ```python
-# Default: 3 slots
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'], slots=3)
+# Default: 3 slots (GPU by default)
+self.outputs['video'] = VideoOutput('video', slots=3)
 
 # Larger buffer for bursty producers
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'], slots=10)
+self.outputs['video'] = VideoOutput('video', slots=10)
 
 # Minimal buffer for tight memory
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'], slots=1)
+self.outputs['video'] = VideoOutput('video', slots=1)
 ```
 
 **How it works:**
@@ -314,9 +316,9 @@ self.outputs['video'] = VideoOutput('video', capabilities=['gpu'], slots=1)
 class PassThroughHandler(StreamHandler):
     def __init__(self):
         super().__init__()
-        # Flexible: accepts CPU or GPU
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu', 'gpu'])
+        # GPU by default, runtime handles everything
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
     async def process(self, tick: TimedTick):
         frame = self.inputs['video'].read_latest()
@@ -330,9 +332,9 @@ class PassThroughHandler(StreamHandler):
 class BlurFilterGPU(StreamHandler):
     def __init__(self):
         super().__init__()
-        # GPU-only
-        self.inputs['video'] = VideoInput('video', capabilities=['gpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+        # GPU by default
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
     async def process(self, tick: TimedTick):
         frame = self.inputs['video'].read_latest()
@@ -354,14 +356,10 @@ class BlurFilterGPU(StreamHandler):
 class CompositorHandler(StreamHandler):
     def __init__(self, num_inputs: int = 2):
         super().__init__()
-        # Multiple inputs
+        # GPU by default for all inputs and outputs
         for i in range(num_inputs):
-            self.inputs[f'input_{i}'] = VideoInput(
-                f'input_{i}',
-                capabilities=['gpu', 'cpu']
-            )
-        # Single output
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+            self.inputs[f'input_{i}'] = VideoInput(f'input_{i}')
+        self.outputs['video'] = VideoOutput('video')
 
     async def process(self, tick: TimedTick):
         # Read from all inputs
@@ -379,11 +377,11 @@ class CompositorHandler(StreamHandler):
 
 ## Best Practices
 
-1. **Default to flexible capabilities** - Use `['cpu', 'gpu']` unless you have a reason not to
-2. **Let runtime negotiate** - Don't assume which memory space will be used
-3. **Check negotiated_memory in on_start()** - Set up resources based on actual negotiated space
-4. **Use read_latest() for real-time** - Don't process old frames
-5. **Size buffers appropriately** - Default of 3 works for most cases
+1. **Trust GPU-first by default** - Don't explicitly declare capabilities unless you have a specific need
+2. **Let runtime handle everything** - Execution context and memory management are automatic
+3. **Use read_latest() for real-time** - Don't process old frames
+4. **Size buffers appropriately** - Default of 3 works for most cases
+5. **Only use CPU when necessary** - GPU is faster for almost all video operations
 
 ## See Also
 

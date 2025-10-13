@@ -24,9 +24,6 @@ class StreamHandler(ABC):
     Handlers are pure processing logic - inert until runtime activates them.
     """
 
-    # Preferred execution context (can be overridden by Stream())
-    preferred_dispatcher: str = 'asyncio'  # or 'threadpool', 'gpu', 'processpool'
-
     def __init__(self, handler_id: str = None):
         """Initialize handler.
 
@@ -104,9 +101,9 @@ class PassThroughHandler(StreamHandler):
 
     def __init__(self):
         super().__init__()
-        # Declare ports
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        # Declare ports (GPU by default)
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
     async def process(self, tick: TimedTick):
         """Read frame, pass it through."""
@@ -124,12 +121,10 @@ import numpy as np
 class GrayscaleHandler(StreamHandler):
     """Convert color video to grayscale."""
 
-    preferred_dispatcher = 'threadpool'  # CPU-intensive
-
     def __init__(self):
         super().__init__()
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         # State (initialized in on_start)
         self.frame_count = 0
@@ -171,15 +166,13 @@ import torch
 class BlurFilterGPU(StreamHandler):
     """GPU-accelerated blur filter."""
 
-    preferred_dispatcher = 'gpu'  # GPU execution
-
     def __init__(self, kernel_size: int = 5):
         super().__init__()
         self.kernel_size = kernel_size
 
-        # GPU-capable ports
-        self.inputs['video'] = VideoInput('video', capabilities=['gpu', 'cpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+        # Ports are GPU by default
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
         self.blur_kernel = None
 
@@ -219,48 +212,32 @@ class BlurFilterGPU(StreamHandler):
 
 ## Port Declaration
 
-Handlers declare their inputs and outputs in `__init__()`:
+Handlers declare their inputs and outputs in `__init__()`. All ports are GPU-first by default:
 
 ```python
-# CPU-only handler
-self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+# Standard handler (GPU by default)
+self.inputs['video'] = VideoInput('video')
+self.outputs['video'] = VideoOutput('video')
 
-# GPU-only handler
-self.inputs['video'] = VideoInput('video', capabilities=['gpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+# Explicitly allow CPU fallback (rare)
+self.inputs['video'] = VideoInput('video', allow_cpu=True)
 
-# Flexible handler (accepts both CPU and GPU)
-self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+# Force CPU-only (very rare)
+self.inputs['video'] = VideoInput('video', cpu_only=True)
 ```
+
+The runtime automatically handles execution context and memory management. You don't need to specify dispatchers or worry about CPU↔GPU transfers.
 
 See [Ports](ports.md) for detailed port documentation.
-
-## Dispatcher Selection
-
-The `preferred_dispatcher` tells the runtime where to execute this handler:
-
-- **`asyncio`** - Non-blocking I/O, lightweight operations (TestPatternHandler)
-- **`threadpool`** - Blocking calls, CPU-intensive work (DisplayHandler, CPU blur)
-- **`gpu`** - GPU operations (GPU blur, compositing)
-- **`processpool`** - Heavy compute requiring process isolation
-
-Can be overridden when adding to runtime:
-
-```python
-runtime.add_stream(Stream(blur_handler, dispatcher='threadpool'))  # Override
-```
-
-See `docs/dispatcher-guidelines.md` for detailed selection rules.
 
 ## Key Principles
 
 1. **Handlers are stateless processors** - All state should be in ports or internal variables
 2. **Runtime manages lifecycle** - Don't create threads or start processing manually
-3. **Ports declare capabilities** - Let runtime handle CPU/GPU transfers
+3. **GPU-first by default** - Runtime keeps data on GPU automatically
 4. **process() is called every tick** - Make it fast, don't block unnecessarily
 5. **Use on_start() for initialization** - Don't do heavy work in `__init__()`
+6. **Trust the runtime** - It handles execution context and memory management
 
 ## See Also
 

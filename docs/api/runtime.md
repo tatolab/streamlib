@@ -105,9 +105,9 @@ async def main():
     pattern = TestPatternHandler(width=1920, height=1080, pattern='smpte_bars')
     display = DisplayGPUHandler(window_name='Test', width=1920, height=1080)
 
-    # Add to runtime
-    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-    runtime.add_stream(Stream(display, dispatcher='threadpool'))
+    # Add to runtime (dispatcher inferred automatically)
+    runtime.add_stream(Stream(pattern))
+    runtime.add_stream(Stream(display))
 
     # Connect
     runtime.connect(pattern.outputs['video'], display.inputs['video'])
@@ -140,10 +140,10 @@ camera = CameraHandlerGPU(device_name="Live Camera", width=1920, height=1080)
 blur = BlurFilterGPU(kernel_size=15, sigma=8.0)
 display = DisplayGPUHandler(width=1920, height=1080)
 
-# Add to runtime (with explicit dispatchers)
-runtime.add_stream(Stream(camera, dispatcher='asyncio'))      # I/O bound
-runtime.add_stream(Stream(blur, dispatcher='gpu'))            # GPU compute
-runtime.add_stream(Stream(display, dispatcher='threadpool'))  # Blocking display
+# Add to runtime (dispatcher inferred automatically)
+runtime.add_stream(Stream(camera))
+runtime.add_stream(Stream(blur))
+runtime.add_stream(Stream(display))
 
 # Connect pipeline
 runtime.connect(camera.outputs['video'], blur.inputs['video'])
@@ -153,80 +153,57 @@ runtime.connect(blur.outputs['video'], display.inputs['video'])
 runtime.start()
 ```
 
-## Capability Negotiation
+## Automatic GPU-First Architecture
 
-The runtime automatically negotiates memory space between connected handlers:
+The runtime automatically manages memory and execution:
 
-### Example 1: Direct GPU Connection
+### All-GPU Pipeline (Common)
 
 ```python
-# Both handlers support GPU
-camera = CameraHandlerGPU()  # outputs: capabilities=['gpu']
-blur = BlurFilterGPU()       # inputs: capabilities=['gpu']
+# All handlers are GPU-first by default
+camera = CameraHandlerGPU()
+blur = BlurFilterGPU()
+display = DisplayGPUHandler()
 
 runtime.connect(camera.outputs['video'], blur.inputs['video'])
-# ✅ Connected video → video (negotiated: gpu)
-# No transfer needed - stays on GPU!
+runtime.connect(blur.outputs['video'], display.inputs['video'])
+# ✅ All connections stay on GPU automatically
+# No explicit capabilities needed!
 ```
 
-### Example 2: GPU → CPU Transfer
+### Automatic Transfer (When Needed)
 
 ```python
-# GPU output → CPU input
-camera = CameraHandlerGPU()  # outputs: capabilities=['gpu']
-display = DisplayCPU()       # inputs: capabilities=['cpu']
+# GPU output → CPU-only handler (rare case)
+camera = CameraHandlerGPU()
+cpu_filter = CPUOnlyFilter(cpu_only=True)
 
-runtime.connect(camera.outputs['video'], display.inputs['video'])
-# ✅ Connected video → video (negotiated: cpu)
-# Runtime auto-inserts GPU→CPU transfer handler
+runtime.connect(camera.outputs['video'], cpu_filter.inputs['video'])
+# ✅ Runtime automatically inserts GPU→CPU transfer if needed
 ```
 
-### Example 3: Flexible Handler
+### Benefits
 
-```python
-# Handler accepts both CPU and GPU
-blur = BlurFilterGPU()  # inputs: capabilities=['cpu', 'gpu']
-
-# Scenario A: GPU source
-runtime.connect(gpu_camera.outputs['video'], blur.inputs['video'])
-# ✅ Negotiated: gpu (no transfer)
-
-# Scenario B: CPU source
-runtime.connect(cpu_pattern.outputs['video'], blur.inputs['video'])
-# ✅ Negotiated: cpu (no transfer)
-```
-
-### Example 4: No Common Capability
-
-```python
-# GPU-only output → CPU-only input, auto_transfer=False
-camera = CameraHandlerGPU()  # outputs: capabilities=['gpu']
-cpu_filter = CPUFilter()     # inputs: capabilities=['cpu']
-
-runtime.connect(
-    camera.outputs['video'],
-    cpu_filter.inputs['video'],
-    auto_transfer=False  # Don't insert transfer handler
-)
-# ❌ Raises ValueError: No common capability
-```
+- **GPU by default** - All operations stay on GPU
+- **Automatic execution** - Runtime infers optimal dispatcher
+- **Zero-copy** - Data stays on GPU throughout pipeline
+- **Simple API** - No explicit capabilities or dispatchers needed
 
 ## Stream Configuration
 
-The `Stream` wrapper configures how a handler executes:
+The `Stream` wrapper adds a handler to the runtime:
 
 ```python
 from streamlib import Stream
 
-# Use handler's preferred dispatcher
+# Runtime automatically infers execution context
 runtime.add_stream(Stream(handler))
 
-# Override dispatcher
-runtime.add_stream(Stream(handler, dispatcher='threadpool'))
-
 # Future: Set priority, CPU affinity, etc.
-runtime.add_stream(Stream(handler, dispatcher='gpu', priority=10))
+runtime.add_stream(Stream(handler, priority=10))
 ```
+
+You don't need to specify dispatchers - the runtime handles this automatically based on the handler's operations.
 
 ## GPU Context
 
@@ -318,9 +295,10 @@ To stop the runtime on error, raise in `on_start()` instead.
 
 1. **Create runtime once** - Reuse for entire application lifetime
 2. **Add all handlers before connecting** - Makes connections visible
-3. **Use auto_transfer=True** - Let runtime handle GPU↔CPU transfers
+3. **Trust the runtime** - It automatically handles execution and memory
 4. **Match FPS to slowest handler** - Don't set FPS higher than you can process
 5. **Shut down cleanly** - Always call `runtime.stop()` before exit
+6. **Let GPU do the work** - Runtime keeps data on GPU automatically
 
 ## Common Patterns
 

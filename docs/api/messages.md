@@ -177,14 +177,14 @@ class DetectionFrame:
 class ObjectDetectorHandler(StreamHandler):
     def __init__(self):
         super().__init__()
-        # Input: video frames
-        self.inputs['video'] = VideoInput('video', capabilities=['gpu'])
+        # Input: video frames (GPU by default)
+        self.inputs['video'] = VideoInput('video')
 
         # Output: detection results (port_type='data')
         self.outputs['detections'] = StreamOutput(
             'detections',
-            port_type='data',
-            capabilities=['cpu']  # Detections are CPU data structures
+            port_type='data'
+            # Detections are typically small CPU data structures
         )
 
     async def process(self, tick: TimedTick):

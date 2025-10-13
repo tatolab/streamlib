@@ -238,7 +238,7 @@ async def main():
     # Add all to runtime
     for handler in [camera_main, camera_guest, camera_wide, blur, lower_thirds,
                     pip_compositor, preview_compositor, main_output, preview]:
-        runtime.add_stream(Stream(handler, dispatcher='asyncio'))
+        runtime.add_stream(Stream(handler))
 
     # Main program output: Main camera → Blur → Lower Thirds → PIP (with guest) → Display
     runtime.connect(camera_main.outputs['video'], blur.inputs['video'])
@@ -286,49 +286,41 @@ graph TB
     end
 ```
 
-## GPU Optimization
+## GPU-First Architecture
 
-The runtime automatically keeps data on GPU when possible:
+All handlers are GPU-first by default - the runtime automatically keeps data on GPU throughout the pipeline:
 
 ```python
-# All GPU-capable handlers
-camera = CameraHandlerGPU(...)      # outputs: capabilities=['gpu']
-blur = BlurFilterGPU(...)           # inputs/outputs: capabilities=['gpu']
-compositor = MultiInputCompositor() # inputs/outputs: capabilities=['gpu']
-display = DisplayGPUHandler(...)    # inputs: capabilities=['gpu', 'cpu']
+# All handlers are GPU-capable by default
+camera = CameraHandlerGPU(...)
+blur = BlurFilterGPU(...)
+compositor = MultiInputCompositor()
+display = DisplayGPUHandler(...)
 
 # These connections stay on GPU - zero CPU transfers!
 runtime.connect(camera.outputs['video'], blur.inputs['video'])
-# ✅ Negotiated: gpu
-
 runtime.connect(blur.outputs['video'], compositor.inputs['input_0'])
-# ✅ Negotiated: gpu
-
 runtime.connect(compositor.outputs['video'], display.inputs['video'])
-# ✅ Negotiated: gpu
 
 # Entire pipeline runs on GPU with zero-copy!
 ```
 
-## Dispatcher Strategy
+The runtime automatically handles:
+- **Execution context** - Infers optimal dispatcher for each handler
+- **Memory management** - Keeps data on GPU when possible
+- **Zero-copy transfers** - Data passes as references
 
-Different handlers need different execution contexts:
+## Automatic Execution
+
+The runtime automatically determines the optimal execution context for each handler based on its operations. You don't need to specify dispatchers or manage threading - just add handlers and connect them:
 
 ```python
-# I/O bound (camera capture, pattern generation)
-runtime.add_stream(Stream(camera, dispatcher='asyncio'))
-runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-
-# GPU compute
-runtime.add_stream(Stream(blur, dispatcher='gpu'))
-runtime.add_stream(Stream(compositor, dispatcher='gpu'))
-
-# Blocking calls (display with cv2.imshow, file I/O)
-runtime.add_stream(Stream(display, dispatcher='threadpool'))
-runtime.add_stream(Stream(file_writer, dispatcher='threadpool'))
+# Runtime automatically handles execution context
+runtime.add_stream(Stream(camera))      # Auto: async I/O
+runtime.add_stream(Stream(blur))        # Auto: GPU compute
+runtime.add_stream(Stream(compositor))  # Auto: GPU compute
+runtime.add_stream(Stream(display))     # Auto: blocking thread
 ```
-
-See `docs/dispatcher-guidelines.md` for detailed rules.
 
 ## Error Handling
 
@@ -365,10 +357,10 @@ runtime.connect(new_camera.outputs['video'], compositor.inputs['input_3'])
 
 1. **Design pipelines on paper first** - Draw the flow diagram
 2. **Start simple, then compose** - Get each handler working independently
-3. **Use appropriate dispatchers** - Match execution context to handler type
-4. **Let runtime handle transfers** - Don't manually move data between CPU/GPU
-5. **Monitor FPS** - If dropping frames, profile your handlers
-6. **Keep handlers stateless** - State should be in ports, not global variables
+3. **Trust the runtime** - Let it handle execution and memory automatically
+4. **Monitor FPS** - If dropping frames, profile your handlers
+5. **Keep handlers stateless** - State should be in ports, not global variables
+6. **Think in streams** - Design data flow, not implementation details
 
 ## See Also
 

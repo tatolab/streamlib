@@ -6,7 +6,7 @@ Learn how streamlib automatically optimizes GPU pipelines for maximum performanc
 
 **This is what differentiates streamlib from GStreamer and other video frameworks:**
 
-Traditional video pipelines constantly bounce between CPU and GPU because they're not opinionated. **streamlib automatically chooses the fastest path** and **stays on GPU as long as possible**.
+Traditional video pipelines constantly bounce between CPU and GPU because they're not opinionated. **streamlib is GPU-first by default** - everything stays on GPU automatically.
 
 ```python
 # You write simple code
@@ -14,54 +14,47 @@ runtime.connect(camera.outputs['video'], blur.inputs['video'])
 runtime.connect(blur.outputs['video'], display.inputs['video'])
 
 # streamlib automatically:
-# 1. Detects camera outputs GPU textures (Metal/CUDA)
-# 2. Negotiates GPU path with blur filter
-# 3. Blur stays on GPU (zero-copy)
-# 4. Display receives GPU data directly
+# 1. Camera outputs GPU textures (WebGPU)
+# 2. Blur processes on GPU (zero-copy)
+# 3. Display receives GPU data directly
+# 4. Runtime handles all execution and memory
 #
-# Result: ZERO CPU TRANSFERS!
+# Result: ZERO CPU TRANSFERS! All automatic!
 ```
 
-## Automatic Capability Negotiation
+## GPU-First by Default
 
-streamlib uses **capability-based ports** (inspired by GStreamer) to automatically find the optimal memory path:
+All streamlib handlers are GPU-first by default. You don't need to declare capabilities or manage memory - the runtime handles everything automatically:
 
 ### Example: All-GPU Pipeline
 
 ```python
-# Camera outputs GPU textures
-camera = CameraHandlerGPU()  # outputs: capabilities=['gpu']
+# All handlers are GPU by default
+camera = CameraHandlerGPU()
+blur = BlurFilterGPU()
+display = DisplayGPUHandler()
 
-# Blur accepts GPU or CPU
-blur = BlurFilterGPU()       # inputs: capabilities=['gpu', 'cpu']
-                             # outputs: capabilities=['gpu']
-
-# Display accepts GPU or CPU
-display = DisplayGPUHandler() # inputs: capabilities=['gpu', 'cpu']
-
-# Connect
+# Connect - runtime keeps everything on GPU
 runtime.connect(camera.outputs['video'], blur.inputs['video'])
-# ✅ Negotiated: gpu (no transfer)
-
 runtime.connect(blur.outputs['video'], display.inputs['video'])
-# ✅ Negotiated: gpu (no transfer)
 
 # Entire pipeline runs on GPU with zero CPU transfers!
+# Runtime automatically:
+# - Keeps data on GPU throughout
+# - Manages execution context
+# - Uses zero-copy where possible
 ```
 
-### Example: Automatic Transfers
+### CPU Fallback (Rare Cases)
 
-When handlers don't share capabilities, runtime auto-inserts transfers:
+For the rare case where you need CPU processing, you can explicitly configure it:
 
 ```python
-# GPU camera → CPU-only filter
-camera = CameraHandlerGPU()    # outputs: capabilities=['gpu']
-cpu_filter = CPUFilter()       # inputs: capabilities=['cpu']
+# Explicitly request CPU-only processing
+cpu_filter = CPUFilter(allow_cpu=True)
 
 runtime.connect(camera.outputs['video'], cpu_filter.inputs['video'])
-# ⚠️ WARNING: Auto-inserting gpu→cpu transfer (performance cost ~2ms)
-
-# Runtime automatically inserted a GPUtoCPUTransferHandler between them
+# Runtime automatically inserts GPU→CPU transfer if needed
 ```
 
 ## Zero-Copy Architecture
@@ -82,7 +75,7 @@ async def process(self, tick: TimedTick):
 ```
 
 **Benefits:**
-- GPU tensors stay on GPU throughout pipeline
+- GPU textures stay on GPU throughout pipeline
 - No unnecessary memory allocations
 - Minimal latency
 - Maximum throughput
@@ -112,34 +105,32 @@ async def process(self, tick: TimedTick):
 
 **Key insight:** At small resolutions, CPU is faster due to low overhead. At large resolutions, GPU wins with proper optimization.
 
-## Flexible Handlers
+## Writing GPU Handlers
 
-Write handlers that adapt to both CPU and GPU:
+All handlers are GPU-first by default. Just implement your processing logic and the runtime handles the rest:
 
 ```python
-class AdaptiveBlur(StreamHandler):
-    def __init__(self):
+class BlurFilter(StreamHandler):
+    def __init__(self, kernel_size=15):
         super().__init__()
-        # Declare flexible capabilities
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu', 'gpu'])
+        self.kernel_size = kernel_size
+        # Ports are GPU by default - no explicit declaration needed
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
     async def process(self, tick: TimedTick):
         frame = self.inputs['video'].read_latest()
         if frame:
-            # Runtime tells you which memory space was negotiated
-            if self.inputs['video'].negotiated_memory == 'gpu':
-                result = self.gpu_blur(frame.data)  # PyTorch
-            else:
-                result = self.cpu_blur(frame.data)  # NumPy
-
+            # Process on GPU using WebGPU compute shaders
+            result = self.gpu_blur(frame.data)  # WebGPU compute shader
             self.outputs['video'].write(VideoFrame(data=result, ...))
 ```
 
 **Benefits:**
-- Handler works in any pipeline
-- Runtime chooses optimal path
-- User doesn't need to think about it
+- Simple, clean code
+- GPU by default
+- Runtime handles execution automatically
+- No capability declarations needed
 
 ## GPU Context
 
@@ -149,26 +140,24 @@ Runtime provides GPU context for all handlers:
 async def on_start(self):
     """Called once when handler starts."""
     if self._runtime.gpu_context:
-        self.device = self._runtime.gpu_context['device']
-        print(f"Using GPU: {self._runtime.gpu_context['backend']}")
-        # backend is 'mps' (macOS), 'cuda' (NVIDIA), or 'cpu' (fallback)
+        self.gpu_context = self._runtime.gpu_context
+        print(f"Using GPU: WebGPU (backend: {self.gpu_context.adapter.properties['backendType']})")
+        # backendType: 'Metal' (macOS), 'D3D12' (Windows), 'Vulkan' (Linux), 'WebGPU' (Web)
     else:
-        self.device = 'cpu'
         print("Using CPU")
 ```
 
 ## Best Practices
 
-### 1. Declare Flexible Capabilities
+### 1. Trust the GPU-First Approach
 
 ```python
-# ✅ GOOD: Handler can adapt
-self.inputs['video'] = VideoInput('video', capabilities=['cpu', 'gpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['cpu', 'gpu'])
+# ✅ GOOD: Default GPU-first
+self.inputs['video'] = VideoInput('video')  # GPU by default
+self.outputs['video'] = VideoOutput('video')  # GPU by default
 
-# ⚠️ OKAY: Handler only works on GPU
-self.inputs['video'] = VideoInput('video', capabilities=['gpu'])
-self.outputs['video'] = VideoOutput('video', capabilities=['gpu'])
+# ⚠️ Only use CPU when absolutely necessary
+self.inputs['video'] = VideoInput('video', allow_cpu=True)
 ```
 
 ### 2. Keep Pipelines On GPU
@@ -183,128 +172,123 @@ camera (GPU) → cpu_filter (CPU) → gpu_effect (GPU) → cpu_display (CPU)
 # 3 transfers! (~6ms overhead)
 ```
 
-### 3. Let Runtime Handle Transfers
+### 3. Let Runtime Handle Everything
 
 ```python
-# ✅ GOOD: Auto-transfer
-runtime.connect(gpu_source.outputs['video'], cpu_sink.inputs['video'])
-# Runtime warns about transfer, inserts handler automatically
+# ✅ GOOD: Simple, automatic
+runtime.connect(camera.outputs['video'], blur.inputs['video'])
+runtime.connect(blur.outputs['video'], display.inputs['video'])
+# Runtime handles execution, memory, and transfers automatically
 
-# ❌ BAD: Manual transfer
-gpu_to_cpu = GPUtoCPUTransferHandler()
-runtime.add_stream(Stream(gpu_to_cpu))
-runtime.connect(gpu_source.outputs['video'], gpu_to_cpu.inputs['in'])
-runtime.connect(gpu_to_cpu.outputs['out'], cpu_sink.inputs['video'])
-# More code, same result
+# ❌ BAD: Don't manually manage dispatchers or transfers
+# The runtime does this for you!
 ```
 
-### 4. Check Negotiated Memory
+### 4. Focus on Processing Logic
 
 ```python
 async def process(self, tick: TimedTick):
     frame = self.inputs['video'].read_latest()
     if frame:
-        # Adapt to negotiated memory space
-        memory = self.inputs['video'].negotiated_memory
-
-        if memory == 'gpu':
-            result = self.process_gpu(frame.data)
-        else:
-            result = self.process_cpu(frame.data)
-
+        # Just process the frame - runtime handles memory
+        result = self.process_frame(frame.data)
         self.outputs['video'].write(VideoFrame(data=result, ...))
 ```
 
 ## Common Patterns
 
-### Pattern 1: GPU Pipeline with CPU Endpoints
+### Pattern 1: Simple GPU Pipeline
 
 ```python
-# CPU camera → GPU processing → CPU display
-camera = CameraHandler()         # outputs: ['cpu']
-to_gpu = CPUtoGPUTransfer()      # cpu → gpu
-blur = BlurFilterGPU()           # gpu → gpu
-compositor = CompositorGPU()     # gpu → gpu
-to_cpu = GPUtoCPUTransfer()      # gpu → cpu
-display = DisplayHandler()       # inputs: ['cpu']
+# All GPU by default - runtime handles everything
+camera = CameraHandlerGPU()
+blur = BlurFilterGPU()
+compositor = CompositorGPU()
+display = DisplayGPUHandler()
 
-# Only 2 transfers (at boundaries)
-# All processing stays on GPU
-```
+runtime.add_stream(Stream(camera))
+runtime.add_stream(Stream(blur))
+runtime.add_stream(Stream(compositor))
+runtime.add_stream(Stream(display))
 
-### Pattern 2: Flexible Pipeline
-
-```python
-# All handlers flexible
-camera = CameraHandlerGPU()      # outputs: ['cpu', 'gpu']
-blur = BlurFilter()              # both: ['cpu', 'gpu']
-display = DisplayHandler()       # inputs: ['cpu', 'gpu']
-
-# Runtime negotiates best path (probably GPU throughout)
 runtime.connect(camera.outputs['video'], blur.inputs['video'])
-runtime.connect(blur.outputs['video'], display.inputs['video'])
+runtime.connect(blur.outputs['video'], compositor.inputs['video'])
+runtime.connect(compositor.outputs['video'], display.inputs['video'])
+
+# Everything stays on GPU automatically!
 ```
 
-### Pattern 3: Mixed Pipeline
+### Pattern 2: Multi-Input Composition
 
 ```python
-# Some GPU, some CPU
-camera = CameraHandlerGPU()      # outputs: ['gpu']
-ml_model = MLInference()         # gpu → gpu (needs GPU)
-text_overlay = TextOverlay()     # inputs: ['cpu'] (CPU-only)
-display = DisplayHandler()       # inputs: ['cpu', 'gpu']
+# Multiple GPU sources → GPU compositor
+camera1 = CameraHandlerGPU()
+camera2 = CameraHandlerGPU()
+pattern = TestPatternHandler()
+compositor = MultiInputCompositor(num_inputs=3, mode='grid')
+display = DisplayGPUHandler()
 
-runtime.connect(camera.outputs['video'], ml_model.inputs['video'])
-# ✅ Negotiated: gpu
+# Add and connect
+for handler in [camera1, camera2, pattern, compositor, display]:
+    runtime.add_stream(Stream(handler))
 
-runtime.connect(ml_model.outputs['video'], text_overlay.inputs['video'])
-# ⚠️ WARNING: Auto-inserting gpu→cpu transfer
+runtime.connect(camera1.outputs['video'], compositor.inputs['input_0'])
+runtime.connect(camera2.outputs['video'], compositor.inputs['input_1'])
+runtime.connect(pattern.outputs['video'], compositor.inputs['input_2'])
+runtime.connect(compositor.outputs['video'], display.inputs['video'])
 
-runtime.connect(text_overlay.outputs['video'], display.inputs['video'])
-# ✅ Negotiated: cpu
+# All GPU, zero transfers!
+```
+
+### Pattern 3: Effects Chain
+
+```python
+# Chain multiple GPU effects
+camera = CameraHandlerGPU()
+blur = BlurFilterGPU()
+overlay = LowerThirdsGPUHandler()
+display = DisplayGPUHandler()
+
+# Runtime figures out optimal execution
+for handler in [camera, blur, overlay, display]:
+    runtime.add_stream(Stream(handler))
+
+runtime.connect(camera.outputs['video'], blur.inputs['video'])
+runtime.connect(blur.outputs['video'], overlay.inputs['video'])
+runtime.connect(overlay.outputs['video'], display.inputs['video'])
 ```
 
 ## Debugging GPU Issues
 
-### Check What Was Negotiated
-
-```python
-# After connecting, check negotiated memory:
-runtime.connect(output, input)
-print(f"Negotiated: {input.negotiated_memory}")  # 'cpu', 'gpu', or None
-```
-
 ### Verify GPU Context
 
 ```python
-runtime = StreamRuntime(fps=30, gpu_backend='auto')
+runtime = StreamRuntime(fps=30)
 print(f"GPU available: {runtime.gpu_context is not None}")
 if runtime.gpu_context:
-    print(f"Backend: {runtime.gpu_context['backend']}")
-    print(f"Device: {runtime.gpu_context['device']}")
+    backend_type = runtime.gpu_context.adapter.properties.get('backendType', 'Unknown')
+    print(f"WebGPU Backend: {backend_type}")  # Metal, D3D12, Vulkan, or WebGPU
+    print(f"Device: {runtime.gpu_context.device}")
 ```
 
-### Force CPU or GPU
+### Force CPU-Only Mode
 
 ```python
-# Force specific backend
-runtime = StreamRuntime(fps=30, gpu_backend='metal')  # or 'cuda', 'none'
-
-# Disable GPU entirely
-runtime = StreamRuntime(fps=30, gpu_backend='none')
+# Disable GPU entirely (force CPU mode)
+runtime = StreamRuntime(fps=30, disable_gpu=True)
 ```
 
 ## Summary
 
 streamlib's GPU optimization is **automatic and opinionated**:
 
-1. ✅ **Declare capabilities** - Tell runtime what memory spaces you support
-2. ✅ **Let runtime negotiate** - It finds the optimal path
-3. ✅ **Zero-copy by default** - Frames pass as references
-4. ✅ **Auto-transfer when needed** - Runtime warns about performance costs
-5. ✅ **Write flexible handlers** - Work on CPU or GPU
+1. ✅ **GPU-first by default** - All operations use GPU unless explicitly configured
+2. ✅ **Automatic execution** - Runtime determines optimal dispatcher for each handler
+3. ✅ **Zero-copy by default** - Frames pass as references, stay on GPU
+4. ✅ **Auto-transfer when needed** - Runtime handles CPU↔GPU transfers if required
+5. ✅ **Simple API** - No explicit capabilities or dispatcher declarations
 
-**Result:** Simple code that automatically runs as fast as possible!
+**Result:** Write simple, clean code that automatically runs as fast as possible!
 
 ## See Also
 

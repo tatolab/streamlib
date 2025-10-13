@@ -53,22 +53,20 @@ runtime.connect(camera.outputs['video'], display.inputs['video'])
 # Result: NO CPU TRANSFERS!
 ```
 
-See `docs/gpu-optimization-philosophy.md` for complete explanation.
+## Architecture
 
-## Architecture (Phase 3)
+### StreamHandler + Runtime
 
-### Current Design: StreamHandler + Runtime
-
-We're implementing a **handler-based architecture** inspired by Cloudflare Durable Objects and GStreamer's capability negotiation:
+The **handler-based architecture** is inspired by Cloudflare Durable Objects and GStreamer's capability negotiation:
 
 **StreamHandler** - Pure processing logic (inert until runtime activates)
 ```python
 class BlurFilter(StreamHandler):
     def __init__(self):
         super().__init__()
-        # Declare capability-based ports
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        # GPU-first by default - no capabilities needed!
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
 
     async def process(self, tick: TimedTick):
         frame = self.inputs['video'].read_latest()  # Zero-copy
@@ -80,61 +78,20 @@ class BlurFilter(StreamHandler):
 **StreamRuntime** - Lifecycle manager
 ```python
 runtime = StreamRuntime(fps=30)
-runtime.add_stream(Stream(camera_handler, dispatcher='asyncio'))
-runtime.add_stream(Stream(blur_handler, dispatcher='threadpool'))  # CPU-intensive!
+# Runtime automatically infers execution context - no dispatchers needed!
+runtime.add_stream(Stream(camera_handler))
+runtime.add_stream(Stream(blur_handler))
 runtime.connect(camera_handler.outputs['video'], blur_handler.inputs['video'])
 await runtime.start()
 ```
 
 **Key Concepts:**
-- **Capability-based ports**: Ports declare `['cpu']`, `['gpu']`, or `['cpu', 'gpu']`
-- **Runtime negotiation**: Auto-inserts transfer handlers when memory spaces don't match
-- **Explicit dispatcher**: Use `dispatcher='asyncio'`, `'threadpool'`, `'gpu'`, or `'processpool'`
+- **GPU-first by default**: All ports default to GPU, runtime handles everything automatically
+- **Automatic execution inference**: Runtime selects optimal execution context based on operations
+- **Automatic transfers**: Runtime inserts GPU↔CPU transfers only when necessary
 - **Clock-driven**: Runtime clock ticks drive all handlers
 - **Zero-copy**: Ring buffers hold references, not data copies
-
-**⚠️ CRITICAL: Dispatcher Selection**
-
-Choosing the correct dispatcher is **essential** for pipeline performance:
-
-- **`asyncio`**: Non-blocking I/O, lightweight operations (TestPatternHandler)
-- **`threadpool`**: Blocking calls, CPU-intensive work (DisplayHandler, BlurFilter, CompositorHandler)
-- **`gpu`**: GPU operations (stub, not implemented)
-- **`processpool`**: Heavy compute (stub, not implemented)
-
-**Common mistake**: Using `asyncio` for DisplayHandler - `cv2.imshow()` is blocking and will freeze the entire pipeline!
-
-See `docs/dispatcher-guidelines.md` for complete decision tree and examples.
-
-### What's Different From Actor Model (Obsolete)
-
-The codebase currently has an Actor model implementation (Phase 3 legacy), but we're transitioning to StreamHandler:
-
-**OLD (Actor model - being replaced):**
-- `Actor` base class with auto-start
-- `>>` operator for connections
-- "modality" concept
-- Actors own their lifecycle
-
-**NEW (StreamHandler model - implementing now):**
-- `StreamHandler` base class (inert)
-- `runtime.connect()` for explicit wiring
-- "dispatcher" parameter (explicit)
-- Runtime manages lifecycle
-- Capability-based port negotiation
-
-## Development Status
-
-### Current State
-- ✅ Phase 1/2: Legacy prototype (being replaced)
-- 🚧 Phase 3: Actor model (obsolete, will be deleted)
-- 🎯 **NOW**: Implementing StreamHandler + Runtime from scratch
-
-### What We're Building
-
-See `docs/architecture.md` for complete design. Key files:
-- `docs/architecture.md` - Complete architecture specification
-- `docs/project.md` - Implementation task list
+- **Simple API**: No explicit capabilities or dispatchers - runtime handles it all
 
 ## When Working on This Project
 
@@ -163,27 +120,14 @@ See `docs/architecture.md` for complete design. Key files:
 ## Important Files
 
 ### Design Documents
-- `docs/architecture.md` - Complete architecture (authoritative)
+- `docs/internal/architecture.md` - Complete architecture (authoritative)
 - `docs/project.md` - Implementation task list and timeline
-- `docs/dispatcher-guidelines.md` - **CRITICAL**: Dispatcher selection rules (read this!)
-- `docs/gpu-optimization-philosophy.md` - **CORE DIFFERENTIATOR**: GPU-first philosophy (read this!)
+- `docs/guides/gpu-optimization.md` - GPU-first optimization guide
 
-### Current Implementation (Legacy - Will Be Replaced)
-- `packages/streamlib/src/streamlib/` - Current Actor model code
-- `tests/` - Tests for Actor model (will be rewritten)
-- `examples/` - Actor-based examples (will be rewritten)
-
-### What to Keep
-- **Algorithms**: Alpha blending math, test patterns, drawing code
-- **PyAV usage patterns**: File reading/writing patterns
-- **Performance learnings**: Optimization strategies from benchmark_results.md
-
-### What to Replace
-- **Architecture**: Actor → StreamHandler
-- **Lifecycle**: Auto-start → Runtime-managed
-- **Connections**: `>>` operator → `runtime.connect()`
-- **Dispatchers**: "modality" → explicit dispatcher parameter
-- **Ports**: Simple → Capability-based negotiation
+### Implementation
+- `packages/streamlib/src/streamlib/` - StreamHandler implementation
+- `tests/` - Test suite
+- `examples/` - Example pipelines
 
 ## Commit Workflow
 

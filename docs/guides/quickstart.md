@@ -46,8 +46,8 @@ display = DisplayGPUHandler(
 runtime = StreamRuntime(fps=30)
 
 # Add handlers
-runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-runtime.add_stream(Stream(display, dispatcher='threadpool'))
+runtime.add_stream(Stream(pattern))
+runtime.add_stream(Stream(display))
 
 # Connect: pattern → display
 runtime.connect(pattern.outputs['video'], display.inputs['video'])
@@ -103,8 +103,8 @@ async def main():
     )
 
     # Add to runtime
-    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-    runtime.add_stream(Stream(display, dispatcher='threadpool'))
+    runtime.add_stream(Stream(pattern))
+    runtime.add_stream(Stream(display))
 
     # Connect
     runtime.connect(pattern.outputs['video'], display.inputs['video'])
@@ -146,7 +146,7 @@ camera = CameraHandlerGPU(
     height=720
 )
 
-runtime.add_stream(Stream(camera, dispatcher='asyncio'))
+runtime.add_stream(Stream(camera))
 
 # Connect: camera → display
 runtime.connect(camera.outputs['video'], display.inputs['video'])
@@ -165,9 +165,9 @@ blur = BlurFilterGPU(kernel_size=15, sigma=8.0)
 display = DisplayGPUHandler(width=1280, height=720)
 
 # Add to runtime
-runtime.add_stream(Stream(camera, dispatcher='asyncio'))
-runtime.add_stream(Stream(blur, dispatcher='gpu'))
-runtime.add_stream(Stream(display, dispatcher='threadpool'))
+runtime.add_stream(Stream(camera))
+runtime.add_stream(Stream(blur))
+runtime.add_stream(Stream(display))
 
 # Connect: camera → blur → display
 runtime.connect(camera.outputs['video'], blur.inputs['video'])
@@ -243,14 +243,6 @@ See the [API documentation](../api/handler.md) for complete handler reference.
 
 ## Common Issues
 
-### Window doesn't appear
-
-Make sure you're using `dispatcher='threadpool'` for DisplayGPUHandler:
-
-```python
-runtime.add_stream(Stream(display, dispatcher='threadpool'))  # Not 'asyncio'!
-```
-
 ### Camera not found
 
 List available cameras:
@@ -277,14 +269,15 @@ runtime = StreamRuntime(fps=30)  # Try lower FPS
 
 ## Philosophy
 
-streamlib is designed around composability:
+streamlib is designed around composability and simplicity:
 
 - **Handlers are Unix tools** - Small, single-purpose, composable
-- **Runtime is the shell** - Orchestrates and connects
+- **Runtime is the shell** - Orchestrates and connects handlers automatically
 - **Ports are pipes** - Data flows through ports like Unix pipes
-- **Zero-copy where possible** - GPU data stays on GPU
+- **GPU-first by default** - Operations stay on GPU automatically
+- **Zero-copy where possible** - Data passes as references, not copies
 
-This makes it easy for AI agents (and humans) to orchestrate complex video pipelines by combining simple primitives.
+The runtime automatically handles execution context and memory management, so you can focus on building pipelines without worrying about dispatchers or memory transfers.
 
 ## Help
 

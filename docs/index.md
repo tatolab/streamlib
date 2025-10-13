@@ -42,8 +42,8 @@ async def main():
     pattern = TestPatternHandler(width=1280, height=720, pattern='smpte_bars')
     display = DisplayGPUHandler(window_name='Hello streamlib', width=1280, height=720)
 
-    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-    runtime.add_stream(Stream(display, dispatcher='threadpool'))
+    runtime.add_stream(Stream(pattern))
+    runtime.add_stream(Stream(display))
     runtime.connect(pattern.outputs['video'], display.inputs['video'])
 
     runtime.start()
@@ -92,8 +92,8 @@ Most streaming/visual tools are **large, stateful, monolithic applications**. Th
 
 1. **Composable primitives** - Small, single-purpose components that chain together
 2. **Stateless handlers** - Pure processing logic, runtime manages lifecycle
-3. **Capability-based ports** - Declare what you support, runtime finds optimal path
-4. **GPU-first optimization** - Automatically stay on GPU, never bounce unnecessarily
+3. **GPU-first by default** - All operations use GPU unless explicitly configured otherwise
+4. **Automatic optimization** - Runtime infers optimal execution and memory paths
 5. **Network-transparent** - Operations work locally or remotely (future)
 6. **Tool-first, not product** - Provide primitives, let use cases emerge
 

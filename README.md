@@ -42,14 +42,15 @@ from streamlib.handlers import TestPatternHandler, DisplayGPUHandler
 
 async def main():
     runtime = StreamRuntime(fps=30)
-    
+
     pattern = TestPatternHandler(width=1280, height=720, pattern='smpte_bars')
     display = DisplayGPUHandler(window_name='Hello streamlib', width=1280, height=720)
-    
-    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
-    runtime.add_stream(Stream(display, dispatcher='threadpool'))
+
+    # Runtime automatically infers execution context - no dispatchers needed!
+    runtime.add_stream(Stream(pattern))
+    runtime.add_stream(Stream(display))
     runtime.connect(pattern.outputs['video'], display.inputs['video'])
-    
+
     runtime.start()
     try:
         while runtime._running:
