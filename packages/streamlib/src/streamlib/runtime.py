@@ -163,14 +163,13 @@ class StreamRuntime:
         auto_transfer: bool = True
     ) -> None:
         """
-        Connect output port to input port with capability negotiation.
+        Connect output port to input port (GPU-first by default).
 
-        Negotiation rules:
+        Connection rules:
         1. Port types must match (video→video, audio→audio)
-        2. Find intersection of capabilities
-        3. If intersection exists, negotiate that memory space
-        4. If no intersection and auto_transfer=True, insert transfer handler
-        5. If no intersection and auto_transfer=False, error
+        2. GPU by default - most connections just work
+        3. If CPU↔GPU mismatch, auto-insert transfer (rare, with warning)
+        4. Runtime handles all memory management automatically
 
         Args:
             output_port: Output port from source handler
@@ -185,7 +184,7 @@ class StreamRuntime:
 
         Raises:
             TypeError: If port types don't match
-            RuntimeError: If no capability overlap and auto_transfer=False
+            RuntimeError: If memory space mismatch and auto_transfer=False
         """
         # Check port type compatibility
         if output_port.port_type != input_port.port_type:
@@ -194,30 +193,31 @@ class StreamRuntime:
                 f"{input_port.port_type} input"
             )
 
-        # Find capability intersection
-        common_caps = set(output_port.capabilities) & set(input_port.capabilities)
-
-        if common_caps:
-            # Negotiate: prefer first common capability
-            negotiated = list(common_caps)[0]
-
-            output_port.negotiated_memory = negotiated
-            input_port.negotiated_memory = negotiated
+        # GPU-first: most connections just work
+        if not output_port.cpu_only and not input_port.cpu_only:
+            # Both ports are GPU (default) - direct connection
             input_port.connect(output_port.buffer)
+            print(f"✅ Connected {output_port.name} → {input_port.name} (GPU)")
+            return
 
-            print(
-                f"✅ Connected {output_port.name} → {input_port.name} "
-                f"(negotiated: {negotiated})"
+        # Rare case: CPU involved
+        if output_port.cpu_only and input_port.cpu_only:
+            # Both CPU - direct connection
+            input_port.connect(output_port.buffer)
+            print(f"✅ Connected {output_port.name} → {input_port.name} (CPU)")
+            return
+
+        # Very rare: GPU↔CPU transfer needed
+        if not auto_transfer:
+            raise TypeError(
+                f"Memory space mismatch: output is "
+                f"{'CPU' if output_port.cpu_only else 'GPU'}, input is "
+                f"{'CPU' if input_port.cpu_only else 'GPU'}. "
+                f"Set auto_transfer=True to allow automatic transfer."
             )
-        else:
-            # No overlap - need transfer handler
-            if not auto_transfer:
-                raise RuntimeError(
-                    f"No capability overlap between {output_port.capabilities} and "
-                    f"{input_port.capabilities}. Cannot connect without transfer handler."
-                )
 
-            self._insert_transfer_handler(output_port, input_port)
+        # Auto-insert transfer handler
+        self._insert_transfer_handler(output_port, input_port)
 
     def _insert_transfer_handler(
         self,
@@ -225,49 +225,37 @@ class StreamRuntime:
         input_port: StreamInput
     ) -> None:
         """
-        Auto-insert transfer handler between incompatible ports.
+        Auto-insert transfer handler (rare case).
 
-        Determines direction (CPU↔GPU or CPU↔Metal) and inserts appropriate handler.
+        Inserts CPU↔GPU transfer when memory spaces don't match.
+        Warns user about performance cost to encourage GPU-first design.
 
         Args:
             output_port: Source output port
             input_port: Destination input port
         """
         # Determine transfer direction
-        if 'cpu' in output_port.capabilities and 'gpu' in input_port.capabilities:
+        if output_port.cpu_only:
             # CPU → GPU transfer
+            print(
+                f"⚠️  WARNING: Auto-inserting CPU→GPU transfer "
+                f"for {output_port.port_type} (performance cost ~2ms). "
+                f"Consider making entire pipeline GPU-first."
+            )
             transfer = CPUtoGPUTransferHandler()
             direction = "CPU → GPU"
-        elif 'gpu' in output_port.capabilities and 'cpu' in input_port.capabilities:
+        else:
             # GPU → CPU transfer
+            print(
+                f"⚠️  WARNING: Auto-inserting GPU→CPU transfer "
+                f"for {output_port.port_type} (performance cost ~2ms). "
+                f"Consider making entire pipeline GPU-first."
+            )
             transfer = GPUtoCPUTransferHandler()
             direction = "GPU → CPU"
-        elif 'cpu' in output_port.capabilities and 'metal' in input_port.capabilities:
-            # CPU → Metal transfer
-            if not HAS_METAL_TRANSFERS:
-                raise RuntimeError(
-                    "Metal transfers not available. Install Metal frameworks: "
-                    "pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders"
-                )
-            transfer = CPUtoMetalTransferHandler()
-            direction = "CPU → Metal"
-        elif 'metal' in output_port.capabilities and 'cpu' in input_port.capabilities:
-            # Metal → CPU transfer
-            if not HAS_METAL_TRANSFERS:
-                raise RuntimeError(
-                    "Metal transfers not available. Install Metal frameworks: "
-                    "pip install pyobjc-framework-Metal pyobjc-framework-MetalPerformanceShaders"
-                )
-            transfer = MetalToCPUTransferHandler()
-            direction = "Metal → CPU"
-        else:
-            raise RuntimeError(
-                f"Cannot determine transfer direction: "
-                f"{output_port.capabilities} → {input_port.capabilities}"
-            )
 
-        # Add transfer handler to runtime
-        transfer_stream = Stream(transfer, dispatcher='threadpool')  # Metal ops use threadpool
+        # Add transfer handler to runtime (dispatcher inferred automatically)
+        transfer_stream = Stream(transfer, dispatcher='threadpool')
         self.add_stream(transfer_stream)
         self._transfer_handlers.add(transfer)
 

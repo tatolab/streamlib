@@ -1,42 +1,40 @@
 """
-Capability-based ports for StreamHandler inputs/outputs.
+GPU-first ports for StreamHandler inputs/outputs.
 
-Ports declare what memory spaces they can work with ('cpu', 'gpu', or both).
-Runtime negotiates capabilities when connecting handlers and auto-inserts
-transfer handlers when memory spaces don't overlap.
+Ports are GPU by default. Runtime automatically handles memory management.
+CPU is only used when explicitly requested (rare).
 
-This design is inspired by GStreamer's capability negotiation system.
+This design follows the docs-first architecture: simple, opinionated, GPU-first.
 """
 
-from typing import List, Optional
+from typing import Optional
 from .buffers import RingBuffer
 
 
 class StreamOutput:
     """
-    Output port with capability negotiation.
+    Output port for sending data (GPU by default).
 
-    Capabilities list memory spaces this port can produce:
-    - ['cpu'] - CPU memory only (numpy arrays)
-    - ['gpu'] - GPU memory only (torch tensors)
-    - ['cpu', 'gpu'] - Flexible, can produce either
+    Ports are GPU-first - data stays on GPU unless explicitly configured otherwise.
+    Runtime automatically manages memory without manual capability negotiation.
 
     Example:
-        # CPU-only output
-        self.outputs['video'] = StreamOutput('video', port_type='video', capabilities=['cpu'])
+        # GPU output (default - recommended)
+        self.outputs['video'] = StreamOutput('video', port_type='video')
 
-        # GPU-only output
-        self.outputs['video'] = StreamOutput('video', port_type='video', capabilities=['gpu'])
+        # CPU-only output (rare - legacy compatibility)
+        self.outputs['video'] = StreamOutput('video', port_type='video', cpu_only=True)
 
-        # Flexible output (can produce either)
-        self.outputs['video'] = StreamOutput('video', port_type='video', capabilities=['cpu', 'gpu'])
+        # Flexible output (can produce either GPU or CPU)
+        self.outputs['video'] = StreamOutput('video', port_type='video', allow_cpu=True)
     """
 
     def __init__(
         self,
         name: str,
         port_type: str,  # 'video', 'audio', 'data'
-        capabilities: List[str],  # ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        allow_cpu: bool = False,  # Can fall back to CPU if needed
+        cpu_only: bool = False,   # Force CPU (rare, for legacy)
         slots: int = 3
     ):
         """
@@ -45,22 +43,18 @@ class StreamOutput:
         Args:
             name: Port name (e.g., 'video', 'audio', 'out')
             port_type: Port type ('video', 'audio', 'data')
-            capabilities: List of supported memory spaces
+            allow_cpu: Allow CPU fallback if GPU unavailable (default: False)
+            cpu_only: Force CPU-only operation (rare, default: False)
             slots: Ring buffer size (default: 3, broadcast practice)
         """
-        if not capabilities:
-            raise ValueError("Output port must declare at least one capability")
-
-        valid_capabilities = {'cpu', 'gpu', 'metal'}
-        for cap in capabilities:
-            if cap not in valid_capabilities:
-                raise ValueError(f"Invalid capability '{cap}'. Must be 'cpu', 'gpu', or 'metal'")
+        if cpu_only and allow_cpu:
+            raise ValueError("Cannot set both cpu_only=True and allow_cpu=True")
 
         self.name = name
         self.port_type = port_type
-        self.capabilities = capabilities
+        self.allow_cpu = allow_cpu
+        self.cpu_only = cpu_only
         self.buffer = RingBuffer(slots=slots)
-        self.negotiated_memory: Optional[str] = None  # Set during runtime.connect()
 
     def write(self, data) -> None:
         """
@@ -71,35 +65,39 @@ class StreamOutput:
         """
         self.buffer.write(data)
 
+    def is_gpu(self) -> bool:
+        """Check if this port operates on GPU."""
+        return not self.cpu_only
+
     def __repr__(self) -> str:
-        return f"StreamOutput(name='{self.name}', type='{self.port_type}', caps={self.capabilities})"
+        memory = "CPU-only" if self.cpu_only else ("GPU+CPU" if self.allow_cpu else "GPU")
+        return f"StreamOutput(name='{self.name}', type='{self.port_type}', memory={memory})"
 
 
 class StreamInput:
     """
-    Input port with capability negotiation.
+    Input port for receiving data (GPU by default).
 
-    Capabilities list memory spaces this port can accept:
-    - ['cpu'] - CPU memory only
-    - ['gpu'] - GPU memory only
-    - ['cpu', 'gpu'] - Flexible, can accept either
+    Ports are GPU-first - expects data on GPU unless explicitly configured otherwise.
+    Runtime automatically manages memory without manual capability negotiation.
 
     Example:
-        # CPU-only input
-        self.inputs['video'] = StreamInput('video', port_type='video', capabilities=['cpu'])
+        # GPU input (default - recommended)
+        self.inputs['video'] = StreamInput('video', port_type='video')
 
-        # GPU-only input
-        self.inputs['video'] = StreamInput('video', port_type='video', capabilities=['gpu'])
+        # CPU-only input (rare - legacy compatibility)
+        self.inputs['video'] = StreamInput('video', port_type='video', cpu_only=True)
 
-        # Flexible input (can accept either)
-        self.inputs['video'] = StreamInput('video', port_type='video', capabilities=['cpu', 'gpu'])
+        # Flexible input (can accept either GPU or CPU)
+        self.inputs['video'] = StreamInput('video', port_type='video', allow_cpu=True)
     """
 
     def __init__(
         self,
         name: str,
         port_type: str,  # 'video', 'audio', 'data'
-        capabilities: List[str]  # ['cpu'], ['gpu'], or ['cpu', 'gpu']
+        allow_cpu: bool = False,  # Can accept CPU if needed
+        cpu_only: bool = False    # Force CPU (rare, for legacy)
     ):
         """
         Initialize input port.
@@ -107,21 +105,17 @@ class StreamInput:
         Args:
             name: Port name (e.g., 'video', 'audio', 'in')
             port_type: Port type ('video', 'audio', 'data')
-            capabilities: List of supported memory spaces
+            allow_cpu: Allow CPU fallback if GPU unavailable (default: False)
+            cpu_only: Force CPU-only operation (rare, default: False)
         """
-        if not capabilities:
-            raise ValueError("Input port must declare at least one capability")
-
-        valid_capabilities = {'cpu', 'gpu', 'metal'}
-        for cap in capabilities:
-            if cap not in valid_capabilities:
-                raise ValueError(f"Invalid capability '{cap}'. Must be 'cpu', 'gpu', or 'metal'")
+        if cpu_only and allow_cpu:
+            raise ValueError("Cannot set both cpu_only=True and allow_cpu=True")
 
         self.name = name
         self.port_type = port_type
-        self.capabilities = capabilities
-        self.buffer: Optional[RingBuffer] = None  # Connected during runtime.connect()
-        self.negotiated_memory: Optional[str] = None  # Set during runtime.connect()
+        self.allow_cpu = allow_cpu
+        self.cpu_only = cpu_only
+        self.buffer: Optional[RingBuffer] = None
 
     def connect(self, buffer: RingBuffer) -> None:
         """
@@ -151,19 +145,25 @@ class StreamInput:
         """Check if this input is connected to an upstream output."""
         return self.buffer is not None
 
+    def is_gpu(self) -> bool:
+        """Check if this port operates on GPU."""
+        return not self.cpu_only
+
     def __repr__(self) -> str:
-        return f"StreamInput(name='{self.name}', type='{self.port_type}', caps={self.capabilities})"
+        memory = "CPU-only" if self.cpu_only else ("GPU+CPU" if self.allow_cpu else "GPU")
+        return f"StreamInput(name='{self.name}', type='{self.port_type}', memory={memory})"
 
 
-# Typed port helpers for common use cases
+# Typed port helpers (GPU by default)
 
-def VideoOutput(name: str, capabilities: Optional[List[str]] = None, slots: int = 3) -> StreamOutput:
+def VideoOutput(name: str, allow_cpu: bool = False, cpu_only: bool = False, slots: int = 3) -> StreamOutput:
     """
-    Helper to create a video output port.
+    Helper to create a video output port (GPU by default).
 
     Args:
         name: Port name (e.g., 'video', 'out')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu'] (GPU-first)
+        allow_cpu: Allow CPU fallback (default: False)
+        cpu_only: Force CPU-only (rare, default: False)
         slots: Ring buffer size (default: 3)
 
     Returns:
@@ -172,18 +172,17 @@ def VideoOutput(name: str, capabilities: Optional[List[str]] = None, slots: int 
     Example:
         self.outputs['video'] = VideoOutput('video')  # GPU by default
     """
-    if capabilities is None:
-        capabilities = ['gpu']  # GPU-first by default
-    return StreamOutput(name, port_type='video', capabilities=capabilities, slots=slots)
+    return StreamOutput(name, port_type='video', allow_cpu=allow_cpu, cpu_only=cpu_only, slots=slots)
 
 
-def VideoInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInput:
+def VideoInput(name: str, allow_cpu: bool = False, cpu_only: bool = False) -> StreamInput:
     """
-    Helper to create a video input port.
+    Helper to create a video input port (GPU by default).
 
     Args:
         name: Port name (e.g., 'video', 'in')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu'] (GPU-first)
+        allow_cpu: Allow CPU fallback (default: False)
+        cpu_only: Force CPU-only (rare, default: False)
 
     Returns:
         StreamInput configured for video
@@ -191,18 +190,17 @@ def VideoInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInp
     Example:
         self.inputs['video'] = VideoInput('video')  # GPU by default
     """
-    if capabilities is None:
-        capabilities = ['gpu']  # GPU-first by default
-    return StreamInput(name, port_type='video', capabilities=capabilities)
+    return StreamInput(name, port_type='video', allow_cpu=allow_cpu, cpu_only=cpu_only)
 
 
-def AudioOutput(name: str, capabilities: Optional[List[str]] = None, slots: int = 3) -> StreamOutput:
+def AudioOutput(name: str, allow_cpu: bool = False, cpu_only: bool = False, slots: int = 3) -> StreamOutput:
     """
-    Helper to create an audio output port.
+    Helper to create an audio output port (GPU by default).
 
     Args:
         name: Port name (e.g., 'audio', 'out')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
+        allow_cpu: Allow CPU fallback (default: False)
+        cpu_only: Force CPU-only (rare, default: False)
         slots: Ring buffer size (default: 3)
 
     Returns:
@@ -211,18 +209,17 @@ def AudioOutput(name: str, capabilities: Optional[List[str]] = None, slots: int 
     Example:
         self.outputs['audio'] = AudioOutput('audio')  # GPU by default
     """
-    if capabilities is None:
-        capabilities = ['gpu']
-    return StreamOutput(name, port_type='audio', capabilities=capabilities, slots=slots)
+    return StreamOutput(name, port_type='audio', allow_cpu=allow_cpu, cpu_only=cpu_only, slots=slots)
 
 
-def AudioInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInput:
+def AudioInput(name: str, allow_cpu: bool = False, cpu_only: bool = False) -> StreamInput:
     """
-    Helper to create an audio input port.
+    Helper to create an audio input port (GPU by default).
 
     Args:
         name: Port name (e.g., 'audio', 'in')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
+        allow_cpu: Allow CPU fallback (default: False)
+        cpu_only: Force CPU-only (rare, default: False)
 
     Returns:
         StreamInput configured for audio
@@ -230,18 +227,17 @@ def AudioInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInp
     Example:
         self.inputs['audio'] = AudioInput('audio')  # GPU by default
     """
-    if capabilities is None:
-        capabilities = ['gpu']
-    return StreamInput(name, port_type='audio', capabilities=capabilities)
+    return StreamInput(name, port_type='audio', allow_cpu=allow_cpu, cpu_only=cpu_only)
 
 
-def DataOutput(name: str, capabilities: Optional[List[str]] = None, slots: int = 3) -> StreamOutput:
+def DataOutput(name: str, allow_cpu: bool = False, cpu_only: bool = False, slots: int = 3) -> StreamOutput:
     """
-    Helper to create a generic data output port.
+    Helper to create a generic data output port (GPU by default).
 
     Args:
         name: Port name (e.g., 'data', 'out')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
+        allow_cpu: Allow CPU fallback (default: False)
+        cpu_only: Force CPU-only (rare, default: False)
         slots: Ring buffer size (default: 3)
 
     Returns:
@@ -250,18 +246,17 @@ def DataOutput(name: str, capabilities: Optional[List[str]] = None, slots: int =
     Example:
         self.outputs['data'] = DataOutput('data')  # GPU by default
     """
-    if capabilities is None:
-        capabilities = ['gpu']
-    return StreamOutput(name, port_type='data', capabilities=capabilities, slots=slots)
+    return StreamOutput(name, port_type='data', allow_cpu=allow_cpu, cpu_only=cpu_only, slots=slots)
 
 
-def DataInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInput:
+def DataInput(name: str, allow_cpu: bool = False, cpu_only: bool = False) -> StreamInput:
     """
-    Helper to create a generic data input port.
+    Helper to create a generic data input port (GPU by default).
 
     Args:
         name: Port name (e.g., 'data', 'in')
-        capabilities: ['cpu'], ['gpu'], or ['cpu', 'gpu']. Defaults to ['gpu']
+        allow_cpu: Allow CPU fallback (default: False)
+        cpu_only: Force CPU-only (rare, default: False)
 
     Returns:
         StreamInput configured for data
@@ -269,6 +264,4 @@ def DataInput(name: str, capabilities: Optional[List[str]] = None) -> StreamInpu
     Example:
         self.inputs['data'] = DataInput('data')  # GPU by default
     """
-    if capabilities is None:
-        capabilities = ['gpu']
-    return StreamInput(name, port_type='data', capabilities=capabilities)
+    return StreamInput(name, port_type='data', allow_cpu=allow_cpu, cpu_only=cpu_only)

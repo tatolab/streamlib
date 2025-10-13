@@ -103,8 +103,8 @@ class CPUtoGPUTransferHandler(StreamHandler):
         self.backend = 'CUDA' if 'cuda' in device else 'MPS' if device == 'mps' else device
 
         # Input: CPU only, Output: GPU only
-        self.inputs['in'] = VideoInput('in', capabilities=['cpu'])
-        self.outputs['out'] = VideoOutput('out', capabilities=['gpu'])
+        self.inputs['in'] = VideoInput('in', cpu_only=True)
+        self.outputs['out'] = VideoOutput('out')  # GPU by default
 
     async def process(self, tick: TimedTick):
         """
@@ -175,8 +175,8 @@ class GPUtoCPUTransferHandler(StreamHandler):
             raise RuntimeError("PyTorch required for GPU transfers. Install: pip install torch")
 
         # Input: GPU only, Output: CPU only
-        self.inputs['in'] = VideoInput('in', capabilities=['gpu'])
-        self.outputs['out'] = VideoOutput('out', capabilities=['cpu'])
+        self.inputs['in'] = VideoInput('in')  # GPU by default
+        self.outputs['out'] = VideoOutput('out', cpu_only=True)
 
     async def process(self, tick: TimedTick):
         """
@@ -253,9 +253,9 @@ class CPUtoMetalTransferHandler(StreamHandler):
         if not available:
             raise RuntimeError(f"Metal not available: {error}")
 
-        # Input: CPU only, Output: Metal only
-        self.inputs['in'] = VideoInput('in', capabilities=['cpu'])
-        self.outputs['out'] = VideoOutput('out', capabilities=['metal'])
+        # Input: CPU only, Output: Metal/GPU
+        self.inputs['in'] = VideoInput('in', cpu_only=True)
+        self.outputs['out'] = VideoOutput('out')  # GPU by default (Metal backend)
 
         # Metal context (singleton)
         self._ctx = None
@@ -321,9 +321,9 @@ class MetalToCPUTransferHandler(StreamHandler):
         if not available:
             raise RuntimeError(f"Metal not available: {error}")
 
-        # Input: Metal only, Output: CPU only
-        self.inputs['in'] = VideoInput('in', capabilities=['metal'])
-        self.outputs['out'] = VideoOutput('out', capabilities=['cpu'])
+        # Input: Metal/GPU, Output: CPU only
+        self.inputs['in'] = VideoInput('in')  # GPU by default (Metal backend)
+        self.outputs['out'] = VideoOutput('out', cpu_only=True)
 
         # Metal context (singleton)
         self._ctx = None
