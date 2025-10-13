@@ -99,12 +99,6 @@ from .dispatchers import Dispatcher, AsyncioDispatcher, ThreadPoolDispatcher
 # Messages
 from .messages import VideoFrame, AudioBuffer, KeyEvent, MouseEvent, DataMessage
 
-# Legacy Actor model (DEPRECATED - will be removed)
-# Keeping for backward compatibility during transition
-from .actor import Actor, StreamInput as LegacyStreamInput, StreamOutput as LegacyStreamOutput
-from .registry import ActorRegistry, ActorURI, PortAllocator
-from .stubs import ActorStub, LocalActorStub, RemoteActorStub, connect_actor
-
 __all__ = [
     # Phase 3.1: StreamHandler + Runtime (NEW)
     'StreamRuntime',
@@ -169,18 +163,6 @@ __all__ = [
     'KeyEvent',
     'MouseEvent',
     'DataMessage',
-
-    # Legacy Actor model (DEPRECATED)
-    'Actor',
-    'LegacyStreamInput',
-    'LegacyStreamOutput',
-    'ActorRegistry',
-    'ActorURI',
-    'PortAllocator',
-    'ActorStub',
-    'LocalActorStub',
-    'RemoteActorStub',
-    'connect_actor',
 ]
 
 # Phase 3.4: Add GPU handlers if available

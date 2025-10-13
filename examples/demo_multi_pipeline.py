@@ -31,6 +31,7 @@ def main():
     parser.add_argument('--pip-position', choices=['top_left', 'top_right', 'bottom_left', 'bottom_right'],
                         default='bottom_right', help='PIP position (only for pip mode)')
     parser.add_argument('--pip-scale', type=float, default=0.25, help='PIP scale factor (0.0-1.0)')
+    parser.add_argument('--camera', type=str, default='Live Camera', help='Camera device name')
     args = parser.parse_args()
 
     print("=" * 70)
@@ -41,6 +42,7 @@ def main():
     print("                               ├─→ Compositor → Display")
     print("  Pipeline 2: Test Pattern ────┘")
     print()
+    print(f"Camera: {args.camera}")
     print(f"Compositing mode: {args.mode}")
     if args.mode == 'pip':
         print(f"  PIP position: {args.pip_position}")
@@ -61,7 +63,7 @@ def main():
 
         # Pipeline 1: Camera → Blur
         camera = CameraHandlerGPU(
-            device_name="FaceTime HD Camera",
+            device_name=args.camera,
             width=1920,
             height=1080,
             name='camera'

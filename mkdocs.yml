@@ -1,0 +1,95 @@
+site_name: streamlib
+site_description: Composable streaming primitives for Python
+site_author: TatoLab
+site_url: https://streamlib.readthedocs.io
+
+repo_name: tatolab/streamlib
+repo_url: https://github.com/tatolab/streamlib
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quick Start: guides/quickstart.md
+      - Composition: guides/composition.md
+      - GPU Optimization: guides/gpu-optimization.md
+  - Guides:
+      - StreamHandler: api/handler.md
+      - StreamRuntime: api/runtime.md
+      - Ports: api/ports.md
+      - Messages: api/messages.md
+  - SDK Reference:
+      - Core:
+          - StreamHandler: reference/handler.md
+          - StreamRuntime: reference/runtime.md
+          - Stream: reference/stream.md
+          - FunctionHandler: reference/function_handler.md
+      - Data Flow:
+          - Ports: reference/ports.md
+          - Messages: reference/messages.md
+          - Buffers: reference/buffers.md
+          - Transfers: reference/transfers.md
+      - Execution:
+          - Clocks: reference/clocks.md
+          - Dispatchers: reference/dispatchers.md
+          - Events: reference/events.md
+      - Handlers:
+          - Built-in Handlers: reference/handlers.md
+  - Examples: examples/
+
+plugins:
+  - search
+  - mermaid2
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [packages/streamlib/src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_category_heading: true

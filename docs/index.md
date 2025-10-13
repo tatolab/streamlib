@@ -11,10 +11,6 @@ runtime.connect(camera.outputs['video'], blur.inputs['video'])
 runtime.connect(blur.outputs['video'], display.inputs['video'])
 ```
 
-[![PyPI](https://img.shields.io/pypi/v/streamlib)](https://pypi.org/project/streamlib/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 ## Why streamlib?
 
 Most video tools are **monolithic applications** (Unity, OBS, complex streaming platforms). They're environments, not primitives.
@@ -29,27 +25,27 @@ Most video tools are **monolithic applications** (Unity, OBS, complex streaming 
 
 ## Quick Start
 
-\`\`\`bash
+```bash
 pip install streamlib
-\`\`\`
+```
 
 **Your First Pipeline (30 seconds):**
 
-\`\`\`python
+```python
 import asyncio
 from streamlib import StreamRuntime, Stream
 from streamlib.handlers import TestPatternHandler, DisplayGPUHandler
 
 async def main():
     runtime = StreamRuntime(fps=30)
-    
+
     pattern = TestPatternHandler(width=1280, height=720, pattern='smpte_bars')
     display = DisplayGPUHandler(window_name='Hello streamlib', width=1280, height=720)
-    
+
     runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
     runtime.add_stream(Stream(display, dispatcher='threadpool'))
     runtime.connect(pattern.outputs['video'], display.inputs['video'])
-    
+
     runtime.start()
     try:
         while runtime._running:
@@ -59,23 +55,19 @@ async def main():
     runtime.stop()
 
 asyncio.run(main())
-\`\`\`
+```
 
 **Result:** Window displays SMPTE color bars at 30 FPS!
 
-## Documentation
+## Next Steps
 
-- **[Quick Start Guide](docs/guides/quickstart.md)** - Build your first pipeline
-- **[Composition Guide](docs/guides/composition.md)** - Complex pipelines
-- **[API Reference](docs/api/)** - Complete docs
-  - [StreamHandler](docs/api/handler.md)
-  - [StreamRuntime](docs/api/runtime.md)
-  - [Ports](docs/api/ports.md)
-  - [Messages](docs/api/messages.md)
+- [Quick Start Guide](guides/quickstart.md) - Learn the basics
+- [Composition Guide](guides/composition.md) - Build complex pipelines
+- [API Reference](api/) - Complete documentation
 
 ## Examples
 
-\`\`\`bash
+```bash
 # Test pattern
 python examples/demo_test_pattern.py
 
@@ -84,7 +76,26 @@ python examples/demo_camera.py
 
 # Multi-pipeline composition
 python examples/demo_multi_pipeline.py --mode pip --camera "Live Camera"
-\`\`\`
+```
+
+## Philosophy
+
+### The Problem
+
+Most streaming/visual tools are **large, stateful, monolithic applications**. They're environments, not primitives. There's no equivalent to "pipe grep into sed into awk" for visual operations.
+
+### The Solution
+
+**Stateless visual primitives that can be orchestrated** - like Unix tools but for video/image processing.
+
+### Core Principles
+
+1. **Composable primitives** - Small, single-purpose components that chain together
+2. **Stateless handlers** - Pure processing logic, runtime manages lifecycle
+3. **Capability-based ports** - Declare what you support, runtime finds optimal path
+4. **GPU-first optimization** - Automatically stay on GPU, never bounce unnecessarily
+5. **Network-transparent** - Operations work locally or remotely (future)
+6. **Tool-first, not product** - Provide primitives, let use cases emerge
 
 ## License
 
