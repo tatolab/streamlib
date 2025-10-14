@@ -84,8 +84,9 @@ class DisplayHandler(StreamHandler):
     stays on GPU as long as possible and only transfers when absolutely required.
     """
 
-    # Preferred dispatcher: threadpool because cv2.imshow() is blocking
-    preferred_dispatcher = 'threadpool'
+    # Preferred dispatcher: asyncio for GPU operations
+    # cv2.imshow/waitKey(1) is fast enough (~1ms) to not block event loop
+    preferred_dispatcher = 'asyncio'
 
     def __init__(
         self,
@@ -125,49 +126,17 @@ class DisplayHandler(StreamHandler):
 
     def _select_backend(self) -> DisplayBackend:
         """
-        Select optimal display backend based on negotiated memory and available hardware.
+        Select optimal display backend based on available hardware.
 
         Returns:
             DisplayBackend enum indicating selected backend
 
         Selection priority:
-        1. If negotiated_memory='gpu': Try Metal → CUDA-OpenGL → OpenGL
-        2. If negotiated_memory='cpu': Use OpenCV
+        1. Try Metal → CUDA-OpenGL → OpenGL
+        2. Fallback to OpenCV (will transfer GPU → CPU if needed)
         """
-        negotiated = self.inputs['video'].negotiated_memory
-
-        if negotiated == 'cpu':
-            return DisplayBackend.OPENCV
-
-        # GPU path - select best available
-        if not HAS_TORCH:
-            # No PyTorch, fall back to CPU
-            print("⚠️  DisplayHandler: GPU data available but PyTorch not installed, using OpenCV (CPU)")
-            return DisplayBackend.OPENCV
-
-        # Check for Metal (Apple Silicon)
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            # TODO: Implement Metal backend
-            print("⚠️  DisplayHandler: Metal available but not yet implemented, using OpenCV")
-            return DisplayBackend.OPENCV
-            # return DisplayBackend.METAL
-
-        # Check for CUDA (NVIDIA)
-        if torch.cuda.is_available():
-            # TODO: Implement CUDA-OpenGL interop
-            print("⚠️  DisplayHandler: CUDA available but CUDA-OpenGL interop not yet implemented, using OpenCV")
-            return DisplayBackend.OPENCV
-            # return DisplayBackend.CUDA_GL
-
-        # Check for OpenGL (generic GPU)
-        if HAS_PYGAME:
-            # TODO: Implement OpenGL backend
-            print("⚠️  DisplayHandler: OpenGL backend not yet implemented, using OpenCV")
-            return DisplayBackend.OPENCV
-            # return DisplayBackend.OPENGL
-
-        # Fallback: Transfer to CPU and use OpenCV
-        print("⚠️  DisplayHandler: GPU data available but no GPU display backend ready, using OpenCV (will transfer to CPU)")
+        # For now, always use OpenCV since GPU display backends aren't implemented yet
+        # TODO: Implement Metal, CUDA-OpenGL, and OpenGL backends
         return DisplayBackend.OPENCV
 
     def _init_backend(self) -> None:
@@ -233,7 +202,7 @@ class DisplayHandler(StreamHandler):
 
         # Dispatch to backend-specific display
         if self.backend == DisplayBackend.OPENCV:
-            self._display_opencv(frame)
+            await self._display_opencv(frame)
         elif self.backend == DisplayBackend.METAL:
             self._display_metal(frame)
         elif self.backend == DisplayBackend.CUDA_GL:
@@ -304,20 +273,58 @@ class DisplayHandler(StreamHandler):
 
         return display_frame
 
-    def _display_opencv(self, frame) -> None:
+    async def _display_opencv(self, frame) -> None:
         """Display frame using OpenCV (CPU path)."""
         # Update FPS
         self._update_fps(frame.timestamp)
 
+        # Check if frame.data is a WebGPU buffer (has 'size' attribute from wgpu)
+        if hasattr(frame.data, 'size') and hasattr(frame.data, 'map_async'):
+            # WebGPU buffer → CPU transfer
+            # Since process() is async, we can await properly
+            import asyncio
+
+            # Create staging buffer for readback
+            buffer_size = frame.width * frame.height * 4  # RGBA u32
+            staging_buffer = self._runtime.gpu_context.create_buffer(
+                size=buffer_size,
+                usage=0x1 | 0x8  # MAP_READ | COPY_DST
+            )
+
+            # Copy GPU buffer → staging buffer
+            encoder = self._runtime.gpu_context.device.create_command_encoder()
+            encoder.copy_buffer_to_buffer(frame.data, 0, staging_buffer, 0, buffer_size)
+            self._runtime.gpu_context.queue.submit([encoder.finish()])
+
+            # Await async map operation
+            await staging_buffer.map_async(0x0001)  # MapMode.READ
+
+            data_view = staging_buffer.read_mapped()
+            result_packed = np.frombuffer(data_view, dtype=np.uint32).copy()
+            staging_buffer.unmap()
+
+            # Unpack u32 to RGBA
+            result_packed_2d = result_packed.reshape((frame.height, frame.width))
+            frame_rgba = np.zeros((frame.height, frame.width, 4), dtype=np.uint8)
+            frame_rgba[:, :, 0] = (result_packed_2d & 0xFF).astype(np.uint8)           # R
+            frame_rgba[:, :, 1] = ((result_packed_2d >> 8) & 0xFF).astype(np.uint8)   # G
+            frame_rgba[:, :, 2] = ((result_packed_2d >> 16) & 0xFF).astype(np.uint8)  # B
+            frame_rgba[:, :, 3] = ((result_packed_2d >> 24) & 0xFF).astype(np.uint8)  # A
+
+            # Convert RGBA to BGR for OpenCV
+            frame_bgr = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
+
         # If frame is GPU tensor, transfer to CPU
-        if HAS_TORCH and isinstance(frame.data, torch.Tensor):
+        elif HAS_TORCH and isinstance(frame.data, torch.Tensor):
             # GPU → CPU transfer
             frame_np = frame.data.cpu().numpy()
+            # OpenCV expects BGR, our frames are RGB
+            frame_bgr = cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR)
         else:
+            # Already CPU data
             frame_np = frame.data
-
-        # OpenCV expects BGR, our frames are RGB
-        frame_bgr = cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR)
+            # OpenCV expects BGR, our frames are RGB
+            frame_bgr = cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR)
 
         # Add FPS overlay
         frame_bgr = self._draw_fps_overlay(frame_bgr)

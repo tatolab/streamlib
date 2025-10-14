@@ -10,12 +10,8 @@ Demonstrates:
 """
 
 import asyncio
-from streamlib import (
-    StreamRuntime,
-    Stream,
-    TestPatternHandler,
-    DisplayHandler,
-)
+from streamlib import StreamRuntime, Stream
+from streamlib_extras import TestPatternHandler, DisplayHandler
 
 
 async def main():
@@ -35,15 +31,15 @@ async def main():
     # Create runtime
     runtime = StreamRuntime(fps=30)
     
-    # Add streams with appropriate dispatchers
-    runtime.add_stream(Stream(pattern, dispatcher='asyncio'))  # Lightweight pattern generation
-    runtime.add_stream(Stream(display, dispatcher='threadpool'))  # Blocking OpenCV calls
+    # Add streams (dispatchers inferred from handler.preferred_dispatcher)
+    runtime.add_stream(Stream(pattern))  # Uses asyncio (GPU operations)
+    runtime.add_stream(Stream(display))  # Uses asyncio (GPU + fast OpenCV)
     
     # Connect: TestPattern → Display
     runtime.connect(pattern.outputs['video'], display.inputs['video'])
-    
-    # Start runtime (not async)
-    runtime.start()
+
+    # Start runtime
+    await runtime.start()
 
     # Run for 5 seconds
     print("\nRunning pipeline for 5 seconds...")

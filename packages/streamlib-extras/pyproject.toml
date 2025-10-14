@@ -21,7 +21,7 @@ classifiers = [
 
 # Core dependency: streamlib SDK
 dependencies = [
-    "streamlib>=0.2.0",
+    "streamlib>=0.1.0",
     "numpy>=1.24.0",
 ]
 

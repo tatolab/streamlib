@@ -49,9 +49,16 @@ class VideoFrame:
     metadata: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
-        """Validate frame data (works for numpy, torch, and Metal)."""
+        """Validate frame data (works for numpy, torch, Metal, and WebGPU)."""
         # Detect data type
         data_type = type(self.data).__name__
+
+        # WebGPU buffer validation (GPUBuffer from wgpu)
+        if data_type == 'GPUBuffer' or 'Buffer' in data_type:
+            # WebGPU buffer - trust width/height parameters
+            # Buffers are opaque GPU memory, can't inspect dimensions
+            # Runtime will validate buffer size matches width*height*4
+            return
 
         # Metal texture validation (has width() and height() methods)
         if hasattr(self.data, 'width') and callable(self.data.width):
@@ -69,8 +76,8 @@ class VideoFrame:
         # NumPy/Torch validation (has .shape and .dtype)
         if not hasattr(self.data, 'shape'):
             raise ValueError(
-                f"VideoFrame data must have .shape attribute (numpy/torch) or width()/height() methods (Metal), "
-                f"got {data_type}"
+                f"VideoFrame data must have .shape attribute (numpy/torch), width()/height() methods (Metal), "
+                f"or be a GPU buffer (WebGPU), got {data_type}"
             )
 
         # Check shape (works for both numpy and torch)

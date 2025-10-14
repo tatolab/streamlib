@@ -243,12 +243,13 @@ class LowerThirdsGPUHandler(StreamHandler):
 
     async def on_start(self):
         """Initialize GPU device."""
-        if self._runtime and self._runtime.gpu_context:
-            self.device = self._runtime.gpu_context['device']
-            print(f"[{self.handler_id}] GPU lower thirds initialized: '{self.name}' / '{self.title}'")
+        # Use PyTorch MPS if available
+        if torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+            print(f"[{self.handler_id}] GPU lower thirds initialized: '{self.name}' / '{self.title}' (MPS)")
         else:
             self.device = torch.device('cpu')
-            print(f"[{self.handler_id}] Lower thirds using CPU (no GPU context)")
+            print(f"[{self.handler_id}] Lower thirds using CPU")
 
     async def process(self, tick: TimedTick):
         """Composite lower thirds overlay on video frame."""

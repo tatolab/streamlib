@@ -131,12 +131,19 @@ fragment float4 fragmentShader(
     g = clamp(g, 0.0, 1.0);
     b = clamp(b, 0.0, 1.0);
 
-    return float4(r, g, b, 1.0);
+    // Output BGRA (Metal standard format)
+    return float4(b, g, r, 1.0);
 }
 """
 
 
 if AVFOUNDATION_AVAILABLE:
+    # Import protocol
+    try:
+        from AVFoundation import AVCaptureVideoDataOutputSampleBufferDelegate
+    except:
+        AVCaptureVideoDataOutputSampleBufferDelegate = None
+
     class FrameCaptureDelegate(NSObject):
         """
         AVFoundation delegate that receives camera frames.
@@ -152,20 +159,19 @@ if AVFOUNDATION_AVAILABLE:
 
             self.latest_frame = None
             self.frame_count = 0
-            self.lock = asyncio.Lock()
 
             return self
 
         def captureOutput_didOutputSampleBuffer_fromConnection_(
             self, output, sample_buffer, connection
         ):
-            """Called when a new frame is available."""
+            """Called when a new frame is available (AVFoundation delegate callback)."""
             try:
                 # Get pixel buffer from sample buffer
                 pixel_buffer = CMSampleBufferGetImageBuffer(sample_buffer)
 
                 if pixel_buffer:
-                    # Store latest frame (lock not needed for simple assignment)
+                    # Store latest frame
                     self.latest_frame = pixel_buffer
                     self.frame_count += 1
 
@@ -179,6 +185,13 @@ if AVFOUNDATION_AVAILABLE:
                 print(f"[Delegate] Error capturing frame: {e}")
                 import traceback
                 traceback.print_exc()
+
+    # Explicitly register as conforming to AVCaptureVideoDataOutputSampleBufferDelegate
+    if AVCaptureVideoDataOutputSampleBufferDelegate:
+        try:
+            objc.protocolNamed('AVCaptureVideoDataOutputSampleBufferDelegate')
+        except:
+            pass  # Protocol might not be available
 
 
 class CameraHandlerGPU(StreamHandler):
@@ -279,22 +292,36 @@ class CameraHandlerGPU(StreamHandler):
         self.last_frame_number = -1
 
     def _find_camera_device(self) -> Optional[AVCaptureDevice]:
-        """Find camera device by name or index."""
+        """Find camera device by name or index (only returns actually available cameras)."""
         devices = AVCaptureDevice.devicesWithMediaType_(AVMediaTypeVideo)
 
+        # Filter to only connected/available devices
+        available_devices = [d for d in devices if d.isConnected()]
+
+        if not available_devices:
+            return None
+
         if self.device_name:
-            # Find by name
-            for device in devices:
+            # Find by name (must be connected)
+            for device in available_devices:
                 if self.device_name in device.localizedName():
                     return device
+            # If named device not found, log available cameras
+            print(f"[{self.handler_id}] Requested camera '{self.device_name}' not found")
+            print(f"[{self.handler_id}] Available cameras:")
+            for device in available_devices:
+                print(f"[{self.handler_id}]   - {device.localizedName()}")
+            return None
         elif self.device_id is not None:
-            # Find by index
-            if 0 <= self.device_id < len(devices):
-                return devices[self.device_id]
+            # Find by index (only among connected devices)
+            if 0 <= self.device_id < len(available_devices):
+                return available_devices[self.device_id]
 
-        # Default: return first available camera
-        if len(devices) > 0:
-            return devices[0]
+        # Default: return first available connected camera
+        if len(available_devices) > 0:
+            selected = available_devices[0]
+            print(f"[{self.handler_id}] Auto-selected first available camera: {selected.localizedName()}")
+            return selected
 
         return None
 
@@ -313,7 +340,7 @@ class CameraHandlerGPU(StreamHandler):
         """Set up Metal render pipeline for YUV→RGB conversion shader."""
         from Metal import (
             MTLRenderPipelineDescriptor,
-            MTLPixelFormatRGBA8Unorm,
+            MTLPixelFormatBGRA8Unorm,
         )
 
         # Create command queue
@@ -348,7 +375,7 @@ class CameraHandlerGPU(StreamHandler):
         pipeline_descriptor = MTLRenderPipelineDescriptor.alloc().init()
         pipeline_descriptor.setVertexFunction_(vertex_function)
         pipeline_descriptor.setFragmentFunction_(fragment_function)
-        pipeline_descriptor.colorAttachments().objectAtIndexedSubscript_(0).setPixelFormat_(MTLPixelFormatRGBA8Unorm)
+        pipeline_descriptor.colorAttachments().objectAtIndexedSubscript_(0).setPixelFormat_(MTLPixelFormatBGRA8Unorm)
 
         # Create render pipeline state
         # PyObjC error-out pattern: returns (result, error)
@@ -372,6 +399,25 @@ class CameraHandlerGPU(StreamHandler):
     async def on_start(self):
         """Initialize AVFoundation camera session."""
         print(f"[{self.handler_id}] Initializing GPU camera capture...")
+
+        # Check and request camera permissions
+        from AVFoundation import AVCaptureDevice, AVAuthorizationStatusAuthorized, AVAuthorizationStatusNotDetermined
+        auth_status = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeVideo)
+
+        if auth_status == AVAuthorizationStatusNotDetermined:
+            # Request permission (this will block until user responds)
+            print(f"[{self.handler_id}] Requesting camera permission...")
+            granted = AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+                AVMediaTypeVideo, None
+            )
+            if not granted:
+                raise RuntimeError("Camera permission denied")
+            print(f"[{self.handler_id}] Camera permission granted")
+        elif auth_status != AVAuthorizationStatusAuthorized:
+            raise RuntimeError(
+                "Camera permission denied. "
+                "Please grant camera access in System Settings → Privacy & Security → Camera"
+            )
 
         # Find camera device
         self.device = self._find_camera_device()
@@ -452,16 +498,22 @@ class CameraHandlerGPU(StreamHandler):
         # Create delegate to receive frames
         self.delegate = FrameCaptureDelegate.alloc().init()
 
-        # Use global dispatch queue (avoids retention issues)
-        # DISPATCH_QUEUE_PRIORITY_DEFAULT = 0
+        # Create a serial dispatch queue for camera delegate callbacks
+        # Serial queue ensures frames are processed in order
         libdispatch = ctypes.CDLL('/usr/lib/system/libdispatch.dylib')
-        dispatch_get_global_queue = libdispatch.dispatch_get_global_queue
-        dispatch_get_global_queue.restype = ctypes.c_void_p
-        dispatch_get_global_queue.argtypes = [ctypes.c_long, ctypes.c_ulong]
 
-        # Get global queue with default priority
-        DISPATCH_QUEUE_PRIORITY_DEFAULT = 0
-        queue_ptr = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)
+        # dispatch_queue_create(const char *label, dispatch_queue_attr_t attr)
+        dispatch_queue_create = libdispatch.dispatch_queue_create
+        dispatch_queue_create.restype = ctypes.c_void_p
+        dispatch_queue_create.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
+
+        # Create serial queue (NULL attr = serial)
+        queue_label = b"com.streamlib.camera.capture"
+        queue_ptr = dispatch_queue_create(queue_label, None)
+
+        if not queue_ptr:
+            raise RuntimeError("Failed to create dispatch queue")
+
         queue = objc.objc_object(c_void_p=queue_ptr)
 
         # Retain queue reference to prevent garbage collection
@@ -469,6 +521,8 @@ class CameraHandlerGPU(StreamHandler):
 
         # Set delegate with queue
         self.output.setSampleBufferDelegate_queue_(self.delegate, queue)
+
+        print(f"[{self.handler_id}] Created serial dispatch queue for camera callbacks")
 
         if self.session.canAddOutput_(self.output):
             self.session.addOutput_(self.output)
@@ -514,7 +568,7 @@ class CameraHandlerGPU(StreamHandler):
         from Metal import (
             MTLPixelFormatR8Unorm,     # Y plane (8-bit single channel)
             MTLPixelFormatRG8Unorm,    # CbCr plane (8-bit two channel)
-            MTLPixelFormatRGBA8Unorm,  # Output RGB
+            MTLPixelFormatBGRA8Unorm,  # Output BGRA (Metal standard)
             MTLTextureDescriptor,
             MTLRenderPassDescriptor,
             MTLLoadActionClear,
@@ -590,9 +644,9 @@ class CameraHandlerGPU(StreamHandler):
         if not cbcr_texture:
             raise RuntimeError("Failed to get CbCr Metal texture")
 
-        # Create output RGB texture
+        # Create output BGRA texture (Metal standard format)
         output_desc = MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped_(
-            MTLPixelFormatRGBA8Unorm,
+            MTLPixelFormatBGRA8Unorm,
             width,
             height,
             False

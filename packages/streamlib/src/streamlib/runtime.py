@@ -30,12 +30,12 @@ from .ports import StreamOutput, StreamInput
 from .transfers import CPUtoGPUTransferHandler, GPUtoCPUTransferHandler
 from .events import EventBus, ClockTickEvent, ErrorEvent
 
-# GPU utilities for runtime-level optimizations
+# WebGPU support for shared GPU context
 try:
-    from .gpu_utils import create_gpu_context
-    HAS_GPU_UTILS = True
+    from .gpu import GPUContext
+    HAS_WEBGPU = True
 except ImportError:
-    HAS_GPU_UTILS = False
+    HAS_WEBGPU = False
 
 # Metal transfer handlers (macOS only, optional)
 try:
@@ -85,14 +85,10 @@ class StreamRuntime:
         self.dispatchers: Dict[str, Dispatcher] = {}
         self._init_dispatchers()
 
-        # GPU context (provides memory pooling, batching, transfer optimization)
-        self.gpu_context: Optional[Dict[str, Any]] = None
-        if enable_gpu and HAS_GPU_UTILS:
-            try:
-                self.gpu_context = create_gpu_context(backend='auto')
-                print(f"[Runtime] GPU context initialized: {self.gpu_context['backend']}")
-            except Exception as e:
-                print(f"[Runtime] GPU context initialization failed: {e}")
+        # Shared WebGPU context (created async in start())
+        # All handlers share this single context for zero-copy GPU operations
+        self.gpu_context: Optional['GPUContext'] = None
+        self._enable_gpu = enable_gpu
 
         # Auto-inserted transfer handlers
         self._transfer_handlers: Set[StreamHandler] = set()
@@ -270,15 +266,25 @@ class StreamRuntime:
             f"{output_port.name} → [{transfer.handler_id}] → {input_port.name}"
         )
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """
         Start runtime with central clock loop.
 
-        Starts clock loop that broadcasts ticks to all handlers concurrently.
+        Creates shared WebGPU context (if enabled) and starts clock loop
+        that broadcasts ticks to all handlers concurrently.
 
         Example:
-            runtime.start()
+            await runtime.start()
         """
+        # Create shared WebGPU context for all handlers
+        if self._enable_gpu and HAS_WEBGPU:
+            try:
+                self.gpu_context = await GPUContext.create(power_preference='high-performance')
+                print(f"[Runtime] Shared GPU context created: {self.gpu_context.backend_name}")
+            except Exception as e:
+                print(f"[Runtime] Warning: Failed to create GPU context: {e}")
+                print(f"[Runtime] GPU handlers will fail if they require GPU context")
+
         self._running = True
 
         # Start central clock loop (broadcasts ticks to all handlers)
@@ -293,7 +299,7 @@ class StreamRuntime:
         Example:
             await runtime.run()
         """
-        self.start()
+        await self.start()
         try:
             while self._running:
                 await asyncio.sleep(1)
@@ -331,9 +337,11 @@ class StreamRuntime:
         for dispatcher in self.dispatchers.values():
             await dispatcher.shutdown()
 
-        # Clean up GPU resources
-        if self.gpu_context and 'memory_pool' in self.gpu_context:
-            self.gpu_context['memory_pool'].clear()
+        # Clean up shared WebGPU context
+        if self.gpu_context:
+            # WebGPU contexts are automatically cleaned up by wgpu
+            # but we can explicitly release the reference
+            self.gpu_context = None
 
         print("[Runtime] Stopped")
 

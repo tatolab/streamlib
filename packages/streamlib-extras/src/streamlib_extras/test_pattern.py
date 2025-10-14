@@ -1,16 +1,20 @@
 """
-Test pattern generator handler.
+GPU-native test pattern generator.
 
-Generates various test patterns for pipeline testing and debugging.
+Generates test patterns directly on GPU using WebGPU compute shaders.
+Zero CPU→GPU transfers - true GPU-first architecture.
 """
 
-import numpy as np
 from typing import Optional, Literal
+from pathlib import Path
 
 from streamlib.handler import StreamHandler
 from streamlib.ports import VideoOutput
 from streamlib.messages import VideoFrame
 from streamlib.clocks import TimedTick
+from streamlib.gpu import GPUContext, ComputeShader
+
+import struct
 
 
 PatternType = Literal['smpte_bars', 'gradient', 'solid', 'checkerboard']
@@ -18,22 +22,35 @@ PatternType = Literal['smpte_bars', 'gradient', 'solid', 'checkerboard']
 
 class TestPatternHandler(StreamHandler):
     """
-    Generate test pattern video frames.
+    GPU-native test pattern generator.
 
-    Produces standard test patterns useful for debugging and pipeline testing.
+    Generates patterns directly on GPU using compute shaders.
+    Output is GPU-native (WebGPU buffer), eliminating CPU→GPU transfers.
 
-    Output capabilities: ['cpu'] - generates numpy arrays
+    Patterns:
+    - smpte_bars: Classic 7-bar color test pattern
+    - gradient: Horizontal black-to-white gradient
+    - solid: Solid color fill
+    - checkerboard: 8x8 checkerboard pattern
 
     Example:
         ```python
         pattern = TestPatternHandler(
-            width=640,
-            height=480,
+            width=1920,
+            height=1080,
             pattern='smpte_bars'
         )
-        runtime.add_stream(Stream(pattern, dispatcher='asyncio'))
+        runtime.add_stream(Stream(pattern))  # Uses 'asyncio' by default
         ```
+
+    GPU-first philosophy:
+    - Pattern generated on GPU (compute shader)
+    - Data never touches CPU
+    - Output is GPU buffer (not numpy array)
+    - Zero memory transfers
     """
+
+    preferred_dispatcher = 'asyncio'  # GPU operations are non-blocking
 
     def __init__(
         self,
@@ -44,7 +61,7 @@ class TestPatternHandler(StreamHandler):
         handler_id: str = None
     ):
         """
-        Initialize test pattern generator.
+        Initialize GPU-native test pattern generator.
 
         Args:
             width: Frame width in pixels
@@ -60,136 +77,120 @@ class TestPatternHandler(StreamHandler):
         self.pattern = pattern
         self.color = color or (255, 255, 255)
 
-        # Output: Generates numpy arrays (runtime handles GPU transfer if needed)
-        self.outputs['video'] = VideoOutput('video')
+        # Output: GPU buffer (WebGPU)
+        self.outputs['video'] = VideoOutput('video')  # GPU by default
 
         # Frame counter
         self._frame_number = 0
 
-        # Pre-generate pattern if static
-        if pattern in ['smpte_bars', 'solid', 'checkerboard']:
-            self._static_pattern = self._generate_pattern()
-        else:
-            self._static_pattern = None
+        # GPU resources (initialized in on_start)
+        self._gpu_ctx: Optional[GPUContext] = None
+        self._compute_shader: Optional[ComputeShader] = None
+        self._output_buffer = None
+        self._params_buffer = None
 
-    def _generate_pattern(self) -> np.ndarray:
-        """Generate the test pattern based on type."""
-        if self.pattern == 'smpte_bars':
-            return self._generate_smpte_bars()
-        elif self.pattern == 'gradient':
-            return self._generate_gradient()
-        elif self.pattern == 'solid':
-            return self._generate_solid()
-        elif self.pattern == 'checkerboard':
-            return self._generate_checkerboard()
-        else:
-            raise ValueError(f"Unknown pattern type: {self.pattern}")
+        # Pattern mode mapping
+        self._pattern_modes = {
+            'smpte_bars': 0,
+            'gradient': 1,
+            'solid': 2,
+            'checkerboard': 3,
+        }
 
-    def _generate_smpte_bars(self) -> np.ndarray:
-        """
-        Generate SMPTE color bars test pattern.
+    async def on_start(self) -> None:
+        """Initialize GPU context and compute shader."""
+        # Use runtime's shared WebGPU context (no fallback)
+        self._gpu_ctx = self._runtime.gpu_context
+        if not self._gpu_ctx:
+            raise RuntimeError(
+                f"[{self.handler_id}] GPU context not available from runtime. "
+                f"Ensure runtime has enable_gpu=True"
+            )
 
-        Classic 7-bar pattern: white, yellow, cyan, green, magenta, red, blue.
-        """
-        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        # Load shader (colocated with handler in streamlib-extras)
+        shader_path = Path(__file__).parent / 'shaders' / 'test_pattern.wgsl'
+        shader_code = shader_path.read_text()
 
-        # 7 bars of equal width
-        bar_width = self.width // 7
+        # Create output buffer (RGBA packed as u32)
+        buffer_size = self.width * self.height * 4  # 4 bytes per pixel (RGBA)
+        self._output_buffer = self._gpu_ctx.create_buffer(
+            size=buffer_size,
+            usage=0x80 | 0x4,  # STORAGE | COPY_SRC
+            label='test_pattern_output'
+        )
 
-        # RGB values for SMPTE bars
-        colors = [
-            (255, 255, 255),  # White
-            (255, 255, 0),    # Yellow
-            (0, 255, 255),    # Cyan
-            (0, 255, 0),      # Green
-            (255, 0, 255),    # Magenta
-            (255, 0, 0),      # Red
-            (0, 0, 255),      # Blue
-        ]
+        # Create params buffer (uniform)
+        # struct PatternParams { width: u32, height: u32, mode: u32, color_r/g/b: u32 }
+        params_data = struct.pack(
+            'IIIIII',
+            self.width,
+            self.height,
+            self._pattern_modes[self.pattern],
+            self.color[0],
+            self.color[1],
+            self.color[2]
+        )
+        self._params_buffer = self._gpu_ctx.create_buffer(
+            size=len(params_data),
+            usage=0x40 | 0x8,  # UNIFORM | COPY_DST
+            label='test_pattern_params'
+        )
+        self._gpu_ctx.queue.write_buffer(self._params_buffer, 0, params_data)
 
-        for i, color in enumerate(colors):
-            x_start = i * bar_width
-            x_end = (i + 1) * bar_width if i < 6 else self.width
-            frame[:, x_start:x_end] = color
+        # Create compute shader
+        self._compute_shader = ComputeShader.from_wgsl(
+            context=self._gpu_ctx,
+            shader_code=shader_code,
+            entry_point='main',
+            bindings=[
+                {'binding': 0, 'type': 'storage'},      # output_buffer
+                {'binding': 1, 'type': 'uniform'},      # params
+            ]
+        )
 
-        return frame
-
-    def _generate_gradient(self) -> np.ndarray:
-        """
-        Generate horizontal gradient from black to white.
-
-        Useful for testing color reproduction and dynamic range.
-        """
-        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-
-        # Horizontal gradient
-        gradient = np.linspace(0, 255, self.width, dtype=np.uint8)
-        frame[:, :] = gradient[np.newaxis, :, np.newaxis]
-
-        return frame
-
-    def _generate_solid(self) -> np.ndarray:
-        """
-        Generate solid color frame.
-
-        Useful for testing compositing and alpha blending.
-        """
-        frame = np.full((self.height, self.width, 3), self.color, dtype=np.uint8)
-        return frame
-
-    def _generate_checkerboard(self) -> np.ndarray:
-        """
-        Generate checkerboard pattern.
-
-        Useful for testing motion and alignment.
-        """
-        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-
-        # 8x8 checkerboard
-        square_size = min(self.width, self.height) // 8
-
-        for i in range(8):
-            for j in range(8):
-                if (i + j) % 2 == 0:
-                    y_start = i * square_size
-                    y_end = min(y_start + square_size, self.height)
-                    x_start = j * square_size
-                    x_end = min(x_start + square_size, self.width)
-                    frame[y_start:y_end, x_start:x_end] = (255, 255, 255)
-
-        return frame
+        print(f"TestPatternHandler started: {self.width}x{self.height} @ {self.pattern} (GPU-native)")
 
     async def process(self, tick: TimedTick) -> None:
         """
-        Generate and output one frame per tick.
+        Generate test pattern on GPU.
 
-        For static patterns, reuses pre-generated pattern.
-        For dynamic patterns (gradient with animation), regenerates each frame.
+        Dispatches compute shader to generate pattern directly on GPU.
+        Output is GPU buffer - no CPU→GPU transfer needed!
         """
-        # Use pre-generated pattern if available
-        if self._static_pattern is not None:
-            frame_data = self._static_pattern.copy()  # Copy to avoid mutations
-        else:
-            frame_data = self._generate_pattern()
+        if self._compute_shader is None:
+            return
 
-        # Create VideoFrame
+        # Dispatch compute shader (16x16 workgroup size)
+        workgroup_count_x = (self.width + 15) // 16
+        workgroup_count_y = (self.height + 15) // 16
+
+        self._compute_shader.dispatch(
+            workgroup_count=(workgroup_count_x, workgroup_count_y, 1),
+            bindings={
+                0: self._output_buffer,
+                1: self._params_buffer,
+            }
+        )
+
+        # Create VideoFrame with GPU buffer
+        # Note: data is GPU buffer, not numpy array!
         frame = VideoFrame(
-            data=frame_data,
+            data=self._output_buffer,  # WebGPU buffer
             timestamp=tick.timestamp,
             frame_number=self._frame_number,
             width=self.width,
             height=self.height,
-            metadata={'pattern': self.pattern}
+            metadata={
+                'pattern': self.pattern,
+                'gpu': True,
+                'backend': 'webgpu'
+            }
         )
 
         # Write to output
         self.outputs['video'].write(frame)
         self._frame_number += 1
 
-    async def on_start(self) -> None:
-        """Called when handler starts."""
-        print(f"TestPatternHandler started: {self.width}x{self.height} @ {self.pattern}")
-
     async def on_stop(self) -> None:
-        """Called when handler stops."""
-        print(f"TestPatternHandler stopped: {self._frame_number} frames generated")
+        """Clean up GPU resources."""
+        print(f"TestPatternHandler stopped: {self._frame_number} frames generated (GPU)")

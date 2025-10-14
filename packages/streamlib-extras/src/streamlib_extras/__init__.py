@@ -3,10 +3,10 @@ streamlib-extras: Reference handler implementations for streamlib.
 
 This package provides ready-to-use handlers for common video streaming operations:
 - Patterns: TestPatternHandler
-- Camera: CameraHandler, CameraHandlerGPU
-- Display: DisplayHandler, DisplayGPUHandler
-- Effects: BlurFilter, BlurFilterGPU, BlurFilterMetal, CompositorHandler, MultiInputCompositor
-- Overlays: LowerThirdsHandler, LowerThirdsGPUHandler, GPUTextOverlayHandler
+- Camera: CameraHandler, CameraHandlerGPU, CameraHandlerMetal
+- Display: DisplayHandler, DisplayMetalHandler
+- Effects: BlurFilter, BlurFilterMetal, CompositorHandler, MultiInputCompositor
+- Overlays: LowerThirdsHandler, LowerThirdsGPUHandler, LowerThirdsMetalHandler
 - Utils: DrawingHandler, DrawingContext
 
 Install: pip install streamlib-extras
@@ -23,13 +23,19 @@ try:
 except ImportError:
     _HAS_GPU_CAMERA = False
 
+try:
+    from .camera_metal import CameraHandlerMetal
+    _HAS_METAL_CAMERA = True
+except ImportError:
+    _HAS_METAL_CAMERA = False
+
 # Display handlers
 from .display import DisplayHandler
 try:
-    from .display_gpu import DisplayGPUHandler
-    _HAS_GPU_DISPLAY = True
+    from .display_metal import DisplayMetalHandler
+    _HAS_METAL_DISPLAY = True
 except ImportError:
-    _HAS_GPU_DISPLAY = False
+    _HAS_METAL_DISPLAY = False
 
 # Drawing utilities
 from .drawing import DrawingHandler, DrawingContext
@@ -37,15 +43,9 @@ from .drawing import DrawingHandler, DrawingContext
 # Effects
 from .effects.blur import BlurFilter
 try:
-    from .effects.blur_gpu import BlurFilterGPU
-    _HAS_GPU_BLUR = True
-except ImportError:
-    _HAS_GPU_BLUR = False
-
-try:
     from .effects.blur_metal import BlurFilterMetal
     _HAS_METAL_BLUR = True
-except (ImportError, RuntimeError):
+except ImportError:
     _HAS_METAL_BLUR = False
 
 from .effects.compositor import CompositorHandler
@@ -64,10 +64,10 @@ except ImportError:
     _HAS_GPU_LOWER_THIRDS = False
 
 try:
-    from .overlays.text_overlay_gpu import GPUTextOverlayHandler
-    _HAS_GPU_TEXT_OVERLAY = True
+    from .overlays.lower_thirds_metal import LowerThirdsMetalHandler
+    _HAS_METAL_LOWER_THIRDS = True
 except ImportError:
-    _HAS_GPU_TEXT_OVERLAY = False
+    _HAS_METAL_LOWER_THIRDS = False
 
 
 __all__ = [
@@ -96,11 +96,11 @@ __all__ = [
 if _HAS_GPU_CAMERA:
     __all__.append('CameraHandlerGPU')
 
-if _HAS_GPU_DISPLAY:
-    __all__.append('DisplayGPUHandler')
+if _HAS_METAL_CAMERA:
+    __all__.append('CameraHandlerMetal')
 
-if _HAS_GPU_BLUR:
-    __all__.append('BlurFilterGPU')
+if _HAS_METAL_DISPLAY:
+    __all__.append('DisplayMetalHandler')
 
 if _HAS_METAL_BLUR:
     __all__.append('BlurFilterMetal')
@@ -111,7 +111,7 @@ if _HAS_MULTI_COMPOSITOR:
 if _HAS_GPU_LOWER_THIRDS:
     __all__.append('LowerThirdsGPUHandler')
 
-if _HAS_GPU_TEXT_OVERLAY:
-    __all__.append('GPUTextOverlayHandler')
+if _HAS_METAL_LOWER_THIRDS:
+    __all__.append('LowerThirdsMetalHandler')
 
 __version__ = '0.1.0'
