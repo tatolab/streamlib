@@ -105,6 +105,41 @@ class DisplayWindow:
         # Track current texture
         self._current_texture = None
 
+        # Store NSApplication for event processing
+        self._app = app
+        self._NSDate = None
+        self._NSDefaultRunLoopMode = None
+        self._NSEventMaskAny = None
+
+    def process_events(self):
+        """
+        Process macOS window events (NSApplication event loop).
+
+        This must be called regularly (e.g., every frame) to keep the window
+        responsive and handle user input.
+
+        Example:
+            window.process_events()
+        """
+        # Lazy import to avoid issues if called from wrong thread
+        if self._NSDate is None:
+            from Cocoa import NSDate, NSDefaultRunLoopMode, NSEventMaskAny
+            self._NSDate = NSDate
+            self._NSDefaultRunLoopMode = NSDefaultRunLoopMode
+            self._NSEventMaskAny = NSEventMaskAny
+
+        # Process all pending events (non-blocking)
+        event = self._app.nextEventMatchingMask_untilDate_inMode_dequeue_(
+            self._NSEventMaskAny,
+            self._NSDate.dateWithTimeIntervalSinceNow_(0),  # Non-blocking (0 timeout)
+            self._NSDefaultRunLoopMode,
+            True
+        )
+
+        if event:
+            self._app.sendEvent_(event)
+            self._app.updateWindows()
+
     def get_current_texture(self):
         """
         Get the current swapchain texture to render into.
@@ -134,6 +169,125 @@ class DisplayWindow:
         if self._current_texture is not None:
             self.context.present()
             self._current_texture = None
+
+    def render(self, texture):
+        """
+        Render a texture to the display (convenience method).
+
+        This is a simplified API that renders the texture to the swapchain,
+        presents it, and processes window events. All the platform-specific
+        boilerplate (NSApplication events on macOS, etc.) is handled automatically.
+
+        Args:
+            texture: WebGPU texture to display
+
+        Example:
+            # Simple rendering - events processed automatically!
+            window.render(frame.data)
+        """
+        # Process window events (NSApplication on macOS)
+        # This keeps the window responsive and handles user input
+        self.process_events()
+
+        # Get swapchain texture
+        dst_texture = self.get_current_texture()
+
+        # Create blit pipeline if not already created
+        if not hasattr(self, '_blit_pipeline'):
+            self._create_blit_pipeline()
+
+        # Create bind group for this texture
+        bind_group = self.gpu_context.device.create_bind_group(
+            layout=self._blit_pipeline.get_bind_group_layout(0),
+            entries=[
+                {
+                    "binding": 0,
+                    "resource": texture.create_view()
+                },
+                {
+                    "binding": 1,
+                    "resource": self._sampler
+                }
+            ]
+        )
+
+        # Render texture to swapchain using blit pipeline
+        encoder = self.gpu_context.device.create_command_encoder()
+        render_pass = encoder.begin_render_pass(
+            color_attachments=[{
+                "view": dst_texture.create_view(),
+                "load_op": "clear",
+                "store_op": "store",
+                "clear_value": (0, 0, 0, 1)
+            }]
+        )
+        render_pass.set_pipeline(self._blit_pipeline)
+        render_pass.set_bind_group(0, bind_group)
+        render_pass.draw(3)  # Fullscreen triangle
+        render_pass.end()
+        self.gpu_context.queue.submit([encoder.finish()])
+
+        # Present
+        self.present()
+
+    def _create_blit_pipeline(self):
+        """Create a simple blit pipeline for rendering textures to the screen."""
+        # Vertex shader - fullscreen triangle
+        vertex_shader = """
+        @vertex
+        fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
+            // Fullscreen triangle
+            var pos = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0)
+            );
+            return vec4<f32>(pos[vertex_index], 0.0, 1.0);
+        }
+        """
+
+        # Fragment shader - sample texture
+        fragment_shader = """
+        @group(0) @binding(0) var input_texture: texture_2d<f32>;
+        @group(0) @binding(1) var input_sampler: sampler;
+
+        @fragment
+        fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+            let tex_size = textureDimensions(input_texture);
+            let uv = pos.xy / vec2<f32>(f32(tex_size.x), f32(tex_size.y));
+            return textureSample(input_texture, input_sampler, uv);
+        }
+        """
+
+        # Create shader module
+        shader_module = self.gpu_context.device.create_shader_module(
+            code=vertex_shader + "\n" + fragment_shader
+        )
+
+        # Create sampler
+        self._sampler = self.gpu_context.device.create_sampler(
+            mag_filter="linear",
+            min_filter="linear"
+        )
+
+        # Create pipeline
+        self._blit_pipeline = self.gpu_context.device.create_render_pipeline(
+            layout="auto",
+            vertex={
+                "module": shader_module,
+                "entry_point": "vs_main"
+            },
+            fragment={
+                "module": shader_module,
+                "entry_point": "fs_main",
+                "targets": [{
+                    "format": wgpu.TextureFormat.bgra8unorm
+                }]
+            },
+            primitive={
+                "topology": "triangle-list"
+            }
+        )
 
     def close(self):
         """Close the display window and clean up resources."""

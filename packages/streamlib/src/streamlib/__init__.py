@@ -52,7 +52,13 @@ from .function_handler import FunctionHandler, stream_handler
 from .pipeline import PipelineBuilder, pipeline
 
 # High-level decorators for AI-friendly API (Level 1 - Recommended)
-from .decorators import video_effect, audio_effect, stream_processor, camera_source
+from .decorators import video_effect, audio_effect, stream_processor, camera_source, display_sink
+
+# Source handlers (Level 2 - Explicit control)
+from .sources import CameraSource
+
+# Sink handlers (Level 2 - Explicit control)
+from .sinks import DisplaySink
 
 # Event bus for communication (NEW - Phase 3.6)
 from .events import (
@@ -104,6 +110,13 @@ __all__ = [
     'audio_effect',
     'stream_processor',
     'camera_source',
+    'display_sink',
+
+    # Source handlers (Level 2 - Explicit control)
+    'CameraSource',
+
+    # Sink handlers (Level 2 - Explicit control)
+    'DisplaySink',
 
     # Event bus
     'EventBus',

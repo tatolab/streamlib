@@ -18,6 +18,7 @@ from .context import GPUContext
 from .compute import ComputeShader
 from .renderer import GPURenderer
 from .ml import MLRuntime, ONNXModel
+from .display import DisplayWindow
 
 __all__ = [
     'GPUContext',
@@ -25,4 +26,5 @@ __all__ = [
     'GPURenderer',
     'MLRuntime',
     'ONNXModel',
+    'DisplayWindow',
 ]

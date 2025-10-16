@@ -49,7 +49,14 @@ class StreamRuntime:
         gpu_context: Shared WebGPU context for all handlers
     """
 
-    def __init__(self, fps: float = 30.0, clock: Optional[Clock] = None, enable_gpu: bool = True):
+    def __init__(
+        self,
+        fps: float = 30.0,
+        clock: Optional[Clock] = None,
+        enable_gpu: bool = True,
+        width: int = 1920,
+        height: int = 1080
+    ):
         """
         Initialize stream runtime.
 
@@ -57,11 +64,17 @@ class StreamRuntime:
             fps: Frames per second for default software clock
             clock: Optional custom clock (defaults to SoftwareClock)
             enable_gpu: Enable GPU optimizations (auto-detect backend)
+            width: Default frame width for video handlers
+            height: Default frame height for video handlers
 
         Example:
-            runtime = StreamRuntime(fps=30)
+            runtime = StreamRuntime(fps=30, width=1920, height=1080)
         """
         self.clock = clock or SoftwareClock(fps=fps)
+
+        # Frame dimensions (used by camera, display, etc.)
+        self.width = width
+        self.height = height
 
         # Event bus for tick broadcast and error propagation
         self.event_bus = EventBus(buffer_size=100)
@@ -152,7 +165,13 @@ class StreamRuntime:
         if self._enable_gpu and HAS_WEBGPU:
             try:
                 self.gpu_context = await GPUContext.create(power_preference='high-performance')
+
+                # Store runtime dimensions on GPU context for camera/display
+                self.gpu_context._runtime_width = self.width
+                self.gpu_context._runtime_height = self.height
+
                 print(f"[Runtime] Shared GPU context created: {self.gpu_context.backend_name}")
+                print(f"[Runtime] Frame dimensions: {self.width}x{self.height}")
             except Exception as e:
                 print(f"[Runtime] Warning: Failed to create GPU context: {e}")
                 print(f"[Runtime] GPU handlers will fail if they require GPU context")

@@ -441,15 +441,8 @@ def camera_source(
                         height=self._runtime.height
                     )
 
-                    # Optionally call user function for custom processing
-                    # (Most users won't need this - camera just works!)
-                    if self.source_func:
-                        gpu_ctx = self._runtime.gpu_context
-                        result = self.source_func(gpu=gpu_ctx, device_id=self.camera_device_id)
-                        if result is not None:
-                            frame = result
-
-                    # Emit frame
+                    # Emit frame (user function is optional and not called by default)
+                    # The decorator handles everything - users just write "pass"
                     self.outputs['video'].write(frame)
 
                 except Exception as e:
@@ -475,9 +468,130 @@ def camera_source(
         return decorator(func)
 
 
+def display_sink(
+    func: Optional[Callable] = None,
+    *,
+    handler_id: Optional[str] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    title: str = "streamlib Display"
+) -> Callable:
+    """
+    Decorator that converts a simple display configuration into a StreamHandler.
+
+    The decorated function should have signature:
+        def display_func(frame: VideoFrame, gpu: GPUContext) -> None
+
+    The decorator automatically:
+    - Creates display window on handler start
+    - Inputs video port
+    - Handles tick processing
+    - Reads latest frame and renders to display
+    - Zero-copy rendering via WebGPU swapchain
+
+    Args:
+        func: Function to decorate (provided automatically when used as @display_sink)
+        handler_id: Optional handler ID (defaults to function name)
+        width: Window width (None = use runtime width)
+        height: Window height (None = use runtime height)
+        title: Window title
+
+    Returns:
+        StreamHandler subclass instance that wraps display sink
+
+    Example:
+        @display_sink(title="Camera Feed")
+        def my_display():
+            '''
+            Simple display sink - no code needed!
+            Renders incoming frames automatically.
+            '''
+            # This function body is optional - decorator handles everything
+            # You can add custom logic here if needed
+            pass
+
+        # Use in pipeline (zero-copy rendering via swapchain!)
+        runtime = StreamRuntime(fps=30, width=1920, height=1080)
+        runtime.add_stream(Stream(camera))
+        runtime.add_stream(Stream(my_display))
+        runtime.connect(camera.outputs['video'], my_display.inputs['video'])
+        await runtime.start()
+    """
+    def decorator(f: Callable) -> StreamHandler:
+        # Create handler class dynamically
+        class DisplaySinkHandler(StreamHandler):
+            """Auto-generated handler from @display_sink decorator."""
+
+            def __init__(
+                self,
+                sink_id: Optional[str] = None,
+                display_width: Optional[int] = None,
+                display_height: Optional[int] = None,
+                display_title: str = "streamlib Display"
+            ):
+                super().__init__(handler_id=sink_id or f.__name__)
+                self.sink_func = f
+                self.display_width = display_width
+                self.display_height = display_height
+                self.display_title = display_title
+                self.display = None
+
+                # Create input port only (sinks have no outputs)
+                from .ports import VideoInput
+                self.inputs['video'] = VideoInput('video')
+
+            async def on_start(self) -> None:
+                """Create display window when handler starts."""
+                # Create display window (zero-copy rendering via swapchain)
+                self.display = self._runtime.gpu_context.create_display(
+                    width=self.display_width,
+                    height=self.display_height,
+                    title=self.display_title
+                )
+
+            async def process(self, tick: TimedTick) -> None:
+                """Read latest frame and render to display."""
+                if self.display is None:
+                    return
+
+                try:
+                    # Read latest frame (zero-copy from ring buffer)
+                    frame = self.inputs['video'].read_latest()
+
+                    if frame is not None:
+                        # Render to display (zero-copy to swapchain)
+                        # User function is optional and not called by default
+                        # The decorator handles everything - users just write "pass"
+                        self.display.render(frame.data)
+
+                except Exception as e:
+                    print(f"[{self.handler_id}] Error in display sink: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            async def on_stop(self) -> None:
+                """Close display window when handler stops."""
+                if self.display:
+                    self.display.close()
+                    self.display = None
+
+            def __repr__(self) -> str:
+                return f"DisplaySink('{self.handler_id}', title={self.display_title})"
+
+        # Create and return handler instance
+        return DisplaySinkHandler(handler_id, width, height, title)
+
+    # Handle both @display_sink and @display_sink() syntax
+    if func is None:
+        return decorator
+    else:
+        return decorator(func)
+
+
 __all__ = [
     'video_effect',
     'audio_effect',
     'stream_processor',
     'camera_source',
+    'display_sink',
 ]

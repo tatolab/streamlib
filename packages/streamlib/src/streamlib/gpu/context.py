@@ -632,6 +632,53 @@ class GPUContext:
             device_id=device_id
         )
 
+    def create_display(
+        self,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        title: str = "streamlib Display"
+    ):
+        """
+        Create display window for rendering GPU textures.
+
+        Args:
+            width: Window width (None = use runtime width)
+            height: Window height (None = use runtime height)
+            title: Window title
+
+        Returns:
+            DisplayWindow instance
+
+        The display window provides a WebGPU swapchain for zero-copy rendering.
+        Call render(texture) to display a texture, or use get_current_texture()
+        for manual rendering control.
+
+        Example:
+            # In handler's on_start():
+            self.display = self._runtime.gpu_context.create_display(
+                title="My Stream"
+            )
+
+            # In handler's process():
+            frame = self.inputs['video'].read_latest()
+            if frame:
+                self.display.render(frame.data)  # Zero-copy to swapchain
+        """
+        from .display import DisplayWindow
+
+        # Get runtime dimensions if not specified
+        if width is None:
+            width = getattr(self, '_runtime_width', 1920)
+        if height is None:
+            height = getattr(self, '_runtime_height', 1080)
+
+        return DisplayWindow(
+            gpu_context=self,
+            width=width,
+            height=height,
+            title=title
+        )
+
     def __repr__(self) -> str:
         return (
             f"GPUContext(backend={self.backend_name}, "
