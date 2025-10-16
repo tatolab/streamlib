@@ -1,0 +1,22 @@
+[package]
+name = "streamlib_metal"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "streamlib_metal"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+objc = "0.2"
+core-foundation = "0.10"
+metal = "0.32"
+foreign-types = "0.5"
+wgpu-hal = { git = "https://github.com/tato123/wgpu", branch = "trunk", features = ["metal"] }
+wgpu-core = { git = "https://github.com/tato123/wgpu", branch = "trunk" }
+wgpu = { git = "https://github.com/tato123/wgpu", branch = "trunk", features = ["wgpu-core"] }
+wgpu-types = { git = "https://github.com/tato123/wgpu", branch = "trunk" }
+
+[build-dependencies]
+cc = "1.0"
