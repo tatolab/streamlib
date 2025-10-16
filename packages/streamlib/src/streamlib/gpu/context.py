@@ -636,7 +636,8 @@ class GPUContext:
         self,
         width: Optional[int] = None,
         height: Optional[int] = None,
-        title: str = "streamlib Display"
+        title: str = "streamlib Display",
+        show_fps: bool = False
     ):
         """
         Create display window for rendering GPU textures.
@@ -645,6 +646,7 @@ class GPUContext:
             width: Window width (None = use runtime width)
             height: Window height (None = use runtime height)
             title: Window title
+            show_fps: If True, display FPS counter in window title
 
         Returns:
             DisplayWindow instance
@@ -656,7 +658,8 @@ class GPUContext:
         Example:
             # In handler's on_start():
             self.display = self._runtime.gpu_context.create_display(
-                title="My Stream"
+                title="My Stream",
+                show_fps=True  # Show FPS in window title
             )
 
             # In handler's process():
@@ -676,7 +679,8 @@ class GPUContext:
             gpu_context=self,
             width=width,
             height=height,
-            title=title
+            title=title,
+            show_fps=show_fps
         )
 
     def __repr__(self) -> str:

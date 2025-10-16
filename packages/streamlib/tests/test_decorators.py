@@ -91,7 +91,7 @@ async def test_video_effect_processing():
     effect_called = False
 
     @video_effect
-    def simple_effect(frame: VideoFrame) -> VideoFrame:
+    def simple_effect(frame: VideoFrame, gpu) -> VideoFrame:
         """Effect that modifies frame data (pass-through for GPU textures)."""
         nonlocal effect_called
         effect_called = True

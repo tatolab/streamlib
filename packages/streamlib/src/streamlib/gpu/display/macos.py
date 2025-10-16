@@ -48,7 +48,7 @@ class DisplayWindow:
         window.present()
     """
 
-    def __init__(self, gpu_context, width=1920, height=1080, title="streamlib"):
+    def __init__(self, gpu_context, width=1920, height=1080, title="streamlib", show_fps=False):
         """
         Create display window with wgpu Surface/SwapChain.
 
@@ -57,11 +57,19 @@ class DisplayWindow:
             width: Window width in pixels
             height: Window height in pixels
             title: Window title
+            show_fps: If True, display FPS counter in window title
         """
         self.gpu_context = gpu_context
         self.width = width
         self.height = height
         self.title = title
+        self.show_fps = show_fps
+
+        # FPS tracking
+        self._fps_frame_count = 0
+        self._fps_last_time = None
+        self._fps_current = 0.0
+        self._fps_update_interval = 0.5  # Update FPS display every 0.5 seconds
 
         # Initialize NSApplication if not already initialized
         app = NSApplication.sharedApplication()
@@ -169,6 +177,41 @@ class DisplayWindow:
         if self._current_texture is not None:
             self.context.present()
             self._current_texture = None
+
+        # Update FPS counter if enabled
+        if self.show_fps:
+            self._update_fps()
+
+    def _update_fps(self):
+        """
+        Update FPS counter and window title.
+
+        This method tracks frame times and calculates FPS, updating the window
+        title periodically. It's designed to be lightweight and reusable across
+        different display implementations.
+        """
+        import time
+
+        # Initialize timer on first call
+        if self._fps_last_time is None:
+            self._fps_last_time = time.perf_counter()
+            return
+
+        # Increment frame count
+        self._fps_frame_count += 1
+
+        # Calculate elapsed time
+        current_time = time.perf_counter()
+        elapsed = current_time - self._fps_last_time
+
+        # Update FPS display every interval
+        if elapsed >= self._fps_update_interval:
+            self._fps_current = self._fps_frame_count / elapsed
+            self._fps_frame_count = 0
+            self._fps_last_time = current_time
+
+            # Update window title with FPS
+            self.ns_window.setTitle_(f"{self.title} - {self._fps_current:.1f} FPS")
 
     def render(self, texture):
         """

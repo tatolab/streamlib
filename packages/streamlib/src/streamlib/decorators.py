@@ -474,7 +474,8 @@ def display_sink(
     handler_id: Optional[str] = None,
     width: Optional[int] = None,
     height: Optional[int] = None,
-    title: str = "streamlib Display"
+    title: str = "streamlib Display",
+    show_fps: bool = False
 ) -> Callable:
     """
     Decorator that converts a simple display configuration into a StreamHandler.
@@ -495,16 +496,17 @@ def display_sink(
         width: Window width (None = use runtime width)
         height: Window height (None = use runtime height)
         title: Window title
+        show_fps: If True, display FPS counter in window title
 
     Returns:
         StreamHandler subclass instance that wraps display sink
 
     Example:
-        @display_sink(title="Camera Feed")
+        @display_sink(title="Camera Feed", show_fps=True)
         def my_display():
             '''
             Simple display sink - no code needed!
-            Renders incoming frames automatically.
+            Renders incoming frames automatically with FPS counter.
             '''
             # This function body is optional - decorator handles everything
             # You can add custom logic here if needed
@@ -527,13 +529,15 @@ def display_sink(
                 sink_id: Optional[str] = None,
                 display_width: Optional[int] = None,
                 display_height: Optional[int] = None,
-                display_title: str = "streamlib Display"
+                display_title: str = "streamlib Display",
+                display_show_fps: bool = False
             ):
                 super().__init__(handler_id=sink_id or f.__name__)
                 self.sink_func = f
                 self.display_width = display_width
                 self.display_height = display_height
                 self.display_title = display_title
+                self.display_show_fps = display_show_fps
                 self.display = None
 
                 # Create input port only (sinks have no outputs)
@@ -546,7 +550,8 @@ def display_sink(
                 self.display = self._runtime.gpu_context.create_display(
                     width=self.display_width,
                     height=self.display_height,
-                    title=self.display_title
+                    title=self.display_title,
+                    show_fps=self.display_show_fps
                 )
 
             async def process(self, tick: TimedTick) -> None:
@@ -579,7 +584,7 @@ def display_sink(
                 return f"DisplaySink('{self.handler_id}', title={self.display_title})"
 
         # Create and return handler instance
-        return DisplaySinkHandler(handler_id, width, height, title)
+        return DisplaySinkHandler(handler_id, width, height, title, show_fps)
 
     # Handle both @display_sink and @display_sink() syntax
     if func is None:
