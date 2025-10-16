@@ -1,10 +1,10 @@
 """
-GPU-first ports for StreamHandler inputs/outputs.
+WebGPU-first ports for StreamHandler inputs/outputs.
 
-Ports are GPU by default. Runtime automatically handles memory management.
-CPU is only used when explicitly requested (rare).
+All ports operate on WebGPU textures. No CPU fallback options.
+This design ensures zero-copy GPU pipelines throughout.
 
-This design follows the docs-first architecture: simple, opinionated, GPU-first.
+Follows the WebGPU-first architecture: simple, opinionated, GPU-only.
 """
 
 from typing import Optional
@@ -13,28 +13,20 @@ from .buffers import RingBuffer
 
 class StreamOutput:
     """
-    Output port for sending data (GPU by default).
+    Output port for sending WebGPU data.
 
-    Ports are GPU-first - data stays on GPU unless explicitly configured otherwise.
-    Runtime automatically manages memory without manual capability negotiation.
+    Ports are WebGPU-only - all data must be GPU textures.
+    Runtime provides shared GPU context for texture management.
 
     Example:
-        # GPU output (default - recommended)
+        # All outputs are WebGPU (the only option)
         self.outputs['video'] = StreamOutput('video', port_type='video')
-
-        # CPU-only output (rare - legacy compatibility)
-        self.outputs['video'] = StreamOutput('video', port_type='video', cpu_only=True)
-
-        # Flexible output (can produce either GPU or CPU)
-        self.outputs['video'] = StreamOutput('video', port_type='video', allow_cpu=True)
     """
 
     def __init__(
         self,
         name: str,
         port_type: str,  # 'video', 'audio', 'data'
-        allow_cpu: bool = False,  # Can fall back to CPU if needed
-        cpu_only: bool = False,   # Force CPU (rare, for legacy)
         slots: int = 3
     ):
         """
@@ -43,17 +35,10 @@ class StreamOutput:
         Args:
             name: Port name (e.g., 'video', 'audio', 'out')
             port_type: Port type ('video', 'audio', 'data')
-            allow_cpu: Allow CPU fallback if GPU unavailable (default: False)
-            cpu_only: Force CPU-only operation (rare, default: False)
             slots: Ring buffer size (default: 3, broadcast practice)
         """
-        if cpu_only and allow_cpu:
-            raise ValueError("Cannot set both cpu_only=True and allow_cpu=True")
-
         self.name = name
         self.port_type = port_type
-        self.allow_cpu = allow_cpu
-        self.cpu_only = cpu_only
         self.buffer = RingBuffer(slots=slots)
 
     def write(self, data) -> None:
@@ -65,39 +50,26 @@ class StreamOutput:
         """
         self.buffer.write(data)
 
-    def is_gpu(self) -> bool:
-        """Check if this port operates on GPU."""
-        return not self.cpu_only
-
     def __repr__(self) -> str:
-        memory = "CPU-only" if self.cpu_only else ("GPU+CPU" if self.allow_cpu else "GPU")
-        return f"StreamOutput(name='{self.name}', type='{self.port_type}', memory={memory})"
+        return f"StreamOutput(name='{self.name}', type='{self.port_type}')"
 
 
 class StreamInput:
     """
-    Input port for receiving data (GPU by default).
+    Input port for receiving WebGPU data.
 
-    Ports are GPU-first - expects data on GPU unless explicitly configured otherwise.
-    Runtime automatically manages memory without manual capability negotiation.
+    Ports are WebGPU-only - expects all data as GPU textures.
+    Runtime provides shared GPU context for texture management.
 
     Example:
-        # GPU input (default - recommended)
+        # All inputs are WebGPU (the only option)
         self.inputs['video'] = StreamInput('video', port_type='video')
-
-        # CPU-only input (rare - legacy compatibility)
-        self.inputs['video'] = StreamInput('video', port_type='video', cpu_only=True)
-
-        # Flexible input (can accept either GPU or CPU)
-        self.inputs['video'] = StreamInput('video', port_type='video', allow_cpu=True)
     """
 
     def __init__(
         self,
         name: str,
-        port_type: str,  # 'video', 'audio', 'data'
-        allow_cpu: bool = False,  # Can accept CPU if needed
-        cpu_only: bool = False    # Force CPU (rare, for legacy)
+        port_type: str  # 'video', 'audio', 'data'
     ):
         """
         Initialize input port.
@@ -105,16 +77,9 @@ class StreamInput:
         Args:
             name: Port name (e.g., 'video', 'audio', 'in')
             port_type: Port type ('video', 'audio', 'data')
-            allow_cpu: Allow CPU fallback if GPU unavailable (default: False)
-            cpu_only: Force CPU-only operation (rare, default: False)
         """
-        if cpu_only and allow_cpu:
-            raise ValueError("Cannot set both cpu_only=True and allow_cpu=True")
-
         self.name = name
         self.port_type = port_type
-        self.allow_cpu = allow_cpu
-        self.cpu_only = cpu_only
         self.buffer: Optional[RingBuffer] = None
 
     def connect(self, buffer: RingBuffer) -> None:
@@ -145,123 +110,106 @@ class StreamInput:
         """Check if this input is connected to an upstream output."""
         return self.buffer is not None
 
-    def is_gpu(self) -> bool:
-        """Check if this port operates on GPU."""
-        return not self.cpu_only
-
     def __repr__(self) -> str:
-        memory = "CPU-only" if self.cpu_only else ("GPU+CPU" if self.allow_cpu else "GPU")
-        return f"StreamInput(name='{self.name}', type='{self.port_type}', memory={memory})"
+        return f"StreamInput(name='{self.name}', type='{self.port_type}')"
 
 
-# Typed port helpers (GPU by default)
+# Typed port helpers (WebGPU-only)
 
-def VideoOutput(name: str, allow_cpu: bool = False, cpu_only: bool = False, slots: int = 3) -> StreamOutput:
+def VideoOutput(name: str, slots: int = 3) -> StreamOutput:
     """
-    Helper to create a video output port (GPU by default).
+    Helper to create a video output port (WebGPU-only).
 
     Args:
         name: Port name (e.g., 'video', 'out')
-        allow_cpu: Allow CPU fallback (default: False)
-        cpu_only: Force CPU-only (rare, default: False)
         slots: Ring buffer size (default: 3)
 
     Returns:
         StreamOutput configured for video
 
     Example:
-        self.outputs['video'] = VideoOutput('video')  # GPU by default
+        self.outputs['video'] = VideoOutput('video')  # WebGPU textures only
     """
-    return StreamOutput(name, port_type='video', allow_cpu=allow_cpu, cpu_only=cpu_only, slots=slots)
+    return StreamOutput(name, port_type='video', slots=slots)
 
 
-def VideoInput(name: str, allow_cpu: bool = False, cpu_only: bool = False) -> StreamInput:
+def VideoInput(name: str) -> StreamInput:
     """
-    Helper to create a video input port (GPU by default).
+    Helper to create a video input port (WebGPU-only).
 
     Args:
         name: Port name (e.g., 'video', 'in')
-        allow_cpu: Allow CPU fallback (default: False)
-        cpu_only: Force CPU-only (rare, default: False)
 
     Returns:
         StreamInput configured for video
 
     Example:
-        self.inputs['video'] = VideoInput('video')  # GPU by default
+        self.inputs['video'] = VideoInput('video')  # WebGPU textures only
     """
-    return StreamInput(name, port_type='video', allow_cpu=allow_cpu, cpu_only=cpu_only)
+    return StreamInput(name, port_type='video')
 
 
-def AudioOutput(name: str, allow_cpu: bool = False, cpu_only: bool = False, slots: int = 3) -> StreamOutput:
+def AudioOutput(name: str, slots: int = 3) -> StreamOutput:
     """
-    Helper to create an audio output port (GPU by default).
+    Helper to create an audio output port (WebGPU-only).
 
     Args:
         name: Port name (e.g., 'audio', 'out')
-        allow_cpu: Allow CPU fallback (default: False)
-        cpu_only: Force CPU-only (rare, default: False)
         slots: Ring buffer size (default: 3)
 
     Returns:
         StreamOutput configured for audio
 
     Example:
-        self.outputs['audio'] = AudioOutput('audio')  # GPU by default
+        self.outputs['audio'] = AudioOutput('audio')  # WebGPU buffers only
     """
-    return StreamOutput(name, port_type='audio', allow_cpu=allow_cpu, cpu_only=cpu_only, slots=slots)
+    return StreamOutput(name, port_type='audio', slots=slots)
 
 
-def AudioInput(name: str, allow_cpu: bool = False, cpu_only: bool = False) -> StreamInput:
+def AudioInput(name: str) -> StreamInput:
     """
-    Helper to create an audio input port (GPU by default).
+    Helper to create an audio input port (WebGPU-only).
 
     Args:
         name: Port name (e.g., 'audio', 'in')
-        allow_cpu: Allow CPU fallback (default: False)
-        cpu_only: Force CPU-only (rare, default: False)
 
     Returns:
         StreamInput configured for audio
 
     Example:
-        self.inputs['audio'] = AudioInput('audio')  # GPU by default
+        self.inputs['audio'] = AudioInput('audio')  # WebGPU buffers only
     """
-    return StreamInput(name, port_type='audio', allow_cpu=allow_cpu, cpu_only=cpu_only)
+    return StreamInput(name, port_type='audio')
 
 
-def DataOutput(name: str, allow_cpu: bool = False, cpu_only: bool = False, slots: int = 3) -> StreamOutput:
+def DataOutput(name: str, slots: int = 3) -> StreamOutput:
     """
-    Helper to create a generic data output port (GPU by default).
+    Helper to create a generic data output port (WebGPU-only).
 
     Args:
         name: Port name (e.g., 'data', 'out')
-        allow_cpu: Allow CPU fallback (default: False)
-        cpu_only: Force CPU-only (rare, default: False)
         slots: Ring buffer size (default: 3)
 
     Returns:
         StreamOutput configured for data
 
     Example:
-        self.outputs['data'] = DataOutput('data')  # GPU by default
+        self.outputs['data'] = DataOutput('data')  # WebGPU buffers only
     """
-    return StreamOutput(name, port_type='data', allow_cpu=allow_cpu, cpu_only=cpu_only, slots=slots)
+    return StreamOutput(name, port_type='data', slots=slots)
 
 
-def DataInput(name: str, allow_cpu: bool = False, cpu_only: bool = False) -> StreamInput:
+def DataInput(name: str) -> StreamInput:
     """
-    Helper to create a generic data input port (GPU by default).
+    Helper to create a generic data input port (WebGPU-only).
 
     Args:
         name: Port name (e.g., 'data', 'in')
-        allow_cpu: Allow CPU fallback (default: False)
-        cpu_only: Force CPU-only (rare, default: False)
 
     Returns:
         StreamInput configured for data
 
     Example:
-        self.inputs['data'] = DataInput('data')  # GPU by default
+        self.inputs['data'] = DataInput('data')  # WebGPU buffers only
     """
-    return StreamInput(name, port_type='data', allow_cpu=allow_cpu, cpu_only=cpu_only)
+    return StreamInput(name, port_type='data')

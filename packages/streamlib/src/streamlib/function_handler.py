@@ -19,13 +19,13 @@ class FunctionHandler(StreamHandler):
     Example:
         @stream_handler(
             inputs={'video': VideoInput('video')},
-            outputs={'video': VideoOutput('video')},
-            dispatcher='threadpool'
+            outputs={'video': VideoOutput('video')}
         )
         async def my_blur(tick, inputs, outputs):
             frame = inputs['video'].read_latest()
             if frame:
-                blurred = cv2.GaussianBlur(frame.data, (5, 5), 0)
+                # Process WebGPU texture with compute shader
+                blurred = gpu.apply_blur(frame.data)
                 outputs['video'].write(VideoFrame(blurred, tick.timestamp))
 
         runtime.add_stream(Stream(my_blur))
@@ -66,7 +66,6 @@ class FunctionHandler(StreamHandler):
 def stream_handler(
     inputs: Dict = None,
     outputs: Dict = None,
-    dispatcher: str = 'asyncio',
     handler_id: str = None
 ):
     """
@@ -78,24 +77,23 @@ def stream_handler(
     Args:
         inputs: Dictionary of input ports {name: InputPort}
         outputs: Dictionary of output ports {name: OutputPort}
-        dispatcher: Preferred dispatcher type ('asyncio', 'threadpool', 'gpu', 'processpool')
         handler_id: Optional handler identifier
 
     Example:
         from streamlib import stream_handler, VideoInput, VideoOutput
         from streamlib.messages import VideoFrame
-        import cv2
 
         @stream_handler(
-            inputs={'video': VideoInput('video', capabilities=['cpu'])},
-            outputs={'video': VideoOutput('video', capabilities=['cpu'])},
-            dispatcher='threadpool'
+            inputs={'video': VideoInput('video')},
+            outputs={'video': VideoOutput('video')}
         )
         async def blur_filter(tick, inputs, outputs):
-            '''AI-generated blur filter.'''
+            '''WebGPU blur filter.'''
             frame = inputs['video'].read_latest()
             if frame:
-                blurred = cv2.GaussianBlur(frame.data, (5, 5), 0)
+                # Process WebGPU texture with compute shader
+                gpu = blur_filter._runtime.gpu_context
+                blurred = gpu.apply_shader('blur', frame.data)
                 outputs['video'].write(VideoFrame(
                     data=blurred,
                     timestamp=tick.timestamp,
@@ -112,7 +110,6 @@ def stream_handler(
         func._stream_metadata = {
             'inputs': inputs or {},
             'outputs': outputs or {},
-            'dispatcher': dispatcher,
             'handler_id': handler_id
         }
         return func

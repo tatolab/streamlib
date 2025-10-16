@@ -8,28 +8,21 @@ selects the best native backend per platform:
 - Linux: Vulkan
 
 Example:
-    # Create GPU context
     gpu_ctx = await GPUContext.create()
-
-    # Create buffer
-    buffer = GPUBuffer.create(gpu_ctx, size=1920*1080*3)
-
-    # Upload data
-    import numpy as np
-    frame = np.random.randint(0, 255, (1080, 1920, 3), dtype=np.uint8)
-    buffer.write(frame)
-
-    # Download data
-    result = buffer.read()
+    texture = gpu_ctx.create_texture(1920, 1080)
+    pipeline = gpu_ctx.create_compute_pipeline(shader_code)
+    gpu_ctx.run_compute(pipeline, input=texture, output=output_texture)
 """
 
 from .context import GPUContext
-from .buffers import GPUBuffer, GPUTexture
 from .compute import ComputeShader
+from .renderer import GPURenderer
+from .ml import MLRuntime, ONNXModel
 
 __all__ = [
     'GPUContext',
-    'GPUBuffer',
-    'GPUTexture',
     'ComputeShader',
+    'GPURenderer',
+    'MLRuntime',
+    'ONNXModel',
 ]

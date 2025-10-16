@@ -4,20 +4,21 @@ StreamHandler base class for stream processing.
 Handlers are pure processing logic - inert until StreamRuntime activates them.
 They implement async def process(tick) to process each clock tick.
 
-Handlers are reusable across different execution contexts (dispatchers).
-Runtime provides clock, dispatcher, and lifecycle management.
+All handlers run with the shared WebGPU context provided by runtime.
 
 Example:
     class BlurFilter(StreamHandler):
         def __init__(self):
             super().__init__()
-            self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-            self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+            self.inputs['video'] = VideoInput('video')
+            self.outputs['video'] = VideoOutput('video')
 
         async def process(self, tick: TimedTick):
             frame = self.inputs['video'].read_latest()
             if frame:
-                blurred = cv2.GaussianBlur(frame.data, (5, 5), 0)
+                # Process WebGPU texture with compute shader
+                gpu = self._runtime.gpu_context
+                blurred = gpu.apply_shader('blur', frame.data)
                 self.outputs['video'].write(VideoFrame(blurred, tick.timestamp, ...))
 """
 
@@ -26,7 +27,6 @@ from abc import ABC, abstractmethod
 from typing import Dict, Optional, TYPE_CHECKING
 from .ports import StreamInput, StreamOutput
 from .clocks import TimedTick
-from .dispatchers import Dispatcher
 
 if TYPE_CHECKING:
     from .events import EventBus, ClockTickEvent
@@ -41,9 +41,9 @@ class StreamHandler(ABC):
 
     Lifecycle:
         1. User creates handler: handler = BlurFilter()
-        2. User wraps in Stream: stream = Stream(handler, dispatcher='asyncio')
+        2. User wraps in Stream: stream = Stream(handler)
         3. User adds to runtime: runtime.add_stream(stream)
-        4. Runtime activates handler: handler._activate(runtime, clock, dispatcher)
+        4. Runtime activates handler: handler._activate(runtime, event_bus)
         5. Handler processes ticks: await handler.process(tick)
         6. Runtime deactivates: await handler._deactivate()
 
@@ -51,18 +51,11 @@ class StreamHandler(ABC):
         handler_id: Unique identifier for this handler
         inputs: Dictionary of input ports
         outputs: Dictionary of output ports
-        preferred_dispatcher: Suggested dispatcher type (class attribute)
         _runtime: Runtime that activated this handler (internal)
-        _clock: Clock provided by runtime (internal)
-        _dispatcher: Dispatcher assigned by runtime (internal)
+        _event_bus: Event bus for tick subscription (internal)
         _running: Whether handler is currently running (internal)
         _task: Async task for handler's run loop (internal)
     """
-
-    # Class attribute: preferred dispatcher for this handler type
-    # Subclasses can override to declare their dispatcher requirements
-    # Options: 'asyncio', 'threadpool', 'gpu', 'processpool'
-    preferred_dispatcher: str = 'asyncio'
 
     def __init__(self, handler_id: str = None):
         """
@@ -83,7 +76,6 @@ class StreamHandler(ABC):
         # Runtime-managed (not user-accessible)
         self._runtime = None
         self._event_bus = None  # EventBus for tick subscription
-        self._dispatcher: Optional[Dispatcher] = None
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._tick_subscription = None  # Event subscription
@@ -200,14 +192,14 @@ class StreamHandler(ABC):
             except Exception as e:
                 print(f"[{self.handler_id}] Error in on_stop: {e}")
 
-    def _activate(self, runtime, event_bus, dispatcher: Dispatcher) -> None:
+    def _activate(self, runtime, event_bus, dispatcher=None) -> None:
         """
         Activate handler - called by runtime.
 
         Args:
             runtime: StreamRuntime that owns this handler
             event_bus: EventBus for tick subscription and error propagation
-            dispatcher: Dispatcher for execution context
+            dispatcher: Ignored (kept for compatibility, will be removed)
 
         Note: This starts the handler's run loop as an async task.
         """
@@ -216,10 +208,9 @@ class StreamHandler(ABC):
 
         self._runtime = runtime
         self._event_bus = event_bus
-        self._dispatcher = dispatcher
         self._running = True
 
-        # Start run loop via dispatcher
+        # Start run loop directly (no dispatcher needed)
         self._task = asyncio.create_task(self._run())
 
         print(f"[{self.handler_id}] Activated")

@@ -10,7 +10,6 @@ import struct
 if TYPE_CHECKING:
     import wgpu
     from .context import GPUContext
-    from .buffers import GPUBuffer
 
 try:
     import wgpu

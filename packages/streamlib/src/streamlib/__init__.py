@@ -49,6 +49,10 @@ from .runtime import StreamRuntime
 from .handler import StreamHandler
 from .stream import Stream
 from .function_handler import FunctionHandler, stream_handler
+from .pipeline import PipelineBuilder, pipeline
+
+# High-level decorators for AI-friendly API (Level 1 - Recommended)
+from .decorators import video_effect, audio_effect, stream_processor, camera_source
 
 # Event bus for communication (NEW - Phase 3.6)
 from .events import (
@@ -72,9 +76,6 @@ from .ports import (
     DataOutput,
 )
 
-# Transfer handlers (NEW)
-from .transfers import CPUtoGPUTransferHandler, GPUtoCPUTransferHandler
-
 # Note: Concrete handler implementations have moved to streamlib-extras
 # Install with: pip install streamlib-extras
 # Import from: from streamlib_extras import TestPatternHandler, DisplayGPUHandler
@@ -84,9 +85,6 @@ from .buffers import RingBuffer, GPURingBuffer
 
 # Clocks
 from .clocks import Clock, SoftwareClock, PTPClock, GenlockClock, TimedTick
-
-# Dispatchers
-from .dispatchers import Dispatcher, AsyncioDispatcher, ThreadPoolDispatcher
 
 # Messages
 from .messages import VideoFrame, AudioBuffer, KeyEvent, MouseEvent, DataMessage
@@ -98,6 +96,14 @@ __all__ = [
     'Stream',
     'FunctionHandler',
     'stream_handler',
+    'PipelineBuilder',
+    'pipeline',
+
+    # High-level decorators (Level 1 API - Recommended for AI agents)
+    'video_effect',
+    'audio_effect',
+    'stream_processor',
+    'camera_source',
 
     # Event bus
     'EventBus',
@@ -117,10 +123,6 @@ __all__ = [
     'DataInput',
     'DataOutput',
 
-    # Transfer handlers
-    'CPUtoGPUTransferHandler',
-    'GPUtoCPUTransferHandler',
-
     # Ring buffers
     'RingBuffer',
     'GPURingBuffer',
@@ -131,11 +133,6 @@ __all__ = [
     'PTPClock',
     'GenlockClock',
     'TimedTick',
-
-    # Dispatchers
-    'Dispatcher',
-    'AsyncioDispatcher',
-    'ThreadPoolDispatcher',
 
     # Messages
     'VideoFrame',

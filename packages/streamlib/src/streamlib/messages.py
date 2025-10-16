@@ -1,29 +1,25 @@
 """
-Message types for inter-actor communication.
+Message types for inter-handler communication.
 
-Messages are stored in ring buffers and passed between actors.
+Messages are stored in ring buffers and passed between handlers.
 All messages include timing information for synchronization.
 
 Message types:
-- VideoFrame: Video frame data (RGB images) - supports both numpy and torch tensors
-- AudioBuffer: Audio sample buffer (PCM audio)
+- VideoFrame: Video frame data (WebGPU textures ONLY - no numpy/pytorch)
+- AudioBuffer: Audio sample buffer (WebGPU buffers ONLY)
 - KeyEvent: Keyboard input event
 - MouseEvent: Mouse input event
 - DataMessage: Generic data message
 
-Note: Messages are just data structures. They don't carry behavior.
+IMPORTANT: All video/audio data uses WebGPU. No NumPy, no PyTorch.
+Data stays on GPU throughout the pipeline.
 """
 
-import numpy as np
 from dataclasses import dataclass
-from typing import Optional, Any, Dict, Union
+from typing import Optional, Any, Dict, TYPE_CHECKING, Literal
 
-# Optional torch support
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+if TYPE_CHECKING:
+    from .gpu.context import GPUContext
 
 
 @dataclass
@@ -31,17 +27,18 @@ class VideoFrame:
     """
     Video frame message.
 
-    Supports CPU (numpy), GPU (torch), and Metal textures.
+    IMPORTANT: data is a WebGPU texture (wgpu.GPUTexture).
+    No NumPy arrays, no PyTorch tensors - GPU only!
 
     Attributes:
-        data: Frame data - numpy array, torch tensor, or Metal texture (RGBA8, RGB interpreted from first 3 channels)
+        data: WebGPU texture (wgpu.GPUTexture) - RGBA8 format
         timestamp: Absolute timestamp in seconds (from tick)
         frame_number: Monotonic frame counter (from tick)
         width: Frame width in pixels
         height: Frame height in pixels
-        metadata: Optional metadata dict (codec info, memory type, etc.)
+        metadata: Optional metadata dict (format info, etc.)
     """
-    data: Union[np.ndarray, Any]  # np.ndarray, torch.Tensor, or Metal texture
+    data: Any  # wgpu.GPUTexture (using Any to avoid import dependency)
     timestamp: float
     frame_number: int
     width: int
@@ -49,56 +46,200 @@ class VideoFrame:
     metadata: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
-        """Validate frame data (works for numpy, torch, Metal, and WebGPU)."""
+        """Validate frame data (WebGPU textures/buffers only)."""
         # Detect data type
         data_type = type(self.data).__name__
 
+        # WebGPU texture validation (GPUTexture from wgpu)
+        if 'Texture' in data_type or 'GPUTexture' in data_type:
+            # WebGPU texture - validate dimensions if accessible
+            if hasattr(self.data, 'width') and hasattr(self.data, 'height'):
+                # Some WebGPU implementations expose dimensions as properties
+                if self.data.width != self.width or self.data.height != self.height:
+                    raise ValueError(
+                        f"VideoFrame dimensions mismatch: texture {self.data.width}x{self.data.height} "
+                        f"!= specified {self.width}x{self.height}"
+                    )
+            # Valid WebGPU texture
+            return
+
         # WebGPU buffer validation (GPUBuffer from wgpu)
-        if data_type == 'GPUBuffer' or 'Buffer' in data_type:
+        if 'Buffer' in data_type or 'GPUBuffer' in data_type:
             # WebGPU buffer - trust width/height parameters
             # Buffers are opaque GPU memory, can't inspect dimensions
-            # Runtime will validate buffer size matches width*height*4
+            # Runtime will validate buffer size matches width*height*4 (RGBA8)
             return
 
-        # Metal texture validation (has width() and height() methods)
-        if hasattr(self.data, 'width') and callable(self.data.width):
-            # Metal texture
-            metal_width = self.data.width()
-            metal_height = self.data.height()
-            if metal_width != self.width or metal_height != self.height:
-                raise ValueError(
-                    f"VideoFrame dimensions mismatch: Metal texture {metal_width}x{metal_height} "
-                    f"!= specified {self.width}x{self.height}"
-                )
-            # Metal textures are valid - skip shape/dtype checks
-            return
+        # If we get here, data is not a WebGPU resource
+        raise TypeError(
+            f"VideoFrame.data must be a WebGPU texture or buffer, got {data_type}. "
+            f"streamlib is GPU-only - no NumPy or PyTorch support. "
+            f"See docs on WebGPU-first architecture."
+        )
 
-        # NumPy/Torch validation (has .shape and .dtype)
-        if not hasattr(self.data, 'shape'):
-            raise ValueError(
-                f"VideoFrame data must have .shape attribute (numpy/torch), width()/height() methods (Metal), "
-                f"or be a GPU buffer (WebGPU), got {data_type}"
-            )
+    @classmethod
+    def create_test_pattern(
+        cls,
+        gpu_ctx: 'GPUContext',
+        width: int,
+        height: int,
+        timestamp: float,
+        frame_number: int = 0,
+        pattern: Literal['smpte_bars', 'checkerboard', 'gradient', 'noise'] = 'smpte_bars',
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> 'VideoFrame':
+        """
+        Create a VideoFrame with a test pattern.
 
-        # Check shape (works for both numpy and torch)
-        if len(self.data.shape) != 3 or self.data.shape[2] != 3:
-            raise ValueError(
-                f"VideoFrame data must be (H, W, 3), got {self.data.shape}"
-            )
+        Args:
+            gpu_ctx: GPU context for texture creation
+            width: Frame width
+            height: Frame height
+            timestamp: Frame timestamp
+            frame_number: Frame number in sequence
+            pattern: Type of test pattern
+            metadata: Optional metadata
 
-        # Check dtype (accept both np.uint8 and torch.uint8)
-        dtype_str = str(self.data.dtype)
-        if 'uint8' not in dtype_str:
-            raise ValueError(
-                f"VideoFrame data must be uint8, got {self.data.dtype}"
-            )
+        Returns:
+            VideoFrame with test pattern texture
 
-        # Validate dimensions match
-        h, w = self.data.shape[:2]
-        if h != self.height or w != self.width:
-            raise ValueError(
-                f"VideoFrame dimensions mismatch: data {(w, h)} != specified ({self.width}, {self.height})"
+        Example:
+            frame = VideoFrame.create_test_pattern(
+                gpu_ctx, 1920, 1080, tick.timestamp, tick.frame_number
             )
+        """
+        texture = gpu_ctx.utils.create_test_pattern(width, height, pattern)
+        return cls(
+            data=texture,
+            timestamp=timestamp,
+            frame_number=frame_number,
+            width=width,
+            height=height,
+            metadata=metadata
+        )
+
+    @classmethod
+    def create_solid_color(
+        cls,
+        gpu_ctx: 'GPUContext',
+        width: int,
+        height: int,
+        timestamp: float,
+        frame_number: int = 0,
+        color: tuple = (0, 0, 0, 255),
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> 'VideoFrame':
+        """
+        Create a VideoFrame with a solid color.
+
+        Args:
+            gpu_ctx: GPU context for texture creation
+            width: Frame width
+            height: Frame height
+            timestamp: Frame timestamp
+            frame_number: Frame number in sequence
+            color: RGBA color tuple (0-255 per component)
+            metadata: Optional metadata
+
+        Returns:
+            VideoFrame with solid color texture
+
+        Example:
+            # Create red frame
+            frame = VideoFrame.create_solid_color(
+                gpu_ctx, 640, 480, tick.timestamp,
+                color=(255, 0, 0, 255)
+            )
+        """
+        texture = gpu_ctx.utils.create_solid_color(width, height, color)
+        return cls(
+            data=texture,
+            timestamp=timestamp,
+            frame_number=frame_number,
+            width=width,
+            height=height,
+            metadata=metadata
+        )
+
+    @classmethod
+    def create_from_texture(
+        cls,
+        texture: Any,  # wgpu.GPUTexture
+        timestamp: float,
+        frame_number: int = 0,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> 'VideoFrame':
+        """
+        Create a VideoFrame from an existing GPU texture.
+
+        Args:
+            texture: WebGPU texture
+            timestamp: Frame timestamp
+            frame_number: Frame number in sequence
+            width: Frame width (auto-detected if None)
+            height: Frame height (auto-detected if None)
+            metadata: Optional metadata
+
+        Returns:
+            VideoFrame wrapping the texture
+
+        Example:
+            frame = VideoFrame.create_from_texture(
+                my_texture, tick.timestamp, tick.frame_number
+            )
+        """
+        # Try to auto-detect dimensions from texture
+        if width is None or height is None:
+            if hasattr(texture, 'size'):
+                width = texture.size[0]
+                height = texture.size[1]
+            elif hasattr(texture, 'width') and hasattr(texture, 'height'):
+                width = texture.width
+                height = texture.height
+            else:
+                raise ValueError("Cannot auto-detect texture dimensions, please provide width and height")
+
+        return cls(
+            data=texture,
+            timestamp=timestamp,
+            frame_number=frame_number,
+            width=width,
+            height=height,
+            metadata=metadata
+        )
+
+    def clone_with_texture(
+        self,
+        new_texture: Any,  # wgpu.GPUTexture
+        timestamp: Optional[float] = None
+    ) -> 'VideoFrame':
+        """
+        Create a new VideoFrame with a different texture but same metadata.
+
+        Useful for effects that modify frame data but preserve timing.
+
+        Args:
+            new_texture: New GPU texture
+            timestamp: Optional new timestamp (uses original if None)
+
+        Returns:
+            New VideoFrame with replaced texture
+
+        Example:
+            # Apply effect and create new frame
+            processed_texture = apply_effect(frame.data)
+            new_frame = frame.clone_with_texture(processed_texture)
+        """
+        return VideoFrame(
+            data=new_texture,
+            timestamp=timestamp or self.timestamp,
+            frame_number=self.frame_number,
+            width=self.width,
+            height=self.height,
+            metadata=self.metadata.copy() if self.metadata else None
+        )
 
 
 @dataclass
@@ -106,39 +247,46 @@ class AudioBuffer:
     """
     Audio buffer message.
 
+    IMPORTANT: data is a WebGPU buffer (wgpu.GPUBuffer).
+    No NumPy arrays - GPU only!
+
     Attributes:
-        data: Audio samples as NumPy array, shape (samples, channels), dtype float32
+        data: WebGPU buffer (wgpu.GPUBuffer) - float32 PCM audio data
         timestamp: Absolute timestamp in seconds (from tick)
         sample_rate: Sample rate in Hz (e.g., 48000)
         channels: Number of channels (1=mono, 2=stereo)
+        samples: Number of samples in the buffer
         metadata: Optional metadata dict (codec info, etc.)
     """
-    data: np.ndarray
+    data: Any  # wgpu.GPUBuffer (using Any to avoid import dependency)
     timestamp: float
     sample_rate: int
     channels: int
+    samples: int  # Number of samples (needed since buffer is opaque)
     metadata: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
-        """Validate audio data."""
-        if self.data.ndim != 2:
-            raise ValueError(
-                f"AudioBuffer data must be 2D (samples, channels), got {self.data.ndim}D"
-            )
-        if self.data.dtype != np.float32:
-            raise ValueError(
-                f"AudioBuffer data must be float32, got {self.data.dtype}"
-            )
-        # Validate channels match
-        if self.data.shape[1] != self.channels:
-            raise ValueError(
-                f"AudioBuffer channels mismatch: data has {self.data.shape[1]}, specified {self.channels}"
-            )
+        """Validate audio data (WebGPU buffers only)."""
+        data_type = type(self.data).__name__
+
+        # WebGPU buffer validation
+        if 'Buffer' in data_type or 'GPUBuffer' in data_type:
+            # WebGPU buffer - trust parameters
+            # Buffer is opaque GPU memory
+            # Runtime validates size matches samples*channels*4 (float32)
+            return
+
+        # If we get here, data is not a WebGPU buffer
+        raise TypeError(
+            f"AudioBuffer.data must be a WebGPU buffer, got {data_type}. "
+            f"streamlib is GPU-only - no NumPy support. "
+            f"See docs on WebGPU-first architecture."
+        )
 
     @property
     def duration(self) -> float:
         """Get duration in seconds."""
-        return self.data.shape[0] / self.sample_rate
+        return self.samples / self.sample_rate
 
 
 @dataclass
