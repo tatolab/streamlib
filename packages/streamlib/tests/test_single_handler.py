@@ -6,12 +6,12 @@ Minimal test with single handler to find CPU busy loop.
 import asyncio
 import sys
 import time
-sys.path.insert(0, 'packages/streamlib/src')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from streamlib import StreamRuntime, StreamHandler, Stream, VideoOutput
 from streamlib.messages import VideoFrame
 from streamlib.clocks import TimedTick
-import numpy as np
 
 
 class SimpleSourceHandler(StreamHandler):
@@ -19,7 +19,7 @@ class SimpleSourceHandler(StreamHandler):
 
     def __init__(self):
         super().__init__('simple-source')
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video')
         self.tick_count = 0
         self.last_print = time.time()
 
@@ -33,10 +33,12 @@ class SimpleSourceHandler(StreamHandler):
             self.tick_count = 0
             self.last_print = now
 
-        # Generate minimal frame
-        data = np.zeros((100, 100, 3), dtype=np.uint8)
-        frame = VideoFrame(data, tick.timestamp, tick.frame_number, 100, 100)
-        self.outputs['video'].write(frame)
+        # Generate minimal frame (WebGPU-first)
+        gpu_ctx = self._runtime.gpu_context if self._runtime else None
+        if gpu_ctx:
+            texture = gpu_ctx.create_texture(width=100, height=100)
+            frame = VideoFrame(texture, tick.timestamp, tick.frame_number, 100, 100)
+            self.outputs['video'].write(frame)
 
 
 async def main():
@@ -48,10 +50,10 @@ async def main():
     # Create minimal pipeline
     source = SimpleSourceHandler()
     runtime = StreamRuntime(fps=10)
-    runtime.add_stream(Stream(source, dispatcher='asyncio'))
+    runtime.add_stream(Stream(source))
 
     # Start
-    runtime.start()
+    await runtime.start()
 
     # Run for 5 seconds
     try:

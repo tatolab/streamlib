@@ -7,12 +7,12 @@ Shows FPS and frame timing without heavy rendering.
 import asyncio
 import sys
 import time
-sys.path.insert(0, 'packages/streamlib/src')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from streamlib import StreamRuntime, StreamHandler, Stream, VideoOutput
 from streamlib.messages import VideoFrame
 from streamlib.clocks import TimedTick
-import numpy as np
 
 
 class LightweightSourceHandler(StreamHandler):
@@ -20,7 +20,7 @@ class LightweightSourceHandler(StreamHandler):
 
     def __init__(self):
         super().__init__('source')
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video')
         self.frame_count = 0
         self.start_time = time.time()
         self.last_report = time.time()
@@ -42,10 +42,12 @@ class LightweightSourceHandler(StreamHandler):
             self.last_report = now
             self.delta_times = []
 
-        # Create minimal frame (100x100 instead of 1280x720)
-        data = np.zeros((100, 100, 3), dtype=np.uint8)
-        frame = VideoFrame(data, tick.timestamp, tick.frame_number, 100, 100)
-        self.outputs['video'].write(frame)
+        # Create minimal frame (WebGPU-first architecture)
+        gpu_ctx = self._runtime.gpu_context if self._runtime else None
+        if gpu_ctx:
+            texture = gpu_ctx.create_texture(width=100, height=100)
+            frame = VideoFrame(texture, tick.timestamp, tick.frame_number, 100, 100)
+            self.outputs['video'].write(frame)
 
 
 async def main():
@@ -56,10 +58,10 @@ async def main():
     # Create minimal pipeline
     source = LightweightSourceHandler()
     runtime = StreamRuntime(fps=60)
-    runtime.add_stream(Stream(source, dispatcher='asyncio'))
+    runtime.add_stream(Stream(source))
 
     # Start
-    runtime.start()
+    await runtime.start()
 
     # Run for 5 seconds
     try:

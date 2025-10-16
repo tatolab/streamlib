@@ -1,135 +1,216 @@
 # streamlib
 
-**Minimal actor-based streaming framework for Python.**
+Realtime streaming SDK for composing camera streams, ML models, audio/video generation, and visual effects on GPU.
 
-streamlib is an SDK for building composable streaming pipelines using the actor model. It provides the core primitives - you build the implementations.
+## API Levels
 
-## Philosophy
+### Decorator API
 
-streamlib is a **framework, not a batteries-included library**. Like Cloudflare Actors or PyTorch core, we provide the primitives and let you build on top:
-
-- ✅ **Actor base class** - Build your own actors
-- ✅ **Ring buffers** - Latest-read semantics
-- ✅ **Clocks** - Software, PTP, Genlock
-- ✅ **Registry** - Network-transparent addressing
-- ✅ **Zero dependencies** - Just Python stdlib
-
-We do NOT provide:
-- ❌ Video processing implementations
-- ❌ Drawing/graphics implementations
-- ❌ Codec implementations
-- ❌ UI implementations
-
-**You** build those using whatever libraries you want (OpenCV, Skia, PIL, FFmpeg, etc.).
-
-## Installation
-
-```bash
-pip install streamlib
-```
-
-## Quick Start
+Functions decorated with `@camera_source`, `@video_effect`, or `@audio_effect` become handlers. GPU context is automatically injected.
 
 ```python
-import asyncio
-from streamlib import Actor, StreamInput, StreamOutput, VideoFrame
+from streamlib import camera_source, video_effect, VideoFrame
+from streamlib.gpu import GPUContext
 
-class MyActor(Actor):
-    """You implement the actor logic."""
+@camera_source(device_id=None)  # First available camera
+def camera():
+    """Zero-copy camera source - no code needed!"""
+    pass  # Decorator handles everything (IOSurface → WebGPU on macOS)
 
+@video_effect
+def blur(frame: VideoFrame, gpu: GPUContext, sigma: float = 2.0) -> VideoFrame:
+    # GPU context automatically injected
+    # frame.data is wgpu.GPUTexture (zero-copy from camera!)
+
+    if not hasattr(blur, 'pipeline'):
+        blur.pipeline = gpu.create_compute_pipeline(BLUR_SHADER)
+
+    output = gpu.create_texture(frame.width, frame.height)
+    gpu.run_compute(blur.pipeline, input=frame.data, output=output)
+
+    return frame.clone_with_texture(output)
+
+@audio_effect
+def reverb(audio: AudioBuffer, decay: float = 0.5) -> AudioBuffer:
+    # Process audio buffer
+    processed = apply_reverb(audio.data, decay)
+    return AudioBuffer(data=processed, timestamp=audio.timestamp)
+```
+
+### Pipeline Builder API (Recommended)
+
+Fluent API for composing handlers with automatic connections:
+
+```python
+from streamlib import StreamRuntime, camera_source, video_effect
+
+runtime = StreamRuntime(fps=60, width=1920, height=1080)
+
+@camera_source(device_id=None)  # Zero-copy camera
+def camera():
+    pass
+
+@video_effect
+def blur(frame, gpu, sigma=2.0):
+    if not hasattr(blur, 'pipeline'):
+        blur.pipeline = gpu.create_compute_pipeline(BLUR_SHADER)
+    output = gpu.create_texture(frame.width, frame.height)
+    gpu.run_compute(blur.pipeline, input=frame.data, output=output)
+    return frame.clone_with_texture(output)
+
+# Fluent pipeline - runtime.pipeline() method!
+p = (
+    runtime.pipeline()
+    .source(camera)
+    .effect(blur, sigma=5.0)
+    .effect(sharpen, strength=0.5)
+    .sink(display)
+)
+p.build()  # Adds streams and connects them
+await runtime.start()  # Starts the runtime
+```
+
+Automatic port connections, type validation, supports branching. Zero-copy camera → GPU effects → display.
+
+### StreamHandler API
+
+Direct handler implementation for custom behavior:
+
+```python
+from streamlib import StreamHandler, VideoInput, VideoOutput
+
+class CustomEffect(StreamHandler):
     def __init__(self):
-        super().__init__('my-actor')
-        self.inputs['video'] = StreamInput('video')
-        self.outputs['video'] = StreamOutput('video')
-        # Actor begins processing automatically
+        super().__init__()
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
+
+    async def on_start(self):
+        self._pipeline = self._runtime.gpu_context.create_compute_pipeline(SHADER)
 
     async def process(self, tick):
-        """Process each tick from the clock."""
         frame = self.inputs['video'].read_latest()
-        if frame is None:
-            return
-
-        # Your processing logic here
-        processed = your_processing_function(frame.data)
-
-        output_frame = VideoFrame(
-            data=processed,
-            timestamp=tick.timestamp,
-            frame_number=tick.frame_number,
-            width=frame.width,
-            height=frame.height
-        )
-        self.outputs['video'].write(output_frame)
-
-# Actors start processing immediately when created
-source = MySourceActor()
-processor = MyActor()
-sink = MySinkActor()
-
-# Connect actors (creates data flow paths)
-source.outputs['video'] >> processor.inputs['video']
-processor.outputs['video'] >> sink.inputs['video']
+        if frame:
+            output = self._runtime.gpu_context.create_texture(frame.width, frame.height)
+            self._runtime.gpu_context.run_compute(self._pipeline,
+                                                   input=frame.data,
+                                                   output=output)
+            self.outputs['video'].write(VideoFrame(data=output, timestamp=tick.timestamp))
 ```
 
-## Core Concepts
+## Architecture
 
-### Actors
+### WebGPU Throughout
 
-Actors are independent, concurrent components that:
-- Process ticks from a clock
-- Read from input ring buffers (latest-read semantics)
-- Write to output ring buffers
-- Auto-start on creation
+VideoFrame.data is always `wgpu.GPUTexture`. No CPU transfers between handlers.
 
-### Ring Buffers
+```
+Camera → wgpu.GPUTexture
+  ↓
+Blur → wgpu.GPUTexture (WGSL compute shader)
+  ↓
+ML Model → wgpu.GPUTexture (ONNX WebGPU EP)
+  ↓
+Display → wgpu.GPUTexture (swapchain)
+```
 
-Fixed-size (3 slots) ring buffers with latest-read semantics:
-- No queueing, no backpressure
-- Always get the latest data
-- Old frames are automatically skipped
+### GPU Context
 
-### Clocks
+Runtime creates single `GPUContext` shared by all handlers. Decorators receive it automatically.
 
-Swappable clock sources:
-- `SoftwareClock` - Free-running software timer
-- `PTPClock` - IEEE 1588 Precision Time Protocol (stub)
-- `GenlockClock` - Hardware sync (stub)
-
-### Registry
-
-Network-transparent actor addressing:
 ```python
-actor://local/MyActor/instance-id
-actor://192.168.1.100/MyActor/instance-id
+runtime = StreamRuntime(fps=60)  # Creates GPU context
+# Handlers access via self._runtime.gpu_context or decorator injection
 ```
 
-## Examples
+### Ports
 
-See the `examples/` directory for reference implementations:
-- `examples/actors/video.py` - Video processing actors
-- `examples/actors/compositor.py` - Alpha blending compositor
-- `examples/actors/drawing.py` - Skia-based drawing
-- `examples/demo_*.py` - Complete demos
+Handlers declare typed inputs/outputs. Runtime connects compatible ports.
 
-These are **reference implementations**, not part of the core library.
+```python
+self.inputs['video'] = VideoInput('video')
+self.outputs['video'] = VideoOutput('video')
 
-## Building Your Own Actors
+runtime.connect(handler1.outputs['video'], handler2.inputs['video'])
+```
 
-streamlib is designed to be extended. Build actors for:
-- Video processing (OpenCV, PyAV, FFmpeg)
-- Graphics (Skia, PIL, Cairo, Manim)
-- Audio (PyAudio, sounddevice)
-- ML (PyTorch, TensorFlow, ONNX)
-- Network (WebRTC, HLS, RTMP)
+Ports use ring buffers for zero-copy texture reference passing.
 
-Use whatever libraries make sense for your use case.
+## Platform Integration
 
-## Design Inspiration
+Camera capture uses platform APIs but outputs WebGPU texture:
 
-- **Cloudflare Actors** - Minimal framework, you build on top
-- **PyTorch** - Core tensor operations, ecosystem builds plugins
-- **Unix philosophy** - Composable primitives, not monoliths
+- macOS: AVFoundation → IOSurface → WebGPU texture import
+- Linux: V4L2 → DMA-BUF → WebGPU texture import
+- Windows: MediaFoundation → D3D11 → WebGPU texture import
 
-## License
+### WGSL Shaders
 
-MIT
+Compute shaders written in WGSL compile to platform backend:
+
+- macOS: Metal Shading Language
+- Windows: HLSL (DirectX 12)
+- Linux: SPIR-V (Vulkan)
+
+Single shader source works across all platforms.
+
+## Audio and A/V Processing
+
+### Audio Buffers
+
+AudioBuffer contains PCM audio data with timestamp and sample rate.
+
+```python
+from streamlib import audio_effect, AudioBuffer
+
+@audio_effect
+def normalize(audio: AudioBuffer, target_db: float = -20.0) -> AudioBuffer:
+    normalized = normalize_loudness(audio.data, target_db)
+    return AudioBuffer(
+        data=normalized,
+        timestamp=audio.timestamp,
+        sample_rate=audio.sample_rate,
+        channels=audio.channels
+    )
+```
+
+### Multiple Outputs
+
+Handlers can output both audio and video:
+
+```python
+class CameraHandler(StreamHandler):
+    def __init__(self):
+        super().__init__()
+        self.outputs['video'] = VideoOutput('video')
+        self.outputs['audio'] = AudioOutput('audio')
+
+    async def process(self, tick):
+        video_texture, audio_buffer = self.capture.get_frame()
+        self.outputs['video'].write(VideoFrame(data=video_texture, timestamp=tick.timestamp))
+        self.outputs['audio'].write(AudioBuffer(data=audio_buffer, timestamp=tick.timestamp))
+```
+
+### A/V Synchronization
+
+Runtime provides synchronized ticks at configured FPS. Handlers receive same timestamp for alignment.
+
+```python
+runtime = StreamRuntime(fps=60)  # 60 ticks/second
+# All handlers receive tick with same timestamp
+# Audio and video use tick.timestamp to stay synchronized
+```
+
+Pipeline builder handles A/V automatically:
+
+```python
+p = (
+    pipeline(runtime)
+    .source(camera)  # Outputs both audio and video
+    .split(
+        audio=lambda p: p.effect(reverb).effect(normalize),
+        video=lambda p: p.effect(blur).effect(color_grade)
+    )
+    .join(av_sync)  # Receives both streams, ensures sync
+    .sink(display)
+)

@@ -7,12 +7,12 @@ Should show all handlers processing the same tick concurrently.
 
 import asyncio
 import sys
-sys.path.insert(0, 'packages/streamlib/src')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from streamlib import StreamRuntime, StreamHandler, Stream, VideoInput, VideoOutput
 from streamlib.messages import VideoFrame
 from streamlib.clocks import TimedTick
-import numpy as np
 
 
 class SourceHandler(StreamHandler):
@@ -20,19 +20,20 @@ class SourceHandler(StreamHandler):
 
     def __init__(self):
         super().__init__('source')
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.outputs['video'] = VideoOutput('video')
         self.processed_ticks = []
 
     async def process(self, tick: TimedTick):
         self.processed_ticks.append(tick.frame_number)
         print(f"[{self.handler_id}] Generating frame for tick {tick.frame_number}")
 
-        # Generate frame
-        data = np.zeros((100, 100, 3), dtype=np.uint8)
-        frame = VideoFrame(data, tick.timestamp, tick.frame_number, 100, 100)
-
-        # Write output
-        self.outputs['video'].write(frame)
+        # Generate frame (WebGPU-first)
+        gpu_ctx = self._runtime.gpu_context if self._runtime else None
+        if gpu_ctx:
+            texture = gpu_ctx.create_texture(width=100, height=100)
+            frame = VideoFrame(texture, tick.timestamp, tick.frame_number, 100, 100)
+            # Write output
+            self.outputs['video'].write(frame)
 
 
 class ProcessHandler(StreamHandler):
@@ -40,8 +41,8 @@ class ProcessHandler(StreamHandler):
 
     def __init__(self, name):
         super().__init__(name)
-        self.inputs['video'] = VideoInput('video', capabilities=['cpu'])
-        self.outputs['video'] = VideoOutput('video', capabilities=['cpu'])
+        self.inputs['video'] = VideoInput('video')
+        self.outputs['video'] = VideoOutput('video')
         self.processed_ticks = []
 
     async def process(self, tick: TimedTick):
@@ -69,16 +70,16 @@ async def main():
     runtime = StreamRuntime(fps=10)  # 10 FPS for faster testing
 
     # Add streams
-    runtime.add_stream(Stream(source, dispatcher='asyncio'))
-    runtime.add_stream(Stream(handler1, dispatcher='asyncio'))
-    runtime.add_stream(Stream(handler2, dispatcher='asyncio'))
+    runtime.add_stream(Stream(source))
+    runtime.add_stream(Stream(handler1))
+    runtime.add_stream(Stream(handler2))
 
     # Connect pipeline
     runtime.connect(source.outputs['video'], handler1.inputs['video'])
     runtime.connect(handler1.outputs['video'], handler2.inputs['video'])
 
     # Start runtime
-    runtime.start()
+    await runtime.start()
 
     # Run for 1 second (should get 10 ticks)
     print("\nRunning for 1 second (10 ticks)...")
