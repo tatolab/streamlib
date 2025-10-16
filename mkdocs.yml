@@ -53,16 +53,12 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started:
-      - Quick Start: guides/quickstart.md
-      - Composition: guides/composition.md
-      - GPU Optimization: guides/gpu-optimization.md
   - Guides:
-      - StreamHandler: api/handler.md
-      - StreamRuntime: api/runtime.md
-      - Ports: api/ports.md
-      - Messages: api/messages.md
-  - SDK Reference:
+      - Working Example (Start Here): guides/working-example.md
+      - Quick Start: guides/quickstart.md
+      - Pipeline Builder: guides/pipeline-builder.md
+      - Webcam with Overlays: guides/webcam-with-overlays.md
+  - API Reference:
       - Core:
           - StreamHandler: reference/handler.md
           - StreamRuntime: reference/runtime.md
@@ -72,14 +68,17 @@ nav:
           - Ports: reference/ports.md
           - Messages: reference/messages.md
           - Buffers: reference/buffers.md
-          - Transfers: reference/transfers.md
       - Execution:
           - Clocks: reference/clocks.md
-          - Dispatchers: reference/dispatchers.md
           - Events: reference/events.md
       - Handlers:
           - Built-in Handlers: reference/handlers.md
-  - Examples: examples/
+  - Advanced:
+      - StreamHandler Concepts: api/handler.md
+      - StreamRuntime Concepts: api/runtime.md
+      - Ports Concepts: api/ports.md
+      - Messages Concepts: api/messages.md
+      - Manual Handler Creation: advanced/manual-handler-creation.md
 
 plugins:
   - search

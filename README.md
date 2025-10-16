@@ -1,91 +1,71 @@
 # streamlib
 
-**Composable streaming primitives for Python** — Build video pipelines like Unix pipes.
+**Realtime streaming platform where AI agents can easily compose:**
 
-```python
-# Just like Unix pipes
-cat file.txt | grep "error" | sed 's/ERROR/WARNING/'
+- 📹 Live camera streams
+- 🤖 ML models (object detection, segmentation, etc.)
+- 🎵 Dynamic audio/video generation
+- ✨ Real-time visual effects and overlays
+- ⚡ All running on GPU at 60fps
 
-# streamlib for video
-runtime.connect(camera.outputs['video'], blur.inputs['video'])
-runtime.connect(blur.outputs['video'], display.inputs['video'])
+**This is the core vision. Everything else is in service of this goal.**
+
+## Installation
+
+```bash
+# Clone repository
+git clone https://github.com/tatolab/gst-mcp-tools.git
+cd gst-mcp-tools
+
+# Install dependencies using uv
+uv sync
 ```
 
-[![PyPI](https://img.shields.io/pypi/v/streamlib)](https://pypi.org/project/streamlib/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## Requirements
 
-## Why streamlib?
+- Python 3.10+
+- WebGPU-capable GPU (most GPUs since 2016)
+- Updated GPU drivers
 
-Most video tools are **monolithic applications** (Unity, OBS, complex streaming platforms). They're environments, not primitives.
+## Running Examples
 
-**streamlib provides Unix-pipe-style primitives for video** that AI agents (and humans) can orchestrate:
+```bash
+# Run examples with uv
+uv run python examples/your_example.py
 
-- 🔧 **Composable** - Small, single-purpose handlers that chain together
-- 🚀 **GPU-first** - Automatic GPU optimization, stays on GPU when possible
-- 🌐 **Network-transparent** - Operations work seamlessly locally or remotely (future)
-- 🎯 **Easy installation** - Simple pip install, no GStreamer required
-- 🤖 **AI-friendly** - Designed for AI agent orchestration
+# Run tests
+uv run pytest packages/streamlib/tests/
+```
 
-## Quick Start
+## Project Structure
 
-\`\`\`bash
-pip install streamlib
-\`\`\`
-
-**Your First Pipeline (30 seconds):**
-
-\`\`\`python
-import asyncio
-from streamlib import StreamRuntime, Stream
-from streamlib.handlers import TestPatternHandler, DisplayGPUHandler
-
-async def main():
-    runtime = StreamRuntime(fps=30)
-
-    pattern = TestPatternHandler(width=1280, height=720, pattern='smpte_bars')
-    display = DisplayGPUHandler(window_name='Hello streamlib', width=1280, height=720)
-
-    # Runtime automatically infers execution context - no dispatchers needed!
-    runtime.add_stream(Stream(pattern))
-    runtime.add_stream(Stream(display))
-    runtime.connect(pattern.outputs['video'], display.inputs['video'])
-
-    runtime.start()
-    try:
-        while runtime._running:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        pass
-    runtime.stop()
-
-asyncio.run(main())
-\`\`\`
-
-**Result:** Window displays SMPTE color bars at 30 FPS!
+```
+gst-mcp-tools/
+├── packages/
+│   └── streamlib/          # Core streaming SDK
+│       ├── src/streamlib/  # Source code
+│       ├── tests/          # Test suite
+│       └── README.md       # API documentation
+├── examples/               # Standalone example projects
+└── README.md              # This file (setup instructions)
+```
 
 ## Documentation
 
-- **[Quick Start Guide](docs/guides/quickstart.md)** - Build your first pipeline
-- **[Composition Guide](docs/guides/composition.md)** - Complex pipelines
-- **[API Reference](docs/api/)** - Complete docs
-  - [StreamHandler](docs/api/handler.md)
-  - [StreamRuntime](docs/api/runtime.md)
-  - [Ports](docs/api/ports.md)
-  - [Messages](docs/api/messages.md)
+See `packages/streamlib/README.md` for API documentation and usage examples.
 
-## Examples
+## Development
 
-\`\`\`bash
-# Test pattern
-python examples/demo_test_pattern.py
+```bash
+# Add dependency
+uv add package-name
 
-# Camera
-python examples/demo_camera.py
+# Add dev dependency
+uv add --dev package-name
 
-# Multi-pipeline composition
-python examples/demo_multi_pipeline.py --mode pip --camera "Live Camera"
-\`\`\`
+# Run with specific Python version
+uv run --python 3.11 python script.py
+```
 
 ## License
 

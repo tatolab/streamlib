@@ -1,11 +1,19 @@
-"""macOS camera capture using AVFoundation with zero-copy IOSurface import.
+"""macOS camera capture using AVFoundation with single-copy pipeline.
 
 This module provides AVFoundationCapture which:
 - Captures camera frames using AVFoundation on background thread
-- Extracts IOSurface from CVPixelBuffer (zero-copy GPU memory)
-- Converts IOSurface → wgpu.GPUTexture via Rust extension (zero-copy)
+- Extracts IOSurface from CVPixelBuffer (GPU memory)
+- Writes DIRECTLY from IOSurface to wgpu.GPUTexture (single copy!)
 - Outputs frames at runtime.width x runtime.height (scales if needed)
 - Returns black frames on disconnection (doesn't crash)
+
+Single-copy pipeline:
+1. Lock IOSurface for CPU read access
+2. Get base address pointer (points to GPU VRAM)
+3. device.queue.write_texture() directly from IOSurface memory
+4. Unlock IOSurface
+
+This eliminates the intermediate CPU buffer, reducing from 2 copies to 1 copy.
 """
 
 import threading
@@ -17,14 +25,37 @@ import wgpu
 import ctypes
 import objc
 
-# Import Rust HAL extension for zero-copy IOSurface → wgpu::Texture
-try:
-    from streamlib import iosurface_hal
-except ImportError:
-    raise ImportError(
-        "iosurface_hal Rust extension not installed. "
-        "Build with: cd packages/streamlib && uv run maturin develop --release"
-    )
+# Import IOSurface functions via ctypes (IOSurface framework)
+# These are not in Quartz, need direct framework access
+IOSurface = ctypes.CDLL('/System/Library/Frameworks/IOSurface.framework/IOSurface')
+
+# Define IOSurface function signatures
+IOSurfaceGetWidth = IOSurface.IOSurfaceGetWidth
+IOSurfaceGetWidth.restype = ctypes.c_size_t
+IOSurfaceGetWidth.argtypes = [ctypes.c_void_p]
+
+IOSurfaceGetHeight = IOSurface.IOSurfaceGetHeight
+IOSurfaceGetHeight.restype = ctypes.c_size_t
+IOSurfaceGetHeight.argtypes = [ctypes.c_void_p]
+
+IOSurfaceGetBytesPerRow = IOSurface.IOSurfaceGetBytesPerRow
+IOSurfaceGetBytesPerRow.restype = ctypes.c_size_t
+IOSurfaceGetBytesPerRow.argtypes = [ctypes.c_void_p]
+
+IOSurfaceGetBaseAddress = IOSurface.IOSurfaceGetBaseAddress
+IOSurfaceGetBaseAddress.restype = ctypes.c_void_p
+IOSurfaceGetBaseAddress.argtypes = [ctypes.c_void_p]
+
+IOSurfaceLock = IOSurface.IOSurfaceLock
+IOSurfaceLock.restype = ctypes.c_int32
+IOSurfaceLock.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+
+IOSurfaceUnlock = IOSurface.IOSurfaceUnlock
+IOSurfaceUnlock.restype = ctypes.c_int32
+IOSurfaceUnlock.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+
+# IOSurface lock flags
+kIOSurfaceLockReadOnly = 0x00000001
 
 
 # Get global dispatch queue using ctypes (proven working approach from camera_gpu.py)
@@ -80,10 +111,12 @@ class CameraDelegate(NSObject):
 
 class AVFoundationCapture:
     """
-    macOS camera capture using AVFoundation.
+    macOS camera capture using AVFoundation with single-copy pipeline.
 
     Outputs frames at runtime's width/height (auto-scales camera).
-    Zero-copy IOSurface → wgpu::Texture pipeline (proven in hal-test).
+    Single-copy pipeline: IOSurface → wgpu.GPUTexture (direct write!)
+
+    Uses IOSurface lock/unlock to write directly from GPU memory to wgpu texture.
     """
 
     def __init__(self, gpu_context, runtime_width, runtime_height, device_id=None):
@@ -200,67 +233,55 @@ class AVFoundationCapture:
         """
         Called on background thread by AVFoundation.
 
-        Uses TRUE ZERO-COPY: IOSurface → Metal texture → HAL texture → wgpu texture
+        Single-copy pipeline: IOSurface → wgpu texture (direct write!)
+        Lock IOSurface → get base address → write_texture → unlock
         """
         try:
-            # Get IOSurface pointer as integer (call __c_void_p__ method)
-            iosurface_ptr = iosurface.__c_void_p__().value
+            # Get IOSurface as void pointer for C API
+            iosurface_ptr = objc.pyobjc_id(iosurface)
 
-            # Store IOSurface for zero-copy access
-            self._iosurface = iosurface_ptr
+            # Get IOSurface dimensions
+            camera_width = IOSurfaceGetWidth(iosurface_ptr)
+            camera_height = IOSurfaceGetHeight(iosurface_ptr)
+            row_bytes = IOSurfaceGetBytesPerRow(iosurface_ptr)
 
-            # Get Metal device (cache it on first use)
-            if not hasattr(self, '_metal_device'):
-                self._metal_device = iosurface_hal.get_default_metal_device()
+            # Lock IOSurface for CPU read access
+            # This ensures thread-safety but doesn't copy data
+            lock_result = IOSurfaceLock(iosurface_ptr, kIOSurfaceLockReadOnly, None)
+            if lock_result != 0:
+                raise RuntimeError(f"Failed to lock IOSurface: {lock_result}")
 
-            # Get dimensions from IOSurface (for now, read to get dimensions)
-            # In production, we'd get this from CVPixelBuffer metadata
-            _, camera_width, camera_height, _ = iosurface_hal.read_iosurface_pixels(iosurface_ptr)
+            try:
+                # Get base address pointer (points directly to GPU VRAM!)
+                base_address = IOSurfaceGetBaseAddress(iosurface_ptr)
+                if not base_address:
+                    raise RuntimeError("IOSurface has no base address")
 
-            self._width = camera_width
-            self._height = camera_height
+                # Calculate total buffer size
+                buffer_size = row_bytes * camera_height
 
-            # Create Metal texture from IOSurface (ZERO-COPY!)
-            metal_texture = iosurface_hal.create_metal_texture_from_iosurface(
-                iosurface_ptr,
-                self._metal_device,
-                camera_width,
-                camera_height
-            )
+                # Create ctypes buffer from IOSurface memory (single copy!)
+                # This creates a Python buffer wrapping the IOSurface memory
+                buffer = (ctypes.c_ubyte * buffer_size).from_address(base_address)
 
-            # Create HAL texture from Metal texture (ZERO-COPY!)
-            hal_texture_ptr = metal_texture.create_hal_texture()
+                # Create wgpu texture at camera resolution
+                camera_texture = self.gpu_context.device.create_texture(
+                    size=(camera_width, camera_height, 1),
+                    format='bgra8unorm',
+                    usage=wgpu.TextureUsage.COPY_DST | wgpu.TextureUsage.COPY_SRC | wgpu.TextureUsage.TEXTURE_BINDING
+                )
 
-            # Now we have a HAL texture pointer ready for wgpu.Device.create_texture_from_hal()
-            # For now, store the Metal texture reference
-            self._metal_texture = metal_texture
-            self._hal_texture_ptr = hal_texture_ptr
-
-            # TODO: Once wgpu-py bindings support create_texture_from_hal with our forked wgpu,
-            # we would do:
-            # camera_texture = self.gpu_context.device.create_texture_from_hal(
-            #     hal_texture_ptr,
-            #     format='bgra8unorm',
-            #     size=(camera_width, camera_height, 1),
-            #     usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_SRC
-            # )
-
-            # For now, as a fallback, read pixels (but we have the zero-copy pipeline ready!)
-            pixel_data, _, _, bytes_per_row = iosurface_hal.read_iosurface_pixels(iosurface_ptr)
-
-            camera_texture = self.gpu_context.device.create_texture(
-                size=(camera_width, camera_height, 1),
-                format='bgra8unorm',
-                usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST | wgpu.TextureUsage.COPY_SRC | wgpu.TextureUsage.RENDER_ATTACHMENT,
-                label='camera_frame_zerocopy'
-            )
-
-            self.gpu_context.device.queue.write_texture(
-                {"texture": camera_texture},
-                pixel_data,
-                {"bytes_per_row": bytes_per_row, "rows_per_image": camera_height},
-                (camera_width, camera_height, 1)
-            )
+                # Write DIRECTLY from IOSurface memory to wgpu texture (single copy!)
+                # buffer wraps the IOSurface memory without copying
+                self.gpu_context.device.queue.write_texture(
+                    {"texture": camera_texture},
+                    buffer,  # Direct IOSurface memory access via ctypes buffer!
+                    {"bytes_per_row": row_bytes, "rows_per_image": camera_height},
+                    (camera_width, camera_height, 1)
+                )
+            finally:
+                # Always unlock IOSurface
+                IOSurfaceUnlock(iosurface_ptr, kIOSurfaceLockReadOnly, None)
 
             # Check if scaling is needed
             if camera_width != self.width or camera_height != self.height:
@@ -286,7 +307,7 @@ class AVFoundationCapture:
             with self._texture_lock:
                 # Keep a reference to old texture temporarily to avoid race condition
                 # where texture gets destroyed while being read by user code
-                old_texture = self._latest_texture
+                _old_texture = self._latest_texture  # Keep reference to prevent premature cleanup
                 self._latest_texture = new_texture
                 # TODO: Implement proper texture pooling to avoid memory growth
 

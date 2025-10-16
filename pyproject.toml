@@ -8,23 +8,28 @@ members = [
 
 [tool.uv]
 dev-dependencies = [
+    # Testing
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
-    # Dependencies for running examples
-    "numpy>=1.24.0",
-    "skia-python>=87.5",
-    "opencv-python>=4.11.0.86", # Changed from opencv-python-headless for GPU demos
-    "av>=10.0.0",
-    # GPU support (optional but recommended)
-    "torch>=2.0.0",
-    # Metal support (macOS only - zero-copy GPU operations)
+    # WebGPU core (required for all examples)
+    "wgpu>=0.25.0",
+    "glfw>=2.7.0",
+    # ML inference (ONNX Runtime)
+    "onnxruntime>=1.19.0",
+    "onnx>=1.15.0",
+    # macOS camera capture
+    "pyobjc-framework-AVFoundation>=10.0",
+    "pyobjc-framework-CoreMedia>=10.0",
     "pyobjc-framework-Metal>=10.0",
-    "pyobjc-framework-MetalPerformanceShaders>=10.0",
-    "pyobjc-framework-MetalKit>=10.0",
-    "pyobjc-framework-Quartz>=10.0", # For CAMetalLayer
-    "cv2-enumerate-cameras>=1.3.0",
-    "pyobjc-framework-coremedia>=11.1",
+    # Text overlays
+    "Pillow>=10.0.0",
+    "rendercanvas>=2.2.1",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.21",
+    "mkdocs-mermaid2-plugin>=1.2.2",
+    "mkdocstrings>=0.30.1",
+    "mkdocstrings-python>=1.18.2",
 ]
 
 [tool.uv.sources]

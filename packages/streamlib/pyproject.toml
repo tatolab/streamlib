@@ -1,6 +1,6 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
-build-backend = "maturin"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "streamlib"
@@ -42,13 +42,6 @@ dev = [
     "ruff>=0.1.0",
     "pillow>=10.0.0",
 ]
-
-[tool.maturin]
-python-source = "src"
-module-name = "streamlib.iosurface_hal"
-manifest-path = "rust/iosurface_hal/Cargo.toml"
-# Only build Rust extension on macOS
-skip-build-for-non-mac = true
 
 [tool.ruff]
 line-length = 100

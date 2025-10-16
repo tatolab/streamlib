@@ -2,6 +2,7 @@
 import asyncio
 import numpy as np
 from PIL import Image
+import wgpu
 from streamlib.gpu import GPUContext
 
 async def main():
@@ -78,5 +79,4 @@ async def main():
     print("\n✅ All frames saved!")
 
 if __name__ == "__main__":
-    import wgpu
     asyncio.run(main())

@@ -1,147 +1,181 @@
 # Context for Claude
 
-## Project Vision
+## The Mindset
 
-streamlib is a **composable streaming library for Python** with network-transparent operations. It's designed to provide Unix-pipe-style primitives for video streaming that AI agents (and humans) can orchestrate.
+**We are builders of the impossible.**
 
-## Why This Exists
+When others say "it can't be done," we:
+1. **Read the source code** - Understand WHY they think it's impossible
+2. **Find the real limitation** - Usually it's just an API restriction, not physics
+3. **Fork and fix** - Modify the tools to serve our vision
+4. **Ship working code** - Prove it with real, running examples
 
-### The Problem
+**We don't just solve prompts, we build the future.**
 
-Most streaming/visual tools are **large, stateful, monolithic applications** (Unity, OBS, complex streaming platforms). They're environments, not primitives. There's no equivalent to "pipe grep into sed into awk" for visual operations.
+## The Vision
 
-### The Solution
+**streamlib is a realtime streaming platform where AI agents can easily compose:**
 
-**Stateless visual primitives that can be orchestrated** - like Unix tools but for video/image processing:
+- Live camera streams
+- ML models (object detection, segmentation, etc.)
+- Dynamic audio/video generation
+- Real-time visual effects and overlays
+- All running on GPU at 60fps
+
+**This is the core vision. Everything else is in service of this goal.**
+
+### We Build the Future, Not Just Features
+
+**FOCUS ON THE VISION, not just the prompt.** Every line of code should move us toward:
+- Zero-copy pipelines (GPU-accelerated transfers)
+- Real-time processing (sub-millisecond operations)
+- GPU-first architecture (data never leaves the GPU)
+- Developer experience that makes the complex simple
+
+## Using uv for Package Management
+
+**ALWAYS use `uv` commands:**
 
 ```bash
-# Unix philosophy (works great):
-cat file.txt | grep "error" | sed 's/ERROR/WARNING/' | awk '{print $1}'
+# Install dependencies
+uv sync
 
-# Visual operations (what we're building):
-runtime.connect(camera.outputs['video'], compositor.inputs['video'])
-runtime.connect(compositor.outputs['video'], display.inputs['video'])
+# Add dependency
+uv add package-name
+
+# Run scripts
+uv run python examples/your_example.py
+
+# Run tests
+uv run pytest tests/
 ```
 
-### Core Philosophy
+**When providing instructions:**
+- ✅ Use: `uv run python script.py`
+- ✅ Use: `uv add package-name`
+- ❌ Don't use: `python script.py`
+- ❌ Don't use: `pip install package-name`
 
-1. **Intention over implementation**: Tools express *what* you want, not *how* to do it
-2. **Composable primitives**: Small, single-purpose components that chain together
-3. **Network-transparent**: Operations work seamlessly locally or remotely
-4. **Distributed**: Chain operations across machines (phone → edge → cloud)
-5. **Zero-dependency core**: No GStreamer installation required
-6. **Tool-first, not product**: Like Claude Code - provide tools, let use cases emerge
-7. **🔥 GPU-first, opinionated optimization**: Automatically stay on GPU, never bounce to CPU unnecessarily
+## Honesty About Implementation
 
-### The streamlib Superpower: Automatic GPU Optimization
+**NEVER LIE ABOUT WHAT'S IMPLEMENTED.**
 
-**This is what differentiates streamlib from GStreamer:**
+### Status Definitions
 
-GStreamer pipelines constantly bounce between CPU/GPU because they're not opinionated.
-streamlib **automatically chooses the fastest path** and **stays on GPU as long as possible**.
+**✅ IMPLEMENTED = Actually works when run**
+- Code executes without errors
+- Produces expected outputs
+- Has been tested by running it
+- No TODO comments in critical paths
 
-```python
-# User writes simple code
-runtime.connect(camera.outputs['video'], display.inputs['video'])
+**🚧 SCAFFOLDED = Structure exists but doesn't work**
+- Functions exist but return placeholder values
+- Contains TODO comments
+- Has NOT been tested
 
-# streamlib automatically:
-# 1. Detects camera outputs GPU
-# 2. Negotiates GPU path
-# 3. Selects optimal display backend (Metal/CUDA/OpenGL)
-# 4. Zero-copy GPU → screen
-#
-# Result: NO CPU TRANSFERS!
-```
+**❌ NOT STARTED = Doesn't exist yet**
+- No code written
+- Only documented as future feature
 
-## Architecture
+### Rules
 
-### StreamHandler + Runtime
+1. **NEVER claim something is "complete" if it's scaffolded**
+   - ❌ WRONG: "Created GPURenderer class ✅"
+   - ✅ RIGHT: "Scaffolded GPURenderer (not implemented, returns input unchanged)"
 
-The **handler-based architecture** is inspired by Cloudflare Durable Objects and GStreamer's capability negotiation:
+2. **ALWAYS test code before claiming it works**
+   - Run the code yourself
+   - Verify expected output
+   - Check for errors
+   - Only then mark as implemented
 
-**StreamHandler** - Pure processing logic (inert until runtime activates)
-```python
-class BlurFilter(StreamHandler):
-    def __init__(self):
-        super().__init__()
-        # GPU-first by default - no capabilities needed!
-        self.inputs['video'] = VideoInput('video')
-        self.outputs['video'] = VideoOutput('video')
+3. **NO TODO comments without context**
+   - ❌ BAD: `return input  # TODO: Implement`
+   - ✅ GOOD: `raise NotImplementedError("Feature not implemented yet")`
 
-    async def process(self, tick: TimedTick):
-        frame = self.inputs['video'].read_latest()  # Zero-copy
-        if frame:
-            result = cv2.GaussianBlur(frame.data, (5, 5), 0)
-            self.outputs['video'].write(VideoFrame(result, tick.timestamp))
-```
+4. **Report status honestly:**
+   - List what actually works (tested)
+   - List what's scaffolded (structure only)
+   - List what's not started
+   - Never conflate these
 
-**StreamRuntime** - Lifecycle manager
-```python
-runtime = StreamRuntime(fps=30)
-# Runtime automatically infers execution context - no dispatchers needed!
-runtime.add_stream(Stream(camera_handler))
-runtime.add_stream(Stream(blur_handler))
-runtime.connect(camera_handler.outputs['video'], blur_handler.inputs['video'])
-await runtime.start()
-```
+## Development Philosophy
 
-**Key Concepts:**
-- **GPU-first by default**: All ports default to GPU, runtime handles everything automatically
-- **Automatic execution inference**: Runtime selects optimal execution context based on operations
-- **Automatic transfers**: Runtime inserts GPU↔CPU transfers only when necessary
-- **Clock-driven**: Runtime clock ticks drive all handlers
-- **Zero-copy**: Ring buffers hold references, not data copies
-- **Simple API**: No explicit capabilities or dispatchers - runtime handles it all
+### Core Principles
 
-## When Working on This Project
+1. **Build then test** - Make it work, verify it works, then document
+2. **Start simple** - One working thing beats ten scaffolds
+3. **Test visually** - Save frames, verify they look correct
+4. **Iterate rapidly** - Fast feedback with `uv run`
 
-### Remember the Vision
-1. **Composable primitives**, not monolithic platform
-2. **Keep handlers stateless**: Each component simple and single-purpose
-3. **Think distributed**: Design for network-transparent operations
-4. **Test visually**: Save frames, verify they look correct
-5. **Use PyAV not GStreamer**: No system dependencies in core
-6. **Document discoveries**: Update progress docs as we learn
+### Go Deep: Read Native Implementations
 
-### Development Principles
+**ALWAYS dig into native code when needed:**
+- Read wgpu-hal source, not just wgpu docs
+- Understand Metal/Vulkan/D3D12 implementations
+- Study IOSurface, CVPixelBuffer internals
+- Don't accept "it can't be done" without verification
 
-**From the Conversation:**
-1. **Build then optimize**: Don't imagine performance problems, find them through testing
-2. **Start simple**: Begin with basic primitives, add complexity as needed
-3. **Visual inspection**: Save frames to files, verify visually
-4. **Iterate rapidly**: Test each change quickly
+**Example:** We discovered `wgpu_hal::metal::Texture` had private fields by reading the source, then forked and fixed it!
 
-### Testing Philosophy
-- **Fast feedback loops**: Tests run in < 1 second
-- **Visual verification**: Save PNGs to verify output
-- **Progressive validation**: Test each component in isolation first
-- **Integration tests**: Verify components work together
+### Fork When Necessary
 
-## Important Files
+**If a library blocks our vision, FORK IT:**
+- We forked wgpu to add `Texture::from_raw()`
+- Made impossible things possible
+- Our fork: https://github.com/tato123/wgpu
 
-### Design Documents
-- `docs/internal/architecture.md` - Complete architecture (authoritative)
-- `docs/project.md` - Implementation task list and timeline
-- `docs/guides/gpu-optimization.md` - GPU-first optimization guide
+**Process:**
+1. Try the official API first
+2. Read the source to understand limitations
+3. Fork and modify if it blocks our goals
+4. Contribute back when possible
 
-### Implementation
-- `packages/streamlib/src/streamlib/` - StreamHandler implementation
-- `tests/` - Test suite
-- `examples/` - Example pipelines
+### Be Polyglot
+
+**We write in whatever language gets the job done:**
+- **Python** - High-level API, rapid prototyping
+- **Rust** - Zero-copy operations, GPU interop, performance
+- **WGSL/Metal/GLSL** - Shader programming
+- **Objective-C** - macOS/iOS system integration
+- **Whatever's needed** - Don't be limited by language boundaries
+
+### Always Measure Performance
+
+**Never trust, always verify:**
+- Time operations with `time.perf_counter()`
+- Compare approaches side-by-side
+- Calculate actual speedups
+- Save proof (images, benchmarks, logs)
+
+## Example Creation
+
+**Use streamlib-example-writer agent for ALL examples:**
+
+The agent will:
+- Create standalone example projects
+- Test developer experience
+- Validate API usability
+- Provide honest feedback
+
+Don't write examples yourself - let the agent validate the APIs.
 
 ## Commit Workflow
 
-**IMPORTANT: DO NOT AUTO-COMMIT CHANGES**
+**DO NOT AUTO-COMMIT CHANGES**
 
-The user wants to personally determine when changes are committed. When working on this project:
+The user decides when to commit:
+1. ❌ Never automatically commit
+2. ✅ Present changes for review
+3. ✅ Wait for explicit instruction
+4. ✅ Let user decide commit message
 
-1. ❌ **Never** automatically commit changes after completing work
-2. ✅ **Always** present changes to the user for review
-3. ✅ **Wait** for explicit user instruction to commit
-4. ✅ **Let the user** decide when to commit and what commit message to use
+## Project Structure
 
-This applies to all changes: code, documentation, tests, configuration, etc.
-
-## Original Session
-
-The vision for this project emerged from session `23245f82-5c95-42d4-9018-665fd44b614f`, documented in `docs/markdown/conversation-history.md`.
+- Core library: `packages/streamlib/src/streamlib/`
+- Camera capture (macOS): `packages/streamlib/src/streamlib/gpu/capture/macos.py`
+- Rust extensions: `packages/streamlib/rust/`
+- Tests: `packages/streamlib/tests/`
+- Examples: `examples/`
+- Documentation: `packages/streamlib/README.md`
+- Forked dependencies: Track in pyproject.toml and Cargo.toml
