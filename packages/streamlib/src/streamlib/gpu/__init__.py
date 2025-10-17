@@ -16,7 +16,7 @@ Example:
 
 from .context import GPUContext
 from .compute import ComputeShader
-from .ml import MLRuntime, ONNXModel
+from .ml import MLRuntime, ONNXModel, LoadedModel, list_available_backends
 from .display import DisplayWindow
 
 __all__ = [
@@ -24,5 +24,7 @@ __all__ = [
     'ComputeShader',
     'MLRuntime',
     'ONNXModel',
+    'LoadedModel',
+    'list_available_backends',
     'DisplayWindow',
 ]
