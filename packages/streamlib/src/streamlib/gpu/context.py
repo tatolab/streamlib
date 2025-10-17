@@ -8,7 +8,6 @@ abstracting the underlying WebGPU backend.
 from typing import Optional, Dict, Any
 from .backends.webgpu import WebGPUBackend
 from .utils import GPUUtils
-from .renderer import GPURenderer
 from .ml import MLRuntime
 
 try:
@@ -41,9 +40,6 @@ class GPUContext:
         # Run ML model
         model = gpu_ctx.ml.load_model("yolov8n.onnx")
         results = gpu_ctx.ml.run(model, frame.data)
-
-        # Draw overlays
-        output = gpu_ctx.renderer.draw_boxes(frame.data, boxes=results['boxes'])
     """
 
     def __init__(self, backend: WebGPUBackend):
@@ -58,7 +54,6 @@ class GPUContext:
 
         # Attach utility modules
         self.utils = GPUUtils(self)         # Texture/buffer utilities
-        self.renderer = GPURenderer(self)   # Rendering overlays and graphics
         self.ml = MLRuntime(self)           # ML model inference
 
     @classmethod

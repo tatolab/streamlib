@@ -16,14 +16,12 @@ Example:
 
 from .context import GPUContext
 from .compute import ComputeShader
-from .renderer import GPURenderer
 from .ml import MLRuntime, ONNXModel
 from .display import DisplayWindow
 
 __all__ = [
     'GPUContext',
     'ComputeShader',
-    'GPURenderer',
     'MLRuntime',
     'ONNXModel',
     'DisplayWindow',
