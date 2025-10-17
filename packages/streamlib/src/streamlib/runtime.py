@@ -259,23 +259,6 @@ class StreamRuntime:
             import traceback
             traceback.print_exc()
 
-    def pipeline(self) -> 'PipelineBuilder':
-        """
-        Create a pipeline builder for this runtime.
-
-        Returns:
-            PipelineBuilder instance for fluent pipeline construction
-
-        Example:
-            pipeline = runtime.pipeline()
-                .source(camera)
-                .effect(blur)
-                .sink(display)
-            await pipeline.start()
-        """
-        from .pipeline import PipelineBuilder
-        return PipelineBuilder(self)
-
     def __repr__(self) -> str:
         return (
             f"StreamRuntime(handlers={len(self.handlers)}, "
