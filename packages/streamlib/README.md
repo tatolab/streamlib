@@ -37,41 +37,6 @@ def reverb(audio: AudioBuffer, decay: float = 0.5) -> AudioBuffer:
     return AudioBuffer(data=processed, timestamp=audio.timestamp)
 ```
 
-### Pipeline Builder API (Recommended)
-
-Fluent API for composing handlers with automatic connections:
-
-```python
-from streamlib import StreamRuntime, camera_source, video_effect
-
-runtime = StreamRuntime(fps=60, width=1920, height=1080)
-
-@camera_source(device_id=None)  # Zero-copy camera
-def camera():
-    pass
-
-@video_effect
-def blur(frame, gpu, sigma=2.0):
-    if not hasattr(blur, 'pipeline'):
-        blur.pipeline = gpu.create_compute_pipeline(BLUR_SHADER)
-    output = gpu.create_texture(frame.width, frame.height)
-    gpu.run_compute(blur.pipeline, input=frame.data, output=output)
-    return frame.clone_with_texture(output)
-
-# Fluent pipeline - runtime.pipeline() method!
-p = (
-    runtime.pipeline()
-    .source(camera)
-    .effect(blur, sigma=5.0)
-    .effect(sharpen, strength=0.5)
-    .sink(display)
-)
-p.build()  # Adds streams and connects them
-await runtime.start()  # Starts the runtime
-```
-
-Automatic port connections, type validation, supports branching. Zero-copy camera → GPU effects → display.
-
 ### StreamHandler API
 
 Direct handler implementation for custom behavior:
@@ -201,16 +166,3 @@ runtime = StreamRuntime(fps=60)  # 60 ticks/second
 # Audio and video use tick.timestamp to stay synchronized
 ```
 
-Pipeline builder handles A/V automatically:
-
-```python
-p = (
-    pipeline(runtime)
-    .source(camera)  # Outputs both audio and video
-    .split(
-        audio=lambda p: p.effect(reverb).effect(normalize),
-        video=lambda p: p.effect(blur).effect(color_grade)
-    )
-    .join(av_sync)  # Receives both streams, ensures sync
-    .sink(display)
-)

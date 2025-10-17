@@ -48,8 +48,6 @@ For concrete handler implementations, see streamlib-extras:
 from .runtime import StreamRuntime
 from .handler import StreamHandler
 from .stream import Stream
-from .function_handler import FunctionHandler, stream_handler
-from .pipeline import PipelineBuilder, pipeline
 
 # High-level decorators for AI-friendly API (Level 1 - Recommended)
 from .decorators import (
@@ -109,10 +107,6 @@ __all__ = [
     'StreamRuntime',
     'StreamHandler',
     'Stream',
-    'FunctionHandler',
-    'stream_handler',
-    'PipelineBuilder',
-    'pipeline',
 
     # High-level decorators (Level 1 API - Recommended for AI agents)
     'video_effect',
