@@ -288,6 +288,176 @@ class AudioBuffer:
         """Get duration in seconds."""
         return self.samples / self.sample_rate
 
+    @classmethod
+    def create_from_numpy(
+        cls,
+        gpu_ctx: 'GPUContext',
+        audio_data: Any,  # np.ndarray
+        timestamp: float,
+        sample_rate: int = 48000,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> 'AudioBuffer':
+        """
+        Create an AudioBuffer from a NumPy array (uploads to GPU).
+
+        Args:
+            gpu_ctx: GPU context for buffer creation
+            audio_data: NumPy array (float32, shape: (samples,) for mono or (samples, channels))
+            timestamp: Audio timestamp
+            sample_rate: Sample rate in Hz (default 48000)
+            metadata: Optional metadata
+
+        Returns:
+            AudioBuffer with data on GPU
+
+        Example:
+            import numpy as np
+            audio = np.sin(2 * np.pi * 440 * np.linspace(0, 1, 48000)).astype(np.float32)
+            buffer = AudioBuffer.create_from_numpy(gpu_ctx, audio, tick.timestamp)
+        """
+        import numpy as np
+
+        # Validate input
+        if not isinstance(audio_data, np.ndarray):
+            raise TypeError(f"audio_data must be numpy array, got {type(audio_data)}")
+        if audio_data.dtype != np.float32:
+            raise TypeError(f"audio_data must be float32, got {audio_data.dtype}")
+
+        # Determine channels and samples
+        if audio_data.ndim == 1:
+            channels = 1
+            samples = len(audio_data)
+        elif audio_data.ndim == 2:
+            samples, channels = audio_data.shape
+        else:
+            raise ValueError(f"audio_data must be 1D (mono) or 2D (multichannel), got {audio_data.ndim}D")
+
+        # Import wgpu for BufferUsage
+        import wgpu
+
+        # Create GPU buffer
+        buffer_size = samples * channels * 4  # float32 = 4 bytes
+        gpu_buffer = gpu_ctx.device.create_buffer(
+            size=buffer_size,
+            usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST | wgpu.BufferUsage.COPY_SRC
+        )
+
+        # Upload to GPU
+        gpu_ctx.device.queue.write_buffer(gpu_buffer, 0, audio_data.tobytes())
+
+        return cls(
+            data=gpu_buffer,
+            timestamp=timestamp,
+            sample_rate=sample_rate,
+            channels=channels,
+            samples=samples,
+            metadata=metadata
+        )
+
+    @classmethod
+    def create_silence(
+        cls,
+        gpu_ctx: 'GPUContext',
+        samples: int,
+        timestamp: float,
+        sample_rate: int = 48000,
+        channels: int = 1,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> 'AudioBuffer':
+        """
+        Create a silent AudioBuffer (all zeros).
+
+        Args:
+            gpu_ctx: GPU context for buffer creation
+            samples: Number of samples
+            timestamp: Audio timestamp
+            sample_rate: Sample rate in Hz (default 48000)
+            channels: Number of channels (default 1)
+            metadata: Optional metadata
+
+        Returns:
+            AudioBuffer with silent audio on GPU
+
+        Example:
+            # Create 1 second of silence
+            buffer = AudioBuffer.create_silence(gpu_ctx, 48000, tick.timestamp)
+        """
+        import numpy as np
+
+        silence = np.zeros(samples * channels, dtype=np.float32)
+        return cls.create_from_numpy(
+            gpu_ctx, silence, timestamp, sample_rate, metadata
+        )
+
+    @classmethod
+    def create_from_buffer(
+        cls,
+        buffer: Any,  # wgpu.GPUBuffer
+        timestamp: float,
+        sample_rate: int,
+        channels: int,
+        samples: int,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> 'AudioBuffer':
+        """
+        Create an AudioBuffer from an existing GPU buffer.
+
+        Args:
+            buffer: WebGPU buffer (wgpu.GPUBuffer)
+            timestamp: Audio timestamp
+            sample_rate: Sample rate in Hz
+            channels: Number of channels
+            samples: Number of samples
+            metadata: Optional metadata
+
+        Returns:
+            AudioBuffer wrapping the buffer
+
+        Example:
+            buffer = AudioBuffer.create_from_buffer(
+                my_gpu_buffer, tick.timestamp, 48000, 1, 512
+            )
+        """
+        return cls(
+            data=buffer,
+            timestamp=timestamp,
+            sample_rate=sample_rate,
+            channels=channels,
+            samples=samples,
+            metadata=metadata
+        )
+
+    def clone_with_buffer(
+        self,
+        new_buffer: Any,  # wgpu.GPUBuffer
+        timestamp: Optional[float] = None
+    ) -> 'AudioBuffer':
+        """
+        Create a new AudioBuffer with a different buffer but same metadata.
+
+        Useful for effects that modify audio data but preserve timing.
+
+        Args:
+            new_buffer: New GPU buffer
+            timestamp: Optional new timestamp (uses original if None)
+
+        Returns:
+            New AudioBuffer with replaced buffer
+
+        Example:
+            # Apply effect and create new buffer
+            processed_buffer = apply_effect(buffer.data)
+            new_buffer = buffer.clone_with_buffer(processed_buffer)
+        """
+        return AudioBuffer(
+            data=new_buffer,
+            timestamp=timestamp or self.timestamp,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            samples=self.samples,
+            metadata=self.metadata.copy() if self.metadata else None
+        )
+
 
 @dataclass
 class KeyEvent:

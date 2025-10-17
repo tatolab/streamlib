@@ -49,6 +49,7 @@ class RingBuffer(Generic[T]):
         self.slots = slots
         self.buffer = [None] * slots
         self.write_idx = 0
+        self.read_idx = 0  # Track read position for read_all()
         self.lock = threading.Lock()
         self.has_data = False
 
@@ -75,7 +76,48 @@ class RingBuffer(Generic[T]):
             if not self.has_data:
                 return None
             idx = (self.write_idx - 1) % self.slots
+            # Update read_idx to mark as read
+            self.read_idx = self.write_idx
             return self.buffer[idx]
+
+    def read_all(self) -> list[T]:
+        """
+        Read all unread data from ring buffer.
+
+        Returns all items that have been written since last read.
+        Useful for audio processing where all chunks must be processed.
+
+        Returns:
+            List of all unread data (may be empty)
+        """
+        with self.lock:
+            if not self.has_data:
+                return []
+
+            result = []
+            # Read all items from read_idx to write_idx
+            if self.read_idx == self.write_idx:
+                # Nothing new to read
+                return []
+
+            # Calculate how many items to read
+            if self.write_idx > self.read_idx:
+                # Simple case: read from read_idx to write_idx
+                count = self.write_idx - self.read_idx
+            else:
+                # Wrapped around: read from read_idx to end, then 0 to write_idx
+                count = (self.slots - self.read_idx) + self.write_idx
+
+            # Collect items
+            for i in range(count):
+                idx = (self.read_idx + i) % self.slots
+                if self.buffer[idx] is not None:
+                    result.append(self.buffer[idx])
+
+            # Update read_idx to current write_idx
+            self.read_idx = self.write_idx
+
+            return result
 
     def is_empty(self) -> bool:
         """
@@ -92,6 +134,7 @@ class RingBuffer(Generic[T]):
         with self.lock:
             self.buffer = [None] * self.slots
             self.write_idx = 0
+            self.read_idx = 0
             self.has_data = False
 
 

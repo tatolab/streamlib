@@ -106,6 +106,22 @@ class StreamInput:
             return None
         return self.buffer.read_latest()
 
+    def read_all(self):
+        """
+        Read all unread data from ring buffer (zero-copy references).
+
+        Returns all items that have been written since last read.
+        Useful for audio processing where all chunks must be processed.
+
+        Returns:
+            List of all unread data (may be empty)
+
+        Note: Returns references to data in ring buffer, not copies.
+        """
+        if self.buffer is None:
+            return []
+        return self.buffer.read_all()
+
     def is_connected(self) -> bool:
         """Check if this input is connected to an upstream output."""
         return self.buffer is not None
@@ -149,13 +165,15 @@ def VideoInput(name: str) -> StreamInput:
     return StreamInput(name, port_type='video')
 
 
-def AudioOutput(name: str, slots: int = 3) -> StreamOutput:
+def AudioOutput(name: str, slots: int = 32) -> StreamOutput:
     """
     Helper to create an audio output port (WebGPU-only).
 
     Args:
         name: Port name (e.g., 'audio', 'out')
-        slots: Ring buffer size (default: 3)
+        slots: Ring buffer size (default: 32 for audio buffering)
+               Audio chunks arrive at ~94 Hz but may be read at 30 Hz,
+               so larger buffer prevents overflow
 
     Returns:
         StreamOutput configured for audio

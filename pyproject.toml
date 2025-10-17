@@ -22,6 +22,10 @@ dev-dependencies = [
     "pyobjc-framework-AVFoundation>=10.0",
     "pyobjc-framework-CoreMedia>=10.0",
     "pyobjc-framework-Metal>=10.0",
+    # Audio capture (uses PortAudio/CoreAudio on macOS)
+    "sounddevice>=0.4.6",
+    # Audio file I/O
+    "scipy>=1.11.0",
     # Text overlays
     "Pillow>=10.0.0",
     "rendercanvas>=2.2.1",

@@ -241,35 +241,36 @@ def audio_effect(
 
             async def process(self, tick: TimedTick) -> None:
                 """Process audio buffer through effect function."""
-                # Read latest buffer (zero-copy)
-                buffer = self.inputs['audio'].read_latest()
-                if buffer is None:
-                    return
+                # Read ALL available buffers (not just latest!)
+                # Audio chunks arrive faster than video frame rate
+                # Using read_latest() would skip chunks and cause audio dropout
+                buffers = self.inputs['audio'].read_all()
 
-                # Call effect function with GPU context injection
-                try:
-                    # Inject GPU context from runtime
-                    gpu_ctx = self._runtime.gpu_context
+                for buffer in buffers:
+                    # Call effect function with GPU context injection
+                    try:
+                        # Inject GPU context from runtime
+                        gpu_ctx = self._runtime.gpu_context
 
-                    if pass_params:
-                        result = self.effect_func(buffer, gpu=gpu_ctx, **self.effect_params)
-                    else:
-                        result = self.effect_func(buffer, gpu=gpu_ctx)
+                        if pass_params:
+                            result = self.effect_func(buffer, gpu=gpu_ctx, **self.effect_params)
+                        else:
+                            result = self.effect_func(buffer, gpu=gpu_ctx)
 
-                    # Ensure result is AudioBuffer
-                    if not isinstance(result, AudioBuffer):
-                        raise TypeError(
-                            f"Effect function {self.effect_func.__name__} must return AudioBuffer, "
-                            f"got {type(result)}"
-                        )
+                        # Ensure result is AudioBuffer
+                        if not isinstance(result, AudioBuffer):
+                            raise TypeError(
+                                f"Effect function {self.effect_func.__name__} must return AudioBuffer, "
+                                f"got {type(result)}"
+                            )
 
-                    # Write result (zero-copy)
-                    self.outputs['audio'].write(result)
+                        # Write result (zero-copy)
+                        self.outputs['audio'].write(result)
 
-                except Exception as e:
-                    print(f"[{self.handler_id}] Error in effect function: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    except Exception as e:
+                        print(f"[{self.handler_id}] Error in effect function: {e}")
+                        import traceback
+                        traceback.print_exc()
 
             def __repr__(self) -> str:
                 return f"AudioEffect('{self.handler_id}', func={self.effect_func.__name__})"
@@ -357,6 +358,166 @@ def stream_processor(
         return CustomStreamHandler(func, handler_id)
 
     return decorator
+
+
+def audio_source(
+    func: Optional[Callable] = None,
+    *,
+    handler_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    sample_rate: int = 48000,
+    chunk_size: int = 512
+) -> Callable:
+    """
+    Decorator that converts a simple audio configuration into a StreamHandler.
+
+    The decorated function should have signature:
+        def audio_func(gpu: GPUContext, device_name: Optional[str] = None) -> AudioBuffer
+
+    The decorator automatically:
+    - Creates audio capture on handler start
+    - Outputs audio port
+    - Handles chunk processing in real-time
+    - Uploads audio chunks to GPU and emits to output
+    - Low-latency streaming architecture (~10ms chunks @ 512 samples)
+
+    Args:
+        func: Function to decorate (provided automatically when used as @audio_source)
+        handler_id: Optional handler ID (defaults to function name)
+        device_name: Audio device name substring (None = default device)
+        sample_rate: Sample rate in Hz (default 48000)
+        chunk_size: Samples per chunk (default 512 = ~10.7ms @ 48kHz)
+
+    Returns:
+        StreamHandler subclass instance that wraps audio capture
+
+    Example:
+        @audio_source(device_name="MacBook", sample_rate=48000, chunk_size=512)
+        def my_microphone(gpu: GPUContext, device_name: Optional[str] = None) -> AudioBuffer:
+            '''
+            Simple audio source - no code needed!
+            Returns GPU audio buffers automatically.
+            '''
+            # This function body is optional - decorator handles everything
+            # You can add custom logic here if needed
+            pass
+
+        # Use in pipeline (real-time streaming with GPU upload!)
+        runtime = StreamRuntime(fps=30)
+        runtime.add_stream(Stream(my_microphone))
+        runtime.connect(my_microphone.outputs['audio'], reverb.inputs['audio'])
+    """
+    def decorator(f: Callable) -> StreamHandler:
+        # Create handler class dynamically
+        class AudioSourceHandler(StreamHandler):
+            """Auto-generated handler from @audio_source decorator."""
+
+            def __init__(
+                self,
+                source_id: Optional[str] = None,
+                audio_device_name: Optional[str] = None,
+                audio_sample_rate: int = 48000,
+                audio_chunk_size: int = 512
+            ):
+                super().__init__(handler_id=source_id or f.__name__)
+                self.source_func = f
+                self.audio_device_name = audio_device_name
+                self.audio_sample_rate = audio_sample_rate
+                self.audio_chunk_size = audio_chunk_size
+                self.capture = None
+                self._chunk_counter = 0
+                self._lock = __import__('threading').Lock()
+
+                # Create output port only (sources have no inputs)
+                self.outputs['audio'] = AudioOutput('audio')
+
+            async def on_start(self) -> None:
+                """Create audio capture when handler starts."""
+                # Import audio capture
+                from .gpu.audio import AudioCapture
+
+                # Create audio capture with callback
+                self.capture = AudioCapture(
+                    gpu_context=self._runtime.gpu_context,
+                    sample_rate=self.audio_sample_rate,
+                    chunk_size=self.audio_chunk_size,
+                    device_name=self.audio_device_name,
+                    process_callback=self._process_audio_chunk
+                )
+
+                # Start capture
+                self.capture.start()
+
+            def _process_audio_chunk(self, audio_chunk):
+                """
+                Callback for audio chunks (runs on audio thread).
+
+                Uploads chunk to GPU and writes to output port.
+
+                Args:
+                    audio_chunk: numpy array (float32, mono)
+
+                Returns:
+                    numpy array (processed, same size)
+                """
+                try:
+                    # Get current tick timestamp
+                    # Note: Audio thread doesn't have tick, use monotonic time
+                    import time
+                    timestamp = time.perf_counter()
+
+                    # Upload to GPU (creates AudioBuffer)
+                    audio_buffer = AudioBuffer.create_from_numpy(
+                        self._runtime.gpu_context,
+                        audio_chunk,
+                        timestamp=timestamp,
+                        sample_rate=self.audio_sample_rate
+                    )
+
+                    # Write to output port (thread-safe)
+                    self.outputs['audio'].write(audio_buffer)
+
+                    # Track chunks
+                    with self._lock:
+                        self._chunk_counter += 1
+
+                    # Return unmodified (passthrough)
+                    return audio_chunk
+
+                except Exception as e:
+                    print(f"[{self.handler_id}] Error processing audio chunk: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return audio_chunk  # Passthrough on error
+
+            async def process(self, tick: TimedTick) -> None:
+                """
+                Process tick (audio capture runs on background thread).
+
+                No action needed here - audio chunks are pushed via callback.
+                """
+                pass
+
+            async def on_stop(self) -> None:
+                """Stop audio capture when handler stops."""
+                if self.capture:
+                    self.capture.stop()
+
+                # Print stats
+                print(f"[{self.handler_id}] Captured {self._chunk_counter} audio chunks")
+
+            def __repr__(self) -> str:
+                return f"AudioSource('{self.handler_id}', device={self.audio_device_name}, " \
+                       f"{self.audio_sample_rate}Hz, {self.audio_chunk_size} samples/chunk)"
+
+        # Create and return handler instance
+        return AudioSourceHandler(handler_id, device_name, sample_rate, chunk_size)
+
+    # Handle both @audio_source and @audio_source() syntax
+    if func is None:
+        return decorator
+    else:
+        return decorator(func)
 
 
 def camera_source(
@@ -593,10 +754,403 @@ def display_sink(
         return decorator(func)
 
 
+def audio_sink_file(
+    func: Optional[Callable] = None,
+    *,
+    handler_id: Optional[str] = None,
+    output_path: str = "output.wav"
+) -> Callable:
+    """
+    Decorator that converts audio stream to file output.
+
+    The decorated function should have signature:
+        def file_sink(gpu: GPUContext, output_path: str) -> None
+
+    The decorator automatically:
+    - Creates audio input port
+    - Downloads audio chunks from GPU
+    - Collects chunks in memory
+    - Saves to WAV file on stop
+
+    Args:
+        func: Function to decorate (provided automatically when used as @audio_sink_file)
+        handler_id: Optional handler ID (defaults to function name)
+        output_path: Output file path (default: "output.wav")
+
+    Returns:
+        StreamHandler subclass instance that wraps file sink
+
+    Example:
+        @audio_sink_file(output_path="recording.wav")
+        def my_file_sink():
+            '''
+            Simple file sink - no code needed!
+            Saves incoming audio to WAV file automatically.
+            '''
+            # This function body is optional - decorator handles everything
+            pass
+
+        # Use in pipeline
+        runtime = StreamRuntime(fps=30)
+        runtime.add_stream(Stream(microphone))
+        runtime.add_stream(Stream(my_file_sink))
+        runtime.connect(microphone.outputs['audio'], my_file_sink.inputs['audio'])
+        await runtime.start()
+    """
+    def decorator(f: Callable) -> StreamHandler:
+        # Create handler class dynamically
+        class AudioFileSinkHandler(StreamHandler):
+            """Auto-generated handler from @audio_sink_file decorator."""
+
+            def __init__(
+                self,
+                sink_id: Optional[str] = None,
+                file_output_path: str = "output.wav"
+            ):
+                super().__init__(handler_id=sink_id or f.__name__)
+                self.sink_func = f
+                self.output_path = file_output_path
+                self.chunks = []
+                self.sample_rate = None
+                self._lock = __import__('threading').Lock()
+
+                # Create input port only (sinks have no outputs)
+                self.inputs['audio'] = AudioInput('audio')
+
+            async def process(self, tick: TimedTick) -> None:
+                """Download audio from GPU and collect chunks."""
+                # Read ALL available audio buffers (not just latest!)
+                # Audio chunks arrive at ~94 Hz but ticks are at 30 Hz
+                # Using read_latest() would skip ~2/3 of chunks!
+                audio_buffers = self.inputs['audio'].read_all()
+
+                for audio_buffer in audio_buffers:
+                    try:
+                        # Store sample rate (for saving later)
+                        if self.sample_rate is None:
+                            self.sample_rate = audio_buffer.sample_rate
+
+                        # Download audio from GPU buffer to CPU
+                        # AudioBuffer.data is wgpu.GPUBuffer, need to read it
+                        buffer_size = audio_buffer.samples * audio_buffer.channels * 4  # float32 = 4 bytes
+
+                        # Read buffer from GPU (synchronous read)
+                        buffer_data = self._runtime.gpu_context.device.queue.read_buffer(
+                            audio_buffer.data,
+                            size=buffer_size
+                        )
+
+                        # Convert to numpy array
+                        import numpy as np
+                        audio_chunk = np.frombuffer(buffer_data, dtype=np.float32).copy()
+
+                        # Store chunk (thread-safe)
+                        with self._lock:
+                            self.chunks.append(audio_chunk)
+
+                    except Exception as e:
+                        print(f"[{self.handler_id}] Error collecting audio: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+            async def on_stop(self) -> None:
+                """Save collected audio to file."""
+                if not self.chunks:
+                    print(f"[{self.handler_id}] No audio chunks to save")
+                    return
+
+                try:
+                    print(f"\n💾 Saving {len(self.chunks)} audio chunks to {self.output_path}...")
+
+                    # Concatenate all chunks
+                    import numpy as np
+                    audio_data = np.concatenate(self.chunks)
+
+                    # Convert float32 [-1, 1] to int16 [-32768, 32767]
+                    audio_int16 = (audio_data * 32767).astype(np.int16)
+
+                    # Save as WAV file
+                    from pathlib import Path
+                    from scipy.io import wavfile
+                    output_path = Path(self.output_path)
+                    wavfile.write(output_path, self.sample_rate, audio_int16)
+
+                    print(f"✅ Saved {len(audio_data):,} samples ({len(audio_data) / self.sample_rate:.2f}s)")
+                    print(f"🎵 Play with: ffplay {self.output_path}")
+
+                except Exception as e:
+                    print(f"[{self.handler_id}] Error saving audio: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            def __repr__(self) -> str:
+                return f"AudioFileSink('{self.handler_id}', output={self.output_path})"
+
+        # Create and return handler instance
+        return AudioFileSinkHandler(handler_id, output_path)
+
+    # Handle both @audio_sink_file and @audio_sink_file() syntax
+    if func is None:
+        return decorator
+    else:
+        return decorator(func)
+
+
+def audio_sink_speaker(
+    func: Optional[Callable] = None,
+    *,
+    handler_id: Optional[str] = None,
+    device_name: Optional[str] = None,
+    sample_rate: int = 48000,
+    chunk_size: int = 512
+) -> Callable:
+    """
+    Decorator that plays audio stream through speakers in real-time.
+
+    The decorated function should have signature:
+        def speaker_sink(gpu: GPUContext, device_name: Optional[str] = None) -> None
+
+    The decorator automatically:
+    - Creates audio output stream
+    - Downloads audio chunks from GPU
+    - Plays through speakers in real-time
+    - Handles buffering and synchronization
+
+    Args:
+        func: Function to decorate (provided automatically when used as @audio_sink_speaker)
+        handler_id: Optional handler ID (defaults to function name)
+        device_name: Audio device name substring (None = default device)
+        sample_rate: Sample rate in Hz (default 48000)
+        chunk_size: Samples per chunk (default 512 = ~10.7ms @ 48kHz)
+
+    Returns:
+        StreamHandler subclass instance that wraps speaker sink
+
+    Example:
+        @audio_sink_speaker(device_name="Built-in Output", sample_rate=48000)
+        def my_speakers():
+            '''
+            Simple speaker sink - no code needed!
+            Plays incoming audio through speakers automatically.
+            '''
+            # This function body is optional - decorator handles everything
+            pass
+
+        # Use in pipeline
+        runtime = StreamRuntime(fps=30)
+        runtime.add_stream(Stream(microphone))
+        runtime.add_stream(Stream(reverb_effect))
+        runtime.add_stream(Stream(my_speakers))
+        runtime.connect(microphone.outputs['audio'], reverb_effect.inputs['audio'])
+        runtime.connect(reverb_effect.outputs['audio'], my_speakers.inputs['audio'])
+        await runtime.start()
+    """
+    def decorator(f: Callable) -> StreamHandler:
+        # Create handler class dynamically
+        class AudioSpeakerSinkHandler(StreamHandler):
+            """Auto-generated handler from @audio_sink_speaker decorator."""
+
+            def __init__(
+                self,
+                sink_id: Optional[str] = None,
+                speaker_device_name: Optional[str] = None,
+                speaker_sample_rate: int = 48000,
+                speaker_chunk_size: int = 512
+            ):
+                super().__init__(handler_id=sink_id or f.__name__)
+                self.sink_func = f
+                self.speaker_device_name = speaker_device_name
+                self.speaker_sample_rate = speaker_sample_rate
+                self.speaker_chunk_size = speaker_chunk_size
+                self.stream = None
+                self.device_id = None
+                self._playback_buffer = []
+                self._lock = __import__('threading').Lock()
+                self._chunks_played = 0
+
+                # Create input port only (sinks have no outputs)
+                self.inputs['audio'] = AudioInput('audio')
+
+            def _find_output_device(self) -> Optional[int]:
+                """Find audio output device by name substring."""
+                import sounddevice as sd
+
+                if self.speaker_device_name is None:
+                    # Use default output device
+                    default_device = sd.default.device[1]  # [0] = input, [1] = output
+                    devices = sd.query_devices()
+                    if default_device is not None and devices[default_device]['max_output_channels'] > 0:
+                        device_info = devices[default_device]
+                        print(f"📢 Using default audio output: {device_info['name']} (id={default_device})")
+                        print(f"   Channels: {device_info['max_output_channels']}, Sample Rate: {device_info['default_samplerate']:.0f}Hz")
+                        return default_device, device_info
+                    return None, None
+
+                # Query all devices
+                devices = sd.query_devices()
+
+                # Find all matching output devices
+                matches = []
+                for idx, device in enumerate(devices):
+                    if (device['max_output_channels'] > 0 and
+                        self.speaker_device_name.lower() in device['name'].lower()):
+                        matches.append((idx, device['name']))
+
+                if not matches:
+                    # Not found - show available devices
+                    print(f"❌ Audio output device '{self.speaker_device_name}' not found.")
+                    print("\n📢 Available Audio Output Devices:")
+                    for idx, device in enumerate(devices):
+                        if device["max_output_channels"] > 0:
+                            default = " (default)" if idx == sd.default.device[1] else ""
+                            print(
+                                f"  [{idx}] {device['name']}{default} "
+                                f"({device['max_output_channels']} channels, "
+                                f"{device['default_samplerate']:.0f}Hz)"
+                            )
+                    raise RuntimeError(
+                        f"Audio output device '{self.speaker_device_name}' not found. "
+                        f"See available devices above."
+                    )
+
+                # If multiple matches, show warning
+                if len(matches) > 1:
+                    print(f"⚠️  Multiple output devices match '{self.speaker_device_name}':")
+                    for idx, name in matches:
+                        print(f"     [{idx}] {name}")
+                    print(f"📢 Using first match: {matches[0][1]} (id={matches[0][0]})")
+                else:
+                    print(f"📢 Found audio output: {matches[0][1]} (id={matches[0][0]})")
+
+                # Get device info for selected device
+                device_id = matches[0][0]
+                device_info = devices[device_id]
+                print(f"   Channels: {device_info['max_output_channels']}, Sample Rate: {device_info['default_samplerate']:.0f}Hz")
+
+                return device_id, device_info
+
+            def _playback_callback(self, outdata, frames, time_info, status):
+                """Callback for audio playback (runs on audio thread)."""
+                if status:
+                    print(f"⚠️  Playback status: {status}")
+
+                import numpy as np
+
+                # Get audio chunks from buffer
+                with self._lock:
+                    if self._playback_buffer:
+                        # Get next chunk
+                        chunk = self._playback_buffer.pop(0)
+
+                        # Reshape to match output format (frames, channels)
+                        if len(chunk) == frames:
+                            outdata[:] = chunk.reshape(-1, 1)  # Mono
+                        else:
+                            # Size mismatch - pad or truncate
+                            if len(chunk) < frames:
+                                # Pad with zeros
+                                padded = np.zeros(frames, dtype=np.float32)
+                                padded[:len(chunk)] = chunk
+                                outdata[:] = padded.reshape(-1, 1)
+                            else:
+                                # Truncate
+                                outdata[:] = chunk[:frames].reshape(-1, 1)
+
+                        self._chunks_played += 1
+                    else:
+                        # No data available - output silence
+                        outdata.fill(0)
+
+            async def on_start(self) -> None:
+                """Create audio output stream when handler starts."""
+                import sounddevice as sd
+
+                # Find output device
+                self.device_id, self.device_info = self._find_output_device()
+
+                # Use device's native channel count
+                device_channels = self.device_info['max_output_channels'] if self.device_info else 1
+
+                # Create output stream
+                self.stream = sd.OutputStream(
+                    device=self.device_id,
+                    channels=1,  # Mono output (convert in callback if needed)
+                    samplerate=self.speaker_sample_rate,
+                    blocksize=self.speaker_chunk_size,
+                    callback=self._playback_callback,
+                    dtype='float32'
+                )
+
+                # Start stream
+                self.stream.start()
+
+                print(f"🔊 Audio playback started")
+                print(f"   Device: {self.device_info['name'] if self.device_info else 'default'}")
+                print(f"   Sample Rate: {self.speaker_sample_rate}Hz, Chunk Size: {self.speaker_chunk_size} samples")
+
+            async def process(self, tick: TimedTick) -> None:
+                """Download audio from GPU and add to playback buffer."""
+                # Read ALL available audio buffers (not just latest!)
+                audio_buffers = self.inputs['audio'].read_all()
+
+                for audio_buffer in audio_buffers:
+                    try:
+                        # Download audio from GPU buffer to CPU
+                        buffer_size = audio_buffer.samples * audio_buffer.channels * 4  # float32 = 4 bytes
+
+                        # Read buffer from GPU
+                        buffer_data = self._runtime.gpu_context.device.queue.read_buffer(
+                            audio_buffer.data,
+                            size=buffer_size
+                        )
+
+                        # Convert to numpy array
+                        import numpy as np
+                        audio_chunk = np.frombuffer(buffer_data, dtype=np.float32).copy()
+
+                        # Add to playback buffer (thread-safe)
+                        with self._lock:
+                            self._playback_buffer.append(audio_chunk)
+
+                            # Prevent buffer from growing too large (drop old chunks)
+                            if len(self._playback_buffer) > 10:
+                                dropped = self._playback_buffer.pop(0)
+                                print(f"⚠️  Dropped audio chunk (buffer overflow)")
+
+                    except Exception as e:
+                        print(f"[{self.handler_id}] Error processing audio for playback: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+            async def on_stop(self) -> None:
+                """Stop audio playback when handler stops."""
+                if self.stream:
+                    self.stream.stop()
+                    self.stream.close()
+                    self.stream = None
+
+                print(f"[{self.handler_id}] Played {self._chunks_played} audio chunks")
+
+            def __repr__(self) -> str:
+                return f"AudioSpeakerSink('{self.handler_id}', device={self.speaker_device_name})"
+
+        # Create and return handler instance
+        return AudioSpeakerSinkHandler(handler_id, device_name, sample_rate, chunk_size)
+
+    # Handle both @audio_sink_speaker and @audio_sink_speaker() syntax
+    if func is None:
+        return decorator
+    else:
+        return decorator(func)
+
+
 __all__ = [
     'video_effect',
     'audio_effect',
     'stream_processor',
+    'audio_source',
     'camera_source',
     'display_sink',
+    'audio_sink_file',
+    'audio_sink_speaker',
 ]
