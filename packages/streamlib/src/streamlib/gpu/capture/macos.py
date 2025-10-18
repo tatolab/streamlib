@@ -209,7 +209,7 @@ class AVFoundationCapture:
             texture = device.create_texture(
                 size=(self.width, self.height, 1),
                 format='bgra8unorm',
-                usage=wgpu.TextureUsage.COPY_DST | wgpu.TextureUsage.TEXTURE_BINDING
+                usage=wgpu.TextureUsage.COPY_DST | wgpu.TextureUsage.COPY_SRC | wgpu.TextureUsage.TEXTURE_BINDING
             )
 
             # Create zeroed bytes buffer (BGRA format, all zeros = black)

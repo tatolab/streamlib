@@ -31,13 +31,14 @@ classifiers = [
 
 dependencies = [
     "wgpu>=0.25.0",
-    "pygfx>=0.14.0",
     "pyobjc-core; sys_platform == 'darwin'",
     "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
     "pyobjc-framework-AVFoundation; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz; sys_platform == 'darwin'",
-    "opencv-python>=4.12.0.88",
-    "onnxruntime>=1.23.1",
+    "pillow>=12.0.0",
+    "coremltools>=8.3.0",
+    "numpy>=1.24.0",
+    "sounddevice>=0.4.6",
 ]
 
 [project.optional-dependencies]

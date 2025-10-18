@@ -30,3 +30,5 @@ Thumbs.db
 # uv
 .uv/
 uv.lock
+
+__internal__/
