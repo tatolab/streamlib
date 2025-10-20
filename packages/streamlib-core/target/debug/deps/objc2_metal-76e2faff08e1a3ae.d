@@ -1,0 +1,9 @@
+/Users/fonta/Repositories/tatolab/gst-mcp-tools/packages/streamlib-core/target/debug/deps/objc2_metal-76e2faff08e1a3ae.d: /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/lib.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/generated/mod.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/slice.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/../examples/triangle.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/../examples/triangle.metal
+
+/Users/fonta/Repositories/tatolab/gst-mcp-tools/packages/streamlib-core/target/debug/deps/libobjc2_metal-76e2faff08e1a3ae.rmeta: /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/lib.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/generated/mod.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/slice.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/../examples/triangle.rs /Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/../examples/triangle.metal
+
+/Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/lib.rs:
+/Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/generated/mod.rs:
+/Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/slice.rs:
+/Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/../examples/triangle.rs:
+/Users/fonta/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-metal-0.2.2/src/../examples/triangle.metal:

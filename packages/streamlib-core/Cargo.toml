@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "streamlib-core",
+    "streamlib-apple",
+    "streamlib-vulkan",
+    "streamlib-py",
+    "streamlib-runtime",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["streamlib contributors"]
+license = "MIT"
+repository = "https://github.com/tato123/streamlib"
+
+[workspace.dependencies]
+# Core dependencies
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+tokio = { version = "1.42", features = ["full"] }
+
+# GPU/Graphics
+metal = "0.29"
+ash = "0.38"  # Vulkan bindings
+
+# Platform bindings
+objc2 = "0.5"
+objc2-metal = "0.2"
+objc2-foundation = "0.2"
+libc = "0.2"
+
+# Shader compilation
+spirv = "0.3"
+
+# Python bindings
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+# WebRTC
+str0m = "0.6"
+
+# HTTP/Web
+axum = "0.7"
+tower-http = "0.6"
+hyper = "1.5"

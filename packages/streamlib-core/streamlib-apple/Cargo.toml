@@ -1,0 +1,16 @@
+[package]
+name = "streamlib-apple"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+streamlib-core = { path = "../streamlib-core" }
+thiserror.workspace = true
+anyhow.workspace = true
+metal.workspace = true
+objc2.workspace = true
+objc2-metal.workspace = true
+objc2-foundation.workspace = true
