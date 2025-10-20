@@ -10,3 +10,4 @@ repository.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+tokio.workspace = true

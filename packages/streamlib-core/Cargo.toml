@@ -2,10 +2,6 @@
 resolver = "2"
 members = [
     "streamlib-core",
-    "streamlib-apple",
-    "streamlib-vulkan",
-    "streamlib-py",
-    "streamlib-runtime",
 ]
 
 [workspace.package]
