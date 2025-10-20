@@ -14,13 +14,15 @@ When others say "it can't be done," we:
 
 ## The Vision
 
-**streamlib is a realtime streaming platform where AI agents can easily compose:**
+**streamlib is the infrastructure layer for agents that share real-time vision.**
 
-- Live camera streams
-- ML models (object detection, segmentation, etc.)
-- Dynamic audio/video generation
-- Real-time visual effects and overlays
-- All running on GPU at 60fps
+Not video streaming. Not a game engine. Not CV library glue.
+
+**The missing infrastructure** that lets:
+- Multiple entities (robots, helmets, systems) share visual reality in real-time
+- Agents generate video effects by writing shaders as code
+- Everything stays on GPU (zero-copy, sub-10ms latency)
+- Deployment on edge devices (Jetson, embedded Linux, armor)
 
 **This is the core vision. Everything else is in service of this goal.**
 
@@ -30,7 +32,7 @@ When others say "it can't be done," we:
 - Zero-copy pipelines (GPU-accelerated transfers)
 - Real-time processing (sub-millisecond operations)
 - GPU-first architecture (data never leaves the GPU)
-- Developer experience that makes the complex simple
+- Emergent behavior that looks like magic (not technical demos)
 
 ## Using uv for Package Management
 
@@ -134,11 +136,48 @@ uv run pytest tests/
 ### Be Polyglot
 
 **We write in whatever language gets the job done:**
-- **Python** - High-level API, rapid prototyping
-- **Rust** - Zero-copy operations, GPU interop, performance
-- **WGSL/Metal/GLSL** - Shader programming
-- **Objective-C** - macOS/iOS system integration
+- **Python** - High-level API, rapid prototyping, VALIDATION ONLY
+- **Rust** - The real implementation (zero-copy, GPU interop, real-time guarantees)
+- **HLSL** - Shader language for agent-to-agent video effects
+- **Objective-C** - macOS/iOS system integration when needed
 - **Whatever's needed** - Don't be limited by language boundaries
+
+## Rust is Non-Negotiable
+
+**Python was for validation. Rust is the real thing.**
+
+We already proved Python works. The decorator API works. The examples work.
+
+Now we're building the production infrastructure in Rust because:
+- Direct Metal/Vulkan access (IOSurface, DMA-BUF zero-copy)
+- HLSL → SPIR-V → Metal/Vulkan shader compilation
+- Real-time guarantees (no GC, no GIL)
+- Embedded deployment (Jetson, armor controllers)
+
+**DO NOT suggest:**
+- ❌ "Can we just use Python for this?"
+- ❌ "Maybe there's a Python library that..."
+- ❌ "This could be simpler if we..."
+- ❌ "Do we really need Rust for..."
+
+**The answer is always: Yes, we need Rust. We already validated with Python.**
+
+## The Python → Rust Migration
+
+**What stays in Python:**
+- Decorator API (user-facing, stays simple)
+- Example scripts (examples/ folder continues to work)
+- High-level abstractions
+
+**What moves to Rust:**
+- Core GPU operations (Metal/Vulkan texture management)
+- Shader compilation pipeline (HLSL → SPIR-V → native)
+- Real-time processing engine
+- Agent communication protocol
+
+**The Python API becomes a thin wrapper over Rust (via PyO3).**
+
+Users don't see the change. Examples still work. But underneath, it's real infrastructure.
 
 ### Always Measure Performance
 
