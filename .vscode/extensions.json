@@ -6,7 +6,7 @@
     // Rust
     "rust-lang.rust-analyzer",
     "vadimcn.vscode-lldb",
-    "serayuzgur.crates",
+    "fill-labs.dependi",
     "tamasfe.even-better-toml",
 
     // Python

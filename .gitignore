@@ -21,10 +21,10 @@ htmlcov/
 output/
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
+# Note: .vscode/ is committed for workspace recommendations
 
 # OS
 .DS_Store
