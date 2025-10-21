@@ -7,9 +7,9 @@
 //! This allows processors to work with concrete types (VideoFrame, AudioBuffer)
 //! without coupling to specific GPU APIs.
 
+use crate::ports::{PortMessage, PortType};
 use std::any::Any;
 use std::collections::HashMap;
-use crate::ports::{PortType, PortMessage};
 
 /// Video frame message
 ///
@@ -391,7 +391,7 @@ mod tests {
     fn test_metadata_value_conversions() {
         let _str_val: MetadataValue = "test".into();
         let _int_val: MetadataValue = 42i64.into();
-        let _float_val: MetadataValue = 3.14f64.into();
+        let _float_val: MetadataValue = 2.71f64.into();
         let _bool_val: MetadataValue = true.into();
     }
 

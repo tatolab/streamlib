@@ -6,6 +6,7 @@
 
 pub mod buffers;
 pub mod clock;
+pub mod error;
 pub mod events;
 pub mod messages;
 pub mod stream_processor;
@@ -17,6 +18,7 @@ pub mod topology;
 // Re-export core types
 pub use buffers::RingBuffer;
 pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
+pub use error::{StreamError, Result};
 pub use events::TickBroadcaster;
 pub use messages::{VideoFrame, AudioBuffer, DataMessage, GpuData, MetadataValue};
 pub use stream_processor::StreamProcessor;
@@ -24,8 +26,5 @@ pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
 };
 pub use runtime::{StreamRuntime, ShaderId};
-pub use texture::{GpuTexture, PixelFormat};
+pub use texture::{GpuTexture, GpuTextureHandle, PixelFormat};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
-
-// Re-export anyhow::Result for convenience
-pub use anyhow::Result;

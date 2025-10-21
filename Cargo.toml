@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "libs/streamlib-core",
-]
+members = ["libs/streamlib-core", "libs/streamlib-apple"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,31 +11,33 @@ repository = "https://github.com/tato123/streamlib"
 
 [workspace.dependencies]
 # Core dependencies
-thiserror = "2.0"
-anyhow = "1.0"
-tracing = "0.1"
-tokio = { version = "1.42", features = ["full"] }
+thiserror = "2.0.17"
+anyhow = "1.0.100"
+tracing = "0.1.41"
+tokio = { version = "1.48.0", features = ["full"] }
 
-# GPU/Graphics
-metal = "0.29"
-ash = "0.38"  # Vulkan bindings
-
-# Platform bindings
-objc2 = "0.5"
-objc2-metal = "0.2"
-objc2-foundation = "0.2"
-libc = "0.2"
+# Platform bindings (objc2 ecosystem - latest versions)
+# Note: All objc2 crates must use compatible versions
+objc2 = "0.6.3"
+objc2-metal = "0.3.2"
+objc2-io-surface = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-av-foundation = "0.3.2"
+libc = "0.2.177"
 
 # Shader compilation
-spirv = "0.3"
+# TODO: Add when implementing HLSL shader compilation:
+#   - hassle-rs (DXC wrapper for HLSL → SPIR-V)
+#   - spirv-cross-rs (SPIR-V → Metal/Vulkan)
 
 # Python bindings
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.27.0", features = ["extension-module"] }
 
 # WebRTC
-str0m = "0.6"
+str0m = "0.11.1"
 
 # HTTP/Web
-axum = "0.7"
-tower-http = "0.6"
-hyper = "1.5"
+axum = "0.8.6"
+tower-http = "0.6.6"
+hyper = "1.7.0"
