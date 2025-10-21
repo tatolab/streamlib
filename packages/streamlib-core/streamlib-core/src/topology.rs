@@ -148,15 +148,14 @@ impl TopologyAnalyzer {
     /// ```ignore
     /// use streamlib_core::TopologyAnalyzer;
     ///
-    /// // Assuming you have a concrete StreamRuntime implementation
-    /// let runtime: Box<dyn StreamRuntime> = ...;
+    /// let mut runtime = StreamRuntime::new(60.0);
     /// // ... add handlers, connect ports ...
     ///
-    /// let topology = TopologyAnalyzer::analyze(&*runtime);
+    /// let topology = TopologyAnalyzer::analyze(&runtime);
     /// println!("Found {} handlers", topology.nodes.len());
     /// println!("Found {} connections", topology.edges.len());
     /// ```
-    pub fn analyze(_runtime: &dyn crate::runtime::StreamRuntime) -> ConnectionTopology {
+    pub fn analyze(_runtime: &crate::runtime::StreamRuntime) -> ConnectionTopology {
         // TODO: Implement once StreamRuntime has introspection methods
         // This would:
         // 1. Walk through runtime.handlers

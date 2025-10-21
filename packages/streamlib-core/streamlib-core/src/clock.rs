@@ -34,6 +34,19 @@ pub struct TimedTick {
     pub delta_time: f64,
 }
 
+impl TimedTick {
+    /// Create a test tick (for unit tests)
+    #[cfg(test)]
+    pub fn test_tick(frame_number: u64) -> Self {
+        Self {
+            timestamp: frame_number as f64 / 60.0, // Simulate 60fps
+            frame_number,
+            clock_id: "test".to_string(),
+            delta_time: 1.0 / 60.0, // ~16.67ms
+        }
+    }
+}
+
 /// Abstract clock interface
 ///
 /// All clocks generate ticks at a specific rate and provide timing info.
@@ -41,7 +54,7 @@ pub trait Clock: Send {
     /// Wait for and return the next tick
     ///
     /// This is async and will sleep until the next tick time.
-    fn next_tick(&mut self) -> impl std::future::Future<Output = TimedTick> + Send;
+    fn next_tick(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = TimedTick> + Send + '_>>;
 
     /// Get nominal frame rate (ticks per second)
     fn get_fps(&self) -> f64;
@@ -120,7 +133,8 @@ impl SoftwareClock {
 }
 
 impl Clock for SoftwareClock {
-    async fn next_tick(&mut self) -> TimedTick {
+    fn next_tick(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = TimedTick> + Send + '_>> {
+        Box::pin(async move {
         // Calculate target time for this frame
         let target_time = self.start_time + self.period * self.frame_number as u32;
         let now = Instant::now();
@@ -165,6 +179,7 @@ impl Clock for SoftwareClock {
         self.frame_number += 1;
 
         tick
+        })
     }
 
     fn get_fps(&self) -> f64 {
@@ -219,12 +234,14 @@ impl PTPClock {
 }
 
 impl Clock for PTPClock {
-    async fn next_tick(&mut self) -> TimedTick {
-        // TODO Phase 4: Implement real PTP synchronization:
-        // - Get PTP time from client
-        // - Align tick to frame boundary
-        // - Sleep until next boundary
-        self.fallback.next_tick().await
+    fn next_tick(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = TimedTick> + Send + '_>> {
+        Box::pin(async move {
+            // TODO Phase 4: Implement real PTP synchronization:
+            // - Get PTP time from client
+            // - Align tick to frame boundary
+            // - Sleep until next boundary
+            self.fallback.next_tick().await
+        })
     }
 
     fn get_fps(&self) -> f64 {
@@ -281,12 +298,14 @@ impl GenlockClock {
 }
 
 impl Clock for GenlockClock {
-    async fn next_tick(&mut self) -> TimedTick {
-        // TODO Phase 4: Implement real hardware sync:
-        // - Wait for hardware pulse from SDI device
-        // - Generate tick when pulse arrives
-        // - Handle frame rate detection
-        self.fallback.next_tick().await
+    fn next_tick(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = TimedTick> + Send + '_>> {
+        Box::pin(async move {
+            // TODO Phase 4: Implement real hardware sync:
+            // - Wait for hardware pulse from SDI device
+            // - Generate tick when pulse arrives
+            // - Handle frame rate detection
+            self.fallback.next_tick().await
+        })
     }
 
     fn get_fps(&self) -> f64 {

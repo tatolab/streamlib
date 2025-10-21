@@ -11,3 +11,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
