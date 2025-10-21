@@ -3,7 +3,7 @@
 
 [tool.uv.workspace]
 members = [
-    "packages/streamlib",
+    "libs/streamlib",
 ]
 
 [tool.uv]
