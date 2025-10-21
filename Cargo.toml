@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "streamlib-core",
+    "libs/streamlib-core",
 ]
 
 [workspace.package]

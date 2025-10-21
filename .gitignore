@@ -32,3 +32,12 @@ Thumbs.db
 uv.lock
 
 __internal__/
+
+# Rust
+target/
+Cargo.lock
+
+# Node/Nx
+node_modules/
+.nx/
+dist/

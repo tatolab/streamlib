@@ -1,0 +1,23 @@
+{
+  "name": "streamlib",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/streamlib/src",
+  "projectType": "library",
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run pytest tests/",
+        "cwd": "libs/streamlib"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run ruff check src/",
+        "cwd": "libs/streamlib"
+      }
+    }
+  },
+  "tags": ["python", "library"]
+}

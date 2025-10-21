@@ -1,0 +1,28 @@
+{
+  "name": "gst-mcp-tools",
+  "version": "1.0.0",
+  "description": "**Realtime streaming platform where AI agents can easily compose:**",
+  "main": "index.js",
+  "directories": {
+    "example": "examples"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tato123/streamlib.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/tato123/streamlib/issues"
+  },
+  "homepage": "https://github.com/tato123/streamlib#readme",
+  "devDependencies": {
+    "@monodon/rust": "^2.3.0",
+    "@nx/workspace": "^21.6.5",
+    "nx": "^21.6.5"
+  }
+}
