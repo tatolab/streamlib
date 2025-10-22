@@ -51,6 +51,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::future::Future;
 use std::pin::Pin;
+use wgpu;
 
 /// Opaque shader ID (for future GPU operations)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,6 +109,13 @@ pub struct StreamRuntime {
 
     /// Optional platform-specific event loop hook
     event_loop: Option<EventLoopFn>,
+
+    /// WebGPU device for GPU operations
+    /// Platform-specific layers provide this (initialized from Metal/Vulkan/D3D12)
+    wgpu_device: Option<Arc<wgpu::Device>>,
+
+    /// WebGPU queue for submitting GPU work
+    wgpu_queue: Option<Arc<wgpu::Queue>>,
 }
 
 impl StreamRuntime {
@@ -134,6 +142,8 @@ impl StreamRuntime {
             clock_task: None,
             running: false,
             event_loop: None,
+            wgpu_device: None,
+            wgpu_queue: None,
         }
     }
 
@@ -164,6 +174,8 @@ impl StreamRuntime {
             clock_task: None,
             running: false,
             event_loop: None,
+            wgpu_device: None,
+            wgpu_queue: None,
         }
     }
 
@@ -181,6 +193,37 @@ impl StreamRuntime {
     /// ```
     pub fn set_event_loop(&mut self, event_loop: EventLoopFn) {
         self.event_loop = Some(event_loop);
+    }
+
+    /// Set the WebGPU device and queue
+    ///
+    /// Platform-specific layers (streamlib-apple, streamlib-jetson, etc.) call this
+    /// to provide the WebGPU device initialized from their native GPU (Metal, CUDA, Vulkan).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // In streamlib-apple:
+    /// let (device, queue) = create_wgpu_from_metal(...);
+    /// runtime.set_wgpu(device, queue);
+    /// ```
+    pub fn set_wgpu(&mut self, device: wgpu::Device, queue: wgpu::Queue) {
+        self.wgpu_device = Some(Arc::new(device));
+        self.wgpu_queue = Some(Arc::new(queue));
+    }
+
+    /// Get the WebGPU device
+    ///
+    /// Returns None if no device has been set by the platform layer.
+    pub fn wgpu_device(&self) -> Option<Arc<wgpu::Device>> {
+        self.wgpu_device.clone()
+    }
+
+    /// Get the WebGPU queue
+    ///
+    /// Returns None if no queue has been set by the platform layer.
+    pub fn wgpu_queue(&self) -> Option<Arc<wgpu::Queue>> {
+        self.wgpu_queue.clone()
     }
 
     /// Add a processor to the runtime

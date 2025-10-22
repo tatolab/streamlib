@@ -41,3 +41,7 @@ str0m = "0.11.1"
 axum = "0.8.6"
 tower-http = "0.6.6"
 hyper = "1.7.0"
+
+# WebGPU (cross-platform GPU abstraction)
+wgpu = "27.0.1"
+wgpu-hal = "27.0.1"

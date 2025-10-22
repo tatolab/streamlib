@@ -1,30 +1,73 @@
-//! streamlib-apple: Metal/IOSurface GPU backend for macOS and iOS
+//! streamlib-apple: Metal → WebGPU bridge for macOS and iOS
 //!
-//! This crate provides zero-copy GPU texture management for Apple platforms.
-//! It implements the streamlib runtime primitives using:
-//! - Metal for GPU operations
-//! - IOSurface for zero-copy texture sharing
-//! - AVFoundation for camera capture
-//! - ARKit for AR capabilities (iOS full, macOS limited)
+//! This crate provides thin wrappers around Apple platform features,
+//! exposing them as WebGPU resources for use with streamlib-core.
+//!
+//! ## Architecture
+//!
+//! streamlib-apple is a **wrapper layer only** - it doesn't implement
+//! any runtime logic or processing. Instead, it:
+//!
+//! 1. Wraps native Metal GPU resources
+//! 2. Bridges them to WebGPU (wgpu)
+//! 3. Wraps platform features (Camera, ARKit, IOSurface)
+//! 4. Exposes everything as WebGPU-compatible types
+//!
+//! ## Core Modules
+//!
+//! - `wgpu_bridge` - Metal ↔ WebGPU zero-copy bridging
+//! - `metal` - Metal device creation and management
+//! - `iosurface` - Zero-copy texture sharing via IOSurface
+//! - `camera` - AVFoundation camera capture → WebGPU textures
+//! - `arkit` - ARKit AR frames → WebGPU textures
+//! - `texture` - Metal texture utilities
+//!
+//! ## Optional Features
+//!
+//! - `display` - Window/display support (disabled by default for headless use)
+//!
+//! ## Example: Creating a WebGPU-enabled runtime
+//!
+//! ```ignore
+//! use streamlib_apple::{WgpuBridge, metal::MetalDevice};
+//! use streamlib_core::StreamRuntime;
+//!
+//! // Create Metal device
+//! let metal_device = MetalDevice::system_default()?;
+//!
+//! // Create WebGPU bridge (wraps Metal)
+//! let bridge = WgpuBridge::new(metal_device.device().clone()).await?;
+//!
+//! // Create runtime with WebGPU
+//! let mut runtime = StreamRuntime::new(60.0);
+//! let (device, queue) = bridge.into_wgpu();
+//! runtime.set_wgpu(device, queue);
+//! ```
 
-// Platform-specific modules (flat structure)
+// Core wrapper modules
+pub mod wgpu_bridge;
 pub mod metal;
 pub mod iosurface;
 pub mod camera;
 pub mod arkit;
 pub mod texture;
+
+// Optional display support (feature-gated)
+#[cfg(feature = "display")]
 pub mod display;
-pub mod processors;
-pub mod runtime_ext;
-pub mod text;
+
+// Internal helpers (not part of public API)
+mod runtime_ext;
+mod runtime_helpers;
 
 // Re-export core types
 pub use streamlib_core::{Result, StreamError};
 
-// Re-export Metal-specific types
-pub use texture::MetalTextureGpuData;
+// Re-export wrapper types
+pub use wgpu_bridge::WgpuBridge;
+pub use metal::MetalDevice;
 
-// Re-export runtime constructor (auto-configured for macOS)
+// Re-export convenience constructor (auto-configures for macOS)
 pub use runtime_ext::new_runtime;
 
 #[cfg(test)]

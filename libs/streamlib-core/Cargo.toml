@@ -13,5 +13,8 @@ tracing.workspace = true
 tokio.workspace = true
 crossbeam-channel = "0.5"
 
+# WebGPU for cross-platform GPU abstraction
+wgpu.workspace = true
+
 [dev-dependencies]
 tracing-subscriber = "0.3"

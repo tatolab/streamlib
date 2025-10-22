@@ -26,5 +26,5 @@ pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
 };
 pub use runtime::{StreamRuntime, ShaderId};
-pub use texture::{GpuTexture, GpuTextureHandle, PixelFormat};
+pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};

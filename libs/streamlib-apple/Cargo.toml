@@ -12,6 +12,10 @@ thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 
+# WebGPU for Metal ↔ WebGPU bridging
+wgpu.workspace = true
+wgpu-hal.workspace = true
+
 # Modern objc2 ecosystem - comprehensive Apple framework bindings
 objc2.workspace = true
 objc2-metal.workspace = true
