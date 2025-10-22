@@ -12,7 +12,19 @@ use objc2::runtime::ProtocolObject;
 use objc2::msg_send;
 use objc2_io_surface::{IOSurface, IOSurfaceRef};
 use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureUsage};
-use streamlib_core::{PixelFormat, Result, StreamError};
+use streamlib_core::{Result, StreamError};
+
+/// Pixel format for IOSurface textures
+///
+/// Simplified enum for the formats we support on Apple platforms.
+/// Maps to both Metal pixel formats and IOSurface FourCC codes.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum PixelFormat {
+    /// BGRA 8-bit per channel (most common on macOS)
+    Bgra8Unorm,
+    /// RGBA 8-bit per channel
+    Rgba8Unorm,
+}
 
 /// Creates a Metal texture from an IOSurface (zero-copy)
 ///

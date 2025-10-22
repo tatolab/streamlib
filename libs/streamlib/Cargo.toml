@@ -1,0 +1,34 @@
+[package]
+name = "streamlib"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform-agnostic real-time video streaming infrastructure"
+keywords = ["video", "streaming", "gpu", "real-time", "webrtc"]
+categories = ["multimedia::video", "multimedia", "api-bindings"]
+
+[dependencies]
+# Core runtime (always included, platform-agnostic)
+streamlib-core = { path = "../streamlib-core" }
+
+# Platform-specific implementations (conditional compilation)
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+streamlib-apple = { path = "../streamlib-apple" }
+
+# Future platform support
+# [target.'cfg(target_os = "linux")'.dependencies]
+# streamlib-linux = { path = "../streamlib-linux" }
+
+# [target.'cfg(target_os = "windows")'.dependencies]
+# streamlib-windows = { path = "../streamlib-windows" }
+
+[dev-dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+
+[package.metadata.docs.rs]
+# Generate docs for all platforms
+all-features = true
+targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]

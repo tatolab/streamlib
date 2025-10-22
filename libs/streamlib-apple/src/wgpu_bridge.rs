@@ -10,6 +10,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLTexture};
 use wgpu;
 use wgpu::hal;
+use metal;
+use metal::foreign_types::ForeignTypeRef;
 
 /// Bridge for converting between Metal and WebGPU resources
 ///
@@ -41,7 +43,7 @@ impl WgpuBridge {
     /// A bridge that can convert Metal resources to WebGPU
     pub async fn new(metal_device: Retained<ProtocolObject<dyn MTLDevice>>) -> Result<Self> {
         // Create wgpu instance
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::METAL,
             ..Default::default()
         });
@@ -54,19 +56,18 @@ impl WgpuBridge {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| StreamError::GpuError("Failed to find Metal adapter".into()))?;
+            .map_err(|e| StreamError::GpuError(format!("Failed to find Metal adapter: {}", e)))?;
 
         // Request device and queue
         let (wgpu_device, wgpu_queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("StreamLib Metal Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("StreamLib Metal Device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+                experimental_features: Default::default(),
+            })
             .await
             .map_err(|e| StreamError::GpuError(format!("Failed to create device: {}", e)))?;
 
@@ -104,9 +105,15 @@ impl WgpuBridge {
         let width = metal_texture.width();
         let height = metal_texture.height();
 
+        // Convert objc2_metal texture to metal crate texture
+        let metal_texture_ptr = metal_texture as *const _ as *mut std::ffi::c_void;
+        let metal_crate_texture = unsafe {
+            metal::TextureRef::from_ptr(metal_texture_ptr as *mut _)
+        }.to_owned();
+
         // Create wgpu-hal Metal texture from raw Metal texture
         let hal_texture = hal::metal::Device::texture_from_raw(
-            metal_texture.clone(),  // Clone the Retained handle
+            metal_crate_texture,
             format.into(),
             metal::MTLTextureType::D2,
             1,  // array_layers

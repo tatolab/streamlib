@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["libs/streamlib-core", "libs/streamlib-apple"]
+members = [
+    "libs/streamlib",           # Top-level facade (platform-agnostic API)
+    "libs/streamlib-core",      # Platform-agnostic runtime
+    "libs/streamlib-apple"      # macOS/iOS platform implementation
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,6 +28,10 @@ objc2-io-surface = "0.3.2"
 objc2-core-video = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-av-foundation = "0.3.2"
+objc2-app-kit = "0.3.2"
+objc2-quartz-core = "0.3.2"
+objc2-core-text = "0.3.2"
+objc2-core-graphics = "0.3.2"
 libc = "0.2.177"
 
 # Shader compilation

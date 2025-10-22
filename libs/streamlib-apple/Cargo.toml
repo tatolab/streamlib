@@ -11,18 +11,24 @@ streamlib-core = { path = "../streamlib-core" }
 thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+tokio = { version = "1.0", features = ["rt", "time", "macros", "signal"] }
 
 # WebGPU for Metal ↔ WebGPU bridging
 wgpu.workspace = true
 wgpu-hal.workspace = true
+metal = "0.32"  # Metal crate for wgpu-hal interop
 
 # Modern objc2 ecosystem - comprehensive Apple framework bindings
 objc2.workspace = true
 objc2-metal.workspace = true
+objc2-app-kit.workspace = true
 objc2-io-surface.workspace = true
 objc2-core-video.workspace = true
 objc2-foundation.workspace = true
 objc2-av-foundation.workspace = true
+objc2-quartz-core.workspace = true
+objc2-core-text.workspace = true
+objc2-core-graphics.workspace = true
 
 [dev-dependencies]
 tracing-subscriber = "0.3"
