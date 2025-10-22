@@ -13,9 +13,19 @@ pub mod iosurface;
 pub mod camera;
 pub mod arkit;
 pub mod texture;
+pub mod display;
+pub mod processors;
+pub mod runtime_ext;
+pub mod text;
 
 // Re-export core types
 pub use streamlib_core::{Result, StreamError};
+
+// Re-export Metal-specific types
+pub use texture::MetalTextureGpuData;
+
+// Re-export runtime constructor (auto-configured for macOS)
+pub use runtime_ext::new_runtime;
 
 #[cfg(test)]
 mod tests {

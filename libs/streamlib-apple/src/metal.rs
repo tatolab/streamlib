@@ -39,9 +39,19 @@ impl MetalDevice {
         &self.device
     }
 
+    /// Clone the Metal device (increments retain count)
+    pub fn clone_device(&self) -> Retained<ProtocolObject<dyn MTLDevice>> {
+        Retained::clone(&self.device)
+    }
+
     /// Get the Metal command queue
     pub fn command_queue(&self) -> &ProtocolObject<dyn MTLCommandQueue> {
         &self.command_queue
+    }
+
+    /// Clone the Metal command queue (increments retain count)
+    pub fn clone_command_queue(&self) -> Retained<ProtocolObject<dyn MTLCommandQueue>> {
+        Retained::clone(&self.command_queue)
     }
 
     /// Create a new command buffer for GPU commands

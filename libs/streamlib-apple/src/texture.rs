@@ -3,7 +3,67 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
-use streamlib_core::{GpuTexture, GpuTextureHandle, PixelFormat, Result, StreamError};
+use streamlib_core::{GpuTexture, GpuTextureHandle, PixelFormat, Result, StreamError, GpuData};
+use std::any::Any;
+
+/// Metal texture wrapper that implements GpuData trait
+///
+/// This allows Metal textures to be used in VideoFrame messages
+/// and passed through the streamlib runtime's port system.
+///
+/// # Example
+///
+/// ```ignore
+/// use streamlib_apple::texture::MetalTextureGpuData;
+/// use streamlib_core::VideoFrame;
+///
+/// let metal_texture = /* ... */;
+/// let gpu_data = MetalTextureGpuData::new(metal_texture);
+/// let frame = VideoFrame::new(
+///     Box::new(gpu_data),
+///     timestamp,
+///     frame_number,
+///     width,
+///     height,
+/// );
+/// ```
+#[derive(Clone)]
+pub struct MetalTextureGpuData {
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
+}
+
+impl MetalTextureGpuData {
+    /// Create a new MetalTextureGpuData from a Metal texture
+    pub fn new(texture: Retained<ProtocolObject<dyn MTLTexture>>) -> Self {
+        Self { texture }
+    }
+
+    /// Get a reference to the underlying Metal texture
+    pub fn texture(&self) -> &ProtocolObject<dyn MTLTexture> {
+        &self.texture
+    }
+
+    /// Get a cloned Retained handle to the Metal texture
+    pub fn clone_texture(&self) -> Retained<ProtocolObject<dyn MTLTexture>> {
+        Retained::clone(&self.texture)
+    }
+}
+
+// Safety: Metal textures are thread-safe (reference-counted)
+// The underlying MTLTexture is safe to Send/Sync as it's reference-counted
+// by Metal's runtime. We're not mutating the texture, just holding a reference.
+unsafe impl Send for MetalTextureGpuData {}
+unsafe impl Sync for MetalTextureGpuData {}
+
+impl GpuData for MetalTextureGpuData {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn GpuData> {
+        Box::new(self.clone())
+    }
+}
 
 /// Create a GpuTexture from a Metal texture
 ///

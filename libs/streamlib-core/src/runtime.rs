@@ -49,10 +49,18 @@ use crate::stream_processor::StreamProcessor;
 use anyhow::{Result, anyhow};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::future::Future;
+use std::pin::Pin;
 
 /// Opaque shader ID (for future GPU operations)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ShaderId(pub u64);
+
+/// Platform-specific event loop hook
+///
+/// Platforms can provide a custom event loop that runs alongside the runtime.
+/// This is used by macOS to process NSApplication events on the main thread.
+pub type EventLoopFn = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send>;
 
 /// StreamRuntime - Manages clock, handlers, and connections
 ///
@@ -97,6 +105,9 @@ pub struct StreamRuntime {
 
     /// Running flag
     running: bool,
+
+    /// Optional platform-specific event loop hook
+    event_loop: Option<EventLoopFn>,
 }
 
 impl StreamRuntime {
@@ -122,6 +133,7 @@ impl StreamRuntime {
             handler_threads: Vec::new(),
             clock_task: None,
             running: false,
+            event_loop: None,
         }
     }
 
@@ -151,7 +163,24 @@ impl StreamRuntime {
             handler_threads: Vec::new(),
             clock_task: None,
             running: false,
+            event_loop: None,
         }
+    }
+
+    /// Set a platform-specific event loop hook
+    ///
+    /// This allows platforms (like macOS) to inject their own event processing
+    /// that runs alongside the runtime. The event loop will be called during `run()`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// runtime.set_event_loop(Box::new(|| {
+    ///     Box::pin(async { /* platform event loop */ Ok(()) })
+    /// }));
+    /// ```
+    pub fn set_event_loop(&mut self, event_loop: EventLoopFn) {
+        self.event_loop = Some(event_loop);
     }
 
     /// Add a processor to the runtime
@@ -246,31 +275,42 @@ impl StreamRuntime {
 
     /// Run the runtime until stopped
     ///
-    /// This blocks the current task until `stop()` is called or
-    /// the runtime is interrupted.
+    /// This starts the runtime and blocks until `stop()` is called or
+    /// the runtime is interrupted (Ctrl+C).
+    ///
+    /// Automatically handles:
+    /// - Starting all processors
+    /// - Running the clock
+    /// - Platform-specific event loops (if configured)
+    /// - Clean shutdown on Ctrl+C
     ///
     /// # Example
     ///
     /// ```ignore
-    /// runtime.start().await?;
-    /// runtime.run().await?;  // Blocks here
+    /// runtime.run().await?;  // Starts and blocks here
     /// ```
     pub async fn run(&mut self) -> Result<()> {
+        // Auto-start if not already running
         if !self.running {
-            return Err(anyhow!("Runtime not running (call start() first)"));
+            self.start().await?;
         }
 
         tracing::info!("Runtime running (press Ctrl+C to stop)");
 
-        // Block until stopped
-        // In real implementation, this would wait for shutdown signal
-        // For now, just yield control
-        tokio::signal::ctrl_c().await
-            .map_err(|e| anyhow!("Failed to listen for shutdown signal: {}", e))?;
+        // Use platform-specific event loop if provided, otherwise default behavior
+        if let Some(event_loop) = self.event_loop.take() {
+            // Platform provided an event loop - use it
+            tracing::debug!("Using platform-specific event loop");
+            event_loop().await?;
+        } else {
+            // Default behavior: wait for Ctrl+C
+            tokio::signal::ctrl_c().await
+                .map_err(|e| anyhow!("Failed to listen for shutdown signal: {}", e))?;
 
-        tracing::info!("Shutdown signal received");
+            tracing::info!("Shutdown signal received");
+        }
+
         self.stop().await?;
-
         Ok(())
     }
 
