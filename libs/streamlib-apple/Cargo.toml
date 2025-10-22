@@ -12,6 +12,8 @@ thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tokio = { version = "1.0", features = ["rt", "time", "macros", "signal"] }
+pollster = "0.3"  # For blocking on async in constructors
+dispatch2 = "0.3"  # For GCD dispatch queues - must match objc2 version
 
 # WebGPU for Metal ↔ WebGPU bridging
 wgpu.workspace = true

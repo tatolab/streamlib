@@ -45,30 +45,30 @@
 //! ```
 
 // Core wrapper modules
-pub mod wgpu_bridge;
-pub mod metal;
-pub mod iosurface;
-pub mod camera;
 pub mod arkit;
+pub mod iosurface;
+pub mod metal;
 pub mod texture;
+pub mod wgpu_bridge;
 
-// Optional display support (feature-gated)
-#[cfg(feature = "display")]
-pub mod display;
+// StreamProcessor implementations
+pub mod processors;
+
+// Runtime configuration (used by streamlib facade)
+pub mod runtime_ext;
 
 // Internal helpers (not part of public API)
-mod runtime_ext;
 mod runtime_helpers;
 
 // Re-export core types
 pub use streamlib_core::{Result, StreamError};
 
 // Re-export wrapper types
-pub use wgpu_bridge::WgpuBridge;
 pub use metal::MetalDevice;
+pub use wgpu_bridge::WgpuBridge;
 
-// Re-export convenience constructor (auto-configures for macOS)
-pub use runtime_ext::new_runtime;
+// Re-export processor implementations
+pub use processors::{AppleCameraProcessor, AppleDisplayProcessor};
 
 #[cfg(test)]
 mod tests {

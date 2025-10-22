@@ -3,11 +3,10 @@
 //! Provides helper functions to run the StreamRuntime while handling
 //! platform requirements (like main-thread event processing on macOS).
 
-use streamlib_core::StreamRuntime;
+use streamlib_core::{StreamRuntime, Result};
 use objc2::{MainThreadMarker, rc::Retained, msg_send};
 use objc2_app_kit::{NSApplication, NSEvent, NSEventMask};
 use objc2_foundation::NSDate;
-use anyhow::Result;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 

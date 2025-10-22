@@ -157,6 +157,11 @@ impl WgpuBridge {
         &self.wgpu_queue
     }
 
+    /// Get both WebGPU device and queue as a tuple
+    pub fn wgpu(&self) -> (&wgpu::Device, &wgpu::Queue) {
+        (&self.wgpu_device, &self.wgpu_queue)
+    }
+
     /// Get the Metal device
     pub fn metal_device(&self) -> &ProtocolObject<dyn MTLDevice> {
         &self.metal_device

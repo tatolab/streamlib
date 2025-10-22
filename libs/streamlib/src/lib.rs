@@ -60,16 +60,19 @@
 
 // Re-export all core types (always available, platform-agnostic)
 pub use streamlib_core::{
-    // Runtime
-    StreamRuntime, ShaderId,
-
     // Processors and Ports
     StreamProcessor,
     StreamInput, StreamOutput,
     PortType, PortMessage,
 
+    // Processor Traits (platform implementations provided below)
+    CameraProcessor as CameraProcessorTrait,
+    DisplayProcessor as DisplayProcessorTrait,
+    CameraDevice, CameraOutputPorts,
+    WindowId, DisplayInputPorts,
+
     // Messages
-    VideoFrame, AudioBuffer, DataMessage, GpuData, MetadataValue,
+    VideoFrame, AudioBuffer, DataMessage, MetadataValue,
 
     // Textures (WebGPU types)
     Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView,
@@ -85,7 +88,14 @@ pub use streamlib_core::{
 
     // Error handling
     StreamError, Result,
+
+    // Other types
+    ShaderId,
 };
+
+// Platform-configured runtime wrapper
+mod runtime;
+pub use runtime::StreamRuntime;
 
 //
 // Platform-Specific Processors
@@ -102,10 +112,11 @@ pub use streamlib_apple::{
     WgpuBridge,
     MetalDevice,
 
-    // TODO: Implement these processors in streamlib-apple
-    // CameraProcessor,
-    // DisplayProcessor,
-    // ARKitProcessor,
+    // Processor implementations (automatically selected on Apple platforms)
+    AppleCameraProcessor as CameraProcessor,
+    AppleDisplayProcessor as DisplayProcessor,
+
+    // TODO: ARKitProcessor,
 };
 
 #[cfg(target_os = "linux")]

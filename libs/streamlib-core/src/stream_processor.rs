@@ -1,5 +1,5 @@
 use crate::clock::TimedTick;
-use anyhow::Result;
+use crate::Result;
 
 pub trait StreamProcessor: Send + 'static {
     fn process(&mut self, tick: TimedTick) -> Result<()>;

@@ -46,7 +46,7 @@
 use crate::clock::{Clock, SoftwareClock};
 use crate::events::TickBroadcaster;
 use crate::stream_processor::StreamProcessor;
-use anyhow::{Result, anyhow};
+use crate::{Result, StreamError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::future::Future;
@@ -256,7 +256,7 @@ impl StreamRuntime {
 
     pub fn connect<T: crate::ports::PortMessage>(&mut self, output: &mut crate::ports::StreamOutput<T>, input: &mut crate::ports::StreamInput<T>) -> Result<()> {
         if self.running {
-            return Err(anyhow!("Cannot connect ports while runtime is running"));
+            return Err(StreamError::Configuration("Cannot connect ports while runtime is running".into()));
         }
 
         input.connect(output.buffer().clone());
@@ -281,7 +281,7 @@ impl StreamRuntime {
     /// ```
     pub async fn start(&mut self) -> Result<()> {
         if self.running {
-            return Err(anyhow!("Runtime already running"));
+            return Err(StreamError::Configuration("Runtime already running".into()));
         }
 
         let handler_count = self.pending_processors.len();
@@ -348,7 +348,7 @@ impl StreamRuntime {
         } else {
             // Default behavior: wait for Ctrl+C
             tokio::signal::ctrl_c().await
-                .map_err(|e| anyhow!("Failed to listen for shutdown signal: {}", e))?;
+                .map_err(|e| StreamError::Configuration(format!("Failed to listen for shutdown signal: {}", e)))?;
 
             tracing::info!("Shutdown signal received");
         }
@@ -418,7 +418,7 @@ impl StreamRuntime {
 
     fn spawn_clock_task(&mut self) -> Result<()> {
         let mut clock = self.clock.take()
-            .ok_or_else(|| anyhow!("Clock already started"))?;
+            .ok_or_else(|| StreamError::Configuration("Clock already started".into()))?;
 
         let broadcaster = Arc::clone(&self.broadcaster);
 

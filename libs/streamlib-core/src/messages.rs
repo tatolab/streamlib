@@ -1,27 +1,30 @@
-//! Platform-agnostic message types for stream data
+//! Message types for stream data
 //!
 //! These types define the **data contracts** between processors.
-//! They are platform-agnostic, with trait-based interfaces that
-//! platform-specific crates (streamlib-metal, streamlib-vulkan) implement.
+//! All GPU data uses **WebGPU (wgpu)** as the intermediate representation.
 //!
-//! This allows processors to work with concrete types (VideoFrame, AudioBuffer)
-//! without coupling to specific GPU APIs.
+//! Platform-specific crates (streamlib-apple, streamlib-linux) convert
+//! their native GPU types (Metal, Vulkan) to/from WebGPU internally.
+//!
+//! This provides:
+//! - Zero-copy GPU operations (via wgpu-hal bridges)
+//! - Platform-agnostic shader effects
+//! - Simple, concrete types (no trait objects)
 
 use crate::ports::{PortMessage, PortType};
-use std::any::Any;
+use std::sync::Arc;
 use std::collections::HashMap;
 
 /// Video frame message
 ///
-/// Represents a single frame of video data on the GPU.
-/// The actual GPU texture implementation is platform-specific.
+/// Represents a single frame of video data as a WebGPU texture.
+/// Platform-specific processors convert their native GPU types internally.
 ///
-/// # Platform-Specific Implementation
+/// # Architecture
 ///
-/// Platform crates provide concrete implementations:
-/// - `streamlib-metal`: Uses `metal::Texture`
-/// - `streamlib-vulkan`: Uses `vk::Image`
-/// - `streamlib-wgpu`: Uses `wgpu::Texture`
+/// - Camera processors (streamlib-apple): Metal → WebGPU
+/// - Display processors (streamlib-apple): WebGPU → Metal (if needed)
+/// - Effect processors: Work directly with WebGPU shaders
 ///
 /// # Example
 ///
@@ -33,22 +36,16 @@ use std::collections::HashMap;
 /// println!("Frame {}x{} @ {:.3}s",
 ///     frame.width, frame.height, frame.timestamp);
 ///
-/// // Access platform-specific texture
-/// if let Some(metal_texture) = frame.gpu_data.downcast_ref::<metal::Texture>() {
-///     // Use Metal texture directly
-/// }
+/// // Access WebGPU texture directly
+/// let texture: &wgpu::Texture = &frame.texture;
 /// ```
 #[derive(Clone)]
 pub struct VideoFrame {
-    /// Platform-specific GPU texture (metal::Texture, vk::Image, etc.)
+    /// WebGPU texture containing the frame data
     ///
-    /// Use `downcast_ref()` to access the concrete type:
-    /// ```ignore
-    /// if let Some(metal_texture) = frame.gpu_data.downcast_ref::<metal::Texture>() {
-    ///     // Use Metal-specific APIs
-    /// }
-    /// ```
-    pub gpu_data: Box<dyn GpuData>,
+    /// This is the universal GPU representation. Platform processors
+    /// convert to/from their native types (Metal, Vulkan) internally.
+    pub texture: Arc<wgpu::Texture>,
 
     /// Timestamp in seconds since stream start
     pub timestamp: f64,
@@ -69,14 +66,14 @@ pub struct VideoFrame {
 impl VideoFrame {
     /// Create a new video frame
     pub fn new(
-        gpu_data: Box<dyn GpuData>,
+        texture: Arc<wgpu::Texture>,
         timestamp: f64,
         frame_number: u64,
         width: u32,
         height: u32,
     ) -> Self {
         Self {
-            gpu_data,
+            texture,
             timestamp,
             frame_number,
             width,
@@ -87,7 +84,7 @@ impl VideoFrame {
 
     /// Create a video frame with metadata
     pub fn with_metadata(
-        gpu_data: Box<dyn GpuData>,
+        texture: Arc<wgpu::Texture>,
         timestamp: f64,
         frame_number: u64,
         width: u32,
@@ -95,7 +92,7 @@ impl VideoFrame {
         metadata: HashMap<String, MetadataValue>,
     ) -> Self {
         Self {
-            gpu_data,
+            texture,
             timestamp,
             frame_number,
             width,
@@ -107,8 +104,7 @@ impl VideoFrame {
 
 /// Audio buffer message
 ///
-/// Represents a chunk of audio data on the GPU.
-/// The actual GPU buffer implementation is platform-specific.
+/// Represents a chunk of audio data as a WebGPU buffer.
 ///
 /// # Example
 ///
@@ -124,8 +120,8 @@ impl VideoFrame {
 /// ```
 #[derive(Clone)]
 pub struct AudioBuffer {
-    /// Platform-specific GPU buffer (metal::Buffer, vk::Buffer, etc.)
-    pub gpu_data: Box<dyn GpuData>,
+    /// WebGPU buffer containing audio samples
+    pub buffer: Arc<wgpu::Buffer>,
 
     /// Timestamp in seconds since stream start
     pub timestamp: f64,
@@ -146,14 +142,14 @@ pub struct AudioBuffer {
 impl AudioBuffer {
     /// Create a new audio buffer
     pub fn new(
-        gpu_data: Box<dyn GpuData>,
+        buffer: Arc<wgpu::Buffer>,
         timestamp: f64,
         sample_count: usize,
         sample_rate: u32,
         channels: u32,
     ) -> Self {
         Self {
-            gpu_data,
+            buffer,
             timestamp,
             sample_count,
             sample_rate,
@@ -166,23 +162,24 @@ impl AudioBuffer {
 /// Generic data message
 ///
 /// For custom data types that don't fit VideoFrame or AudioBuffer.
+/// Uses WebGPU buffer for GPU-resident data.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use streamlib_core::messages::DataMessage;
 ///
-/// // ML detection results
+/// // ML detection results in GPU buffer
 /// let detections = DataMessage::new(
-///     Box::new(detection_data),
+///     detection_buffer,
 ///     timestamp,
 ///     Some(hashmap!{ "model".into() => "yolov8".into() })
 /// );
 /// ```
 #[derive(Clone)]
 pub struct DataMessage {
-    /// Platform-specific GPU data or CPU data
-    pub data: Box<dyn GpuData>,
+    /// WebGPU buffer containing custom data
+    pub buffer: Arc<wgpu::Buffer>,
 
     /// Timestamp in seconds since stream start
     pub timestamp: f64,
@@ -194,54 +191,15 @@ pub struct DataMessage {
 impl DataMessage {
     /// Create a new data message
     pub fn new(
-        data: Box<dyn GpuData>,
+        buffer: Arc<wgpu::Buffer>,
         timestamp: f64,
         metadata: Option<HashMap<String, MetadataValue>>,
     ) -> Self {
         Self {
-            data,
+            buffer,
             timestamp,
             metadata,
         }
-    }
-}
-
-/// Trait for platform-specific GPU data
-///
-/// Platform crates implement this for their GPU types:
-/// - Metal: implement for `metal::Texture`, `metal::Buffer`
-/// - Vulkan: implement for `vk::Image`, `vk::Buffer`
-/// - wgpu: implement for `wgpu::Texture`, `wgpu::Buffer`
-///
-/// This allows zero-copy access to platform-specific GPU resources
-/// while maintaining type safety.
-///
-/// # Safety
-///
-/// Implementors must ensure:
-/// - `as_any()` returns a reference to the concrete GPU type
-/// - The GPU resource is valid for the lifetime of the object
-/// - Thread-safety guarantees match the underlying GPU API
-pub trait GpuData: Send + Sync {
-    /// Downcast to concrete GPU type (metal::Texture, vk::Image, etc.)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// if let Some(metal_texture) = gpu_data.as_any().downcast_ref::<metal::Texture>() {
-    ///     // Use Metal-specific APIs
-    /// }
-    /// ```
-    fn as_any(&self) -> &dyn Any;
-
-    /// Clone the GPU data (may be reference-counted, not a deep copy)
-    fn clone_box(&self) -> Box<dyn GpuData>;
-}
-
-// Implement Clone for Box<dyn GpuData>
-impl Clone for Box<dyn GpuData> {
-    fn clone(&self) -> Self {
-        self.clone_box()
     }
 }
 
@@ -317,76 +275,6 @@ impl PortMessage for DataMessage {
 mod tests {
     use super::*;
 
-    // Mock GPU data for testing
-    #[derive(Clone)]
-    struct MockTexture {
-        id: u32,
-    }
-
-    impl GpuData for MockTexture {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn clone_box(&self) -> Box<dyn GpuData> {
-            Box::new(self.clone())
-        }
-    }
-
-    #[test]
-    fn test_video_frame_creation() {
-        let texture = Box::new(MockTexture { id: 42 });
-        let frame = VideoFrame::new(texture, 1.0, 30, 1920, 1080);
-
-        assert_eq!(frame.timestamp, 1.0);
-        assert_eq!(frame.frame_number, 30);
-        assert_eq!(frame.width, 1920);
-        assert_eq!(frame.height, 1080);
-        assert!(frame.metadata.is_none());
-    }
-
-    #[test]
-    fn test_video_frame_with_metadata() {
-        let texture = Box::new(MockTexture { id: 42 });
-        let mut metadata = HashMap::new();
-        metadata.insert("detections".to_string(), MetadataValue::Int(5));
-
-        let frame = VideoFrame::with_metadata(texture, 1.0, 30, 1920, 1080, metadata);
-
-        assert!(frame.metadata.is_some());
-        if let Some(ref meta) = frame.metadata {
-            if let Some(MetadataValue::Int(count)) = meta.get("detections") {
-                assert_eq!(*count, 5);
-            } else {
-                panic!("Expected Int metadata");
-            }
-        }
-    }
-
-    #[test]
-    fn test_downcast_gpu_data() {
-        let texture = MockTexture { id: 42 };
-        let gpu_data: Box<dyn GpuData> = Box::new(texture);
-
-        // Downcast to concrete type
-        if let Some(mock_texture) = gpu_data.as_any().downcast_ref::<MockTexture>() {
-            assert_eq!(mock_texture.id, 42);
-        } else {
-            panic!("Failed to downcast");
-        }
-    }
-
-    #[test]
-    fn test_audio_buffer_creation() {
-        let buffer = Box::new(MockTexture { id: 100 });
-        let audio = AudioBuffer::new(buffer, 0.5, 1024, 48000, 2);
-
-        assert_eq!(audio.timestamp, 0.5);
-        assert_eq!(audio.sample_count, 1024);
-        assert_eq!(audio.sample_rate, 48000);
-        assert_eq!(audio.channels, 2);
-    }
-
     #[test]
     fn test_metadata_value_conversions() {
         let _str_val: MetadataValue = "test".into();
@@ -395,15 +283,7 @@ mod tests {
         let _bool_val: MetadataValue = true.into();
     }
 
-    #[test]
-    fn test_clone_video_frame() {
-        let texture = Box::new(MockTexture { id: 42 });
-        let frame1 = VideoFrame::new(texture, 1.0, 30, 1920, 1080);
-        let frame2 = frame1.clone();
-
-        assert_eq!(frame1.timestamp, frame2.timestamp);
-        assert_eq!(frame1.frame_number, frame2.frame_number);
-        assert_eq!(frame1.width, frame2.width);
-        assert_eq!(frame1.height, frame2.height);
-    }
+    // Note: VideoFrame and AudioBuffer tests require actual wgpu::Device
+    // to create textures/buffers. Integration tests in platform crates
+    // (streamlib-apple, etc.) test the full pipeline.
 }
