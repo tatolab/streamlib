@@ -95,6 +95,7 @@ impl CameraDelegate {
 /// Note: AVCaptureSession runs on main thread independently.
 /// This processor only reads frames from the shared Arc<Mutex>.
 pub struct AppleCameraProcessor {
+    #[allow(dead_code)] // Stored for future device management features
     device_id: Option<String>,
     ports: CameraOutputPorts,
     frame_count: u64,
@@ -107,9 +108,11 @@ pub struct AppleCameraProcessor {
     metal_device: Option<MetalDevice>,
 
     // Capture session info (for logging)
+    #[allow(dead_code)] // Stored for future logging/diagnostics
     camera_name: String,
 
-    // Delegate (must be kept alive)
+    // Delegate (must be kept alive to prevent deallocation)
+    #[allow(dead_code)]
     delegate: Option<Retained<CameraDelegate>>,
 }
 
@@ -437,12 +440,7 @@ impl StreamProcessor for AppleCameraProcessor {
             latest.take() // Take ownership, leaving None
         };
 
-        if self.frame_count == 0 {
-            eprintln!("Camera: process() called, frame_count={}", self.frame_count);
-        }
-
         if let Some(holder) = frame_holder {
-            eprintln!("Camera: Processing frame {}!", self.frame_count);
             // Convert CVPixelBuffer → IOSurface → Metal Texture → WebGPU Texture
             let result: Result<()> = unsafe {
                 let pixel_buffer_ref = &*holder.pixel_buffer as *const CVPixelBuffer;
@@ -452,13 +450,9 @@ impl StreamProcessor for AppleCameraProcessor {
                 if iosurface_ref.is_null() {
                     // USB cameras on macOS don't provide IOSurface-backed buffers
                     // We need to copy the data to our own IOSurface for GPU access
-                    eprintln!("Camera: CVPixelBuffer has NO IOSurface backing (expected for USB cameras)");
-                    eprintln!("Camera: TODO: Implement CVPixelBuffer → IOSurface copy fallback");
-                    eprintln!("Camera: For now, zero-copy pipeline requires built-in camera or Continuity Camera");
                     tracing::warn!("Camera: Skipping frame {} (no IOSurface backing)", self.frame_count);
                     return Ok(());
                 }
-                eprintln!("Camera: Got IOSurface (zero-copy!)");
 
                 let iosurface = Retained::retain(iosurface_ref)
                     .expect("Failed to retain IOSurface");
@@ -466,31 +460,26 @@ impl StreamProcessor for AppleCameraProcessor {
                 // Get dimensions from CVPixelBuffer
                 let width = CVPixelBufferGetWidth(pixel_buffer_ref);
                 let height = CVPixelBufferGetHeight(pixel_buffer_ref);
-                eprintln!("Camera: Frame dimensions: {}x{}", width, height);
 
                 // Create Metal texture from IOSurface (zero-copy)
                 let metal_device = self.metal_device.as_ref()
                     .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
 
-                eprintln!("Camera: Creating Metal texture from IOSurface...");
                 let metal_texture = iosurface::create_metal_texture_from_iosurface(
                     metal_device.device(),
                     &iosurface,
                     0, // plane 0 for BGRA
                 )?;
-                eprintln!("Camera: Created Metal texture");
 
                 // Convert Metal texture to WebGPU texture (zero-copy via wgpu-hal)
                 let wgpu_bridge = self.wgpu_bridge.as_ref()
                     .ok_or_else(|| StreamError::Configuration("No WebGPU bridge".into()))?;
 
-                eprintln!("Camera: Wrapping Metal texture as WebGPU texture...");
                 let wgpu_texture = wgpu_bridge.wrap_metal_texture(
                     &metal_texture,
                     wgpu::TextureFormat::Bgra8Unorm,
                     wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                 )?;
-                eprintln!("Camera: Created WebGPU texture");
 
                 // Create VideoFrame with WebGPU texture
                 let frame = VideoFrame::new(
@@ -501,16 +490,14 @@ impl StreamProcessor for AppleCameraProcessor {
                     height as u32,
                 );
 
-                eprintln!("Camera: Writing frame to output port");
                 self.ports.video.write(frame);
                 self.frame_count += 1;
-                eprintln!("Camera: Frame {} complete!", self.frame_count - 1);
 
                 Ok(())
             };
 
             if let Err(e) = result {
-                eprintln!("Camera: Error processing frame: {:?}", e);
+                tracing::error!("Camera: Error processing frame: {:?}", e);
                 return Err(e);
             }
         }

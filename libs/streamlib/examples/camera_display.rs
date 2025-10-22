@@ -10,8 +10,8 @@
 //! Press Ctrl+C to stop.
 
 use streamlib::{
-    CameraProcessor, DisplayProcessor, CameraProcessorTrait, DisplayProcessorTrait,
-    Result, StreamRuntime,
+    CameraProcessor, CameraProcessorTrait, DisplayProcessor, DisplayProcessorTrait, Result,
+    StreamRuntime,
 };
 
 #[tokio::main]
@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     // Create camera and display processors
     // These handle all platform-specific details (AVFoundation, NSWindow, etc.)
     // Using default camera to avoid Continuity Camera issues
-    let mut camera = CameraProcessor::new()?;
+    let mut camera = CameraProcessor::with_device_id("0x1424001bcf2284")?;
     let mut display = DisplayProcessor::new()?;
 
     // Set display window title
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     println!("🔗 Connecting camera → display...");
     runtime.connect(
         &mut camera.output_ports().video,
-        &mut display.input_ports().video
+        &mut display.input_ports().video,
     )?;
     println!("✓ Pipeline connected\n");
 

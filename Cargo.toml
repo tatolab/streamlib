@@ -52,4 +52,4 @@ hyper = "1.7.0"
 
 # WebGPU (cross-platform GPU abstraction)
 wgpu = "27.0.1"
-wgpu-hal = "27.0.1"
+wgpu-hal = "27.0.3"

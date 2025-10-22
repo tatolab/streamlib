@@ -12,8 +12,9 @@ use objc2::{rc::Retained, MainThreadOnly, MainThreadMarker};
 use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
 use objc2_app_kit::{NSWindow, NSBackingStoreType, NSWindowStyleMask, NSApplication, NSApplicationActivationPolicy};
 use objc2_quartz_core::{CAMetalLayer, CAMetalDrawable};
-use objc2_metal::{MTLPixelFormat, MTLDrawable};
+use objc2_metal::MTLPixelFormat;
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
+use metal;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -28,7 +29,9 @@ pub struct AppleDisplayProcessor {
     // Window components (will be created on start)
     window: Option<Retained<NSWindow>>,
     metal_layer: Option<Retained<CAMetalLayer>>,
+    #[allow(dead_code)] // Stored for potential future direct Metal API usage
     metal_device: MetalDevice,
+    metal_command_queue: metal::CommandQueue,
     wgpu_bridge: Arc<WgpuBridge>,
 
     // Processor state
@@ -62,6 +65,16 @@ impl AppleDisplayProcessor {
         let wgpu_bridge = pollster::block_on(async {
             WgpuBridge::new(metal_device.clone_device()).await
         })?;
+
+        // Create Metal command queue for blit operations
+        let metal_command_queue = {
+            use metal::foreign_types::ForeignTypeRef;
+            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+            let metal_device_ref = unsafe {
+                metal::DeviceRef::from_ptr(device_ptr as *mut _)
+            };
+            metal_device_ref.new_command_queue()
+        };
 
         let window_title = "streamlib Display".to_string();
 
@@ -118,6 +131,7 @@ impl AppleDisplayProcessor {
             window: Some(window),
             metal_layer: Some(metal_layer),
             metal_device,
+            metal_command_queue,
             wgpu_bridge: Arc::new(wgpu_bridge),
             ports: DisplayInputPorts {
                 video: streamlib_core::StreamInput::new("video"),
@@ -157,59 +171,67 @@ impl StreamProcessor for AppleDisplayProcessor {
             // Get the WebGPU texture from the frame
             let wgpu_texture = &frame.texture;
 
+            // Unwrap WebGPU texture to Metal texture (zero-copy!)
+            let source_metal = unsafe {
+                self.wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)
+            }?;
+
             // Get the next drawable from CAMetalLayer
             let metal_layer = self.metal_layer.as_ref()
                 .ok_or_else(|| StreamError::Configuration("No Metal layer".into()))?;
 
             unsafe {
                 if let Some(drawable) = metal_layer.nextDrawable() {
-                    let metal_texture = drawable.texture();
+                    let drawable_metal = drawable.texture();
 
-                    // Use wgpu command encoder to blit from WebGPU texture to drawable
-                    let (device, queue) = self.wgpu_bridge.wgpu();
-                    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Display Blit"),
-                    });
+                    // Convert objc2_metal texture to metal crate texture for drawable
+                    use metal::foreign_types::ForeignTypeRef;
+                    let drawable_texture_ptr = &*drawable_metal as *const _ as *mut std::ffi::c_void;
+                    let drawable_metal_ref = metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
 
-                    // Wrap the Metal drawable as WebGPU texture
-                    let drawable_wgpu = self.wgpu_bridge.wrap_metal_texture(
-                        &metal_texture,
-                        wgpu::TextureFormat::Bgra8Unorm,
-                        wgpu::TextureUsages::COPY_DST,
-                    )?;
+                    // Convert objc2 drawable to metal crate drawable
+                    let drawable_ptr = &*drawable as *const _ as *mut std::ffi::c_void;
+                    let drawable_ref = metal::DrawableRef::from_ptr(drawable_ptr as *mut _);
 
-                    // Blit the wgpu texture to the drawable texture
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: wgpu_texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &drawable_wgpu,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: frame.width,
-                            height: frame.height,
-                            depth_or_array_layers: 1,
-                        },
+                    // Create Metal command buffer and blit encoder
+                    let command_buffer = self.metal_command_queue.new_command_buffer();
+                    let blit_encoder = command_buffer.new_blit_command_encoder();
+
+                    // Blit from source texture to drawable texture (fastest path!)
+                    use metal::MTLOrigin;
+                    use metal::MTLSize;
+
+                    let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                    let size = MTLSize {
+                        width: frame.width as u64,
+                        height: frame.height as u64,
+                        depth: 1,
+                    };
+
+                    blit_encoder.copy_from_texture(
+                        &source_metal,
+                        0,  // source slice
+                        0,  // source mip level
+                        origin,
+                        size,
+                        drawable_metal_ref,
+                        0,  // dest slice
+                        0,  // dest mip level
+                        origin,
                     );
 
-                    queue.submit(Some(encoder.finish()));
+                    blit_encoder.end_encoding();
 
                     // Present the drawable
-                    drawable.present();
+                    command_buffer.present_drawable(drawable_ref);
+                    command_buffer.commit();
 
                     self.frames_rendered += 1;
 
                     // Log every 60 frames (once per second at 60fps)
                     if self.frames_rendered % 60 == 0 {
                         tracing::info!(
-                            "Display {}: Rendered frame {} ({}x{})",
+                            "Display {}: Rendered frame {} ({}x{}) via Metal blit",
                             self.window_id.0,
                             frame.frame_number,
                             frame.width,

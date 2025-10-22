@@ -167,10 +167,170 @@ impl WgpuBridge {
         &self.metal_device
     }
 
+    /// Unwrap a WebGPU texture to get the underlying Metal texture (zero-copy)
+    ///
+    /// This is the reverse operation of `wrap_metal_texture`, allowing us to
+    /// extract the native Metal texture from a WebGPU texture for use with
+    /// Metal-specific APIs like blit encoders.
+    ///
+    /// # Arguments
+    ///
+    /// * `wgpu_texture` - WebGPU texture to unwrap
+    ///
+    /// # Returns
+    ///
+    /// The underlying Metal texture reference from the `metal` crate
+    ///
+    /// # Safety
+    ///
+    /// The returned Metal texture is only valid as long as the WebGPU texture exists.
+    pub unsafe fn unwrap_to_metal_texture(
+        &self,
+        wgpu_texture: &wgpu::Texture,
+    ) -> Result<metal::Texture> {
+        // Get the HAL texture from the WebGPU texture
+        // as_hal() returns Option<impl Deref<Target = A::Texture>>
+        let hal_deref = wgpu_texture
+            .as_hal::<hal::api::Metal>()
+            .ok_or_else(|| {
+                StreamError::GpuError("Failed to get HAL texture from WebGPU texture".into())
+            })?;
+
+        // Deref to get the actual hal::metal::Texture
+        let hal_texture: &hal::metal::Texture = &*hal_deref;
+
+        // Get the raw Metal texture from HAL texture using raw_handle()
+        // This gives us a &metal::Texture reference
+        let metal_texture_ref = hal_texture.raw_handle();
+
+        Ok(metal_texture_ref.to_owned())
+    }
+
     /// Consume the bridge and return the WebGPU device and queue
     ///
     /// This is useful for passing ownership to streamlib-core's runtime.
     pub fn into_wgpu(self) -> (wgpu::Device, wgpu::Queue) {
         (self.wgpu_device, self.wgpu_queue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::iosurface::{create_iosurface, PixelFormat, create_metal_texture_from_iosurface};
+
+    #[test]
+    fn test_wrap_metal_texture() {
+        // Create Metal device
+        use objc2_metal::MTLCreateSystemDefaultDevice;
+        let metal_device = MTLCreateSystemDefaultDevice()
+            .expect("No Metal device available");
+
+        // Create WgpuBridge
+        let bridge = pollster::block_on(async {
+            WgpuBridge::new(metal_device.clone()).await
+        }).expect("Failed to create WgpuBridge");
+
+        // Create an IOSurface and Metal texture
+        let iosurface = create_iosurface(1920, 1080, PixelFormat::Bgra8Unorm)
+            .expect("Failed to create IOSurface");
+
+        let metal_texture = create_metal_texture_from_iosurface(&metal_device, &iosurface, 0)
+            .expect("Failed to create Metal texture");
+
+        // Wrap Metal texture as WebGPU texture
+        let wgpu_texture = unsafe {
+            bridge.wrap_metal_texture(
+                &metal_texture,
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            )
+        }.expect("Failed to wrap Metal texture");
+
+        // Verify texture properties
+        assert_eq!(wgpu_texture.width(), 1920);
+        assert_eq!(wgpu_texture.height(), 1080);
+        assert_eq!(wgpu_texture.format(), wgpu::TextureFormat::Bgra8Unorm);
+    }
+
+    #[test]
+    fn test_unwrap_to_metal_texture() {
+        // Create Metal device
+        use objc2_metal::MTLCreateSystemDefaultDevice;
+        let metal_device = MTLCreateSystemDefaultDevice()
+            .expect("No Metal device available");
+
+        // Create WgpuBridge
+        let bridge = pollster::block_on(async {
+            WgpuBridge::new(metal_device.clone()).await
+        }).expect("Failed to create WgpuBridge");
+
+        // Create an IOSurface and Metal texture
+        let iosurface = create_iosurface(1920, 1080, PixelFormat::Bgra8Unorm)
+            .expect("Failed to create IOSurface");
+
+        let metal_texture = create_metal_texture_from_iosurface(&metal_device, &iosurface, 0)
+            .expect("Failed to create Metal texture");
+
+        let original_width = metal_texture.width();
+        let original_height = metal_texture.height();
+
+        // Wrap Metal → WebGPU
+        let wgpu_texture = unsafe {
+            bridge.wrap_metal_texture(
+                &metal_texture,
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            )
+        }.expect("Failed to wrap Metal texture");
+
+        // Unwrap WebGPU → Metal (round-trip!)
+        let unwrapped_metal = unsafe {
+            bridge.unwrap_to_metal_texture(&wgpu_texture)
+        }.expect("Failed to unwrap to Metal texture");
+
+        // Verify the unwrapped texture has the same properties
+        assert_eq!(unwrapped_metal.width(), original_width as u64);
+        assert_eq!(unwrapped_metal.height(), original_height as u64);
+        assert_eq!(unwrapped_metal.pixel_format(), metal::MTLPixelFormat::BGRA8Unorm);
+    }
+
+    #[test]
+    fn test_round_trip_conversion() {
+        // This test verifies that Metal → WebGPU → Metal preserves the texture
+        use objc2_metal::MTLCreateSystemDefaultDevice;
+        let metal_device = MTLCreateSystemDefaultDevice()
+            .expect("No Metal device available");
+
+        let bridge = pollster::block_on(async {
+            WgpuBridge::new(metal_device.clone()).await
+        }).expect("Failed to create WgpuBridge");
+
+        // Create test texture via IOSurface
+        let iosurface = create_iosurface(640, 480, PixelFormat::Bgra8Unorm)
+            .expect("Failed to create IOSurface");
+
+        let original_metal = create_metal_texture_from_iosurface(&metal_device, &iosurface, 0)
+            .expect("Failed to create Metal texture");
+
+        // Metal → WebGPU
+        let wgpu_tex = unsafe {
+            bridge.wrap_metal_texture(
+                &original_metal,
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            )
+        }.expect("Failed to wrap");
+
+        // WebGPU → Metal
+        let final_metal = unsafe {
+            bridge.unwrap_to_metal_texture(&wgpu_tex)
+        }.expect("Failed to unwrap");
+
+        // Verify dimensions match
+        assert_eq!(final_metal.width(), 640);
+        assert_eq!(final_metal.height(), 480);
+        assert_eq!(original_metal.width() as u64, final_metal.width());
+        assert_eq!(original_metal.height() as u64, final_metal.height());
     }
 }

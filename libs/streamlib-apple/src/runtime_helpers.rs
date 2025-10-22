@@ -28,6 +28,7 @@ use std::time::Duration;
 /// // Simple one-liner that handles everything
 /// run_runtime_macos(runtime).await?;
 /// ```
+#[allow(dead_code)] // Public API for future runtime management
 pub async fn run_runtime_macos(mut runtime: StreamRuntime) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);

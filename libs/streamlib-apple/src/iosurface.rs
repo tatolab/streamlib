@@ -10,7 +10,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::msg_send;
-use objc2_io_surface::{IOSurface, IOSurfaceRef as _};
+use objc2_io_surface::IOSurface;
 use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureUsage};
 use streamlib_core::{Result, StreamError};
 
@@ -43,24 +43,13 @@ pub fn create_metal_texture_from_iosurface(
     iosurface: &IOSurface,
     plane: usize,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>> {
-    eprintln!("IOSurface: ENTERED create_metal_texture_from_iosurface");
     // Get IOSurface properties
-    eprintln!("IOSurface: About to call iosurface.width()...");
     let width = iosurface.width();
-    eprintln!("IOSurface: Got width={}", width);
-
-    eprintln!("IOSurface: About to call iosurface.height()...");
     let height = iosurface.height();
-    eprintln!("IOSurface: Got height={}", height);
-
-    eprintln!("IOSurface: About to call iosurface.pixelFormat()...");
     let pixel_format = iosurface.pixelFormat();
-    eprintln!("IOSurface: Got pixelFormat=0x{:08X}", pixel_format);
 
     // Convert IOSurface pixel format to Metal pixel format
-    eprintln!("IOSurface: About to convert format to Metal...");
     let metal_format = iosurface_format_to_metal(pixel_format)?;
-    eprintln!("IOSurface: Converted to Metal format: {:?}", metal_format);
 
     // Create texture descriptor
     let descriptor = MTLTextureDescriptor::new();
@@ -77,19 +66,11 @@ pub fn create_metal_texture_from_iosurface(
     // Unfortunately, objc2-metal doesn't expose newTextureWithDescriptor:iosurface:plane: yet,
     // so we need to call it directly using msg_send
     //
-    // The IOSurface object from objc2-io-surface is toll-free bridged with IOSurfaceRef
-    // Cast to raw pointer for msg_send (Objective-C expects id type)
-    eprintln!("IOSurface: About to create Metal texture from IOSurface...");
-    eprintln!("IOSurface: width={}, height={}, format=0x{:08X}, plane={}", width, height, pixel_format, plane);
-
     // Metal expects IOSurfaceRef (Core Foundation type), not an Objective-C object
-    // Use as_ptr() to get the underlying Core Foundation pointer
     // IOSurface (NSObject) is toll-free bridged to IOSurfaceRef (CFType)
     use objc2_io_surface::IOSurfaceRef;
     let iosurface_ptr: *const IOSurfaceRef = iosurface as *const IOSurface as *const IOSurfaceRef;
-    eprintln!("IOSurface: Cast IOSurface to IOSurfaceRef pointer: {:p}", iosurface_ptr);
 
-    eprintln!("IOSurface: Calling msg_send![device, newTextureWithDescriptor:iosurface:plane:]...");
     let texture: Option<Retained<ProtocolObject<dyn MTLTexture>>> = unsafe {
         msg_send![
             device,
@@ -98,10 +79,8 @@ pub fn create_metal_texture_from_iosurface(
             plane: plane
         ]
     };
-    eprintln!("IOSurface: msg_send! returned, texture is {:?}", if texture.is_some() { "Some" } else { "None" });
 
     texture.ok_or_else(|| {
-        eprintln!("IOSurface: ERROR - Metal returned None when creating texture from IOSurface!");
         StreamError::TextureError(format!(
             "Failed to create Metal texture from IOSurface (width={}, height={}, format={})",
             width, height, pixel_format
@@ -126,14 +105,7 @@ pub fn create_iosurface(
 
     // Calculate bytes per row (width * bytes per pixel, aligned to 64 bytes)
     let bytes_per_element = match pixel_format {
-        PixelFormat::Rgba8Unorm => 4,
-        PixelFormat::Bgra8Unorm => 4,
-        _ => {
-            return Err(StreamError::NotSupported(format!(
-                "Pixel format {:?} not yet supported",
-                pixel_format
-            )))
-        }
+        PixelFormat::Rgba8Unorm | PixelFormat::Bgra8Unorm => 4,
     };
     let bytes_per_row = (width * bytes_per_element).div_ceil(64) * 64; // Align to 64 bytes
 
@@ -223,10 +195,6 @@ fn pixel_format_to_iosurface(format: PixelFormat) -> Result<u32> {
     match format {
         PixelFormat::Bgra8Unorm => Ok(0x42475241), // 'BGRA'
         PixelFormat::Rgba8Unorm => Ok(0x52474241), // 'RGBA'
-        _ => Err(StreamError::NotSupported(format!(
-            "Pixel format {:?} not supported for IOSurface",
-            format
-        ))),
     }
 }
 
