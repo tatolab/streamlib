@@ -9,6 +9,10 @@ description = "Platform-agnostic real-time video streaming infrastructure"
 keywords = ["video", "streaming", "gpu", "real-time", "webrtc"]
 categories = ["multimedia::video", "multimedia", "api-bindings"]
 
+[features]
+# Debug overlay with FPS, GPU memory, and performance graph
+debug-overlay = ["streamlib-core/debug-overlay"]
+
 [dependencies]
 # Core runtime (always included, platform-agnostic)
 streamlib-core = { path = "../streamlib-core" }

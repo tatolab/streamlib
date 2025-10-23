@@ -96,6 +96,12 @@ pub use streamlib_core::{
     ShaderId,
 };
 
+// Debug overlay (optional, behind feature flag)
+#[cfg(feature = "debug-overlay")]
+pub use streamlib_core::{
+    PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+};
+
 // Platform-configured runtime wrapper
 mod runtime;
 pub use runtime::StreamRuntime;

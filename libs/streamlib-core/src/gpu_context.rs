@@ -90,11 +90,12 @@ impl GpuContext {
             adapter.get_info().backend
         );
 
-        // Request device and queue
+        // Request device and queue with timestamp query support for GPU performance monitoring
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("StreamLib GPU Context"),
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: Default::default(),

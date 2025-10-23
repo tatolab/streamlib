@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Debug overlay with FPS, GPU memory, and performance graph
+debug-overlay = ["dep:vello", "dep:skrifa", "dep:wgpu-profiler"]
+
 [dependencies]
 thiserror.workspace = true
 anyhow.workspace = true
@@ -15,6 +19,15 @@ crossbeam-channel = "0.5"
 
 # WebGPU for cross-platform GPU abstraction
 wgpu.workspace = true
+
+# Optional: Vello for debug overlay rendering (same version as news-cast example)
+vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }
+
+# Optional: Skrifa for font reading in debug overlay
+skrifa = { version = "0.22", optional = true }
+
+# Optional: wgpu-profiler for GPU timing in debug overlay (compatible with wgpu 25)
+wgpu-profiler = { version = "0.23.0", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = "0.3"

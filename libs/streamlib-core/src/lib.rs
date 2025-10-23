@@ -32,6 +32,11 @@ pub use processors::{
     CameraProcessor, CameraDevice, CameraOutputPorts,
     DisplayProcessor, WindowId, DisplayInputPorts,
 };
+
+#[cfg(feature = "debug-overlay")]
+pub use processors::{
+    PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+};
 pub use runtime::{StreamRuntime, ShaderId};
 pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
