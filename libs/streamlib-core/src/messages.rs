@@ -47,6 +47,13 @@ pub struct VideoFrame {
     /// convert to/from their native types (Metal, Vulkan) internally.
     pub texture: Arc<wgpu::Texture>,
 
+    /// Texture format (Rgba8Unorm or Bgra8Unorm)
+    ///
+    /// Cached for performance. Should always match `texture.format()`.
+    /// - **Internal pipeline standard**: Rgba8Unorm (used by most processors)
+    /// - **Platform edges**: Bgra8Unorm (camera input, display output on some platforms)
+    pub format: wgpu::TextureFormat,
+
     /// Timestamp in seconds since stream start
     pub timestamp: f64,
 
@@ -67,6 +74,7 @@ impl VideoFrame {
     /// Create a new video frame
     pub fn new(
         texture: Arc<wgpu::Texture>,
+        format: wgpu::TextureFormat,
         timestamp: f64,
         frame_number: u64,
         width: u32,
@@ -74,6 +82,7 @@ impl VideoFrame {
     ) -> Self {
         Self {
             texture,
+            format,
             timestamp,
             frame_number,
             width,
@@ -85,6 +94,7 @@ impl VideoFrame {
     /// Create a video frame with metadata
     pub fn with_metadata(
         texture: Arc<wgpu::Texture>,
+        format: wgpu::TextureFormat,
         timestamp: f64,
         frame_number: u64,
         width: u32,
@@ -93,6 +103,7 @@ impl VideoFrame {
     ) -> Self {
         Self {
             texture,
+            format,
             timestamp,
             frame_number,
             width,

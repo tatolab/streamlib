@@ -11,9 +11,10 @@ edition = "2021"
 streamlib = { path = "../../libs/streamlib" }
 
 # GPU-native 2D rendering with vello
-vello = "0.5.0"
+# Using specific commit with wgpu 25.0.2 support (commit verified via GitHub blame)
+vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d" }
 
-# WebGPU - match vello 0.5.0's version (25.0.2)
+# WebGPU - match vello's wgpu version (25.0.2)
 # Explicitly match vello's wgpu version to avoid conflicts
 wgpu = "=25.0.2"
 bytemuck = "1.24.0"

@@ -1,7 +1,7 @@
 //! Lower Third Processor
 //!
-//! GPU-native video effects processor using WebGPU compute shaders.
-//! Implements a grayscale filter using the same pattern as Python streamlib.
+//! GPU-native video effects processor using Vello for 2D rendering.
+//! Renders graphics overlays on top of camera feed.
 
 use streamlib::{
     StreamProcessor, StreamInput, StreamOutput, VideoFrame,
@@ -9,6 +9,12 @@ use streamlib::{
 };
 use std::sync::Arc;
 use wgpu;
+use vello::{
+    kurbo::{Affine, Rect},
+    peniko::Color,
+    util::RenderContext,
+    AaSupport, RenderParams, Renderer, RendererOptions, Scene,
+};
 
 /// Input ports for lower third processor
 pub struct LowerThirdInputPorts {
@@ -36,9 +42,17 @@ pub struct LowerThirdProcessor {
     input_ports: LowerThirdInputPorts,
     output_ports: LowerThirdOutputPorts,
 
-    // Grayscale compute pipeline (using Python's pattern)
-    grayscale_pipeline: Option<wgpu::ComputePipeline>,
-    grayscale_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    // Vello renderer for 2D graphics
+    vello_renderer: Option<Renderer>,
+    render_context: Option<RenderContext>,
+
+    // Frame dimensions (needed for Vello surface creation)
+    frame_width: u32,
+    frame_height: u32,
+
+    // Alpha compositing pipeline (to blend Vello overlay on camera feed)
+    composite_pipeline: Option<wgpu::RenderPipeline>,
+    composite_bind_group_layout: Option<wgpu::BindGroupLayout>,
 }
 
 impl LowerThirdProcessor {
@@ -59,15 +73,51 @@ impl LowerThirdProcessor {
             output_ports: LowerThirdOutputPorts {
                 video: StreamOutput::new("video"),
             },
-            grayscale_pipeline: None,
-            grayscale_bind_group_layout: None,
+            vello_renderer: None,
+            render_context: None,
+            frame_width: 0,
+            frame_height: 0,
+            composite_pipeline: None,
+            composite_bind_group_layout: None,
         })
     }
 
-    /// Create or get grayscale compute pipeline (lazy initialization)
-    /// Uses the same pattern as Python streamlib
-    fn get_or_create_grayscale_pipeline(&mut self) -> Result<()> {
-        if self.grayscale_pipeline.is_some() {
+    /// Initialize Vello renderer (called lazily on first frame)
+    fn init_vello(&mut self, width: u32, height: u32) -> Result<()> {
+        if self.vello_renderer.is_some() {
+            return Ok(());
+        }
+
+        let gpu_context = self.gpu_context.as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+
+        // Create RenderContext (doesn't return a Result in vello 0.5)
+        let render_context = RenderContext::new();
+
+        // Create Vello renderer
+        let renderer = Renderer::new(
+            gpu_context.device(),
+            RendererOptions {
+                use_cpu: false,
+                antialiasing_support: AaSupport::all(),
+                num_init_threads: None,
+                pipeline_cache: None,
+            },
+        )
+        .map_err(|e| StreamError::GpuError(format!("Failed to create Vello renderer: {}", e)))?;
+
+        self.render_context = Some(render_context);
+        self.vello_renderer = Some(renderer);
+        self.frame_width = width;
+        self.frame_height = height;
+
+        tracing::info!("LowerThird: Initialized Vello renderer ({}x{})", width, height);
+        Ok(())
+    }
+
+    /// Initialize alpha compositing pipeline (called lazily on first frame)
+    fn init_composite_pipeline(&mut self) -> Result<()> {
+        if self.composite_pipeline.is_some() {
             return Ok(());
         }
 
@@ -75,103 +125,145 @@ impl LowerThirdProcessor {
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
         let device = gpu_context.device();
 
-        // Create bind group layout for compute shader
+        // Shader for alpha blending two textures
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Alpha Composite Shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(r#"
+@group(0) @binding(0) var camera_texture: texture_2d<f32>;
+@group(0) @binding(1) var overlay_texture: texture_2d<f32>;
+@group(0) @binding(2) var texture_sampler: sampler;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) tex_coords: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var out: VertexOutput;
+    // Full-screen triangle
+    let x = f32((vertex_index & 1u) << 2u) - 1.0;
+    let y = 1.0 - f32((vertex_index & 2u) << 1u);
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.tex_coords = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let camera = textureSample(camera_texture, texture_sampler, in.tex_coords);
+    let overlay = textureSample(overlay_texture, texture_sampler, in.tex_coords);
+
+    // Vello outputs BGR, so swap R and B channels
+    let overlay_rgb = vec3<f32>(overlay.b, overlay.g, overlay.r);
+
+    // Standard alpha blending: result = overlay * alpha + camera * (1 - alpha)
+    let alpha = overlay.a;
+    let blended = overlay_rgb * alpha + camera.rgb * (1.0 - alpha);
+
+    return vec4<f32>(blended, 1.0);
+}
+            "#)),
+        });
+
+        // Create bind group layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Grayscale Bind Group Layout"),
+            label: Some("Composite Bind Group Layout"),
             entries: &[
-                // Input texture (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,
                 },
-                // Output texture (write-only storage)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm, // Storage textures must be Rgba, not Bgra
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
         });
 
-        // Create compute shader (same as Python's GRAYSCALE_SHADER)
-        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Grayscale Compute Shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                r#"
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var output_texture: texture_storage_2d<rgba8unorm, write>;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let dims = textureDimensions(input_texture);
-    let coord = vec2<i32>(gid.xy);
-
-    if (coord.x >= i32(dims.x) || coord.y >= i32(dims.y)) {
-        return;
-    }
-
-    let color = textureLoad(input_texture, coord, 0);
-
-    // Standard luminance weights (ITU-R BT.709)
-    let gray = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let result = vec4<f32>(gray, gray, gray, color.a);
-
-    textureStore(output_texture, coord, result);
-}
-                "#
-            )),
-        });
-
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Grayscale Pipeline Layout"),
+            label: Some("Composite Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Grayscale Compute Pipeline"),
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Composite Pipeline"),
             layout: Some(&pipeline_layout),
-            module: &shader_module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
             cache: None,
         });
 
-        self.grayscale_pipeline = Some(pipeline);
-        self.grayscale_bind_group_layout = Some(bind_group_layout);
+        self.composite_bind_group_layout = Some(bind_group_layout);
+        self.composite_pipeline = Some(pipeline);
 
-        tracing::info!("LowerThird: Created grayscale compute pipeline");
+        tracing::info!("LowerThird: Initialized alpha compositing pipeline");
         Ok(())
     }
 
-    /// Apply grayscale effect to input frame using compute shader
-    /// Pattern matches Python's gpu_context.run_compute()
-    fn apply_grayscale(&mut self, input: &VideoFrame) -> Result<VideoFrame> {
-        // Ensure pipeline exists
-        self.get_or_create_grayscale_pipeline()?;
-
-        // Camera already provides WebGPU-owned textures, no need to copy!
-        // Just use the input texture directly.
+    /// Render Vello graphics overlay on top of camera feed
+    fn render_overlay(&mut self, input: &VideoFrame) -> Result<VideoFrame> {
+        // Initialize Vello and compositing pipeline on first frame
+        if self.vello_renderer.is_none() {
+            self.init_vello(input.width, input.height)?;
+        }
+        if self.composite_pipeline.is_none() {
+            self.init_composite_pipeline()?;
+        }
 
         let gpu_context = self.gpu_context.as_ref()
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
         let device = gpu_context.device();
         let queue = gpu_context.queue();
 
-        // Create WebGPU-owned output texture
-        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Grayscale Output"),
+        // Create Vello overlay texture (transparent background)
+        let vello_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Vello Overlay"),
             size: wgpu::Extent3d {
                 width: input.width,
                 height: input.height,
@@ -180,59 +272,144 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm, // Storage textures must be Rgba, not Bgra
-            // STORAGE_BINDING: compute shader writes to it (exclusive usage!)
-            // COPY_SRC: display processor uses unwrap_to_metal_texture() to read via blit
-            // NOTE: Cannot use TEXTURE_BINDING with STORAGE_BINDING - they conflict in same scope
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
 
+        // Create final output texture
+        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Composite Output"),
+            size: wgpu::Extent3d {
+                width: input.width,
+                height: input.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        // Step 1: Render Vello overlay with transparent background
+        let vello_view = vello_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut scene = Scene::new();
+
+        // Draw semi-transparent blue box in lower third area
+        let box_height = (input.height as f64) / 3.0;
+        let box_y = (input.height as f64) - box_height;
+        let box_rect = Rect::new(0.0, box_y, input.width as f64, input.height as f64);
+
+        scene.fill(
+            vello::peniko::Fill::NonZero,
+            Affine::IDENTITY,
+            Color::from_rgba8(30, 60, 120, 204), // Semi-transparent blue
+            None,
+            &box_rect,
+        );
+
+        // Add gold accent line
+        let accent_rect = Rect::new(0.0, box_y, input.width as f64, box_y + 4.0);
+        scene.fill(
+            vello::peniko::Fill::NonZero,
+            Affine::IDENTITY,
+            Color::from_rgba8(255, 215, 0, 255), // Solid gold
+            None,
+            &accent_rect,
+        );
+
+        let renderer = self.vello_renderer.as_mut().unwrap();
+        renderer
+            .render_to_texture(
+                device,
+                queue,
+                &scene,
+                &vello_view,
+                &RenderParams {
+                    base_color: Color::TRANSPARENT,
+                    width: input.width,
+                    height: input.height,
+                    antialiasing_method: vello::AaConfig::Area,
+                },
+            )
+            .map_err(|e| StreamError::GpuError(format!("Vello render failed: {}", e)))?;
+
+        // Step 2: Use compositing shader to blend camera + Vello overlay
+        let pipeline = self.composite_pipeline.as_ref().unwrap();
+        let bind_group_layout = self.composite_bind_group_layout.as_ref().unwrap();
+
+        // Create sampler for texture sampling
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Composite Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
         // Create texture views
-        let input_view = input.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let camera_view = input.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Create bind group
+        // Create bind group for the compositing shader
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Grayscale Bind Group"),
-            layout: self.grayscale_bind_group_layout.as_ref().unwrap(),
+            label: Some("Composite Bind Group"),
+            layout: bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&input_view),
+                    resource: wgpu::BindingResource::TextureView(&camera_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
+                    resource: wgpu::BindingResource::TextureView(&vello_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
         });
 
-        // Encode & submit compute pass (all in one operation)
+        // Render pass to composite the two textures
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Grayscale Encoder"),
+            label: Some("Composite Encoder"),
         });
 
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Grayscale Pass"),
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Composite Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
                 timestamp_writes: None,
+                occlusion_query_set: None,
             });
-            compute_pass.set_pipeline(self.grayscale_pipeline.as_ref().unwrap());
-            compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            // Dispatch workgroups (8x8 workgroup size, match Python)
-            let workgroups_x = (input.width + 7) / 8;
-            let workgroups_y = (input.height + 7) / 8;
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            render_pass.set_pipeline(pipeline);
+            render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.draw(0..3, 0..1); // Draw full-screen triangle
         }
 
-        // Submit immediately
         queue.submit(std::iter::once(encoder.finish()));
 
-        // Return new frame with WebGPU-owned texture
         Ok(VideoFrame {
             texture: Arc::new(output_texture),
+            format: wgpu::TextureFormat::Rgba8Unorm,
             width: input.width,
             height: input.height,
             frame_number: input.frame_number,
@@ -278,16 +455,28 @@ impl StreamProcessor for LowerThirdProcessor {
             },
         };
 
-        // Apply grayscale effect
-        let output = self.apply_grayscale(&input)?;
-
-        // Debug: Log every 60 frames (once per second at 60fps)
-        if output.frame_number % 60 == 0 {
-            tracing::info!(
-                "LowerThird: Applied grayscale to frame {}, writing to output port",
-                output.frame_number
-            );
-        }
+        // Render Vello overlay on top of camera feed
+        // If rendering fails, pass through the input frame unchanged
+        let output = match self.render_overlay(&input) {
+            Ok(frame) => {
+                // Debug: Log every 60 frames (once per second at 60fps)
+                if frame.frame_number % 60 == 0 {
+                    tracing::info!(
+                        "LowerThird: Rendered overlay on frame {}, writing to output port",
+                        frame.frame_number
+                    );
+                }
+                frame
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "LowerThird: Vello rendering failed ({}), passing through input frame {}",
+                    e,
+                    input.frame_number
+                );
+                input  // Pass through unchanged
+            }
+        };
 
         self.output_ports.video.write(output);
 
