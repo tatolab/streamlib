@@ -1,0 +1,29 @@
+{
+  "name": "streamlib-core",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/streamlib-core/src",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "@monodon/rust:build",
+      "outputs": ["{projectRoot}/target"],
+      "options": {
+        "release": false
+      },
+      "configurations": {
+        "production": {
+          "release": true
+        }
+      }
+    },
+    "test": {
+      "executor": "@monodon/rust:test",
+      "options": {}
+    },
+    "lint": {
+      "executor": "@monodon/rust:clippy",
+      "options": {}
+    }
+  },
+  "tags": ["rust", "core", "library"]
+}

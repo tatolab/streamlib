@@ -1,0 +1,20 @@
+[package]
+name = "streamlib-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+crossbeam-channel = "0.5"
+
+# WebGPU for cross-platform GPU abstraction
+wgpu.workspace = true
+
+[dev-dependencies]
+tracing-subscriber = "0.3"

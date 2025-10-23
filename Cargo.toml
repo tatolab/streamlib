@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "libs/streamlib",           # Top-level facade (platform-agnostic API)
+    "libs/streamlib-core",      # Platform-agnostic runtime
+    "libs/streamlib-apple"      # macOS/iOS platform implementation
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["streamlib contributors"]
+license = "MIT"
+repository = "https://github.com/tato123/streamlib"
+
+[workspace.dependencies]
+# Core dependencies
+thiserror = "2.0.17"
+anyhow = "1.0.100"
+tracing = "0.1.41"
+tokio = { version = "1.48.0", features = ["full"] }
+
+# Platform bindings (objc2 ecosystem - latest versions)
+# Note: All objc2 crates must use compatible versions
+objc2 = "0.6.3"
+objc2-metal = "0.3.2"
+objc2-io-surface = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-av-foundation = "0.3.2"
+objc2-app-kit = "0.3.2"
+objc2-quartz-core = "0.3.2"
+objc2-core-text = "0.3.2"
+objc2-core-graphics = "0.3.2"
+libc = "0.2.177"
+
+# Shader compilation
+# TODO: Add when implementing HLSL shader compilation:
+#   - hassle-rs (DXC wrapper for HLSL → SPIR-V)
+#   - spirv-cross-rs (SPIR-V → Metal/Vulkan)
+
+# Python bindings
+pyo3 = { version = "0.27.0", features = ["extension-module"] }
+
+# WebRTC
+str0m = "0.11.1"
+
+# HTTP/Web
+axum = "0.8.6"
+tower-http = "0.6.6"
+hyper = "1.7.0"
+
+# WebGPU (cross-platform GPU abstraction)
+wgpu = "27.0.1"
+wgpu-hal = "27.0.3"
