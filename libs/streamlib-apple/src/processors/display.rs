@@ -32,7 +32,12 @@ pub struct AppleDisplayProcessor {
     #[allow(dead_code)] // Stored for potential future direct Metal API usage
     metal_device: MetalDevice,
     metal_command_queue: metal::CommandQueue,
-    wgpu_bridge: Arc<WgpuBridge>,
+
+    // GPU context (shared with all processors via runtime)
+    gpu_context: Option<streamlib_core::GpuContext>,
+
+    // WebGPU bridge (created from shared device in on_start)
+    wgpu_bridge: Option<Arc<WgpuBridge>>,
 
     // Processor state
     ports: DisplayInputPorts,
@@ -61,10 +66,7 @@ impl AppleDisplayProcessor {
         let window_id = WindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
         let metal_device = MetalDevice::new()?;
 
-        // Create WgpuBridge for WebGPU → Metal conversion
-        let wgpu_bridge = pollster::block_on(async {
-            WgpuBridge::new(metal_device.clone_device()).await
-        })?;
+        // WgpuBridge will be created from runtime's shared device in on_start()
 
         // Create Metal command queue for blit operations
         let metal_command_queue = {
@@ -132,7 +134,8 @@ impl AppleDisplayProcessor {
             metal_layer: Some(metal_layer),
             metal_device,
             metal_command_queue,
-            wgpu_bridge: Arc::new(wgpu_bridge),
+            gpu_context: None,  // Will be set by runtime in on_start()
+            wgpu_bridge: None,  // Will be created from shared device in on_start()
             ports: DisplayInputPorts {
                 video: streamlib_core::StreamInput::new("video"),
             },
@@ -172,8 +175,11 @@ impl StreamProcessor for AppleDisplayProcessor {
             let wgpu_texture = &frame.texture;
 
             // Unwrap WebGPU texture to Metal texture (zero-copy!)
+            let wgpu_bridge = self.wgpu_bridge.as_ref()
+                .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?;
+
             let source_metal = unsafe {
-                self.wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)
+                wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)
             }?;
 
             // Get the next drawable from CAMetalLayer
@@ -245,7 +251,32 @@ impl StreamProcessor for AppleDisplayProcessor {
         Ok(())
     }
 
-    fn on_start(&mut self) -> Result<()> {
+    fn on_start(&mut self, gpu_context: &streamlib_core::GpuContext) -> Result<()> {
+        // Store the shared GPU context from runtime
+        self.gpu_context = Some(gpu_context.clone());
+
+        // Log device/queue addresses to verify all processors share same context
+        tracing::info!(
+            "Display {}: Received GPU context - device: {:p}, queue: {:p}",
+            self.window_id.0,
+            gpu_context.device().as_ref(),
+            gpu_context.queue().as_ref()
+        );
+
+        // Create WgpuBridge using the shared device from runtime
+        // This ensures all processors use the same GPU device for zero-copy texture sharing
+        let device = (**gpu_context.device()).clone();
+        let queue = (**gpu_context.queue()).clone();
+
+        let bridge = WgpuBridge::from_shared_device(
+            self.metal_device.clone_device(),
+            device,
+            queue,
+        );
+
+        self.wgpu_bridge = Some(Arc::new(bridge));
+
+        tracing::info!("Display {}: Created WgpuBridge using runtime's shared GPU device", self.window_id.0);
         tracing::info!(
             "Display {}: Starting ({}x{}, title=\"{}\")",
             self.window_id.0,

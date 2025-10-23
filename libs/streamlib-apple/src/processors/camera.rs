@@ -103,9 +103,14 @@ pub struct AppleCameraProcessor {
     // Latest frame (thread-safe, shared with main thread capture)
     latest_frame: Arc<Mutex<Option<FrameHolder>>>,
 
-    // GPU bridge and device
-    wgpu_bridge: Option<Arc<WgpuBridge>>,
+    // GPU context (shared with all processors via runtime)
+    gpu_context: Option<streamlib_core::GpuContext>,
+
+    // Metal device (for IOSurface → Metal texture conversion)
     metal_device: Option<MetalDevice>,
+
+    // WebGPU bridge (created from shared device in on_start)
+    wgpu_bridge: Option<Arc<WgpuBridge>>,
 
     // Capture session info (for logging)
     #[allow(dead_code)] // Stored for future logging/diagnostics
@@ -139,15 +144,10 @@ impl AppleCameraProcessor {
         eprintln!("Camera: Have main thread marker");
         tracing::info!("Camera: Initializing AVFoundation capture session");
 
-        // Create Metal device and WebGPU bridge
+        // Create Metal device (for IOSurface → Metal texture conversion)
+        // WebGPU device/queue will be provided by runtime via on_start()
         let metal_device = MetalDevice::new()?;
-        eprintln!("Camera: Created Metal device");
-
-        // Create WgpuBridge for zero-copy Metal → WebGPU conversion
-        let wgpu_bridge = pollster::block_on(async {
-            WgpuBridge::new(metal_device.clone_device()).await
-        })?;
-        eprintln!("Camera: Created WebGPU bridge");
+        eprintln!("Camera: Created Metal device (WebGPU context will be provided by runtime)");
 
         let latest_frame = Arc::new(Mutex::new(None));
 
@@ -374,8 +374,9 @@ impl AppleCameraProcessor {
             },
             frame_count: 0,
             latest_frame,
-            wgpu_bridge: Some(Arc::new(wgpu_bridge)),
+            gpu_context: None,  // Will be set by runtime in on_start()
             metal_device: Some(metal_device),
+            wgpu_bridge: None,  // Will be created from shared device in on_start()
             camera_name,
             delegate: Some(delegate),
         })
@@ -471,19 +472,69 @@ impl StreamProcessor for AppleCameraProcessor {
                     0, // plane 0 for BGRA
                 )?;
 
-                // Convert Metal texture to WebGPU texture (zero-copy via wgpu-hal)
+                // Convert IOSurface Metal texture to pure WebGPU-owned texture
+                // This ensures downstream processors can use it with any usage flags (including compute shaders)
                 let wgpu_bridge = self.wgpu_bridge.as_ref()
                     .ok_or_else(|| StreamError::Configuration("No WebGPU bridge".into()))?;
 
-                let wgpu_texture = wgpu_bridge.wrap_metal_texture(
+                // Step 1: Wrap IOSurface as temporary WebGPU texture (for reading only)
+                let iosurface_texture = wgpu_bridge.wrap_metal_texture(
                     &metal_texture,
                     wgpu::TextureFormat::Bgra8Unorm,
-                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                    wgpu::TextureUsages::COPY_SRC,  // Only need COPY_SRC for reading
                 )?;
 
-                // Create VideoFrame with WebGPU texture
+                // Step 2: Create WebGPU-owned output texture with all necessary usage flags
+                let output_texture = wgpu_bridge.wgpu_device().create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Camera Output (WebGPU-owned)"),
+                    size: wgpu::Extent3d {
+                        width: width as u32,
+                        height: height as u32,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    // Full usage flags so any processor can use this texture
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+
+                // Step 3: GPU-to-GPU copy from IOSurface to WebGPU-owned texture
+                let mut encoder = wgpu_bridge.wgpu_device().create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor {
+                        label: Some("Camera Copy Encoder"),
+                    }
+                );
+
+                encoder.copy_texture_to_texture(
+                    wgpu::ImageCopyTexture {
+                        texture: &iosurface_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::ImageCopyTexture {
+                        texture: &output_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: width as u32,
+                        height: height as u32,
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                wgpu_bridge.wgpu_queue().submit(std::iter::once(encoder.finish()));
+
+                // Step 4: Create VideoFrame with WebGPU-owned texture
                 let frame = VideoFrame::new(
-                    Arc::new(wgpu_texture),
+                    Arc::new(output_texture),
                     tick.timestamp,
                     self.frame_count,
                     width as u32,
@@ -492,6 +543,16 @@ impl StreamProcessor for AppleCameraProcessor {
 
                 self.ports.video.write(frame);
                 self.frame_count += 1;
+
+                // Debug: Log every 60 frames (once per second at 60fps)
+                if self.frame_count % 60 == 0 {
+                    tracing::info!(
+                        "Camera: Wrote frame {} ({}x{}) to output port (WebGPU-owned texture, format=Bgra8Unorm)",
+                        self.frame_count,
+                        width,
+                        height
+                    );
+                }
 
                 Ok(())
             };
@@ -505,7 +566,35 @@ impl StreamProcessor for AppleCameraProcessor {
         Ok(())
     }
 
-    fn on_start(&mut self) -> Result<()> {
+    fn on_start(&mut self, gpu_context: &streamlib_core::GpuContext) -> Result<()> {
+        // Store the shared GPU context from runtime
+        self.gpu_context = Some(gpu_context.clone());
+
+        // Log device/queue addresses to verify all processors share same context
+        tracing::info!(
+            "Camera: Received GPU context - device: {:p}, queue: {:p}",
+            gpu_context.device().as_ref(),
+            gpu_context.queue().as_ref()
+        );
+
+        // Create WgpuBridge using the shared device from runtime
+        // This ensures all processors use the same GPU device for zero-copy texture sharing
+        let metal_device = self.metal_device.as_ref()
+            .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
+
+        // Clone the device and queue from Arc (wgpu types are cheaply cloneable)
+        let device = (**gpu_context.device()).clone();
+        let queue = (**gpu_context.queue()).clone();
+
+        let bridge = WgpuBridge::from_shared_device(
+            metal_device.clone_device(),
+            device,
+            queue,
+        );
+
+        self.wgpu_bridge = Some(Arc::new(bridge));
+
+        tracing::info!("Camera: Created WgpuBridge using runtime's shared GPU device");
         tracing::info!("Camera: Processor started (capture session already running)");
         Ok(())
     }

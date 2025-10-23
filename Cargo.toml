@@ -51,5 +51,6 @@ tower-http = "0.6.6"
 hyper = "1.7.0"
 
 # WebGPU (cross-platform GPU abstraction)
-wgpu = "27.0.1"
-wgpu-hal = "27.0.3"
+# Using 25.0.2 for compatibility with vello 0.5.0 and pygfx ecosystem
+wgpu = "25.0.2"
+wgpu-hal = "25.0.2"

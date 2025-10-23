@@ -51,7 +51,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::future::Future;
 use std::pin::Pin;
-use wgpu;
 
 /// Opaque shader ID (for future GPU operations)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -110,12 +109,9 @@ pub struct StreamRuntime {
     /// Optional platform-specific event loop hook
     event_loop: Option<EventLoopFn>,
 
-    /// WebGPU device for GPU operations
-    /// Platform-specific layers provide this (initialized from Metal/Vulkan/D3D12)
-    wgpu_device: Option<Arc<wgpu::Device>>,
-
-    /// WebGPU queue for submitting GPU work
-    wgpu_queue: Option<Arc<wgpu::Queue>>,
+    /// GPU context (shared device/queue for all processors)
+    /// Initialized automatically during start()
+    gpu_context: Option<crate::gpu_context::GpuContext>,
 }
 
 impl StreamRuntime {
@@ -142,8 +138,7 @@ impl StreamRuntime {
             clock_task: None,
             running: false,
             event_loop: None,
-            wgpu_device: None,
-            wgpu_queue: None,
+            gpu_context: None,
         }
     }
 
@@ -174,8 +169,7 @@ impl StreamRuntime {
             clock_task: None,
             running: false,
             event_loop: None,
-            wgpu_device: None,
-            wgpu_queue: None,
+            gpu_context: None,
         }
     }
 
@@ -195,35 +189,11 @@ impl StreamRuntime {
         self.event_loop = Some(event_loop);
     }
 
-    /// Set the WebGPU device and queue
+    /// Get the GPU context (if initialized)
     ///
-    /// Platform-specific layers (streamlib-apple, streamlib-jetson, etc.) call this
-    /// to provide the WebGPU device initialized from their native GPU (Metal, CUDA, Vulkan).
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // In streamlib-apple:
-    /// let (device, queue) = create_wgpu_from_metal(...);
-    /// runtime.set_wgpu(device, queue);
-    /// ```
-    pub fn set_wgpu(&mut self, device: wgpu::Device, queue: wgpu::Queue) {
-        self.wgpu_device = Some(Arc::new(device));
-        self.wgpu_queue = Some(Arc::new(queue));
-    }
-
-    /// Get the WebGPU device
-    ///
-    /// Returns None if no device has been set by the platform layer.
-    pub fn wgpu_device(&self) -> Option<Arc<wgpu::Device>> {
-        self.wgpu_device.clone()
-    }
-
-    /// Get the WebGPU queue
-    ///
-    /// Returns None if no queue has been set by the platform layer.
-    pub fn wgpu_queue(&self) -> Option<Arc<wgpu::Queue>> {
-        self.wgpu_queue.clone()
+    /// Returns None before start() is called.
+    pub fn gpu_context(&self) -> Option<&crate::gpu_context::GpuContext> {
+        self.gpu_context.as_ref()
     }
 
     /// Add a processor to the runtime
@@ -303,6 +273,12 @@ impl StreamRuntime {
                 core_count
             );
         }
+
+        // Initialize GPU context (WebGPU device/queue for all processors)
+        tracing::info!("Initializing GPU context...");
+        let gpu_context = crate::gpu_context::GpuContext::init_for_platform().await?;
+        tracing::info!("GPU context initialized: {:?}", gpu_context);
+        self.gpu_context = Some(gpu_context);
 
         self.running = true;
 
@@ -444,6 +420,11 @@ impl StreamRuntime {
     }
 
     fn spawn_handler_threads(&mut self) -> Result<()> {
+        // Clone GPU context to pass to all processor threads
+        let gpu_context = self.gpu_context.as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
+            .clone();
+
         for (index, mut processor) in self.pending_processors.drain(..).enumerate() {
             // Subscribe processor to broadcaster
             let rx = {
@@ -451,12 +432,15 @@ impl StreamRuntime {
                 broadcaster.subscribe()
             };
 
+            // Clone GPU context for this processor thread
+            let processor_gpu_context = gpu_context.clone();
+
             // Spawn OS thread for this processor
             let handle = std::thread::spawn(move || {
                 tracing::info!("[Processor {}] Thread started", index);
 
-                // Call on_start lifecycle hook
-                if let Err(e) = processor.on_start() {
+                // Call on_start lifecycle hook with GPU context
+                if let Err(e) = processor.on_start(&processor_gpu_context) {
                     tracing::error!("[Processor {}] on_start() failed: {}", index, e);
                     return;
                 }

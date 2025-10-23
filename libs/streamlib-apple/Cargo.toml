@@ -18,7 +18,7 @@ dispatch2 = "0.3"  # For GCD dispatch queues - must match objc2 version
 # WebGPU for Metal ↔ WebGPU bridging
 wgpu.workspace = true
 wgpu-hal.workspace = true
-metal = "0.32"  # Metal crate for wgpu-hal interop
+metal = "0.31"  # Metal crate for wgpu-hal interop - must match wgpu-hal 25's version
 
 # Modern objc2 ecosystem - comprehensive Apple framework bindings
 objc2.workspace = true

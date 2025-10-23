@@ -8,6 +8,7 @@ pub mod buffers;
 pub mod clock;
 pub mod error;
 pub mod events;
+pub mod gpu_context;
 pub mod messages;
 pub mod stream_processor;
 pub mod ports;
@@ -21,6 +22,7 @@ pub use buffers::RingBuffer;
 pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
 pub use error::{StreamError, Result};
 pub use events::TickBroadcaster;
+pub use gpu_context::GpuContext;
 pub use messages::{VideoFrame, AudioBuffer, DataMessage, MetadataValue};
 pub use stream_processor::StreamProcessor;
 pub use ports::{

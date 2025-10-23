@@ -77,6 +77,9 @@ pub use streamlib_core::{
     // Textures (WebGPU types)
     Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView,
 
+    // GPU Context
+    GpuContext,
+
     // Clock system
     Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock,
 
