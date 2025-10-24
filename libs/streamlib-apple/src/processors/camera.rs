@@ -5,6 +5,7 @@
 use streamlib_core::{
     StreamProcessor, CameraProcessor, CameraOutputPorts, CameraDevice,
     VideoFrame, TimedTick, Result, StreamError,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::{Arc, Mutex};
 use std::ffi::c_void;
@@ -643,5 +644,27 @@ impl StreamProcessor for AppleCameraProcessor {
         // Note: AVCaptureSession continues running on main thread
         // TODO: Implement proper session lifecycle management
         Ok(())
+    }
+
+    fn descriptor() -> Option<ProcessorDescriptor> {
+        Some(
+            ProcessorDescriptor::new(
+                "CameraProcessor",
+                "Captures video frames from a camera device. Outputs WebGPU textures at the configured frame rate."
+            )
+            .with_usage_context(
+                "Use when you need live video input from a camera. This is typically the source \
+                 processor in a pipeline. Supports multiple camera devices - use set_device_id() \
+                 to select a specific camera, or use 'default' for the system default camera."
+            )
+            .with_output(PortDescriptor::new(
+                "video",
+                Arc::clone(&SCHEMA_VIDEO_FRAME),
+                true,
+                "Live video frames from the camera. Each frame is a WebGPU texture with timestamp \
+                 and metadata. Frames are produced at the camera's native frame rate (typically 30 or 60 FPS)."
+            ))
+            .with_tags(vec!["source", "camera", "video", "input", "capture"])
+        )
     }
 }

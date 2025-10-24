@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "streamlib": {
+      "command": "/Users/fonta/Repositories/tatolab/streamlib/target/release/examples/mcp_server",
+      "args": [],
+      "env": {}
+    }
+  }
+}

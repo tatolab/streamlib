@@ -3,7 +3,8 @@ resolver = "2"
 members = [
     "libs/streamlib",           # Top-level facade (platform-agnostic API)
     "libs/streamlib-core",      # Platform-agnostic runtime
-    "libs/streamlib-apple"      # macOS/iOS platform implementation
+    "libs/streamlib-apple",     # macOS/iOS platform implementation
+    "libs/streamlib-mcp"        # MCP server for AI agent integration
 ]
 
 [workspace.package]
@@ -19,6 +20,11 @@ thiserror = "2.0.17"
 anyhow = "1.0.100"
 tracing = "0.1.41"
 tokio = { version = "1.48.0", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Platform bindings (objc2 ecosystem - latest versions)
 # Note: All objc2 crates must use compatible versions
