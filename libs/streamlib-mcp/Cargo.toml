@@ -1,0 +1,33 @@
+[package]
+name = "streamlib-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Core streamlib functionality
+streamlib-core = { path = "../streamlib-core" }
+
+# MCP SDK - TODO: Add real MCP SDK when implementing protocol handlers
+# For now, we implement the core logic ourselves
+# mcp-sdk = { git = "https://github.com/modelcontextprotocol/rust-sdk" }
+
+# Async runtime
+tokio.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber = "0.3"

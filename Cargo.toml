@@ -3,7 +3,8 @@ resolver = "2"
 members = [
     "libs/streamlib",           # Top-level facade (platform-agnostic API)
     "libs/streamlib-core",      # Platform-agnostic runtime
-    "libs/streamlib-apple"      # macOS/iOS platform implementation
+    "libs/streamlib-apple",     # macOS/iOS platform implementation
+    "libs/streamlib-mcp"        # MCP server for AI agent integration
 ]
 
 [workspace.package]
