@@ -9,9 +9,17 @@
 //!
 //! Press Ctrl+C to stop.
 
-use streamlib::{
-    CameraProcessor, CameraProcessorTrait, DisplayProcessor, DisplayProcessorTrait, Result,
-    StreamRuntime,
+use streamlib::{Result, StreamRuntime};
+
+// Import platform-specific processor implementations
+// On macOS: AppleCameraProcessor and AppleDisplayProcessor
+// These are re-exported as CameraProcessor and DisplayProcessor
+use streamlib::{CameraProcessor, DisplayProcessor};
+
+// Import traits for their methods (output_ports, input_ports, etc.)
+use streamlib::core::processors::{
+    CameraProcessor as CameraProcessorTrait,
+    DisplayProcessor as DisplayProcessorTrait,
 };
 
 #[tokio::main]

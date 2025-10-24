@@ -13,11 +13,18 @@
 //!
 //! Everything stays on GPU - no CPU copies!
 
-use streamlib::{
-    Result, StreamRuntime,
-    CameraProcessor, CameraProcessorTrait,
-    DisplayProcessor, DisplayProcessorTrait,
-    PerformanceOverlayProcessor,
+use streamlib::{Result, StreamRuntime};
+
+// Import platform-specific processor implementations
+use streamlib::{CameraProcessor, DisplayProcessor};
+
+// Import core processors (performance overlay requires debug-overlay feature)
+use streamlib::core::PerformanceOverlayProcessor;
+
+// Import traits for their methods
+use streamlib::core::processors::{
+    CameraProcessor as CameraProcessorTrait,
+    DisplayProcessor as DisplayProcessorTrait,
 };
 
 mod lower_third;
@@ -38,7 +45,7 @@ async fn main() -> Result<()> {
 
     // 1. Camera processor (captures from default camera)
     tracing::info!("Creating camera processor...");
-    let mut camera = CameraProcessor::with_device_id("47B4B64B-7067-4B9C-AD2B-AE273A71F4B5")?;
+    let mut camera = CameraProcessor::with_device_id("0x1424001bcf2284")?;
 
     // 2. Lower third effect processor
     tracing::info!("Creating lower third effect processor...");
