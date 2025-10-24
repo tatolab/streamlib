@@ -7,6 +7,33 @@ use crate::{ProcessorDescriptor, StreamError};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Trait for types that provide processor descriptors for inventory registration
+///
+/// Implement this trait and use `inventory::submit!` to auto-register processors:
+///
+/// ```no_run
+/// use streamlib_core::DescriptorProvider;
+///
+/// struct MyProcessorDescriptor;
+///
+/// impl DescriptorProvider for MyProcessorDescriptor {
+///     fn descriptor(&self) -> streamlib_core::ProcessorDescriptor {
+///         streamlib_core::ProcessorDescriptor::new("MyProcessor", "Does cool things")
+///     }
+/// }
+///
+/// // Auto-register at compile time
+/// inventory::submit! {
+///     &MyProcessorDescriptor as &dyn DescriptorProvider
+/// }
+/// ```
+pub trait DescriptorProvider: Sync {
+    fn descriptor(&self) -> ProcessorDescriptor;
+}
+
+// Collect all submitted descriptor providers via inventory
+inventory::collect!(&'static dyn DescriptorProvider);
+
 /// Processor factory function type
 ///
 /// Takes no arguments and returns a boxed StreamProcessor.
@@ -214,9 +241,29 @@ impl Default for ProcessorRegistry {
 static GLOBAL_REGISTRY: OnceLock<Arc<Mutex<ProcessorRegistry>>> = OnceLock::new();
 
 /// Get the global processor registry
+///
+/// On first access, automatically collects and registers all processors
+/// that were submitted via `inventory::submit!` at compile-time.
 pub fn global_registry() -> Arc<Mutex<ProcessorRegistry>> {
     GLOBAL_REGISTRY
-        .get_or_init(|| Arc::new(Mutex::new(ProcessorRegistry::new())))
+        .get_or_init(|| {
+            let mut registry = ProcessorRegistry::new();
+
+            // Auto-register all compile-time submitted descriptors
+            for provider in inventory::iter::<&dyn DescriptorProvider> {
+                let descriptor = provider.descriptor();
+                let name = descriptor.name.clone();
+
+                if let Err(e) = registry.register_descriptor_only(descriptor) {
+                    // Log warning but don't fail - allow duplicate submissions to be gracefully ignored
+                    tracing::warn!("Failed to auto-register processor '{}': {}", name, e);
+                }
+            }
+
+            tracing::debug!("Auto-registered {} processors from inventory", registry.len());
+
+            Arc::new(Mutex::new(registry))
+        })
         .clone()
 }
 

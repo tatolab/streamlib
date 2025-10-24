@@ -4,7 +4,9 @@
 
 use crate::{
     StreamProcessor, StreamOutput, VideoFrame,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
+use std::sync::Arc;
 
 // Re-import Result type for trait methods
 type Result<T> = std::result::Result<T, crate::StreamError>;
@@ -24,6 +26,31 @@ pub struct CameraOutputPorts {
     pub video: StreamOutput<VideoFrame>,
 }
 
+/// Get the standard descriptor for camera processors
+///
+/// Platform implementations should use this descriptor in their
+/// `StreamProcessor::descriptor()` implementation unless they need
+/// to add platform-specific information.
+pub fn descriptor() -> ProcessorDescriptor {
+    ProcessorDescriptor::new(
+        "CameraProcessor",
+        "Captures video frames from a camera device. Outputs WebGPU textures at the configured frame rate."
+    )
+    .with_usage_context(
+        "Use when you need live video input from a camera. This is typically the source \
+         processor in a pipeline. Supports multiple camera devices - use set_device_id() \
+         to select a specific camera, or use 'default' for the system default camera."
+    )
+    .with_output(PortDescriptor::new(
+        "video",
+        Arc::clone(&SCHEMA_VIDEO_FRAME),
+        true,
+        "Live video frames from the camera. Each frame is a WebGPU texture with timestamp \
+         and metadata. Frames are produced at the camera's native frame rate (typically 30 or 60 FPS)."
+    ))
+    .with_tags(vec!["source", "camera", "video", "input", "capture"])
+}
+
 /// Camera processor trait
 ///
 /// Platform implementations (AppleCameraProcessor, etc.) implement this trait
@@ -40,6 +67,20 @@ pub trait CameraProcessor: StreamProcessor {
 
     /// Get the output ports for this camera
     fn output_ports(&mut self) -> &mut CameraOutputPorts;
+}
+
+// Descriptor provider for inventory registration
+struct CameraProcessorDescriptor;
+
+impl crate::DescriptorProvider for CameraProcessorDescriptor {
+    fn descriptor(&self) -> ProcessorDescriptor {
+        descriptor()
+    }
+}
+
+// Auto-register CameraProcessor descriptor at compile-time
+inventory::submit! {
+    &CameraProcessorDescriptor as &dyn crate::DescriptorProvider
 }
 
 #[cfg(test)]

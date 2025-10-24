@@ -10,9 +10,10 @@ repository.workspace = true
 # Core streamlib functionality
 streamlib-core = { path = "../streamlib-core" }
 
-# MCP SDK - TODO: Add real MCP SDK when implementing protocol handlers
-# For now, we implement the core logic ourselves
-# mcp-sdk = { git = "https://github.com/modelcontextprotocol/rust-sdk" }
+# MCP SDK (official Rust implementation)
+rmcp = { version = "0.8", features = ["server", "transport-io"] }
+async-trait = "0.1"
+schemars = "1.0"
 
 # Async runtime
 tokio.workspace = true

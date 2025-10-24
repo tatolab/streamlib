@@ -4,7 +4,9 @@
 
 use crate::{
     StreamProcessor, StreamInput, VideoFrame,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
+use std::sync::Arc;
 
 /// Unique identifier for a display window
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -14,6 +16,31 @@ pub struct WindowId(pub u64);
 pub struct DisplayInputPorts {
     /// Video frame input (WebGPU textures)
     pub video: StreamInput<VideoFrame>,
+}
+
+/// Get the standard descriptor for display processors
+///
+/// Platform implementations should use this descriptor in their
+/// `StreamProcessor::descriptor()` implementation unless they need
+/// to add platform-specific information.
+pub fn descriptor() -> ProcessorDescriptor {
+    ProcessorDescriptor::new(
+        "DisplayProcessor",
+        "Displays video frames in a window. Renders WebGPU textures to the screen at the configured frame rate."
+    )
+    .with_usage_context(
+        "Use when you need to visualize video output in a window. This is typically a sink \
+         processor at the end of a pipeline. Each DisplayProcessor manages one window. The window \
+         is created automatically on first frame and can be configured with set_window_title()."
+    )
+    .with_input(PortDescriptor::new(
+        "video",
+        Arc::clone(&SCHEMA_VIDEO_FRAME),
+        true,
+        "Video frames to display. Accepts WebGPU textures and renders them to the window. \
+         Automatically handles format conversion and scaling to fit the window."
+    ))
+    .with_tags(vec!["sink", "display", "window", "output", "render"])
 }
 
 /// Display processor trait
@@ -31,6 +58,20 @@ pub trait DisplayProcessor: StreamProcessor {
 
     /// Get the input ports for this display
     fn input_ports(&mut self) -> &mut DisplayInputPorts;
+}
+
+// Descriptor provider for inventory registration
+struct DisplayProcessorDescriptor;
+
+impl crate::DescriptorProvider for DisplayProcessorDescriptor {
+    fn descriptor(&self) -> ProcessorDescriptor {
+        descriptor()
+    }
+}
+
+// Auto-register DisplayProcessor descriptor at compile-time
+inventory::submit! {
+    &DisplayProcessorDescriptor as &dyn crate::DescriptorProvider
 }
 
 #[cfg(test)]

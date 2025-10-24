@@ -49,6 +49,7 @@ pub use schema::{
 };
 pub use registry::{
     ProcessorRegistry, ProcessorRegistration, ProcessorFactory,
+    DescriptorProvider,
     global_registry,
     register_processor, register_processor_descriptor,
     list_processors, list_processors_by_tag,

@@ -17,6 +17,9 @@ tracing.workspace = true
 tokio.workspace = true
 crossbeam-channel = "0.5"
 
+# Compile-time registration
+inventory = "0.3"
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
