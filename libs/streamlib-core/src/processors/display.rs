@@ -4,9 +4,7 @@
 
 use crate::{
     StreamProcessor, StreamInput, VideoFrame,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
-use std::sync::Arc;
 
 /// Unique identifier for a display window
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -39,6 +37,8 @@ pub trait DisplayProcessor: StreamProcessor {
 mod tests {
     use super::*;
     use crate::clock::TimedTick;
+    use crate::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
+    use std::sync::Arc;
 
     // Mock implementation for testing
     struct MockDisplayProcessor;

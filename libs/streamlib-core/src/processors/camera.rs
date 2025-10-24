@@ -4,9 +4,7 @@
 
 use crate::{
     StreamProcessor, StreamOutput, VideoFrame,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
-use std::sync::Arc;
 
 // Re-import Result type for trait methods
 type Result<T> = std::result::Result<T, crate::StreamError>;
@@ -48,6 +46,8 @@ pub trait CameraProcessor: StreamProcessor {
 mod tests {
     use super::*;
     use crate::clock::TimedTick;
+    use crate::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
+    use std::sync::Arc;
 
     // Mock implementation for testing
     struct MockCameraProcessor;
