@@ -40,13 +40,15 @@ mod runtime;
 mod types;
 mod decorators;
 mod error;
+mod port;
 
 use pyo3::prelude::*;
 
 pub use error::{PyStreamError, Result};
-pub use runtime::{PyStreamRuntime, PyStream, PyPort};
+pub use runtime::{PyStreamRuntime, PyStream, TestPort};
+pub use port::ProcessorPort;
 pub use types::PyVideoFrame;
-pub use decorators::{camera_processor, display_processor, processor};
+pub use decorators::{camera_processor, display_processor, processor, ProcessorProxy, PortsProxy};
 
 /// Register the streamlib Python module
 ///
@@ -57,7 +59,10 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types::PyVideoFrame>()?;
     m.add_class::<runtime::PyStreamRuntime>()?;
     m.add_class::<runtime::PyStream>()?;
-    m.add_class::<runtime::PyPort>()?;
+    m.add_class::<port::ProcessorPort>()?;
+    m.add_class::<runtime::TestPort>()?;  // Test struct
+    m.add_class::<decorators::ProcessorProxy>()?;
+    m.add_class::<decorators::PortsProxy>()?;
 
     // Register decorators
     m.add_function(wrap_pyfunction!(decorators::camera_processor, m)?)?;

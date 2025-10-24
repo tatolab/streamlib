@@ -33,6 +33,10 @@ pub enum PyStreamError {
     /// Connection error
     #[error("Connection error: {0}")]
     Connection(String),
+
+    /// Runtime error
+    #[error("Runtime error: {0}")]
+    Runtime(String),
 }
 
 impl From<PyStreamError> for PyErr {
