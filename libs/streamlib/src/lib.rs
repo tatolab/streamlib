@@ -77,6 +77,9 @@ pub use streamlib_core::{
     // Textures (WebGPU types)
     Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView,
 
+    // GPU Context
+    GpuContext,
+
     // Clock system
     Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock,
 
@@ -91,6 +94,12 @@ pub use streamlib_core::{
 
     // Other types
     ShaderId,
+};
+
+// Debug overlay (optional, behind feature flag)
+#[cfg(feature = "debug-overlay")]
+pub use streamlib_core::{
+    PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
 };
 
 // Platform-configured runtime wrapper

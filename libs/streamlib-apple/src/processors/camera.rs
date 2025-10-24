@@ -103,9 +103,14 @@ pub struct AppleCameraProcessor {
     // Latest frame (thread-safe, shared with main thread capture)
     latest_frame: Arc<Mutex<Option<FrameHolder>>>,
 
-    // GPU bridge and device
-    wgpu_bridge: Option<Arc<WgpuBridge>>,
+    // GPU context (shared with all processors via runtime)
+    gpu_context: Option<streamlib_core::GpuContext>,
+
+    // Metal device (for IOSurface → Metal texture conversion)
     metal_device: Option<MetalDevice>,
+
+    // WebGPU bridge (created from shared device in on_start)
+    wgpu_bridge: Option<Arc<WgpuBridge>>,
 
     // Capture session info (for logging)
     #[allow(dead_code)] // Stored for future logging/diagnostics
@@ -114,6 +119,9 @@ pub struct AppleCameraProcessor {
     // Delegate (must be kept alive to prevent deallocation)
     #[allow(dead_code)]
     delegate: Option<Retained<CameraDelegate>>,
+
+    // Metal command queue for BGRA→RGBA blit conversion
+    metal_command_queue: Option<metal::CommandQueue>,
 }
 
 impl AppleCameraProcessor {
@@ -139,15 +147,10 @@ impl AppleCameraProcessor {
         eprintln!("Camera: Have main thread marker");
         tracing::info!("Camera: Initializing AVFoundation capture session");
 
-        // Create Metal device and WebGPU bridge
+        // Create Metal device (for IOSurface → Metal texture conversion)
+        // WebGPU device/queue will be provided by runtime via on_start()
         let metal_device = MetalDevice::new()?;
-        eprintln!("Camera: Created Metal device");
-
-        // Create WgpuBridge for zero-copy Metal → WebGPU conversion
-        let wgpu_bridge = pollster::block_on(async {
-            WgpuBridge::new(metal_device.clone_device()).await
-        })?;
-        eprintln!("Camera: Created WebGPU bridge");
+        eprintln!("Camera: Created Metal device (WebGPU context will be provided by runtime)");
 
         let latest_frame = Arc::new(Mutex::new(None));
 
@@ -374,10 +377,12 @@ impl AppleCameraProcessor {
             },
             frame_count: 0,
             latest_frame,
-            wgpu_bridge: Some(Arc::new(wgpu_bridge)),
+            gpu_context: None,  // Will be set by runtime in on_start()
             metal_device: Some(metal_device),
+            wgpu_bridge: None,  // Will be created from shared device in on_start()
             camera_name,
             delegate: Some(delegate),
+            metal_command_queue: None,  // Will be created in on_start()
         })
     }
 }
@@ -471,19 +476,93 @@ impl StreamProcessor for AppleCameraProcessor {
                     0, // plane 0 for BGRA
                 )?;
 
-                // Convert Metal texture to WebGPU texture (zero-copy via wgpu-hal)
+                // Convert IOSurface Metal texture to pure WebGPU-owned texture
+                // This ensures downstream processors can use it with any usage flags (including compute shaders)
                 let wgpu_bridge = self.wgpu_bridge.as_ref()
                     .ok_or_else(|| StreamError::Configuration("No WebGPU bridge".into()))?;
 
-                let wgpu_texture = wgpu_bridge.wrap_metal_texture(
+                // Step 1: Wrap IOSurface as temporary WebGPU texture (for reading only)
+                let iosurface_texture = wgpu_bridge.wrap_metal_texture(
                     &metal_texture,
                     wgpu::TextureFormat::Bgra8Unorm,
+                    wgpu::TextureUsages::COPY_SRC,  // Only need COPY_SRC for reading
+                )?;
+
+                // Step 2: Convert BGRA→RGBA using Metal blit encoder (GPU-accelerated format conversion)
+                // First, create Metal RGBA texture for the destination (using objc2_metal)
+                let metal_device = self.metal_device.as_ref()
+                    .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
+
+                let metal_rgba_texture = unsafe {
+                    use objc2_metal::{MTLTextureDescriptor, MTLPixelFormat, MTLTextureUsage, MTLDevice};
+
+                    let desc = MTLTextureDescriptor::new();
+                    desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+                    desc.setWidth(width);  // width is already usize
+                    desc.setHeight(height);  // height is already usize
+                    desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+
+                    metal_device.device().newTextureWithDescriptor(&desc)
+                        .ok_or_else(|| StreamError::GpuError("Failed to create RGBA texture".into()))?
+                };
+
+                // Use Metal blit encoder to convert BGRA→RGBA (GPU-accelerated, sub-millisecond)
+                // Convert objc2_metal types to metal crate types for blit encoder
+                let command_queue = self.metal_command_queue.as_ref()
+                    .ok_or_else(|| StreamError::Configuration("Metal command queue not initialized".into()))?;
+
+                use metal::foreign_types::ForeignTypeRef;
+
+                // Convert source texture (objc2_metal → metal crate)
+                let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
+                let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
+
+                // Convert destination texture (objc2_metal → metal crate)
+                let dest_texture_ptr = &*metal_rgba_texture as *const _ as *mut std::ffi::c_void;
+                let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
+
+                let command_buffer = command_queue.new_command_buffer();
+                let blit_encoder = command_buffer.new_blit_command_encoder();
+
+                use metal::MTLOrigin;
+                use metal::MTLSize;
+
+                let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                let size = MTLSize {
+                    width: width as u64,
+                    height: height as u64,
+                    depth: 1,
+                };
+
+                // Blit from BGRA IOSurface texture to RGBA texture
+                // Metal blit encoder automatically handles BGRA→RGBA conversion!
+                blit_encoder.copy_from_texture(
+                    source_texture_ref,
+                    0,  // source slice
+                    0,  // source mip level
+                    origin,
+                    size,
+                    dest_texture_ref,
+                    0,  // dest slice
+                    0,  // dest mip level
+                    origin,
+                );
+
+                blit_encoder.end_encoding();
+                command_buffer.commit();
+                command_buffer.wait_until_completed();
+
+                // Step 3: Wrap Metal RGBA texture as WebGPU texture
+                let output_texture = wgpu_bridge.wrap_metal_texture(
+                    &metal_rgba_texture,
+                    wgpu::TextureFormat::Rgba8Unorm,
                     wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                 )?;
 
-                // Create VideoFrame with WebGPU texture
+                // Step 4: Create VideoFrame with RGBA texture
                 let frame = VideoFrame::new(
-                    Arc::new(wgpu_texture),
+                    Arc::new(output_texture),
+                    wgpu::TextureFormat::Rgba8Unorm,  // Explicit format
                     tick.timestamp,
                     self.frame_count,
                     width as u32,
@@ -492,6 +571,16 @@ impl StreamProcessor for AppleCameraProcessor {
 
                 self.ports.video.write(frame);
                 self.frame_count += 1;
+
+                // Debug: Log every 60 frames (once per second at 60fps)
+                if self.frame_count % 60 == 0 {
+                    tracing::info!(
+                        "Camera: Wrote frame {} ({}x{}) to output port (WebGPU-owned texture, format=Rgba8Unorm)",
+                        self.frame_count,
+                        width,
+                        height
+                    );
+                }
 
                 Ok(())
             };
@@ -505,7 +594,46 @@ impl StreamProcessor for AppleCameraProcessor {
         Ok(())
     }
 
-    fn on_start(&mut self) -> Result<()> {
+    fn on_start(&mut self, gpu_context: &streamlib_core::GpuContext) -> Result<()> {
+        // Store the shared GPU context from runtime
+        self.gpu_context = Some(gpu_context.clone());
+
+        // Log device/queue addresses to verify all processors share same context
+        tracing::info!(
+            "Camera: Received GPU context - device: {:p}, queue: {:p}",
+            gpu_context.device().as_ref(),
+            gpu_context.queue().as_ref()
+        );
+
+        // Create WgpuBridge using the shared device from runtime
+        // This ensures all processors use the same GPU device for zero-copy texture sharing
+        let metal_device = self.metal_device.as_ref()
+            .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
+
+        // Clone the device and queue from Arc (wgpu types are cheaply cloneable)
+        let device = (**gpu_context.device()).clone();
+        let queue = (**gpu_context.queue()).clone();
+
+        let bridge = WgpuBridge::from_shared_device(
+            metal_device.clone_device(),
+            device,
+            queue,
+        );
+
+        self.wgpu_bridge = Some(Arc::new(bridge));
+
+        tracing::info!("Camera: Created WgpuBridge using runtime's shared GPU device");
+
+        // Create Metal command queue for BGRA→RGBA blit conversion
+        use metal::foreign_types::ForeignTypeRef;
+        let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+        let metal_device_ref = unsafe {
+            metal::DeviceRef::from_ptr(device_ptr as *mut _)
+        };
+        let command_queue = metal_device_ref.new_command_queue();
+        self.metal_command_queue = Some(command_queue);
+
+        tracing::info!("Camera: Created Metal command queue for BGRA→RGBA blit conversion");
         tracing::info!("Camera: Processor started (capture session already running)");
         Ok(())
     }

@@ -29,10 +29,37 @@ pub struct WgpuBridge {
 }
 
 impl WgpuBridge {
-    /// Create a new WebGPU bridge from a Metal device
+    /// Create a new WebGPU bridge from existing WebGPU device and queue (recommended)
     ///
-    /// This initializes a WebGPU device that uses the provided Metal device
-    /// as its backend, enabling zero-copy texture sharing.
+    /// This creates a bridge using a shared WebGPU device provided by the runtime,
+    /// ensuring all processors use the same GPU context for zero-copy texture sharing.
+    ///
+    /// # Arguments
+    ///
+    /// * `metal_device` - Native Metal device
+    /// * `wgpu_device` - Shared WebGPU device from runtime
+    /// * `wgpu_queue` - Shared WebGPU queue from runtime
+    ///
+    /// # Returns
+    ///
+    /// A bridge that can convert Metal resources to WebGPU using the shared device
+    pub fn from_shared_device(
+        metal_device: Retained<ProtocolObject<dyn MTLDevice>>,
+        wgpu_device: wgpu::Device,
+        wgpu_queue: wgpu::Queue,
+    ) -> Self {
+        Self {
+            metal_device,
+            wgpu_device,
+            wgpu_queue,
+        }
+    }
+
+    /// Create a new WebGPU bridge from a Metal device (legacy - creates its own device)
+    ///
+    /// **⚠️ DEPRECATED**: This method creates a new WebGPU device, which prevents
+    /// texture sharing between processors. Use `from_shared_device()` instead with
+    /// a device from streamlib-core's runtime.
     ///
     /// # Arguments
     ///
@@ -41,6 +68,7 @@ impl WgpuBridge {
     /// # Returns
     ///
     /// A bridge that can convert Metal resources to WebGPU
+    #[deprecated(note = "Use from_shared_device() instead to share GPU context with runtime")]
     pub async fn new(metal_device: Retained<ProtocolObject<dyn MTLDevice>>) -> Result<Self> {
         // Create wgpu instance
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -65,8 +93,7 @@ impl WgpuBridge {
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-                experimental_features: Default::default(),
+                trace: Default::default(),  // wgpu 25 uses path-based tracing
             })
             .await
             .map_err(|e| StreamError::GpuError(format!("Failed to create device: {}", e)))?;
@@ -189,21 +216,20 @@ impl WgpuBridge {
         wgpu_texture: &wgpu::Texture,
     ) -> Result<metal::Texture> {
         // Get the HAL texture from the WebGPU texture
-        // as_hal() returns Option<impl Deref<Target = A::Texture>>
-        let hal_deref = wgpu_texture
-            .as_hal::<hal::api::Metal>()
-            .ok_or_else(|| {
-                StreamError::GpuError("Failed to get HAL texture from WebGPU texture".into())
-            })?;
+        // In wgpu 25, as_hal uses a callback pattern: as_hal<A, F, R>(callback: F)
+        // where F: FnOnce(Option<&A::Texture>) -> R
+        let metal_texture = wgpu_texture.as_hal::<hal::api::Metal, _, _>(|hal_texture_opt| {
+            hal_texture_opt
+                .map(|hal_texture| {
+                    // Get the raw Metal texture from HAL texture using raw_handle()
+                    hal_texture.raw_handle().to_owned()
+                })
+                .ok_or_else(|| {
+                    StreamError::GpuError("Failed to get HAL texture from WebGPU texture".into())
+                })
+        })?;
 
-        // Deref to get the actual hal::metal::Texture
-        let hal_texture: &hal::metal::Texture = &*hal_deref;
-
-        // Get the raw Metal texture from HAL texture using raw_handle()
-        // This gives us a &metal::Texture reference
-        let metal_texture_ref = hal_texture.raw_handle();
-
-        Ok(metal_texture_ref.to_owned())
+        Ok(metal_texture)
     }
 
     /// Consume the bridge and return the WebGPU device and queue
