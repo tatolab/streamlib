@@ -6,9 +6,8 @@
 use streamlib::{
     StreamProcessor, StreamRuntime,
     StreamOutput, StreamInput, PortMessage, PortType,
-    TimedTick,
+    TimedTick, Result,
 };
-use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
 // Define a simple frame message

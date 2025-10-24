@@ -10,6 +10,7 @@ pub mod error;
 pub mod events;
 pub mod gpu_context;
 pub mod messages;
+pub mod schema;
 pub mod stream_processor;
 pub mod ports;
 pub mod processors;
@@ -38,5 +39,12 @@ pub use processors::{
     PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
 };
 pub use runtime::{StreamRuntime, ShaderId};
+pub use schema::{
+    Schema, Field, FieldType, SemanticVersion, SerializationFormat,
+    ProcessorDescriptor, PortDescriptor, ProcessorExample,
+    // Standard schemas
+    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_BUFFER, SCHEMA_DATA_MESSAGE,
+    SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
+};
 pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};

@@ -6,6 +6,7 @@
 use streamlib_core::{
     StreamProcessor, DisplayProcessor, DisplayInputPorts, WindowId,
     TimedTick, Result, StreamError,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use crate::{metal::MetalDevice, WgpuBridge};
 use objc2::{rc::Retained, MainThreadOnly, MainThreadMarker};
@@ -308,5 +309,27 @@ impl StreamProcessor for AppleDisplayProcessor {
         self.metal_layer = None;
 
         Ok(())
+    }
+
+    fn descriptor() -> Option<ProcessorDescriptor> {
+        Some(
+            ProcessorDescriptor::new(
+                "DisplayProcessor",
+                "Displays video frames in a window. Renders WebGPU textures to the screen at the configured frame rate."
+            )
+            .with_usage_context(
+                "Use when you need to visualize video output in a window. This is typically a sink \
+                 processor at the end of a pipeline. Each DisplayProcessor manages one window. The window \
+                 is created automatically on first frame and can be configured with set_window_title()."
+            )
+            .with_input(PortDescriptor::new(
+                "video",
+                Arc::clone(&SCHEMA_VIDEO_FRAME),
+                true,
+                "Video frames to display. Accepts WebGPU textures and renders them to the window. \
+                 Automatically handles format conversion and scaling to fit the window."
+            ))
+            .with_tags(vec!["sink", "display", "window", "output", "render"])
+        )
     }
 }

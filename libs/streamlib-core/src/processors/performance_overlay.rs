@@ -8,6 +8,7 @@
 use crate::{
     StreamProcessor, StreamInput, StreamOutput, VideoFrame,
     Result, StreamError, GpuContext,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -808,8 +809,91 @@ impl StreamProcessor for PerformanceOverlayProcessor {
 
         Ok(())
     }
+
+    fn descriptor() -> Option<ProcessorDescriptor> {
+        Some(
+            ProcessorDescriptor::new(
+                "PerformanceOverlayProcessor",
+                "Composites real-time performance metrics (FPS, GPU memory, frame time graph) onto video frames using Vello 2D graphics. \
+                 Measures both CPU and GPU performance using timestamp queries."
+            )
+            .with_usage_context(
+                "Use when you need to debug and monitor real-time performance of your video pipeline. This processor \
+                 measures actual frame rates, GPU rendering times, and memory usage. It's a pass-through processor \
+                 that adds visual overlay without affecting pipeline performance significantly. \
+                 Only available with the 'debug-overlay' feature flag."
+            )
+            .with_input(PortDescriptor::new(
+                "video",
+                Arc::clone(&SCHEMA_VIDEO_FRAME),
+                true,
+                "Input video frames to overlay performance metrics on. WebGPU textures are analyzed and passed through \
+                 with performance overlay composited on top."
+            ))
+            .with_output(PortDescriptor::new(
+                "video",
+                Arc::clone(&SCHEMA_VIDEO_FRAME),
+                true,
+                "Output video frames with performance overlay composited. Same format as input, but with FPS counter, \
+                 GPU memory usage, and performance graph rendered on top using alpha blending."
+            ))
+            .with_tags(vec!["debug", "performance", "monitoring", "overlay", "profiling", "fps"])
+        )
+    }
 }
 
 // Export input/output port types
 pub use PerformanceOverlayInputPorts as PerformanceOverlayInput;
 pub use PerformanceOverlayOutputPorts as PerformanceOverlayOutput;
+
+#[cfg(all(test, feature = "debug-overlay"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_performance_overlay_descriptor() {
+        let descriptor = PerformanceOverlayProcessor::descriptor()
+            .expect("PerformanceOverlayProcessor should have descriptor");
+
+        // Verify basic metadata
+        assert_eq!(descriptor.name, "PerformanceOverlayProcessor");
+        assert!(descriptor.description.contains("performance"));
+        assert!(descriptor.description.contains("FPS"));
+        assert!(descriptor.usage_context.is_some());
+        assert!(descriptor.usage_context.as_ref().unwrap().contains("debug"));
+
+        // Verify it has video input
+        assert_eq!(descriptor.inputs.len(), 1);
+        assert_eq!(descriptor.inputs[0].name, "video");
+        assert_eq!(descriptor.inputs[0].schema.name, "VideoFrame");
+        assert!(descriptor.inputs[0].required);
+
+        // Verify it has video output (pass-through with overlay)
+        assert_eq!(descriptor.outputs.len(), 1);
+        assert_eq!(descriptor.outputs[0].name, "video");
+        assert_eq!(descriptor.outputs[0].schema.name, "VideoFrame");
+        assert!(descriptor.outputs[0].required);
+
+        // Verify tags
+        assert!(descriptor.tags.contains(&"debug".to_string()));
+        assert!(descriptor.tags.contains(&"performance".to_string()));
+        assert!(descriptor.tags.contains(&"fps".to_string()));
+    }
+
+    #[test]
+    fn test_performance_overlay_descriptor_serialization() {
+        let descriptor = PerformanceOverlayProcessor::descriptor()
+            .expect("PerformanceOverlayProcessor should have descriptor");
+
+        // Test JSON serialization
+        let json = descriptor.to_json().expect("Failed to serialize to JSON");
+        assert!(json.contains("PerformanceOverlayProcessor"));
+        assert!(json.contains("performance"));
+        assert!(json.contains("FPS"));
+
+        // Test YAML serialization
+        let yaml = descriptor.to_yaml().expect("Failed to serialize to YAML");
+        assert!(yaml.contains("PerformanceOverlayProcessor"));
+        assert!(yaml.contains("debug"));
+    }
+}

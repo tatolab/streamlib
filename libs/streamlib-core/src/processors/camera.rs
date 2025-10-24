@@ -2,7 +2,11 @@
 //!
 //! Defines the interface for camera capture processors across platforms.
 
-use crate::{StreamProcessor, StreamOutput, VideoFrame};
+use crate::{
+    StreamProcessor, StreamOutput, VideoFrame,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
+};
+use std::sync::Arc;
 
 // Re-import Result type for trait methods
 type Result<T> = std::result::Result<T, crate::StreamError>;
@@ -38,4 +42,110 @@ pub trait CameraProcessor: StreamProcessor {
 
     /// Get the output ports for this camera
     fn output_ports(&mut self) -> &mut CameraOutputPorts;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::TimedTick;
+
+    // Mock implementation for testing
+    struct MockCameraProcessor;
+
+    impl StreamProcessor for MockCameraProcessor {
+        fn process(&mut self, _tick: TimedTick) -> Result<()> {
+            Ok(())
+        }
+
+        fn descriptor() -> Option<ProcessorDescriptor> {
+            Some(
+                ProcessorDescriptor::new(
+                    "CameraProcessor",
+                    "Captures video frames from a camera device. Outputs WebGPU textures at the configured frame rate."
+                )
+                .with_usage_context(
+                    "Use when you need live video input from a camera. This is typically the source \
+                     processor in a pipeline. Supports multiple camera devices - use set_device_id() \
+                     to select a specific camera, or use 'default' for the system default camera."
+                )
+                .with_output(PortDescriptor::new(
+                    "video",
+                    Arc::clone(&SCHEMA_VIDEO_FRAME),
+                    true,
+                    "Live video frames from the camera. Each frame is a WebGPU texture with timestamp \
+                     and metadata. Frames are produced at the camera's native frame rate (typically 30 or 60 FPS)."
+                ))
+                .with_tags(vec!["source", "camera", "video", "input", "capture"])
+            )
+        }
+    }
+
+    impl CameraProcessor for MockCameraProcessor {
+        fn set_device_id(&mut self, _device_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn list_devices() -> Result<Vec<CameraDevice>> {
+            Ok(vec![])
+        }
+
+        fn output_ports(&mut self) -> &mut CameraOutputPorts {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_camera_descriptor() {
+        let descriptor = MockCameraProcessor::descriptor().expect("Should have descriptor");
+
+        // Verify basic metadata
+        assert_eq!(descriptor.name, "CameraProcessor");
+        assert!(descriptor.description.contains("camera"));
+        assert!(descriptor.usage_context.is_some());
+
+        // Verify it has no inputs (it's a source)
+        assert_eq!(descriptor.inputs.len(), 0);
+
+        // Verify it has video output
+        assert_eq!(descriptor.outputs.len(), 1);
+        assert_eq!(descriptor.outputs[0].name, "video");
+        assert_eq!(descriptor.outputs[0].schema.name, "VideoFrame");
+        assert!(descriptor.outputs[0].required);
+
+        // Verify tags
+        assert!(descriptor.tags.contains(&"source".to_string()));
+        assert!(descriptor.tags.contains(&"camera".to_string()));
+    }
+
+    #[test]
+    fn test_camera_descriptor_serialization() {
+        let descriptor = MockCameraProcessor::descriptor().expect("Should have descriptor");
+
+        // Test JSON serialization
+        let json = descriptor.to_json().expect("Failed to serialize to JSON");
+        assert!(json.contains("CameraProcessor"));
+        assert!(json.contains("video"));
+        assert!(json.contains("VideoFrame"));
+
+        // Note: YAML serialization not tested due to serde_yaml limitation with nested enums
+        // JSON serialization is sufficient for AI agent consumption
+    }
+
+    #[test]
+    fn test_video_frame_schema() {
+        let schema = &*SCHEMA_VIDEO_FRAME;
+
+        // Verify schema structure
+        assert_eq!(schema.name, "VideoFrame");
+        assert_eq!(schema.version.major, 1);
+        assert_eq!(schema.version.minor, 0);
+
+        // Verify required fields exist
+        let field_names: Vec<&str> = schema.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(field_names.contains(&"texture"));
+        assert!(field_names.contains(&"width"));
+        assert!(field_names.contains(&"height"));
+        assert!(field_names.contains(&"timestamp"));
+        assert!(field_names.contains(&"frame_number"));
+    }
 }
