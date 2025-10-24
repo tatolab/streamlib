@@ -4,9 +4,10 @@
 
 use crate::{
     StreamProcessor, StreamInput, VideoFrame,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
+    ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::Arc;
+use serde_json::json;
 
 /// Unique identifier for a display window
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -39,6 +40,37 @@ pub fn descriptor() -> ProcessorDescriptor {
         true,
         "Video frames to display. Accepts WebGPU textures and renders them to the window. \
          Automatically handles format conversion and scaling to fit the window."
+    ))
+    .with_example(ProcessorExample::new(
+        "Display 720p video in a window",
+        json!({
+            "video": {
+                "width": 1280,
+                "height": 720,
+                "format": "RGBA8",
+                "timestamp": 0.033,
+                "frame_number": 1,
+                "metadata": {}
+            }
+        }),
+        json!({})  // No outputs (sink processor)
+    ))
+    .with_example(ProcessorExample::new(
+        "Display 1080p video with metadata overlay",
+        json!({
+            "video": {
+                "width": 1920,
+                "height": 1080,
+                "format": "RGBA8",
+                "timestamp": 1.250,
+                "frame_number": 75,
+                "metadata": {
+                    "fps": 60.0,
+                    "camera_id": "front"
+                }
+            }
+        }),
+        json!({})  // No outputs (sink processor)
     ))
     .with_tags(vec!["sink", "display", "window", "output", "render"])
 }

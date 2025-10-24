@@ -189,54 +189,47 @@ Users don't see the change. Examples still work. But underneath, it's real infra
 
 ## Processor Auto-Registration Pattern
 
-**All processors use the same pattern for auto-registration:**
+**Super simple - just one extra line after your StreamProcessor implementation:**
 
 ```rust
-use streamlib::{DescriptorProvider, ProcessorDescriptor, PortDescriptor};
-use std::sync::Arc;
+use streamlib::{StreamProcessor, ProcessorDescriptor, register_processor_type};
 
-// 1. Define module-level descriptor function
-pub fn descriptor() -> ProcessorDescriptor {
-    ProcessorDescriptor::new(
-        "MyProcessor",
-        "Description of what it does"
-    )
-    .with_output(PortDescriptor::new(...))
-    .with_tags(vec!["tag1", "tag2"])
-}
+struct MyProcessor;
 
-// 2. Create descriptor provider
-struct MyProcessorDescriptor;
+impl StreamProcessor for MyProcessor {
+    fn descriptor() -> Option<ProcessorDescriptor> {
+        Some(
+            ProcessorDescriptor::new(
+                "MyProcessor",
+                "Description of what it does"
+            )
+            .with_output(...)
+            .with_tags(vec!["tag1", "tag2"])
+        )
+    }
 
-impl streamlib::DescriptorProvider for MyProcessorDescriptor {
-    fn descriptor(&self) -> ProcessorDescriptor {
-        descriptor()
+    fn process(&mut self, tick: TimedTick) -> Result<()> {
+        // Your processing logic
+        Ok(())
     }
 }
 
-// 3. Auto-register at compile-time
-inventory::submit! {
-    &MyProcessorDescriptor as &dyn streamlib::DescriptorProvider
-}
+// That's it! One line to auto-register
+register_processor_type!(MyProcessor);
 ```
 
-**This pattern works for:**
-- Built-in processors (CameraProcessor, DisplayProcessor)
-- Custom processors in examples
-- User-defined processors in applications
+**What happens:**
+- The macro handles all the inventory boilerplate
+- On first call to `global_registry()`, all registered processors are collected
+- Automatically available for MCP discovery and runtime use
 
-**On first call to `global_registry()`:**
-- All submitted descriptors are collected
-- Automatically registered in the global registry
-- Available for MCP discovery and runtime use
-
-**Users import from `streamlib`, not `streamlib_core`:**
+**Always import from `streamlib`, not `streamlib_core`:**
 ```rust
 // ✅ Correct
-use streamlib::{DescriptorProvider, ProcessorDescriptor};
+use streamlib::{StreamProcessor, ProcessorDescriptor, register_processor_type};
 
 // ❌ Wrong (internal use only)
-use streamlib_core::{DescriptorProvider, ProcessorDescriptor};
+use streamlib_core::{StreamProcessor, ProcessorDescriptor};
 ```
 
 ## Example Creation

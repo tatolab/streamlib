@@ -36,7 +36,13 @@ use rmcp::{
     model::*,
     ServerHandler, ServiceExt, RoleServer,
     service::RequestContext,
-    transport::stdio,
+    transport::{
+        stdio,
+        streamable_http_server::{
+            StreamableHttpService, StreamableHttpServerConfig,
+            session::local::LocalSessionManager,
+        },
+    },
     ErrorData as RmcpError,
 };
 
@@ -111,17 +117,119 @@ impl McpServer {
     /// Run MCP server over HTTP
     ///
     /// This mode is useful for remote AI agents or distributed systems.
+    /// Uses streamable HTTP transport.
+    ///
+    /// If the requested port is in use, automatically tries the next available port.
     ///
     /// # Arguments
-    /// * `bind_addr` - Address to bind to (e.g., "127.0.0.1:3000")
-    pub async fn run_http(&self, _bind_addr: &str) -> Result<()> {
-        tracing::info!("Starting MCP server on HTTP");
+    /// * `bind_addr` - Address to bind to (e.g., "127.0.0.1:3050")
+    pub async fn run_http(&self, bind_addr: &str) -> Result<()> {
+        // Parse the bind address to extract host and port
+        let (host, requested_port) = Self::parse_bind_addr(bind_addr)?;
 
-        // TODO: Implement HTTP transport when rmcp supports it
-        // For now, HTTP is not prioritized - stdio is the main transport for Claude Desktop
+        // Find an available port starting from the requested port
+        let (actual_host, actual_port) = Self::find_available_port(&host, requested_port).await?;
+        let actual_bind_addr = format!("{}:{}", actual_host, actual_port);
 
-        Err(McpError::NotImplemented(
-            "HTTP transport not yet implemented - use stdio() for now".into()
+        if actual_port != requested_port {
+            tracing::warn!(
+                "Requested port {} was in use, using port {} instead",
+                requested_port,
+                actual_port
+            );
+        }
+
+        tracing::info!("Starting MCP server on HTTP at {}", actual_bind_addr);
+
+        // Create factory for MCP services
+        let registry = Arc::clone(&self.registry);
+        let name = self.name.clone();
+        let version = self.version.clone();
+
+        let service_factory = move || {
+            Ok(StreamlibMcpHandler {
+                registry: Arc::clone(&registry),
+                name: name.clone(),
+                version: version.clone(),
+            })
+        };
+
+        // Create StreamableHttpService with local session manager
+        let session_manager = Arc::new(LocalSessionManager::default());
+        let http_service = StreamableHttpService::new(
+            service_factory,
+            session_manager,
+            StreamableHttpServerConfig::default(),
+        );
+
+        // Create Axum router with the MCP service
+        // Note: nest_service at root is not supported, use fallback_service
+        let app = axum::Router::new()
+            .nest_service("/mcp", http_service.clone())
+            .fallback_service(http_service);
+
+        // Create TCP listener
+        let listener = tokio::net::TcpListener::bind(&actual_bind_addr)
+            .await
+            .map_err(|e| McpError::Protocol(format!("Failed to bind to {}: {}", actual_bind_addr, e)))?;
+
+        tracing::info!("MCP server running on HTTP at {}", actual_bind_addr);
+        tracing::info!("Access the MCP server at http://{}/mcp", actual_bind_addr);
+
+        // Serve the application
+        axum::serve(listener, app)
+            .await
+            .map_err(|e| McpError::Protocol(format!("Server error: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Parse bind address into host and port
+    fn parse_bind_addr(bind_addr: &str) -> Result<(String, u16)> {
+        let parts: Vec<&str> = bind_addr.rsplitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err(McpError::Configuration(
+                format!("Invalid bind address: {}. Expected format: host:port", bind_addr)
+            ));
+        }
+
+        let port = parts[0].parse::<u16>()
+            .map_err(|_| McpError::Configuration(
+                format!("Invalid port number: {}", parts[0])
+            ))?;
+
+        Ok((parts[1].to_string(), port))
+    }
+
+    /// Find an available port starting from the requested port
+    ///
+    /// Tries up to 100 consecutive ports before giving up
+    async fn find_available_port(host: &str, start_port: u16) -> Result<(String, u16)> {
+        const MAX_ATTEMPTS: u16 = 100;
+
+        for offset in 0..MAX_ATTEMPTS {
+            let port = start_port.saturating_add(offset);
+            let addr = format!("{}:{}", host, port);
+
+            // Try to bind to check if port is available
+            match tokio::net::TcpListener::bind(&addr).await {
+                Ok(_) => {
+                    // Port is available
+                    return Ok((host.to_string(), port));
+                }
+                Err(_) => {
+                    // Port in use, try next
+                    continue;
+                }
+            }
+        }
+
+        Err(McpError::Configuration(
+            format!(
+                "Could not find available port in range {}-{}",
+                start_port,
+                start_port.saturating_add(MAX_ATTEMPTS - 1)
+            )
         ))
     }
 
@@ -230,10 +338,12 @@ impl ServerHandler for StreamlibMcpHandler {
                 ))?;
 
             Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text(
-                    content.text,
-                    content.uri,
-                )],
+                contents: vec![ResourceContents::TextResourceContents {
+                    uri: content.uri,
+                    mime_type: Some(content.mime_type),
+                    text: content.text,
+                    meta: None,
+                }],
             })
         }
     }

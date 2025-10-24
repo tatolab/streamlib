@@ -99,6 +99,7 @@ pub use streamlib_core::{
     register_processor, register_processor_descriptor,
     list_processors, list_processors_by_tag,
     create_processor, is_processor_registered, unregister_processor,
+    register_processor_type,
 
     // Schema system
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,

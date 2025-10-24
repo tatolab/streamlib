@@ -11,9 +11,15 @@ repository.workspace = true
 streamlib-core = { path = "../streamlib-core" }
 
 # MCP SDK (official Rust implementation)
-rmcp = { version = "0.8", features = ["server", "transport-io"] }
+rmcp = { version = "0.8", features = ["server", "transport-io", "transport-streamable-http-server"] }
 async-trait = "0.1"
 schemars = "1.0"
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# HTTP server (Axum is required for streamable HTTP transport)
+axum.workspace = true
 
 # Async runtime
 tokio.workspace = true

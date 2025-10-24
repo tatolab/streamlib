@@ -39,4 +39,8 @@ pub enum McpError {
     /// MCP protocol error
     #[error("MCP protocol error: {0}")]
     Protocol(String),
+
+    /// Configuration error
+    #[error("Configuration error: {0}")]
+    Configuration(String),
 }

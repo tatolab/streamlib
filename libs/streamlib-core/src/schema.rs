@@ -327,8 +327,10 @@ impl Schema {
     }
 
     /// Export schema to JSON (for AI agents)
+    ///
+    /// Returns compact JSON (single line) for efficient transmission over MCP.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+        serde_json::to_string(self)
     }
 
     /// Export schema to YAML (for AI agents)
@@ -508,8 +510,10 @@ impl ProcessorDescriptor {
     }
 
     /// Export descriptor to JSON (for AI agents)
+    ///
+    /// Returns compact JSON (single line) for efficient transmission over MCP.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+        serde_json::to_string(self)
     }
 
     /// Export descriptor to YAML (for AI agents)

@@ -22,14 +22,42 @@ Resources use the URI pattern: `processor://ProcessorName`
 
 ### Running the MCP Server
 
-Build and run the example MCP server:
+The MCP server supports two transport modes:
+
+#### stdio Transport (Default)
+
+For local AI agents like Claude Desktop:
 
 ```bash
+# Build
 cargo build --example mcp_server --release
+
+# Run with stdio
 ./target/release/examples/mcp_server
 ```
 
-The server communicates via stdio using JSON-RPC protocol.
+The server communicates via stdin/stdout using JSON-RPC protocol.
+
+#### HTTP Transport
+
+For remote AI agents or testing with MCP tools:
+
+```bash
+# Run with HTTP on default port 3050
+cargo run --example mcp_server -- --http
+
+# Run with custom port
+cargo run --example mcp_server -- --http --port 3060
+
+# Run with custom host and port
+cargo run --example mcp_server -- --http --host 0.0.0.0 --port 8080
+```
+
+**Features**:
+- Streamable HTTP transport (not SSE)
+- Automatic port selection if requested port is in use
+- Access endpoints at `http://host:port/` or `http://host:port/mcp`
+- Stateful sessions with resume support
 
 ### Adding to Claude Code
 
@@ -64,13 +92,14 @@ Once configured, you can verify the MCP server is working by asking Claude Code:
 ### ✅ Implemented
 - **Resource Discovery**: List and read processor descriptors
 - **Tool Definitions**: JSON schemas for all runtime tools
-- **stdio Transport**: JSON-RPC over stdin/stdout
+- **stdio Transport**: JSON-RPC over stdin/stdout for local AI agents
+- **HTTP Transport**: Streamable HTTP for remote AI agents and MCP tools
+- **Auto-Registration**: Built-in processors (CameraProcessor, DisplayProcessor) automatically registered via inventory
 - **Integration**: Works with rmcp 0.8 (official Rust MCP SDK)
 
 ### 🚧 In Progress
 - **Tool Execution**: Currently returns placeholders
 - **Runtime Integration**: Need StreamRuntime for actual processor operations
-- **HTTP Transport**: stdio is prioritized (HTTP planned for future)
 
 ## Development
 

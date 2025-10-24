@@ -34,6 +34,49 @@ pub trait DescriptorProvider: Sync {
 // Collect all submitted descriptor providers via inventory
 inventory::collect!(&'static dyn DescriptorProvider);
 
+/// Register a processor type for auto-discovery
+///
+/// This macro handles all the boilerplate for inventory-based auto-registration.
+/// Just call it once after your StreamProcessor implementation.
+///
+/// # Example
+/// ```no_run
+/// use streamlib::{StreamProcessor, ProcessorDescriptor, register_processor_type};
+///
+/// struct MyProcessor;
+///
+/// impl StreamProcessor for MyProcessor {
+///     fn descriptor() -> Option<ProcessorDescriptor> {
+///         Some(ProcessorDescriptor::new("MyProcessor", "Does cool things"))
+///     }
+///     // ... other trait methods
+/// }
+///
+/// // That's it! One line to auto-register
+/// register_processor_type!(MyProcessor);
+/// ```
+#[macro_export]
+macro_rules! register_processor_type {
+    ($processor_type:ty) => {
+        // Create a hidden descriptor provider
+        const _: () = {
+            struct __DescriptorProvider;
+
+            impl $crate::DescriptorProvider for __DescriptorProvider {
+                fn descriptor(&self) -> $crate::ProcessorDescriptor {
+                    <$processor_type as $crate::StreamProcessor>::descriptor()
+                        .expect(concat!(stringify!($processor_type), " must provide a descriptor"))
+                }
+            }
+
+            // Auto-register at compile time
+            inventory::submit! {
+                &__DescriptorProvider as &dyn $crate::DescriptorProvider
+            }
+        };
+    };
+}
+
 /// Processor factory function type
 ///
 /// Takes no arguments and returns a boxed StreamProcessor.

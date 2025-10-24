@@ -4,9 +4,10 @@
 
 use crate::{
     StreamProcessor, StreamOutput, VideoFrame,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
+    ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::Arc;
+use serde_json::json;
 
 // Re-import Result type for trait methods
 type Result<T> = std::result::Result<T, crate::StreamError>;
@@ -47,6 +48,34 @@ pub fn descriptor() -> ProcessorDescriptor {
         true,
         "Live video frames from the camera. Each frame is a WebGPU texture with timestamp \
          and metadata. Frames are produced at the camera's native frame rate (typically 30 or 60 FPS)."
+    ))
+    .with_example(ProcessorExample::new(
+        "720p video capture at 30 FPS",
+        json!({}),  // No inputs (source processor)
+        json!({
+            "video": {
+                "width": 1280,
+                "height": 720,
+                "format": "RGBA8",
+                "timestamp": 0.033,
+                "frame_number": 1,
+                "metadata": {}
+            }
+        })
+    ))
+    .with_example(ProcessorExample::new(
+        "1080p video capture at 60 FPS",
+        json!({}),  // No inputs (source processor)
+        json!({
+            "video": {
+                "width": 1920,
+                "height": 1080,
+                "format": "RGBA8",
+                "timestamp": 0.016,
+                "frame_number": 1,
+                "metadata": {}
+            }
+        })
     ))
     .with_tags(vec!["source", "camera", "video", "input", "capture"])
 }
