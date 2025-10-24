@@ -187,6 +187,58 @@ Users don't see the change. Examples still work. But underneath, it's real infra
 - Calculate actual speedups
 - Save proof (images, benchmarks, logs)
 
+## Processor Auto-Registration Pattern
+
+**All processors use the same pattern for auto-registration:**
+
+```rust
+use streamlib::{DescriptorProvider, ProcessorDescriptor, PortDescriptor};
+use std::sync::Arc;
+
+// 1. Define module-level descriptor function
+pub fn descriptor() -> ProcessorDescriptor {
+    ProcessorDescriptor::new(
+        "MyProcessor",
+        "Description of what it does"
+    )
+    .with_output(PortDescriptor::new(...))
+    .with_tags(vec!["tag1", "tag2"])
+}
+
+// 2. Create descriptor provider
+struct MyProcessorDescriptor;
+
+impl streamlib::DescriptorProvider for MyProcessorDescriptor {
+    fn descriptor(&self) -> ProcessorDescriptor {
+        descriptor()
+    }
+}
+
+// 3. Auto-register at compile-time
+inventory::submit! {
+    &MyProcessorDescriptor as &dyn streamlib::DescriptorProvider
+}
+```
+
+**This pattern works for:**
+- Built-in processors (CameraProcessor, DisplayProcessor)
+- Custom processors in examples
+- User-defined processors in applications
+
+**On first call to `global_registry()`:**
+- All submitted descriptors are collected
+- Automatically registered in the global registry
+- Available for MCP discovery and runtime use
+
+**Users import from `streamlib`, not `streamlib_core`:**
+```rust
+// ✅ Correct
+use streamlib::{DescriptorProvider, ProcessorDescriptor};
+
+// ❌ Wrong (internal use only)
+use streamlib_core::{DescriptorProvider, ProcessorDescriptor};
+```
+
 ## Example Creation
 
 **Use streamlib-example-writer agent for ALL examples:**
@@ -211,13 +263,38 @@ The user decides when to commit:
 
 ## Project Structure
 
+### Rust Workspace Architecture
+
+**User-Facing:**
+- `libs/streamlib/` - **Main library users import from** (`use streamlib::*`)
+  - Platform-agnostic facade that re-exports everything
+  - Auto-selects platform implementations at compile-time
+  - This is what end users actually use
+
+**Internal Libraries:**
+- `libs/streamlib-core/` - Platform-agnostic runtime and traits
+  - Core types, processors, registry, schema system
+  - NOT imported directly by users
+  - Used by platform implementations
+
+- `libs/streamlib-apple/` - macOS/iOS implementation
+  - AppleCameraProcessor, AppleDisplayProcessor
+  - Metal/IOSurface integration
+
+- `libs/streamlib-mcp/` - MCP server for AI agents
+  - stdio/HTTP transports
+  - Processor discovery via MCP protocol
+
+**Key Pattern:**
+- Users: `use streamlib::DescriptorProvider`
+- NOT: `use streamlib_core::DescriptorProvider`
+- The top-level `streamlib` crate is the public API
+
+### Legacy Python (Being Migrated)
 - Core library: `packages/streamlib/src/streamlib/`
 - Camera capture (macOS): `packages/streamlib/src/streamlib/gpu/capture/macos.py`
-- Rust extensions: `packages/streamlib/rust/`
 - Tests: `packages/streamlib/tests/`
 - Examples: `examples/`
-- Documentation: `packages/streamlib/README.md`
-- Forked dependencies: Track in pyproject.toml and Cargo.toml
 
 
 <!-- nx configuration start-->

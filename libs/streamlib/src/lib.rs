@@ -92,6 +92,20 @@ pub use streamlib_core::{
     // Error handling
     StreamError, Result,
 
+    // Registry and auto-registration
+    ProcessorRegistry, ProcessorRegistration, ProcessorFactory,
+    DescriptorProvider,
+    global_registry,
+    register_processor, register_processor_descriptor,
+    list_processors, list_processors_by_tag,
+    create_processor, is_processor_registered, unregister_processor,
+
+    // Schema system
+    Schema, Field, FieldType, SemanticVersion, SerializationFormat,
+    ProcessorDescriptor, PortDescriptor, ProcessorExample,
+    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_BUFFER, SCHEMA_DATA_MESSAGE,
+    SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
+
     // Other types
     ShaderId,
 };
