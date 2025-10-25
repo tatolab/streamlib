@@ -90,6 +90,15 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<gpu_wrappers::PyWgpuTexture>()?;
     m.add_class::<gpu_wrappers::PyWgpuTextureView>()?;
 
+    // Register wgpu enum classes (replaces wgpu-py dependency)
+    m.add_class::<gpu_wrappers::PyBufferUsage>()?;
+    m.add_class::<gpu_wrappers::PyShaderStage>()?;
+    m.add_class::<gpu_wrappers::PyTextureSampleType>()?;
+    m.add_class::<gpu_wrappers::PyTextureViewDimension>()?;
+    m.add_class::<gpu_wrappers::PyStorageTextureAccess>()?;
+    m.add_class::<gpu_wrappers::PyTextureFormat>()?;
+    m.add_class::<gpu_wrappers::PyBufferBindingType>()?;
+
     // Register decorators
     m.add_function(wrap_pyfunction!(decorators::camera_processor, m)?)?;
     m.add_function(wrap_pyfunction!(decorators::display_processor, m)?)?;

@@ -14,7 +14,13 @@ Zero-copy GPU pipeline:
 import time
 import struct
 import random
-from streamlib import camera_processor, processor, display_processor, StreamRuntime, StreamInput, StreamOutput, VideoFrame
+from streamlib import (
+    camera_processor, processor, display_processor,
+    StreamRuntime, StreamInput, StreamOutput, VideoFrame,
+    # wgpu enums (no wgpu-py dependency needed!)
+    BufferUsage, ShaderStage, TextureSampleType, TextureViewDimension,
+    StorageTextureAccess, TextureFormat, BufferBindingType,
+)
 
 
 # WGSL shader - reads ball parameters from uniform buffer
@@ -161,8 +167,6 @@ class BouncingBallOverlay:
     def _initialize_gpu(self, gpu, width, height):
         """Initialize GPU resources (called on first frame)."""
         try:
-            import wgpu
-
             print(f"Initializing GPU resources for {width}x{height}")
 
             # Create shader module
@@ -176,26 +180,26 @@ class BouncingBallOverlay:
                 entries=[
                     {
                         "binding": 0,
-                        "visibility": wgpu.ShaderStage.COMPUTE,
+                        "visibility": ShaderStage.COMPUTE,
                         "texture": {
-                            "sample_type": wgpu.TextureSampleType.float,
-                            "view_dimension": wgpu.TextureViewDimension.d2,
+                            "sample_type": TextureSampleType.FLOAT,
+                            "view_dimension": TextureViewDimension.D2,
                         }
                     },
                     {
                         "binding": 1,
-                        "visibility": wgpu.ShaderStage.COMPUTE,
+                        "visibility": ShaderStage.COMPUTE,
                         "storage_texture": {
-                            "access": wgpu.StorageTextureAccess.write_only,
-                            "format": wgpu.TextureFormat.rgba8unorm,
-                            "view_dimension": wgpu.TextureViewDimension.d2,
+                            "access": StorageTextureAccess.WRITE_ONLY,
+                            "format": TextureFormat.RGBA8UNORM,
+                            "view_dimension": TextureViewDimension.D2,
                         }
                     },
                     {
                         "binding": 2,
-                        "visibility": wgpu.ShaderStage.COMPUTE,
+                        "visibility": ShaderStage.COMPUTE,
                         "buffer": {
-                            "type": wgpu.BufferBindingType.uniform,
+                            "type": BufferBindingType.UNIFORM,
                         }
                     }
                 ]
@@ -227,7 +231,7 @@ class BouncingBallOverlay:
             print("Creating uniform buffer...")
             self.uniform_buffer = gpu.device.create_buffer(
                 size=16,  # 4 floats * 4 bytes = 16 bytes
-                usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST
+                usage=BufferUsage.UNIFORM | BufferUsage.COPY_DST
             )
             print("Uniform buffer created")
 

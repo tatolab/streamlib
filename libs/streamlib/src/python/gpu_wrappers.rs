@@ -9,6 +9,155 @@ use pyo3::types::{PyDict, PyBytes};
 use crate::core::GpuContext;
 
 // ============================================================================
+// wgpu Enum Exports (replaces wgpu-py dependency)
+// ============================================================================
+
+/// BufferUsage flags (bitflags)
+#[pyclass(name = "BufferUsage", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyBufferUsage;
+
+#[pymethods]
+impl PyBufferUsage {
+    #[classattr]
+    const MAP_READ: u32 = 1;
+    #[classattr]
+    const MAP_WRITE: u32 = 2;
+    #[classattr]
+    const COPY_SRC: u32 = 4;
+    #[classattr]
+    const COPY_DST: u32 = 8;
+    #[classattr]
+    const INDEX: u32 = 16;
+    #[classattr]
+    const VERTEX: u32 = 32;
+    #[classattr]
+    const UNIFORM: u32 = 64;
+    #[classattr]
+    const STORAGE: u32 = 128;
+    #[classattr]
+    const INDIRECT: u32 = 256;
+    #[classattr]
+    const QUERY_RESOLVE: u32 = 512;
+}
+
+/// ShaderStage flags (bitflags)
+#[pyclass(name = "ShaderStage", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyShaderStage;
+
+#[pymethods]
+impl PyShaderStage {
+    #[classattr]
+    const VERTEX: u32 = 1;
+    #[classattr]
+    const FRAGMENT: u32 = 2;
+    #[classattr]
+    const COMPUTE: u32 = 4;
+}
+
+/// TextureSampleType enum
+#[pyclass(name = "TextureSampleType", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyTextureSampleType;
+
+#[pymethods]
+impl PyTextureSampleType {
+    #[classattr]
+    const FLOAT: &'static str = "float";
+    #[classattr]
+    const UNFILTERABLE_FLOAT: &'static str = "unfilterable-float";
+    #[classattr]
+    const DEPTH: &'static str = "depth";
+    #[classattr]
+    const SINT: &'static str = "sint";
+    #[classattr]
+    const UINT: &'static str = "uint";
+
+    // Lowercase alias for compatibility
+    #[classattr]
+    #[pyo3(name = "float")]
+    const FLOAT_LOWER: &'static str = "float";
+}
+
+/// TextureViewDimension enum
+#[pyclass(name = "TextureViewDimension", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyTextureViewDimension;
+
+#[pymethods]
+impl PyTextureViewDimension {
+    #[classattr]
+    const D1: &'static str = "1d";
+    #[classattr]
+    const D2: &'static str = "2d";
+    #[classattr]
+    const D2_ARRAY: &'static str = "2d-array";
+    #[classattr]
+    const CUBE: &'static str = "cube";
+    #[classattr]
+    const CUBE_ARRAY: &'static str = "cube-array";
+    #[classattr]
+    const D3: &'static str = "3d";
+
+    // Lowercase alias for compatibility
+    #[classattr]
+    #[pyo3(name = "d2")]
+    const D2_LOWER: &'static str = "2d";
+}
+
+/// StorageTextureAccess enum
+#[pyclass(name = "StorageTextureAccess", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStorageTextureAccess;
+
+#[pymethods]
+impl PyStorageTextureAccess {
+    #[classattr]
+    const WRITE_ONLY: &'static str = "write-only";
+    #[classattr]
+    const READ_ONLY: &'static str = "read-only";
+    #[classattr]
+    const READ_WRITE: &'static str = "read-write";
+}
+
+/// TextureFormat enum
+#[pyclass(name = "TextureFormat", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyTextureFormat;
+
+#[pymethods]
+impl PyTextureFormat {
+    #[classattr]
+    const RGBA8UNORM: &'static str = "rgba8unorm";
+    #[classattr]
+    const RGBA8UNORM_SRGB: &'static str = "rgba8unorm-srgb";
+    #[classattr]
+    const BGRA8UNORM: &'static str = "bgra8unorm";
+    #[classattr]
+    const BGRA8UNORM_SRGB: &'static str = "bgra8unorm-srgb";
+    #[classattr]
+    const RGBA16FLOAT: &'static str = "rgba16float";
+    #[classattr]
+    const RGBA32FLOAT: &'static str = "rgba32float";
+}
+
+/// BufferBindingType enum
+#[pyclass(name = "BufferBindingType", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyBufferBindingType;
+
+#[pymethods]
+impl PyBufferBindingType {
+    #[classattr]
+    const UNIFORM: &'static str = "uniform";
+    #[classattr]
+    const STORAGE: &'static str = "storage";
+    #[classattr]
+    const READ_ONLY_STORAGE: &'static str = "read-only-storage";
+}
+
+// ============================================================================
 // Helper functions for parsing Python dicts to wgpu types
 // ============================================================================
 

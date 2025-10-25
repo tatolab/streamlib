@@ -22,9 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
 ]
-dependencies = [
-    "wgpu==0.25.0",
-]
+dependencies = []
 
 [tool.maturin]
 features = ["python"]
