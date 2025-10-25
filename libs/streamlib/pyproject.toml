@@ -22,11 +22,15 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
 ]
+dependencies = [
+    "wgpu==0.25.0",
+]
 
 [tool.maturin]
 features = ["python"]
 module-name = "streamlib"
 strip = false
+python-source = "python"
 
 [dependency-groups]
 dev = [

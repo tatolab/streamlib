@@ -38,9 +38,20 @@ pub struct ProcessorProxy {
     pub processor_name: String,
     #[pyo3(get)]
     pub processor_type: String,
-    pub config: Py<PyDict>,
-    input_port_names: Vec<String>,
-    output_port_names: Vec<String>,
+
+    // For pre-built processors (Camera, Display) - stores config dict
+    pub config: Option<Py<PyDict>>,
+
+    // For Python processors - stores the Python class
+    pub python_class: Option<Py<PyAny>>,
+
+    pub input_port_names: Vec<String>,
+    pub output_port_names: Vec<String>,
+
+    // Schema metadata for AI discovery
+    pub description: Option<String>,
+    pub usage_context: Option<String>,
+    pub tags: Vec<String>,
 }
 
 impl Clone for ProcessorProxy {
@@ -49,9 +60,13 @@ impl Clone for ProcessorProxy {
             Self {
                 processor_name: self.processor_name.clone(),
                 processor_type: self.processor_type.clone(),
-                config: self.config.clone_ref(py),
+                config: self.config.as_ref().map(|c| c.clone_ref(py)),
+                python_class: self.python_class.as_ref().map(|c| c.clone_ref(py)),
                 input_port_names: self.input_port_names.clone(),
                 output_port_names: self.output_port_names.clone(),
+                description: self.description.clone(),
+                usage_context: self.usage_context.clone(),
+                tags: self.tags.clone(),
             }
         })
     }
@@ -60,20 +75,28 @@ impl Clone for ProcessorProxy {
 #[pymethods]
 impl ProcessorProxy {
     #[new]
-    #[pyo3(signature = (processor_name, processor_type, config, input_port_names, output_port_names))]
+    #[pyo3(signature = (processor_name, processor_type, input_port_names, output_port_names, config=None, python_class=None, description=None, usage_context=None, tags=None))]
     fn new(
         processor_name: String,
         processor_type: String,
-        config: Py<PyDict>,
         input_port_names: Vec<String>,
         output_port_names: Vec<String>,
+        config: Option<Py<PyDict>>,
+        python_class: Option<Py<PyAny>>,
+        description: Option<String>,
+        usage_context: Option<String>,
+        tags: Option<Vec<String>>,
     ) -> Self {
         Self {
             processor_name,
             processor_type,
             config,
+            python_class,
             input_port_names,
             output_port_names,
+            description,
+            usage_context,
+            tags: tags.unwrap_or_default(),
         }
     }
 
@@ -125,9 +148,9 @@ def _make_decorator(config, ProcessorProxy):
         return ProcessorProxy(
             processor_name=processor_name,
             processor_type='CameraProcessor',
-            config=config,
             input_port_names=[],
-            output_port_names=['video']
+            output_port_names=['video'],
+            config=config
         )
     return _camera_processor_decorator
 "#;
@@ -175,9 +198,9 @@ def _make_decorator(config, ProcessorProxy):
         return ProcessorProxy(
             processor_name=processor_name,
             processor_type='DisplayProcessor',
-            config=config,
             input_port_names=['video'],
-            output_port_names=[]
+            output_port_names=[],
+            config=config
         )
     return _display_processor_decorator
 "#;
@@ -200,54 +223,101 @@ def _make_decorator(config, ProcessorProxy):
 
 /// @processor decorator
 ///
-/// Wraps a Python function as a dynamic processor.
-/// The function will be called for each frame.
+/// Wraps a Python class as a dynamic processor.
+/// The class must define InputPorts and OutputPorts nested classes,
+/// and implement a process(self, tick) method.
 ///
 /// # Example
 /// ```python
-/// @processor(inputs=["video"], outputs=["video"])
-/// def my_filter(frame):
-///     # Process the frame
-///     return frame
+/// @processor(
+///     description="Applies a custom filter to video frames",
+///     usage_context="Use when you need custom frame processing",
+///     tags=["filter", "video", "custom"]
+/// )
+/// class MyFilter:
+///     class InputPorts:
+///         video = StreamInput(VideoFrame)
+///
+///     class OutputPorts:
+///         video = StreamOutput(VideoFrame)
+///
+///     def process(self, tick):
+///         frame = self.input_ports().video.read_latest()
+///         if frame:
+///             self.output_ports().video.write(frame)
 /// ```
 #[pyfunction]
-#[pyo3(signature = (inputs=None, outputs=None, **kwargs))]
+#[pyo3(signature = (description=None, usage_context=None, tags=None))]
 pub fn processor(
     py: Python<'_>,
-    inputs: Option<Vec<String>>,
-    outputs: Option<Vec<String>>,
-    kwargs: Option<&Bound<'_, PyDict>>,
+    description: Option<String>,
+    usage_context: Option<String>,
+    tags: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
     // Create a Python decorator function that returns ProcessorProxy
     let decorator_code = r#"
-def _make_decorator(input_names, output_names, config, ProcessorProxy):
-    def _processor_decorator(func):
-        # Get processor name from function
-        processor_name = func.__name__
+def _make_decorator(description, usage_context, tags, ProcessorProxy):
+    # Define marker classes for syntax sugar (not actually used at runtime)
+    class StreamInput:
+        def __init__(self, type_hint=None):
+            pass
+        def __repr__(self):
+            return "StreamInput(VideoFrame)"
 
-        # Store the function in config for later execution
-        config['__python_function__'] = func
+    class StreamOutput:
+        def __init__(self, type_hint=None):
+            pass
+        def __repr__(self):
+            return "StreamOutput(VideoFrame)"
 
-        # Create ProcessorProxy with Python processor metadata
+    class VideoFrame:
+        pass
+
+    def _processor_decorator(cls):
+        # Validate it's a class
+        if not isinstance(cls, type):
+            raise TypeError("@processor can only decorate classes, not functions")
+
+        # Parse InputPorts
+        if not hasattr(cls, 'InputPorts'):
+            raise AttributeError(f"Processor class {cls.__name__} must define InputPorts nested class")
+
+        # Parse OutputPorts
+        if not hasattr(cls, 'OutputPorts'):
+            raise AttributeError(f"Processor class {cls.__name__} must define OutputPorts nested class")
+
+        # Extract port names from class attributes
+        input_port_names = []
+        for name in dir(cls.InputPorts):
+            if not name.startswith('_'):
+                input_port_names.append(name)
+
+        output_port_names = []
+        for name in dir(cls.OutputPorts):
+            if not name.startswith('_'):
+                output_port_names.append(name)
+
+        # Create ProcessorProxy with Python class
         return ProcessorProxy(
-            processor_name=processor_name,
+            processor_name=cls.__name__,
             processor_type='PythonProcessor',
-            config=config,
-            input_port_names=input_names,
-            output_port_names=output_names
+            input_port_names=input_port_names,
+            output_port_names=output_port_names,
+            python_class=cls,
+            description=description,
+            usage_context=usage_context,
+            tags=tags or []
         )
+
+    # Inject marker classes into decorator's closure so they're available
+    _processor_decorator.StreamInput = StreamInput
+    _processor_decorator.StreamOutput = StreamOutput
+    _processor_decorator.VideoFrame = VideoFrame
+
     return _processor_decorator
 "#;
 
     let locals = PyDict::new_bound(py);
-    let inputs_list = inputs.unwrap_or_default();
-    let outputs_list = outputs.unwrap_or_default();
-    let empty_dict = PyDict::new_bound(py);
-    let config_dict = kwargs.unwrap_or(&empty_dict);
-
-    locals.set_item("inputs", &inputs_list)?;
-    locals.set_item("outputs", &outputs_list)?;
-    locals.set_item("kwargs", config_dict)?;
 
     // Get ProcessorProxy class
     let proxy_class = py.get_type_bound::<ProcessorProxy>();
@@ -255,9 +325,9 @@ def _make_decorator(input_names, output_names, config, ProcessorProxy):
 
     py.run_bound(decorator_code, None, Some(&locals))?;
     let decorator = locals.get_item("_make_decorator")?.unwrap().call((
-        inputs_list,
-        outputs_list,
-        config_dict,
+        description,
+        usage_context,
+        tags,
         &proxy_class,
     ), None)?;
 
