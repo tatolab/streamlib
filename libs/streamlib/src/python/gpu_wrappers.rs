@@ -163,57 +163,157 @@ impl PyBufferBindingType {
 
 /// Parse BufferUsage from Python wgpu.BufferUsage flags
 fn parse_buffer_usage(py: Python<'_>, usage_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::BufferUsages> {
-    // Try to get as integer
-    let usage_int: u32 = usage_obj.extract()?;
-    Ok(wgpu::BufferUsages::from_bits(usage_int).unwrap_or(wgpu::BufferUsages::empty()))
+    let usage_int: u32 = usage_obj.extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid BufferUsage value: must be an integer, got {}", e)
+        ))?;
+
+    wgpu::BufferUsages::from_bits(usage_int)
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid BufferUsage flags: 0x{:x}", usage_int)
+        ))
 }
 
 /// Parse ShaderStage from Python wgpu.ShaderStage
 fn parse_shader_stage(py: Python<'_>, stage_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::ShaderStages> {
-    let stage_int: u32 = stage_obj.extract()?;
-    Ok(wgpu::ShaderStages::from_bits(stage_int).unwrap_or(wgpu::ShaderStages::empty()))
+    let stage_int: u32 = stage_obj.extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid ShaderStage value: must be an integer, got {}", e)
+        ))?;
+
+    wgpu::ShaderStages::from_bits(stage_int)
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid ShaderStage flags: 0x{:x}", stage_int)
+        ))
 }
 
 /// Parse TextureSampleType from Python dict
 fn parse_texture_sample_type(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<wgpu::TextureSampleType> {
-    // For now, default to float
-    Ok(wgpu::TextureSampleType::Float { filterable: true })
+    let sample_type_str: String = dict
+        .get_item("sample_type")?
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'sample_type' in texture dict"))?
+        .extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid sample_type value: must be a string, got {}", e)
+        ))?;
+
+    match sample_type_str.as_str() {
+        "float" => Ok(wgpu::TextureSampleType::Float { filterable: true }),
+        "unfilterable-float" => Ok(wgpu::TextureSampleType::Float { filterable: false }),
+        "depth" => Ok(wgpu::TextureSampleType::Depth),
+        "sint" => Ok(wgpu::TextureSampleType::Sint),
+        "uint" => Ok(wgpu::TextureSampleType::Uint),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Unknown TextureSampleType: '{}'. Valid values: float, unfilterable-float, depth, sint, uint", sample_type_str)
+        ))
+    }
 }
 
 /// Parse TextureViewDimension from Python
 fn parse_texture_view_dimension(py: Python<'_>, dim_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::TextureViewDimension> {
-    // For now, default to D2
-    Ok(wgpu::TextureViewDimension::D2)
+    let dim_str: String = dim_obj.extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid view_dimension value: must be a string, got {}", e)
+        ))?;
+
+    match dim_str.as_str() {
+        "1d" => Ok(wgpu::TextureViewDimension::D1),
+        "2d" => Ok(wgpu::TextureViewDimension::D2),
+        "2d-array" => Ok(wgpu::TextureViewDimension::D2Array),
+        "cube" => Ok(wgpu::TextureViewDimension::Cube),
+        "cube-array" => Ok(wgpu::TextureViewDimension::CubeArray),
+        "3d" => Ok(wgpu::TextureViewDimension::D3),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Unknown TextureViewDimension: '{}'. Valid values: 1d, 2d, 2d-array, cube, cube-array, 3d", dim_str)
+        ))
+    }
 }
 
 /// Parse StorageTextureAccess from Python
 fn parse_storage_texture_access(py: Python<'_>, access_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::StorageTextureAccess> {
-    // For now, default to WriteOnly
-    Ok(wgpu::StorageTextureAccess::WriteOnly)
+    let access_str: String = access_obj.extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid access value: must be a string, got {}", e)
+        ))?;
+
+    match access_str.as_str() {
+        "write-only" => Ok(wgpu::StorageTextureAccess::WriteOnly),
+        "read-only" => Ok(wgpu::StorageTextureAccess::ReadOnly),
+        "read-write" => Ok(wgpu::StorageTextureAccess::ReadWrite),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Unknown StorageTextureAccess: '{}'. Valid values: write-only, read-only, read-write", access_str)
+        ))
+    }
 }
 
 /// Parse TextureFormat from Python
 fn parse_texture_format(py: Python<'_>, format_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::TextureFormat> {
-    // For now, default to Rgba8Unorm
-    Ok(wgpu::TextureFormat::Rgba8Unorm)
+    let format_str: String = format_obj.extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid format value: must be a string, got {}", e)
+        ))?;
+
+    match format_str.as_str() {
+        "rgba8unorm" => Ok(wgpu::TextureFormat::Rgba8Unorm),
+        "rgba8unorm-srgb" => Ok(wgpu::TextureFormat::Rgba8UnormSrgb),
+        "bgra8unorm" => Ok(wgpu::TextureFormat::Bgra8Unorm),
+        "bgra8unorm-srgb" => Ok(wgpu::TextureFormat::Bgra8UnormSrgb),
+        "rgba16float" => Ok(wgpu::TextureFormat::Rgba16Float),
+        "rgba32float" => Ok(wgpu::TextureFormat::Rgba32Float),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Unknown TextureFormat: '{}'. Supported formats: rgba8unorm, rgba8unorm-srgb, bgra8unorm, bgra8unorm-srgb, rgba16float, rgba32float", format_str)
+        ))
+    }
 }
 
 /// Parse BufferBindingType from Python dict
-fn parse_buffer_binding_type(_py: Python<'_>) -> PyResult<wgpu::BufferBindingType> {
-    // For now, default to Uniform
-    Ok(wgpu::BufferBindingType::Uniform)
+fn parse_buffer_binding_type(py: Python<'_>, buffer_dict: &Bound<'_, PyDict>) -> PyResult<wgpu::BufferBindingType> {
+    let type_str: String = buffer_dict
+        .get_item("type")?
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'type' in buffer dict"))?
+        .extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid buffer type value: must be a string, got {}", e)
+        ))?;
+
+    match type_str.as_str() {
+        "uniform" => Ok(wgpu::BufferBindingType::Uniform),
+        "storage" => Ok(wgpu::BufferBindingType::Storage { read_only: false }),
+        "read-only-storage" => Ok(wgpu::BufferBindingType::Storage { read_only: true }),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Unknown BufferBindingType: '{}'. Valid values: uniform, storage, read-only-storage", type_str)
+        ))
+    }
 }
 
 /// Parse BindGroupLayoutEntry from Python dict
 fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>) -> PyResult<wgpu::BindGroupLayoutEntry> {
-    let binding: u32 = entry_dict.get_item("binding")?.unwrap().extract()?;
-    let visibility = parse_shader_stage(py, &entry_dict.get_item("visibility")?.unwrap())?;
+    let binding: u32 = entry_dict
+        .get_item("binding")?
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'binding' key in bind group layout entry"))?
+        .extract()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid 'binding' value: must be an integer, got {}", e)
+        ))?;
+
+    let visibility_obj = entry_dict
+        .get_item("visibility")?
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'visibility' key in bind group layout entry"))?;
+    let visibility = parse_shader_stage(py, &visibility_obj)?;
 
     // Check which binding type is present
     if let Some(texture_dict) = entry_dict.get_item("texture")? {
-        let texture_dict = texture_dict.downcast::<PyDict>()?;
+        let texture_dict = texture_dict.downcast::<PyDict>()
+            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(
+                format!("'texture' must be a dict, got {}", e)
+            ))?;
+
         let sample_type = parse_texture_sample_type(py, texture_dict)?;
-        let view_dimension = parse_texture_view_dimension(py, &texture_dict.get_item("view_dimension")?.unwrap())?;
+
+        let view_dimension_obj = texture_dict
+            .get_item("view_dimension")?
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'view_dimension' in texture dict"))?;
+        let view_dimension = parse_texture_view_dimension(py, &view_dimension_obj)?;
 
         return Ok(wgpu::BindGroupLayoutEntry {
             binding,
@@ -228,10 +328,25 @@ fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>)
     }
 
     if let Some(storage_dict) = entry_dict.get_item("storage_texture")? {
-        let storage_dict = storage_dict.downcast::<PyDict>()?;
-        let access = parse_storage_texture_access(py, &storage_dict.get_item("access")?.unwrap())?;
-        let format = parse_texture_format(py, &storage_dict.get_item("format")?.unwrap())?;
-        let view_dimension = parse_texture_view_dimension(py, &storage_dict.get_item("view_dimension")?.unwrap())?;
+        let storage_dict = storage_dict.downcast::<PyDict>()
+            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(
+                format!("'storage_texture' must be a dict, got {}", e)
+            ))?;
+
+        let access_obj = storage_dict
+            .get_item("access")?
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'access' in storage_texture dict"))?;
+        let access = parse_storage_texture_access(py, &access_obj)?;
+
+        let format_obj = storage_dict
+            .get_item("format")?
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'format' in storage_texture dict"))?;
+        let format = parse_texture_format(py, &format_obj)?;
+
+        let view_dimension_obj = storage_dict
+            .get_item("view_dimension")?
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'view_dimension' in storage_texture dict"))?;
+        let view_dimension = parse_texture_view_dimension(py, &view_dimension_obj)?;
 
         return Ok(wgpu::BindGroupLayoutEntry {
             binding,
@@ -245,12 +360,19 @@ fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>)
         });
     }
 
-    if let Some(_buffer_dict) = entry_dict.get_item("buffer")? {
+    if let Some(buffer_dict) = entry_dict.get_item("buffer")? {
+        let buffer_dict = buffer_dict.downcast::<PyDict>()
+            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(
+                format!("'buffer' must be a dict, got {}", e)
+            ))?;
+
+        let buffer_type = parse_buffer_binding_type(py, buffer_dict)?;
+
         return Ok(wgpu::BindGroupLayoutEntry {
             binding,
             visibility,
             ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
+                ty: buffer_type,
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
@@ -258,7 +380,9 @@ fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>)
         });
     }
 
-    Err(pyo3::exceptions::PyValueError::new_err("Unknown binding type"))
+    Err(pyo3::exceptions::PyValueError::new_err(
+        "Unknown binding type: entry must have one of 'texture', 'storage_texture', or 'buffer' keys"
+    ))
 }
 
 // ============================================================================
