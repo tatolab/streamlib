@@ -37,6 +37,12 @@ pub enum StreamError {
     #[error("Operation not supported: {0}")]
     NotSupported(String),
 
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+
+    #[error("Runtime error: {0}")]
+    Runtime(String),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

@@ -170,8 +170,9 @@ pub struct StreamRuntime {
     processors: Arc<Mutex<HashMap<ProcessorId, ProcessorHandle>>>,
 
     /// Processors waiting to be started (drained on start)
+    /// Stores: (processor_id, processor, shutdown_receiver)
     /// TODO: Remove after full migration to processor registry
-    pending_processors: Vec<(ProcessorId, Box<dyn StreamProcessor>)>,
+    pending_processors: Vec<(ProcessorId, Box<dyn StreamProcessor>, crossbeam_channel::Receiver<()>)>,
 
     /// Handler threads (spawned on start)
     /// TODO: Remove after full migration to processor registry
@@ -324,7 +325,7 @@ impl StreamRuntime {
         self.next_processor_id += 1;
 
         // Create shutdown channel for this processor
-        let (shutdown_tx, _shutdown_rx) = crossbeam_channel::bounded(1);
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
 
         // Create processor handle with Pending status
         let handle = ProcessorHandle {
@@ -342,7 +343,8 @@ impl StreamRuntime {
         }
 
         // Add to pending list (will be spawned on start())
-        self.pending_processors.push((id.clone(), processor));
+        // Store the shutdown_rx so we can use it when spawning the thread
+        self.pending_processors.push((id.clone(), processor, shutdown_rx));
 
         tracing::info!("Added processor with ID: {}", id);
         id
@@ -561,6 +563,121 @@ impl StreamRuntime {
         Ok(())
     }
 
+    /// Remove a specific processor from the runtime
+    ///
+    /// This cleanly shuts down a single processor by:
+    /// 1. Sending shutdown signal to the processor thread
+    /// 2. Waiting for the thread to join (with timeout)
+    /// 3. Updating processor status to Stopped
+    ///
+    /// # Arguments
+    ///
+    /// * `processor_id` - The unique ID of the processor to remove
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Processor successfully removed
+    /// * `Err(StreamError::NotFound)` - Processor ID not found
+    /// * `Err(StreamError::Runtime)` - Processor already stopped or shutdown failed
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let processor_id = runtime.add_processor(Box::new(MyProcessor::new()));
+    /// runtime.start().await?;
+    /// // ... later ...
+    /// runtime.remove_processor(&processor_id).await?;
+    /// ```
+    pub async fn remove_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
+        // 1. Look up processor and verify it exists
+        let shutdown_tx = {
+            let mut processors = self.processors.lock().unwrap();
+            let processor = processors.get_mut(processor_id).ok_or_else(|| {
+                StreamError::NotFound(format!("Processor '{}' not found", processor_id))
+            })?;
+
+            // Check current status
+            let current_status = *processor.status.lock().unwrap();
+            if current_status == ProcessorStatus::Stopped || current_status == ProcessorStatus::Stopping {
+                return Err(StreamError::Runtime(format!(
+                    "Processor '{}' is already {:?}",
+                    processor_id, current_status
+                )));
+            }
+
+            // Update status to Stopping
+            *processor.status.lock().unwrap() = ProcessorStatus::Stopping;
+
+            // Clone the shutdown sender
+            processor.shutdown_tx.clone()
+        };
+
+        tracing::info!("[{}] Removing processor...", processor_id);
+
+        // 2. Send shutdown signal
+        shutdown_tx.send(()).map_err(|_| {
+            StreamError::Runtime(format!(
+                "Failed to send shutdown signal to processor '{}'",
+                processor_id
+            ))
+        })?;
+
+        tracing::debug!("[{}] Shutdown signal sent", processor_id);
+
+        // 3. Wait for thread to join (with timeout)
+        let thread_handle = {
+            let mut processors = self.processors.lock().unwrap();
+            processors
+                .get_mut(processor_id)
+                .and_then(|proc| proc.thread.take())
+        };
+
+        if let Some(handle) = thread_handle {
+            // Spawn a task to join the thread
+            let join_result = tokio::task::spawn_blocking(move || {
+                handle.join()
+            }).await;
+
+            match join_result {
+                Ok(Ok(_)) => {
+                    tracing::info!("[{}] Processor thread joined successfully", processor_id);
+
+                    // 4. Update status to Stopped
+                    let mut processors = self.processors.lock().unwrap();
+                    if let Some(proc) = processors.get_mut(processor_id) {
+                        *proc.status.lock().unwrap() = ProcessorStatus::Stopped;
+                    }
+                }
+                Ok(Err(panic_err)) => {
+                    tracing::error!("[{}] Processor thread panicked: {:?}", processor_id, panic_err);
+
+                    // Still mark as stopped
+                    let mut processors = self.processors.lock().unwrap();
+                    if let Some(proc) = processors.get_mut(processor_id) {
+                        *proc.status.lock().unwrap() = ProcessorStatus::Stopped;
+                    }
+
+                    return Err(StreamError::Runtime(format!(
+                        "Processor '{}' thread panicked",
+                        processor_id
+                    )));
+                }
+                Err(join_err) => {
+                    tracing::error!("[{}] Failed to join thread: {:?}", processor_id, join_err);
+                    return Err(StreamError::Runtime(format!(
+                        "Failed to join processor '{}' thread",
+                        processor_id
+                    )));
+                }
+            }
+        } else {
+            tracing::warn!("[{}] No thread handle found (processor may not have started)", processor_id);
+        }
+
+        tracing::info!("[{}] Processor removed", processor_id);
+        Ok(())
+    }
+
     /// Get runtime status info
     pub fn status(&self) -> RuntimeStatus {
         let handler_count = {
@@ -619,9 +736,9 @@ impl StreamRuntime {
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
             .clone();
 
-        for (processor_id, mut processor) in self.pending_processors.drain(..) {
+        for (processor_id, mut processor, shutdown_rx) in self.pending_processors.drain(..) {
             // Subscribe processor to broadcaster
-            let rx = {
+            let tick_rx = {
                 let mut broadcaster = self.broadcaster.lock().unwrap();
                 broadcaster.subscribe()
             };
@@ -642,11 +759,33 @@ impl StreamRuntime {
                     return;
                 }
 
-                // Process ticks until channel closes
-                for tick in rx {
-                    if let Err(e) = processor.process(tick) {
-                        tracing::error!("[{}] process() error: {}", id_for_thread, e);
-                        // Continue processing (errors are isolated)
+                // Process ticks until shutdown signal or channel closes
+                loop {
+                    crossbeam_channel::select! {
+                        recv(tick_rx) -> result => {
+                            match result {
+                                Ok(tick) => {
+                                    if let Err(e) = processor.process(tick) {
+                                        tracing::error!("[{}] process() error: {}", id_for_thread, e);
+                                        // Continue processing (errors are isolated)
+                                    }
+                                }
+                                Err(_) => {
+                                    // Tick channel closed (runtime stopped)
+                                    tracing::debug!("[{}] Tick channel closed", id_for_thread);
+                                    break;
+                                }
+                            }
+                        }
+                        recv(shutdown_rx) -> result => {
+                            // Shutdown signal received
+                            match result {
+                                Ok(_) | Err(_) => {
+                                    tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
 
