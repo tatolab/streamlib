@@ -98,19 +98,9 @@ pub trait CameraProcessor: StreamProcessor {
     fn output_ports(&mut self) -> &mut CameraOutputPorts;
 }
 
-// Descriptor provider for inventory registration
-struct CameraProcessorDescriptor;
-
-impl crate::DescriptorProvider for CameraProcessorDescriptor {
-    fn descriptor(&self) -> ProcessorDescriptor {
-        descriptor()
-    }
-}
-
-// Auto-register CameraProcessor descriptor at compile-time
-inventory::submit! {
-    &CameraProcessorDescriptor as &dyn crate::DescriptorProvider
-}
+// NOTE: Descriptor-only registration removed - platform implementations (AppleCameraProcessor, etc.)
+// register themselves with full factory support via register_processor_type! macro.
+// The facade in lib.rs re-exports them as CameraProcessor/DisplayProcessor.
 
 #[cfg(test)]
 mod tests {

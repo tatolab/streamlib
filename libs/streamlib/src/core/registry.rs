@@ -310,7 +310,18 @@ pub fn global_registry() -> Arc<Mutex<ProcessorRegistry>> {
                 registry.len()
             );
 
-            Arc::new(Mutex::new(registry))
+            // Create Arc early so we can register platform processors
+            let registry_arc = Arc::new(Mutex::new(registry));
+
+            // Register platform-specific processors with factories
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            {
+                // Call Apple processor registration
+                // This registers CameraProcessor and DisplayProcessor with factories
+                crate::apple::processors::register_apple_processors();
+            }
+
+            registry_arc
         })
         .clone()
 }

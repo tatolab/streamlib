@@ -92,19 +92,9 @@ pub trait DisplayProcessor: StreamProcessor {
     fn input_ports(&mut self) -> &mut DisplayInputPorts;
 }
 
-// Descriptor provider for inventory registration
-struct DisplayProcessorDescriptor;
-
-impl crate::DescriptorProvider for DisplayProcessorDescriptor {
-    fn descriptor(&self) -> ProcessorDescriptor {
-        descriptor()
-    }
-}
-
-// Auto-register DisplayProcessor descriptor at compile-time
-inventory::submit! {
-    &DisplayProcessorDescriptor as &dyn crate::DescriptorProvider
-}
+// NOTE: Descriptor-only registration removed - platform implementations (AppleDisplayProcessor, etc.)
+// register themselves with full factory support via register_processor_type! macro.
+// The facade in lib.rs re-exports them as CameraProcessor/DisplayProcessor.
 
 #[cfg(test)]
 mod tests {

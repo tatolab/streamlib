@@ -4,10 +4,10 @@
 //! Examples: add_processor, remove_processor, connect_processors
 
 use super::{McpError, Result};
-use crate::core::StreamRuntime;
+use crate::core::{StreamRuntime, ProcessorRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as TokioMutex;
 
 /// MCP Tool definition
@@ -230,6 +230,7 @@ pub struct ConnectProcessorsArgs {
 /// # Arguments
 /// * `tool_name` - Name of the tool to execute
 /// * `arguments` - JSON arguments for the tool
+/// * `registry` - Processor registry for creating processor instances
 /// * `runtime` - Optional runtime for application-level tools (add/remove processors, list connections, etc.)
 ///
 /// If runtime is None, only discovery-level tools are available (list available processor types).
@@ -237,6 +238,7 @@ pub struct ConnectProcessorsArgs {
 pub async fn execute_tool(
     tool_name: &str,
     arguments: JsonValue,
+    registry: Arc<Mutex<ProcessorRegistry>>,
     runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
 ) -> Result<ToolResult> {
     match tool_name {
@@ -358,27 +360,51 @@ pub async fn execute_tool(
                     message: e.to_string(),
                 })?;
 
-            // TODO: Implement actual add_processor logic
-            // This will require access to StreamRuntime
+            // Check if runtime is available
+            let runtime = runtime.ok_or_else(|| {
+                McpError::Runtime(
+                    "add_processor requires runtime access. MCP server is in discovery mode (registry only). \
+                     Use McpServer::with_runtime() to enable application-level control.".to_string()
+                )
+            })?;
 
-            let processor_type = match (&args.language, &args.code) {
-                (Some(lang), Some(_code)) => format!("dynamic {} processor", lang),
-                (None, None) => "pre-compiled processor".to_string(),
-                _ => return Err(McpError::InvalidArguments {
+            // For now, only support pre-compiled processors from registry
+            if args.language.is_some() || args.code.is_some() {
+                return Err(McpError::InvalidArguments {
                     tool: tool_name.to_string(),
-                    message: "Must provide both 'language' and 'code' for dynamic processors, or neither for pre-compiled".to_string(),
-                }),
+                    message: "Dynamic processors (language/code) not yet implemented. Use pre-compiled processors from registry.".to_string(),
+                });
+            }
+
+            // Create processor instance from registry
+            let processor = {
+                let reg = registry.lock().unwrap();
+                reg.create_instance(&args.name).map_err(|e| {
+                    McpError::Runtime(format!("Failed to create processor '{}': {}", args.name, e))
+                })?
             };
 
-            Ok(ToolResult {
-                success: false,
-                message: format!(
-                    "add_processor('{}', {}) not yet implemented - placeholder only",
-                    args.name,
-                    processor_type
-                ),
-                data: None,
-            })
+            // Add processor to runtime
+            let mut rt = runtime.lock().await;
+            match rt.add_processor_runtime(processor).await {
+                Ok(processor_id) => {
+                    Ok(ToolResult {
+                        success: true,
+                        message: format!("Successfully added processor '{}'", args.name),
+                        data: Some(serde_json::json!({
+                            "processor_type": args.name,
+                            "processor_id": processor_id,
+                        })),
+                    })
+                }
+                Err(e) => {
+                    Ok(ToolResult {
+                        success: false,
+                        message: format!("Failed to add processor '{}': {}", args.name, e),
+                        data: None,
+                    })
+                }
+            }
         }
 
         "remove_processor" => {
@@ -420,20 +446,29 @@ pub async fn execute_tool(
         }
 
         "connect_processors" => {
-            let args: ConnectProcessorsArgs = serde_json::from_value(arguments)
+            let _args: ConnectProcessorsArgs = serde_json::from_value(arguments)
                 .map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
 
-            // TODO: Implement actual connect_processors logic
+            // Check if runtime is available
+            let _runtime = runtime.ok_or_else(|| {
+                McpError::Runtime(
+                    "connect_processors requires runtime access. MCP server is in discovery mode (registry only). \
+                     Use McpServer::with_runtime() to enable application-level control.".to_string()
+                )
+            })?;
+
+            // TODO: Implement Phase 5 - Dynamic connections at runtime
+            // Current limitation: runtime.connect() can only be called before start()
+            // Need to implement connect_at_runtime() method
 
             Ok(ToolResult {
                 success: false,
-                message: format!(
-                    "connect_processors('{}' -> '{}') not yet implemented - placeholder only",
-                    args.source, args.destination
-                ),
+                message: "connect_processors not yet implemented - requires Phase 5 (dynamic connections at runtime). \
+                         Current connect() method can only be called before runtime.start(). \
+                         Note: Some processors may auto-connect if compatible.".to_string(),
                 data: None,
             })
         }
@@ -553,34 +588,39 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_unknown_tool() {
-        let result = execute_tool("unknown_tool", serde_json::json!({}), None).await;
+        use crate::core::ProcessorRegistry;
+        let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
+        let result = execute_tool("unknown_tool", serde_json::json!({}), registry, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_execute_add_processor_placeholder() {
+        use crate::core::ProcessorRegistry;
+        let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
         let result = execute_tool(
             "add_processor",
             serde_json::json!({
                 "name": "CameraProcessor"
             }),
+            registry,
             None, // Discovery mode
         )
         .await;
 
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(!result.success); // Placeholder returns false
-        assert!(result.message.contains("not yet implemented"));
+        assert!(result.is_err()); // Should fail because runtime is None
     }
 
     #[tokio::test]
     async fn test_execute_invalid_arguments() {
+        use crate::core::ProcessorRegistry;
+        let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
         let result = execute_tool(
             "add_processor",
             serde_json::json!({
                 "invalid": "arguments"
             }),
+            registry,
             None, // Discovery mode
         )
         .await;
@@ -590,7 +630,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_processors_requires_runtime() {
-        let result = execute_tool("list_processors", serde_json::json!({}), None).await;
+        use crate::core::ProcessorRegistry;
+        let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
+        let result = execute_tool("list_processors", serde_json::json!({}), registry, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, McpError::Runtime(_)));
@@ -598,7 +640,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_connections_requires_runtime() {
-        let result = execute_tool("list_connections", serde_json::json!({}), None).await;
+        use crate::core::ProcessorRegistry;
+        let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
+        let result = execute_tool("list_connections", serde_json::json!({}), registry, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, McpError::Runtime(_)));

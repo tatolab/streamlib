@@ -436,8 +436,13 @@ impl ServerHandler for StreamlibMcpHandler {
         // Convert arguments from Map to Value
         let arguments = serde_json::Value::Object(params.arguments.unwrap_or_default());
 
-        // Pass runtime to tool execution (if available)
-        let result = tools::execute_tool(&params.name, arguments, self.runtime.as_ref().map(Arc::clone)).await
+        // Pass registry and runtime to tool execution
+        let result = tools::execute_tool(
+            &params.name,
+            arguments,
+            self.registry.clone(),
+            self.runtime.as_ref().map(Arc::clone)
+        ).await
             .map_err(|e| RmcpError::internal_error(
                 "tool_execution_error",
                 Some(serde_json::json!({"error": e.to_string()}))
