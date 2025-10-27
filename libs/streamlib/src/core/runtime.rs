@@ -350,6 +350,130 @@ impl StreamRuntime {
         id
     }
 
+    /// Add a processor to a running runtime
+    ///
+    /// This method adds and immediately starts a processor while the runtime is running.
+    /// Unlike `add_processor()`, this spawns the processor thread immediately.
+    ///
+    /// # Arguments
+    ///
+    /// * `processor` - Boxed processor implementation
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ProcessorId)` - The generated ProcessorId for this processor
+    /// * `Err(StreamError::Runtime)` - If runtime is not running or GPU context missing
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// runtime.start().await?;
+    /// // ... later, while running ...
+    /// let processor_id = runtime.add_processor_runtime(Box::new(MyProcessor::new())).await?;
+    /// ```
+    pub async fn add_processor_runtime(
+        &mut self,
+        mut processor: Box<dyn StreamProcessor>,
+    ) -> Result<ProcessorId> {
+        // 1. Verify runtime is running
+        if !self.running {
+            return Err(StreamError::Runtime(
+                "Cannot add processor at runtime - runtime is not running. Use add_processor() instead.".into()
+            ));
+        }
+
+        // 2. Generate unique ID
+        let processor_id = format!("processor_{}", self.next_processor_id);
+        self.next_processor_id += 1;
+
+        tracing::info!("[{}] Adding processor to running runtime...", processor_id);
+
+        // 3. Create shutdown channel for this processor
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+
+        // 4. Get GPU context
+        let gpu_context = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
+            .clone();
+
+        // 5. Subscribe processor to broadcaster
+        let tick_rx = {
+            let mut broadcaster = self.broadcaster.lock().unwrap();
+            broadcaster.subscribe()
+        };
+
+        // 6. Clone variables for thread
+        let id_for_thread = processor_id.clone();
+        let processor_gpu_context = gpu_context.clone();
+
+        // 7. Spawn OS thread for this processor (on_start called within thread)
+        let handle = std::thread::spawn(move || {
+            tracing::info!("[{}] Thread started", id_for_thread);
+
+            // Call on_start lifecycle hook with GPU context
+            if let Err(e) = processor.on_start(&processor_gpu_context) {
+                tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
+                return;
+            }
+
+            // Process ticks until shutdown signal or channel closes
+            loop {
+                crossbeam_channel::select! {
+                    recv(tick_rx) -> result => {
+                        match result {
+                            Ok(tick) => {
+                                if let Err(e) = processor.process(tick) {
+                                    tracing::error!("[{}] process() error: {}", id_for_thread, e);
+                                    // Continue processing (errors are isolated)
+                                }
+                            }
+                            Err(_) => {
+                                // Tick channel closed (runtime stopped)
+                                tracing::debug!("[{}] Tick channel closed", id_for_thread);
+                                break;
+                            }
+                        }
+                    }
+                    recv(shutdown_rx) -> result => {
+                        // Shutdown signal received
+                        match result {
+                            Ok(_) | Err(_) => {
+                                tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Call on_stop lifecycle hook
+            if let Err(e) = processor.on_stop() {
+                tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
+            }
+
+            tracing::info!("[{}] Thread stopped", id_for_thread);
+        });
+
+        // 8. Create and register processor handle
+        let proc_handle = ProcessorHandle {
+            id: processor_id.clone(),
+            name: format!("Processor {}", self.next_processor_id - 1),
+            thread: Some(handle),
+            shutdown_tx,
+            status: Arc::new(Mutex::new(ProcessorStatus::Running)),
+        };
+
+        {
+            let mut processors = self.processors.lock().unwrap();
+            processors.insert(processor_id.clone(), proc_handle);
+        }
+
+        tracing::info!("[{}] Processor added to running runtime", processor_id);
+        Ok(processor_id)
+    }
+
     pub fn connect<T: crate::core::ports::PortMessage>(
         &mut self,
         output: &mut crate::core::ports::StreamOutput<T>,
