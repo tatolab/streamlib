@@ -6,7 +6,7 @@
 use crate::core::{
     StreamProcessor, DisplayProcessor, DisplayInputPorts, WindowId,
     TimedTick, Result, StreamError,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
+    ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use crate::apple::{metal::MetalDevice, WgpuBridge};
 use objc2::{rc::Retained, MainThreadOnly, MainThreadMarker};
@@ -329,7 +329,56 @@ impl StreamProcessor for AppleDisplayProcessor {
                 "Video frames to display. Accepts WebGPU textures and renders them to the window. \
                  Automatically handles format conversion and scaling to fit the window."
             ))
+            .with_example(ProcessorExample::new(
+                "Basic display window",
+                serde_json::json!({
+                    "code": "from streamlib import display_processor\n\n@display_processor()\ndef display():\n    \"\"\"Zero-copy display window - no code needed!\"\"\"\n    pass",
+                    "language": "python"
+                }),
+                serde_json::json!({})
+            ))
+            .with_example(ProcessorExample::new(
+                "Complete camera to display pipeline",
+                serde_json::json!({
+                    "code": "from streamlib import camera_processor, display_processor\n\n@camera_processor(device_id=\"0x1424001bcf2284\")\ndef camera():\n    pass\n\n@display_processor()\ndef display():\n    pass",
+                    "language": "python"
+                }),
+                serde_json::json!({})
+            ))
+            .with_example(ProcessorExample::new(
+                "Complete pipeline: Camera → Display (MCP workflow)",
+                serde_json::json!({
+                    "steps": [
+                        {
+                            "action": "add_processor",
+                            "language": "python",
+                            "code": "from streamlib import camera_processor\n\n@camera_processor(device_id=\"0x1424001bcf2284\")\ndef camera():\n    pass",
+                            "result": "processor_0"
+                        },
+                        {
+                            "action": "add_processor",
+                            "language": "python",
+                            "code": "from streamlib import display_processor\n\n@display_processor()\ndef display():\n    pass",
+                            "result": "processor_1"
+                        },
+                        {
+                            "action": "connect_processors",
+                            "source": "processor_0.video",
+                            "destination": "processor_1.video",
+                            "note": "Connect camera OUTPUT port to display INPUT port. Ports are compatible because both use VideoFrame schema."
+                        }
+                    ]
+                }),
+                serde_json::json!({})
+            ))
             .with_tags(vec!["sink", "display", "window", "output", "render"])
         )
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
+
+// Auto-register DisplayProcessor with global registry
+crate::register_processor_type!(AppleDisplayProcessor);

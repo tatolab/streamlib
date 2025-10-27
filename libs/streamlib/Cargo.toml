@@ -30,9 +30,17 @@ mcp = [
     "dep:axum",
 ]
 
-# Python bindings via PyO3
+# Python bindings via PyO3 (extension module mode - for .so/.dylib built with maturin)
 python = [
     "dep:pyo3",
+    "pyo3/extension-module",
+    "dep:unindent",
+]
+
+# Python embedding (for binaries like MCP server that execute Python code)
+python-embed = [
+    "dep:pyo3",
+    "pyo3/auto-initialize",
     "dep:unindent",
 ]
 
@@ -67,7 +75,9 @@ clap = { version = "4.5", features = ["derive"], optional = true }
 axum = { workspace = true, optional = true }
 
 # Optional: Python dependencies
-pyo3 = { version = "0.22", features = ["extension-module", "abi3-py311"], optional = true }
+# Note: Use "extension-module" for building .so/.dylib (maturin build)
+#       Use "auto-initialize" for embedding Python in binaries (MCP server)
+pyo3 = { version = "0.22", features = ["abi3-py311"], optional = true }
 unindent = { version = "0.2", optional = true }
 
 # Platform-specific: macOS/iOS
@@ -88,6 +98,9 @@ libc.workspace = true
 metal = "0.31"  # Metal crate for wgpu-hal interop
 dispatch2 = "0.3"  # GCD dispatch queues
 pollster = "0.3"  # For blocking on async
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

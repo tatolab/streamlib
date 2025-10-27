@@ -32,6 +32,7 @@ pub use package_manager::{PackageManager, PackageInfo, PackageStatus, ApprovalPo
 use crate::core::{ProcessorRegistry, StreamRuntime};
 use std::sync::{Arc, Mutex};
 use std::future::Future;
+use std::collections::HashSet;
 use tokio::sync::Mutex as TokioMutex;
 
 // MCP protocol imports
@@ -68,6 +69,10 @@ pub struct McpServer {
     /// Uses tokio::sync::Mutex for async operations across await points
     runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
 
+    /// Granted permissions (e.g., "camera", "display")
+    /// Set via --allow-camera, --allow-display CLI flags
+    permissions: Arc<HashSet<String>>,
+
     /// Server name for MCP identification
     name: String,
 
@@ -86,6 +91,7 @@ impl McpServer {
         Self {
             registry,
             runtime: None,
+            permissions: Arc::new(HashSet::new()),
             name: "streamlib-mcp".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
@@ -106,9 +112,16 @@ impl McpServer {
         Self {
             registry,
             runtime: Some(runtime),
+            permissions: Arc::new(HashSet::new()),
             name: "streamlib-mcp".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
+    }
+
+    /// Set permissions (typically called after with_runtime)
+    pub fn with_permissions(mut self, permissions: HashSet<String>) -> Self {
+        self.permissions = Arc::new(permissions);
+        self
     }
 
     /// Create with custom name and version (discovery mode)
@@ -120,6 +133,7 @@ impl McpServer {
         Self {
             registry,
             runtime: None,
+            permissions: Arc::new(HashSet::new()),
             name: name.into(),
             version: version.into(),
         }
@@ -132,10 +146,11 @@ impl McpServer {
     pub async fn run_stdio(&self) -> Result<()> {
         tracing::info!("Starting MCP server on stdio");
 
-        // Create handler with registry and optional runtime
+        // Create handler with registry, optional runtime, and permissions
         let handler = StreamlibMcpHandler {
             registry: Arc::clone(&self.registry),
             runtime: self.runtime.as_ref().map(Arc::clone),
+            permissions: Arc::clone(&self.permissions),
             name: self.name.clone(),
             version: self.version.clone(),
         };
@@ -183,6 +198,7 @@ impl McpServer {
         // Create factory for MCP services
         let registry = Arc::clone(&self.registry);
         let runtime = self.runtime.as_ref().map(Arc::clone);
+        let permissions = Arc::clone(&self.permissions);
         let name = self.name.clone();
         let version = self.version.clone();
 
@@ -190,6 +206,7 @@ impl McpServer {
             Ok(StreamlibMcpHandler {
                 registry: Arc::clone(&registry),
                 runtime: runtime.as_ref().map(Arc::clone),
+                permissions: Arc::clone(&permissions),
                 name: name.clone(),
                 version: version.clone(),
             })
@@ -295,6 +312,7 @@ impl McpServer {
 struct StreamlibMcpHandler {
     registry: Arc<Mutex<ProcessorRegistry>>,
     runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
+    permissions: Arc<HashSet<String>>,
     name: String,
     version: String,
 }
@@ -431,17 +449,18 @@ impl ServerHandler for StreamlibMcpHandler {
         params: CallToolRequestParam,
         _ctx: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, RmcpError> {
-        tracing::debug!("MCP: call_tool called: {}", params.name);
+        tracing::info!("MCP: call_tool called: {} with args: {:?}", params.name, params.arguments);
 
         // Convert arguments from Map to Value
         let arguments = serde_json::Value::Object(params.arguments.unwrap_or_default());
 
-        // Pass registry and runtime to tool execution
+        // Pass registry, runtime, and permissions to tool execution
         let result = tools::execute_tool(
             &params.name,
             arguments,
             self.registry.clone(),
-            self.runtime.as_ref().map(Arc::clone)
+            self.runtime.as_ref().map(Arc::clone),
+            self.permissions.clone()
         ).await
             .map_err(|e| RmcpError::internal_error(
                 "tool_execution_error",

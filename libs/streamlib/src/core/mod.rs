@@ -48,12 +48,12 @@ pub use schema::{
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
 };
 pub use registry::{
-    ProcessorRegistry, ProcessorRegistration, ProcessorFactory,
+    ProcessorRegistry, ProcessorRegistration,
     DescriptorProvider,
     global_registry,
-    register_processor, register_processor_descriptor,
+    register_processor,
     list_processors, list_processors_by_tag,
-    create_processor, is_processor_registered, unregister_processor,
+    is_processor_registered, unregister_processor,
 };
 pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};

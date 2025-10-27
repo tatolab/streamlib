@@ -916,6 +916,14 @@ impl StreamProcessor for PerformanceOverlayProcessor {
             .with_tags(vec!["debug", "performance", "monitoring", "overlay", "profiling", "fps"])
         )
     }
+
+    fn on_stop(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 // Export input/output port types

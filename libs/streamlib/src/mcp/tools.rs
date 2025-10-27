@@ -8,6 +8,7 @@ use crate::core::{StreamRuntime, ProcessorRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
 use tokio::sync::Mutex as TokioMutex;
 
 /// MCP Tool definition
@@ -145,17 +146,17 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "connect_processors".to_string(),
-            description: "Connect two processors by linking an output port to an input port. Data will flow from source to destination.".to_string(),
+            description: "Connect two processors by linking an output port to an input port. Data will flow from source to destination. Ports are compatible if their schemas match (e.g., both use VideoFrame schema).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "source": {
                         "type": "string",
-                        "description": "Source processor and port (e.g., 'CameraProcessor.video')"
+                        "description": "Source OUTPUT port in format 'processor_id.port_name' (e.g., 'processor_0.video'). Use list_processors to get processor IDs. The source must be an output port."
                     },
                     "destination": {
                         "type": "string",
-                        "description": "Destination processor and port (e.g., 'DisplayProcessor.video')"
+                        "description": "Destination INPUT port in format 'processor_id.port_name' (e.g., 'processor_1.video'). Use list_processors to get processor IDs. The destination must be an input port."
                     }
                 },
                 "required": ["source", "destination"]
@@ -210,6 +211,8 @@ pub struct AddProcessorArgs {
     pub language: Option<String>,
     #[serde(default)]
     pub code: Option<String>,
+    #[serde(default)]
+    pub config: Option<JsonValue>,
 }
 
 /// Arguments for remove_processor tool
@@ -232,6 +235,7 @@ pub struct ConnectProcessorsArgs {
 /// * `arguments` - JSON arguments for the tool
 /// * `registry` - Processor registry for creating processor instances
 /// * `runtime` - Optional runtime for application-level tools (add/remove processors, list connections, etc.)
+/// * `permissions` - Granted permissions (e.g., "camera", "display") from CLI flags
 ///
 /// If runtime is None, only discovery-level tools are available (list available processor types).
 /// If runtime is Some, full application control is enabled (modify running system).
@@ -240,6 +244,7 @@ pub async fn execute_tool(
     arguments: JsonValue,
     registry: Arc<Mutex<ProcessorRegistry>>,
     runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
+    permissions: Arc<HashSet<String>>,
 ) -> Result<ToolResult> {
     match tool_name {
         "list_supported_languages" => {
@@ -354,57 +359,226 @@ pub async fn execute_tool(
         }
 
         "add_processor" => {
+            tracing::info!("add_processor tool called");
             let args: AddProcessorArgs = serde_json::from_value(arguments)
                 .map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
 
+            tracing::info!("add_processor args parsed: {:?}", args);
+
             // Check if runtime is available
             let runtime = runtime.ok_or_else(|| {
+                tracing::error!("add_processor called without runtime");
                 McpError::Runtime(
                     "add_processor requires runtime access. MCP server is in discovery mode (registry only). \
                      Use McpServer::with_runtime() to enable application-level control.".to_string()
                 )
             })?;
 
-            // For now, only support pre-compiled processors from registry
-            if args.language.is_some() || args.code.is_some() {
-                return Err(McpError::InvalidArguments {
-                    tool: tool_name.to_string(),
-                    message: "Dynamic processors (language/code) not yet implemented. Use pre-compiled processors from registry.".to_string(),
-                });
+            tracing::info!("Runtime available, checking permissions...");
+
+            // Handle dynamic Python processors
+            if let (Some(language), Some(code)) = (&args.language, &args.code) {
+                if language != "python" {
+                    return Err(McpError::InvalidArguments {
+                        tool: tool_name.to_string(),
+                        message: format!("Only 'python' language is currently supported, got '{}'", language),
+                    });
+                }
+
+                #[cfg(not(feature = "python-embed"))]
+                {
+                    return Err(McpError::Runtime(
+                        "Python processors require the 'python-embed' feature to be enabled. Rebuild MCP server with --features python-embed.".to_string()
+                    ));
+                }
+
+                #[cfg(feature = "python-embed")]
+                {
+                    use pyo3::prelude::*;
+                    use crate::python::PythonProcessor;
+
+                    // Execute Python code and extract ProcessorProxy
+                    let processor = Python::with_gil(|py| -> crate::Result<Box<dyn crate::StreamProcessor>> {
+                        // Register streamlib module into sys.modules so imports work
+                        // (only needed for python-embed mode, not extension-module mode)
+                        let streamlib_module = pyo3::types::PyModule::new_bound(py, "streamlib")
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Failed to create streamlib module: {}", e)
+                            ))?;
+
+                        crate::python::register_python_module(&streamlib_module)
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Failed to register streamlib module: {}", e)
+                            ))?;
+
+                        // Add streamlib to sys.modules
+                        py.import_bound("sys")
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Failed to import sys: {}", e)
+                            ))?
+                            .getattr("modules")
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Failed to get sys.modules: {}", e)
+                            ))?
+                            .set_item("streamlib", streamlib_module)
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Failed to add streamlib to sys.modules: {}", e)
+                            ))?;
+
+                        // Now execute the user's code exactly as provided (like a notebook cell)
+                        let locals = pyo3::types::PyDict::new_bound(py);
+                        py.run_bound(code, None, Some(&locals))
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Failed to execute Python code: {}", e)
+                            ))?;
+
+                        // Extract the ProcessorProxy from locals (find the decorated function)
+                        let proxy = locals.values()
+                            .iter()
+                            .find(|v| {
+                                // Check if this value has processor_name attribute (indicates ProcessorProxy)
+                                v.hasattr("processor_name").unwrap_or(false)
+                            })
+                            .ok_or_else(|| crate::core::StreamError::Configuration(
+                                "Python code did not define a processor (no decorated function found)".to_string()
+                            ))?;
+
+                        // Extract ProcessorProxy metadata
+                        let processor_name: String = proxy.getattr("processor_name")
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Invalid processor: {}", e)
+                            ))?
+                            .extract()
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Invalid processor_name: {}", e)
+                            ))?;
+
+                        let processor_type: String = proxy.getattr("processor_type")
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Invalid processor: {}", e)
+                            ))?
+                            .extract()
+                            .map_err(|e| crate::core::StreamError::Configuration(
+                                format!("Invalid processor_type: {}", e)
+                            ))?;
+
+                        // For Python processors, extract the python_class
+                        let python_class = proxy.getattr("python_class")
+                            .ok()
+                            .and_then(|c| if c.is_none() { None } else { Some(c.into()) });
+
+                        if let Some(python_class) = python_class {
+                            // Custom Python processor
+                            let input_ports: Vec<String> = proxy.getattr("input_port_names")
+                                .map_err(|e| crate::core::StreamError::Configuration(format!("Missing input_port_names: {}", e)))?
+                                .extract()
+                                .map_err(|e| crate::core::StreamError::Configuration(format!("Invalid input_port_names: {}", e)))?;
+                            let output_ports: Vec<String> = proxy.getattr("output_port_names")
+                                .map_err(|e| crate::core::StreamError::Configuration(format!("Missing output_port_names: {}", e)))?
+                                .extract()
+                                .map_err(|e| crate::core::StreamError::Configuration(format!("Invalid output_port_names: {}", e)))?;
+                            let description: Option<String> = proxy.getattr("description").ok().and_then(|d| d.extract().ok());
+                            let usage_context: Option<String> = proxy.getattr("usage_context").ok().and_then(|u| u.extract().ok());
+                            let tags: Vec<String> = proxy.getattr("tags").ok().and_then(|t| t.extract().ok()).unwrap_or_default();
+
+                            let py_processor = PythonProcessor::new(
+                                python_class,
+                                processor_name,
+                                input_ports,
+                                output_ports,
+                                description,
+                                usage_context,
+                                tags,
+                            )?;
+
+                            Ok(Box::new(py_processor) as Box<dyn crate::StreamProcessor>)
+                        } else {
+                            // Pre-built processor (Camera, Display) - extract config and create Rust processor
+                            let config_dict = proxy.getattr("config")
+                                .ok()
+                                .and_then(|c| if c.is_none() { None } else { Some(c) });
+
+                            match processor_type.as_str() {
+                                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                                "CameraProcessor" => {
+                                    use crate::apple::main_thread::execute_on_main_thread;
+                                    use crate::apple::processors::AppleCameraProcessor;
+
+                                    let device_id = config_dict
+                                        .and_then(|c| c.get_item("device_id").ok())
+                                        .and_then(|d| d.extract::<String>().ok());
+
+                                    execute_on_main_thread(move || {
+                                        let p = if let Some(device_id) = device_id {
+                                            AppleCameraProcessor::with_device_id(&device_id)?
+                                        } else {
+                                            AppleCameraProcessor::new()?
+                                        };
+                                        Ok(Box::new(p) as Box<dyn crate::StreamProcessor>)
+                                    })
+                                }
+
+                                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                                "DisplayProcessor" => {
+                                    use crate::apple::main_thread::execute_on_main_thread;
+                                    use crate::apple::processors::AppleDisplayProcessor;
+
+                                    execute_on_main_thread(|| {
+                                        let p = AppleDisplayProcessor::new()?;
+                                        Ok(Box::new(p) as Box<dyn crate::StreamProcessor>)
+                                    })
+                                }
+
+                                _ => Err(crate::core::StreamError::Configuration(
+                                    format!("Unknown pre-built processor type: {}", processor_type)
+                                ))
+                            }
+                        }
+                    }).map_err(|e| {
+                        tracing::error!("Failed to create Python processor: {}", e);
+                        McpError::Runtime(format!("Failed to create Python processor: {}", e))
+                    })?;
+
+                    // Add to runtime
+                    let mut rt = runtime.lock().await;
+                    match rt.add_processor_runtime(processor).await {
+                        Ok(processor_id) => {
+                            return Ok(ToolResult {
+                                success: true,
+                                message: format!("Successfully added Python processor"),
+                                data: Some(serde_json::json!({
+                                    "processor_id": processor_id,
+                                })),
+                            });
+                        }
+                        Err(e) => {
+                            return Ok(ToolResult {
+                                success: false,
+                                message: format!("Failed to add Python processor: {}", e),
+                                data: None,
+                            });
+                        }
+                    }
+                }
             }
 
-            // Create processor instance from registry
-            let processor = {
-                let reg = registry.lock().unwrap();
-                reg.create_instance(&args.name).map_err(|e| {
-                    McpError::Runtime(format!("Failed to create processor '{}': {}", args.name, e))
-                })?
-            };
-
-            // Add processor to runtime
-            let mut rt = runtime.lock().await;
-            match rt.add_processor_runtime(processor).await {
-                Ok(processor_id) => {
-                    Ok(ToolResult {
-                        success: true,
-                        message: format!("Successfully added processor '{}'", args.name),
-                        data: Some(serde_json::json!({
-                            "processor_type": args.name,
-                            "processor_id": processor_id,
-                        })),
-                    })
-                }
-                Err(e) => {
-                    Ok(ToolResult {
-                        success: false,
-                        message: format!("Failed to add processor '{}': {}", args.name, e),
-                        data: None,
-                    })
-                }
-            }
+            // If we get here, no language/code was provided
+            // All processors must be added via Python code
+            Err(McpError::InvalidArguments {
+                tool: tool_name.to_string(),
+                message: format!(
+                    "add_processor requires Python code. Example:\n\
+                    language: \"python\"\n\
+                    code: \"\
+                    @camera_processor(device_id='0x1424001bcf2284')\n\
+                    def camera():\n\
+                        pass\"\n\n\
+                    Check the processor registry for available decorators (@camera_processor, @display_processor, @processor)."
+                ),
+            })
         }
 
         "remove_processor" => {
@@ -446,31 +620,48 @@ pub async fn execute_tool(
         }
 
         "connect_processors" => {
-            let _args: ConnectProcessorsArgs = serde_json::from_value(arguments)
+            let args: ConnectProcessorsArgs = serde_json::from_value(arguments)
                 .map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
 
             // Check if runtime is available
-            let _runtime = runtime.ok_or_else(|| {
+            let runtime = runtime.ok_or_else(|| {
                 McpError::Runtime(
                     "connect_processors requires runtime access. MCP server is in discovery mode (registry only). \
                      Use McpServer::with_runtime() to enable application-level control.".to_string()
                 )
             })?;
 
-            // TODO: Implement Phase 5 - Dynamic connections at runtime
-            // Current limitation: runtime.connect() can only be called before start()
-            // Need to implement connect_at_runtime() method
-
-            Ok(ToolResult {
-                success: false,
-                message: "connect_processors not yet implemented - requires Phase 5 (dynamic connections at runtime). \
-                         Current connect() method can only be called before runtime.start(). \
-                         Note: Some processors may auto-connect if compatible.".to_string(),
-                data: None,
-            })
+            // Connect processors at runtime (Phase 5)
+            let mut rt = runtime.lock().await;
+            match rt.connect_at_runtime(&args.source, &args.destination).await {
+                Ok(connection_id) => {
+                    Ok(ToolResult {
+                        success: true,
+                        message: format!(
+                            "Successfully connected {} → {}",
+                            args.source, args.destination
+                        ),
+                        data: Some(serde_json::json!({
+                            "connection_id": connection_id,
+                            "source": args.source,
+                            "destination": args.destination
+                        })),
+                    })
+                }
+                Err(e) => {
+                    Ok(ToolResult {
+                        success: false,
+                        message: format!(
+                            "Failed to connect {} → {}: {}",
+                            args.source, args.destination, e
+                        ),
+                        data: None,
+                    })
+                }
+            }
         }
 
         "list_processors" => {

@@ -25,6 +25,7 @@
 
 use streamlib::{global_registry, mcp::McpServer};
 use streamlib::core::StreamRuntime;
+use streamlib::{request_camera_permission, request_display_permission};
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
@@ -45,11 +46,18 @@ struct Args {
     /// Host to bind to (HTTP mode only)
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
+
+    /// Allow camera access (requests permission upfront)
+    #[arg(long)]
+    allow_camera: bool,
+
+    /// Allow display window creation
+    #[arg(long)]
+    allow_display: bool,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Parse CLI arguments
+fn main() -> anyhow::Result<()> {
+    // Parse CLI arguments on main thread
     let args = Args::parse();
 
     // Initialize tracing (logs to stderr so they don't interfere with stdio MCP protocol)
@@ -60,6 +68,75 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     tracing::info!("Starting streamlib MCP server");
+
+    // Request permissions on main thread BEFORE entering async runtime
+    // This ensures platform permission dialogs appear correctly
+    let mut permissions = std::collections::HashSet::new();
+
+    if args.allow_camera {
+        tracing::info!("Requesting camera permission...");
+        if request_camera_permission()? {
+            tracing::info!("Camera permission granted");
+            permissions.insert("camera".to_string());
+        } else {
+            anyhow::bail!("Camera permission denied by user");
+        }
+    }
+
+    if args.allow_display {
+        tracing::info!("Requesting display permission...");
+        if request_display_permission()? {
+            tracing::info!("Display permission granted");
+            permissions.insert("display".to_string());
+        } else {
+            anyhow::bail!("Display permission denied by user");
+        }
+    }
+
+    // Now enter async runtime with permissions already granted
+    // IMPORTANT: Run tokio on a background thread and keep main thread for CFRunLoop
+    // This allows GCD exec_sync() to work properly
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+
+    // Spawn tokio runtime on a background thread
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(async_main(args, permissions));
+        result_tx.send(result).ok();
+    });
+
+    // Run CFRunLoop on main thread to process GCD dispatches
+    tracing::info!("Main thread now running CFRunLoop for GCD dispatches");
+
+    #[cfg(target_os = "macos")]
+    {
+        use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
+        use std::time::Duration;
+
+        // Poll for completion while processing run loop
+        loop {
+            // Check if async_main completed
+            if let Ok(result) = result_rx.try_recv() {
+                return result;
+            }
+
+            // Process run loop events for a short time (100ms)
+            // This allows GCD exec_sync() calls to complete
+            unsafe {
+                CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_millis(100), true);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Non-macOS: just wait for result
+        result_rx.recv().unwrap()
+    }
+}
+
+async fn async_main(args: Args, permissions: std::collections::HashSet<String>) -> anyhow::Result<()> {
+    tracing::info!("Entered async runtime");
 
     // Get the global processor registry
     // Built-in processors (CameraProcessor, DisplayProcessor) are automatically registered
@@ -84,8 +161,9 @@ async fn main() -> anyhow::Result<()> {
     // Wrap runtime in Arc<TokioMutex<>> for MCP server
     let runtime = Arc::new(TokioMutex::new(runtime));
 
-    // Create MCP server in APPLICATION MODE (with runtime control)
-    let server = McpServer::with_runtime(registry.clone(), runtime.clone());
+    // Create MCP server in APPLICATION MODE (with runtime control and permissions)
+    let server = McpServer::with_runtime(registry.clone(), runtime.clone())
+        .with_permissions(permissions);
 
     tracing::info!(
         "MCP server {} v{} ready (APPLICATION MODE - runtime control enabled)",

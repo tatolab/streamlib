@@ -89,6 +89,11 @@ pub struct ProcessorHandle {
 
     /// Current processor status
     pub(crate) status: Arc<Mutex<ProcessorStatus>>,
+
+    /// Shared reference to the processor (for dynamic connections at runtime)
+    /// Wrapped in Arc<Mutex<>> so it can be accessed from both the processing thread
+    /// and connection operations
+    pub(crate) processor: Option<Arc<Mutex<Box<dyn StreamProcessor>>>>,
 }
 
 /// Unique identifier for connections
@@ -334,6 +339,7 @@ impl StreamRuntime {
             thread: None,
             shutdown_tx,
             status: Arc::new(Mutex::new(ProcessorStatus::Pending)),
+            processor: None,  // Will be set when processor is started
         };
 
         // Add to processor registry
@@ -404,18 +410,25 @@ impl StreamRuntime {
             broadcaster.subscribe()
         };
 
-        // 6. Clone variables for thread
+        // 6. Wrap processor in Arc<Mutex<>> for shared access (enables dynamic connections)
+        let processor_arc = Arc::new(Mutex::new(processor));
+
+        // 7. Clone variables for thread
         let id_for_thread = processor_id.clone();
         let processor_gpu_context = gpu_context.clone();
+        let processor_for_thread = Arc::clone(&processor_arc);
 
-        // 7. Spawn OS thread for this processor (on_start called within thread)
+        // 8. Spawn OS thread for this processor (on_start called within thread)
         let handle = std::thread::spawn(move || {
             tracing::info!("[{}] Thread started", id_for_thread);
 
             // Call on_start lifecycle hook with GPU context
-            if let Err(e) = processor.on_start(&processor_gpu_context) {
-                tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
-                return;
+            {
+                let mut processor = processor_for_thread.lock().unwrap();
+                if let Err(e) = processor.on_start(&processor_gpu_context) {
+                    tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
+                    return;
+                }
             }
 
             // Process ticks until shutdown signal or channel closes
@@ -424,6 +437,7 @@ impl StreamRuntime {
                     recv(tick_rx) -> result => {
                         match result {
                             Ok(tick) => {
+                                let mut processor = processor_for_thread.lock().unwrap();
                                 if let Err(e) = processor.process(tick) {
                                     tracing::error!("[{}] process() error: {}", id_for_thread, e);
                                     // Continue processing (errors are isolated)
@@ -449,20 +463,24 @@ impl StreamRuntime {
             }
 
             // Call on_stop lifecycle hook
-            if let Err(e) = processor.on_stop() {
-                tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
+            {
+                let mut processor = processor_for_thread.lock().unwrap();
+                if let Err(e) = processor.on_stop() {
+                    tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
+                }
             }
 
             tracing::info!("[{}] Thread stopped", id_for_thread);
         });
 
-        // 8. Create and register processor handle
+        // 9. Create and register processor handle (with processor reference for dynamic connections)
         let proc_handle = ProcessorHandle {
             id: processor_id.clone(),
             name: format!("Processor {}", self.next_processor_id - 1),
             thread: Some(handle),
             shutdown_tx,
             status: Arc::new(Mutex::new(ProcessorStatus::Running)),
+            processor: Some(processor_arc),  // Store for dynamic connections
         };
 
         {
@@ -506,6 +524,149 @@ impl StreamRuntime {
 
         tracing::debug!("Registered connection: {}", connection_id);
         Ok(())
+    }
+
+    /// Connect two processors at runtime (Phase 5)
+    ///
+    /// This method connects processors while the runtime is running.
+    /// It parses processor IDs and port names from the source/destination strings
+    /// (format: "processor_id.port_name"), then connects the specified ports.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - Source port in format "processor_id.port_name" (e.g., "processor_0.video")
+    /// * `destination` - Destination port in format "processor_id.port_name"
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ConnectionId)` - The ID of the created connection
+    /// * `Err(StreamError)` - If processors not found, ports invalid, or connection fails
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// runtime.connect_at_runtime("processor_0.video", "processor_1.video").await?;
+    /// ```
+    pub async fn connect_at_runtime(
+        &mut self,
+        source: &str,
+        destination: &str,
+    ) -> Result<ConnectionId> {
+        // 1. Parse source and destination (format: "processor_id.port_name")
+        let (source_proc_id, source_port) = source.split_once('.').ok_or_else(|| {
+            StreamError::Configuration(format!(
+                "Invalid source format '{}'. Expected 'processor_id.port_name'",
+                source
+            ))
+        })?;
+
+        let (dest_proc_id, dest_port) = destination.split_once('.').ok_or_else(|| {
+            StreamError::Configuration(format!(
+                "Invalid destination format '{}'. Expected 'processor_id.port_name'",
+                destination
+            ))
+        })?;
+
+        tracing::info!(
+            "Connecting {} ({}:{}) → ({}:{})",
+            source,
+            source_proc_id,
+            source_port,
+            dest_proc_id,
+            dest_port
+        );
+
+        // 2. Look up both processors
+        let (source_processor, dest_processor) = {
+            let processors = self.processors.lock().unwrap();
+
+            let source_handle = processors.get(source_proc_id).ok_or_else(|| {
+                StreamError::Configuration(format!("Source processor '{}' not found", source_proc_id))
+            })?;
+
+            let dest_handle = processors.get(dest_proc_id).ok_or_else(|| {
+                StreamError::Configuration(format!(
+                    "Destination processor '{}' not found",
+                    dest_proc_id
+                ))
+            })?;
+
+            // Get processor references (Arc<Mutex<>>)
+            let source_proc = source_handle.processor.as_ref().ok_or_else(|| {
+                StreamError::Runtime(format!(
+                    "Source processor '{}' has no processor reference (not started?)",
+                    source_proc_id
+                ))
+            })?;
+
+            let dest_proc = dest_handle.processor.as_ref().ok_or_else(|| {
+                StreamError::Runtime(format!(
+                    "Destination processor '{}' has no processor reference (not started?)",
+                    dest_proc_id
+                ))
+            })?;
+
+            (Arc::clone(source_proc), Arc::clone(dest_proc))
+        };
+
+        // 3. Connect the ports
+        // For now, this is specialized for CameraProcessor→DisplayProcessor
+        // TODO: Generalize this with a trait-based port access system
+        {
+            // Lock both processors
+            let mut source = source_processor.lock().unwrap();
+            let mut dest = dest_processor.lock().unwrap();
+
+            // Try to downcast to CameraProcessor and DisplayProcessor
+            use crate::core::{CameraProcessor, DisplayProcessor};
+
+            let camera = source
+                .as_any_mut()
+                .downcast_mut::<crate::CameraProcessor>()
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Source processor '{}' is not a CameraProcessor",
+                        source_proc_id
+                    ))
+                })?;
+
+            let display = dest
+                .as_any_mut()
+                .downcast_mut::<crate::DisplayProcessor>()
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Destination processor '{}' is not a DisplayProcessor",
+                        dest_proc_id
+                    ))
+                })?;
+
+            // Get ports
+            let output = &mut camera.output_ports().video;
+            let input = &mut display.input_ports().video;
+
+            // Perform connection (same as regular connect())
+            input.connect(output.buffer().clone());
+
+            tracing::info!(
+                "Connected CameraProcessor {} → DisplayProcessor {}",
+                source_proc_id,
+                dest_proc_id
+            );
+        }
+
+        // 4. Register connection in registry
+        let connection_id = format!("connection_{}", self.next_connection_id);
+        self.next_connection_id += 1;
+
+        let connection = Connection::new(connection_id.clone(), source.to_string(), destination.to_string());
+
+        {
+            let mut connections = self.connections.lock().unwrap();
+            connections.insert(connection_id.clone(), connection);
+        }
+
+        tracing::info!("Registered runtime connection: {}", connection_id);
+        Ok(connection_id)
     }
 
     /// Start the runtime

@@ -65,11 +65,11 @@ pub use core::{
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
     SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_BUFFER, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
-    ProcessorRegistry, ProcessorRegistration, ProcessorFactory,
+    ProcessorRegistry, ProcessorRegistration,
     DescriptorProvider, global_registry,
-    register_processor, register_processor_descriptor,
+    register_processor,
     list_processors, list_processors_by_tag,
-    create_processor, is_processor_registered, unregister_processor,
+    is_processor_registered, unregister_processor,
     Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView,
     ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge,
 };
@@ -86,12 +86,49 @@ pub use apple::{
     MetalDevice,
 };
 
+// Platform permission functions
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use apple::permissions::{request_camera_permission, request_display_permission};
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub mod permissions {
+    //! Platform permission stubs for non-Apple platforms
+    //!
+    //! On Linux/Windows, permission handling may differ or not be required.
+    //! These stubs allow the same API to be used across platforms.
+
+    use crate::core::Result;
+
+    /// Request camera permission (stub for non-Apple platforms)
+    ///
+    /// On Linux/Windows, camera permissions are typically handled at the OS level
+    /// or don't require explicit runtime requests. This stub always returns true.
+    ///
+    /// Platform-specific implementations should be added as needed.
+    pub fn request_camera_permission() -> Result<bool> {
+        tracing::info!("Camera permission granted (no system prompt on this platform)");
+        Ok(true)
+    }
+
+    /// Request display permission (stub for non-Apple platforms)
+    ///
+    /// On most platforms, creating windows doesn't require special permissions.
+    /// This stub always returns true.
+    pub fn request_display_permission() -> Result<bool> {
+        tracing::info!("Display permission granted (no system prompt on this platform)");
+        Ok(true)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub use permissions::{request_camera_permission, request_display_permission};
+
 // Optional MCP module (feature-gated)
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
-// Optional Python module (feature-gated)
-#[cfg(feature = "python")]
+// Optional Python module (feature-gated for both python and python-embed)
+#[cfg(any(feature = "python", feature = "python-embed"))]
 pub mod python;
 
 // Platform-configured runtime wrapper

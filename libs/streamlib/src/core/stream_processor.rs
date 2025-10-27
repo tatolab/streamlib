@@ -2,6 +2,7 @@ use super::clock::TimedTick;
 use super::gpu_context::GpuContext;
 use super::schema::ProcessorDescriptor;
 use super::Result;
+use std::any::Any;
 
 /// StreamProcessor trait
 ///
@@ -92,4 +93,20 @@ pub trait StreamProcessor: Send + 'static {
     {
         None
     }
+
+    /// Enable downcasting to concrete processor types
+    ///
+    /// This method enables dynamic connections at runtime by allowing
+    /// the runtime to downcast trait objects to their concrete types.
+    /// This is required for accessing type-specific ports (e.g., CameraOutputPorts).
+    ///
+    /// # Implementation
+    ///
+    /// All processors must implement this as:
+    /// ```ignore
+    /// fn as_any_mut(&mut self) -> &mut dyn Any {
+    ///     self
+    /// }
+    /// ```
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }

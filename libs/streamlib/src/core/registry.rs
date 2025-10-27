@@ -79,59 +79,33 @@ macro_rules! register_processor_type {
     };
 }
 
-/// Processor factory function type
-///
-/// Takes no arguments and returns a boxed StreamProcessor.
-/// Used for creating processor instances from registered descriptors.
-pub type ProcessorFactory =
-    Arc<dyn Fn() -> crate::Result<Box<dyn crate::StreamProcessor>> + Send + Sync>;
-
-/// Entry in the processor registry
+/// Entry in the processor registry (descriptor-only for AI agent documentation)
 #[derive(Clone)]
 pub struct ProcessorRegistration {
     /// Processor metadata
     pub descriptor: ProcessorDescriptor,
-
-    /// Factory function to create instances
-    ///
-    /// None for descriptors that are registered without a factory
-    /// (e.g., from external tools that just want to advertise capabilities)
-    pub factory: Option<ProcessorFactory>,
 }
 
 impl ProcessorRegistration {
-    /// Create a new registration with both descriptor and factory
-    pub fn new(descriptor: ProcessorDescriptor, factory: ProcessorFactory) -> Self {
-        Self {
-            descriptor,
-            factory: Some(factory),
-        }
-    }
-
-    /// Create a descriptor-only registration (no factory)
-    ///
-    /// Useful for advertising processor capabilities without providing
-    /// the actual implementation (e.g., from Python/TypeScript bindings)
-    pub fn descriptor_only(descriptor: ProcessorDescriptor) -> Self {
-        Self {
-            descriptor,
-            factory: None,
-        }
+    /// Create a new registration
+    pub fn new(descriptor: ProcessorDescriptor) -> Self {
+        Self { descriptor }
     }
 }
 
-/// Processor registry for dynamic discovery
+/// Processor registry for AI agent discovery
 ///
-/// Maintains a runtime registry of available processors, supporting:
-/// - Runtime registration (Python, TypeScript, etc.)
-/// - Descriptor-only registration (capability advertisement)
-/// - Factory-based instantiation
-/// - Tag-based filtering
+/// This is pure documentation for AI agents to understand what processors exist
+/// and how to use them. It does NOT create processor instances - that's handled
+/// directly in MCP tools.
 ///
-/// This registry complements compile-time registration (via inventory crate)
-/// and enables dynamic processor loading for AI agents and scripting languages.
+/// Purpose: Help AI agents understand:
+/// - What processors are available
+/// - What inputs/outputs they have
+/// - How to configure them
+/// - When to use them
 pub struct ProcessorRegistry {
-    /// Registered processors by name
+    /// Registered processor descriptors by name
     processors: HashMap<String, ProcessorRegistration>,
 }
 
@@ -143,19 +117,17 @@ impl ProcessorRegistry {
         }
     }
 
-    /// Register a processor with both descriptor and factory
+    /// Register a processor descriptor for AI agent discovery
+    ///
+    /// This is pure documentation - it does NOT enable instantiation.
+    /// Processor creation is handled directly in MCP tools.
     ///
     /// # Arguments
     /// * `descriptor` - Processor metadata
-    /// * `factory` - Function to create processor instances
     ///
     /// # Returns
     /// Error if a processor with the same name is already registered
-    pub fn register(
-        &mut self,
-        descriptor: ProcessorDescriptor,
-        factory: ProcessorFactory,
-    ) -> crate::Result<()> {
+    pub fn register(&mut self, descriptor: ProcessorDescriptor) -> crate::Result<()> {
         let name = descriptor.name.clone();
 
         if self.processors.contains_key(&name) {
@@ -166,36 +138,7 @@ impl ProcessorRegistry {
         }
 
         self.processors
-            .insert(name, ProcessorRegistration::new(descriptor, factory));
-
-        Ok(())
-    }
-
-    /// Register a processor descriptor without a factory
-    ///
-    /// Useful for advertising capabilities from external tools
-    /// that don't provide the actual implementation in Rust.
-    ///
-    /// # Arguments
-    /// * `descriptor` - Processor metadata
-    ///
-    /// # Returns
-    /// Error if a processor with the same name is already registered
-    pub fn register_descriptor_only(
-        &mut self,
-        descriptor: ProcessorDescriptor,
-    ) -> crate::Result<()> {
-        let name = descriptor.name.clone();
-
-        if self.processors.contains_key(&name) {
-            return Err(StreamError::Configuration(format!(
-                "Processor '{}' is already registered",
-                name
-            )));
-        }
-
-        self.processors
-            .insert(name, ProcessorRegistration::descriptor_only(descriptor));
+            .insert(name, ProcessorRegistration::new(descriptor));
 
         Ok(())
     }
@@ -222,30 +165,6 @@ impl ProcessorRegistry {
             .collect()
     }
 
-    /// Create a processor instance by name
-    ///
-    /// # Arguments
-    /// * `name` - Name of the processor to instantiate
-    ///
-    /// # Returns
-    /// A boxed StreamProcessor instance, or an error if:
-    /// - Processor not found
-    /// - Processor has no factory
-    /// - Factory function fails
-    pub fn create_instance(&self, name: &str) -> crate::Result<Box<dyn crate::StreamProcessor>> {
-        let registration = self.get(name).ok_or_else(|| {
-            StreamError::Configuration(format!("Processor '{}' not found in registry", name))
-        })?;
-
-        let factory = registration.factory.as_ref().ok_or_else(|| {
-            StreamError::Configuration(format!(
-                "Processor '{}' has no factory (descriptor-only registration)",
-                name
-            ))
-        })?;
-
-        factory()
-    }
 
     /// Check if a processor is registered
     pub fn contains(&self, name: &str) -> bool {
@@ -295,79 +214,45 @@ pub fn global_registry() -> Arc<Mutex<ProcessorRegistry>> {
             let mut registry = ProcessorRegistry::new();
 
             // Auto-register all compile-time submitted descriptors
+            // This is pure documentation for AI agents
             for provider in inventory::iter::<&dyn DescriptorProvider> {
                 let descriptor = provider.descriptor();
                 let name = descriptor.name.clone();
 
-                if let Err(e) = registry.register_descriptor_only(descriptor) {
+                if let Err(e) = registry.register(descriptor) {
                     // Log warning but don't fail - allow duplicate submissions to be gracefully ignored
                     tracing::warn!("Failed to auto-register processor '{}': {}", name, e);
                 }
             }
 
-            tracing::debug!(
-                "Auto-registered {} processors from inventory",
+            tracing::info!(
+                "Auto-registered {} processor descriptors for AI agent discovery",
                 registry.len()
             );
 
-            // Create Arc early so we can register platform processors
-            let registry_arc = Arc::new(Mutex::new(registry));
-
-            // Register platform-specific processors with factories
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            {
-                // Call Apple processor registration
-                // This registers CameraProcessor and DisplayProcessor with factories
-                crate::apple::processors::register_apple_processors();
-            }
-
-            registry_arc
+            // Create Arc after all registrations are complete
+            Arc::new(Mutex::new(registry))
         })
         .clone()
 }
 
-/// Register a processor in the global registry
+/// Register a processor descriptor in the global registry
+///
+/// This is for AI agent documentation only - it does not enable instantiation.
+/// Processor creation is handled directly in MCP tools based on processor type.
 ///
 /// # Arguments
 /// * `descriptor` - Processor metadata
-/// * `factory` - Function to create processor instances
 ///
 /// # Example
 /// ```no_run
 /// use streamlib_core::{register_processor, ProcessorDescriptor};
-/// use std::sync::Arc;
 ///
 /// let descriptor = ProcessorDescriptor::new("MyProcessor", "Does cool stuff");
-///
-/// register_processor(
-///     descriptor,
-///     Arc::new(|| {
-///         // Create and return processor instance
-///         Ok(Box::new(MyProcessorImpl::new()))
-///     })
-/// ).unwrap();
+/// register_processor(descriptor).unwrap();
 /// ```
-pub fn register_processor(
-    descriptor: ProcessorDescriptor,
-    factory: ProcessorFactory,
-) -> crate::Result<()> {
-    global_registry()
-        .lock()
-        .unwrap()
-        .register(descriptor, factory)
-}
-
-/// Register a processor descriptor without a factory
-///
-/// Useful for advertising processor capabilities from external tools.
-///
-/// # Arguments
-/// * `descriptor` - Processor metadata
-pub fn register_processor_descriptor(descriptor: ProcessorDescriptor) -> crate::Result<()> {
-    global_registry()
-        .lock()
-        .unwrap()
-        .register_descriptor_only(descriptor)
+pub fn register_processor(descriptor: ProcessorDescriptor) -> crate::Result<()> {
+    global_registry().lock().unwrap().register(descriptor)
 }
 
 /// List all registered processors
@@ -378,11 +263,6 @@ pub fn list_processors() -> Vec<ProcessorDescriptor> {
 /// List processors filtered by tag
 pub fn list_processors_by_tag(tag: &str) -> Vec<ProcessorDescriptor> {
     global_registry().lock().unwrap().list_by_tag(tag)
-}
-
-/// Create a processor instance by name
-pub fn create_processor(name: &str) -> crate::Result<Box<dyn crate::StreamProcessor>> {
-    global_registry().lock().unwrap().create_instance(name)
 }
 
 /// Check if a processor is registered

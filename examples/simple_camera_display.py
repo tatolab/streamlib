@@ -11,7 +11,7 @@ Zero-copy GPU pipeline:
 from streamlib import camera_processor, display_processor, StreamRuntime
 
 
-@camera_processor(device_id=None)  # None = first available camera
+@camera_processor(device_id="0x1424001bcf2284")  
 def camera():
     """Zero-copy camera source - no code needed!"""
     pass

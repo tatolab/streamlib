@@ -301,4 +301,8 @@ def gpu_context(self):
         tracing::info!("[PythonProcessor:{}] Stopped", self.name);
         Ok(())
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }

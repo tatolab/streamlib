@@ -5,7 +5,7 @@
 use crate::core::{
     StreamProcessor, CameraProcessor, CameraOutputPorts, CameraDevice,
     VideoFrame, TimedTick, Result, StreamError,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
+    ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::{Arc, Mutex};
 use std::ffi::c_void;
@@ -664,7 +664,56 @@ impl StreamProcessor for AppleCameraProcessor {
                 "Live video frames from the camera. Each frame is a WebGPU texture with timestamp \
                  and metadata. Frames are produced at the camera's native frame rate (typically 30 or 60 FPS)."
             ))
+            .with_example(ProcessorExample::new(
+                "Basic camera capture (default device)",
+                serde_json::json!({
+                    "code": "from streamlib import camera_processor\n\n@camera_processor()\ndef camera():\n    \"\"\"Zero-copy camera source - no code needed!\"\"\"\n    pass",
+                    "language": "python"
+                }),
+                serde_json::json!({})
+            ))
+            .with_example(ProcessorExample::new(
+                "Specific camera device",
+                serde_json::json!({
+                    "code": "from streamlib import camera_processor\n\n@camera_processor(device_id=\"0x1424001bcf2284\")\ndef camera():\n    \"\"\"Zero-copy camera source with specific device\"\"\"\n    pass",
+                    "language": "python"
+                }),
+                serde_json::json!({})
+            ))
+            .with_example(ProcessorExample::new(
+                "Complete pipeline: Camera → Display (MCP workflow)",
+                serde_json::json!({
+                    "steps": [
+                        {
+                            "action": "add_processor",
+                            "language": "python",
+                            "code": "from streamlib import camera_processor\n\n@camera_processor(device_id=\"0x1424001bcf2284\")\ndef camera():\n    pass",
+                            "result": "processor_0"
+                        },
+                        {
+                            "action": "add_processor",
+                            "language": "python",
+                            "code": "from streamlib import display_processor\n\n@display_processor()\ndef display():\n    pass",
+                            "result": "processor_1"
+                        },
+                        {
+                            "action": "connect_processors",
+                            "source": "processor_0.video",
+                            "destination": "processor_1.video",
+                            "note": "Connect camera OUTPUT port to display INPUT port. Ports are compatible because both use VideoFrame schema."
+                        }
+                    ]
+                }),
+                serde_json::json!({})
+            ))
             .with_tags(vec!["source", "camera", "video", "input", "capture"])
         )
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
+
+// Auto-register CameraProcessor with global registry
+crate::register_processor_type!(AppleCameraProcessor);

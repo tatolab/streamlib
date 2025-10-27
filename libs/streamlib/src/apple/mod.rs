@@ -54,6 +54,12 @@ pub mod wgpu_bridge;
 // StreamProcessor implementations
 pub mod processors;
 
+// Platform permission handling
+pub mod permissions;
+
+// Main thread dispatcher (for AVFoundation/NSWindow operations)
+pub mod main_thread;
+
 // Runtime configuration (used by streamlib facade)
 pub mod runtime_ext;
 
