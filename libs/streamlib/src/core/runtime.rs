@@ -129,10 +129,16 @@ pub struct StreamRuntime {
     /// Broadcaster for distributing ticks to handlers
     broadcaster: Arc<Mutex<TickBroadcaster>>,
 
+    /// Processor registry (maps ID -> ProcessorHandle)
+    /// Tracks all processors (pending, running, stopped)
+    processors: Arc<Mutex<HashMap<ProcessorId, ProcessorHandle>>>,
+
     /// Processors waiting to be started (drained on start)
-    pending_processors: Vec<Box<dyn StreamProcessor>>,
+    /// TODO: Remove after full migration to processor registry
+    pending_processors: Vec<(ProcessorId, Box<dyn StreamProcessor>)>,
 
     /// Handler threads (spawned on start)
+    /// TODO: Remove after full migration to processor registry
     handler_threads: Vec<JoinHandle<()>>,
 
     /// Clock task handle (spawned on start)
@@ -147,6 +153,9 @@ pub struct StreamRuntime {
     /// GPU context (shared device/queue for all processors)
     /// Initialized automatically during start()
     gpu_context: Option<crate::core::gpu_context::GpuContext>,
+
+    /// Counter for generating unique processor IDs
+    next_processor_id: usize,
 }
 
 impl StreamRuntime {
@@ -168,12 +177,14 @@ impl StreamRuntime {
             clock: Some(Box::new(SoftwareClock::new(fps))),
             fps,
             broadcaster: Arc::new(Mutex::new(TickBroadcaster::new())),
+            processors: Arc::new(Mutex::new(HashMap::new())),
             pending_processors: Vec::new(),
             handler_threads: Vec::new(),
             clock_task: None,
             running: false,
             event_loop: None,
             gpu_context: None,
+            next_processor_id: 0,
         }
     }
 
@@ -199,12 +210,14 @@ impl StreamRuntime {
             clock: Some(clock),
             fps,
             broadcaster: Arc::new(Mutex::new(TickBroadcaster::new())),
+            processors: Arc::new(Mutex::new(HashMap::new())),
             pending_processors: Vec::new(),
             handler_threads: Vec::new(),
             clock_task: None,
             running: false,
             event_loop: None,
             gpu_context: None,
+            next_processor_id: 0,
         }
     }
 
@@ -239,6 +252,10 @@ impl StreamRuntime {
     ///
     /// * `processor` - Boxed processor implementation
     ///
+    /// # Returns
+    ///
+    /// The generated ProcessorId for this processor
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -247,16 +264,41 @@ impl StreamRuntime {
     /// let mut runtime = StreamRuntime::new(60.0);
     ///
     /// let processor = MyProcessor::new();
-    /// runtime.add_processor(Box::new(processor));
+    /// let processor_id = runtime.add_processor(Box::new(processor));
     /// ```
-    pub fn add_processor(&mut self, processor: Box<dyn StreamProcessor>) {
+    pub fn add_processor(&mut self, processor: Box<dyn StreamProcessor>) -> ProcessorId {
         if self.running {
             eprintln!("[Runtime] Warning: Cannot add processor while running");
-            return;
+            return String::new();
         }
 
-        tracing::info!("Added processor");
-        self.pending_processors.push(processor);
+        // Generate unique ID
+        let id = format!("processor_{}", self.next_processor_id);
+        self.next_processor_id += 1;
+
+        // Create shutdown channel for this processor
+        let (shutdown_tx, _shutdown_rx) = crossbeam_channel::bounded(1);
+
+        // Create processor handle with Pending status
+        let handle = ProcessorHandle {
+            id: id.clone(),
+            name: format!("Processor {}", self.next_processor_id - 1),
+            thread: None,
+            shutdown_tx,
+            status: Arc::new(Mutex::new(ProcessorStatus::Pending)),
+        };
+
+        // Add to processor registry
+        {
+            let mut processors = self.processors.lock().unwrap();
+            processors.insert(id.clone(), handle);
+        }
+
+        // Add to pending list (will be spawned on start())
+        self.pending_processors.push((id.clone(), processor));
+
+        tracing::info!("Added processor with ID: {}", id);
+        id
     }
 
     pub fn connect<T: crate::core::ports::PortMessage>(
@@ -413,16 +455,39 @@ impl StreamRuntime {
         tracing::debug!("Broadcaster channels closed");
 
         // 3. Wait for handler threads to finish
-        let thread_count = self.handler_threads.len();
-        for (i, handle) in self.handler_threads.drain(..).enumerate() {
-            match handle.join() {
-                Ok(_) => tracing::debug!("Handler thread {}/{} joined", i + 1, thread_count),
-                Err(e) => tracing::error!(
-                    "Handler thread {}/{} panicked: {:?}",
-                    i + 1,
-                    thread_count,
-                    e
-                ),
+        let processor_ids: Vec<ProcessorId> = {
+            let processors = self.processors.lock().unwrap();
+            processors.keys().cloned().collect()
+        };
+
+        let thread_count = processor_ids.len();
+        for (i, processor_id) in processor_ids.iter().enumerate() {
+            // Take the thread handle from the processor
+            let thread_handle = {
+                let mut processors = self.processors.lock().unwrap();
+                processors
+                    .get_mut(processor_id)
+                    .and_then(|proc| proc.thread.take())
+            };
+
+            if let Some(handle) = thread_handle {
+                match handle.join() {
+                    Ok(_) => {
+                        tracing::debug!("[{}] Thread joined ({}/{})", processor_id, i + 1, thread_count);
+                        // Update status to Stopped
+                        let mut processors = self.processors.lock().unwrap();
+                        if let Some(proc) = processors.get_mut(processor_id) {
+                            *proc.status.lock().unwrap() = ProcessorStatus::Stopped;
+                        }
+                    }
+                    Err(e) => tracing::error!(
+                        "[{}] Thread panicked ({}/{}): {:?}",
+                        processor_id,
+                        i + 1,
+                        thread_count,
+                        e
+                    ),
+                }
             }
         }
 
@@ -432,10 +497,15 @@ impl StreamRuntime {
 
     /// Get runtime status info
     pub fn status(&self) -> RuntimeStatus {
+        let handler_count = {
+            let processors = self.processors.lock().unwrap();
+            processors.len()
+        };
+
         RuntimeStatus {
             running: self.running,
             fps: self.fps,
-            handler_count: self.handler_threads.len() + self.pending_processors.len(),
+            handler_count,
             clock_type: if self.clock.is_some() {
                 "pending"
             } else {
@@ -483,7 +553,7 @@ impl StreamRuntime {
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
             .clone();
 
-        for (index, mut processor) in self.pending_processors.drain(..).enumerate() {
+        for (processor_id, mut processor) in self.pending_processors.drain(..) {
             // Subscribe processor to broadcaster
             let rx = {
                 let mut broadcaster = self.broadcaster.lock().unwrap();
@@ -493,33 +563,49 @@ impl StreamRuntime {
             // Clone GPU context for this processor thread
             let processor_gpu_context = gpu_context.clone();
 
+            // Clone processor ID for thread logging
+            let id_for_thread = processor_id.clone();
+
             // Spawn OS thread for this processor
             let handle = std::thread::spawn(move || {
-                tracing::info!("[Processor {}] Thread started", index);
+                tracing::info!("[{}] Thread started", id_for_thread);
 
                 // Call on_start lifecycle hook with GPU context
                 if let Err(e) = processor.on_start(&processor_gpu_context) {
-                    tracing::error!("[Processor {}] on_start() failed: {}", index, e);
+                    tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                     return;
                 }
 
                 // Process ticks until channel closes
                 for tick in rx {
                     if let Err(e) = processor.process(tick) {
-                        tracing::error!("[Processor {}] process() error: {}", index, e);
+                        tracing::error!("[{}] process() error: {}", id_for_thread, e);
                         // Continue processing (errors are isolated)
                     }
                 }
 
                 // Call on_stop lifecycle hook
                 if let Err(e) = processor.on_stop() {
-                    tracing::error!("[Processor {}] on_stop() failed: {}", index, e);
+                    tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
                 }
 
-                tracing::info!("[Processor {}] Thread stopped", index);
+                tracing::info!("[{}] Thread stopped", id_for_thread);
             });
 
-            self.handler_threads.push(handle);
+            // Update processor handle in registry with thread and Running status
+            {
+                let mut processors = self.processors.lock().unwrap();
+                if let Some(proc_handle) = processors.get_mut(&processor_id) {
+                    proc_handle.thread = Some(handle);
+                    *proc_handle.status.lock().unwrap() = ProcessorStatus::Running;
+                } else {
+                    tracing::error!("Processor {} not found in registry", processor_id);
+                }
+            }
+
+            // Also push to handler_threads for backward compatibility
+            // TODO: Remove after full migration
+            // (Can't push handle here since it was moved to the ProcessorHandle)
         }
 
         Ok(())
@@ -590,7 +676,12 @@ mod tests {
 
         runtime.start().await.unwrap();
         assert!(runtime.running);
-        assert_eq!(runtime.handler_threads.len(), 2);
+
+        // Check processor registry instead of handler_threads
+        {
+            let processors = runtime.processors.lock().unwrap();
+            assert_eq!(processors.len(), 2);
+        }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
