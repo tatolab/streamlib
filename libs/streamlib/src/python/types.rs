@@ -3,7 +3,6 @@
 use pyo3::prelude::*;
 use crate::core::VideoFrame;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Python wrapper for VideoFrame
 ///
@@ -52,9 +51,10 @@ impl PyVideoFrame {
     #[getter]
     fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use super::gpu_wrappers::PyWgpuTexture;
-        // Get raw pointer to the Arc's inner texture
-        let texture_ptr = self.inner.texture.as_ref() as *const wgpu::Texture as usize;
-        let texture_wrapper = PyWgpuTexture { handle: texture_ptr };
+        // Clone the Arc (cheap, just increments refcount)
+        let texture_wrapper = PyWgpuTexture {
+            texture: self.inner.texture.clone()
+        };
         Ok(Py::new(py, texture_wrapper)?.into_py(py))
     }
 
@@ -64,26 +64,20 @@ impl PyVideoFrame {
 
         // Extract the texture wrapper
         let texture_wrapper: Py<PyWgpuTexture> = new_texture.extract()?;
-        let texture_handle = texture_wrapper.borrow(py).handle;
+        // Just clone the Arc from the wrapper - cheap and safe!
+        let texture_arc = texture_wrapper.borrow(py).texture.clone();
 
-        // SAFETY: texture_handle must be a valid wgpu::Texture pointer
-        unsafe {
-            let texture_ref = &*(texture_handle as *const wgpu::Texture);
-            // Clone the texture Arc to share ownership
-            let texture_arc = Arc::new(texture_ref.clone());
+        let new_frame = VideoFrame {
+            texture: texture_arc,
+            format: self.inner.format,
+            width: self.inner.width,
+            height: self.inner.height,
+            timestamp: self.inner.timestamp,
+            frame_number: self.inner.frame_number,
+            metadata: self.inner.metadata.clone(),
+        };
 
-            let new_frame = VideoFrame {
-                texture: texture_arc,
-                format: self.inner.format,
-                width: self.inner.width,
-                height: self.inner.height,
-                timestamp: self.inner.timestamp,
-                frame_number: self.inner.frame_number,
-                metadata: self.inner.metadata.clone(),
-            };
-
-            Ok(PyVideoFrame { inner: new_frame })
-        }
+        Ok(PyVideoFrame { inner: new_frame })
     }
 
     /// Get metadata as dictionary

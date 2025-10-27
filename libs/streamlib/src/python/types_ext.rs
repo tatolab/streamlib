@@ -194,8 +194,7 @@ impl PyGpuContext {
             view_formats: &[],
         });
 
-        let handle = Box::into_raw(Box::new(texture)) as usize;
-        Ok(Py::new(py, PyWgpuTexture { handle })?.into_py(py))
+        Ok(Py::new(py, PyWgpuTexture { texture: std::sync::Arc::new(texture) })?.into_py(py))
     }
 
     fn __repr__(&self) -> String {

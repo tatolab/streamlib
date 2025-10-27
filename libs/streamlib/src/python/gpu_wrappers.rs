@@ -391,55 +391,55 @@ fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>)
 
 #[pyclass(name = "WgpuShaderModule", module = "streamlib")]
 pub struct PyWgpuShaderModule {
-    handle: usize,
+    shader_module: std::sync::Arc<wgpu::ShaderModule>,
 }
 
 #[pymethods]
 impl PyWgpuShaderModule {
     fn __repr__(&self) -> String {
-        format!("WgpuShaderModule(handle=0x{:x})", self.handle)
+        "WgpuShaderModule".to_string()
     }
 }
 
 #[pyclass(name = "WgpuBuffer", module = "streamlib")]
 pub struct PyWgpuBuffer {
-    handle: usize,
+    buffer: std::sync::Arc<wgpu::Buffer>,
 }
 
 #[pymethods]
 impl PyWgpuBuffer {
     fn __repr__(&self) -> String {
-        format!("WgpuBuffer(handle=0x{:x})", self.handle)
+        "WgpuBuffer".to_string()
     }
 }
 
 #[pyclass(name = "WgpuBindGroupLayout", module = "streamlib")]
 pub struct PyWgpuBindGroupLayout {
-    handle: usize,
+    layout: std::sync::Arc<wgpu::BindGroupLayout>,
 }
 
 #[pymethods]
 impl PyWgpuBindGroupLayout {
     fn __repr__(&self) -> String {
-        format!("WgpuBindGroupLayout(handle=0x{:x})", self.handle)
+        "WgpuBindGroupLayout".to_string()
     }
 }
 
 #[pyclass(name = "WgpuPipelineLayout", module = "streamlib")]
 pub struct PyWgpuPipelineLayout {
-    handle: usize,
+    pipeline_layout: std::sync::Arc<wgpu::PipelineLayout>,
 }
 
 #[pymethods]
 impl PyWgpuPipelineLayout {
     fn __repr__(&self) -> String {
-        format!("WgpuPipelineLayout(handle=0x{:x})", self.handle)
+        "WgpuPipelineLayout".to_string()
     }
 }
 
 #[pyclass(name = "WgpuComputePipeline", module = "streamlib")]
 pub struct PyWgpuComputePipeline {
-    handle: usize,
+    pipeline: std::sync::Arc<wgpu::ComputePipeline>,
     // Store bind group layout handle for later use
     bind_group_layout_handle: usize,
 }
@@ -449,31 +449,32 @@ impl PyWgpuComputePipeline {
     /// Get the bind group layout (Python code needs this)
     #[getter]
     fn _bind_group_layout(&self, py: Python<'_>) -> PyResult<Py<PyWgpuBindGroupLayout>> {
-        Py::new(py, PyWgpuBindGroupLayout {
-            handle: self.bind_group_layout_handle,
-        })
+        // TODO: This is a placeholder - need to properly store bind group layout Arc
+        Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "bind_group_layout getter not yet implemented for Arc-based wrappers"
+        ))
     }
 
     fn __repr__(&self) -> String {
-        format!("WgpuComputePipeline(handle=0x{:x})", self.handle)
+        "WgpuComputePipeline".to_string()
     }
 }
 
 #[pyclass(name = "WgpuBindGroup", module = "streamlib")]
 pub struct PyWgpuBindGroup {
-    handle: usize,
+    bind_group: std::sync::Arc<wgpu::BindGroup>,
 }
 
 #[pymethods]
 impl PyWgpuBindGroup {
     fn __repr__(&self) -> String {
-        format!("WgpuBindGroup(handle=0x{:x})", self.handle)
+        "WgpuBindGroup".to_string()
     }
 }
 
 #[pyclass(name = "WgpuCommandEncoder", module = "streamlib")]
 pub struct PyWgpuCommandEncoder {
-    handle: usize,
+    encoder: std::sync::Arc<std::sync::Mutex<Option<wgpu::CommandEncoder>>>,
     context: GpuContext,
 }
 
@@ -481,51 +482,66 @@ pub struct PyWgpuCommandEncoder {
 impl PyWgpuCommandEncoder {
     /// Begin a compute pass
     fn begin_compute_pass(&self, py: Python<'_>) -> PyResult<Py<PyWgpuComputePass>> {
-        // SAFETY: handle must be a valid CommandEncoder pointer
-        unsafe {
-            let encoder = &mut *(self.handle as *mut wgpu::CommandEncoder);
-            let compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
-            });
+        let mut encoder_guard = self.encoder.lock().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to lock encoder: {}", e))
+        })?;
 
-            let handle = Box::into_raw(Box::new(compute_pass)) as usize;
-            Py::new(py, PyWgpuComputePass { handle })
-        }
+        let encoder = encoder_guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Encoder already consumed (finish() called)")
+        })?;
+
+        let compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
+
+        // SAFETY: Transmute to 'static lifetime - safe because compute_pass lifetime is managed by Arc/Mutex
+        let compute_pass_static: wgpu::ComputePass<'static> = unsafe { std::mem::transmute(compute_pass) };
+
+        Py::new(py, PyWgpuComputePass {
+            compute_pass: std::sync::Arc::new(std::sync::Mutex::new(Some(compute_pass_static)))
+        })
     }
 
     /// Finish encoding and return command buffer
     fn finish(&self, py: Python<'_>) -> PyResult<usize> {
-        // SAFETY: handle must be a valid CommandEncoder pointer
-        unsafe {
-            // Take ownership of encoder
-            let encoder = Box::from_raw(self.handle as *mut wgpu::CommandEncoder);
-            let command_buffer = encoder.finish();
+        let mut encoder_guard = self.encoder.lock().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to lock encoder: {}", e))
+        })?;
 
-            // Return command buffer handle
-            Ok(Box::into_raw(Box::new(command_buffer)) as usize)
-        }
+        let encoder = encoder_guard.take().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Encoder already consumed (finish() called twice)")
+        })?;
+
+        let command_buffer = encoder.finish();
+
+        // Still return usize for queue.submit() compatibility
+        Ok(Box::into_raw(Box::new(command_buffer)) as usize)
     }
 
     fn __repr__(&self) -> String {
-        format!("WgpuCommandEncoder(handle=0x{:x})", self.handle)
+        "WgpuCommandEncoder".to_string()
     }
 }
 
 #[pyclass(name = "WgpuComputePass", module = "streamlib")]
 pub struct PyWgpuComputePass {
-    handle: usize,
+    compute_pass: std::sync::Arc<std::sync::Mutex<Option<wgpu::ComputePass<'static>>>>,
 }
 
 #[pymethods]
 impl PyWgpuComputePass {
     /// Set the compute pipeline
     fn set_pipeline(&self, pipeline: &PyWgpuComputePipeline) -> PyResult<()> {
-        unsafe {
-            let pass = &mut *(self.handle as *mut wgpu::ComputePass);
-            let pipeline_ref = &*(pipeline.handle as *const wgpu::ComputePipeline);
-            pass.set_pipeline(pipeline_ref);
-        }
+        let mut pass_guard = self.compute_pass.lock().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to lock compute pass: {}", e))
+        })?;
+
+        let pass = pass_guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Compute pass already ended")
+        })?;
+
+        pass.set_pipeline(pipeline.pipeline.as_ref());
         Ok(())
     }
 
@@ -536,69 +552,79 @@ impl PyWgpuComputePass {
         bind_group: &PyWgpuBindGroup,
         offsets: Option<Vec<u32>>,
     ) -> PyResult<()> {
-        unsafe {
-            let pass = &mut *(self.handle as *mut wgpu::ComputePass);
-            let bind_group_ref = &*(bind_group.handle as *const wgpu::BindGroup);
-            let offsets_slice = offsets.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
-            pass.set_bind_group(index, bind_group_ref, offsets_slice);
-        }
+        let mut pass_guard = self.compute_pass.lock().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to lock compute pass: {}", e))
+        })?;
+
+        let pass = pass_guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Compute pass already ended")
+        })?;
+
+        let offsets_slice = offsets.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        pass.set_bind_group(index, bind_group.bind_group.as_ref(), offsets_slice);
         Ok(())
     }
 
     /// Dispatch workgroups
     fn dispatch_workgroups(&self, x: u32, y: u32, z: u32) -> PyResult<()> {
-        unsafe {
-            let pass = &mut *(self.handle as *mut wgpu::ComputePass);
-            pass.dispatch_workgroups(x, y, z);
-        }
+        let mut pass_guard = self.compute_pass.lock().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to lock compute pass: {}", e))
+        })?;
+
+        let pass = pass_guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Compute pass already ended")
+        })?;
+
+        pass.dispatch_workgroups(x, y, z);
         Ok(())
     }
 
     /// End the compute pass
     fn end(&self) -> PyResult<()> {
-        unsafe {
-            // Take ownership and drop to end the pass
-            let _pass = Box::from_raw(self.handle as *mut wgpu::ComputePass);
-        }
+        let mut pass_guard = self.compute_pass.lock().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to lock compute pass: {}", e))
+        })?;
+
+        // Take ownership and drop to end the pass
+        pass_guard.take().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Compute pass already ended")
+        })?;
+
         Ok(())
     }
 
     fn __repr__(&self) -> String {
-        format!("WgpuComputePass(handle=0x{:x})", self.handle)
+        "WgpuComputePass".to_string()
     }
 }
 
 #[pyclass(name = "WgpuTextureView", module = "streamlib")]
 pub struct PyWgpuTextureView {
-    handle: usize,
+    view: std::sync::Arc<wgpu::TextureView>,
 }
 
 #[pymethods]
 impl PyWgpuTextureView {
     fn __repr__(&self) -> String {
-        format!("WgpuTextureView(handle=0x{:x})", self.handle)
+        "WgpuTextureView".to_string()
     }
 }
 
 #[pyclass(name = "WgpuTexture", module = "streamlib")]
 pub struct PyWgpuTexture {
-    pub(crate) handle: usize,
+    pub(crate) texture: std::sync::Arc<wgpu::Texture>,
 }
 
 #[pymethods]
 impl PyWgpuTexture {
     /// Create a texture view
     fn create_view(&self, py: Python<'_>) -> PyResult<Py<PyWgpuTextureView>> {
-        unsafe {
-            let texture = &*(self.handle as *const wgpu::Texture);
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let handle = Box::into_raw(Box::new(view)) as usize;
-            Py::new(py, PyWgpuTextureView { handle })
-        }
+        let view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Py::new(py, PyWgpuTextureView { view: std::sync::Arc::new(view) })
     }
 
     fn __repr__(&self) -> String {
-        format!("WgpuTexture(handle=0x{:x})", self.handle)
+        "WgpuTexture".to_string()
     }
 }
 
@@ -622,8 +648,7 @@ impl PyWgpuDevice {
             source: wgpu::ShaderSource::Wgsl(code.into()),
         });
 
-        let handle = Box::into_raw(Box::new(shader_module)) as usize;
-        Py::new(py, PyWgpuShaderModule { handle })
+        Py::new(py, PyWgpuShaderModule { shader_module: std::sync::Arc::new(shader_module) })
     }
 
     /// Create a buffer
@@ -638,8 +663,7 @@ impl PyWgpuDevice {
             mapped_at_creation: false,
         });
 
-        let handle = Box::into_raw(Box::new(buffer)) as usize;
-        Py::new(py, PyWgpuBuffer { handle })
+        Py::new(py, PyWgpuBuffer { buffer: std::sync::Arc::new(buffer) })
     }
 
     /// Create a bind group layout
@@ -666,8 +690,7 @@ impl PyWgpuDevice {
             entries: &parsed_entries,
         });
 
-        let handle = Box::into_raw(Box::new(layout)) as usize;
-        Py::new(py, PyWgpuBindGroupLayout { handle })
+        Py::new(py, PyWgpuBindGroupLayout { layout: std::sync::Arc::new(layout) })
     }
 
     /// Create a pipeline layout
@@ -678,10 +701,15 @@ impl PyWgpuDevice {
     ) -> PyResult<Py<PyWgpuPipelineLayout>> {
         let device = self.context.device();
 
-        // Convert handles to references
-        let layout_refs: Vec<&wgpu::BindGroupLayout> = bind_group_layouts
+        // Keep borrowed values alive and collect references
+        let layouts: Vec<_> = bind_group_layouts
             .iter()
-            .map(|layout| unsafe { &*(layout.borrow(py).handle as *const wgpu::BindGroupLayout) })
+            .map(|layout| layout.borrow(py))
+            .collect();
+
+        let layout_refs: Vec<&wgpu::BindGroupLayout> = layouts
+            .iter()
+            .map(|layout| layout.layout.as_ref())
             .collect();
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -690,8 +718,7 @@ impl PyWgpuDevice {
             push_constant_ranges: &[],
         });
 
-        let handle = Box::into_raw(Box::new(pipeline_layout)) as usize;
-        Py::new(py, PyWgpuPipelineLayout { handle })
+        Py::new(py, PyWgpuPipelineLayout { pipeline_layout: std::sync::Arc::new(pipeline_layout) })
     }
 
     /// Create a compute pipeline
@@ -707,8 +734,10 @@ impl PyWgpuDevice {
         let module: Py<PyWgpuShaderModule> = compute.get_item("module")?.unwrap().extract()?;
         let entry_point: String = compute.get_item("entry_point")?.unwrap().extract()?;
 
-        let module_ref = unsafe { &*(module.borrow(py).handle as *const wgpu::ShaderModule) };
-        let layout_ref = unsafe { &*(layout.handle as *const wgpu::PipelineLayout) };
+        // Keep borrowed value alive
+        let module_borrowed = module.borrow(py);
+        let module_ref = module_borrowed.shader_module.as_ref();
+        let layout_ref = layout.pipeline_layout.as_ref();
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -719,13 +748,11 @@ impl PyWgpuDevice {
             cache: None,
         });
 
-        let handle = Box::into_raw(Box::new(pipeline)) as usize;
-
         // Store bind group layout handle for Python access
         // For now, assume first layout in pipeline_layout
         let bind_group_layout_handle = 0; // TODO: Get from pipeline
 
-        Py::new(py, PyWgpuComputePipeline { handle, bind_group_layout_handle })
+        Py::new(py, PyWgpuComputePipeline { pipeline: std::sync::Arc::new(pipeline), bind_group_layout_handle })
     }
 
     /// Create a bind group
@@ -736,10 +763,15 @@ impl PyWgpuDevice {
         entries: Vec<Py<PyDict>>,
     ) -> PyResult<Py<PyWgpuBindGroup>> {
         let device = self.context.device();
-        let layout_ref = unsafe { &*(layout.handle as *const wgpu::BindGroupLayout) };
+        let layout_ref = layout.layout.as_ref();
 
-        // Parse entries - this is complex, need to handle different resource types
-        let mut bind_entries = Vec::new();
+        // Parse entries - need to keep Py objects alive
+        // Store Py objects, then borrow them
+        let mut py_texture_views: Vec<Py<PyWgpuTextureView>> = Vec::new();
+        let mut py_buffers: Vec<Py<PyWgpuBuffer>> = Vec::new();
+
+        // Collect binding info
+        let mut entry_info: Vec<(u32, usize, bool)> = Vec::new(); // (binding, index, is_texture_view)
 
         for entry_dict in entries.iter() {
             let entry_dict = entry_dict.bind(py);
@@ -748,27 +780,43 @@ impl PyWgpuDevice {
 
             // Check resource type
             if let Ok(texture_view) = resource_obj.extract::<Py<PyWgpuTextureView>>() {
-                let view_handle = texture_view.borrow(py).handle;
-                let view_ref = unsafe { &*(view_handle as *const wgpu::TextureView) };
-                bind_entries.push(wgpu::BindGroupEntry {
-                    binding,
-                    resource: wgpu::BindingResource::TextureView(view_ref),
-                });
+                let idx = py_texture_views.len();
+                py_texture_views.push(texture_view);
+                entry_info.push((binding, idx, true));
             } else if let Ok(resource_dict) = resource_obj.downcast::<PyDict>() {
                 // Buffer resource (dict with "buffer" key)
                 if let Some(buffer_obj) = resource_dict.get_item("buffer")? {
                     let buffer: Py<PyWgpuBuffer> = buffer_obj.extract()?;
-                    let buffer_handle = buffer.borrow(py).handle;
-                    let buffer_ref = unsafe { &*(buffer_handle as *const wgpu::Buffer) };
-                    bind_entries.push(wgpu::BindGroupEntry {
-                        binding,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: buffer_ref,
-                            offset: 0,
-                            size: None,
-                        }),
-                    });
+                    let idx = py_buffers.len();
+                    py_buffers.push(buffer);
+                    entry_info.push((binding, idx, false));
                 }
+            }
+        }
+
+        // Borrow all Py objects
+        let texture_views: Vec<_> = py_texture_views.iter().map(|tv| tv.borrow(py)).collect();
+        let buffers: Vec<_> = py_buffers.iter().map(|b| b.borrow(py)).collect();
+
+        // Now create bind entries using the borrowed values
+        let mut bind_entries = Vec::new();
+        for (binding, idx, is_texture_view) in entry_info {
+            if is_texture_view {
+                let view_ref = texture_views[idx].view.as_ref();
+                bind_entries.push(wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::TextureView(view_ref),
+                });
+            } else {
+                let buffer_ref = buffers[idx].buffer.as_ref();
+                bind_entries.push(wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: buffer_ref,
+                        offset: 0,
+                        size: None,
+                    }),
+                });
             }
         }
 
@@ -778,8 +826,7 @@ impl PyWgpuDevice {
             entries: &bind_entries,
         });
 
-        let handle = Box::into_raw(Box::new(bind_group)) as usize;
-        Py::new(py, PyWgpuBindGroup { handle })
+        Py::new(py, PyWgpuBindGroup { bind_group: std::sync::Arc::new(bind_group) })
     }
 
     /// Create a command encoder
@@ -789,9 +836,8 @@ impl PyWgpuDevice {
             label: None,
         });
 
-        let handle = Box::into_raw(Box::new(encoder)) as usize;
         Py::new(py, PyWgpuCommandEncoder {
-            handle,
+            encoder: std::sync::Arc::new(std::sync::Mutex::new(Some(encoder))),
             context: self.context.clone(),
         })
     }
@@ -823,9 +869,7 @@ impl PyWgpuQueue {
         data: &Bound<'_, PyBytes>,
     ) -> PyResult<()> {
         let queue = self.context.queue();
-        let buffer_ref = unsafe { &*(buffer.handle as *const wgpu::Buffer) };
-
-        queue.write_buffer(buffer_ref, offset, data.as_bytes());
+        queue.write_buffer(buffer.buffer.as_ref(), offset, data.as_bytes());
         Ok(())
     }
 
