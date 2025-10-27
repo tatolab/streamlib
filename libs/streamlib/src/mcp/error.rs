@@ -43,4 +43,8 @@ pub enum McpError {
     /// Configuration error
     #[error("Configuration error: {0}")]
     Configuration(String),
+
+    /// Runtime error (e.g., runtime not available, operation failed)
+    #[error("Runtime error: {0}")]
+    Runtime(String),
 }

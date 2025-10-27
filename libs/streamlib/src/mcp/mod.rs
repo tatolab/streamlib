@@ -32,6 +32,7 @@ pub use package_manager::{PackageManager, PackageInfo, PackageStatus, ApprovalPo
 use crate::core::{ProcessorRegistry, StreamRuntime};
 use std::sync::{Arc, Mutex};
 use std::future::Future;
+use tokio::sync::Mutex as TokioMutex;
 
 // MCP protocol imports
 use rmcp::{
@@ -64,7 +65,8 @@ pub struct McpServer {
     /// Optional runtime for live system control
     /// If None, MCP server is in "discovery mode" (can only list processor types)
     /// If Some, MCP server is in "application mode" (can add/remove processors, list connections, etc.)
-    runtime: Option<Arc<Mutex<StreamRuntime>>>,
+    /// Uses tokio::sync::Mutex for async operations across await points
+    runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
 
     /// Server name for MCP identification
     name: String,
@@ -99,7 +101,7 @@ impl McpServer {
     /// * `runtime` - Shared runtime (for live system control)
     pub fn with_runtime(
         registry: Arc<Mutex<ProcessorRegistry>>,
-        runtime: Arc<Mutex<StreamRuntime>>,
+        runtime: Arc<TokioMutex<StreamRuntime>>,
     ) -> Self {
         Self {
             registry,
@@ -292,7 +294,7 @@ impl McpServer {
 #[derive(Clone)]
 struct StreamlibMcpHandler {
     registry: Arc<Mutex<ProcessorRegistry>>,
-    runtime: Option<Arc<Mutex<StreamRuntime>>>,
+    runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
     name: String,
     version: String,
 }

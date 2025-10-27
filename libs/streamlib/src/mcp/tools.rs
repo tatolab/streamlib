@@ -7,7 +7,8 @@ use super::{McpError, Result};
 use crate::core::StreamRuntime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 
 /// MCP Tool definition
 #[derive(Debug, Clone, Serialize)]
@@ -236,7 +237,7 @@ pub struct ConnectProcessorsArgs {
 pub async fn execute_tool(
     tool_name: &str,
     arguments: JsonValue,
-    runtime: Option<Arc<Mutex<StreamRuntime>>>,
+    runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
 ) -> Result<ToolResult> {
     match tool_name {
         "list_supported_languages" => {
@@ -396,7 +397,8 @@ pub async fn execute_tool(
             })?;
 
             // Call runtime's remove_processor method
-            let mut rt = runtime.lock().unwrap();
+            // Use tokio::sync::Mutex which is Send and can be held across await
+            let mut rt = runtime.lock().await;
             match rt.remove_processor(&args.name).await {
                 Ok(_) => {
                     Ok(ToolResult {
@@ -445,21 +447,24 @@ pub async fn execute_tool(
                 )
             })?;
 
-            // Access processors registry
-            let processors_map = runtime.lock().unwrap().processors.lock().unwrap();
+            // Access processors registry and clone the data we need
+            let processors = {
+                let rt = runtime.lock().await;
+                let processors_map = rt.processors.lock().unwrap();
 
-            // Build processor list
-            let processors: Vec<serde_json::Value> = processors_map
-                .iter()
-                .map(|(id, handle)| {
-                    let status = *handle.status.lock().unwrap();
-                    serde_json::json!({
-                        "id": id,
-                        "name": handle.name,
-                        "status": format!("{:?}", status)
+                // Build processor list while holding the lock
+                processors_map
+                    .iter()
+                    .map(|(id, handle)| {
+                        let status = *handle.status.lock().unwrap();
+                        serde_json::json!({
+                            "id": id,
+                            "name": handle.name,
+                            "status": format!("{:?}", status)
+                        })
                     })
-                })
-                .collect();
+                    .collect::<Vec<_>>()
+            };
 
             Ok(ToolResult {
                 success: true,
@@ -480,21 +485,24 @@ pub async fn execute_tool(
                 )
             })?;
 
-            // Access connections registry
-            let connections_map = runtime.lock().unwrap().connections.lock().unwrap();
+            // Access connections registry and clone the data we need
+            let connections = {
+                let rt = runtime.lock().await;
+                let connections_map = rt.connections.lock().unwrap();
 
-            // Build connections list
-            let connections: Vec<serde_json::Value> = connections_map
-                .iter()
-                .map(|(id, conn)| {
-                    serde_json::json!({
-                        "id": id,
-                        "from_port": conn.from_port,
-                        "to_port": conn.to_port,
-                        "created_at": format!("{:?}", conn.created_at)
+                // Build connections list while holding the lock
+                connections_map
+                    .iter()
+                    .map(|(id, conn)| {
+                        serde_json::json!({
+                            "id": id,
+                            "from_port": conn.from_port,
+                            "to_port": conn.to_port,
+                            "created_at": format!("{:?}", conn.created_at)
+                        })
                     })
-                })
-                .collect();
+                    .collect::<Vec<_>>()
+            };
 
             Ok(ToolResult {
                 success: true,

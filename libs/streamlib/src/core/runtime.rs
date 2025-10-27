@@ -88,7 +88,7 @@ pub struct ProcessorHandle {
     shutdown_tx: crossbeam_channel::Sender<()>,
 
     /// Current processor status
-    status: Arc<Mutex<ProcessorStatus>>,
+    pub(crate) status: Arc<Mutex<ProcessorStatus>>,
 }
 
 /// Unique identifier for connections
