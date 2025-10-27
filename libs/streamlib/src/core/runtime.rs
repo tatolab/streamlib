@@ -167,7 +167,7 @@ pub struct StreamRuntime {
 
     /// Processor registry (maps ID -> ProcessorHandle)
     /// Tracks all processors (pending, running, stopped)
-    processors: Arc<Mutex<HashMap<ProcessorId, ProcessorHandle>>>,
+    pub(crate) processors: Arc<Mutex<HashMap<ProcessorId, ProcessorHandle>>>,
 
     /// Processors waiting to be started (drained on start)
     /// Stores: (processor_id, processor, shutdown_receiver)
@@ -196,7 +196,7 @@ pub struct StreamRuntime {
 
     /// Connection registry (maps ID -> Connection)
     /// Tracks all port connections for dynamic graph operations
-    connections: Arc<Mutex<HashMap<ConnectionId, Connection>>>,
+    pub(crate) connections: Arc<Mutex<HashMap<ConnectionId, Connection>>>,
 
     /// Counter for generating unique connection IDs
     next_connection_id: usize,

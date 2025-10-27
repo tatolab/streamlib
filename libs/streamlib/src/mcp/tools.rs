@@ -4,8 +4,10 @@
 //! Examples: add_processor, remove_processor, connect_processors
 
 use super::{McpError, Result};
+use crate::core::StreamRuntime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::sync::{Arc, Mutex};
 
 /// MCP Tool definition
 #[derive(Debug, Clone, Serialize)]
@@ -160,7 +162,15 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "list_processors".to_string(),
-            description: "List all processors currently in the runtime (not just available in registry).".to_string(),
+            description: "List all processors currently in the runtime (not just available in registry). Shows processor IDs, names, and status (Pending, Running, Stopping, Stopped).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        Tool {
+            name: "list_connections".to_string(),
+            description: "List all connections between processors in the runtime. Shows source ports, destination ports, and connection IDs.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -216,11 +226,17 @@ pub struct ConnectProcessorsArgs {
 
 /// Execute a tool
 ///
-/// This is a placeholder implementation. In a real system, this would
-/// interact with the StreamRuntime to actually perform the operations.
+/// # Arguments
+/// * `tool_name` - Name of the tool to execute
+/// * `arguments` - JSON arguments for the tool
+/// * `runtime` - Optional runtime for application-level tools (add/remove processors, list connections, etc.)
+///
+/// If runtime is None, only discovery-level tools are available (list available processor types).
+/// If runtime is Some, full application control is enabled (modify running system).
 pub async fn execute_tool(
     tool_name: &str,
     arguments: JsonValue,
+    runtime: Option<Arc<Mutex<StreamRuntime>>>,
 ) -> Result<ToolResult> {
     match tool_name {
         "list_supported_languages" => {
@@ -371,16 +387,34 @@ pub async fn execute_tool(
                     message: e.to_string(),
                 })?;
 
-            // TODO: Implement actual remove_processor logic
+            // Check if runtime is available
+            let runtime = runtime.ok_or_else(|| {
+                McpError::Runtime(
+                    "remove_processor requires runtime access. MCP server is in discovery mode (registry only). \
+                     Use McpServer::with_runtime() to enable application-level control.".to_string()
+                )
+            })?;
 
-            Ok(ToolResult {
-                success: false,
-                message: format!(
-                    "remove_processor('{}') not yet implemented - placeholder only",
-                    args.name
-                ),
-                data: None,
-            })
+            // Call runtime's remove_processor method
+            let mut rt = runtime.lock().unwrap();
+            match rt.remove_processor(&args.name).await {
+                Ok(_) => {
+                    Ok(ToolResult {
+                        success: true,
+                        message: format!("Successfully removed processor '{}'", args.name),
+                        data: Some(serde_json::json!({
+                            "processor_id": args.name
+                        })),
+                    })
+                }
+                Err(e) => {
+                    Ok(ToolResult {
+                        success: false,
+                        message: format!("Failed to remove processor '{}': {}", args.name, e),
+                        data: None,
+                    })
+                }
+            }
         }
 
         "connect_processors" => {
@@ -403,14 +437,71 @@ pub async fn execute_tool(
         }
 
         "list_processors" => {
-            // TODO: Implement actual list_processors logic
-            // Should return processors currently in runtime
+            // Check if runtime is available
+            let runtime = runtime.ok_or_else(|| {
+                McpError::Runtime(
+                    "list_processors requires runtime access. MCP server is in discovery mode (registry only). \
+                     Use McpServer::with_runtime() to enable application-level control.".to_string()
+                )
+            })?;
+
+            // Access processors registry
+            let processors_map = runtime.lock().unwrap().processors.lock().unwrap();
+
+            // Build processor list
+            let processors: Vec<serde_json::Value> = processors_map
+                .iter()
+                .map(|(id, handle)| {
+                    let status = *handle.status.lock().unwrap();
+                    serde_json::json!({
+                        "id": id,
+                        "name": handle.name,
+                        "status": format!("{:?}", status)
+                    })
+                })
+                .collect();
 
             Ok(ToolResult {
-                success: false,
-                message: "list_processors not yet implemented - placeholder only".to_string(),
+                success: true,
+                message: format!("Found {} processor(s) in runtime", processors.len()),
                 data: Some(serde_json::json!({
-                    "processors": []
+                    "processors": processors,
+                    "total_count": processors.len()
+                })),
+            })
+        }
+
+        "list_connections" => {
+            // Check if runtime is available
+            let runtime = runtime.ok_or_else(|| {
+                McpError::Runtime(
+                    "list_connections requires runtime access. MCP server is in discovery mode (registry only). \
+                     Use McpServer::with_runtime() to enable application-level control.".to_string()
+                )
+            })?;
+
+            // Access connections registry
+            let connections_map = runtime.lock().unwrap().connections.lock().unwrap();
+
+            // Build connections list
+            let connections: Vec<serde_json::Value> = connections_map
+                .iter()
+                .map(|(id, conn)| {
+                    serde_json::json!({
+                        "id": id,
+                        "from_port": conn.from_port,
+                        "to_port": conn.to_port,
+                        "created_at": format!("{:?}", conn.created_at)
+                    })
+                })
+                .collect();
+
+            Ok(ToolResult {
+                success: true,
+                message: format!("Found {} connection(s) in runtime", connections.len()),
+                data: Some(serde_json::json!({
+                    "connections": connections,
+                    "total_count": connections.len()
                 })),
             })
         }
@@ -426,7 +517,7 @@ mod tests {
     #[test]
     fn test_list_tools() {
         let tools = list_tools();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"list_supported_languages"));
@@ -437,6 +528,7 @@ mod tests {
         assert!(tool_names.contains(&"remove_processor"));
         assert!(tool_names.contains(&"connect_processors"));
         assert!(tool_names.contains(&"list_processors"));
+        assert!(tool_names.contains(&"list_connections"));
     }
 
     #[test]
@@ -453,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_unknown_tool() {
-        let result = execute_tool("unknown_tool", serde_json::json!({})).await;
+        let result = execute_tool("unknown_tool", serde_json::json!({}), None).await;
         assert!(result.is_err());
     }
 
@@ -464,6 +556,7 @@ mod tests {
             serde_json::json!({
                 "name": "CameraProcessor"
             }),
+            None, // Discovery mode
         )
         .await;
 
@@ -480,9 +573,26 @@ mod tests {
             serde_json::json!({
                 "invalid": "arguments"
             }),
+            None, // Discovery mode
         )
         .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_processors_requires_runtime() {
+        let result = execute_tool("list_processors", serde_json::json!({}), None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, McpError::Runtime(_)));
+    }
+
+    #[tokio::test]
+    async fn test_list_connections_requires_runtime() {
+        let result = execute_tool("list_connections", serde_json::json!({}), None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, McpError::Runtime(_)));
     }
 }

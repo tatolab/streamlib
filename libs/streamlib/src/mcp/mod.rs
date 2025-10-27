@@ -29,7 +29,7 @@ mod package_manager;
 pub use error::{McpError, Result};
 pub use package_manager::{PackageManager, PackageInfo, PackageStatus, ApprovalPolicy};
 
-use crate::core::ProcessorRegistry;
+use crate::core::{ProcessorRegistry, StreamRuntime};
 use std::sync::{Arc, Mutex};
 use std::future::Future;
 
@@ -50,11 +50,21 @@ use rmcp::{
 
 /// MCP Server for streamlib
 ///
-/// Exposes processor registry via MCP protocol for AI agent integration.
+/// Exposes processor registry and runtime control via MCP protocol for AI agent integration.
 /// Supports both stdio and HTTP transports.
+///
+/// # Modes
+///
+/// - **Discovery Mode** (registry only): `McpServer::new(registry)` - AI agents can discover processor types
+/// - **Application Mode** (registry + runtime): `McpServer::with_runtime(registry, runtime)` - AI agents can control running system
 pub struct McpServer {
     /// Processor registry (shared with runtime)
     registry: Arc<Mutex<ProcessorRegistry>>,
+
+    /// Optional runtime for live system control
+    /// If None, MCP server is in "discovery mode" (can only list processor types)
+    /// If Some, MCP server is in "application mode" (can add/remove processors, list connections, etc.)
+    runtime: Option<Arc<Mutex<StreamRuntime>>>,
 
     /// Server name for MCP identification
     name: String,
@@ -64,19 +74,42 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Create a new MCP server
+    /// Create a new MCP server in discovery mode (registry only)
+    ///
+    /// AI agents can discover available processor types but cannot control a running runtime.
     ///
     /// # Arguments
     /// * `registry` - Shared processor registry
     pub fn new(registry: Arc<Mutex<ProcessorRegistry>>) -> Self {
         Self {
             registry,
+            runtime: None,
             name: "streamlib-mcp".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 
-    /// Create with custom name and version
+    /// Create a new MCP server in application mode (registry + runtime)
+    ///
+    /// AI agents can both discover processor types AND control the running runtime
+    /// (add/remove processors, list connections, etc.).
+    ///
+    /// # Arguments
+    /// * `registry` - Shared processor registry (for type discovery)
+    /// * `runtime` - Shared runtime (for live system control)
+    pub fn with_runtime(
+        registry: Arc<Mutex<ProcessorRegistry>>,
+        runtime: Arc<Mutex<StreamRuntime>>,
+    ) -> Self {
+        Self {
+            registry,
+            runtime: Some(runtime),
+            name: "streamlib-mcp".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+
+    /// Create with custom name and version (discovery mode)
     pub fn with_info(
         registry: Arc<Mutex<ProcessorRegistry>>,
         name: impl Into<String>,
@@ -84,6 +117,7 @@ impl McpServer {
     ) -> Self {
         Self {
             registry,
+            runtime: None,
             name: name.into(),
             version: version.into(),
         }
@@ -96,9 +130,10 @@ impl McpServer {
     pub async fn run_stdio(&self) -> Result<()> {
         tracing::info!("Starting MCP server on stdio");
 
-        // Create handler with registry
+        // Create handler with registry and optional runtime
         let handler = StreamlibMcpHandler {
             registry: Arc::clone(&self.registry),
+            runtime: self.runtime.as_ref().map(Arc::clone),
             name: self.name.clone(),
             version: self.version.clone(),
         };
@@ -145,12 +180,14 @@ impl McpServer {
 
         // Create factory for MCP services
         let registry = Arc::clone(&self.registry);
+        let runtime = self.runtime.as_ref().map(Arc::clone);
         let name = self.name.clone();
         let version = self.version.clone();
 
         let service_factory = move || {
             Ok(StreamlibMcpHandler {
                 registry: Arc::clone(&registry),
+                runtime: runtime.as_ref().map(Arc::clone),
                 name: name.clone(),
                 version: version.clone(),
             })
@@ -255,6 +292,7 @@ impl McpServer {
 #[derive(Clone)]
 struct StreamlibMcpHandler {
     registry: Arc<Mutex<ProcessorRegistry>>,
+    runtime: Option<Arc<Mutex<StreamRuntime>>>,
     name: String,
     version: String,
 }
@@ -396,7 +434,8 @@ impl ServerHandler for StreamlibMcpHandler {
         // Convert arguments from Map to Value
         let arguments = serde_json::Value::Object(params.arguments.unwrap_or_default());
 
-        let result = tools::execute_tool(&params.name, arguments).await
+        // Pass runtime to tool execution (if available)
+        let result = tools::execute_tool(&params.name, arguments, self.runtime.as_ref().map(Arc::clone)).await
             .map_err(|e| RmcpError::internal_error(
                 "tool_execution_error",
                 Some(serde_json::json!({"error": e.to_string()}))
