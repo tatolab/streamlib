@@ -91,6 +91,42 @@ pub struct ProcessorHandle {
     status: Arc<Mutex<ProcessorStatus>>,
 }
 
+/// Unique identifier for connections
+pub type ConnectionId = String;
+
+/// Represents a connection between two ports
+///
+/// This tracks port wiring in a type-erased way. The actual connection
+/// is maintained by the port buffer references, but we need this registry
+/// to support dynamic graph operations (add/remove connections at runtime).
+#[derive(Debug, Clone)]
+pub struct Connection {
+    /// Unique connection ID
+    pub id: ConnectionId,
+
+    /// Source port identifier (format: "processor_id.port_name")
+    /// For now, this is opaque until we add processor port metadata
+    pub from_port: String,
+
+    /// Destination port identifier (format: "processor_id.port_name")
+    pub to_port: String,
+
+    /// Timestamp when connection was created
+    pub created_at: std::time::Instant,
+}
+
+impl Connection {
+    /// Create a new connection
+    pub fn new(id: ConnectionId, from_port: String, to_port: String) -> Self {
+        Self {
+            id,
+            from_port,
+            to_port,
+            created_at: std::time::Instant::now(),
+        }
+    }
+}
+
 /// Platform-specific event loop hook
 ///
 /// Platforms can provide a custom event loop that runs alongside the runtime.
@@ -156,6 +192,13 @@ pub struct StreamRuntime {
 
     /// Counter for generating unique processor IDs
     next_processor_id: usize,
+
+    /// Connection registry (maps ID -> Connection)
+    /// Tracks all port connections for dynamic graph operations
+    connections: Arc<Mutex<HashMap<ConnectionId, Connection>>>,
+
+    /// Counter for generating unique connection IDs
+    next_connection_id: usize,
 }
 
 impl StreamRuntime {
@@ -185,6 +228,8 @@ impl StreamRuntime {
             event_loop: None,
             gpu_context: None,
             next_processor_id: 0,
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            next_connection_id: 0,
         }
     }
 
@@ -218,6 +263,8 @@ impl StreamRuntime {
             event_loop: None,
             gpu_context: None,
             next_processor_id: 0,
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            next_connection_id: 0,
         }
     }
 
@@ -312,7 +359,26 @@ impl StreamRuntime {
             ));
         }
 
+        // Perform the actual connection
         input.connect(output.buffer().clone());
+
+        // Register connection in the registry for tracking
+        // TODO: Use actual processor IDs and port names when metadata is available
+        let connection_id = format!("connection_{}", self.next_connection_id);
+        self.next_connection_id += 1;
+
+        let connection = Connection::new(
+            connection_id.clone(),
+            "unknown_output".to_string(),  // Will be enhanced in Phase 5
+            "unknown_input".to_string(),   // Will be enhanced in Phase 5
+        );
+
+        {
+            let mut connections = self.connections.lock().unwrap();
+            connections.insert(connection_id.clone(), connection);
+        }
+
+        tracing::debug!("Registered connection: {}", connection_id);
         Ok(())
     }
 
