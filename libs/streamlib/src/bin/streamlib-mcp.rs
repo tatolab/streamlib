@@ -3,6 +3,12 @@
 //! This binary starts an MCP server that exposes streamlib processors
 //! to AI agents like Claude Code.
 //!
+//! Runs in **application mode** with a live StreamRuntime, enabling AI agents to:
+//! - List running processors (list_processors)
+//! - Remove processors dynamically (remove_processor)
+//! - List connections (list_connections)
+//! - Discover available processor types (discovery mode features)
+//!
 //! Usage:
 //! ```bash
 //! # Install the binary
@@ -18,7 +24,10 @@
 //! ```
 
 use streamlib::{global_registry, mcp::McpServer};
+use streamlib::core::StreamRuntime;
 use clap::Parser;
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 
 #[derive(Parser, Debug)]
 #[command(name = "streamlib-mcp")]
@@ -63,16 +72,29 @@ async fn main() -> anyhow::Result<()> {
         reg.list().len()
     });
 
-    // Create MCP server with the shared registry
-    let server = McpServer::new(registry);
+    // Create and start StreamRuntime (application mode)
+    tracing::info!("Creating StreamRuntime at 60 FPS");
+    let mut runtime = StreamRuntime::new(60.0);
+
+    // Start the runtime
+    tracing::info!("Starting StreamRuntime...");
+    runtime.start().await?;
+    tracing::info!("StreamRuntime started successfully");
+
+    // Wrap runtime in Arc<TokioMutex<>> for MCP server
+    let runtime = Arc::new(TokioMutex::new(runtime));
+
+    // Create MCP server in APPLICATION MODE (with runtime control)
+    let server = McpServer::with_runtime(registry.clone(), runtime.clone());
 
     tracing::info!(
-        "MCP server {} v{} ready",
+        "MCP server {} v{} ready (APPLICATION MODE - runtime control enabled)",
         server.name(),
         server.version()
     );
 
     // Run the server with the selected transport
+    // The runtime will keep running in the background while the MCP server handles requests
     if args.http {
         let bind_addr = format!("{}:{}", args.host, args.port);
         tracing::info!("Using HTTP transport on {}", bind_addr);
@@ -82,6 +104,12 @@ async fn main() -> anyhow::Result<()> {
         // This will handle JSON-RPC messages from stdin and write responses to stdout
         server.run_stdio().await?;
     }
+
+    // Cleanup: Stop the runtime when MCP server exits
+    tracing::info!("Stopping StreamRuntime...");
+    let mut rt = runtime.lock().await;
+    rt.stop().await?;
+    tracing::info!("StreamRuntime stopped");
 
     Ok(())
 }
