@@ -47,6 +47,7 @@ use super::clock::{Clock, SoftwareClock};
 use super::events::TickBroadcaster;
 use super::stream_processor::StreamProcessor;
 use super::{Result, StreamError};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -55,6 +56,40 @@ use std::thread::JoinHandle;
 /// Opaque shader ID (for future GPU operations)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ShaderId(pub u64);
+
+/// Unique identifier for processors in the runtime
+pub type ProcessorId = String;
+
+/// Status of a processor in the runtime
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessorStatus {
+    /// Processor added but not yet started
+    Pending,
+    /// Processor thread is running
+    Running,
+    /// Shutdown signal sent, thread stopping
+    Stopping,
+    /// Processor thread has stopped
+    Stopped,
+}
+
+/// Handle to a running processor
+pub struct ProcessorHandle {
+    /// Unique processor ID
+    pub id: ProcessorId,
+
+    /// Human-readable processor name
+    pub name: String,
+
+    /// Processor thread handle (None if not started yet)
+    thread: Option<JoinHandle<()>>,
+
+    /// Channel for sending shutdown signal to processor thread
+    shutdown_tx: crossbeam_channel::Sender<()>,
+
+    /// Current processor status
+    status: Arc<Mutex<ProcessorStatus>>,
+}
 
 /// Platform-specific event loop hook
 ///
