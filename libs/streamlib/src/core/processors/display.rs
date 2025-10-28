@@ -92,6 +92,10 @@ pub trait DisplayProcessor: StreamProcessor {
     fn input_ports(&mut self) -> &mut DisplayInputPorts;
 }
 
+// NOTE: Port access methods are now part of StreamProcessor trait.
+// Concrete display processor types (AppleDisplayProcessor, etc.) should override
+// the with_video_input_mut() method from StreamProcessor to provide access to their "video" input port.
+
 // NOTE: Descriptor-only registration removed - platform implementations (AppleDisplayProcessor, etc.)
 // register themselves with full factory support via register_processor_type! macro.
 // The facade in lib.rs re-exports them as CameraProcessor/DisplayProcessor.

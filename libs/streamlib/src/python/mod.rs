@@ -14,7 +14,10 @@
 //! ## Example
 //!
 //! ```python
-//! from streamlib import camera_processor, display_processor, processor, StreamRuntime
+//! from streamlib import (
+//!     camera_processor, display_processor, processor,
+//!     StreamRuntime, StreamInput, StreamOutput, VideoFrame
+//! )
 //!
 //! @camera_processor(device_id=0)
 //! def camera():
@@ -24,15 +27,28 @@
 //! def display():
 //!     pass  # Uses Rust DisplayProcessor
 //!
-//! @processor(inputs=["video"], outputs=["video"])
-//! def my_filter(frame):
-//!     # Dynamic Python code
-//!     return frame
+//! @processor(
+//!     description="Custom video processor",
+//!     tags=["filter"]
+//! )
+//! class MyFilter:
+//!     class InputPorts:
+//!         video = StreamInput(VideoFrame)
+//!
+//!     class OutputPorts:
+//!         video = StreamOutput(VideoFrame)
+//!
+//!     def process(self, tick):
+//!         frame = self.input_ports().video.read_latest()
+//!         # Process frame...
+//!         self.output_ports().video.write(frame)
 //!
 //! runtime = StreamRuntime(fps=30)
-//! runtime.add_processor(camera)
-//! runtime.add_processor(display)
-//! runtime.connect(camera.outputs['video'], display.inputs['video'])
+//! runtime.add_stream(camera)
+//! runtime.add_stream(MyFilter)
+//! runtime.add_stream(display)
+//! runtime.connect(camera.output_ports().video, MyFilter.input_ports().video)
+//! runtime.connect(MyFilter.output_ports().video, display.input_ports().video)
 //! runtime.run()
 //! ```
 

@@ -98,6 +98,10 @@ pub trait CameraProcessor: StreamProcessor {
     fn output_ports(&mut self) -> &mut CameraOutputPorts;
 }
 
+// NOTE: Port access methods are now part of StreamProcessor trait.
+// Concrete camera processor types (AppleCameraProcessor, etc.) should override
+// the with_video_output_mut() method from StreamProcessor to provide access to their "video" output port.
+
 // NOTE: Descriptor-only registration removed - platform implementations (AppleCameraProcessor, etc.)
 // register themselves with full factory support via register_processor_type! macro.
 // The facade in lib.rs re-exports them as CameraProcessor/DisplayProcessor.

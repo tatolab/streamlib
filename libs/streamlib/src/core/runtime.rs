@@ -497,13 +497,7 @@ impl StreamRuntime {
         output: &mut crate::core::ports::StreamOutput<T>,
         input: &mut crate::core::ports::StreamInput<T>,
     ) -> Result<()> {
-        if self.running {
-            return Err(StreamError::Configuration(
-                "Cannot connect ports while runtime is running".into(),
-            ));
-        }
-
-        // Perform the actual connection
+        // Perform the actual connection (works both before and during runtime)
         input.connect(output.buffer().clone());
 
         // Register connection in the registry for tracking
@@ -524,6 +518,103 @@ impl StreamRuntime {
 
         tracing::debug!("Registered connection: {}", connection_id);
         Ok(())
+    }
+
+    /// Helper: Get output buffer from a processor by port name
+    ///
+    /// Tries to downcast to known processor types and access their output ports.
+    fn get_output_buffer(
+        processor: &mut dyn StreamProcessor,
+        port_name: &str,
+        processor_id: &str,
+    ) -> Result<Arc<crate::core::buffers::RingBuffer<crate::core::VideoFrame>>> {
+        #[cfg(feature = "debug-overlay")]
+        use crate::core::processors::PerformanceOverlayProcessor;
+
+        #[cfg(any(feature = "python", feature = "python-embed"))]
+        use crate::python::PythonProcessor;
+
+        // Try AppleCameraProcessor (via CameraProcessor trait)
+        #[cfg(target_os = "macos")]
+        if let Some(camera) = processor.as_any_mut().downcast_mut::<crate::apple::AppleCameraProcessor>() {
+            use crate::core::CameraProcessor;
+            if port_name == "video" {
+                return Ok(camera.output_ports().video.buffer().clone());
+            }
+        }
+
+        // Try PerformanceOverlayProcessor
+        #[cfg(feature = "debug-overlay")]
+        if let Some(perf) = processor.as_any_mut().downcast_mut::<PerformanceOverlayProcessor>() {
+            if port_name == "video" {
+                return Ok(perf.output_ports().video.buffer().clone());
+            }
+        }
+
+        // Try PythonProcessor
+        #[cfg(any(feature = "python", feature = "python-embed"))]
+        if let Some(python) = processor.as_any_mut().downcast_mut::<PythonProcessor>() {
+            if let Some(port_arc) = python.output_ports().ports.get(port_name) {
+                let port = port_arc.lock().unwrap();
+                return Ok(port.buffer().clone());
+            }
+        }
+
+        Err(StreamError::Configuration(format!(
+            "Processor '{}' does not have output port '{}' or is not a supported type",
+            processor_id, port_name
+        )))
+    }
+
+    /// Helper: Connect input port to output buffer
+    ///
+    /// Tries to downcast to known processor types and connect their input ports.
+    fn connect_input_port(
+        processor: &mut dyn StreamProcessor,
+        port_name: &str,
+        buffer: Arc<crate::core::buffers::RingBuffer<crate::core::VideoFrame>>,
+        processor_id: &str,
+    ) -> Result<()> {
+
+        #[cfg(feature = "debug-overlay")]
+        use crate::core::processors::PerformanceOverlayProcessor;
+
+        #[cfg(any(feature = "python", feature = "python-embed"))]
+        use crate::python::PythonProcessor;
+
+        // Try AppleDisplayProcessor (via DisplayProcessor trait)
+        #[cfg(target_os = "macos")]
+        if let Some(display) = processor.as_any_mut().downcast_mut::<crate::apple::AppleDisplayProcessor>() {
+            use crate::core::DisplayProcessor;
+            if port_name == "video" {
+                display.input_ports().video.connect(buffer);
+                return Ok(());
+            }
+        }
+
+        // Try PerformanceOverlayProcessor
+        #[cfg(feature = "debug-overlay")]
+        if let Some(perf) = processor.as_any_mut().downcast_mut::<PerformanceOverlayProcessor>() {
+            if port_name == "video" {
+                perf.input_ports().video.connect(buffer);
+                return Ok(());
+            }
+        }
+
+        // Try PythonProcessor
+        #[cfg(any(feature = "python", feature = "python-embed"))]
+        if let Some(python) = processor.as_any_mut().downcast_mut::<PythonProcessor>() {
+            if let Some(port_arc) = python.input_ports().ports.get(port_name) {
+                let mut port = port_arc.lock().unwrap();
+                port.connect(buffer);
+                return Ok(());
+            }
+        }
+
+        Err(StreamError::Configuration(format!(
+            "Processor '{}' does not have input port '{}' or is not a supported type",
+            processor_id, port_name
+        )))
     }
 
     /// Connect two processors at runtime (Phase 5)
@@ -609,48 +700,25 @@ impl StreamRuntime {
             (Arc::clone(source_proc), Arc::clone(dest_proc))
         };
 
-        // 3. Connect the ports
-        // For now, this is specialized for CameraProcessor→DisplayProcessor
-        // TODO: Generalize this with a trait-based port access system
+        // 3. Connect the ports by trying to access them from known processor types
+        // This approach uses downcasting but supports any registered processor type
         {
             // Lock both processors
             let mut source = source_processor.lock().unwrap();
             let mut dest = dest_processor.lock().unwrap();
 
-            // Try to downcast to CameraProcessor and DisplayProcessor
-            use crate::core::{CameraProcessor, DisplayProcessor};
+            // Try to get output buffer from source processor
+            let output_buffer = Self::get_output_buffer(&mut **source, source_port, source_proc_id)?;
 
-            let camera = source
-                .as_any_mut()
-                .downcast_mut::<crate::CameraProcessor>()
-                .ok_or_else(|| {
-                    StreamError::Configuration(format!(
-                        "Source processor '{}' is not a CameraProcessor",
-                        source_proc_id
-                    ))
-                })?;
-
-            let display = dest
-                .as_any_mut()
-                .downcast_mut::<crate::DisplayProcessor>()
-                .ok_or_else(|| {
-                    StreamError::Configuration(format!(
-                        "Destination processor '{}' is not a DisplayProcessor",
-                        dest_proc_id
-                    ))
-                })?;
-
-            // Get ports
-            let output = &mut camera.output_ports().video;
-            let input = &mut display.input_ports().video;
-
-            // Perform connection (same as regular connect())
-            input.connect(output.buffer().clone());
+            // Connect input port to output buffer
+            Self::connect_input_port(&mut **dest, dest_port, output_buffer, dest_proc_id)?;
 
             tracing::info!(
-                "Connected CameraProcessor {} → DisplayProcessor {}",
+                "Connected {} ({}) → {} ({})",
                 source_proc_id,
-                dest_proc_id
+                source_port,
+                dest_proc_id,
+                dest_port
             );
         }
 
