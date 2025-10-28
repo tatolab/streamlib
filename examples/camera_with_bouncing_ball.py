@@ -1,8 +1,8 @@
 """
-Camera with animated bouncing ball overlay using @video_effect decorator.
+Camera with animated bouncing ball overlay using @processor decorator.
 
 This demonstrates:
-- Camera → Video Effect → Display pipeline
+- Camera → Python Processor → Display pipeline
 - WebGPU shader for drawing animated graphics
 - Bouncing ball physics simulation
 - GPU-based compositing
@@ -11,10 +11,16 @@ Zero-copy GPU pipeline:
     Camera → WebGPU texture → Bouncing ball shader → Display swapchain
 """
 
-import asyncio
 import time
-import math
-from streamlib import camera_source, video_effect, display_sink, StreamRuntime, Stream, VideoFrame
+import struct
+import random
+from streamlib import (
+    camera_processor, processor, display_processor,
+    StreamRuntime, StreamInput, StreamOutput, VideoFrame,
+    # wgpu enums (no wgpu-py dependency needed!)
+    BufferUsage, ShaderStage, TextureSampleType, TextureViewDimension,
+    StorageTextureAccess, TextureFormat, BufferBindingType,
+)
 
 
 # WGSL shader - reads ball parameters from uniform buffer
@@ -120,191 +126,209 @@ class BouncingBall:
             self.vy = -abs(self.vy) * self.bounce_damping
 
         # Add small random perturbation to keep it interesting
-        import random
         if random.random() < 0.01:  # 1% chance per frame
             self.vx += random.uniform(-0.1, 0.1)
             self.vy += random.uniform(-0.1, 0.1)
 
 
-@camera_source(device_id=None)  # None = first available camera
+@camera_processor(device_id="0x1424001bcf2284")  # None = first available camera
 def camera():
     """Zero-copy camera source - no code needed!"""
     pass
 
 
-@video_effect
-def bouncing_ball_overlay(frame: VideoFrame, gpu) -> VideoFrame:
+@processor(
+    description="GPU-accelerated bouncing ball overlay effect",
+    usage_context="Draws an animated bouncing ball on video frames using WebGPU compute shaders",
+    tags=["gpu", "effect", "animation", "demo"]
+)
+class BouncingBallOverlay:
     """
-    GPU-accelerated bouncing ball overlay effect.
+    GPU-accelerated bouncing ball overlay processor.
 
     Draws an animated bouncing ball on top of the camera feed using WebGPU.
     Ball physics are calculated on CPU, rendering done on GPU.
-
-    Performance optimized: Pipeline is cached, ball parameters passed via 1x1 texture.
     """
-    # Initialize on first call (stored on handler)
-    if not hasattr(bouncing_ball_overlay, 'ball'):
-        bouncing_ball_overlay.ball = BouncingBall()
-        bouncing_ball_overlay.last_time = time.perf_counter()
 
-        # Create compute pipeline ONCE (cached!)
-        bouncing_ball_overlay.pipeline = _create_ball_pipeline(gpu)
+    class InputPorts:
+        video = StreamInput(VideoFrame)
 
-        # Create uniform buffer for ball parameters (16 bytes: 4 floats)
-        import wgpu
-        bouncing_ball_overlay.uniform_buffer = gpu.device.create_buffer(
-            size=16,  # 4 floats * 4 bytes = 16 bytes
-            usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST
+    class OutputPorts:
+        video = StreamOutput(VideoFrame)
+
+    def __init__(self):
+        print("BouncingBallOverlay.__init__() called")
+        self.ball = BouncingBall()
+        self.last_time = time.perf_counter()
+        self.pipeline = None
+        self.uniform_buffer = None
+        self.initialized = False
+
+    def _initialize_gpu(self, gpu, width, height):
+        """Initialize GPU resources (called on first frame)."""
+        try:
+            print(f"Initializing GPU resources for {width}x{height}")
+
+            # Create shader module
+            print("Creating shader module...")
+            shader_module = gpu.device.create_shader_module(code=BOUNCING_BALL_SHADER)
+            print("Shader module created")
+
+            # Create bind group layout with 3 bindings (input, output, uniform buffer)
+            print("Creating bind group layout...")
+            bind_group_layout = gpu.device.create_bind_group_layout(
+                entries=[
+                    {
+                        "binding": 0,
+                        "visibility": ShaderStage.COMPUTE,
+                        "texture": {
+                            "sample_type": TextureSampleType.FLOAT,
+                            "view_dimension": TextureViewDimension.D2,
+                        }
+                    },
+                    {
+                        "binding": 1,
+                        "visibility": ShaderStage.COMPUTE,
+                        "storage_texture": {
+                            "access": StorageTextureAccess.WRITE_ONLY,
+                            "format": TextureFormat.RGBA8UNORM,
+                            "view_dimension": TextureViewDimension.D2,
+                        }
+                    },
+                    {
+                        "binding": 2,
+                        "visibility": ShaderStage.COMPUTE,
+                        "buffer": {
+                            "type": BufferBindingType.UNIFORM,
+                        }
+                    }
+                ]
+            )
+            print("Bind group layout created")
+
+            # Create pipeline layout
+            print("Creating pipeline layout...")
+            pipeline_layout = gpu.device.create_pipeline_layout(
+                bind_group_layouts=[bind_group_layout]
+            )
+            print("Pipeline layout created")
+
+            # Create compute pipeline
+            print("Creating compute pipeline...")
+            self.pipeline = gpu.device.create_compute_pipeline(
+                layout=pipeline_layout,
+                compute={
+                    "module": shader_module,
+                    "entry_point": "main",
+                }
+            )
+            print("Compute pipeline created")
+
+            # Store bind group layout for later use
+            self.bind_group_layout = bind_group_layout
+
+            # Create uniform buffer for ball parameters (16 bytes: 4 floats)
+            print("Creating uniform buffer...")
+            self.uniform_buffer = gpu.device.create_buffer(
+                size=16,  # 4 floats * 4 bytes = 16 bytes
+                usage=BufferUsage.UNIFORM | BufferUsage.COPY_DST
+            )
+            print("Uniform buffer created")
+
+            self.initialized = True
+            print("GPU resources initialized successfully")
+
+        except Exception as e:
+            print(f"❌ ERROR in _initialize_gpu: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def process(self, tick):
+        """Process each frame: update physics and render ball."""
+        # Read input frame
+        frame = self.input_ports().video.read_latest()
+        if not frame:
+            return
+
+        # Get GPU context
+        gpu = self.gpu_context()
+
+        # Initialize GPU resources on first frame
+        if not self.initialized:
+            self._initialize_gpu(gpu, frame.width, frame.height)
+
+        # Update ball physics
+        current_time = time.perf_counter()
+        dt = current_time - self.last_time
+        self.last_time = current_time
+        self.ball.update(dt)
+
+        # Update uniform buffer with ball position (fast GPU upload)
+        params_data = struct.pack('ffff', self.ball.x, self.ball.y, self.ball.radius, 0.0)
+        gpu.queue.write_buffer(self.uniform_buffer, 0, params_data)
+
+        # Create output texture
+        output = gpu.create_texture(frame.width, frame.height)
+
+        # Create bind group
+        bind_group = gpu.device.create_bind_group(
+            layout=self.bind_group_layout,
+            entries=[
+                {"binding": 0, "resource": frame.data.create_view()},
+                {"binding": 1, "resource": output.create_view()},
+                {"binding": 2, "resource": {"buffer": self.uniform_buffer}},
+            ]
         )
 
-    # Update ball physics
-    current_time = time.perf_counter()
-    dt = current_time - bouncing_ball_overlay.last_time
-    bouncing_ball_overlay.last_time = current_time
-    bouncing_ball_overlay.ball.update(dt)
-    ball = bouncing_ball_overlay.ball
+        # Calculate workgroup count (8x8 workgroup size)
+        workgroup_count_x = (frame.width + 7) // 8
+        workgroup_count_y = (frame.height + 7) // 8
 
-    # Update uniform buffer with ball position (fast GPU upload)
-    import struct
-    params_data = struct.pack('ffff', ball.x, ball.y, ball.radius, 0.0)
-    gpu.queue.write_buffer(
-        bouncing_ball_overlay.uniform_buffer,
-        0,  # offset
-        params_data
-    )
+        # Create command encoder and run compute pass
+        encoder = gpu.device.create_command_encoder()
+        compute_pass = encoder.begin_compute_pass()
+        compute_pass.set_pipeline(self.pipeline)
+        compute_pass.set_bind_group(0, bind_group)
+        compute_pass.dispatch_workgroups(workgroup_count_x, workgroup_count_y, 1)
+        compute_pass.end()
 
-    # Create output texture
-    output = gpu.create_texture(frame.width, frame.height)
+        # Submit
+        gpu.queue.submit([encoder.finish()])
 
-    # Run shader with custom bind group (input, output, uniform buffer)
-    _run_ball_compute(
-        gpu,
-        bouncing_ball_overlay.pipeline,
-        frame.data,
-        output,
-        bouncing_ball_overlay.uniform_buffer,
-        frame.width,
-        frame.height
-    )
-
-    return frame.clone_with_texture(output)
+        # Write output frame
+        output_frame = frame.clone_with_texture(output)
+        self.output_ports().video.write(output_frame)
 
 
-def _create_ball_pipeline(gpu):
-    """Create the bouncing ball compute pipeline (called once)."""
-    import wgpu
-
-    # Create shader module
-    shader_module = gpu.device.create_shader_module(code=BOUNCING_BALL_SHADER)
-
-    # Create bind group layout with 3 bindings (input, output, uniform buffer)
-    bind_group_layout = gpu.device.create_bind_group_layout(
-        entries=[
-            {
-                "binding": 0,
-                "visibility": wgpu.ShaderStage.COMPUTE,
-                "texture": {
-                    "sample_type": wgpu.TextureSampleType.float,
-                    "view_dimension": wgpu.TextureViewDimension.d2,
-                }
-            },
-            {
-                "binding": 1,
-                "visibility": wgpu.ShaderStage.COMPUTE,
-                "storage_texture": {
-                    "access": wgpu.StorageTextureAccess.write_only,
-                    "format": wgpu.TextureFormat.rgba8unorm,
-                    "view_dimension": wgpu.TextureViewDimension.d2,
-                }
-            },
-            {
-                "binding": 2,
-                "visibility": wgpu.ShaderStage.COMPUTE,
-                "buffer": {
-                    "type": wgpu.BufferBindingType.uniform,
-                }
-            }
-        ]
-    )
-
-    # Create pipeline layout
-    pipeline_layout = gpu.device.create_pipeline_layout(
-        bind_group_layouts=[bind_group_layout]
-    )
-
-    # Create compute pipeline
-    pipeline = gpu.device.create_compute_pipeline(
-        layout=pipeline_layout,
-        compute={
-            "module": shader_module,
-            "entry_point": "main",
-        }
-    )
-
-    # Attach bind group layout for later use
-    pipeline._bind_group_layout = bind_group_layout
-
-    return pipeline
-
-
-def _run_ball_compute(gpu, pipeline, input_tex, output_tex, uniform_buffer, width, height):
-    """Run the ball compute shader with 2 textures and a uniform buffer."""
-    # Create bind group
-    bind_group = gpu.device.create_bind_group(
-        layout=pipeline._bind_group_layout,
-        entries=[
-            {"binding": 0, "resource": input_tex.create_view()},
-            {"binding": 1, "resource": output_tex.create_view()},
-            {"binding": 2, "resource": {"buffer": uniform_buffer}},  # Buffer must be wrapped
-        ]
-    )
-
-    # Calculate workgroup count (8x8 workgroup size)
-    workgroup_count_x = (width + 7) // 8
-    workgroup_count_y = (height + 7) // 8
-
-    # Create command encoder and run compute pass
-    encoder = gpu.device.create_command_encoder()
-    compute_pass = encoder.begin_compute_pass()
-    compute_pass.set_pipeline(pipeline)
-    compute_pass.set_bind_group(0, bind_group)
-    compute_pass.dispatch_workgroups(workgroup_count_x, workgroup_count_y, 1)
-    compute_pass.end()
-
-    # Submit
-    gpu.queue.submit([encoder.finish()])
-
-
-@display_sink(title="Camera with Bouncing Ball - streamlib", show_fps=True)
+@display_processor(title="Camera with Bouncing Ball - streamlib")
 def display():
-    """Zero-copy display sink with FPS counter - no code needed!"""
+    """Zero-copy display sink - no code needed!"""
     pass
 
 
-async def main():
+def main():
     print("🎥 Starting camera-to-display pipeline with bouncing ball overlay...")
     print("Press Ctrl+C to stop\n")
 
     # Create runtime (60 FPS for smooth animation, 1920x1080)
     runtime = StreamRuntime(fps=60, width=1920, height=1080, enable_gpu=True)
 
-    # Add handlers to runtime
-    runtime.add_stream(Stream(camera))
-    runtime.add_stream(Stream(bouncing_ball_overlay))
-    runtime.add_stream(Stream(display))
+    # Add processors to runtime
+    runtime.add_stream(camera)
+    runtime.add_stream(BouncingBallOverlay)
+    runtime.add_stream(display)
 
     # Connect pipeline: camera → bouncing_ball_overlay → display
-    runtime.connect(camera.outputs['video'], bouncing_ball_overlay.inputs['video'])
-    runtime.connect(bouncing_ball_overlay.outputs['video'], display.inputs['video'])
+    runtime.connect(camera.output_ports().video, BouncingBallOverlay.input_ports().video)
+    runtime.connect(BouncingBallOverlay.output_ports().video, display.input_ports().video)
 
     # Start the pipeline and run until interrupted
-    print("✅ Pipeline configured: Camera → Bouncing Ball Effect → Display")
-    print("✅ Starting runtime at 60 FPS...\n")
-    print("Watch the orange ball bounce around on your camera feed! 🏀\n")
+    print("✅ Pipeline configured: Camera → Bouncing Ball (GPU) → Display")
+    print("✅ Starting runtime...\n")
 
-    # runtime.run() starts and blocks until Ctrl+C
-    await runtime.run()
+    runtime.run()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
