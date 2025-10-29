@@ -12,17 +12,20 @@
 //! # Example
 //!
 //! ```ignore
-//! use streamlib::{AudioOutputProcessor, StreamRuntime};
+//! use streamlib::{AudioCaptureProcessor, AudioOutputProcessor, StreamRuntime};
 //!
 //! // Create audio output to default device
-//! let speaker = AudioOutputProcessor::new(None)?;
-//! runtime.add_processor(Box::new(speaker))?;
+//! let mut mic = AudioCaptureProcessor::new(None, 48000, 2)?;
+//! let mut speaker = AudioOutputProcessor::new(None)?;
 //!
-//! // Connect audio source to speaker
-//! runtime.connect("mic.audio", "speaker.audio")?;
+//! // Type-safe connection
+//! runtime.connect(
+//!     &mut mic.output_ports().audio,
+//!     &mut speaker.input_ports().audio
+//! )?;
 //! ```
 
-use crate::core::{StreamProcessor, Result};
+use crate::core::{StreamProcessor, StreamInput, AudioFrame, Result};
 
 /// Audio output device information
 #[derive(Debug, Clone)]
@@ -114,21 +117,15 @@ pub trait AudioOutputProcessor: StreamProcessor {
     ///
     /// Returns information about the device this processor is using
     fn current_device(&self) -> &AudioDevice;
+
+    /// Get mutable access to input ports
+    ///
+    /// Required for type-safe connections between processors.
+    fn input_ports(&mut self) -> &mut AudioOutputInputPorts;
 }
 
 /// Input ports for AudioOutputProcessor
-///
-/// Used by processor descriptors for port introspection.
 pub struct AudioOutputInputPorts {
     /// Audio input port (receives AudioFrame)
-    pub audio: String,
-}
-
-impl AudioOutputInputPorts {
-    /// Create default input ports
-    pub fn default() -> Self {
-        Self {
-            audio: "audio".to_string(),
-        }
-    }
+    pub audio: StreamInput<AudioFrame>,
 }

@@ -46,7 +46,7 @@
 //! let output_frame = reverb.process_audio(&input_frame)?;
 //! ```
 
-use crate::core::{AudioFrame, Result, StreamError, StreamProcessor};
+use crate::core::{AudioFrame, Result, StreamError, StreamProcessor, StreamInput, StreamOutput};
 use std::path::Path;
 
 /// Information about a plugin parameter
@@ -314,31 +314,26 @@ pub trait AudioEffectProcessor: StreamProcessor {
     fn end_edit(&mut self, _id: u32) -> Result<()> {
         Ok(())
     }
+
+    /// Get mutable access to input ports
+    ///
+    /// Required for type-safe connections between processors.
+    fn input_ports(&mut self) -> &mut AudioEffectInputPorts;
+
+    /// Get mutable access to output ports
+    ///
+    /// Required for type-safe connections between processors.
+    fn output_ports(&mut self) -> &mut AudioEffectOutputPorts;
 }
 
-/// Port names for AudioEffectProcessor
+/// Input ports for AudioEffectProcessor
 pub struct AudioEffectInputPorts {
-    pub audio: String,
+    pub audio: StreamInput<AudioFrame>,
 }
 
-impl Default for AudioEffectInputPorts {
-    fn default() -> Self {
-        Self {
-            audio: "audio".to_string(),
-        }
-    }
-}
-
+/// Output ports for AudioEffectProcessor
 pub struct AudioEffectOutputPorts {
-    pub audio: String,
-}
-
-impl Default for AudioEffectOutputPorts {
-    fn default() -> Self {
-        Self {
-            audio: "audio".to_string(),
-        }
-    }
+    pub audio: StreamOutput<AudioFrame>,
 }
 
 #[cfg(test)]
