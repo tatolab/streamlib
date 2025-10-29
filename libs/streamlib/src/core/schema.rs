@@ -418,6 +418,167 @@ impl ProcessorExample {
     }
 }
 
+/// Audio processing requirements for a processor
+///
+/// Processors declare their audio requirements so the runtime can:
+/// - Validate compatibility when connecting processors
+/// - Provide correct configuration to agents via MCP
+/// - Insert automatic adapters when needed (future)
+///
+/// # Example
+///
+/// ```ignore
+/// AudioRequirements {
+///     preferred_buffer_size: Some(2048),  // Efficient size
+///     required_buffer_size: None,         // But flexible
+///     supported_sample_rates: vec![44100, 48000],
+///     required_channels: Some(2),         // Stereo only
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioRequirements {
+    /// Preferred buffer size in samples per channel
+    ///
+    /// This is the most efficient size for this processor, but it can
+    /// adapt to other sizes if needed.
+    ///
+    /// Example: 2048 samples (standard audio plugin size)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_buffer_size: Option<usize>,
+
+    /// Required buffer size in samples per channel
+    ///
+    /// If set, this processor ONLY works with this exact buffer size.
+    /// The runtime will validate connections and may insert adapters.
+    ///
+    /// Example: Some CLAP plugins require specific buffer sizes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_buffer_size: Option<usize>,
+
+    /// Supported sample rates in Hz
+    ///
+    /// Empty = any sample rate is supported.
+    /// Non-empty = only these specific rates work.
+    ///
+    /// Example: vec![44100, 48000, 96000]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub supported_sample_rates: Vec<u32>,
+
+    /// Required number of audio channels
+    ///
+    /// None = any channel count is supported.
+    /// Some(n) = only this specific channel count works.
+    ///
+    /// Example: Some(2) for stereo-only processors
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_channels: Option<u32>,
+}
+
+impl AudioRequirements {
+    /// Create audio requirements with no restrictions (flexible)
+    pub fn flexible() -> Self {
+        Self {
+            preferred_buffer_size: None,
+            required_buffer_size: None,
+            supported_sample_rates: Vec::new(),
+            required_channels: None,
+        }
+    }
+
+    /// Create audio requirements with preferred settings
+    pub fn with_preferred(buffer_size: usize, sample_rate: u32, channels: u32) -> Self {
+        Self {
+            preferred_buffer_size: Some(buffer_size),
+            required_buffer_size: None,
+            supported_sample_rates: vec![sample_rate],
+            required_channels: Some(channels),
+        }
+    }
+
+    /// Create strict audio requirements (required, not just preferred)
+    pub fn required(buffer_size: usize, sample_rate: u32, channels: u32) -> Self {
+        Self {
+            preferred_buffer_size: None,
+            required_buffer_size: Some(buffer_size),
+            supported_sample_rates: vec![sample_rate],
+            required_channels: Some(channels),
+        }
+    }
+
+    /// Check if this processor's requirements are compatible with another's
+    ///
+    /// Returns true if data can flow from this processor to the other.
+    pub fn compatible_with(&self, downstream: &AudioRequirements) -> bool {
+        // Check buffer size compatibility
+        if let (Some(our_size), Some(their_size)) =
+            (self.required_buffer_size, downstream.required_buffer_size) {
+            if our_size != their_size {
+                return false;
+            }
+        }
+
+        // Check sample rate compatibility
+        if !downstream.supported_sample_rates.is_empty()
+            && !self.supported_sample_rates.is_empty() {
+            let has_common_rate = downstream.supported_sample_rates.iter()
+                .any(|rate| self.supported_sample_rates.contains(rate));
+            if !has_common_rate {
+                return false;
+            }
+        }
+
+        // Check channel compatibility
+        if let (Some(our_channels), Some(their_channels)) =
+            (self.required_channels, downstream.required_channels) {
+            if our_channels != their_channels {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Get detailed compatibility error message
+    pub fn compatibility_error(&self, downstream: &AudioRequirements) -> String {
+        // Check buffer size
+        if let (Some(our_size), Some(their_size)) =
+            (self.required_buffer_size, downstream.required_buffer_size) {
+            if our_size != their_size {
+                return format!(
+                    "Buffer size mismatch: upstream outputs {} samples, downstream requires {}",
+                    our_size, their_size
+                );
+            }
+        }
+
+        // Check sample rate
+        if !downstream.supported_sample_rates.is_empty()
+            && !self.supported_sample_rates.is_empty() {
+            let has_common_rate = downstream.supported_sample_rates.iter()
+                .any(|rate| self.supported_sample_rates.contains(rate));
+            if !has_common_rate {
+                return format!(
+                    "Sample rate mismatch: upstream supports {:?}, downstream requires {:?}",
+                    self.supported_sample_rates, downstream.supported_sample_rates
+                );
+            }
+        }
+
+        // Check channels
+        if let (Some(our_channels), Some(their_channels)) =
+            (self.required_channels, downstream.required_channels) {
+            if our_channels != their_channels {
+                return format!(
+                    "Channel count mismatch: upstream outputs {} channels, downstream requires {}",
+                    our_channels, their_channels
+                );
+            }
+        }
+
+        "Audio requirements are compatible".to_string()
+    }
+}
+
 /// Processor descriptor for AI discovery
 ///
 /// This contains all metadata needed for AI agents to understand
@@ -450,6 +611,16 @@ pub struct ProcessorDescriptor {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 
+    /// Audio processing requirements (optional)
+    ///
+    /// If this processor handles audio, declare its requirements here.
+    /// This enables:
+    /// - Runtime validation of audio pipeline compatibility
+    /// - AI agents discovering correct buffer sizes and sample rates
+    /// - Automatic adapter insertion (future)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_requirements: Option<AudioRequirements>,
+
     /// Additional metadata
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
@@ -469,6 +640,7 @@ impl ProcessorDescriptor {
             outputs: Vec::new(),
             examples: Vec::new(),
             tags: Vec::new(),
+            audio_requirements: None,
             metadata: None,
         }
     }
@@ -506,6 +678,22 @@ impl ProcessorDescriptor {
     /// Add multiple tags (builder pattern)
     pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.tags.extend(tags.into_iter().map(|t| t.into()));
+        self
+    }
+
+    /// Add audio requirements (builder pattern)
+    ///
+    /// Declares what audio configuration this processor needs/supports.
+    /// This enables runtime validation and helps AI agents generate correct code.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// ProcessorDescriptor::new("ClapEffect", "CLAP audio plugin")
+    ///     .with_audio_requirements(AudioRequirements::required(2048, 48000, 2))
+    /// ```
+    pub fn with_audio_requirements(mut self, requirements: AudioRequirements) -> Self {
+        self.audio_requirements = Some(requirements);
         self
     }
 

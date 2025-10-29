@@ -794,6 +794,29 @@ impl AudioEffectProcessor for ClapEffectProcessor {
 
 #[cfg(feature = "clap-plugins")]
 impl StreamProcessor for ClapEffectProcessor {
+    fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
+        use crate::core::schema::{ProcessorDescriptor, AudioRequirements};
+
+        Some(
+            ProcessorDescriptor::new(
+                "ClapEffectProcessor",
+                "CLAP audio plugin processor with parameter control and automation"
+            )
+            .with_usage_context(
+                "Use for loading and processing audio through CLAP plugins. \
+                 Supports parameter enumeration, modification, transactions (begin_edit/end_edit), \
+                 and automation. Most CLAP plugins require stereo input at specific buffer sizes."
+            )
+            .with_audio_requirements(AudioRequirements {
+                preferred_buffer_size: Some(2048),  // Standard CLAP buffer size
+                required_buffer_size: Some(2048),    // Many plugins require this
+                supported_sample_rates: vec![44100, 48000, 96000],  // Common rates
+                required_channels: Some(2),          // Most plugins expect stereo
+            })
+            .with_tags(vec!["audio", "effect", "clap", "plugin"])
+        )
+    }
+
     fn process(&mut self, _tick: TimedTick) -> Result<()> {
         // Note: Actual audio processing happens via process_audio()
         // This is called by the runtime for integration

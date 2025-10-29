@@ -136,6 +136,28 @@ impl TestToneGenerator {
 }
 
 impl StreamProcessor for TestToneGenerator {
+    fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
+        use crate::core::schema::{ProcessorDescriptor, AudioRequirements};
+
+        Some(
+            ProcessorDescriptor::new(
+                "TestToneGenerator",
+                "Generates sine wave test tones for audio testing and validation"
+            )
+            .with_usage_context(
+                "Use for testing audio output processors without requiring microphone input. \
+                 Can generate tones at any frequency and amplitude."
+            )
+            .with_audio_requirements(AudioRequirements {
+                preferred_buffer_size: Some(2048),  // Standard audio plugin buffer size
+                required_buffer_size: None,          // But flexible - can adapt
+                supported_sample_rates: vec![],      // Any sample rate supported
+                required_channels: None,             // Any channel count supported
+            })
+            .with_tags(vec!["audio", "generator", "test"])
+        )
+    }
+
     fn process(&mut self, _tick: TimedTick) -> Result<()> {
         // Note: Actual output to port will be handled by runtime
         // This is a placeholder - the runtime will call generate_frame() separately
