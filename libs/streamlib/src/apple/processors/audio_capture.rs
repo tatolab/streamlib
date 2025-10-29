@@ -6,7 +6,7 @@
 use crate::core::{
     AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioFrame, Result,
     StreamError, StreamProcessor, StreamOutput, TimedTick, ProcessorDescriptor, PortDescriptor,
-    SCHEMA_AUDIO_BUFFER,
+    SCHEMA_AUDIO_FRAME,
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -302,7 +302,7 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
             )
             .with_output(PortDescriptor::new(
                 "audio",
-                Arc::clone(&SCHEMA_AUDIO_BUFFER),
+                Arc::clone(&SCHEMA_AUDIO_FRAME),
                 true,
                 "Captured audio frames. Each frame contains samples at the configured sample rate and channel count. \
                  Frames are produced at the runtime's tick rate (typically 60 FPS).",

@@ -5,7 +5,8 @@
 
 use crate::core::{
     AudioOutputProcessor as AudioOutputProcessorTrait, AudioDevice, AudioFrame, Result,
-    StreamError, StreamProcessor, TimedTick,
+    StreamError, StreamProcessor, TimedTick, ProcessorDescriptor, PortDescriptor,
+    SCHEMA_AUDIO_FRAME,
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -238,6 +239,28 @@ impl AudioOutputProcessorTrait for AppleAudioOutputProcessor {
 }
 
 impl StreamProcessor for AppleAudioOutputProcessor {
+    fn descriptor() -> Option<ProcessorDescriptor> {
+        Some(
+            ProcessorDescriptor::new(
+                "AppleAudioOutputProcessor",
+                "Plays audio through speakers/headphones using CoreAudio. Receives AudioFrames and outputs to the configured audio device.",
+            )
+            .with_usage_context(
+                "Use when you need to play audio to speakers or headphones. This is typically a sink processor \
+                 (end of pipeline). AudioFrames are buffered internally and played at the device's sample rate. \
+                 The processor handles sample rate and channel conversion automatically.",
+            )
+            .with_input(PortDescriptor::new(
+                "audio",
+                Arc::clone(&SCHEMA_AUDIO_FRAME),
+                true,
+                "Audio frames to play. Frames are buffered and played continuously. The processor handles \
+                 sample rate conversion and channel conversion (mono↔stereo) automatically.",
+            ))
+            .with_tags(vec!["sink", "audio", "speaker", "output", "playback"])
+        )
+    }
+
     fn process(&mut self, _tick: TimedTick) -> Result<()> {
         // Read AudioFrame from input port
         // Note: This is a placeholder - actual port reading will be implemented

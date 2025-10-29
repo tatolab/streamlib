@@ -53,7 +53,7 @@ pub use schema::{
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
     AudioRequirements,  // Audio configuration requirements
     // Standard schemas
-    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_BUFFER, SCHEMA_DATA_MESSAGE,
+    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_AUDIO_BUFFER, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
 };
 pub use registry::{
