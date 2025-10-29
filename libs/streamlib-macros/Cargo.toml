@@ -1,0 +1,18 @@
+[package]
+name = "streamlib-macros"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+proc-macro2 = "1.0"
+
+[dev-dependencies]
+streamlib = { path = "../streamlib", default-features = false }

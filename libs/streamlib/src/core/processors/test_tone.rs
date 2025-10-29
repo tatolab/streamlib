@@ -158,6 +158,10 @@ impl StreamProcessor for TestToneGenerator {
         )
     }
 
+    fn descriptor_instance(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
+        Self::descriptor()
+    }
+
     fn process(&mut self, _tick: TimedTick) -> Result<()> {
         // Note: Actual output to port will be handled by runtime
         // This is a placeholder - the runtime will call generate_frame() separately

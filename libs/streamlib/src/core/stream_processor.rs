@@ -96,6 +96,18 @@ pub trait StreamProcessor: Send + 'static {
         None
     }
 
+    /// Get processor descriptor for this instance (for runtime validation)
+    ///
+    /// This is the instance version of `descriptor()` that can be called
+    /// on trait objects. Used by the runtime for audio requirement validation
+    /// and other runtime checks.
+    ///
+    /// Default implementation returns None. Processors should override this
+    /// to return their descriptor.
+    fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
+        None
+    }
+
     /// Enable downcasting to concrete processor types
     ///
     /// This method enables dynamic connections at runtime by allowing

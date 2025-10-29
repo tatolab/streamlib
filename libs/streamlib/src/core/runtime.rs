@@ -808,6 +808,36 @@ impl StreamRuntime {
             (Arc::clone(source_proc), Arc::clone(dest_proc))
         };
 
+        // 2.5. Validate audio requirements compatibility (if applicable)
+        {
+            let source_guard = source_processor.lock();
+            let dest_guard = dest_processor.lock();
+
+            // Get descriptors using the StreamProcessor trait
+            let source_descriptor = source_guard.descriptor_instance();
+            let dest_descriptor = dest_guard.descriptor_instance();
+
+            // If both processors have audio requirements, validate compatibility
+            if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
+                if let (Some(source_audio), Some(dest_audio)) =
+                    (&source_desc.audio_requirements, &dest_desc.audio_requirements)
+                {
+                    if !source_audio.compatible_with(dest_audio) {
+                        let error_msg = source_audio.compatibility_error(dest_audio);
+                        return Err(StreamError::Configuration(format!(
+                            "Audio requirements incompatible when connecting {} → {}: {}",
+                            source, destination, error_msg
+                        )));
+                    }
+
+                    tracing::debug!(
+                        "Audio requirements validated: {} → {} (compatible)",
+                        source_proc_id, dest_proc_id
+                    );
+                }
+            }
+        }
+
         // 3. Connect the ports by trying to access them from known processor types
         // This approach uses downcasting but supports any registered processor type
         {

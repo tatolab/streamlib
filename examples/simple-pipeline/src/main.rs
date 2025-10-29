@@ -58,6 +58,10 @@ impl StreamProcessor for Source {
         self.count += 1;
         Ok(())
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 // Simple sink processor (consumes frames)
@@ -94,6 +98,10 @@ impl StreamProcessor for Sink {
             *self.count.lock().unwrap() += 1;
         }
         Ok(())
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 

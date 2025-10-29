@@ -250,7 +250,7 @@ pub async fn execute_tool(
     match tool_name {
         "list_supported_languages" => {
             // Return list of languages the runtime supports for dynamic processors
-            // Only python is currently supported (PyO3 integration in progress)
+            // Python is fully supported via PyO3 embedded interpreter
             Ok(ToolResult {
                 success: true,
                 message: "Supported languages for dynamic processor creation".to_string(),
@@ -259,8 +259,8 @@ pub async fn execute_tool(
                         {
                             "name": "python",
                             "version": "3.11+",
-                            "status": "in_progress",
-                            "description": "Python via PyO3 embedded interpreter (streamlib-python crate in progress)"
+                            "status": "ready",
+                            "description": "Python via PyO3 embedded interpreter - create custom processors with @processor decorator"
                         }
                     ]
                 })),
@@ -282,15 +282,15 @@ pub async fn execute_tool(
                 });
             }
 
-            // TODO: Query actual Python environment via PyO3 once integrated
-            // For now, return empty list since Python runtime isn't initialized
+            // TODO: Query actual Python environment via PyO3 to list installed packages
+            // For now, return empty list (package listing not yet implemented)
             Ok(ToolResult {
                 success: true,
                 message: format!("Packages available for {}", args.language),
                 data: Some(serde_json::json!({
                     "language": args.language,
                     "packages": [],
-                    "note": "Python runtime not yet initialized. Once streamlib-python is integrated, this will return actual installed packages."
+                    "note": "Package listing not yet implemented. Python processors work with standard library by default."
                 })),
             })
         }
@@ -310,8 +310,7 @@ pub async fn execute_tool(
                 });
             }
 
-            // TODO: Implement actual package request handling
-            // This will evaluate against security policy and potentially install
+            // TODO: Implement package installation with security policy evaluation
             Ok(ToolResult {
                 success: true,
                 message: format!(
@@ -325,8 +324,8 @@ pub async fn execute_tool(
                 data: Some(serde_json::json!({
                     "language": args.language,
                     "package": args.package,
-                    "status": "pending_approval",
-                    "message": "Package installation requires approval (placeholder - will be functional once streamlib-python is integrated)"
+                    "status": "not_implemented",
+                    "message": "Package installation not yet implemented. Use Python standard library for now."
                 })),
             })
         }
@@ -346,15 +345,15 @@ pub async fn execute_tool(
                 });
             }
 
-            // TODO: Implement actual package status check
+            // TODO: Implement package status checking
             Ok(ToolResult {
                 success: true,
                 message: format!("Status for {} package '{}'", args.language, args.package),
                 data: Some(serde_json::json!({
                     "language": args.language,
                     "package": args.package,
-                    "status": "not_installed",
-                    "message": "Package status check not yet implemented (will be functional once streamlib-python is integrated)"
+                    "status": "unknown",
+                    "message": "Package status check not yet implemented. Python processors work with standard library by default."
                 })),
             })
         }
@@ -398,147 +397,10 @@ pub async fn execute_tool(
 
                 #[cfg(feature = "python-embed")]
                 {
-                    use pyo3::prelude::*;
-                    use crate::python::PythonProcessor;
+                    use crate::python::create_processor_from_code;
 
-                    // Execute Python code and extract ProcessorProxy
-                    let processor = Python::with_gil(|py| -> crate::Result<Box<dyn crate::StreamProcessor>> {
-                        // Register streamlib module into sys.modules so imports work
-                        // (only needed for python-embed mode, not extension-module mode)
-                        let streamlib_module = pyo3::types::PyModule::new_bound(py, "streamlib")
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Failed to create streamlib module: {}", e)
-                            ))?;
-
-                        crate::python::register_python_module(&streamlib_module)
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Failed to register streamlib module: {}", e)
-                            ))?;
-
-                        // Add streamlib to sys.modules
-                        py.import_bound("sys")
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Failed to import sys: {}", e)
-                            ))?
-                            .getattr("modules")
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Failed to get sys.modules: {}", e)
-                            ))?
-                            .set_item("streamlib", streamlib_module)
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Failed to add streamlib to sys.modules: {}", e)
-                            ))?;
-
-                        // Now execute the user's code exactly as provided (like a notebook cell)
-                        let locals = pyo3::types::PyDict::new_bound(py);
-                        py.run_bound(code, None, Some(&locals))
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Failed to execute Python code: {}", e)
-                            ))?;
-
-                        // Extract the ProcessorProxy from locals (find the decorated function)
-                        let proxy = locals.values()
-                            .iter()
-                            .find(|v| {
-                                // Check if this value has processor_name attribute (indicates ProcessorProxy)
-                                v.hasattr("processor_name").unwrap_or(false)
-                            })
-                            .ok_or_else(|| crate::core::StreamError::Configuration(
-                                "Python code did not define a processor (no decorated function found)".to_string()
-                            ))?;
-
-                        // Extract ProcessorProxy metadata
-                        let processor_name: String = proxy.getattr("processor_name")
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Invalid processor: {}", e)
-                            ))?
-                            .extract()
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Invalid processor_name: {}", e)
-                            ))?;
-
-                        let processor_type: String = proxy.getattr("processor_type")
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Invalid processor: {}", e)
-                            ))?
-                            .extract()
-                            .map_err(|e| crate::core::StreamError::Configuration(
-                                format!("Invalid processor_type: {}", e)
-                            ))?;
-
-                        // For Python processors, extract the python_class
-                        let python_class = proxy.getattr("python_class")
-                            .ok()
-                            .and_then(|c| if c.is_none() { None } else { Some(c.into()) });
-
-                        if let Some(python_class) = python_class {
-                            // Custom Python processor
-                            let input_ports: Vec<String> = proxy.getattr("input_port_names")
-                                .map_err(|e| crate::core::StreamError::Configuration(format!("Missing input_port_names: {}", e)))?
-                                .extract()
-                                .map_err(|e| crate::core::StreamError::Configuration(format!("Invalid input_port_names: {}", e)))?;
-                            let output_ports: Vec<String> = proxy.getattr("output_port_names")
-                                .map_err(|e| crate::core::StreamError::Configuration(format!("Missing output_port_names: {}", e)))?
-                                .extract()
-                                .map_err(|e| crate::core::StreamError::Configuration(format!("Invalid output_port_names: {}", e)))?;
-                            let description: Option<String> = proxy.getattr("description").ok().and_then(|d| d.extract().ok());
-                            let usage_context: Option<String> = proxy.getattr("usage_context").ok().and_then(|u| u.extract().ok());
-                            let tags: Vec<String> = proxy.getattr("tags").ok().and_then(|t| t.extract().ok()).unwrap_or_default();
-
-                            let py_processor = PythonProcessor::new(
-                                python_class,
-                                processor_name,
-                                input_ports,
-                                output_ports,
-                                description,
-                                usage_context,
-                                tags,
-                            )?;
-
-                            Ok(Box::new(py_processor) as Box<dyn crate::StreamProcessor>)
-                        } else {
-                            // Pre-built processor (Camera, Display) - extract config and create Rust processor
-                            let config_dict = proxy.getattr("config")
-                                .ok()
-                                .and_then(|c| if c.is_none() { None } else { Some(c) });
-
-                            match processor_type.as_str() {
-                                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                                "CameraProcessor" => {
-                                    use crate::apple::main_thread::execute_on_main_thread;
-                                    use crate::apple::processors::AppleCameraProcessor;
-
-                                    let device_id = config_dict
-                                        .and_then(|c| c.get_item("device_id").ok())
-                                        .and_then(|d| d.extract::<String>().ok());
-
-                                    execute_on_main_thread(move || {
-                                        let p = if let Some(device_id) = device_id {
-                                            AppleCameraProcessor::with_device_id(&device_id)?
-                                        } else {
-                                            AppleCameraProcessor::new()?
-                                        };
-                                        Ok(Box::new(p) as Box<dyn crate::StreamProcessor>)
-                                    })
-                                }
-
-                                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                                "DisplayProcessor" => {
-                                    use crate::apple::main_thread::execute_on_main_thread;
-                                    use crate::apple::processors::AppleDisplayProcessor;
-
-                                    execute_on_main_thread(|| {
-                                        let p = AppleDisplayProcessor::new()?;
-                                        Ok(Box::new(p) as Box<dyn crate::StreamProcessor>)
-                                    })
-                                }
-
-                                _ => Err(crate::core::StreamError::Configuration(
-                                    format!("Unknown pre-built processor type: {}", processor_type)
-                                ))
-                            }
-                        }
-                    }).map_err(|e| {
+                    // Create processor from Python code (logic moved to python/executor.rs)
+                    let processor = create_processor_from_code(code).map_err(|e| {
                         tracing::error!("Failed to create Python processor: {}", e);
                         McpError::Runtime(format!("Failed to create Python processor: {}", e))
                     })?;

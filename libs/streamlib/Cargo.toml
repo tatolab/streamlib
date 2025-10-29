@@ -51,6 +51,9 @@ clap-plugins = [
 ]
 
 [dependencies]
+# Procedural macros
+streamlib-macros = { path = "../streamlib-macros" }
+
 # Core dependencies (always included)
 thiserror.workspace = true
 anyhow.workspace = true

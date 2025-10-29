@@ -817,6 +817,10 @@ impl StreamProcessor for ClapEffectProcessor {
         )
     }
 
+    fn descriptor_instance(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
+        Self::descriptor()
+    }
+
     fn process(&mut self, _tick: TimedTick) -> Result<()> {
         // Note: Actual audio processing happens via process_audio()
         // This is called by the runtime for integration

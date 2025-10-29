@@ -60,6 +60,7 @@ mod error;
 mod port;
 mod processor;
 mod gpu_wrappers;
+mod executor;
 
 use pyo3::prelude::*;
 
@@ -69,6 +70,7 @@ pub use port::ProcessorPort;
 pub use types::PyVideoFrame;
 pub use decorators::{camera_processor, display_processor, processor as processor_decorator, ProcessorProxy, PortsProxy};
 pub use processor::PythonProcessor;
+pub use executor::create_processor_from_code;
 
 /// Register the streamlib Python module
 ///
@@ -175,6 +177,38 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ))?;
 
     m.add("StreamOutput", stream_output)?;
+
+    // Add marker classes for frame types (VideoFrame, AudioFrame)
+    // These are simple markers used for type hints in port declarations
+    let video_frame_dict = pyo3::types::PyDict::new_bound(py);
+    video_frame_dict.set_item("__repr__", py.eval_bound(
+        "lambda self: 'VideoFrame'",
+        None,
+        None
+    )?)?;
+
+    let video_frame = type_fn.call1((
+        "VideoFrame",
+        py.eval_bound("(object,)", None, None)?,
+        video_frame_dict,
+    ))?;
+
+    m.add("VideoFrame", video_frame)?;
+
+    let audio_frame_dict = pyo3::types::PyDict::new_bound(py);
+    audio_frame_dict.set_item("__repr__", py.eval_bound(
+        "lambda self: 'AudioFrame'",
+        None,
+        None
+    )?)?;
+
+    let audio_frame = type_fn.call1((
+        "AudioFrame",
+        py.eval_bound("(object,)", None, None)?,
+        audio_frame_dict,
+    ))?;
+
+    m.add("AudioFrame", audio_frame)?;
 
     Ok(())
 }

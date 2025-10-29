@@ -1,0 +1,17 @@
+[project]
+name = "audio-test"
+version = "0.1.0"
+description = "Audio capture and playback test"
+requires-python = ">=3.10"
+dependencies = [
+    "sounddevice>=0.4.6",
+    "scipy>=1.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "streamlib",
+]
+
+[tool.uv.sources]
+streamlib = { path = "../../libs/streamlib" }
