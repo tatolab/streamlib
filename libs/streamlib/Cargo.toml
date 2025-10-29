@@ -44,6 +44,12 @@ python-embed = [
     "dep:unindent",
 ]
 
+# CLAP audio plugin hosting
+clap-plugins = [
+    "dep:clack-host",
+    "dep:clack-extensions",
+]
+
 [dependencies]
 # Core dependencies (always included)
 thiserror.workspace = true
@@ -53,6 +59,7 @@ tracing-subscriber = "0.3"  # For MCP binary logging
 tokio.workspace = true
 crossbeam-channel = "0.5"
 inventory = "0.3"
+parking_lot = "0.12"  # Fast mutexes for all synchronization
 
 # Serialization
 serde.workspace = true
@@ -80,6 +87,10 @@ axum = { workspace = true, optional = true }
 pyo3 = { version = "0.22", features = ["abi3-py311"], optional = true }
 unindent = { version = "0.2", optional = true }
 
+# Optional: CLAP plugin hosting dependencies
+clack-host = { git = "https://github.com/prokopyl/clack", optional = true }
+clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "params"], optional = true }
+
 # Platform-specific: macOS/iOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2.workspace = true
@@ -98,17 +109,69 @@ libc.workspace = true
 metal = "0.31"  # Metal crate for wgpu-hal interop
 dispatch2 = "0.3"  # GCD dispatch queues
 pollster = "0.3"  # For blocking on async
+cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+hound = "3.5"  # WAV file writing for examples
 
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features
 all-features = true
 targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+# Examples - organized by category
+# Audio examples
+[[example]]
+name = "audio_test_tone"
+path = "examples/audio/audio_test_tone.rs"
+
+[[example]]
+name = "test_audio_recording"
+path = "examples/audio/test_audio_recording.rs"
+
+[[example]]
+name = "microphone_to_file"
+path = "examples/audio/microphone_to_file.rs"
+
+# CLAP plugin examples
+[[example]]
+name = "test_clap_gain"
+path = "examples/clap-plugins/test_clap_gain.rs"
+required-features = ["clap-plugins"]
+
+[[example]]
+name = "clap_gain_wav_proof"
+path = "examples/clap-plugins/clap_gain_wav_proof.rs"
+required-features = ["clap-plugins"]
+
+[[example]]
+name = "clap_parameter_discovery"
+path = "examples/clap-plugins/clap_parameter_discovery.rs"
+required-features = ["clap-plugins"]
+
+[[example]]
+name = "parameter_modulation_audio_demo"
+path = "examples/clap-plugins/parameter_modulation_audio_demo.rs"
+required-features = ["clap-plugins"]
+
+[[example]]
+name = "power_armor_audio_isolation"
+path = "examples/clap-plugins/power_armor_audio_isolation.rs"
+required-features = ["clap-plugins"]
+
+# Video examples
+[[example]]
+name = "camera_display"
+path = "examples/video/camera_display.rs"
+
+# Pipeline examples
+[[example]]
+name = "simple_pipeline"
+path = "examples/pipelines/simple_pipeline.rs"
 
 # MCP Server Binary
 [[bin]]

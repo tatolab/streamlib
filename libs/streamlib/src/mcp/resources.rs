@@ -5,7 +5,8 @@
 
 use super::{McpError, Result};
 use crate::core::ProcessorRegistry;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 /// MCP Resource representation
 #[derive(Debug, Clone, serde::Serialize)]
@@ -42,7 +43,7 @@ pub struct ResourceContent {
 ///
 /// This is called when an AI agent queries "resources/list"
 pub fn list_resources(registry: Arc<Mutex<ProcessorRegistry>>) -> Result<Vec<Resource>> {
-    let registry = registry.lock().unwrap();
+    let registry = registry.lock();
     let descriptors = registry.list();
 
     Ok(descriptors
@@ -70,7 +71,7 @@ pub fn read_resource(
         .ok_or_else(|| McpError::ResourceNotFound(format!("Invalid URI: {}", uri)))?;
 
     // Get descriptor from registry
-    let registry = registry.lock().unwrap();
+    let registry = registry.lock();
     let registration = registry
         .get(processor_name)
         .ok_or_else(|| McpError::ResourceNotFound(processor_name.to_string()))?;

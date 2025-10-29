@@ -15,6 +15,32 @@
 //!     clock = SoftwareClock::new(60.0);
 //! }
 //! ```
+//!
+//! # Important: Tick Rate vs. Buffer Sizes
+//!
+//! **Clock tick rate** (e.g., 60 Hz) is for **synchronization**, not data processing.
+//!
+//! - **Tick rate (60 Hz)**: How often processors get woken up to check for work
+//!   - Used for: polling ring buffers, synchronization, frame-independent timing
+//!   - Set via: `SoftwareClock::new(60.0)` or similar
+//!
+//! - **Buffer size (e.g., 2048 samples)**: The granularity of actual data processing
+//!   - Used for: audio plugin processing, efficient batch operations
+//!   - Set via: processor configuration, NOT derived from tick rate
+//!   - Example: `TestToneGenerator` uses 2048 samples per frame
+//!
+//! **These are independent concepts!** Do NOT calculate buffer sizes from tick rate:
+//!
+//! ```ignore
+//! // ❌ WRONG: Mixing tick rate with buffer size
+//! let buffer_size = sample_rate / fps;  // NO! This causes artifacts
+//!
+//! // ✅ CORRECT: Use natural buffer size for the processor
+//! let buffer_size = 2048;  // Standard audio plugin buffer size
+//! ```
+//!
+//! Audio processors may generate multiple buffers per tick, or accumulate data
+//! across multiple ticks. The tick rate provides timing, not data sizing.
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 

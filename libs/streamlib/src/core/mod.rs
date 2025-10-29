@@ -25,7 +25,7 @@ pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
 pub use error::{StreamError, Result};
 pub use events::TickBroadcaster;
 pub use gpu_context::GpuContext;
-pub use messages::{VideoFrame, AudioBuffer, DataMessage, MetadataValue};
+pub use messages::{VideoFrame, AudioFrame, AudioFormat, AudioBuffer, DataMessage, MetadataValue};
 pub use stream_processor::StreamProcessor;
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
@@ -33,6 +33,14 @@ pub use ports::{
 pub use processors::{
     CameraProcessor, CameraDevice, CameraOutputPorts,
     DisplayProcessor, WindowId, DisplayInputPorts,
+    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts,
+    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts,
+    AudioEffectProcessor, ParameterInfo, PluginInfo,
+    AudioEffectInputPorts, AudioEffectOutputPorts,
+    ClapEffectProcessor,
+    ParameterModulator, LfoWaveform,
+    ParameterAutomation,
+    TestToneGenerator,
 };
 
 #[cfg(feature = "debug-overlay")]

@@ -62,6 +62,19 @@ uv run pytest tests/
 
 **NEVER LIE ABOUT WHAT'S IMPLEMENTED.**
 
+**NEVER CUT CORNERS OR SKIP IMPLEMENTATION WHEN YOU HIT AN OBSTACLE.**
+
+When you encounter compilation errors or technical challenges:
+- ✅ **DO:** Debug the issue, read documentation, fix the errors properly
+- ✅ **DO:** Implement the feature completely and correctly
+- ✅ **DO:** Test that it actually works
+- ❌ **DON'T:** Skip to a simpler workaround without implementing the real thing
+- ❌ **DON'T:** Guess at values instead of reading actual parameter info
+- ❌ **DON'T:** Leave TODOs when asked to implement something
+- ❌ **DON'T:** Claim something works when you haven't tested it
+
+**If you're stuck, ask for help or clarification. Don't fake it.**
+
 ### Status Definitions
 
 **✅ IMPLEMENTED = Actually works when run**

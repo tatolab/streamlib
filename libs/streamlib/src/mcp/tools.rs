@@ -7,7 +7,8 @@ use super::{McpError, Result};
 use crate::core::{StreamRuntime, ProcessorRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::collections::HashSet;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -676,13 +677,13 @@ pub async fn execute_tool(
             // Access processors registry and clone the data we need
             let processors = {
                 let rt = runtime.lock().await;
-                let processors_map = rt.processors.lock().unwrap();
+                let processors_map = rt.processors.lock();
 
                 // Build processor list while holding the lock
                 processors_map
                     .iter()
                     .map(|(id, handle)| {
-                        let status = *handle.status.lock().unwrap();
+                        let status = *handle.status.lock();
                         serde_json::json!({
                             "id": id,
                             "name": handle.name,
@@ -714,7 +715,7 @@ pub async fn execute_tool(
             // Access connections registry and clone the data we need
             let connections = {
                 let rt = runtime.lock().await;
-                let connections_map = rt.connections.lock().unwrap();
+                let connections_map = rt.connections.lock();
 
                 // Build connections list while holding the lock
                 connections_map

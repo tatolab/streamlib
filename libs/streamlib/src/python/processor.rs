@@ -10,7 +10,7 @@ use super::types_ext::{PyStreamInput, PyStreamOutput, PyInputPorts, PyOutputPort
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 /// Input ports for Python processors (dynamically sized)
 pub struct PythonInputPorts {

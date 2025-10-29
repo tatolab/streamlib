@@ -4,7 +4,8 @@ use pyo3::prelude::*;
 use super::error::PyStreamError;
 use super::port::ProcessorPort;
 use super::decorators::ProcessorProxy;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use crate::StreamRuntime;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -110,7 +111,7 @@ impl PyStreamRuntime {
     fn add_stream(&self, py: Python<'_>, processor: Py<ProcessorProxy>) -> PyResult<()> {
         let name = processor.borrow(py).processor_name.clone();
 
-        let mut processors = self.processors.lock().unwrap();
+        let mut processors = self.processors.lock();
         processors.push(processor);
 
         tracing::info!("Added processor: {}", name);
@@ -134,7 +135,7 @@ impl PyStreamRuntime {
             ).into());
         }
 
-        let mut connections = self.connections.lock().unwrap();
+        let mut connections = self.connections.lock();
         connections.push((source, destination));
 
         Ok(())
@@ -149,10 +150,10 @@ impl PyStreamRuntime {
         println!("   Resolution: {}x{}", self.width, self.height);
         println!("   GPU: {}", if self.enable_gpu { "enabled" } else { "disabled" });
 
-        let processors = self.processors.lock().unwrap();
+        let processors = self.processors.lock();
         println!("   Processors: {}", processors.len());
 
-        let connections = self.connections.lock().unwrap();
+        let connections = self.connections.lock();
         println!("   Connections: {}", connections.len());
 
         // Instantiate the Rust runtime
@@ -281,7 +282,7 @@ impl PyStreamRuntime {
                             .ok_or_else(|| PyStreamError::Connection(
                                 format!("Python processor has no input port '{}'", port_name)
                             ))?;
-                        let mut python_input_guard = python_input_arc.lock().unwrap();
+                        let mut python_input_guard = python_input_arc.lock();
                         runtime.connect(
                             &mut camera.output_ports().video,
                             &mut *python_input_guard,
@@ -293,7 +294,7 @@ impl PyStreamRuntime {
                             .ok_or_else(|| PyStreamError::Connection(
                                 format!("Python processor has no output port '{}'", port_name)
                             ))?;
-                        let mut python_output_guard = python_output_arc.lock().unwrap();
+                        let mut python_output_guard = python_output_arc.lock();
                         runtime.connect(
                             &mut *python_output_guard,
                             &mut display.input_ports().video,
@@ -309,8 +310,8 @@ impl PyStreamRuntime {
                             .ok_or_else(|| PyStreamError::Connection(
                                 format!("Destination Python processor has no input port '{}'", dest_port_name)
                             ))?;
-                        let mut source_output_guard = source_output_arc.lock().unwrap();
-                        let mut dest_input_guard = dest_input_arc.lock().unwrap();
+                        let mut source_output_guard = source_output_arc.lock();
+                        let mut dest_input_guard = dest_input_arc.lock();
                         runtime.connect(
                             &mut *source_output_guard,
                             &mut *dest_input_guard,

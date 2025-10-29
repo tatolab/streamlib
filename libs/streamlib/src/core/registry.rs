@@ -5,7 +5,8 @@
 
 use super::{ProcessorDescriptor, StreamError};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use parking_lot::Mutex;
 
 /// Trait for types that provide processor descriptors for inventory registration
 ///
@@ -252,49 +253,37 @@ pub fn global_registry() -> Arc<Mutex<ProcessorRegistry>> {
 /// register_processor(descriptor).unwrap();
 /// ```
 pub fn register_processor(descriptor: ProcessorDescriptor) -> crate::Result<()> {
-    global_registry().lock().unwrap().register(descriptor)
+    global_registry().lock().register(descriptor)
 }
 
 /// List all registered processors
 pub fn list_processors() -> Vec<ProcessorDescriptor> {
-    global_registry().lock().unwrap().list()
+    global_registry().lock().list()
 }
 
 /// List processors filtered by tag
 pub fn list_processors_by_tag(tag: &str) -> Vec<ProcessorDescriptor> {
-    global_registry().lock().unwrap().list_by_tag(tag)
+    global_registry().lock().list_by_tag(tag)
 }
 
 /// Check if a processor is registered
 pub fn is_processor_registered(name: &str) -> bool {
-    global_registry().lock().unwrap().contains(name)
+    global_registry().lock().contains(name)
 }
 
 /// Unregister a processor
 pub fn unregister_processor(name: &str) -> bool {
-    global_registry().lock().unwrap().unregister(name)
+    global_registry().lock().unregister(name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{ProcessorDescriptor, TimedTick};
-
-    struct MockProcessor;
-
-    impl crate::StreamProcessor for MockProcessor {
-        fn process(&mut self, _tick: TimedTick) -> crate::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::core::ProcessorDescriptor;
 
     fn create_test_descriptor(name: &str) -> ProcessorDescriptor {
         ProcessorDescriptor::new(name, &format!("{} description", name))
             .with_tags(vec!["test", "mock"])
-    }
-
-    fn create_test_factory() -> ProcessorFactory {
-        Arc::new(|| Ok(Box::new(MockProcessor) as Box<dyn crate::StreamProcessor>))
     }
 
     #[test]
@@ -308,30 +297,25 @@ mod tests {
     fn test_register_and_get() {
         let mut registry = ProcessorRegistry::new();
         let descriptor = create_test_descriptor("TestProcessor");
-        let factory = create_test_factory();
 
-        registry.register(descriptor.clone(), factory).unwrap();
+        registry.register(descriptor.clone()).unwrap();
 
         assert_eq!(registry.len(), 1);
         assert!(registry.contains("TestProcessor"));
 
         let registration = registry.get("TestProcessor").unwrap();
         assert_eq!(registration.descriptor.name, "TestProcessor");
-        assert!(registration.factory.is_some());
     }
 
     #[test]
     fn test_register_duplicate() {
         let mut registry = ProcessorRegistry::new();
         let descriptor = create_test_descriptor("TestProcessor");
-        let factory = create_test_factory();
 
-        registry
-            .register(descriptor.clone(), factory.clone())
-            .unwrap();
+        registry.register(descriptor.clone()).unwrap();
 
         // Try to register again
-        let result = registry.register(descriptor, factory);
+        let result = registry.register(descriptor);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -340,32 +324,12 @@ mod tests {
     }
 
     #[test]
-    fn test_descriptor_only_registration() {
-        let mut registry = ProcessorRegistry::new();
-        let descriptor = create_test_descriptor("ExternalProcessor");
-
-        registry.register_descriptor_only(descriptor).unwrap();
-
-        assert_eq!(registry.len(), 1);
-
-        let registration = registry.get("ExternalProcessor").unwrap();
-        assert_eq!(registration.descriptor.name, "ExternalProcessor");
-        assert!(registration.factory.is_none());
-    }
-
-    #[test]
     fn test_list_processors() {
         let mut registry = ProcessorRegistry::new();
 
-        registry
-            .register(create_test_descriptor("Proc1"), create_test_factory())
-            .unwrap();
-        registry
-            .register(create_test_descriptor("Proc2"), create_test_factory())
-            .unwrap();
-        registry
-            .register_descriptor_only(create_test_descriptor("Proc3"))
-            .unwrap();
+        registry.register(create_test_descriptor("Proc1")).unwrap();
+        registry.register(create_test_descriptor("Proc2")).unwrap();
+        registry.register(create_test_descriptor("Proc3")).unwrap();
 
         let list = registry.list();
         assert_eq!(list.len(), 3);
@@ -387,9 +351,9 @@ mod tests {
         let desc3 =
             ProcessorDescriptor::new("Proc3", "Description").with_tags(vec!["source", "audio"]);
 
-        registry.register(desc1, create_test_factory()).unwrap();
-        registry.register(desc2, create_test_factory()).unwrap();
-        registry.register(desc3, create_test_factory()).unwrap();
+        registry.register(desc1).unwrap();
+        registry.register(desc2).unwrap();
+        registry.register(desc3).unwrap();
 
         let sources = registry.list_by_tag("source");
         assert_eq!(sources.len(), 2);
@@ -402,50 +366,11 @@ mod tests {
     }
 
     #[test]
-    fn test_create_instance() {
-        let mut registry = ProcessorRegistry::new();
-        let descriptor = create_test_descriptor("TestProcessor");
-        let factory = create_test_factory();
-
-        registry.register(descriptor, factory).unwrap();
-
-        let instance = registry.create_instance("TestProcessor");
-        assert!(instance.is_ok());
-    }
-
-    #[test]
-    fn test_create_instance_not_found() {
-        let registry = ProcessorRegistry::new();
-
-        let result = registry.create_instance("NonExistent");
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(e.to_string().contains("not found"));
-        }
-    }
-
-    #[test]
-    fn test_create_instance_no_factory() {
-        let mut registry = ProcessorRegistry::new();
-        let descriptor = create_test_descriptor("ExternalProcessor");
-
-        registry.register_descriptor_only(descriptor).unwrap();
-
-        let result = registry.create_instance("ExternalProcessor");
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(e.to_string().contains("no factory"));
-        }
-    }
-
-    #[test]
     fn test_unregister() {
         let mut registry = ProcessorRegistry::new();
         let descriptor = create_test_descriptor("TestProcessor");
 
-        registry
-            .register(descriptor, create_test_factory())
-            .unwrap();
+        registry.register(descriptor).unwrap();
         assert_eq!(registry.len(), 1);
 
         let removed = registry.unregister("TestProcessor");
@@ -460,12 +385,8 @@ mod tests {
     fn test_clear() {
         let mut registry = ProcessorRegistry::new();
 
-        registry
-            .register(create_test_descriptor("Proc1"), create_test_factory())
-            .unwrap();
-        registry
-            .register(create_test_descriptor("Proc2"), create_test_factory())
-            .unwrap();
+        registry.register(create_test_descriptor("Proc1")).unwrap();
+        registry.register(create_test_descriptor("Proc2")).unwrap();
 
         assert_eq!(registry.len(), 2);
 
@@ -479,9 +400,8 @@ mod tests {
         // In a real scenario, you'd want to reset the global state or use test isolation
 
         let descriptor = create_test_descriptor("GlobalTestProcessor");
-        let factory = create_test_factory();
 
-        register_processor(descriptor, factory).unwrap();
+        register_processor(descriptor).unwrap();
 
         assert!(is_processor_registered("GlobalTestProcessor"));
 

@@ -136,6 +136,10 @@ mod tests {
                 .with_tags(vec!["sink", "display", "window", "output", "render"])
             )
         }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
 
     impl DisplayProcessor for MockDisplayProcessor {

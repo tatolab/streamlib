@@ -30,7 +30,8 @@ pub use error::{McpError, Result};
 pub use package_manager::{PackageManager, PackageInfo, PackageStatus, ApprovalPolicy};
 
 use crate::core::{ProcessorRegistry, StreamRuntime};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::future::Future;
 use std::collections::HashSet;
 use tokio::sync::Mutex as TokioMutex;

@@ -4,7 +4,8 @@ use pyo3::prelude::*;
 use pyo3::exceptions::PyAttributeError;
 use crate::core::{StreamInput, StreamOutput, VideoFrame, TimedTick, GpuContext};
 use super::PyVideoFrame;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 
 /// Python wrapper for StreamInput<VideoFrame>
@@ -34,13 +35,13 @@ impl PyStreamInput {
 
     /// Read the latest frame from the input port
     fn read_latest(&self) -> Option<PyVideoFrame> {
-        let port = self.port.lock().unwrap();
+        let port = self.port.lock();
         port.read_latest().map(PyVideoFrame::from_rust)
     }
 
     /// Check if port has data available
     fn has_data(&self) -> bool {
-        let port = self.port.lock().unwrap();
+        let port = self.port.lock();
         port.read_latest().is_some()
     }
 
@@ -85,7 +86,7 @@ impl PyStreamOutput {
 
     /// Write a frame to the output port
     fn write(&self, frame: PyVideoFrame) {
-        let port = self.port.lock().unwrap();
+        let port = self.port.lock();
         port.write(frame.into_rust());
     }
 

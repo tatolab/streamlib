@@ -25,7 +25,7 @@
 
 use streamlib::{global_registry, mcp::McpServer};
 use streamlib::core::StreamRuntime;
-use streamlib::{request_camera_permission, request_display_permission};
+use streamlib::{request_camera_permission, request_display_permission, request_audio_permission};
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
@@ -47,6 +47,10 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
+    /// Allow all permissions (camera, display, audio)
+    #[arg(long)]
+    allow_all: bool,
+
     /// Allow camera access (requests permission upfront)
     #[arg(long)]
     allow_camera: bool,
@@ -54,6 +58,10 @@ struct Args {
     /// Allow display window creation
     #[arg(long)]
     allow_display: bool,
+
+    /// Allow audio input (microphone access)
+    #[arg(long)]
+    allow_audio: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -71,9 +79,15 @@ fn main() -> anyhow::Result<()> {
 
     // Request permissions on main thread BEFORE entering async runtime
     // This ensures platform permission dialogs appear correctly
+
+    // --allow-all overrides specific flags
+    let allow_camera = args.allow_all || args.allow_camera;
+    let allow_display = args.allow_all || args.allow_display;
+    let allow_audio = args.allow_all || args.allow_audio;
+
     let mut permissions = std::collections::HashSet::new();
 
-    if args.allow_camera {
+    if allow_camera {
         tracing::info!("Requesting camera permission...");
         if request_camera_permission()? {
             tracing::info!("Camera permission granted");
@@ -83,13 +97,23 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    if args.allow_display {
+    if allow_display {
         tracing::info!("Requesting display permission...");
         if request_display_permission()? {
             tracing::info!("Display permission granted");
             permissions.insert("display".to_string());
         } else {
             anyhow::bail!("Display permission denied by user");
+        }
+    }
+
+    if allow_audio {
+        tracing::info!("Requesting audio permission...");
+        if request_audio_permission()? {
+            tracing::info!("Audio permission granted");
+            permissions.insert("audio".to_string());
+        } else {
+            anyhow::bail!("Audio permission denied by user");
         }
     }
 

@@ -54,12 +54,20 @@ pub mod core;
 pub use core::{
     RingBuffer, Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock,
     StreamError, Result, TickBroadcaster, GpuContext,
-    VideoFrame, AudioBuffer, DataMessage, MetadataValue,
+    VideoFrame, AudioFrame, AudioFormat, AudioBuffer, DataMessage, MetadataValue,
     StreamProcessor, StreamOutput, StreamInput, PortType, PortMessage,
-    // Note: CameraProcessor and DisplayProcessor traits are in core,
+    // Note: CameraProcessor, DisplayProcessor, and AudioProcessor traits are in core,
     // but we'll re-export platform implementations below
     CameraDevice, CameraOutputPorts,
     WindowId, DisplayInputPorts,
+    AudioDevice, AudioOutputInputPorts,
+    AudioInputDevice, AudioCaptureOutputPorts,
+    AudioEffectProcessor, ParameterInfo, PluginInfo,
+    AudioEffectInputPorts, AudioEffectOutputPorts,
+    ClapEffectProcessor,
+    ParameterModulator, LfoWaveform,
+    ParameterAutomation,
+    TestToneGenerator,
     ShaderId, // from runtime, but we'll override StreamRuntime below
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
@@ -82,13 +90,15 @@ pub mod apple;
 pub use apple::{
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
+    AppleAudioOutputProcessor as AudioOutputProcessor,
+    AppleAudioCaptureProcessor as AudioCaptureProcessor,
     WgpuBridge,
     MetalDevice,
 };
 
 // Platform permission functions
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::permissions::{request_camera_permission, request_display_permission};
+pub use apple::permissions::{request_camera_permission, request_display_permission, request_audio_permission};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub mod permissions {
@@ -118,10 +128,21 @@ pub mod permissions {
         tracing::info!("Display permission granted (no system prompt on this platform)");
         Ok(true)
     }
+
+    /// Request audio input permission (stub for non-Apple platforms)
+    ///
+    /// On Linux/Windows, audio permissions are typically handled at the OS level
+    /// or don't require explicit runtime requests. This stub always returns true.
+    ///
+    /// Platform-specific implementations should be added as needed.
+    pub fn request_audio_permission() -> Result<bool> {
+        tracing::info!("Audio permission granted (no system prompt on this platform)");
+        Ok(true)
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-pub use permissions::{request_camera_permission, request_display_permission};
+pub use permissions::{request_camera_permission, request_display_permission, request_audio_permission};
 
 // Optional MCP module (feature-gated)
 #[cfg(feature = "mcp")]
@@ -133,7 +154,7 @@ pub mod python;
 
 // Platform-configured runtime wrapper
 mod runtime;
-pub use runtime::StreamRuntime;
+pub use runtime::{StreamRuntime, AudioConfig};
 
 // Platform information
 pub mod platform {
