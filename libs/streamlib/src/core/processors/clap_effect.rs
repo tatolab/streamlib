@@ -36,7 +36,6 @@
 //! let output = reverb.process_audio(&input_frame)?;
 //! ```
 
-#[cfg(feature = "clap-plugins")]
 use clack_host::{
     prelude::*,
     host::HostInfo,
@@ -51,7 +50,6 @@ use clack_host::{
     utils::{ClapId, Cookie},
 };
 
-#[cfg(feature = "clap-plugins")]
 use clack_extensions::params::{PluginParams, ParamInfoBuffer};
 
 use crate::core::{
@@ -60,12 +58,8 @@ use crate::core::{
 
 use super::audio_effect::{AudioEffectProcessor, ParameterInfo, PluginInfo};
 
-#[cfg(feature = "clap-plugins")]
 use parking_lot::Mutex;
-
-#[cfg(feature = "clap-plugins")]
 use std::sync::Arc;
-
 use std::path::Path;
 
 /// CLAP plugin effect processor
@@ -120,7 +114,6 @@ use std::path::Path;
 /// let config = runtime.audio_config();
 /// plugin.activate(config.sample_rate, config.buffer_size)?;
 /// ```
-#[cfg(feature = "clap-plugins")]
 pub struct ClapEffectProcessor {
     /// Plugin metadata
     plugin_info: PluginInfo,
@@ -147,11 +140,9 @@ pub struct ClapEffectProcessor {
 // SAFETY: ClapEffectProcessor is Send despite PluginBundle containing raw pointers
 // because all shared state is protected by Arc<Mutex<...>> which ensures thread safety.
 // The plugin bundle itself is never accessed across threads without synchronization.
-#[cfg(feature = "clap-plugins")]
 unsafe impl Send for ClapEffectProcessor {}
 
 /// Shared state accessible from all threads
-#[cfg(feature = "clap-plugins")]
 struct SharedState {
     /// Current parameter values (id -> normalized value)
     parameters: std::collections::HashMap<u32, f64>,
@@ -182,7 +173,6 @@ struct SharedState {
 /// # Panics
 ///
 /// Panics if frame is not stereo (2 channels)
-#[cfg(feature = "clap-plugins")]
 fn deinterleave_audio_frame(frame: &AudioFrame) -> (Vec<f32>, Vec<f32>) {
     assert_eq!(frame.channels, 2, "Only stereo audio supported for CLAP plugins");
 
@@ -221,7 +211,6 @@ fn deinterleave_audio_frame(frame: &AudioFrame) -> (Vec<f32>, Vec<f32>) {
 /// # Panics
 ///
 /// Panics if left and right have different lengths
-#[cfg(feature = "clap-plugins")]
 fn interleave_to_audio_frame(
     left: &[f32],
     right: &[f32],
@@ -244,12 +233,10 @@ fn interleave_to_audio_frame(
 }
 
 /// Host data passed to plugin (main thread context)
-#[cfg(feature = "clap-plugins")]
 struct HostData {
     shared: Arc<Mutex<SharedState>>,
 }
 
-#[cfg(feature = "clap-plugins")]
 impl HostData {
     fn new(shared: Arc<Mutex<SharedState>>) -> Self {
         Self { shared }
@@ -257,19 +244,16 @@ impl HostData {
 }
 
 /// Shared host data accessible from all contexts
-#[cfg(feature = "clap-plugins")]
 struct HostShared {
     state: Arc<Mutex<SharedState>>,
 }
 
-#[cfg(feature = "clap-plugins")]
 impl HostHandlers for HostData {
     type Shared<'a> = HostShared;
     type MainThread<'a> = (); // No additional main thread data needed
     type AudioProcessor<'a> = (); // No additional audio processor data needed
 }
 
-#[cfg(feature = "clap-plugins")]
 impl<'a> SharedHandler<'a> for HostShared {
     fn request_restart(&self) {
         tracing::debug!("Plugin requested restart");
@@ -288,7 +272,6 @@ impl<'a> SharedHandler<'a> for HostShared {
     }
 }
 
-#[cfg(feature = "clap-plugins")]
 impl ClapEffectProcessor {
     /// Load a specific plugin by name from a CLAP bundle
     ///
@@ -432,7 +415,6 @@ impl ClapEffectProcessor {
     }
 }
 
-#[cfg(feature = "clap-plugins")]
 impl AudioEffectProcessor for ClapEffectProcessor {
     /// Load the first plugin from a CLAP bundle
     ///
@@ -792,7 +774,6 @@ impl AudioEffectProcessor for ClapEffectProcessor {
     // Parameter changes are still batched via ParamValueEvents in process_audio()
 }
 
-#[cfg(feature = "clap-plugins")]
 impl StreamProcessor for ClapEffectProcessor {
     fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
         use crate::core::schema::{ProcessorDescriptor, AudioRequirements};
@@ -832,17 +813,231 @@ impl StreamProcessor for ClapEffectProcessor {
     }
 }
 
-// Stub implementation when clap-plugins feature is disabled
-#[cfg(not(feature = "clap-plugins"))]
-#[derive(Debug)]
-pub struct ClapEffectProcessor;
+/// Information about a discovered CLAP plugin
+#[derive(Debug, Clone)]
+pub struct ClapPluginInfo {
+    /// Full path to the plugin bundle
+    pub path: std::path::PathBuf,
 
-#[cfg(not(feature = "clap-plugins"))]
-impl ClapEffectProcessor {
-    pub fn load<P: AsRef<Path>>(_path: P) -> Result<Self> {
-        Err(StreamError::Configuration(
-            "CLAP plugin support not enabled. Enable 'clap-plugins' feature.".into()
-        ))
+    /// Plugin ID (e.g., "com.u-he.diva")
+    pub id: String,
+
+    /// Plugin name (e.g., "Diva")
+    pub name: String,
+
+    /// Vendor name
+    pub vendor: String,
+
+    /// Version string
+    pub version: String,
+
+    /// Plugin description
+    pub description: String,
+
+    /// Plugin features/categories (e.g., ["audio-effect", "reverb"])
+    pub features: Vec<String>,
+}
+
+/// CLAP plugin scanner for discovering installed plugins
+pub struct ClapScanner;
+
+impl ClapScanner {
+    /// Scan system directories for installed CLAP plugins
+    ///
+    /// Returns a list of all discovered plugins with their metadata.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use streamlib::ClapScanner;
+    ///
+    /// let plugins = ClapScanner::scan_system_plugins()?;
+    /// for plugin in plugins {
+    ///     println!("{} by {} ({})", plugin.name, plugin.vendor, plugin.path.display());
+    /// }
+    /// ```
+    pub fn scan_system_plugins() -> Result<Vec<ClapPluginInfo>> {
+        let paths = Self::get_system_paths();
+        let mut all_plugins = Vec::new();
+
+        for path in paths {
+            match Self::scan_directory(&path) {
+                Ok(plugins) => all_plugins.extend(plugins),
+                Err(e) => {
+                    tracing::debug!("Failed to scan directory {:?}: {}", path, e);
+                    // Continue scanning other directories
+                }
+            }
+        }
+
+        Ok(all_plugins)
+    }
+
+    /// Get standard CLAP plugin installation directories for the current platform
+    fn get_system_paths() -> Vec<std::path::PathBuf> {
+        let mut paths = Vec::new();
+
+        #[cfg(target_os = "macos")]
+        {
+            // macOS paths
+            if let Some(home) = std::env::var_os("HOME") {
+                paths.push(std::path::PathBuf::from(home).join("Library/Audio/Plug-Ins/CLAP"));
+            }
+            paths.push(std::path::PathBuf::from("/Library/Audio/Plug-Ins/CLAP"));
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // Linux paths
+            if let Some(home) = std::env::var_os("HOME") {
+                paths.push(std::path::PathBuf::from(home).join(".clap"));
+            }
+            paths.push(std::path::PathBuf::from("/usr/lib/clap"));
+            paths.push(std::path::PathBuf::from("/usr/local/lib/clap"));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Windows paths
+            if let Some(common_files) = std::env::var_os("CommonProgramFiles") {
+                paths.push(std::path::PathBuf::from(common_files).join("CLAP"));
+            }
+            if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+                paths.push(std::path::PathBuf::from(local_app_data).join("Programs/Common/CLAP"));
+            }
+        }
+
+        paths
+    }
+
+    /// Scan a specific directory for CLAP plugins
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Directory to scan
+    ///
+    /// # Returns
+    ///
+    /// List of plugins found in the directory
+    pub fn scan_directory<P: AsRef<Path>>(path: P) -> Result<Vec<ClapPluginInfo>> {
+        let path = path.as_ref();
+
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut plugins = Vec::new();
+
+        for entry in std::fs::read_dir(path)
+            .map_err(|e| StreamError::Configuration(format!("Failed to read directory {:?}: {}", path, e)))?
+        {
+            let entry = entry
+                .map_err(|e| StreamError::Configuration(format!("Failed to read entry: {}", e)))?;
+            let entry_path = entry.path();
+
+            // Check if it's a CLAP bundle
+            if Self::is_clap_bundle(&entry_path) {
+                match Self::scan_plugin_bundle(&entry_path) {
+                    Ok(bundle_plugins) => plugins.extend(bundle_plugins),
+                    Err(e) => {
+                        tracing::debug!("Failed to scan bundle {:?}: {}", entry_path, e);
+                        // Continue with other plugins
+                    }
+                }
+            }
+        }
+
+        Ok(plugins)
+    }
+
+    /// Check if a path is a CLAP plugin bundle
+    fn is_clap_bundle(path: &Path) -> bool {
+        // CLAP bundles end with .clap extension
+        path.extension().and_then(|s| s.to_str()) == Some("clap")
+    }
+
+    /// Scan a single plugin bundle and extract metadata
+    fn scan_plugin_bundle(path: &Path) -> Result<Vec<ClapPluginInfo>> {
+        // Get the actual binary path within the bundle
+        let binary_path = Self::get_bundle_binary_path(path)?;
+
+        // Load the plugin bundle
+        // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
+        let bundle = unsafe {
+            PluginBundle::load(&binary_path)
+                .map_err(|e| StreamError::Configuration(format!("Failed to load bundle {:?}: {:?}", path, e)))?
+        };
+
+        // Get plugin factory
+        let factory = bundle.get_plugin_factory()
+            .ok_or_else(|| StreamError::Configuration("Plugin has no factory".into()))?;
+
+        // Iterate through all plugins in the bundle
+        let mut plugins = Vec::new();
+
+        for desc in factory.plugin_descriptors() {
+            plugins.push(ClapPluginInfo {
+                path: path.to_path_buf(),
+                id: desc.id()
+                    .and_then(|id| id.to_str().ok())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                name: desc.name()
+                    .and_then(|n| n.to_str().ok())
+                    .unwrap_or("Unknown")
+                    .to_string(),
+                vendor: desc.vendor()
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("Unknown")
+                    .to_string(),
+                version: desc.version()
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("Unknown")
+                    .to_string(),
+                description: desc.description()
+                    .and_then(|d| d.to_str().ok())
+                    .unwrap_or("")
+                    .to_string(),
+                // Features are optional metadata - leave empty for now
+                // TODO: Parse features() properly when needed
+                features: Vec::new(),
+            });
+        }
+
+        Ok(plugins)
+    }
+
+    /// Get the actual binary path within a CLAP bundle
+    ///
+    /// On macOS, CLAP bundles are app bundles with structure:
+    /// MyPlugin.clap/Contents/MacOS/MyPlugin
+    fn get_bundle_binary_path(bundle_path: &Path) -> Result<std::path::PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            // macOS bundle structure: MyPlugin.clap/Contents/MacOS/MyPlugin
+            let binary_name = bundle_path
+                .file_stem()
+                .ok_or_else(|| StreamError::Configuration("Invalid bundle path".into()))?;
+
+            let binary_path = bundle_path
+                .join("Contents")
+                .join("MacOS")
+                .join(binary_name);
+
+            if binary_path.exists() {
+                Ok(binary_path)
+            } else {
+                Err(StreamError::Configuration(
+                    format!("Binary not found in bundle: {:?}", binary_path)
+                ))
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // On Linux/Windows, the .clap file is the binary itself
+            Ok(bundle_path.to_path_buf())
+        }
     }
 }
 
@@ -850,15 +1045,6 @@ impl ClapEffectProcessor {
 mod tests {
     use super::*;
 
-    #[test]
-    #[cfg(not(feature = "clap-plugins"))]
-    fn test_clap_disabled_error() {
-        let result = ClapEffectProcessor::load("test.clap");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not enabled"));
-    }
-
-    #[cfg(feature = "clap-plugins")]
     mod clap_tests {
         use super::*;
 

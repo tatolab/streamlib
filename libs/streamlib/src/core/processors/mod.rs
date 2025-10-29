@@ -24,7 +24,7 @@ pub use audio_effect::{
     AudioEffectProcessor, ParameterInfo, PluginInfo,
     AudioEffectInputPorts, AudioEffectOutputPorts,
 };
-pub use clap_effect::ClapEffectProcessor;
+pub use clap_effect::{ClapEffectProcessor, ClapScanner, ClapPluginInfo};
 pub use parameter_modulation::{ParameterModulator, LfoWaveform};
 pub use parameter_automation::ParameterAutomation;
 pub use test_tone::TestToneGenerator;

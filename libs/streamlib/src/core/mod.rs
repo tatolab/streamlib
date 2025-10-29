@@ -37,7 +37,7 @@ pub use processors::{
     AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts,
     AudioEffectProcessor, ParameterInfo, PluginInfo,
     AudioEffectInputPorts, AudioEffectOutputPorts,
-    ClapEffectProcessor,
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
     TestToneGenerator,
