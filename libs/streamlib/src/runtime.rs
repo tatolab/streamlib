@@ -6,6 +6,9 @@
 
 use crate::core::{Result, StreamProcessor, StreamInput, StreamOutput, ports::PortMessage};
 
+// Re-export AudioConfig from core
+pub use crate::core::runtime::AudioConfig;
+
 /// Platform-configured StreamRuntime
 ///
 /// This wraps `crate::core::StreamRuntime` and automatically configures
@@ -51,5 +54,29 @@ impl StreamRuntime {
     /// Stop the runtime
     pub async fn stop(&mut self) -> Result<()> {
         self.inner.stop().await
+    }
+
+    /// Get the global audio configuration
+    ///
+    /// All audio processors should use these settings to ensure
+    /// sample rate compatibility across the pipeline.
+    pub fn audio_config(&self) -> AudioConfig {
+        self.inner.audio_config()
+    }
+
+    /// Set the global audio configuration
+    ///
+    /// **Must be called before starting the runtime**. Changing audio config
+    /// after processors are running may cause sample rate mismatches.
+    pub fn set_audio_config(&mut self, config: AudioConfig) {
+        self.inner.set_audio_config(config)
+    }
+
+    /// Validate that an AudioFrame matches the runtime's audio configuration
+    ///
+    /// This checks that the frame's sample rate and channel count match the
+    /// runtime's global audio config.
+    pub fn validate_audio_frame(&self, frame: &crate::core::AudioFrame) -> Result<()> {
+        self.inner.validate_audio_frame(frame)
     }
 }

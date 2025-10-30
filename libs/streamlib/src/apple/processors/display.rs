@@ -22,10 +22,12 @@ static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 /// Apple-specific display processor
 ///
 /// Each instance manages one NSWindow with a CAMetalLayer for Metal rendering.
-/// Accepts VideoFrame input and renders to screen.
+/// Accepts VideoFrame input and renders to screen using GPU-accelerated Metal blits.
 ///
-/// NOTE: Currently this is a stub that doesn't actually render.
-/// TODO: Implement actual rendering from VideoFrame GPU textures.
+/// Rendering is fully implemented:
+/// - Unwraps WebGPU textures to Metal textures (zero-copy via WgpuBridge)
+/// - Blits to CAMetalLayer drawable with automatic RGBA→BGRA conversion
+/// - Presents frames at runtime tick rate (typically 60 FPS)
 pub struct AppleDisplayProcessor {
     // Window components (will be created on start)
     window: Option<Retained<NSWindow>>,

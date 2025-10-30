@@ -1,5 +1,5 @@
 # Root workspace configuration for streamlib
-# This is NOT a package - it coordinates workspace members
+# This coordinates the workspace and provides testing infrastructure
 
 [tool.uv.workspace]
 members = [
@@ -7,46 +7,33 @@ members = [
 ]
 
 [tool.uv]
+# uv will automatically download Python 3.11+ if not found
+# This ignores the macOS system Python 3.9
 dev-dependencies = [
-    # Testing
+    # Testing tools
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
-    # WebGPU core (required for all examples)
-    "wgpu>=0.25.0",
-    "glfw>=2.7.0",
-    # ML inference (ONNX Runtime)
-    "onnxruntime>=1.19.0",
-    "onnx>=1.15.0",
-    # macOS camera capture
-    "pyobjc-framework-AVFoundation>=10.0",
-    "pyobjc-framework-CoreMedia>=10.0",
-    "pyobjc-framework-Metal>=10.0",
-    # Audio capture (uses PortAudio/CoreAudio on macOS)
-    "sounddevice>=0.4.6",
-    # Audio file I/O
-    "scipy>=1.11.0",
-    # Text overlays
-    "Pillow>=10.0.0",
-    "rendercanvas>=2.2.1",
-    "mkdocs>=1.6.1",
-    "mkdocs-material>=9.6.21",
-    "mkdocs-mermaid2-plugin>=1.2.2",
-    "mkdocstrings>=0.30.1",
-    "mkdocstrings-python>=1.18.2",
 ]
 
 [tool.uv.sources]
 streamlib = { workspace = true }
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["libs/streamlib/tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E501"]
+
+[project]
+name = "streamlib-workspace"
+version = "0.1.0"
+description = "Workspace root for streamlib"
+requires-python = ">=3.11"
+dependencies = []

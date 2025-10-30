@@ -7,7 +7,8 @@ use crate::core::{
     VideoFrame, TimedTick, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::ffi::c_void;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -75,7 +76,7 @@ define_class!(
             // Store in global frame holder
             if let Some(storage) = FRAME_STORAGE.get() {
                 let frame_holder = FrameHolder { pixel_buffer };
-                let mut latest = storage.lock().unwrap();
+                let mut latest = storage.lock();
                 *latest = Some(frame_holder);
             }
         }
@@ -442,7 +443,7 @@ impl StreamProcessor for AppleCameraProcessor {
     fn process(&mut self, tick: TimedTick) -> Result<()> {
         // Try to get the latest frame from the delegate
         let frame_holder = {
-            let mut latest = self.latest_frame.lock().unwrap();
+            let mut latest = self.latest_frame.lock();
             latest.take() // Take ownership, leaving None
         };
 

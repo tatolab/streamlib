@@ -1,0 +1,18 @@
+[project]
+name = "camera-with-bouncing-ball"
+version = "0.1.0"
+description = "Camera with bouncing ball overlay example"
+requires-python = ">=3.10"
+dependencies = [
+    "wgpu>=0.25.0",
+    "glfw>=2.7.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "streamlib",
+]
+
+[tool.uv.sources]
+streamlib = { path = "../../libs/streamlib" }

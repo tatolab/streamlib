@@ -1,7 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "libs/streamlib"            # All-in-one: core, apple, mcp, python (feature-gated)
+    "libs/streamlib",           # All-in-one: core, apple, mcp, python (feature-gated)
+    "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
+    "examples/simple-pipeline", # Example: Basic processing pipeline
+    "examples/camera-display",  # Example: Camera capture and display
+    "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP
+    # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 
 [workspace.package]

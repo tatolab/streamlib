@@ -50,7 +50,8 @@ use super::{Result, StreamError};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::thread::JoinHandle;
 
 /// Opaque shader ID (for future GPU operations)
@@ -59,6 +60,33 @@ pub struct ShaderId(pub u64);
 
 /// Unique identifier for processors in the runtime
 pub type ProcessorId = String;
+
+/// Global audio configuration for the runtime
+///
+/// All audio processors (microphone, CLAP plugins, speakers) should use
+/// these settings to ensure sample rate compatibility across the pipeline.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioConfig {
+    /// Sample rate in Hz (e.g., 48000, 44100)
+    pub sample_rate: u32,
+
+    /// Number of audio channels (1 = mono, 2 = stereo)
+    pub channels: u32,
+
+    /// Buffer size in frames (e.g., 512, 1024, 2048)
+    /// Smaller = lower latency, but higher CPU usage
+    pub buffer_size: usize,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            sample_rate: 48000,  // CD quality+
+            channels: 2,         // Stereo
+            buffer_size: 2048,   // ~43ms latency at 48kHz
+        }
+    }
+}
 
 /// Status of a processor in the runtime
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +209,7 @@ pub struct StreamRuntime {
 
     /// Handler threads (spawned on start)
     /// TODO: Remove after full migration to processor registry
+    #[allow(dead_code)]
     handler_threads: Vec<JoinHandle<()>>,
 
     /// Clock task handle (spawned on start)
@@ -205,6 +234,10 @@ pub struct StreamRuntime {
 
     /// Counter for generating unique connection IDs
     next_connection_id: usize,
+
+    /// Global audio configuration
+    /// All audio processors should use these settings for sample rate compatibility
+    audio_config: AudioConfig,
 }
 
 impl StreamRuntime {
@@ -236,7 +269,81 @@ impl StreamRuntime {
             next_processor_id: 0,
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
+            audio_config: AudioConfig::default(),
         }
+    }
+
+    /// Get the global audio configuration
+    ///
+    /// All audio processors should use these settings to ensure
+    /// sample rate compatibility across the pipeline.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let config = runtime.audio_config();
+    /// plugin.activate(config.sample_rate, config.buffer_size)?;
+    /// ```
+    pub fn audio_config(&self) -> AudioConfig {
+        self.audio_config
+    }
+
+    /// Set the global audio configuration
+    ///
+    /// **Must be called before starting the runtime**. Changing audio config
+    /// after processors are running may cause sample rate mismatches.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// runtime.set_audio_config(AudioConfig {
+    ///     sample_rate: 44100,  // 44.1kHz
+    ///     channels: 2,
+    ///     buffer_size: 1024,   // Lower latency
+    /// });
+    /// ```
+    pub fn set_audio_config(&mut self, config: AudioConfig) {
+        if self.running {
+            tracing::warn!("Changing audio config while runtime is running may cause issues");
+        }
+        self.audio_config = config;
+    }
+
+    /// Validate that an AudioFrame matches the runtime's audio configuration
+    ///
+    /// This checks that the frame's sample rate and channel count match the
+    /// runtime's global audio config. Use this when processing audio to ensure
+    /// pipeline-wide consistency.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// if let Err(e) = runtime.validate_audio_frame(&frame) {
+    ///     tracing::warn!("Audio config mismatch: {}", e);
+    /// }
+    /// ```
+    pub fn validate_audio_frame(&self, frame: &crate::core::AudioFrame) -> Result<()> {
+        if frame.sample_rate != self.audio_config.sample_rate {
+            return Err(StreamError::Configuration(format!(
+                "AudioFrame sample rate mismatch: expected {}Hz (runtime config), got {}Hz. \
+                 This can cause pitch shifts and audio artifacts. \
+                 Ensure all audio processors use runtime.audio_config() when activating.",
+                self.audio_config.sample_rate,
+                frame.sample_rate
+            )));
+        }
+
+        if frame.channels != self.audio_config.channels {
+            return Err(StreamError::Configuration(format!(
+                "AudioFrame channel count mismatch: expected {} channels (runtime config), got {} channels. \
+                 This can cause audio artifacts. \
+                 Ensure all audio processors use runtime.audio_config() when activating.",
+                self.audio_config.channels,
+                frame.channels
+            )));
+        }
+
+        Ok(())
     }
 
     /// Create runtime with custom clock
@@ -271,6 +378,7 @@ impl StreamRuntime {
             next_processor_id: 0,
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
+            audio_config: AudioConfig::default(),
         }
     }
 
@@ -344,7 +452,7 @@ impl StreamRuntime {
 
         // Add to processor registry
         {
-            let mut processors = self.processors.lock().unwrap();
+            let mut processors = self.processors.lock();
             processors.insert(id.clone(), handle);
         }
 
@@ -379,7 +487,7 @@ impl StreamRuntime {
     /// ```
     pub async fn add_processor_runtime(
         &mut self,
-        mut processor: Box<dyn StreamProcessor>,
+        processor: Box<dyn StreamProcessor>,
     ) -> Result<ProcessorId> {
         // 1. Verify runtime is running
         if !self.running {
@@ -406,7 +514,7 @@ impl StreamRuntime {
 
         // 5. Subscribe processor to broadcaster
         let tick_rx = {
-            let mut broadcaster = self.broadcaster.lock().unwrap();
+            let mut broadcaster = self.broadcaster.lock();
             broadcaster.subscribe()
         };
 
@@ -424,7 +532,7 @@ impl StreamRuntime {
 
             // Call on_start lifecycle hook with GPU context
             {
-                let mut processor = processor_for_thread.lock().unwrap();
+                let mut processor = processor_for_thread.lock();
                 if let Err(e) = processor.on_start(&processor_gpu_context) {
                     tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                     return;
@@ -437,7 +545,7 @@ impl StreamRuntime {
                     recv(tick_rx) -> result => {
                         match result {
                             Ok(tick) => {
-                                let mut processor = processor_for_thread.lock().unwrap();
+                                let mut processor = processor_for_thread.lock();
                                 if let Err(e) = processor.process(tick) {
                                     tracing::error!("[{}] process() error: {}", id_for_thread, e);
                                     // Continue processing (errors are isolated)
@@ -464,7 +572,7 @@ impl StreamRuntime {
 
             // Call on_stop lifecycle hook
             {
-                let mut processor = processor_for_thread.lock().unwrap();
+                let mut processor = processor_for_thread.lock();
                 if let Err(e) = processor.on_stop() {
                     tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
                 }
@@ -484,7 +592,7 @@ impl StreamRuntime {
         };
 
         {
-            let mut processors = self.processors.lock().unwrap();
+            let mut processors = self.processors.lock();
             processors.insert(processor_id.clone(), proc_handle);
         }
 
@@ -512,7 +620,7 @@ impl StreamRuntime {
         );
 
         {
-            let mut connections = self.connections.lock().unwrap();
+            let mut connections = self.connections.lock();
             connections.insert(connection_id.clone(), connection);
         }
 
@@ -555,7 +663,7 @@ impl StreamRuntime {
         #[cfg(any(feature = "python", feature = "python-embed"))]
         if let Some(python) = processor.as_any_mut().downcast_mut::<PythonProcessor>() {
             if let Some(port_arc) = python.output_ports().ports.get(port_name) {
-                let port = port_arc.lock().unwrap();
+                let port = port_arc.lock();
                 return Ok(port.buffer().clone());
             }
         }
@@ -605,7 +713,7 @@ impl StreamRuntime {
         #[cfg(any(feature = "python", feature = "python-embed"))]
         if let Some(python) = processor.as_any_mut().downcast_mut::<PythonProcessor>() {
             if let Some(port_arc) = python.input_ports().ports.get(port_name) {
-                let mut port = port_arc.lock().unwrap();
+                let mut port = port_arc.lock();
                 port.connect(buffer);
                 return Ok(());
             }
@@ -669,7 +777,7 @@ impl StreamRuntime {
 
         // 2. Look up both processors
         let (source_processor, dest_processor) = {
-            let processors = self.processors.lock().unwrap();
+            let processors = self.processors.lock();
 
             let source_handle = processors.get(source_proc_id).ok_or_else(|| {
                 StreamError::Configuration(format!("Source processor '{}' not found", source_proc_id))
@@ -700,12 +808,42 @@ impl StreamRuntime {
             (Arc::clone(source_proc), Arc::clone(dest_proc))
         };
 
+        // 2.5. Validate audio requirements compatibility (if applicable)
+        {
+            let source_guard = source_processor.lock();
+            let dest_guard = dest_processor.lock();
+
+            // Get descriptors using the StreamProcessor trait
+            let source_descriptor = source_guard.descriptor_instance();
+            let dest_descriptor = dest_guard.descriptor_instance();
+
+            // If both processors have audio requirements, validate compatibility
+            if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
+                if let (Some(source_audio), Some(dest_audio)) =
+                    (&source_desc.audio_requirements, &dest_desc.audio_requirements)
+                {
+                    if !source_audio.compatible_with(dest_audio) {
+                        let error_msg = source_audio.compatibility_error(dest_audio);
+                        return Err(StreamError::Configuration(format!(
+                            "Audio requirements incompatible when connecting {} → {}: {}",
+                            source, destination, error_msg
+                        )));
+                    }
+
+                    tracing::debug!(
+                        "Audio requirements validated: {} → {} (compatible)",
+                        source_proc_id, dest_proc_id
+                    );
+                }
+            }
+        }
+
         // 3. Connect the ports by trying to access them from known processor types
         // This approach uses downcasting but supports any registered processor type
         {
             // Lock both processors
-            let mut source = source_processor.lock().unwrap();
-            let mut dest = dest_processor.lock().unwrap();
+            let mut source = source_processor.lock();
+            let mut dest = dest_processor.lock();
 
             // Try to get output buffer from source processor
             let output_buffer = Self::get_output_buffer(&mut **source, source_port, source_proc_id)?;
@@ -729,7 +867,7 @@ impl StreamRuntime {
         let connection = Connection::new(connection_id.clone(), source.to_string(), destination.to_string());
 
         {
-            let mut connections = self.connections.lock().unwrap();
+            let mut connections = self.connections.lock();
             connections.insert(connection_id.clone(), connection);
         }
 
@@ -870,14 +1008,14 @@ impl StreamRuntime {
         // 2. Drop broadcaster to close all channels
         // This makes handler threads' `for tick in rx` loops exit
         {
-            let mut broadcaster = self.broadcaster.lock().unwrap();
+            let mut broadcaster = self.broadcaster.lock();
             broadcaster.clear();
         }
         tracing::debug!("Broadcaster channels closed");
 
         // 3. Wait for handler threads to finish
         let processor_ids: Vec<ProcessorId> = {
-            let processors = self.processors.lock().unwrap();
+            let processors = self.processors.lock();
             processors.keys().cloned().collect()
         };
 
@@ -885,7 +1023,7 @@ impl StreamRuntime {
         for (i, processor_id) in processor_ids.iter().enumerate() {
             // Take the thread handle from the processor
             let thread_handle = {
-                let mut processors = self.processors.lock().unwrap();
+                let mut processors = self.processors.lock();
                 processors
                     .get_mut(processor_id)
                     .and_then(|proc| proc.thread.take())
@@ -896,9 +1034,9 @@ impl StreamRuntime {
                     Ok(_) => {
                         tracing::debug!("[{}] Thread joined ({}/{})", processor_id, i + 1, thread_count);
                         // Update status to Stopped
-                        let mut processors = self.processors.lock().unwrap();
+                        let mut processors = self.processors.lock();
                         if let Some(proc) = processors.get_mut(processor_id) {
-                            *proc.status.lock().unwrap() = ProcessorStatus::Stopped;
+                            *proc.status.lock() = ProcessorStatus::Stopped;
                         }
                     }
                     Err(e) => tracing::error!(
@@ -944,13 +1082,13 @@ impl StreamRuntime {
     pub async fn remove_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
         // 1. Look up processor and verify it exists
         let shutdown_tx = {
-            let mut processors = self.processors.lock().unwrap();
+            let mut processors = self.processors.lock();
             let processor = processors.get_mut(processor_id).ok_or_else(|| {
                 StreamError::NotFound(format!("Processor '{}' not found", processor_id))
             })?;
 
             // Check current status
-            let current_status = *processor.status.lock().unwrap();
+            let current_status = *processor.status.lock();
             if current_status == ProcessorStatus::Stopped || current_status == ProcessorStatus::Stopping {
                 return Err(StreamError::Runtime(format!(
                     "Processor '{}' is already {:?}",
@@ -959,7 +1097,7 @@ impl StreamRuntime {
             }
 
             // Update status to Stopping
-            *processor.status.lock().unwrap() = ProcessorStatus::Stopping;
+            *processor.status.lock() = ProcessorStatus::Stopping;
 
             // Clone the shutdown sender
             processor.shutdown_tx.clone()
@@ -979,7 +1117,7 @@ impl StreamRuntime {
 
         // 3. Wait for thread to join (with timeout)
         let thread_handle = {
-            let mut processors = self.processors.lock().unwrap();
+            let mut processors = self.processors.lock();
             processors
                 .get_mut(processor_id)
                 .and_then(|proc| proc.thread.take())
@@ -996,18 +1134,18 @@ impl StreamRuntime {
                     tracing::info!("[{}] Processor thread joined successfully", processor_id);
 
                     // 4. Update status to Stopped
-                    let mut processors = self.processors.lock().unwrap();
+                    let mut processors = self.processors.lock();
                     if let Some(proc) = processors.get_mut(processor_id) {
-                        *proc.status.lock().unwrap() = ProcessorStatus::Stopped;
+                        *proc.status.lock() = ProcessorStatus::Stopped;
                     }
                 }
                 Ok(Err(panic_err)) => {
                     tracing::error!("[{}] Processor thread panicked: {:?}", processor_id, panic_err);
 
                     // Still mark as stopped
-                    let mut processors = self.processors.lock().unwrap();
+                    let mut processors = self.processors.lock();
                     if let Some(proc) = processors.get_mut(processor_id) {
-                        *proc.status.lock().unwrap() = ProcessorStatus::Stopped;
+                        *proc.status.lock() = ProcessorStatus::Stopped;
                     }
 
                     return Err(StreamError::Runtime(format!(
@@ -1034,7 +1172,7 @@ impl StreamRuntime {
     /// Get runtime status info
     pub fn status(&self) -> RuntimeStatus {
         let handler_count = {
-            let processors = self.processors.lock().unwrap();
+            let processors = self.processors.lock();
             processors.len()
         };
 
@@ -1069,7 +1207,7 @@ impl StreamRuntime {
 
                 // Broadcast to all handlers (non-blocking)
                 {
-                    let broadcaster = broadcaster.lock().unwrap();
+                    let broadcaster = broadcaster.lock();
                     broadcaster.broadcast(tick);
                 }
 
@@ -1092,7 +1230,7 @@ impl StreamRuntime {
         for (processor_id, mut processor, shutdown_rx) in self.pending_processors.drain(..) {
             // Subscribe processor to broadcaster
             let tick_rx = {
-                let mut broadcaster = self.broadcaster.lock().unwrap();
+                let mut broadcaster = self.broadcaster.lock();
                 broadcaster.subscribe()
             };
 
@@ -1152,10 +1290,10 @@ impl StreamRuntime {
 
             // Update processor handle in registry with thread and Running status
             {
-                let mut processors = self.processors.lock().unwrap();
+                let mut processors = self.processors.lock();
                 if let Some(proc_handle) = processors.get_mut(&processor_id) {
                     proc_handle.thread = Some(handle);
-                    *proc_handle.status.lock().unwrap() = ProcessorStatus::Running;
+                    *proc_handle.status.lock() = ProcessorStatus::Running;
                 } else {
                     tracing::error!("Processor {} not found in registry", processor_id);
                 }
@@ -1201,6 +1339,10 @@ mod tests {
             self.count.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
 
     #[test]
@@ -1237,7 +1379,7 @@ mod tests {
 
         // Check processor registry instead of handler_threads
         {
-            let processors = runtime.processors.lock().unwrap();
+            let processors = runtime.processors.lock();
             assert_eq!(processors.len(), 2);
         }
 
@@ -1255,17 +1397,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_true_parallelism() {
-        use std::sync::Mutex as StdMutex;
         use std::time::Instant;
 
         struct WorkProcessor {
             work_duration_ms: u64,
-            start_times: Arc<StdMutex<Vec<Instant>>>,
+            start_times: Arc<Mutex<Vec<Instant>>>,
         }
 
         impl StreamProcessor for WorkProcessor {
             fn process(&mut self, tick: TimedTick) -> Result<()> {
-                self.start_times.lock().unwrap().push(Instant::now());
+                self.start_times.lock().push(Instant::now());
 
                 let start = Instant::now();
                 let mut sum = 0u64;
@@ -1279,12 +1420,16 @@ mod tests {
 
                 Ok(())
             }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
         }
 
         let mut runtime = StreamRuntime::new(10.0);
 
-        let start_times1 = Arc::new(StdMutex::new(Vec::new()));
-        let start_times2 = Arc::new(StdMutex::new(Vec::new()));
+        let start_times1 = Arc::new(Mutex::new(Vec::new()));
+        let start_times2 = Arc::new(Mutex::new(Vec::new()));
 
         runtime.add_processor(Box::new(WorkProcessor {
             work_duration_ms: 50,
@@ -1302,8 +1447,8 @@ mod tests {
 
         runtime.stop().await.unwrap();
 
-        let times1 = start_times1.lock().unwrap();
-        let times2 = start_times2.lock().unwrap();
+        let times1 = start_times1.lock();
+        let times2 = start_times2.lock();
 
         assert!(times1.len() >= 2);
         assert!(times2.len() >= 2);
@@ -1320,5 +1465,67 @@ mod tests {
                 "Processors should start processing nearly simultaneously"
             );
         }
+    }
+
+    #[test]
+    fn test_audio_config_validation() {
+        let runtime = StreamRuntime::new(60.0);
+
+        // Test matching config - should succeed
+        let matching_frame = crate::core::AudioFrame::new(
+            vec![0.0; 2048],  // 1024 stereo samples
+            0,                // timestamp_ns
+            0,                // frame_number
+            48000,            // sample_rate (matches default)
+            2,                // channels (matches default)
+        );
+        assert!(runtime.validate_audio_frame(&matching_frame).is_ok());
+
+        // Test mismatched sample rate - should fail
+        let wrong_sample_rate_frame = crate::core::AudioFrame::new(
+            vec![0.0; 2048],
+            0,
+            0,
+            44100,  // Wrong sample rate
+            2,
+        );
+        let result = runtime.validate_audio_frame(&wrong_sample_rate_frame);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("sample rate mismatch"));
+
+        // Test mismatched channels - should fail
+        let wrong_channels_frame = crate::core::AudioFrame::new(
+            vec![0.0; 1024],
+            0,
+            0,
+            48000,
+            1,  // Wrong channels (mono instead of stereo)
+        );
+        let result = runtime.validate_audio_frame(&wrong_channels_frame);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("channel count mismatch"));
+    }
+
+    #[test]
+    fn test_audio_config_getter_setter() {
+        let mut runtime = StreamRuntime::new(60.0);
+
+        // Test default config
+        let config = runtime.audio_config();
+        assert_eq!(config.sample_rate, 48000);
+        assert_eq!(config.channels, 2);
+        assert_eq!(config.buffer_size, 2048);
+
+        // Test custom config
+        runtime.set_audio_config(AudioConfig {
+            sample_rate: 44100,
+            channels: 1,
+            buffer_size: 1024,
+        });
+
+        let new_config = runtime.audio_config();
+        assert_eq!(new_config.sample_rate, 44100);
+        assert_eq!(new_config.channels, 1);
+        assert_eq!(new_config.buffer_size, 1024);
     }
 }

@@ -62,6 +62,19 @@ uv run pytest tests/
 
 **NEVER LIE ABOUT WHAT'S IMPLEMENTED.**
 
+**NEVER CUT CORNERS OR SKIP IMPLEMENTATION WHEN YOU HIT AN OBSTACLE.**
+
+When you encounter compilation errors or technical challenges:
+- ✅ **DO:** Debug the issue, read documentation, fix the errors properly
+- ✅ **DO:** Implement the feature completely and correctly
+- ✅ **DO:** Test that it actually works
+- ❌ **DON'T:** Skip to a simpler workaround without implementing the real thing
+- ❌ **DON'T:** Guess at values instead of reading actual parameter info
+- ❌ **DON'T:** Leave TODOs when asked to implement something
+- ❌ **DON'T:** Claim something works when you haven't tested it
+
+**If you're stuck, ask for help or clarification. Don't fake it.**
+
 ### Status Definitions
 
 **✅ IMPLEMENTED = Actually works when run**
@@ -136,9 +149,9 @@ uv run pytest tests/
 ### Be Polyglot
 
 **We write in whatever language gets the job done:**
-- **Python** - High-level API, rapid prototyping, VALIDATION ONLY
+- **Python** - High-level API, rapid prototyping, dynamic processors via MCP
 - **Rust** - The real implementation (zero-copy, GPU interop, real-time guarantees)
-- **HLSL** - Shader language for agent-to-agent video effects
+- **WGSL** - Shader language for GPU compute and video effects (wgpu's shader language)
 - **Objective-C** - macOS/iOS system integration when needed
 - **Whatever's needed** - Don't be limited by language boundaries
 
@@ -150,7 +163,7 @@ We already proved Python works. The decorator API works. The examples work.
 
 Now we're building the production infrastructure in Rust because:
 - Direct Metal/Vulkan access (IOSurface, DMA-BUF zero-copy)
-- HLSL → SPIR-V → Metal/Vulkan shader compilation
+- WGSL shader compilation for GPU compute and effects
 - Real-time guarantees (no GC, no GIL)
 - Embedded deployment (Jetson, armor controllers)
 
@@ -171,9 +184,9 @@ Now we're building the production infrastructure in Rust because:
 
 **What moves to Rust:**
 - Core GPU operations (Metal/Vulkan texture management)
-- Shader compilation pipeline (HLSL → SPIR-V → native)
+- WGSL shader compilation for GPU effects
 - Real-time processing engine
-- Agent communication protocol
+- Agent communication protocol (MCP)
 
 **The Python API becomes a thin wrapper over Rust (via PyO3).**
 
@@ -231,6 +244,176 @@ use streamlib::{StreamProcessor, ProcessorDescriptor, register_processor_type};
 // ❌ Wrong (internal use only)
 use streamlib_core::{StreamProcessor, ProcessorDescriptor};
 ```
+
+## Architecture: Patch Cable Model
+
+**streamlib is a modular synthesis system for real-time video/audio processing.**
+
+Think of it like a Eurorack modular synthesizer:
+- **Processors are modules** (oscillators, filters, effects)
+- **Connections are patch cables** (route signals between modules)
+- **No automatic routing** - you explicitly control the graph
+- **Supports arbitrary topologies** - feedback loops, splits, merges, DAGs
+
+### Directed Acyclic Graphs (DAGs) with Flexibility
+
+The runtime executes **multiple concurrent DAGs**:
+- **Nodes** = Processors (CameraProcessor, EffectProcessor, DisplayProcessor)
+- **Edges** = Connections (patch cables between output and input ports)
+- **Standalone nodes** = Processors with no connections (e.g., cron-like jobs running on tick)
+- **Connected subgraphs** = Data flows through edges from outputs to inputs
+
+**Example topology:**
+```
+CameraProcessor.video → EffectProcessor.input → DisplayProcessor.video
+         ↓
+  DebugSaver.frames
+```
+
+This creates:
+- Main path: Camera → Effect → Display
+- Branch: Camera → DebugSaver (saves frames to disk)
+
+### Real-Time Philosophy: Drop Frames, Never Buffer
+
+**This is NOT a video editing system. This is a real-time system for power armor.**
+
+Core principles:
+1. **Latency kills** - In combat/AR scenarios, 100ms delay = death
+2. **Drop frames over buffering** - Missing one frame is better than being 10 frames behind
+3. **No backpressure** - Fast processors don't wait for slow ones
+4. **Tick-driven** - All processors wake up on clock ticks (e.g., 60 Hz)
+
+**Why drop frames?**
+- AR headsets need 90 Hz minimum (11ms per frame)
+- Power armor HUD needs real-time targeting data
+- Robotic control systems can't operate on stale data
+- Live video effects must feel instant
+
+**When we DO need "buffering":**
+- Audio requires sample collections (e.g., 2048 samples for CLAP plugins)
+- This is **sample granularity**, not **latency buffering**
+- We collect enough samples to process, then immediately output
+- No queuing of multiple buffers waiting to drain
+
+**Audio example:**
+```
+✅ Correct: Accumulate 2048 samples → process → output immediately
+❌ Wrong: Queue 10 buffers of 2048 samples → add 200ms latency
+```
+
+### Data Flow Mechanism: Parallel Processors with Shared Ports
+
+**How data moves between connected processors:**
+
+When processors are connected via `connect_processors("source.port", "dest.port")`:
+1. Runtime maintains connections as "patch cables" between ports
+2. On each tick, **ALL processors execute in parallel** (not serial!)
+3. Each processor **independently decides** whether to read/write ports
+
+**Key insight: Processors are autonomous, connections are optional data sharing**
+
+Think of it like a modular synthesizer:
+- Patch cable connects oscillator output → filter input
+- But the filter decides when to sample the input
+- The oscillator outputs whenever it wants
+- They run simultaneously, not one-after-another
+
+**On each tick, a processor can:**
+- Read latest frame from input port (or ignore it completely)
+- Write new data to output port (or skip this tick)
+- Be busy processing old data from 15 ticks ago
+- Output results from previous work
+- Decide "I'm not ready yet" and drop this frame
+
+**Example: ML Object Detection Processor**
+```rust
+fn process(&mut self, tick: TimedTick) -> Result<()> {
+    // Check if we're still processing previous frame
+    if self.is_busy {
+        // Ignore input this tick - drop the frame
+        // Don't read from input_port.video
+        return Ok(());
+    }
+
+    // Only read when ready
+    if let Some(frame) = self.input_port.video.read_latest() {
+        self.start_detection(frame);
+        self.is_busy = true;
+    }
+
+    // Output results from 15 ticks ago when ready
+    if let Some(results) = self.check_if_done() {
+        self.output_port.detections.write(results);
+        self.is_busy = false;
+    }
+
+    Ok(())
+}
+```
+
+**This enables true real-time processing:**
+- ✅ Slow processors don't block fast ones
+- ✅ Each processor runs at its own pace
+- ✅ No cascading delays (parallel execution)
+- ✅ Frames drop gracefully when needed
+- ✅ Processors have full control over timing
+
+**Port behavior:**
+- `read_latest()` - Get newest data, or None if nothing available
+- Only stores ONE frame (no queue, no history)
+- Writing overwrites previous data
+- No blocking - processors never wait for each other
+
+**Critical: No implicit buffering**
+- If downstream is slow, it reads stale data or nothing
+- If upstream is fast, old frames get overwritten
+- Real-time systems prioritize current data over complete history
+- Lag is expected - processors can be many ticks behind
+
+### Error Handling & Self-Healing
+
+**Traditional error handling doesn't work for real-time systems.**
+
+In power armor:
+- Camera fails → don't crash the whole system
+- Display disconnects → keep processing, reconnect when available
+- Effect processor errors → skip that frame, continue
+- Hardware swap → hot-plug replacement without restart
+
+**Event-based approach (not panic-based):**
+```rust
+// ❌ Traditional approach - kills the system
+fn process(&mut self, tick: TimedTick) -> Result<()> {
+    let frame = self.camera.capture()?;  // Camera unplugged = panic
+    Ok(())
+}
+
+// ✅ Event-based approach - self-healing
+fn process(&mut self, tick: TimedTick) -> Result<()> {
+    match self.camera.try_capture() {
+        Ok(frame) => { /* process frame */ }
+        Err(e) => {
+            // Emit event: camera disconnected
+            // Runtime can reconnect, swap to backup, or notify operator
+            // Other processors keep running
+        }
+    }
+    Ok(())
+}
+```
+
+**Processor hot-swapping:**
+- Processors can be disconnected while runtime is running
+- Failed processors can be replaced without stopping the system
+- Runtime continues processing other subgraphs
+- Self-healing for transient hardware failures
+
+**Design principle:**
+- Processors don't panic - they emit events
+- Runtime handles recovery strategies
+- System degrades gracefully, doesn't crash
+- Critical for deployed hardware (armor, robots, drones)
 
 ## Example Creation
 

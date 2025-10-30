@@ -5,7 +5,8 @@
 
 use super::{McpError, Result};
 use crate::core::ProcessorRegistry;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 /// MCP Resource representation
 #[derive(Debug, Clone, serde::Serialize)]
@@ -42,7 +43,7 @@ pub struct ResourceContent {
 ///
 /// This is called when an AI agent queries "resources/list"
 pub fn list_resources(registry: Arc<Mutex<ProcessorRegistry>>) -> Result<Vec<Resource>> {
-    let registry = registry.lock().unwrap();
+    let registry = registry.lock();
     let descriptors = registry.list();
 
     Ok(descriptors
@@ -70,7 +71,7 @@ pub fn read_resource(
         .ok_or_else(|| McpError::ResourceNotFound(format!("Invalid URI: {}", uri)))?;
 
     // Get descriptor from registry
-    let registry = registry.lock().unwrap();
+    let registry = registry.lock();
     let registration = registry
         .get(processor_name)
         .ok_or_else(|| McpError::ResourceNotFound(processor_name.to_string()))?;
@@ -155,5 +156,34 @@ mod tests {
         let registry = create_test_registry();
         let result = read_resource(registry, "invalid://uri");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_audio_requirements_in_descriptor() {
+        use crate::core::AudioRequirements;
+        use std::sync::Arc as StdArc;
+
+        let registry = create_test_registry();
+
+        // Register a processor with audio requirements
+        let descriptor = ProcessorDescriptor::new("AudioProcessor", "Test audio processor")
+            .with_audio_requirements(AudioRequirements::required(2048, 48000, 2));
+
+        let factory = StdArc::new(|| Err(crate::core::StreamError::Configuration("Test".into())));
+        registry.lock().unwrap().register(descriptor, factory).unwrap();
+
+        // Read the resource and check JSON contains audio_requirements
+        let content = read_resource(registry, "processor://AudioProcessor").unwrap();
+
+        // Parse JSON to verify audio_requirements is present
+        let json: serde_json::Value = serde_json::from_str(&content.text).unwrap();
+
+        assert!(json.get("audio_requirements").is_some(),
+                "audio_requirements should be present in JSON");
+
+        let audio_req = &json["audio_requirements"];
+        assert_eq!(audio_req["required_buffer_size"], 2048);
+        assert_eq!(audio_req["supported_sample_rates"][0], 48000);
+        assert_eq!(audio_req["required_channels"], 2);
     }
 }

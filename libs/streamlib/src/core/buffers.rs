@@ -13,7 +13,7 @@
 //! This matches professional broadcast practice where old frames are
 //! worthless and should be discarded in favor of new ones.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 /// Fixed-size circular buffer for data exchange
 ///
@@ -75,7 +75,7 @@ impl<T> RingBuffer<T> {
     ///
     /// * `data` - Data to write
     pub fn write(&self, data: T) {
-        let mut state = self.buffer.lock().unwrap();
+        let mut state = self.buffer.lock();
         let idx = state.write_idx;
         state.data[idx] = Some(data);
         state.write_idx = (idx + 1) % self.slots;
@@ -94,7 +94,7 @@ impl<T> RingBuffer<T> {
     where
         T: Clone,
     {
-        let mut state = self.buffer.lock().unwrap();
+        let mut state = self.buffer.lock();
         if !state.has_data {
             return None;
         }
@@ -120,7 +120,7 @@ impl<T> RingBuffer<T> {
     where
         T: Clone,
     {
-        let mut state = self.buffer.lock().unwrap();
+        let mut state = self.buffer.lock();
         if !state.has_data {
             return vec![];
         }
@@ -174,13 +174,13 @@ impl<T> RingBuffer<T> {
     ///
     /// true if no data written yet, false otherwise
     pub fn is_empty(&self) -> bool {
-        let state = self.buffer.lock().unwrap();
+        let state = self.buffer.lock();
         !state.has_data
     }
 
     /// Clear buffer (reset to empty state)
     pub fn clear(&self) {
-        let mut state = self.buffer.lock().unwrap();
+        let mut state = self.buffer.lock();
         state.data = (0..self.slots).map(|_| None).collect();
         state.write_idx = 0;
         state.read_idx = 0;

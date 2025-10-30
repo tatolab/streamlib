@@ -40,17 +40,24 @@ pub struct ProcessorProxy {
     pub processor_type: String,
 
     // For pre-built processors (Camera, Display) - stores config dict
+    #[pyo3(get)]
     pub config: Option<Py<PyDict>>,
 
     // For Python processors - stores the Python class
+    #[pyo3(get)]
     pub python_class: Option<Py<PyAny>>,
 
+    #[pyo3(get)]
     pub input_port_names: Vec<String>,
+    #[pyo3(get)]
     pub output_port_names: Vec<String>,
 
     // Schema metadata for AI discovery
+    #[pyo3(get)]
     pub description: Option<String>,
+    #[pyo3(get)]
     pub usage_context: Option<String>,
+    #[pyo3(get)]
     pub tags: Vec<String>,
 }
 
@@ -224,8 +231,12 @@ def _make_decorator(config, ProcessorProxy):
 /// @processor decorator
 ///
 /// Wraps a Python class as a dynamic processor.
-/// The class must define InputPorts and OutputPorts nested classes,
-/// and implement a process(self, tick) method.
+/// The class should define InputPorts and/or OutputPorts nested classes
+/// (at least one is required), and implement a process(self, tick) method.
+///
+/// - Generators (sources): Only OutputPorts, no InputPorts
+/// - Sinks: Only InputPorts, no OutputPorts
+/// - Filters: Both InputPorts and OutputPorts
 ///
 /// # Example
 /// ```python
@@ -278,24 +289,19 @@ def _make_decorator(description, usage_context, tags, ProcessorProxy):
         if not isinstance(cls, type):
             raise TypeError("@processor can only decorate classes, not functions")
 
-        # Parse InputPorts
-        if not hasattr(cls, 'InputPorts'):
-            raise AttributeError(f"Processor class {cls.__name__} must define InputPorts nested class")
-
-        # Parse OutputPorts
-        if not hasattr(cls, 'OutputPorts'):
-            raise AttributeError(f"Processor class {cls.__name__} must define OutputPorts nested class")
-
-        # Extract port names from class attributes
+        # Parse InputPorts (optional - for generators/sources)
         input_port_names = []
-        for name in dir(cls.InputPorts):
-            if not name.startswith('_'):
-                input_port_names.append(name)
+        if hasattr(cls, 'InputPorts'):
+            for name in dir(cls.InputPorts):
+                if not name.startswith('_'):
+                    input_port_names.append(name)
 
+        # Parse OutputPorts (optional - for sinks)
         output_port_names = []
-        for name in dir(cls.OutputPorts):
-            if not name.startswith('_'):
-                output_port_names.append(name)
+        if hasattr(cls, 'OutputPorts'):
+            for name in dir(cls.OutputPorts):
+                if not name.startswith('_'):
+                    output_port_names.append(name)
 
         # Create ProcessorProxy with Python class
         return ProcessorProxy(

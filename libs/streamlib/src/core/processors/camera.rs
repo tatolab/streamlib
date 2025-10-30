@@ -142,6 +142,10 @@ mod tests {
                 .with_tags(vec!["source", "camera", "video", "input", "capture"])
             )
         }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
 
     impl CameraProcessor for MockCameraProcessor {

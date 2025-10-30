@@ -74,7 +74,12 @@ pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;
 
 // Re-export processor implementations
-pub use processors::{AppleCameraProcessor, AppleDisplayProcessor};
+pub use processors::{
+    AppleCameraProcessor,
+    AppleDisplayProcessor,
+    AppleAudioOutputProcessor,
+    AppleAudioCaptureProcessor,
+};
 
 #[cfg(test)]
 mod tests {
