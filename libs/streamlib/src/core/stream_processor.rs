@@ -1,4 +1,3 @@
-use super::clock::TimedTick;
 use super::gpu_context::GpuContext;
 use super::schema::ProcessorDescriptor;
 use super::ports::{StreamInput, StreamOutput};
@@ -26,13 +25,16 @@ use std::any::Any;
 /// - Automatic validation of connections
 /// - Code generation by AI agents
 pub trait StreamProcessor: Send + 'static {
-    /// Process a single tick/frame
+    /// Process a wakeup event
     ///
-    /// This is called on every clock tick. Processors should:
+    /// Called when the processor receives a wakeup event (DataAvailable, TimerTick, etc.).
+    /// Processors should:
     /// - Read inputs from their input ports
     /// - Perform their processing (GPU operations, ML inference, etc.)
     /// - Write outputs to their output ports
-    fn process(&mut self, tick: TimedTick) -> Result<()>;
+    ///
+    /// Processors no longer receive tick objects - they wake on events only.
+    fn process(&mut self) -> Result<()>;
 
     /// Called when the processor starts, passing the shared GPU context
     ///
@@ -123,6 +125,34 @@ pub trait StreamProcessor: Send + 'static {
     /// }
     /// ```
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// Set the wakeup channel for push-based operation (optional)
+    ///
+    /// Push-based processors (audio capture, camera, etc.) can implement this
+    /// to receive their wakeup channel. They can then trigger their own processing
+    /// when hardware data arrives, instead of waiting for ticks.
+    ///
+    /// # Arguments
+    ///
+    /// * `wakeup_tx` - Channel sender to trigger WakeupEvent::DataAvailable
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn set_wakeup_channel(&mut self, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
+    ///     self.wakeup_tx = Some(wakeup_tx);
+    /// }
+    /// ```
+    ///
+    /// Then in hardware callback:
+    /// ```ignore
+    /// if let Some(tx) = &self.wakeup_tx {
+    ///     let _ = tx.send(WakeupEvent::DataAvailable);
+    /// }
+    /// ```
+    fn set_wakeup_channel(&mut self, _wakeup_tx: crossbeam_channel::Sender<super::runtime::WakeupEvent>) {
+        // Default: no-op for processors that don't need push-based wakeup
+    }
 }
 
 /// Helper trait for port access (kept separate from StreamProcessor for object safety)

@@ -53,7 +53,7 @@ use clack_host::{
 use clack_extensions::params::{PluginParams, ParamInfoBuffer};
 
 use crate::core::{
-    Result, StreamError, StreamProcessor, TimedTick, AudioFrame,
+    Result, StreamError, StreamProcessor, AudioFrame,
     StreamInput, StreamOutput,
 };
 
@@ -82,7 +82,7 @@ use std::path::Path;
 /// use streamlib::{StreamRuntime, ClapEffectProcessor};
 ///
 /// // Create runtime with default audio config (48kHz, stereo, 2048 buffer)
-/// let runtime = StreamRuntime::new(60.0);
+/// let runtime = StreamRuntime::new();
 /// let config = runtime.audio_config();
 ///
 /// // Load CLAP plugin by name
@@ -105,7 +105,7 @@ use std::path::Path;
 /// ```ignore
 /// use streamlib::{StreamRuntime, AudioConfig};
 ///
-/// let mut runtime = StreamRuntime::new(60.0);
+/// let mut runtime = StreamRuntime::new();
 ///
 /// // Set audio config BEFORE adding processors
 /// runtime.set_audio_config(AudioConfig {
@@ -834,7 +834,7 @@ impl StreamProcessor for ClapEffectProcessor {
         Self::descriptor()
     }
 
-    fn process(&mut self, _tick: TimedTick) -> Result<()> {
+    fn process(&mut self) -> Result<()> {
         // Read audio frame from input port
         if let Some(input_frame) = self.input_ports.audio.read_latest() {
             // Process through CLAP plugin

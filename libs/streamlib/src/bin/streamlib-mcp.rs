@@ -174,8 +174,8 @@ async fn async_main(args: Args, permissions: std::collections::HashSet<String>) 
     });
 
     // Create and start StreamRuntime (application mode)
-    tracing::info!("Creating StreamRuntime at 60 FPS");
-    let mut runtime = StreamRuntime::new(60.0);
+    tracing::info!("Creating StreamRuntime");
+    let mut runtime = StreamRuntime::new();
 
     // Start the runtime
     tracing::info!("Starting StreamRuntime...");

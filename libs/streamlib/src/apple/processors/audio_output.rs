@@ -5,7 +5,7 @@
 
 use crate::core::{
     AudioOutputProcessor as AudioOutputProcessorTrait, AudioDevice, AudioOutputInputPorts,
-    AudioFrame, Result, StreamError, StreamProcessor, StreamInput, TimedTick,
+    AudioFrame, Result, StreamError, StreamProcessor, StreamInput,
     ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -269,7 +269,7 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         )
     }
 
-    fn process(&mut self, _tick: TimedTick) -> Result<()> {
+    fn process(&mut self) -> Result<()> {
         // Read AudioFrame from input port
         if let Some(frame) = self.ports.audio.read_latest() {
             self.push_frame(&frame)?;
@@ -337,21 +337,29 @@ impl AppleAudioOutputProcessor {
 
         // Push samples to ring buffer
         let mut buffer = self.sample_buffer.lock();
-        buffer.extend_from_slice(&samples);
 
-        // Warn if buffer is getting too large (potential latency issue)
-        let max_buffer_size = (self.sample_rate as usize * self.channels as usize) / 2; // 500ms max
+        // Real-time audio strategy: Drop old samples to maintain low latency
+        // For power armor / real-time applications, we prioritize current data over complete history
+        const MAX_LATENCY_MS: f64 = 50.0; // Maximum 50ms latency (imperceptible)
+        let max_buffer_size = ((self.sample_rate as f64 * MAX_LATENCY_MS / 1000.0) * self.channels as f64) as usize;
+
         let buffer_len = buffer.len();
         if buffer_len > max_buffer_size {
-            tracing::warn!(
-                "Audio buffer overflow: {} samples (max {})",
-                buffer_len,
-                max_buffer_size
-            );
-            // Trim oldest samples
-            let drain_count = buffer_len - max_buffer_size;
+            // Buffer too full = we're behind real-time
+            // Drop OLD samples (stale data from the past) to catch up
+            // This is better than dropping NEW samples (current reality)
+            let drain_count = buffer_len - (max_buffer_size / 2); // Drop half to leave headroom
             buffer.drain(..drain_count);
+
+            let latency_ms = (buffer_len as f64 / self.sample_rate as f64) * 1000.0 / self.channels as f64;
+            tracing::warn!(
+                "Audio lagging: {:.1}ms latency, dropped {} samples to maintain real-time",
+                latency_ms,
+                drain_count
+            );
         }
+
+        buffer.extend_from_slice(&samples);
 
         Ok(())
     }

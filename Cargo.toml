@@ -6,6 +6,7 @@ members = [
     "examples/simple-pipeline", # Example: Basic processing pipeline
     "examples/camera-display",  # Example: Camera capture and display
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP
+    "examples/audio-mixer-demo", # Example: Mixing multiple audio streams
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 

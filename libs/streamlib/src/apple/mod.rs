@@ -39,7 +39,7 @@
 //! let bridge = WgpuBridge::new(metal_device.device().clone()).await?;
 //!
 //! // Create runtime with WebGPU
-//! let mut runtime = StreamRuntime::new(60.0);
+//! let mut runtime = StreamRuntime::new();
 //! let (device, queue) = bridge.into_wgpu();
 //! runtime.set_wgpu(device, queue);
 //! ```
@@ -66,8 +66,7 @@ pub mod runtime_ext;
 // Internal helpers (not part of public API)
 mod runtime_helpers;
 
-// Re-export core types
-pub use crate::core::{Result, StreamError};
+// Re-export core types (Result and StreamError are internal, not re-exported)
 
 // Re-export wrapper types
 pub use metal::MetalDevice;

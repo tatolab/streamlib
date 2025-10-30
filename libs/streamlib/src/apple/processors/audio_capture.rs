@@ -68,6 +68,11 @@ pub struct AppleAudioCaptureProcessor {
 
     /// Output ports
     pub ports: AudioCaptureOutputPorts,
+
+    /// Wakeup channel for push-based operation (Phase 3)
+    /// When audio data arrives, we trigger processing immediately
+    /// Wrapped in Arc<Mutex> so audio callback can access it
+    wakeup_tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>,
 }
 
 // SAFETY: AppleAudioCaptureProcessor is Send despite cpal::Stream not being Send
@@ -142,6 +147,11 @@ impl AppleAudioCaptureProcessor {
         // Create frame counter
         let frame_counter = Arc::new(AtomicU64::new(0));
 
+        // Create wakeup channel holder (Phase 3: Push-based operation)
+        let wakeup_tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>> =
+            Arc::new(Mutex::new(None));
+        let wakeup_tx_clone = wakeup_tx.clone();
+
         // Build audio stream configuration
         // Note: We request the desired sample_rate and channels, but cpal may use device defaults
         let stream_config = StreamConfig {
@@ -166,6 +176,12 @@ impl AppleAudioCaptureProcessor {
                     *current_level_clone.lock() = peak;
 
                     is_capturing_clone.store(true, Ordering::Relaxed);
+
+                    // Phase 3: Trigger push-based wakeup when data arrives
+                    if let Some(tx) = wakeup_tx_clone.lock().as_ref() {
+                        // Send non-blocking wakeup event
+                        let _ = tx.send(crate::core::runtime::WakeupEvent::DataAvailable);
+                    }
                 },
                 move |err| {
                     tracing::error!("Audio capture error: {}", err);
@@ -195,6 +211,7 @@ impl AppleAudioCaptureProcessor {
             sample_rate,
             channels,
             ports,
+            wakeup_tx: Arc::new(Mutex::new(None)),  // Will be set by runtime via set_wakeup_channel()
         })
     }
 }
@@ -255,21 +272,25 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
 }
 
 impl StreamProcessor for AppleAudioCaptureProcessor {
-    fn process(&mut self, _tick: TimedTick) -> Result<()> {
-        // Read captured samples from ring buffer
+    fn process(&mut self) -> Result<()> {
+        // Phase 3: Push-based operation - process all available samples
+        // No longer tied to 60 FPS ticks, hardware drives the rate
+
+        // Read all captured samples from ring buffer
         let samples = {
             let mut buffer = self.sample_buffer.lock();
 
-            // Calculate how many samples to extract for one frame
-            // At 60 FPS and 48kHz: 48000 / 60 = 800 samples per frame
-            let samples_per_frame = (self.sample_rate as f32 / 60.0) as usize * self.channels as usize;
+            // Check if we have enough samples for a reasonable chunk
+            // Use 512 samples per channel as minimum (good balance for most audio processing)
+            let min_chunk_size = 512 * self.channels as usize;
 
-            if buffer.len() >= samples_per_frame {
-                // Extract samples and remove from buffer
-                let samples: Vec<f32> = buffer.drain(..samples_per_frame).collect();
+            if buffer.len() >= min_chunk_size {
+                // Extract all available samples
+                let samples: Vec<f32> = buffer.drain(..).collect();
                 samples
             } else {
-                // Not enough samples yet, wait for next tick
+                // Not enough samples yet for a meaningful chunk
+                // This is normal at startup or during audio gaps
                 return Ok(());
             }
         };
@@ -289,7 +310,7 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
             self.channels,
         );
 
-        // Write to output port
+        // Write to output port (this will trigger downstream via push notification)
         self.ports.audio.write(audio_frame);
 
         Ok(())
@@ -319,6 +340,11 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn set_wakeup_channel(&mut self, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        *self.wakeup_tx.lock() = Some(wakeup_tx);
+        tracing::debug!("AudioCaptureProcessor: Push-based wakeup enabled");
     }
 }
 
@@ -379,14 +405,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
 
             // Try to process captured audio
-            let tick = TimedTick {
-                timestamp: 0.0,
-                frame_number: 0,
-                clock_id: "test".to_string(),
-                delta_time: 0.01667,  // 60 FPS
-            };
-
-            let result = processor.process(tick);
+            let result = processor.process();
             if result.is_ok() {
                 println!("Successfully processed captured audio");
 

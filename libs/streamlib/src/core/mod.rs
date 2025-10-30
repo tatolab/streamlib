@@ -16,6 +16,7 @@ pub mod stream_processor;
 pub mod ports;
 pub mod processors;
 pub mod runtime;
+pub mod sync;
 pub mod texture;
 pub mod topology;
 
@@ -40,7 +41,9 @@ pub use processors::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    TestToneGenerator,
+    TestToneGenerator, TestToneGeneratorOutputPorts,
+    AudioMixerProcessor, MixingStrategy,
+    AudioMixerInputPorts, AudioMixerOutputPorts,
 };
 
 #[cfg(feature = "debug-overlay")]
@@ -52,9 +55,15 @@ pub use schema::{
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
     AudioRequirements,  // Audio configuration requirements
+    TimerRequirements,  // Timer configuration requirements
     // Standard schemas
     SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
+};
+pub use sync::{
+    timestamp_delta_ms, video_audio_delta_ms,
+    are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
+    MultimodalBuffer, DEFAULT_SYNC_TOLERANCE_MS,
 };
 pub use registry::{
     ProcessorRegistry, ProcessorRegistration,

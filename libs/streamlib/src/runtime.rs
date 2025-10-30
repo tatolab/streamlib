@@ -1,7 +1,7 @@
 //! Platform-configured StreamRuntime
 //!
 //! This module provides a StreamRuntime that automatically configures itself
-//! for the current platform. Users just call `StreamRuntime::new(60.0)` and
+//! for the current platform. Users just call `StreamRuntime::new()` and
 //! the runtime handles platform-specific setup (like NSApplication on macOS).
 
 use crate::core::{Result, StreamProcessor, StreamInput, StreamOutput, ports::PortMessage};
@@ -19,8 +19,8 @@ pub struct StreamRuntime {
 
 impl StreamRuntime {
     /// Create a new runtime configured for the current platform
-    pub fn new(fps: f64) -> Self {
-        let mut inner = crate::core::StreamRuntime::new(fps);
+    pub fn new() -> Self {
+        let mut inner = crate::core::StreamRuntime::new();
 
         // Configure platform-specific event loop
         #[cfg(any(target_os = "macos", target_os = "ios"))]

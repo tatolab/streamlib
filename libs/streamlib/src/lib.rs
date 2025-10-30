@@ -26,7 +26,7 @@
 //! ```ignore
 //! use streamlib::{StreamRuntime, CameraProcessor, DisplayProcessor};
 //!
-//! let mut runtime = StreamRuntime::new(60.0);
+//! let mut runtime = StreamRuntime::new();
 //! runtime.add_processor(Box::new(CameraProcessor::new(0)));
 //! runtime.start().await?;
 //! ```
@@ -70,12 +70,19 @@ pub use core::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    TestToneGenerator,
+    TestToneGenerator, TestToneGeneratorOutputPorts,
+    AudioMixerProcessor, MixingStrategy,
+    AudioMixerInputPorts, AudioMixerOutputPorts,
     ShaderId, // from runtime, but we'll override StreamRuntime below
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
+    AudioRequirements, TimerRequirements,
     SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
+    // Sync utilities
+    timestamp_delta_ms, video_audio_delta_ms,
+    are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
+    MultimodalBuffer, DEFAULT_SYNC_TOLERANCE_MS,
     ProcessorRegistry, ProcessorRegistration,
     DescriptorProvider, global_registry,
     register_processor,

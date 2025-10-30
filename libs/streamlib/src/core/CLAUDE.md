@@ -23,7 +23,7 @@ use streamlib::{CameraProcessor, AudioCaptureProcessor, StreamRuntime};
 let camera = CameraProcessor::new(None)?;
 let mic = AudioCaptureProcessor::new(None, 48000, 2)?;
 
-let mut runtime = StreamRuntime::new(60.0);
+let mut runtime = StreamRuntime::new();
 runtime.add_processor(Box::new(camera));
 runtime.add_processor(Box::new(mic));
 ```

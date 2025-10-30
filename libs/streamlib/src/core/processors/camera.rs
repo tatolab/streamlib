@@ -109,7 +109,6 @@ pub trait CameraProcessor: StreamProcessor {
 #[cfg(test)]
 mod tests {
     use crate::core::*;
-    use crate::core::clock::TimedTick;
     use crate::core::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
     use std::sync::Arc;
 
@@ -117,7 +116,7 @@ mod tests {
     struct MockCameraProcessor;
 
     impl StreamProcessor for MockCameraProcessor {
-        fn process(&mut self, _tick: TimedTick) -> Result<()> {
+        fn process(&mut self) -> Result<()> {
             Ok(())
         }
 

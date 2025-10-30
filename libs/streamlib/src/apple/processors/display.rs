@@ -8,6 +8,7 @@ use crate::core::{
     TimedTick, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
+use crate::core::schema::TimerRequirements;
 use crate::apple::{metal::MetalDevice, WgpuBridge};
 use objc2::{rc::Retained, MainThreadOnly, MainThreadMarker};
 use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
@@ -171,7 +172,7 @@ impl DisplayProcessor for AppleDisplayProcessor {
 }
 
 impl StreamProcessor for AppleDisplayProcessor {
-    fn process(&mut self, _tick: TimedTick) -> Result<()> {
+    fn process(&mut self) -> Result<()> {
         // Read latest video frame
         if let Some(frame) = self.ports.video.read_latest() {
             // Get the WebGPU texture from the frame
@@ -373,6 +374,10 @@ impl StreamProcessor for AppleDisplayProcessor {
                 }),
                 serde_json::json!({})
             ))
+            .with_timer_requirements(TimerRequirements {
+                rate_hz: 60.0,
+                description: Some("Display refresh at 60 FPS for smooth rendering".into()),
+            })
             .with_tags(vec!["sink", "display", "window", "output", "render"])
         )
     }

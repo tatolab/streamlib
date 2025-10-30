@@ -1,11 +1,20 @@
 //! Camera to Display Pipeline Example
 //!
 //! Demonstrates a real-time camera → display pipeline using streamlib's
-//! processor-based API. The CameraProcessor and DisplayProcessor handle all
-//! platform-specific details internally.
+//! processor-based API with **type-safe connections**.
 //!
-//! The same code works on macOS, Linux, and Windows - streamlib automatically
-//! configures itself for the platform at runtime.
+//! ## Key Features
+//!
+//! - **Type-safe connections**: Compiler enforces VideoFrame → VideoFrame matching
+//! - **Event-driven**: Camera wakes display on each frame (push-based, not ticks)
+//! - **Platform-agnostic**: Same code works on macOS, Linux, Windows
+//! - **Zero-copy GPU**: Frames stay on GPU from camera to display
+//!
+//! ## How It Works
+//!
+//! 1. Camera captures frames and writes to output port
+//! 2. Display wakes up immediately on data arrival (no polling)
+//! 3. Display reads frame and renders to window
 //!
 //! Press Ctrl+C to stop.
 
@@ -27,22 +36,24 @@ async fn main() -> Result<()> {
     println!("=== Camera → Display Pipeline ===\n");
 
     // Create runtime - automatically configured for the platform
-    let mut runtime = StreamRuntime::new(60.0);
+    // Event-driven: processors wake on data arrival or timer events
+    let mut runtime = StreamRuntime::new();
 
     // Create camera and display processors
     // These handle all platform-specific details (AVFoundation, NSWindow, etc.)
     // Using default camera to avoid Continuity Camera issues
-    let mut camera = CameraProcessor::with_device_id("0x1424001bcf2284")?;
+    let mut camera = CameraProcessor::with_device_id("0x11424001bcf2284")?;
     let mut display = DisplayProcessor::new()?;
 
     // Set display window title
     display.set_window_title("streamlib Camera Display");
 
-    // Connect camera output → display input
-    println!("🔗 Connecting camera → display...");
+    // Connect camera output → display input (TYPE-SAFE!)
+    // The compiler ensures both ports use VideoFrame - mismatched types won't compile
+    println!("🔗 Connecting camera → display (type-safe)...");
     runtime.connect(
-        &mut camera.output_ports().video,
-        &mut display.input_ports().video,
+        &mut camera.output_ports().video,   // StreamOutput<VideoFrame>
+        &mut display.input_ports().video,   // StreamInput<VideoFrame>
     )?;
     println!("✓ Pipeline connected\n");
 
@@ -51,7 +62,7 @@ async fn main() -> Result<()> {
     runtime.add_processor(Box::new(display));
 
     // Start pipeline
-    println!("▶️  Starting pipeline (60 fps)...");
+    println!("▶️  Starting pipeline...");
     println!("   Press Ctrl+C to stop\n");
     runtime.start().await?;
 

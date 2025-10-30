@@ -8,6 +8,7 @@ pub mod display;
 pub mod audio_output;
 pub mod audio_capture;
 pub mod audio_effect;
+pub mod audio_mixer;
 pub mod clap_effect;
 pub mod parameter_modulation;
 pub mod parameter_automation;
@@ -24,10 +25,14 @@ pub use audio_effect::{
     AudioEffectProcessor, ParameterInfo, PluginInfo,
     AudioEffectInputPorts, AudioEffectOutputPorts,
 };
+pub use audio_mixer::{
+    AudioMixerProcessor, MixingStrategy,
+    AudioMixerInputPorts, AudioMixerOutputPorts,
+};
 pub use clap_effect::{ClapEffectProcessor, ClapScanner, ClapPluginInfo};
 pub use parameter_modulation::{ParameterModulator, LfoWaveform};
 pub use parameter_automation::ParameterAutomation;
-pub use test_tone::TestToneGenerator;
+pub use test_tone::{TestToneGenerator, TestToneGeneratorOutputPorts};
 
 #[cfg(feature = "debug-overlay")]
 pub use performance_overlay::{

@@ -4,7 +4,7 @@
 
 use crate::core::{
     StreamProcessor, CameraProcessor, CameraOutputPorts, CameraDevice,
-    VideoFrame, TimedTick, Result, StreamError,
+    VideoFrame, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::Arc;
@@ -47,6 +47,10 @@ unsafe impl Sync for FrameHolder {}
 // In practice, we only have one camera processor at a time
 static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> = std::sync::OnceLock::new();
 
+// Global wakeup channel (shared between delegate and processor)
+// Phase 3: Camera wakeup on frame arrival
+static WAKEUP_CHANNEL: std::sync::OnceLock<Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>> = std::sync::OnceLock::new();
+
 // Define the delegate class that receives camera frames
 define_class!(
     #[unsafe(super(NSObject))]
@@ -78,6 +82,14 @@ define_class!(
                 let frame_holder = FrameHolder { pixel_buffer };
                 let mut latest = storage.lock();
                 *latest = Some(frame_holder);
+
+                // Phase 3: Trigger push-based wakeup when frame arrives
+                if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
+                    if let Some(tx) = wakeup_storage.lock().as_ref() {
+                        // Non-blocking send (unbounded channel)
+                        let _ = tx.send(crate::core::runtime::WakeupEvent::DataAvailable);
+                    }
+                }
             }
         }
     }
@@ -268,6 +280,11 @@ impl AppleCameraProcessor {
         eprintln!("Camera: Initializing frame storage");
         let _ = FRAME_STORAGE.set(latest_frame.clone());
 
+        // Initialize global wakeup channel storage (Phase 3: push-based operation)
+        let wakeup_holder: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>> =
+            Arc::new(Mutex::new(None));
+        let _ = WAKEUP_CHANNEL.set(wakeup_holder.clone());
+
         eprintln!("Camera: Creating AVCaptureVideoDataOutput");
         // Create output
         let output = unsafe { AVCaptureVideoDataOutput::new() };
@@ -440,7 +457,7 @@ impl CameraProcessor for AppleCameraProcessor {
 }
 
 impl StreamProcessor for AppleCameraProcessor {
-    fn process(&mut self, tick: TimedTick) -> Result<()> {
+    fn process(&mut self) -> Result<()> {
         // Try to get the latest frame from the delegate
         let frame_holder = {
             let mut latest = self.latest_frame.lock();
@@ -562,10 +579,15 @@ impl StreamProcessor for AppleCameraProcessor {
                 )?;
 
                 // Step 4: Create VideoFrame with RGBA texture
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+
                 let frame = VideoFrame::new(
                     Arc::new(output_texture),
                     wgpu::TextureFormat::Rgba8Unorm,  // Explicit format
-                    tick.timestamp,
+                    timestamp,
                     self.frame_count,
                     width as u32,
                     height as u32,
@@ -713,6 +735,14 @@ impl StreamProcessor for AppleCameraProcessor {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn set_wakeup_channel(&mut self, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        // Store in global wakeup channel (shared with AVFoundation delegate)
+        if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
+            *wakeup_storage.lock() = Some(wakeup_tx);
+            tracing::debug!("CameraProcessor: Push-based wakeup enabled (AVFoundation callback will trigger processing)");
+        }
     }
 }
 
