@@ -54,9 +54,13 @@ use clack_extensions::params::{PluginParams, ParamInfoBuffer};
 
 use crate::core::{
     Result, StreamError, StreamProcessor, TimedTick, AudioFrame,
+    StreamInput, StreamOutput,
 };
 
-use super::audio_effect::{AudioEffectProcessor, ParameterInfo, PluginInfo};
+use super::audio_effect::{
+    AudioEffectProcessor, ParameterInfo, PluginInfo,
+    AudioEffectInputPorts, AudioEffectOutputPorts,
+};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -135,6 +139,12 @@ pub struct ClapEffectProcessor {
 
     /// Is the plugin currently activated?
     is_activated: bool,
+
+    /// Input ports
+    input_ports: AudioEffectInputPorts,
+
+    /// Output ports
+    output_ports: AudioEffectOutputPorts,
 }
 
 // SAFETY: ClapEffectProcessor is Send despite PluginBundle containing raw pointers
@@ -339,11 +349,14 @@ impl ClapEffectProcessor {
     {
         let path = path.as_ref();
 
+        // Get the actual binary path within the bundle (on macOS, bundles are folders)
+        let binary_path = ClapScanner::get_bundle_binary_path(path)?;
+
         // Load plugin bundle
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         // We trust that the plugin path points to a valid CLAP plugin
         let bundle = unsafe {
-            PluginBundle::load(path)
+            PluginBundle::load(&binary_path)
                 .map_err(|e| StreamError::Configuration(
                     format!("Failed to load CLAP plugin from {:?}: {:?}", path, e)
                 ))?
@@ -403,6 +416,15 @@ impl ClapEffectProcessor {
             max_frames: 2048,    // Default, will be set in activate()
         }));
 
+        // Create input and output ports
+        let input_ports = AudioEffectInputPorts {
+            audio: StreamInput::new("audio".to_string()),
+        };
+
+        let output_ports = AudioEffectOutputPorts {
+            audio: StreamOutput::new("audio".to_string()),
+        };
+
         Ok(Self {
             plugin_info,
             bundle,
@@ -411,6 +433,8 @@ impl ClapEffectProcessor {
             audio_processor: Arc::new(Mutex::new(None)),
             shared_state,
             is_activated: false,
+            input_ports,
+            output_ports,
         })
     }
 }
@@ -772,6 +796,14 @@ impl AudioEffectProcessor for ClapEffectProcessor {
     // Note: begin_edit/end_edit use default implementation from trait
     // Current version of clack-host doesn't expose these CLAP extension methods
     // Parameter changes are still batched via ParamValueEvents in process_audio()
+
+    fn input_ports(&mut self) -> &mut AudioEffectInputPorts {
+        &mut self.input_ports
+    }
+
+    fn output_ports(&mut self) -> &mut AudioEffectOutputPorts {
+        &mut self.output_ports
+    }
 }
 
 impl StreamProcessor for ClapEffectProcessor {
@@ -803,8 +835,15 @@ impl StreamProcessor for ClapEffectProcessor {
     }
 
     fn process(&mut self, _tick: TimedTick) -> Result<()> {
-        // Note: Actual audio processing happens via process_audio()
-        // This is called by the runtime for integration
+        // Read audio frame from input port
+        if let Some(input_frame) = self.input_ports.audio.read_latest() {
+            // Process through CLAP plugin
+            let output_frame = self.process_audio(&input_frame)?;
+
+            // Write to output port
+            self.output_ports.audio.write(output_frame);
+        }
+
         Ok(())
     }
 
@@ -1011,7 +1050,7 @@ impl ClapScanner {
     ///
     /// On macOS, CLAP bundles are app bundles with structure:
     /// MyPlugin.clap/Contents/MacOS/MyPlugin
-    fn get_bundle_binary_path(bundle_path: &Path) -> Result<std::path::PathBuf> {
+    pub fn get_bundle_binary_path(bundle_path: &Path) -> Result<std::path::PathBuf> {
         #[cfg(target_os = "macos")]
         {
             // macOS bundle structure: MyPlugin.clap/Contents/MacOS/MyPlugin

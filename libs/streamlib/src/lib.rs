@@ -57,7 +57,7 @@ pub use streamlib_macros::{processor, StreamProcessor as DeriveStreamProcessor};
 pub use core::{
     RingBuffer, Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock,
     StreamError, Result, TickBroadcaster, GpuContext,
-    VideoFrame, AudioFrame, AudioFormat, AudioBuffer, DataMessage, MetadataValue,
+    VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue,
     StreamProcessor, StreamOutput, StreamInput, PortType, PortMessage,
     // Note: CameraProcessor, DisplayProcessor, and AudioProcessor traits are in core,
     // but we'll re-export platform implementations below
@@ -67,14 +67,14 @@ pub use core::{
     AudioInputDevice, AudioCaptureOutputPorts,
     AudioEffectProcessor, ParameterInfo, PluginInfo,
     AudioEffectInputPorts, AudioEffectOutputPorts,
-    ClapEffectProcessor,
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
     TestToneGenerator,
     ShaderId, // from runtime, but we'll override StreamRuntime below
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
-    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_BUFFER, SCHEMA_DATA_MESSAGE,
+    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
     ProcessorRegistry, ProcessorRegistration,
     DescriptorProvider, global_registry,
@@ -86,8 +86,9 @@ pub use core::{
 };
 
 // Platform-specific module (conditional compilation)
+// Internal use only - external users should use the platform-agnostic aliases below
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub mod apple;
+pub(crate) mod apple;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{

@@ -874,43 +874,10 @@ pub static SCHEMA_VIDEO_FRAME: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     )
 });
 
-/// Standard schema for audio buffers
-///
-/// Represents a chunk of audio data with GPU buffer.
-pub static SCHEMA_AUDIO_BUFFER: LazyLock<Arc<Schema>> = LazyLock::new(|| {
-    Arc::new(
-        Schema::new(
-            "AudioBuffer",
-            SemanticVersion::new(1, 0, 0),
-            vec![
-                Field::new("buffer", FieldType::Buffer {
-                    element_type: Box::new(FieldType::Float32),
-                })
-                .with_description("WebGPU buffer containing audio samples"),
-                Field::new("timestamp", FieldType::Float64)
-                    .with_description("Timestamp in seconds since stream start"),
-                Field::new("sample_count", FieldType::UInt64)
-                    .with_description("Number of audio samples in this buffer"),
-                Field::new("sample_rate", FieldType::UInt32)
-                    .with_description("Sample rate in Hz (e.g., 48000)"),
-                Field::new("channels", FieldType::UInt32)
-                    .with_description("Number of channels (1 = mono, 2 = stereo)"),
-                Field::new("metadata", FieldType::Optional(Box::new(FieldType::Struct(vec![]))))
-                    .optional()
-                    .with_description("Optional metadata"),
-            ],
-            SerializationFormat::Arrow,
-        )
-        .with_description(
-            "A chunk of audio data with GPU buffer. Standard format for audio streaming in streamlib."
-        ),
-    )
-});
-
 /// Standard schema for audio frames
 ///
 /// Represents a chunk of audio data with CPU-first architecture.
-/// Unlike AudioBuffer (deprecated), AudioFrame uses CPU storage with optional GPU buffer.
+/// AudioFrame uses CPU storage with optional GPU buffer for flexible audio processing.
 pub static SCHEMA_AUDIO_FRAME: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     Arc::new(
         Schema::new(

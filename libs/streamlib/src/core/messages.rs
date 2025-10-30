@@ -294,68 +294,9 @@ impl AudioFrame {
     }
 }
 
-/// Audio buffer message (DEPRECATED - use AudioFrame instead)
-///
-/// This GPU-first approach doesn't match how audio is actually processed.
-/// Use AudioFrame for new code.
-///
-/// # Example
-///
-/// ```ignore
-/// use streamlib_core::messages::AudioBuffer;
-///
-/// // In a processor
-/// let buffers = audio_input.read_all();
-/// for buffer in buffers {
-///     println!("Audio: {} samples @ {} Hz",
-///         buffer.sample_count, buffer.sample_rate);
-/// }
-/// ```
-#[deprecated(since = "0.2.0", note = "Use AudioFrame instead")]
-#[derive(Clone)]
-pub struct AudioBuffer {
-    /// WebGPU buffer containing audio samples
-    pub buffer: Arc<wgpu::Buffer>,
-
-    /// Timestamp in seconds since stream start
-    pub timestamp: f64,
-
-    /// Number of audio samples in this buffer
-    pub sample_count: usize,
-
-    /// Sample rate in Hz (e.g., 48000)
-    pub sample_rate: u32,
-
-    /// Number of channels (1 = mono, 2 = stereo)
-    pub channels: u32,
-
-    /// Optional metadata
-    pub metadata: Option<HashMap<String, MetadataValue>>,
-}
-
-impl AudioBuffer {
-    /// Create a new audio buffer
-    pub fn new(
-        buffer: Arc<wgpu::Buffer>,
-        timestamp: f64,
-        sample_count: usize,
-        sample_rate: u32,
-        channels: u32,
-    ) -> Self {
-        Self {
-            buffer,
-            timestamp,
-            sample_count,
-            sample_rate,
-            channels,
-            metadata: None,
-        }
-    }
-}
-
 /// Generic data message
 ///
-/// For custom data types that don't fit VideoFrame or AudioBuffer.
+/// For custom data types that don't fit VideoFrame or AudioFrame.
 /// Uses WebGPU buffer for GPU-resident data.
 ///
 /// # Example
@@ -459,12 +400,6 @@ impl PortMessage for AudioFrame {
     }
 }
 
-#[allow(deprecated)]
-impl PortMessage for AudioBuffer {
-    fn port_type() -> PortType {
-        PortType::Audio
-    }
-}
 
 impl PortMessage for DataMessage {
     fn port_type() -> PortType {

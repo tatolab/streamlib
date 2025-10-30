@@ -25,7 +25,7 @@ pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
 pub use error::{StreamError, Result};
 pub use events::TickBroadcaster;
 pub use gpu_context::GpuContext;
-pub use messages::{VideoFrame, AudioFrame, AudioFormat, AudioBuffer, DataMessage, MetadataValue};
+pub use messages::{VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue};
 pub use stream_processor::StreamProcessor;
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
@@ -53,7 +53,7 @@ pub use schema::{
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
     AudioRequirements,  // Audio configuration requirements
     // Standard schemas
-    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_AUDIO_BUFFER, SCHEMA_DATA_MESSAGE,
+    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
 };
 pub use registry::{

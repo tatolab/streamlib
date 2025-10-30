@@ -4,9 +4,9 @@
 //! This gives us low-latency audio capture from microphones with minimal overhead.
 
 use crate::core::{
-    AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioFrame, Result,
-    StreamError, StreamProcessor, StreamOutput, TimedTick, ProcessorDescriptor, PortDescriptor,
-    SCHEMA_AUDIO_FRAME,
+    AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioCaptureOutputPorts,
+    AudioFrame, Result, StreamError, StreamProcessor, StreamOutput, TimedTick, ProcessorDescriptor,
+    PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -66,8 +66,8 @@ pub struct AppleAudioCaptureProcessor {
     /// Number of channels (1 = mono, 2 = stereo)
     channels: u32,
 
-    /// Audio output port (sends AudioFrame)
-    output_port: StreamOutput<AudioFrame>,
+    /// Output ports
+    pub ports: AudioCaptureOutputPorts,
 }
 
 // SAFETY: AppleAudioCaptureProcessor is Send despite cpal::Stream not being Send
@@ -179,8 +179,10 @@ impl AppleAudioCaptureProcessor {
             .play()
             .map_err(|e| StreamError::Configuration(format!("Failed to start audio stream: {}", e)))?;
 
-        // Create output port for AudioFrames
-        let output_port = StreamOutput::new("audio".to_string());
+        // Create output ports
+        let ports = AudioCaptureOutputPorts {
+            audio: StreamOutput::new("audio".to_string()),
+        };
 
         Ok(Self {
             device_info,
@@ -192,7 +194,7 @@ impl AppleAudioCaptureProcessor {
             frame_counter,
             sample_rate,
             channels,
-            output_port,
+            ports,
         })
     }
 }
@@ -246,6 +248,10 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
     fn current_level(&self) -> f32 {
         *self.current_level.lock()
     }
+
+    fn output_ports(&mut self) -> &mut AudioCaptureOutputPorts {
+        &mut self.ports
+    }
 }
 
 impl StreamProcessor for AppleAudioCaptureProcessor {
@@ -284,7 +290,7 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
         );
 
         // Write to output port
-        self.output_port.write(audio_frame);
+        self.ports.audio.write(audio_frame);
 
         Ok(())
     }
@@ -313,13 +319,6 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
-    }
-}
-
-/// Get access to the audio output port
-impl AppleAudioCaptureProcessor {
-    pub fn output_port_mut(&mut self) -> &mut StreamOutput<AudioFrame> {
-        &mut self.output_port
     }
 }
 

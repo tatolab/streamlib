@@ -9,6 +9,13 @@ use streamlib::{
     Result,
 };
 
+// Import traits to get access to their methods
+use streamlib::core::{
+    AudioCaptureProcessor as AudioCaptureProcessorTrait,
+    AudioOutputProcessor as AudioOutputProcessorTrait,
+    AudioEffectProcessor as AudioEffectProcessorTrait,
+};
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -39,24 +46,29 @@ async fn main() -> Result<()> {
         println!("   [{}] {} by {}", i, plugin.name, plugin.vendor);
     }
 
-    // Step 2: Find a reverb plugin
-    println!("\n🔍 Looking for reverb plugin...");
-    let reverb_plugin = plugins.iter()
+    // Step 2: Find an effects plugin (reverb, delay, etc.)
+    println!("\n🔍 Looking for audio effects plugin...");
+    let effects_plugin = plugins.iter()
         .find(|p| {
             let name_lower = p.name.to_lowercase();
             name_lower.contains("reverb") ||
             name_lower.contains("verb") ||
-            p.features.iter().any(|f| f.to_lowercase().contains("reverb"))
+            name_lower.contains("effects") ||
+            name_lower.contains("fx") ||
+            p.features.iter().any(|f| {
+                let f_lower = f.to_lowercase();
+                f_lower.contains("reverb") || f_lower.contains("effect")
+            })
         });
 
-    let plugin_path = match reverb_plugin {
+    let plugin_path = match effects_plugin {
         Some(plugin) => {
             println!("✅ Using: {} by {}", plugin.name, plugin.vendor);
             println!("   Path: {}", plugin.path.display());
             plugin.path.clone()
         }
         None => {
-            println!("⚠️  No reverb plugin found, using first available plugin...");
+            println!("⚠️  No effects plugin found, using first available plugin...");
             let first = &plugins[0];
             println!("   Using: {} by {}", first.name, first.vendor);
             first.path.clone()
@@ -73,7 +85,7 @@ async fn main() -> Result<()> {
 
     // Step 4: Create microphone input
     println!("\n🎤 Setting up microphone input...");
-    let mic = AudioCaptureProcessor::new(
+    let mut mic = AudioCaptureProcessor::new(
         None, // Use default mic
         audio_config.sample_rate,
         audio_config.channels,
@@ -110,21 +122,25 @@ async fn main() -> Result<()> {
 
     // Step 6: Create speaker output
     println!("\n🔊 Setting up speaker output...");
-    let speaker = AudioOutputProcessor::new(None)?; // Use default speaker
+    let mut speaker = AudioOutputProcessor::new(None)?; // Use default speaker
     println!("✅ Using speaker: {}", speaker.current_device().name);
 
-    // Step 7: Add processors to runtime
+    // Step 7: Connect the pipeline (type-safe connections BEFORE adding to runtime)
     println!("\n🔗 Building audio pipeline...");
-    let mic_id = runtime.add_processor(Box::new(mic));
-    let reverb_id = runtime.add_processor(Box::new(reverb));
-    let speaker_id = runtime.add_processor(Box::new(speaker));
+    runtime.connect(
+        &mut mic.output_ports().audio,
+        &mut reverb.input_ports().audio
+    )?;
+    runtime.connect(
+        &mut reverb.output_ports().audio,
+        &mut speaker.input_ports().audio
+    )?;
+    println!("✅ Pipeline connected: mic → reverb → speaker");
 
-    // Step 8: Connect the pipeline
-    runtime.connect(&format!("{}.audio", mic_id), &format!("{}.input", reverb_id))?;
-    runtime.connect(&format!("{}.output", reverb_id), &format!("{}.audio", speaker_id))?;
-
-    println!("✅ Pipeline connected:");
-    println!("   {} (mic) → {} (reverb) → {} (speaker)", mic_id, reverb_id, speaker_id);
+    // Step 8: Add processors to runtime (AFTER connecting)
+    runtime.add_processor(Box::new(mic));
+    runtime.add_processor(Box::new(reverb));
+    runtime.add_processor(Box::new(speaker));
 
     // Step 9: Start the runtime
     println!("\n▶️  Starting audio processing...");

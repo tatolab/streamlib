@@ -4,9 +4,9 @@
 //! This gives us low-latency audio playback with minimal overhead.
 
 use crate::core::{
-    AudioOutputProcessor as AudioOutputProcessorTrait, AudioDevice, AudioFrame, Result,
-    StreamError, StreamProcessor, TimedTick, ProcessorDescriptor, PortDescriptor,
-    SCHEMA_AUDIO_FRAME,
+    AudioOutputProcessor as AudioOutputProcessorTrait, AudioDevice, AudioOutputInputPorts,
+    AudioFrame, Result, StreamError, StreamProcessor, StreamInput, TimedTick,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -58,9 +58,8 @@ pub struct AppleAudioOutputProcessor {
     /// Number of channels (2 = stereo)
     channels: u32,
 
-    /// Input port name
-    #[allow(dead_code)]
-    input_port: String,
+    /// Input ports
+    pub ports: AudioOutputInputPorts,
 }
 
 // SAFETY: AppleAudioOutputProcessor is Send despite cpal::Stream not being Send
@@ -164,6 +163,11 @@ impl AppleAudioOutputProcessor {
             .play()
             .map_err(|e| StreamError::Configuration(format!("Failed to start audio stream: {}", e)))?;
 
+        // Create input ports
+        let ports = AudioOutputInputPorts {
+            audio: StreamInput::new("audio".to_string()),
+        };
+
         Ok(Self {
             device_info,
             _device: device,
@@ -172,7 +176,7 @@ impl AppleAudioOutputProcessor {
             is_playing,
             sample_rate,
             channels,
-            input_port: "audio".to_string(),
+            ports,
         })
     }
 
@@ -236,6 +240,10 @@ impl AudioOutputProcessorTrait for AppleAudioOutputProcessor {
     fn current_device(&self) -> &AudioDevice {
         &self.device_info
     }
+
+    fn input_ports(&mut self) -> &mut AudioOutputInputPorts {
+        &mut self.ports
+    }
 }
 
 impl StreamProcessor for AppleAudioOutputProcessor {
@@ -263,11 +271,9 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
     fn process(&mut self, _tick: TimedTick) -> Result<()> {
         // Read AudioFrame from input port
-        // Note: This is a placeholder - actual port reading will be implemented
-        // when we integrate with the runtime's port system
-
-        // For now, we'll add a method to push audio frames manually
-        // which will be called by the runtime when data is available
+        if let Some(frame) = self.ports.audio.read_latest() {
+            self.push_frame(&frame)?;
+        }
 
         Ok(())
     }
