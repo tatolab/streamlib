@@ -1050,10 +1050,25 @@ impl ClapScanner {
     ///
     /// On macOS, CLAP bundles are app bundles with structure:
     /// MyPlugin.clap/Contents/MacOS/MyPlugin
+    ///
+    /// This function handles both:
+    /// - Bundle paths: "/path/to/Plugin.clap" → "/path/to/Plugin.clap/Contents/MacOS/Plugin"
+    /// - Direct binary paths: "/path/to/Plugin.clap/Contents/MacOS/Plugin" → returns as-is
     pub fn get_bundle_binary_path(bundle_path: &Path) -> Result<std::path::PathBuf> {
         #[cfg(target_os = "macos")]
         {
-            // macOS bundle structure: MyPlugin.clap/Contents/MacOS/MyPlugin
+            // If the path is already a file (binary), return it as-is
+            if bundle_path.is_file() {
+                return Ok(bundle_path.to_path_buf());
+            }
+
+            // If the path doesn't end with .clap, assume it's already a binary path
+            // (even if it doesn't exist yet - let the plugin loader handle the error)
+            if bundle_path.extension().and_then(|s| s.to_str()) != Some("clap") {
+                return Ok(bundle_path.to_path_buf());
+            }
+
+            // It's a bundle directory - construct the binary path
             let binary_name = bundle_path
                 .file_stem()
                 .ok_or_else(|| StreamError::Configuration("Invalid bundle path".into()))?;
@@ -1389,7 +1404,7 @@ mod tests {
         /// Verifies that transaction semantics work correctly for batched parameter updates
         #[test]
         fn test_clap_plugin_parameter_transactions() {
-            let plugin_path = "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap/Contents/MacOS/Surge XT Effects";
+            let plugin_path = "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap";
             if !std::path::Path::new(plugin_path).exists() {
                 println!("⚠️  Skipping test - plugin not found at {}", plugin_path);
                 return;
@@ -1405,37 +1420,47 @@ mod tests {
 
             println!("\n🎛️  Testing parameter transactions...");
 
-            // Find gain parameter
+            // Find any numeric parameter for testing
             let parameters = plugin.list_parameters();
-            let gain_param = parameters.iter()
-                .find(|p| p.name.to_lowercase().contains("gain"))
-                .expect("No gain parameter found");
 
-            let gain_id = gain_param.id;
-            println!("   Found gain parameter: {} (ID: {})", gain_param.name, gain_id);
+            // Try to find a simple parameter (mix, gain, level, etc.)
+            let test_param = parameters.iter()
+                .find(|p| {
+                    let name_lower = p.name.to_lowercase();
+                    name_lower.contains("mix") ||
+                    name_lower.contains("gain") ||
+                    name_lower.contains("level") ||
+                    name_lower.contains("wet") ||
+                    name_lower.contains("dry")
+                })
+                .or_else(|| parameters.first())
+                .expect("No parameters found");
+
+            let param_id = test_param.id;
+            println!("   Using parameter for test: {} (ID: {})", test_param.name, param_id);
 
             // Test transaction workflow
             println!("   Starting parameter transaction...");
 
             // Begin edit
-            let result = plugin.begin_edit(gain_id);
+            let result = plugin.begin_edit(param_id);
             assert!(result.is_ok(), "begin_edit should succeed");
 
-            // Make parameter changes (batched)
-            plugin.set_parameter(gain_id, 6.0).unwrap();
-            plugin.set_parameter(gain_id, 8.0).unwrap();
-            plugin.set_parameter(gain_id, 10.0).unwrap();
+            // Make parameter changes (batched) - use values in 0.0-1.0 range
+            plugin.set_parameter(param_id, 0.3).unwrap();
+            plugin.set_parameter(param_id, 0.5).unwrap();
+            plugin.set_parameter(param_id, 0.7).unwrap();
 
             // End edit (commit transaction)
-            let result = plugin.end_edit(gain_id);
+            let result = plugin.end_edit(param_id);
             assert!(result.is_ok(), "end_edit should succeed");
 
             println!("   ✅ Transaction completed successfully");
 
             // Verify final value was applied
-            let final_value = plugin.get_parameter(gain_id).unwrap();
-            assert!((final_value - 10.0).abs() < 0.1, "Final value should be 10.0, got {}", final_value);
-            println!("   ✅ Final parameter value: {} dB", final_value);
+            let final_value = plugin.get_parameter(param_id).unwrap();
+            assert!((final_value - 0.7).abs() < 0.1, "Final value should be ~0.7, got {}", final_value);
+            println!("   ✅ Final parameter value: {}", final_value);
 
             plugin.deactivate().expect("Failed to deactivate");
         }
