@@ -72,19 +72,20 @@ impl TestToneGenerator {
 
 1. [Background & Motivation](#background--motivation)
 2. [GStreamer Research Findings](#gstreamer-research-findings)
-3. [3-Tier Processor Architecture](#3-tier-processor-architecture)
-4. [Declarative Scheduling API](#declarative-scheduling-api)
-5. [Clock Infrastructure](#clock-infrastructure)
-6. [Runtime Scheduling Infrastructure](#runtime-scheduling-infrastructure)
-7. [Event Flow & Data Movement](#event-flow--data-movement)
-8. [How This Fixes Buffer Overrun](#how-this-fixes-buffer-overrun)
-9. [Migration Path](#migration-path)
-10. [Implementation Plan](#implementation-plan)
-11. [API Design Details](#api-design-details)
-12. [Testing Strategy](#testing-strategy)
-13. [Success Criteria](#success-criteria)
-14. [Open Questions](#open-questions)
-15. [References](#references)
+3. [StreamElement Base Trait](#streamelement-base-trait)
+4. [3-Tier Processor Architecture](#3-tier-processor-architecture)
+5. [Declarative Scheduling API](#declarative-scheduling-api)
+6. [Clock Infrastructure](#clock-infrastructure)
+7. [Runtime Scheduling Infrastructure](#runtime-scheduling-infrastructure)
+8. [Event Flow & Data Movement](#event-flow--data-movement)
+9. [How This Fixes Buffer Overrun](#how-this-fixes-buffer-overrun)
+10. [Migration Path](#migration-path)
+11. [Implementation Plan](#implementation-plan)
+12. [API Design Details](#api-design-details)
+13. [Testing Strategy](#testing-strategy)
+14. [Success Criteria](#success-criteria)
+15. [Open Questions](#open-questions)
+16. [References](#references)
 
 ---
 
@@ -337,9 +338,272 @@ GStreamer teaches us:
 
 ---
 
+## StreamElement Base Trait
+
+Following GStreamer's design, all processors share a common base trait that provides uniform operations.
+
+### GStreamer's Hierarchy
+
+GStreamer uses inheritance-based design:
+```c
+GstElement (base class)
+├── GstBaseSrc (inherits GstElement)
+├── GstBaseSink (inherits GstElement)
+└── GstBaseTransform (inherits GstElement)
+```
+
+All common functionality (name, state management, events, queries) lives in `GstElement`, while specialized behavior is in the subclasses.
+
+### streamlib's Equivalent
+
+```rust
+trait StreamElement (base trait)
+├── trait StreamSource: StreamElement
+├── trait StreamSink: StreamElement
+└── trait StreamTransform: StreamElement
+```
+
+### Why a Base Trait?
+
+#### 1. Runtime Simplification
+
+**Without base trait**:
+```rust
+struct StreamRuntime {
+    sources: HashMap<ProcessorId, Box<dyn StreamSource>>,
+    sinks: HashMap<ProcessorId, Box<dyn StreamSink>>,
+    transforms: HashMap<ProcessorId, Box<dyn StreamTransform>>,
+}
+
+// Awkward: need to search all 3 collections
+fn get_processor(&self, id: ProcessorId) -> ??? {
+    // Which collection is it in?
+}
+```
+
+**With base trait**:
+```rust
+struct StreamRuntime {
+    elements: HashMap<ProcessorId, Box<dyn StreamElement>>,
+}
+
+// Clean: single storage, single lookup
+fn get_element(&self, id: ProcessorId) -> Option<&dyn StreamElement> {
+    self.elements.get(&id)
+}
+```
+
+#### 2. Uniform Operations
+
+```rust
+trait StreamElement: Send + 'static {
+    // Metadata
+    fn name(&self) -> &str;
+    fn element_type(&self) -> ElementType;
+    fn descriptor(&self) -> Option<ProcessorDescriptor>;
+
+    // Lifecycle
+    fn start(&mut self) -> Result<()>;
+    fn stop(&mut self) -> Result<()>;
+    fn shutdown(&mut self) -> Result<()>;
+
+    // Introspection
+    fn input_ports(&self) -> Vec<PortDescriptor>;
+    fn output_ports(&self) -> Vec<PortDescriptor>;
+}
+
+// Runtime can operate uniformly on all elements:
+for element in runtime.elements.values_mut() {
+    element.start()?;  // Start all processors uniformly
+}
+
+runtime.stop_all()?;  // Stop all processors
+```
+
+#### 3. MCP/AI Discoverability
+
+```rust
+// MCP can query all elements uniformly
+impl StreamRuntime {
+    pub fn list_elements(&self) -> Vec<ElementInfo> {
+        self.elements.values().map(|e| ElementInfo {
+            name: e.name(),
+            type: e.element_type(),
+            inputs: e.input_ports(),
+            outputs: e.output_ports(),
+        }).collect()
+    }
+}
+```
+
+#### 4. Type-Safe Dispatch
+
+```rust
+impl StreamRuntime {
+    pub fn add_element<E: StreamElement>(&mut self, element: E) -> ProcessorHandle<E> {
+        let elem_type = element.element_type();
+
+        // Dispatch based on type
+        let handle = match elem_type {
+            ElementType::Source => {
+                let src = element.as_source().unwrap();
+                self.spawn_source_loop(src)
+            }
+            ElementType::Sink => {
+                let sink = element.as_sink().unwrap();
+                self.spawn_sink_handler(sink)
+            }
+            ElementType::Transform => {
+                let trans = element.as_transform().unwrap();
+                self.spawn_transform_handler(trans)
+            }
+        };
+
+        self.elements.insert(handle.id(), Box::new(element));
+        handle
+    }
+}
+```
+
+### StreamElement Trait Definition
+
+```rust
+/// Base trait for all stream processing elements
+///
+/// Inspired by GStreamer's GstElement, this provides common functionality
+/// for metadata, lifecycle management, and introspection.
+pub trait StreamElement: Send + 'static {
+    /// Element name (for logging, debugging, MCP)
+    ///
+    /// Should be unique within a runtime instance.
+    fn name(&self) -> &str;
+
+    /// Element type (Source/Sink/Transform)
+    ///
+    /// Used by runtime to dispatch to appropriate execution model.
+    fn element_type(&self) -> ElementType;
+
+    /// Processor descriptor for MCP/AI discoverability
+    fn descriptor(&self) -> Option<ProcessorDescriptor>;
+
+    /// Lifecycle: Start processing
+    ///
+    /// Called by runtime when pipeline starts.
+    /// Default implementation does nothing.
+    fn start(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Lifecycle: Stop processing
+    ///
+    /// Called by runtime when pipeline stops.
+    /// Should gracefully pause processing but maintain state.
+    fn stop(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Lifecycle: Shutdown (cleanup resources)
+    ///
+    /// Called when element is being removed from runtime.
+    /// Should release all resources (hardware, memory, threads).
+    fn shutdown(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Get input port descriptors
+    ///
+    /// Returns metadata about all input ports.
+    /// Default: empty (for sources with no inputs).
+    fn input_ports(&self) -> Vec<PortDescriptor> {
+        Vec::new()
+    }
+
+    /// Get output port descriptors
+    ///
+    /// Returns metadata about all output ports.
+    /// Default: empty (for sinks with no outputs).
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        Vec::new()
+    }
+
+    /// Downcast to StreamSource (if applicable)
+    fn as_source(&self) -> Option<&dyn StreamSource> {
+        None
+    }
+
+    /// Downcast to StreamSink (if applicable)
+    fn as_sink(&self) -> Option<&dyn StreamSink> {
+        None
+    }
+
+    /// Downcast to StreamTransform (if applicable)
+    fn as_transform(&self) -> Option<&dyn StreamTransform> {
+        None
+    }
+}
+
+pub enum ElementType {
+    Source,
+    Sink,
+    Transform,
+}
+```
+
+### Derive Macro Support
+
+The derive macros automatically implement `StreamElement`:
+
+```rust
+#[derive(StreamSource)]
+#[scheduling(mode = "loop", clock = "audio")]
+struct TestToneGenerator {
+    #[output()]
+    audio: StreamOutput<AudioFrame>,
+
+    frequency: f64,
+}
+
+// Macro generates:
+impl StreamElement for TestToneGenerator {
+    fn name(&self) -> &str {
+        "TestToneGenerator"
+    }
+
+    fn element_type(&self) -> ElementType {
+        ElementType::Source
+    }
+
+    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+        // Auto-generated from struct definition
+    }
+
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        // Extracted from #[output()] attributes
+        vec![
+            PortDescriptor {
+                name: "audio",
+                data_type: "AudioFrame",
+                direction: PortDirection::Output,
+            }
+        ]
+    }
+
+    fn as_source(&self) -> Option<&dyn StreamSource> {
+        Some(self)
+    }
+}
+
+impl StreamSource for TestToneGenerator {
+    // Specialized source methods
+    // ...
+}
+```
+
+---
+
 ## 3-Tier Processor Architecture
 
-Based on GStreamer's architecture and streamlib's requirements, we define 3 processor types:
+Based on GStreamer's architecture and streamlib's requirements, we define 3 processor types that all inherit from `StreamElement`:
 
 ### Design Principles
 
@@ -350,23 +614,31 @@ Based on GStreamer's architecture and streamlib's requirements, we define 3 proc
 
 ### The Three Tiers
 
+All three processor types inherit from `StreamElement`:
+
 ```
-┌─────────────────┐
-│  StreamSource   │  No inputs, only outputs
-│                 │  Examples: TestTone, Camera, Microphone
-└────────┬────────┘
-         │ generates data
-         ▼
-┌─────────────────┐
-│ StreamTransform │  Has inputs and outputs (any configuration)
-│                 │  Examples: Effect (1→1), Mixer (N→1), Tee (1→N)
-└────────┬────────┘
-         │ processes data
-         ▼
-┌─────────────────┐
-│   StreamSink    │  Only inputs, no outputs
-│                 │  Examples: Speaker, Display, Network sender
-└─────────────────┘
+                    ┌──────────────────┐
+                    │  StreamElement   │  Base trait (common functionality)
+                    │   (base trait)   │
+                    └────────┬─────────┘
+                             │ inherits
+                    ┌────────┴─────────┬────────────────┬─────────────┐
+                    │                  │                │             │
+         ┌──────────▼──────────┐  ┌───▼──────────┐  ┌──▼──────────┐
+         │   StreamSource      │  │ StreamSink   │  │StreamTransform│
+         │  (no inputs)        │  │(no outputs)  │  │(both I/O)   │
+         └──────────┬──────────┘  └───┬──────────┘  └──┬──────────┘
+                    │                 │                │
+                    │                 │                │
+         ┌──────────▼──────────┐  ┌───▼──────────┐  ┌──▼──────────┐
+         │ TestToneGenerator   │  │AudioOutput   │  │AudioMixer   │
+         │ CameraProcessor     │  │DisplayProc   │  │ClapEffect   │
+         │ AudioCapture        │  │FileSink      │  │Tee          │
+         └─────────────────────┘  └──────────────┘  └─────────────┘
+                    │ generates         │ renders        │ processes
+                    ▼                   ▼                ▼
+                AudioFrame          (to hardware)    AudioFrame
+                VideoFrame          (to file)        VideoFrame
 ```
 
 ### 1. StreamSource
@@ -394,14 +666,19 @@ Based on GStreamer's architecture and streamlib's requirements, we define 3 proc
 
 **Key trait methods**:
 ```rust
-trait StreamSource {
+trait StreamSource: StreamElement {
+    type Output: FrameData;
+
     fn generate(&mut self) -> Result<Self::Output>;
     // Called by runtime in loop or callback
 
     fn clock_sync_point(&self) -> Duration;
     // How long to wait before next generation
 
-    // No process() method - not event-driven!
+    // Inherits from StreamElement:
+    // - fn name(&self) -> &str;
+    // - fn element_type(&self) -> ElementType { ElementType::Source }
+    // - fn output_ports(&self) -> Vec<PortDescriptor>; (auto-generated)
 }
 ```
 
@@ -430,15 +707,25 @@ trait StreamSource {
 
 **Key trait methods**:
 ```rust
-trait StreamSink {
+trait StreamSink: StreamElement {
+    type Input: FrameData;
+
     fn render(&mut self, input: Self::Input) -> Result<()>;
     // Called when data arrives, syncs to clock before rendering
 
-    fn provide_clock(&self) -> Option<Arc<dyn Clock>>;
-    // Can provide clock for pipeline synchronization
+    fn provide_clock(&self) -> Option<Arc<dyn Clock>> {
+        None  // Default: no clock provided
+    }
 
-    fn accept_data(&mut self, input: Self::Input);
-    // For callback-driven sinks (queues data for callback)
+    fn accept_data(&mut self, input: Self::Input) {
+        // Default: immediate render
+        self.render(input).ok();
+    }
+
+    // Inherits from StreamElement:
+    // - fn name(&self) -> &str;
+    // - fn element_type(&self) -> ElementType { ElementType::Sink }
+    // - fn input_ports(&self) -> Vec<PortDescriptor>; (auto-generated)
 }
 ```
 
@@ -467,13 +754,19 @@ trait StreamSink {
 
 **Key trait methods**:
 ```rust
-trait StreamTransform {
+trait StreamTransform: StreamElement {
     fn transform(&mut self, event: WakeupEvent) -> Result<()>;
     // Called when DataAvailable event arrives
     // Reads from inputs, writes to outputs
 
     // Can use read_latest() for slow processors (auto frame drop)
     // Can use blocking read for fast processors (backpressure)
+
+    // Inherits from StreamElement:
+    // - fn name(&self) -> &str;
+    // - fn element_type(&self) -> ElementType { ElementType::Transform }
+    // - fn input_ports(&self) -> Vec<PortDescriptor>; (auto-generated)
+    // - fn output_ports(&self) -> Vec<PortDescriptor>; (auto-generated)
 }
 ```
 
@@ -2502,54 +2795,179 @@ Track questions that arise during design/implementation:
 
 ## Appendix: Complete API Reference
 
+### StreamElement Trait (Base)
+
+```rust
+/// Base trait for all stream processing elements
+///
+/// Inspired by GStreamer's GstElement, provides common functionality
+/// for metadata, lifecycle management, and introspection.
+///
+/// All processors (Source/Sink/Transform) inherit from this trait.
+pub trait StreamElement: Send + 'static {
+    /// Element name (for logging, debugging, MCP)
+    ///
+    /// Should be unique within a runtime instance.
+    /// Auto-generated from struct name by derive macro.
+    fn name(&self) -> &str;
+
+    /// Element type (Source/Sink/Transform)
+    ///
+    /// Used by runtime to dispatch to appropriate execution model.
+    /// Auto-generated based on which trait is derived.
+    fn element_type(&self) -> ElementType;
+
+    /// Processor descriptor for MCP/AI discoverability
+    ///
+    /// Auto-generated from struct definition, attributes, and doc comments.
+    fn descriptor(&self) -> Option<ProcessorDescriptor>;
+
+    /// Lifecycle: Start processing
+    ///
+    /// Called by runtime when pipeline starts.
+    /// Override to initialize hardware, open files, etc.
+    /// Default implementation does nothing.
+    fn start(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Lifecycle: Stop processing
+    ///
+    /// Called by runtime when pipeline stops.
+    /// Should gracefully pause processing but maintain state.
+    /// Override to pause hardware, flush buffers, etc.
+    /// Default implementation does nothing.
+    fn stop(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Lifecycle: Shutdown (cleanup resources)
+    ///
+    /// Called when element is being removed from runtime.
+    /// Should release all resources (hardware, memory, threads).
+    /// Override to close hardware, free resources, etc.
+    /// Default implementation does nothing.
+    fn shutdown(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Get input port descriptors
+    ///
+    /// Returns metadata about all input ports.
+    /// Auto-generated from #[input(...)] attributes by derive macro.
+    /// Default: empty (for sources with no inputs).
+    fn input_ports(&self) -> Vec<PortDescriptor> {
+        Vec::new()
+    }
+
+    /// Get output port descriptors
+    ///
+    /// Returns metadata about all output ports.
+    /// Auto-generated from #[output(...)] attributes by derive macro.
+    /// Default: empty (for sinks with no outputs).
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        Vec::new()
+    }
+
+    /// Downcast to StreamSource (if applicable)
+    ///
+    /// Returns Some if this element is a Source, None otherwise.
+    /// Auto-generated by derive macro.
+    fn as_source(&self) -> Option<&dyn StreamSource> {
+        None
+    }
+
+    /// Downcast to StreamSink (if applicable)
+    ///
+    /// Returns Some if this element is a Sink, None otherwise.
+    /// Auto-generated by derive macro.
+    fn as_sink(&self) -> Option<&dyn StreamSink> {
+        None
+    }
+
+    /// Downcast to StreamTransform (if applicable)
+    ///
+    /// Returns Some if this element is a Transform, None otherwise.
+    /// Auto-generated by derive macro.
+    fn as_transform(&self) -> Option<&dyn StreamTransform> {
+        None
+    }
+}
+
+pub enum ElementType {
+    Source,
+    Sink,
+    Transform,
+}
+```
+
 ### StreamSource Trait
 
 ```rust
-pub trait StreamSource: Send + 'static {
+/// Source processors that generate data
+///
+/// Sources have no inputs, only outputs.
+/// They run in continuous loops or hardware callbacks.
+///
+/// Inherits from StreamElement for common functionality.
+pub trait StreamSource: StreamElement {
     /// Output data type
     type Output: FrameData;
-    
+
     /// Configuration struct type
     type Config: DeserializeOwned + Serialize;
-    
+
     /// Construct from config
     fn from_config(config: Self::Config) -> Result<Self> where Self: Sized;
-    
+
     /// Generate next output frame
     /// Called by runtime in loop or callback
     fn generate(&mut self) -> Result<Self::Output>;
-    
+
     /// Duration to wait before next generation
     /// Used by runtime for clock synchronization
     fn clock_sync_point(&self) -> Duration;
-    
+
     /// Processor descriptor for MCP
     fn descriptor() -> Option<ProcessorDescriptor>;
-    
+
     /// Scheduling configuration
     /// Generated by #[scheduling(...)] macro
     fn scheduling_config(&self) -> SchedulingConfig;
+
+    // Inherits from StreamElement:
+    // - fn name(&self) -> &str;
+    // - fn element_type(&self) -> ElementType; (returns ElementType::Source)
+    // - fn start/stop/shutdown(&mut self) -> Result<()>;
+    // - fn output_ports(&self) -> Vec<PortDescriptor>;
+    // - fn as_source(&self) -> Option<&dyn StreamSource>; (returns Some(self))
 }
 ```
 
 ### StreamSink Trait
 
 ```rust
-pub trait StreamSink: Send + 'static {
+/// Sink processors that consume data
+///
+/// Sinks have inputs but no outputs (terminal processors).
+/// They render to hardware, network, or application.
+///
+/// Inherits from StreamElement for common functionality.
+pub trait StreamSink: StreamElement {
     /// Input data type
     type Input: FrameData;
-    
+
     /// Configuration struct type
     type Config: DeserializeOwned + Serialize;
-    
+
     /// Construct from config
     fn from_config(config: Self::Config) -> Result<Self> where Self: Sized;
-    
+
     /// Render input frame
     /// For reactive sinks: called when data arrives
     /// For callback sinks: called from accept_data()
     fn render(&mut self, input: Self::Input) -> Result<()>;
-    
+
     /// Accept data for callback-driven sinks
     /// Queues data for hardware callback
     /// Optional: only needed for callback mode
@@ -2557,28 +2975,41 @@ pub trait StreamSink: Send + 'static {
         // Default: immediate render
         self.render(input).ok();
     }
-    
+
     /// Provide clock for pipeline
     /// Return Some if this sink provides hardware clock
     fn provide_clock(&self) -> Option<Arc<dyn Clock>> {
         None
     }
-    
+
     /// Processor descriptor for MCP
     fn descriptor() -> Option<ProcessorDescriptor>;
-    
+
     /// Scheduling configuration
     fn scheduling_config(&self) -> SchedulingConfig;
+
+    // Inherits from StreamElement:
+    // - fn name(&self) -> &str;
+    // - fn element_type(&self) -> ElementType; (returns ElementType::Sink)
+    // - fn start/stop/shutdown(&mut self) -> Result<()>;
+    // - fn input_ports(&self) -> Vec<PortDescriptor>;
+    // - fn as_sink(&self) -> Option<&dyn StreamSink>; (returns Some(self))
 }
 ```
 
 ### StreamTransform Trait
 
 ```rust
-pub trait StreamTransform: Send + 'static {
+/// Transform processors that process data
+///
+/// Transforms have both inputs and outputs (any configuration).
+/// They are purely reactive, waking only on DataAvailable events.
+///
+/// Inherits from StreamElement for common functionality.
+pub trait StreamTransform: StreamElement {
     /// Configuration struct type
     type Config: DeserializeOwned + Serialize;
-    
+
     /// Construct from config
     fn from_config(config: Self::Config) -> Result<Self> where Self: Sized;
     
@@ -2586,9 +3017,17 @@ pub trait StreamTransform: Send + 'static {
     /// Called when WakeupEvent arrives
     /// Typically only processes on DataAvailable
     fn transform(&mut self, event: WakeupEvent) -> Result<()>;
-    
+
     /// Processor descriptor for MCP
     fn descriptor() -> Option<ProcessorDescriptor>;
+
+    // Inherits from StreamElement:
+    // - fn name(&self) -> &str;
+    // - fn element_type(&self) -> ElementType; (returns ElementType::Transform)
+    // - fn start/stop/shutdown(&mut self) -> Result<()>;
+    // - fn input_ports(&self) -> Vec<PortDescriptor>;
+    // - fn output_ports(&self) -> Vec<PortDescriptor>;
+    // - fn as_transform(&self) -> Option<&dyn StreamTransform>; (returns Some(self))
 }
 ```
 
