@@ -200,49 +200,101 @@ Users don't see the change. Examples still work. But underneath, it's real infra
 - Calculate actual speedups
 - Save proof (images, benchmarks, logs)
 
-## Processor Auto-Registration Pattern
+## Creating Processors: ALWAYS Use the Macro
 
-**Super simple - just one extra line after your StreamProcessor implementation:**
+**CRITICAL: Use `#[derive(StreamProcessor)]` for ALL new processors.**
+
+This reduces boilerplate from ~90 lines to ~10 lines and ensures MCP compatibility.
+
+### The Standard Way (Use This!)
 
 ```rust
-use streamlib::{StreamProcessor, ProcessorDescriptor, register_processor_type};
+use streamlib::{StreamInput, StreamOutput, VideoFrame};
 
-struct MyProcessor;
+#[derive(StreamProcessor)]
+struct MyEffectProcessor {
+    #[input()]
+    video_in: StreamInput<VideoFrame>,
 
-impl StreamProcessor for MyProcessor {
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        Some(
-            ProcessorDescriptor::new(
-                "MyProcessor",
-                "Description of what it does"
-            )
-            .with_output(...)
-            .with_tags(vec!["tag1", "tag2"])
-        )
-    }
+    #[output()]
+    video_out: StreamOutput<VideoFrame>,
 
-    fn process(&mut self, tick: TimedTick) -> Result<()> {
-        // Your processing logic
+    // Config fields (not ports)
+    strength: f32,
+}
+
+impl MyEffectProcessor {
+    fn process(&mut self) -> Result<()> {
+        if let Some(frame) = self.video_in.read_latest() {
+            // Your processing logic
+            self.video_out.write(frame);
+        }
         Ok(())
     }
 }
-
-// That's it! One line to auto-register
-register_processor_type!(MyProcessor);
 ```
 
-**What happens:**
-- The macro handles all the inventory boilerplate
-- On first call to `global_registry()`, all registered processors are collected
-- Automatically available for MCP discovery and runtime use
+**That's it!** The macro auto-generates:
+- ✅ Config struct with `strength` field
+- ✅ `from_config()` constructor
+- ✅ `descriptor()` with type-safe schemas
+- ✅ Descriptions, tags, examples
+- ✅ Full MCP compatibility
+
+### With Custom Description and Usage
+
+```rust
+#[derive(StreamProcessor)]
+#[processor(
+    description = "Applies color grading to video",
+    usage = "Connect video input, adjust color parameters, connect output"
+)]
+struct ColorGradeProcessor {
+    #[input(description = "Input video stream")]
+    video: StreamInput<VideoFrame>,
+
+    #[output(description = "Color-graded output")]
+    output: StreamOutput<VideoFrame>,
+
+    temperature: f32,
+    saturation: f32,
+}
+```
+
+### When to Use Manual Implementation
+
+**Only manually implement StreamProcessor when:**
+- Complex initialization that can't be expressed as config fields
+- Dynamic port configuration (runtime-determined port count)
+- Extreme performance optimization requires custom trait methods
+
+**In 95% of cases, use the macro!**
+
+### Key Benefits
+
+- **Type Safety**: Schemas extracted from generic type parameters at compile time
+- **IDE Support**: Full autocomplete and type hints
+- **No Boilerplate**: From 90+ lines to 10-15 lines
+- **MCP Compatible**: Every processor automatically AI-discoverable
+- **Smart Defaults**: Auto-generates descriptions, tags, examples
+- **Compile-Time Validation**: Catches errors before runtime
+
+### Detailed Documentation
+
+See `libs/streamlib-macros/CLAUDE.md` for:
+- Progressive disclosure (3 levels of configuration)
+- Attribute reference (`#[processor(...)]`, `#[input(...)]`, `#[output(...)]`)
+- Smart defaults algorithm
+- Type safety guarantees
+- Troubleshooting guide
 
 **Always import from `streamlib`, not `streamlib_core`:**
 ```rust
 // ✅ Correct
-use streamlib::{StreamProcessor, ProcessorDescriptor, register_processor_type};
+use streamlib::{StreamInput, StreamOutput, VideoFrame, AudioFrame};
 
 // ❌ Wrong (internal use only)
-use streamlib_core::{StreamProcessor, ProcessorDescriptor};
+use streamlib_core::{StreamInput, StreamOutput};
 ```
 
 ## Architecture: Patch Cable Model

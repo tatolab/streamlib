@@ -52,6 +52,10 @@ pub struct AppleAudioOutputProcessor {
     /// Whether the processor is actively playing
     is_playing: Arc<AtomicBool>,
 
+    /// Minimum buffer size before playback starts (prevents initial underruns)
+    /// Set to ~20ms - lower than steady-state to avoid stopping during normal operation
+    prebuffer_samples: usize,
+
     /// Sample rate for this output
     sample_rate: u32,
 
@@ -117,6 +121,17 @@ impl AppleAudioOutputProcessor {
             is_default: device_id.is_none(),
         };
 
+        // Industry standard: Pre-buffer = 1x callback size (512 frames = 1024 samples stereo)
+        // Prevents startup underruns while staying below steady-state minimum
+        const CALLBACK_FRAMES: usize = 512;
+        let prebuffer_samples = CALLBACK_FRAMES * channels as usize; // 1024 samples for stereo
+
+        tracing::info!(
+            "Audio output prebuffer: {} samples (1x callback = {:.1}ms)",
+            prebuffer_samples,
+            (prebuffer_samples as f32 / sample_rate as f32 / channels as f32) * 1000.0
+        );
+
         // Create shared ring buffer for audio samples
         let sample_buffer = Arc::new(Mutex::new(Vec::new()));
         let sample_buffer_clone = sample_buffer.clone();
@@ -125,11 +140,12 @@ impl AppleAudioOutputProcessor {
         let is_playing = Arc::new(AtomicBool::new(false));
         let is_playing_clone = is_playing.clone();
 
-        // Build audio stream configuration
+        // Build audio stream configuration with industry-standard buffer size
+        // 512 frames = 10.7ms @ 48kHz (industry standard for mixing)
         let stream_config = StreamConfig {
             channels: channels as u16,
             sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Default,
+            buffer_size: cpal::BufferSize::Fixed(CALLBACK_FRAMES as u32),
         };
 
         // Build output stream with callback
@@ -139,16 +155,50 @@ impl AppleAudioOutputProcessor {
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     // Audio thread callback - fill output buffer
                     let mut buffer = sample_buffer_clone.lock();
+                    let buffer_size_before = buffer.len();
+                    let requested = data.len();
 
+                    // Pre-buffer strategy: Don't start playback until buffer has enough samples
+                    // This prevents initial underruns and provides smooth playback
+                    if buffer.len() < prebuffer_samples {
+                        // Not enough samples for smooth playback - output silence and wait
+                        data.fill(0.0);
+                        is_playing_clone.store(false, Ordering::Relaxed);
+
+                        tracing::debug!(
+                            "[AudioOutput::Callback] Pre-buffering - have {} samples, need {} ({}%)",
+                            buffer.len(), prebuffer_samples, (buffer.len() * 100 / prebuffer_samples)
+                        );
+                        return;
+                    }
+
+                    // Buffer has enough samples - proceed with playback
                     if buffer.len() >= data.len() {
                         // Copy samples from ring buffer to output
                         data.copy_from_slice(&buffer[..data.len()]);
                         buffer.drain(..data.len());
                         is_playing_clone.store(true, Ordering::Relaxed);
+
+                        tracing::debug!(
+                            "[AudioOutput::Callback] Normal playback - buffer: {} → {} samples (-{})",
+                            buffer_size_before, buffer.len(), requested
+                        );
                     } else {
-                        // Not enough samples - output silence
-                        data.fill(0.0);
-                        is_playing_clone.store(false, Ordering::Relaxed);
+                        // Partial buffer available - use what we have and repeat last sample
+                        let available = buffer.len();
+                        data[..available].copy_from_slice(&buffer[..]);
+                        buffer.clear();
+
+                        // Fill remainder with last sample (sample-and-hold) to avoid clicks
+                        let last_sample = data[available - 1];
+                        data[available..].fill(last_sample);
+
+                        is_playing_clone.store(true, Ordering::Relaxed);
+
+                        tracing::warn!(
+                            "[AudioOutput::Callback] ⚠️  UNDERRUN - requested {} samples, only {} available ({}% short)",
+                            requested, available, ((requested - available) * 100 / requested)
+                        );
                     }
                 },
                 |err| {
@@ -174,6 +224,7 @@ impl AppleAudioOutputProcessor {
             _stream: stream,
             sample_buffer,
             is_playing,
+            prebuffer_samples,
             sample_rate,
             channels,
             ports,
@@ -184,8 +235,10 @@ impl AppleAudioOutputProcessor {
     ///
     /// Useful for monitoring latency and detecting underruns
     pub fn buffer_level(&self) -> f32 {
+        const CALLBACK_FRAMES: usize = 512;
         let buffer = self.sample_buffer.lock();
-        let target_size = (self.sample_rate as usize / 10) * self.channels as usize; // 100ms buffer
+        // Industry standard: Ring buffer = 8x callback size
+        let target_size = CALLBACK_FRAMES * self.channels as usize * 8;
         (buffer.len() as f32 / target_size as f32).min(1.0)
     }
 
@@ -247,6 +300,14 @@ impl AudioOutputProcessorTrait for AppleAudioOutputProcessor {
 }
 
 impl StreamProcessor for AppleAudioOutputProcessor {
+    type Config = crate::core::config::AudioOutputConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        // Parse device_id string to usize if provided
+        let device_id = config.device_id.as_ref().and_then(|s| s.parse::<usize>().ok());
+        Self::new_internal(device_id)
+    }
+
     fn descriptor() -> Option<ProcessorDescriptor> {
         Some(
             ProcessorDescriptor::new(
@@ -270,9 +331,28 @@ impl StreamProcessor for AppleAudioOutputProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // Read AudioFrame from input port
-        if let Some(frame) = self.ports.audio.read_latest() {
+        tracing::debug!("[AudioOutput] process() called");
+
+        // Read ALL AudioFrames from input port (don't drop any!)
+        // For audio, we need continuous sample flow - dropping frames causes gaps/clicks
+        let mut frame_count = 0;
+        for frame in self.ports.audio.read_all() {
+            tracing::debug!(
+                "[AudioOutput] Got frame #{} - {} samples, {} channels, {} Hz",
+                frame.frame_number, frame.sample_count, frame.channels, frame.sample_rate
+            );
             self.push_frame(&frame)?;
+            frame_count += 1;
+        }
+
+        if frame_count == 0 {
+            tracing::debug!("[AudioOutput] No frames available this tick");
+        } else {
+            let buffer_level = self.buffer_level();
+            tracing::debug!(
+                "[AudioOutput] Processed {} frame(s), buffer level: {:.1}%",
+                frame_count, buffer_level * 100.0
+            );
         }
 
         Ok(())
@@ -280,6 +360,28 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn take_output_consumer(&mut self, _port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+        // AppleAudioOutputProcessor has no outputs - it's a sink processor
+        None
+    }
+
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::stream_processor::PortConsumer) -> bool {
+        // Extract the AudioFrame consumer from the enum
+        let audio_consumer = match consumer {
+            crate::core::stream_processor::PortConsumer::Audio(c) => c,
+            _ => return false,  // Wrong type - type safety via enum pattern match
+        };
+
+        // AppleAudioOutputProcessor has one audio input port
+        match port_name {
+            "audio" => {
+                self.input_ports().audio.connect_consumer(audio_consumer);
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -297,6 +399,11 @@ impl AppleAudioOutputProcessor {
     ///
     /// Ok if frame was queued successfully
     pub fn push_frame(&mut self, frame: &AudioFrame) -> Result<()> {
+        tracing::debug!(
+            "[AudioOutput] push_frame: frame #{}, {} samples ({} channels @ {} Hz)",
+            frame.frame_number, frame.sample_count, frame.channels, frame.sample_rate
+        );
+
         // Convert AudioFrame to output format if needed
         let mut samples = Vec::new();
 
@@ -337,29 +444,31 @@ impl AppleAudioOutputProcessor {
 
         // Push samples to ring buffer
         let mut buffer = self.sample_buffer.lock();
+        let buffer_size_before = buffer.len();
 
-        // Real-time audio strategy: Drop old samples to maintain low latency
-        // For power armor / real-time applications, we prioritize current data over complete history
-        const MAX_LATENCY_MS: f64 = 50.0; // Maximum 50ms latency (imperceptible)
-        let max_buffer_size = ((self.sample_rate as f64 * MAX_LATENCY_MS / 1000.0) * self.channels as f64) as usize;
+        // Extend buffer with new samples
+        // Trust upstream to produce at correct rate (event-driven, no drops needed)
+        buffer.extend_from_slice(&samples);
 
-        let buffer_len = buffer.len();
-        if buffer_len > max_buffer_size {
-            // Buffer too full = we're behind real-time
-            // Drop OLD samples (stale data from the past) to catch up
-            // This is better than dropping NEW samples (current reality)
-            let drain_count = buffer_len - (max_buffer_size / 2); // Drop half to leave headroom
-            buffer.drain(..drain_count);
+        let buffer_size_after = buffer.len();
 
-            let latency_ms = (buffer_len as f64 / self.sample_rate as f64) * 1000.0 / self.channels as f64;
+        // Industry standard: Ring buffer = 8x callback size (512 frames × 2 channels × 8 = 8192 samples)
+        const CALLBACK_FRAMES: usize = 512;
+        let target_buffer_samples = CALLBACK_FRAMES * self.channels as usize * 8;
+        let buffer_percent = (buffer_size_after as f32 / target_buffer_samples as f32) * 100.0;
+
+        tracing::debug!(
+            "[AudioOutput] Ring buffer: {} → {} samples (+{}) [{:.1}% of 8x target]",
+            buffer_size_before, buffer_size_after, samples.len(), buffer_percent
+        );
+
+        // Warn if buffer is getting too full (>2x target)
+        if buffer_size_after > target_buffer_samples * 2 {
             tracing::warn!(
-                "Audio lagging: {:.1}ms latency, dropped {} samples to maintain real-time",
-                latency_ms,
-                drain_count
+                "[AudioOutput] ⚠️  BUFFER OVERRUN - buffer at {:.1}% capacity ({} samples). Audio output may be lagging!",
+                buffer_percent, buffer_size_after
             );
         }
-
-        buffer.extend_from_slice(&samples);
 
         Ok(())
     }

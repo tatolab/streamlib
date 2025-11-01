@@ -62,6 +62,7 @@ pub mod main_thread;
 
 // Runtime configuration (used by streamlib facade)
 pub mod runtime_ext;
+pub use runtime_ext::configure_macos_event_loop;
 
 // Internal helpers (not part of public API)
 mod runtime_helpers;

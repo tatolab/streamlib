@@ -13,6 +13,7 @@ pub mod clap_effect;
 pub mod parameter_modulation;
 pub mod parameter_automation;
 pub mod test_tone;
+pub mod simple_passthrough;
 
 #[cfg(feature = "debug-overlay")]
 pub mod performance_overlay;
@@ -33,6 +34,7 @@ pub use clap_effect::{ClapEffectProcessor, ClapScanner, ClapPluginInfo};
 pub use parameter_modulation::{ParameterModulator, LfoWaveform};
 pub use parameter_automation::ParameterAutomation;
 pub use test_tone::{TestToneGenerator, TestToneGeneratorOutputPorts};
+pub use simple_passthrough::SimplePassthroughProcessor;
 
 #[cfg(feature = "debug-overlay")]
 pub use performance_overlay::{

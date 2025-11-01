@@ -5,7 +5,7 @@
 
 use crate::core::{
     AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioCaptureOutputPorts,
-    AudioFrame, Result, StreamError, StreamProcessor, StreamOutput, TimedTick, ProcessorDescriptor,
+    AudioFrame, Result, StreamError, StreamProcessor, StreamOutput, ProcessorDescriptor,
     PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -272,6 +272,14 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
 }
 
 impl StreamProcessor for AppleAudioCaptureProcessor {
+    type Config = crate::core::config::AudioCaptureConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        // Parse device_id string to usize if provided
+        let device_id = config.device_id.as_ref().and_then(|s| s.parse::<usize>().ok());
+        Self::new_internal(device_id, config.sample_rate, config.channels)
+    }
+
     fn process(&mut self) -> Result<()> {
         // Phase 3: Push-based operation - process all available samples
         // No longer tied to 60 FPS ticks, hardware drives the rate

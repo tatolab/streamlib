@@ -188,6 +188,182 @@ impl MultimodalBuffer {
     }
 }
 
+/// Sample-and-hold buffer for managing multiple asynchronous inputs
+///
+/// Stores the last received value from each named input. When collecting all inputs,
+/// returns the most recent value for each, using held (previous) values for inputs
+/// that haven't arrived yet this cycle.
+///
+/// This is essential for real-time mixing/muxing where inputs arrive at different times
+/// but need to be combined. Industry-standard approach used in audio mixers, video muxers,
+/// and multi-sensor fusion systems.
+///
+/// # Example
+///
+/// ```rust
+/// use streamlib::sync::SampleAndHoldBuffer;
+///
+/// // Create buffer for 3 audio inputs
+/// let mut buffer = SampleAndHoldBuffer::new(vec!["tone1", "tone2", "tone3"]);
+///
+/// // First cycle: only tone1 and tone2 arrive
+/// buffer.update("tone1", audio_frame_1);
+/// buffer.update("tone2", audio_frame_2);
+///
+/// // Can't collect yet - tone3 has never arrived
+/// assert!(buffer.collect_all().is_none());
+///
+/// // Second cycle: tone3 arrives
+/// buffer.update("tone3", audio_frame_3);
+///
+/// // Now we can collect all 3 (tone1 and tone2 held from previous cycle)
+/// let all_inputs = buffer.collect_all().unwrap();
+/// // Mix all 3 together!
+/// ```
+///
+/// # Generic Over Any Type
+///
+/// Works with AudioFrame, VideoFrame, or any cloneable type:
+/// ```rust
+/// let audio_buffer = SampleAndHoldBuffer::<AudioFrame>::new(vec!["mic1", "mic2"]);
+/// let video_buffer = SampleAndHoldBuffer::<VideoFrame>::new(vec!["cam1", "cam2"]);
+/// ```
+pub struct SampleAndHoldBuffer<T: Clone> {
+    /// Map of input name → last received value
+    inputs: std::collections::HashMap<String, Option<T>>,
+}
+
+impl<T: Clone> SampleAndHoldBuffer<T> {
+    /// Create new buffer with named inputs
+    ///
+    /// # Arguments
+    /// * `input_names` - Names of all inputs that will be tracked
+    ///
+    /// # Example
+    /// ```rust
+    /// let buffer = SampleAndHoldBuffer::<AudioFrame>::new(
+    ///     vec!["input_0", "input_1", "input_2"]
+    /// );
+    /// ```
+    pub fn new<S: Into<String>>(input_names: impl IntoIterator<Item = S>) -> Self {
+        let inputs = input_names
+            .into_iter()
+            .map(|name| (name.into(), None))
+            .collect();
+
+        Self { inputs }
+    }
+
+    /// Update an input with new data
+    ///
+    /// Stores the value and marks this input as "having data".
+    /// This value will be held (reused) until updated again.
+    pub fn update(&mut self, input_name: &str, value: T) {
+        if let Some(slot) = self.inputs.get_mut(input_name) {
+            *slot = Some(value);
+        } else {
+            tracing::warn!(
+                "SampleAndHoldBuffer: Received data for unknown input '{}', ignoring",
+                input_name
+            );
+        }
+    }
+
+    /// Collect all inputs, using held values where needed
+    ///
+    /// Returns `Some(Vec<T>)` if all inputs have received at least one value.
+    /// Returns `None` if any input has never received data (cold start).
+    ///
+    /// # Ordering
+    /// Values are returned in alphabetical order by input name for consistency.
+    ///
+    /// # Example
+    /// ```rust
+    /// // First call: tone1 and tone2 arrive
+    /// buffer.update("tone1", frame1.clone());
+    /// buffer.update("tone2", frame2.clone());
+    /// buffer.update("tone3", frame3.clone());
+    ///
+    /// // All 3 present
+    /// let samples = buffer.collect_all().unwrap();
+    ///
+    /// // Second call: only tone1 arrives
+    /// buffer.update("tone1", new_frame1.clone());
+    ///
+    /// // Collects: new_frame1, frame2 (held), frame3 (held)
+    /// let samples = buffer.collect_all().unwrap();
+    /// ```
+    pub fn collect_all(&self) -> Option<Vec<T>> {
+        // Check if all inputs have data (no cold start)
+        if self.inputs.values().any(|v| v.is_none()) {
+            return None;
+        }
+
+        // Collect all values in sorted order for consistency
+        let mut keys: Vec<_> = self.inputs.keys().collect();
+        keys.sort();
+
+        Some(
+            keys.iter()
+                .filter_map(|key| self.inputs.get(*key).and_then(|v| v.as_ref()))
+                .cloned()
+                .collect()
+        )
+    }
+
+    /// Collect all inputs as a named map
+    ///
+    /// Returns `Some(HashMap<String, T>)` with all inputs.
+    /// Returns `None` if any input has never received data.
+    ///
+    /// Useful when you need to know which value came from which input.
+    pub fn collect_all_named(&self) -> Option<std::collections::HashMap<String, T>> {
+        // Check if all inputs have data
+        if self.inputs.values().any(|v| v.is_none()) {
+            return None;
+        }
+
+        Some(
+            self.inputs
+                .iter()
+                .filter_map(|(k, v)| v.as_ref().map(|val| (k.clone(), val.clone())))
+                .collect()
+        )
+    }
+
+    /// Get the number of inputs being tracked
+    pub fn len(&self) -> usize {
+        self.inputs.len()
+    }
+
+    /// Check if buffer is empty (no inputs tracked)
+    pub fn is_empty(&self) -> bool {
+        self.inputs.is_empty()
+    }
+
+    /// Clear all held values (reset to cold start)
+    ///
+    /// Useful if you want to force all inputs to provide new data before mixing.
+    pub fn clear(&mut self) {
+        for value in self.inputs.values_mut() {
+            *value = None;
+        }
+    }
+
+    /// Check if a specific input has received data at least once
+    pub fn has_data(&self, input_name: &str) -> bool {
+        self.inputs
+            .get(input_name)
+            .map(|v| v.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Check if all inputs have received data at least once
+    pub fn all_ready(&self) -> bool {
+        self.inputs.values().all(|v| v.is_some())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +414,7 @@ mod tests {
         }).await
         .expect("Failed to find adapter");
 
-        let (device, queue) = adapter.request_device(
+        let (device, _queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),

@@ -46,6 +46,8 @@
 //! )?;
 //! ```
 
+use dasp::Frame;
+
 use crate::core::{
     Result, StreamError, StreamProcessor, GpuContext,
     AudioFrame, StreamInput, StreamOutput,
@@ -156,17 +158,17 @@ pub struct AudioMixerProcessor {
     /// Buffer size (samples per channel) - determines mix rate
     buffer_size: usize,
 
+    /// Optional timer group ID for synchronized timing with input sources
+    timer_group_id: Option<String>,
+
     /// Sample-and-hold buffer for synchronizing async inputs
     /// Holds last received frame from each input to ensure all inputs are mixed together
     sample_hold_buffer: SampleAndHoldBuffer<(Vec<f32>, i64, u64)>,  // (samples, timestamp, frame_number)
 
-    /// Track last mixed timestamps to avoid duplicate mixes
+    /// Track last mixed timestamps to prevent duplicate mixes on spurious wakeups
     /// Key: input name (e.g., "input_0"), Value: last mixed timestamp_ns
+    /// Timestamp-based deduplication is more robust than frame numbers
     last_mixed_timestamps: HashMap<String, i64>,
-
-    /// Track last mixed frame numbers for frame-aligned mixing
-    /// Key: input name (e.g., "input_0"), Value: last mixed frame_number
-    last_mixed_frame_numbers: HashMap<String, u64>,
 }
 
 impl AudioMixerProcessor {
@@ -243,9 +245,9 @@ impl AudioMixerProcessor {
             resamplers: HashMap::new(),
             resample_buffers: HashMap::new(),
             buffer_size,
+            timer_group_id: None,
             sample_hold_buffer,
             last_mixed_timestamps: HashMap::new(),
-            last_mixed_frame_numbers: HashMap::new(),
         })
     }
 
@@ -261,6 +263,8 @@ impl AudioMixerProcessor {
 
     /// Convert mono audio to stereo by duplicating samples to both channels
     ///
+    /// Uses dasp Frame operations for channel conversion.
+    ///
     /// # Arguments
     ///
     /// * `mono_samples` - Mono audio samples (L, L, L, ...)
@@ -270,10 +274,15 @@ impl AudioMixerProcessor {
     /// Stereo samples (L, L, L, L, ...) - each mono sample duplicated to L and R
     fn mono_to_stereo(&self, mono_samples: &[f32]) -> Vec<f32> {
         let mut stereo = Vec::with_capacity(mono_samples.len() * 2);
+
+        // Process each mono sample as a Frame, then duplicate to stereo
         for &sample in mono_samples {
-            stereo.push(sample); // Left
-            stereo.push(sample); // Right (same as left for mono)
+            // Create stereo frame by duplicating mono sample to both channels
+            let stereo_frame: [f32; 2] = [sample, sample];
+            stereo.push(stereo_frame[0]);
+            stereo.push(stereo_frame[1]);
         }
+
         stereo
     }
 
@@ -365,6 +374,8 @@ impl AudioMixerProcessor {
 
     /// Mix multiple audio sample vectors according to mixing strategy
     ///
+    /// Uses dasp Frame operations for professional-quality DSP.
+    ///
     /// # Arguments
     ///
     /// * `inputs` - Vector of sample vectors to mix (all must be same length and stereo)
@@ -377,38 +388,42 @@ impl AudioMixerProcessor {
             return Vec::new();
         }
 
-        let sample_count = inputs[0].len();
-        let mut output = vec![0.0; sample_count];
+        let sample_count = inputs[0].len() / 2; // Stereo: divide by 2 for frame count
+        let mut output = Vec::with_capacity(sample_count * 2);
 
-        match self.strategy {
-            MixingStrategy::SumNormalized => {
-                // Sum all inputs
-                for input in &inputs {
-                    for (i, &sample) in input.iter().enumerate() {
-                        output[i] += sample;
-                    }
-                }
+        // Process frame-by-frame using dasp
+        for frame_idx in 0..sample_count {
+            // Start with silence (equilibrium)
+            let mut mixed_frame: [f32; 2] = Frame::EQUILIBRIUM;
 
-                // Normalize by number of active inputs
-                let num_inputs = inputs.len() as f32;
-                for sample in &mut output {
-                    *sample /= num_inputs;
-                }
+            // Add all input frames using dasp Frame operations
+            for input in &inputs {
+                let left = input[frame_idx * 2];
+                let right = input[frame_idx * 2 + 1];
+                let input_frame: [f32; 2] = [left, right];
+                mixed_frame = mixed_frame.add_amp(input_frame);
             }
 
-            MixingStrategy::SumClipped => {
-                // Sum all inputs
-                for input in &inputs {
-                    for (i, &sample) in input.iter().enumerate() {
-                        output[i] += sample;
-                    }
+            // Apply mixing strategy
+            mixed_frame = match self.strategy {
+                MixingStrategy::SumNormalized => {
+                    // Normalize by number of inputs using dasp scale_amp
+                    mixed_frame.scale_amp(1.0 / inputs.len() as f32)
                 }
+                MixingStrategy::SumClipped => {
+                    // Clip each channel to [-1.0, 1.0]
+                    // Note: dasp doesn't have a built-in clip_amp for frames,
+                    // so we do it manually but still using Sample trait
+                    [
+                        mixed_frame[0].clamp(-1.0, 1.0),
+                        mixed_frame[1].clamp(-1.0, 1.0),
+                    ]
+                }
+            };
 
-                // Clip to [-1.0, 1.0]
-                for sample in &mut output {
-                    *sample = sample.clamp(-1.0, 1.0);
-                }
-            }
+            // Write interleaved output
+            output.push(mixed_frame[0]);
+            output.push(mixed_frame[1]);
         }
 
         output
@@ -419,7 +434,9 @@ impl StreamProcessor for AudioMixerProcessor {
     type Config = crate::core::config::AudioMixerConfig;
 
     fn from_config(config: Self::Config) -> crate::core::Result<Self> {
-        Self::new(config.num_inputs, config.strategy, config.sample_rate, config.buffer_size)
+        let mut mixer = Self::new(config.num_inputs, config.strategy, config.sample_rate, config.buffer_size)?;
+        mixer.timer_group_id = config.timer_group_id;
+        Ok(mixer)
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> {
@@ -445,6 +462,27 @@ impl StreamProcessor for AudioMixerProcessor {
             .with_tags(vec!["audio", "mixer", "processing", "real-time"])
             .with_audio_requirements(AudioRequirements::flexible())
         )
+    }
+
+    fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
+        use crate::core::schema::TimerRequirements;
+
+        // Calculate timer rate from buffer size and sample rate
+        let rate_hz = self.target_sample_rate as f64 / self.buffer_size as f64;
+
+        // Get base descriptor and add instance-specific TimerRequirements
+        Self::descriptor().map(|desc| {
+            desc.with_timer_requirements(TimerRequirements {
+                rate_hz,
+                group_id: self.timer_group_id.clone(),
+                description: Some(format!(
+                    "Mix audio buffers at {:.2} Hz ({} samples at {} Hz sample rate)",
+                    rate_hz,
+                    self.buffer_size,
+                    self.target_sample_rate
+                )),
+            })
+        })
     }
 
     fn on_start(&mut self, _gpu_context: &GpuContext) -> Result<()> {
@@ -507,61 +545,45 @@ impl StreamProcessor for AudioMixerProcessor {
             return Ok(());
         }
 
-        // Step 3: Collect ALL inputs using sample-and-hold
-        let all_inputs = self.sample_hold_buffer.collect_all()
-            .expect("all_ready() returned true, so collect_all() must succeed");
-
-        // Step 4: Check if ALL inputs have NEW data (prevent partial mixes)
-        // Only mix when ALL inputs have progressed, not just when ANY input changes
+        // Step 3: Check for duplicate mixes using timestamp-based deduplication
+        // Prevents re-mixing the same data when woken multiple times (e.g., from downstream)
         let all_inputs_named = self.sample_hold_buffer.collect_all_named()
             .expect("all_ready() returned true, so collect_all_named() must succeed");
 
-        // Check that ALL inputs have new timestamps
-        let mut all_inputs_new = true;
+        // Check if ALL inputs have the SAME timestamps as last mix (duplicate wakeup)
+        let mut all_inputs_unchanged = true;
         for (input_name, (_samples, timestamp, _frame_num)) in &all_inputs_named {
             if let Some(&last_ts) = self.last_mixed_timestamps.get(input_name) {
-                if *timestamp == last_ts {
-                    // This input hasn't changed since last mix
-                    all_inputs_new = false;
+                if *timestamp != last_ts {
+                    // At least one input has a new timestamp
+                    all_inputs_unchanged = false;
                     break;
                 }
+            } else {
+                // First time seeing this input
+                all_inputs_unchanged = false;
+                break;
             }
-            // If we haven't seen this input before, it counts as "new"
         }
 
-        if !all_inputs_new {
-            tracing::debug!("[AudioMixer] Waiting for ALL inputs to have new data (event-driven sync)");
+        if all_inputs_unchanged {
+            tracing::debug!("[AudioMixer] Skipping duplicate mix - all inputs have same timestamps as last mix");
             return Ok(());
         }
 
-        // Step 5: Check that ALL inputs have SIMILAR frame numbers (frame-aligned mixing)
-        // Allow ±1 frame tolerance to account for timing jitter in parallel processing
-        let frame_numbers: Vec<u64> = all_inputs_named.values()
-            .map(|(_samples, _ts, frame_num)| *frame_num)
-            .collect();
+        // Step 4: Collect ALL inputs using sample-and-hold
+        let all_inputs = self.sample_hold_buffer.collect_all()
+            .expect("all_ready() returned true, so collect_all() must succeed");
 
-        let min_frame = *frame_numbers.iter().min().unwrap();
-        let max_frame = *frame_numbers.iter().max().unwrap();
-        let frame_spread = max_frame - min_frame;
-
-        // Allow up to 1 frame difference (e.g., [100, 101] is OK, [100, 102] is not)
-        const MAX_FRAME_SPREAD: u64 = 1;
-
-        if frame_spread > MAX_FRAME_SPREAD {
-            tracing::debug!(
-                "[AudioMixer] Frame numbers spread too wide ({} frames apart) - waiting for alignment. Frames: {:?}",
-                frame_spread,
-                frame_numbers
-            );
-            return Ok(());
-        }
+        // Step 5: Mix based on timestamps using sample-and-hold
+        // Timer groups ensure all inputs wake up simultaneously, eliminating clock drift.
+        // Sample-and-hold buffer provides latest data from each input.
+        // Timestamp deduplication prevents re-mixing on spurious wakeups.
 
         tracing::debug!(
-            "[AudioMixer] Inputs within acceptable alignment (frames {} to {}, spread={}) - proceeding with mix",
-            min_frame, max_frame, frame_spread
+            "[AudioMixer] Mixing ALL {} input streams (timestamp-synchronized via sample-and-hold)",
+            all_inputs.len()
         );
-
-        tracing::debug!("[AudioMixer] Mixing ALL {} input streams (sample-and-hold)", all_inputs.len());
 
         // Extract samples, timestamp, and frame number
         let input_samples: Vec<Vec<f32>> = all_inputs.iter().map(|(samples, _ts, _frame)| samples.clone()).collect();
@@ -606,10 +628,9 @@ impl StreamProcessor for AudioMixerProcessor {
         self.frame_counter += 1;
         self.current_timestamp_ns += (sample_count as i64 * 1_000_000_000) / self.target_sample_rate as i64;
 
-        // Update last mixed timestamps and frame numbers to prevent duplicate mixes on next wakeup
-        for (input_name, (_samples, timestamp, frame_num)) in all_inputs_named {
-            self.last_mixed_timestamps.insert(input_name.clone(), timestamp);
-            self.last_mixed_frame_numbers.insert(input_name, frame_num);
+        // Update last mixed timestamps to prevent duplicate mixes on next wakeup
+        for (input_name, (_samples, timestamp, _frame_num)) in all_inputs_named {
+            self.last_mixed_timestamps.insert(input_name, timestamp);
         }
 
         Ok(())
@@ -666,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_mixer_creation() {
-        let mixer = AudioMixerProcessor::new(4, MixingStrategy::SumNormalized, 48000).unwrap();
+        let mixer = AudioMixerProcessor::new(4, MixingStrategy::SumNormalized, 48000, 2048).unwrap();
         assert_eq!(mixer.num_inputs, 4);
         assert_eq!(mixer.strategy, MixingStrategy::SumNormalized);
         assert_eq!(mixer.target_sample_rate, 48000);
@@ -677,13 +698,13 @@ mod tests {
 
     #[test]
     fn test_mixer_zero_inputs_fails() {
-        let result = AudioMixerProcessor::new(0, MixingStrategy::SumNormalized, 48000);
+        let result = AudioMixerProcessor::new(0, MixingStrategy::SumNormalized, 48000, 2048);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_mono_to_stereo() {
-        let mixer = AudioMixerProcessor::new(1, MixingStrategy::SumNormalized, 48000).unwrap();
+        let mixer = AudioMixerProcessor::new(1, MixingStrategy::SumNormalized, 48000, 2048).unwrap();
         let mono = vec![0.5, 0.6, 0.7];
         let stereo = mixer.mono_to_stereo(&mono);
         assert_eq!(stereo, vec![0.5, 0.5, 0.6, 0.6, 0.7, 0.7]);
@@ -691,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_sum_normalized() {
-        let mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, 48000).unwrap();
+        let mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, 48000, 2048).unwrap();
 
         let input1 = vec![0.5, 0.5, 0.6, 0.6];
         let input2 = vec![0.3, 0.3, 0.4, 0.4];
@@ -703,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_sum_clipped() {
-        let mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, 48000).unwrap();
+        let mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, 48000, 2048).unwrap();
 
         let input1 = vec![0.8, 0.8, 0.9, 0.9];
         let input2 = vec![0.7, 0.7, 0.8, 0.8];

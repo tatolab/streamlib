@@ -34,8 +34,8 @@ pub enum PortType {
 
 /// Trait for message types that can flow through ports
 ///
-/// This trait associates a message type with its port type,
-/// allowing automatic port type inference from the generic type parameter.
+/// This trait associates a message type with its port type, schema, and examples.
+/// Used by the macro system to auto-generate processor descriptors for MCP discovery.
 ///
 /// # Example
 ///
@@ -44,14 +44,41 @@ pub enum PortType {
 ///     fn port_type() -> PortType {
 ///         PortType::Video
 ///     }
+///
+///     fn schema() -> Arc<Schema> {
+///         Arc::clone(&SCHEMA_VIDEO_FRAME)
+///     }
+///
+///     fn examples() -> Vec<(&'static str, serde_json::Value)> {
+///         vec![
+///             ("720p", Self::example_720p()),
+///             ("1080p", Self::example_1080p()),
+///         ]
+///     }
 /// }
 ///
-/// // Now ports can infer their type from T:
+/// // Now ports can infer their type and schema from T:
 /// let input = StreamInput::<VideoFrame>::new("video");  // Automatically PortType::Video!
 /// ```
 pub trait PortMessage: Clone + Send + 'static {
     /// Returns the port type for this message type
     fn port_type() -> PortType;
+
+    /// Returns the schema for this message type
+    ///
+    /// Used by the macro system to auto-generate ProcessorDescriptor with correct schemas.
+    /// The schema is used by MCP servers for AI agent discovery.
+    fn schema() -> std::sync::Arc<crate::core::Schema>;
+
+    /// Returns example values for this message type
+    ///
+    /// Used by the macro system to auto-generate ProcessorExample instances.
+    /// Each example is a tuple of (description, sample_value).
+    ///
+    /// Default implementation returns empty vec - override for custom types.
+    fn examples() -> Vec<(&'static str, serde_json::Value)> {
+        Vec::new()
+    }
 }
 
 impl PortType {
@@ -203,6 +230,7 @@ impl<T: PortMessage> StreamOutput<T> {
     ///
     /// This is used by the runtime to connect ports.
     /// The consumer is transferred to StreamInput during connection.
+    #[allow(dead_code)]
     pub(crate) fn consumer_holder(&self) -> &Arc<Mutex<Option<rtrb::Consumer<T>>>> {
         &self.consumer_holder
     }
@@ -216,6 +244,7 @@ impl<T: PortMessage> StreamOutput<T> {
     /// # Arguments
     ///
     /// * `wakeup_tx` - Channel sender to wake up downstream processor
+    #[allow(dead_code)]
     pub(crate) fn set_downstream_wakeup(&self, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
         *self.downstream_wakeup.lock() = Some(wakeup_tx);
     }
@@ -284,6 +313,7 @@ impl<T: PortMessage> StreamInput<T> {
     ///
     /// Note: This is called by StreamRuntime.connect()
     /// SPSC constraint: Only one consumer can exist per producer
+    #[allow(dead_code)]
     pub(crate) fn connect_consumer(&mut self, consumer: rtrb::Consumer<T>) {
         self.consumer = Some(consumer);
     }
@@ -371,6 +401,18 @@ mod tests {
     impl PortMessage for i32 {
         fn port_type() -> PortType {
             PortType::Data  // Use Data for simple test types
+        }
+
+        fn schema() -> std::sync::Arc<crate::core::Schema> {
+            use crate::core::{Schema, Field, FieldType, SemanticVersion, SerializationFormat};
+            std::sync::Arc::new(
+                Schema::new(
+                    "i32",
+                    SemanticVersion::new(1, 0, 0),
+                    vec![Field::new("value", FieldType::Int32)],
+                    SerializationFormat::Bincode,
+                )
+            )
         }
     }
 

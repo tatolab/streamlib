@@ -6,14 +6,10 @@
 use streamlib::{
     StreamRuntime, ClapEffectProcessor, ClapScanner,
     AudioCaptureProcessor, AudioOutputProcessor,
-    Result,
+    AudioFrame, Result,
 };
-
-// Import traits to get access to their methods
-use streamlib::core::{
-    AudioCaptureProcessor as AudioCaptureProcessorTrait,
-    AudioOutputProcessor as AudioOutputProcessorTrait,
-    AudioEffectProcessor as AudioEffectProcessorTrait,
+use streamlib::core::config::{
+    AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig,
 };
 
 #[tokio::main]
@@ -75,74 +71,61 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Step 3: Create runtime with audio configuration
+    // Step 3: Create runtime (event-driven, no FPS parameter!)
     println!("\n🎛️  Creating audio runtime...");
-    let mut runtime = StreamRuntime::new(60.0); // 60 FPS tick rate
+    let mut runtime = StreamRuntime::new();
     let audio_config = runtime.audio_config();
     println!("   Sample rate: {} Hz", audio_config.sample_rate);
     println!("   Buffer size: {} samples", audio_config.buffer_size);
     println!("   Channels: {}", audio_config.channels);
 
-    // Step 4: Create microphone input
-    println!("\n🎤 Setting up microphone input...");
-    let mut mic = AudioCaptureProcessor::new(
-        None, // Use default mic
-        audio_config.sample_rate,
-        audio_config.channels,
-    )?;
-    println!("✅ Using microphone: {}", mic.current_device().name);
-
-    // Step 5: Load CLAP reverb plugin
-    println!("\n🎛️  Loading CLAP plugin...");
-    let mut reverb = ClapEffectProcessor::load(&plugin_path)?;
-    println!("✅ Plugin loaded: {}", reverb.plugin_info().name);
-
-    // Activate plugin with runtime's audio config
-    println!("   Activating plugin...");
-    reverb.activate(audio_config.sample_rate, audio_config.buffer_size)?;
-    println!("✅ Plugin activated");
-
-    // List and set parameters
-    let params = reverb.list_parameters();
-    println!("   Plugin has {} parameters", params.len());
-
-    // Try to set room size or mix if available
-    for param in params.iter().take(20) {
-        let name_lower = param.name.to_lowercase();
-        if name_lower.contains("mix") || name_lower.contains("wet") {
-            // Set mix to 30% for subtle reverb
-            reverb.set_parameter(param.id, 0.3)?;
-            println!("   Set {}: 30%", param.name);
-        } else if name_lower.contains("size") || name_lower.contains("room") {
-            // Set room size to 60%
-            reverb.set_parameter(param.id, 0.6)?;
-            println!("   Set {}: 60%", param.name);
+    // Step 4: Add microphone input processor using config-based API
+    println!("\n🎤 Adding microphone input...");
+    let mic = runtime.add_processor_with_config::<AudioCaptureProcessor>(
+        AudioCaptureConfig {
+            device_id: None, // Use default mic
+            sample_rate: audio_config.sample_rate,
+            channels: audio_config.channels,
         }
-    }
+    )?;
+    println!("✅ Microphone processor added");
 
-    // Step 6: Create speaker output
-    println!("\n🔊 Setting up speaker output...");
-    let mut speaker = AudioOutputProcessor::new(None)?; // Use default speaker
-    println!("✅ Using speaker: {}", speaker.current_device().name);
+    // Step 5: Add CLAP reverb plugin using config-based API
+    println!("\n🎛️  Adding CLAP plugin...");
+    let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(
+        ClapEffectConfig {
+            plugin_path,
+            plugin_name: None, // Use first plugin in bundle
+            sample_rate: audio_config.sample_rate,
+            buffer_size: audio_config.buffer_size,
+        }
+    )?;
+    println!("✅ CLAP effect processor added");
+    println!("   Note: Plugin activates automatically with runtime's audio config");
+    println!("   Note: Use parameter automation API for runtime parameter changes");
 
-    // Step 7: Connect the pipeline (type-safe connections BEFORE adding to runtime)
+    // Step 6: Add speaker output processor using config-based API
+    println!("\n🔊 Adding speaker output...");
+    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
+        AudioOutputConfig {
+            device_id: None, // Use default speaker
+        }
+    )?;
+    println!("✅ Speaker processor added");
+
+    // Step 7: Connect the pipeline using type-safe handles
     println!("\n🔗 Building audio pipeline...");
     runtime.connect(
-        &mut mic.output_ports().audio,
-        &mut reverb.input_ports().audio
+        mic.output_port::<AudioFrame>("audio"),
+        reverb.input_port::<AudioFrame>("audio"),
     )?;
     runtime.connect(
-        &mut reverb.output_ports().audio,
-        &mut speaker.input_ports().audio
+        reverb.output_port::<AudioFrame>("audio"),
+        speaker.input_port::<AudioFrame>("audio"),
     )?;
     println!("✅ Pipeline connected: mic → reverb → speaker");
 
-    // Step 8: Add processors to runtime (AFTER connecting)
-    runtime.add_processor(Box::new(mic));
-    runtime.add_processor(Box::new(reverb));
-    runtime.add_processor(Box::new(speaker));
-
-    // Step 9: Start the runtime
+    // Step 8: Start the runtime
     println!("\n▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
     println!("🎙️  Speak into your microphone - you should hear yourself with reverb!\n");

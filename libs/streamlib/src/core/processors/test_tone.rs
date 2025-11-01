@@ -5,9 +5,6 @@
 
 use crate::core::{AudioFrame, Result, StreamProcessor, StreamOutput};
 use std::f64::consts::PI;
-use std::sync::Arc;
-use std::thread::JoinHandle;
-use parking_lot::Mutex;
 
 /// Output ports for TestToneGenerator
 pub struct TestToneGeneratorOutputPorts {
@@ -19,6 +16,8 @@ pub struct TestToneGeneratorOutputPorts {
 ///
 /// Generates a continuous sine wave at a specified frequency.
 /// Useful for testing audio output processors and validating the audio pipeline.
+///
+/// Wakes up periodically via TimerRequirements to generate audio buffers at the optimal rate.
 ///
 /// # Example
 ///
@@ -50,31 +49,29 @@ pub struct TestToneGenerator {
     /// Frame counter
     frame_number: u64,
 
-    /// Samples per frame (based on tick rate)
-    samples_per_frame: usize,
+    /// Samples per buffer (fixed at 2048 for optimal audio processing)
+    buffer_size: usize,
+
+    /// Optional timer group ID for synchronized wakeups
+    timer_group_id: Option<String>,
 
     /// Output ports
     output_ports: TestToneGeneratorOutputPorts,
-
-    /// Wakeup channel for push-based operation (Phase 3)
-    /// Background thread sends DataAvailable events at audio rate
-    wakeup_tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>,
-
-    /// Background thread handle that mimics hardware timing
-    generator_thread: Option<JoinHandle<()>>,
-
-    /// Shutdown signal for background thread
-    shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl TestToneGenerator {
+    /// Fixed buffer size for audio generation (2048 samples is standard)
+    const BUFFER_SIZE: usize = 2048;
+
     /// Create new test tone generator
+    ///
+    /// Generates audio buffers at the optimal rate for the given sample rate.
+    /// Uses TimerRequirements to wake up periodically.
     ///
     /// # Arguments
     ///
     /// * `frequency` - Frequency in Hz (e.g., 440.0 for A4 note)
     /// * `sample_rate` - Sample rate in Hz (e.g., 48000)
-    /// * `tick_rate` - Runtime tick rate in Hz (e.g., 60.0 for 60 FPS)
     /// * `amplitude` - Volume (0.0 to 1.0, where 0.5 is 50% volume)
     ///
     /// # Example
@@ -82,15 +79,10 @@ impl TestToneGenerator {
     /// ```
     /// use streamlib::TestToneGenerator;
     ///
-    /// // 440Hz tone at 48kHz, 60 FPS runtime, 50% volume
-    /// let gen = TestToneGenerator::new(440.0, 48000, 60.0, 0.5);
+    /// // 440Hz tone at 48kHz, 50% volume
+    /// let gen = TestToneGenerator::new(440.0, 48000, 0.5);
     /// ```
-    pub fn new(frequency: f64, sample_rate: u32, tick_rate: f64, amplitude: f64) -> Self {
-        // Calculate samples per frame based on tick rate
-        // At 60 FPS: 48000 / 60 = 800 samples per frame
-        // This ensures we generate exactly the right amount for real-time processing
-        let samples_per_frame = (sample_rate as f64 / tick_rate).ceil() as usize;
-
+    pub fn new(frequency: f64, sample_rate: u32, amplitude: f64) -> Self {
         Self {
             frequency,
             sample_rate,
@@ -98,14 +90,20 @@ impl TestToneGenerator {
             phase: 0.0,
             amplitude: amplitude.clamp(0.0, 1.0),
             frame_number: 0,
-            samples_per_frame,
+            buffer_size: Self::BUFFER_SIZE,
+            timer_group_id: None,
             output_ports: TestToneGeneratorOutputPorts {
                 audio: StreamOutput::new("audio"),
             },
-            wakeup_tx: Arc::new(Mutex::new(None)),
-            generator_thread: None,
-            shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Calculate optimal timer rate for this generator
+    ///
+    /// Returns the rate in Hz at which this processor should wake up.
+    /// For 48kHz with 2048 sample buffers: 48000 / 2048 ≈ 23.44 Hz
+    fn timer_rate_hz(&self) -> f64 {
+        self.sample_rate as f64 / self.buffer_size as f64
     }
 
     /// Get mutable access to output ports
@@ -120,22 +118,17 @@ impl TestToneGenerator {
         self.amplitude = amplitude.clamp(0.0, 1.0);
     }
 
-    /// Set samples per frame
+    /// Generate next audio buffer
     ///
-    /// Useful for adjusting buffer size based on tick rate
-    pub fn set_samples_per_frame(&mut self, samples: usize) {
-        self.samples_per_frame = samples;
-    }
-
-    /// Generate next audio frame
+    /// Generates buffer_size samples at the configured frequency and amplitude.
     pub fn generate_frame(&mut self, timestamp_ns: i64) -> AudioFrame {
-        let mut samples = Vec::with_capacity(self.samples_per_frame * self.channels as usize);
+        let mut samples = Vec::with_capacity(self.buffer_size * self.channels as usize);
 
         // Phase increment per sample
         let phase_increment = 2.0 * PI * self.frequency / self.sample_rate as f64;
 
         // Generate samples
-        for _ in 0..self.samples_per_frame {
+        for _ in 0..self.buffer_size {
             // Calculate sine wave sample
             let sample = (self.phase.sin() * self.amplitude) as f32;
 
@@ -168,6 +161,18 @@ impl TestToneGenerator {
 }
 
 impl StreamProcessor for TestToneGenerator {
+    type Config = crate::core::config::TestToneConfig;
+
+    fn from_config(config: Self::Config) -> crate::core::Result<Self> {
+        let mut gen = Self::new(
+            config.frequency,
+            config.sample_rate,
+            config.amplitude,
+        );
+        gen.timer_group_id = config.timer_group_id;
+        Ok(gen)
+    }
+
     fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
         use crate::core::schema::{ProcessorDescriptor, AudioRequirements};
 
@@ -192,13 +197,36 @@ impl StreamProcessor for TestToneGenerator {
     }
 
     fn descriptor_instance(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
-        Self::descriptor()
+        use crate::core::schema::TimerRequirements;
+
+        // Get base descriptor and add instance-specific TimerRequirements
+        Self::descriptor().map(|desc| {
+            desc.with_timer_requirements(TimerRequirements {
+                rate_hz: self.timer_rate_hz(),
+                group_id: self.timer_group_id.clone(),
+                description: Some(format!(
+                    "Generate audio buffers at {} Hz ({} samples at {} Hz sample rate)",
+                    self.timer_rate_hz(),
+                    self.buffer_size,
+                    self.sample_rate
+                )),
+            })
+        })
     }
 
     fn process(&mut self) -> Result<()> {
-        // Push-based operation: Background thread generates frames autonomously
-        // This method is called on wakeup events but does nothing since
-        // the background thread (spawned in on_start) handles frame generation
+        // Generate audio buffer on every timer tick
+        // Timer rate is set via TimerRequirements to match optimal audio generation rate
+        tracing::debug!("TestToneGenerator: process() called, generating frame {}", self.frame_number);
+
+        let timestamp_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
+
+        let frame = self.generate_frame(timestamp_ns);
+        self.output_ports.audio.write(frame);
+
         Ok(())
     }
 
@@ -206,58 +234,27 @@ impl StreamProcessor for TestToneGenerator {
         self
     }
 
-    fn set_wakeup_channel(&mut self, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
-        // Store wakeup channel
-        *self.wakeup_tx.lock() = Some(wakeup_tx.clone());
-
-        // Phase 3: Spawn background thread that mimics hardware timing
-        // The thread sends DataAvailable events at the rate audio would naturally arrive
-        let wakeup_tx_clone = wakeup_tx;
-        let shutdown_flag = self.shutdown_flag.clone();
-        let samples_per_frame = self.samples_per_frame;
-        let sample_rate = self.sample_rate;
-
-        // Calculate sleep duration based on audio chunk size
-        // e.g., 800 samples at 48kHz = 16.67ms per chunk (~60 Hz)
-        let chunk_duration = std::time::Duration::from_secs_f64(
-            samples_per_frame as f64 / sample_rate as f64
-        );
-
-        let thread = std::thread::spawn(move || {
-            tracing::debug!(
-                "TestToneGenerator: Background thread started ({}ms per chunk, ~{} Hz)",
-                chunk_duration.as_millis(),
-                1000 / chunk_duration.as_millis().max(1)
-            );
-
-            while !shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                // Sleep for one audio chunk duration (mimics hardware timing)
-                std::thread::sleep(chunk_duration);
-
-                // Send wakeup event (non-blocking)
-                if wakeup_tx_clone.send(crate::core::runtime::WakeupEvent::DataAvailable).is_err() {
-                    // Channel closed, processor shut down
-                    break;
-                }
+    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+        // TestToneGenerator only has audio output
+        match port_name {
+            "audio" => {
+                self.output_ports.audio.consumer_holder().lock().take()
+                    .map(crate::core::stream_processor::PortConsumer::Audio)
             }
-
-            tracing::debug!("TestToneGenerator: Background thread stopped");
-        });
-
-        self.generator_thread = Some(thread);
-        tracing::debug!("TestToneGenerator: Push-based wakeup enabled");
+            _ => None,
+        }
     }
 
-    fn on_stop(&mut self) -> Result<()> {
-        // Signal shutdown to background thread
-        self.shutdown_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    fn connect_input_consumer(&mut self, _port_name: &str, _consumer: crate::core::stream_processor::PortConsumer) -> bool {
+        // TestToneGenerator has no inputs - it's a source processor
+        false
+    }
 
-        // Wait for thread to finish
-        if let Some(thread) = self.generator_thread.take() {
-            let _ = thread.join();
+    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        match port_name {
+            "audio" => self.output_ports.audio.set_downstream_wakeup(wakeup_tx),
+            _ => {}
         }
-
-        Ok(())
     }
 }
 
@@ -267,43 +264,29 @@ mod tests {
 
     #[test]
     fn test_create_tone_generator() {
-        let gen = TestToneGenerator::new(440.0, 48000, 60.0, 0.5);
+        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
         assert_eq!(gen.frequency, 440.0);
         assert_eq!(gen.sample_rate, 48000);
         assert_eq!(gen.channels, 2); // Always stereo
         assert_eq!(gen.amplitude, 0.5);
         assert_eq!(gen.phase, 0.0);
         assert_eq!(gen.frame_number, 0);
-        // At 60 FPS: 48000 / 60 = 800 samples per frame
-        assert_eq!(gen.samples_per_frame, 800);
-    }
-
-    #[test]
-    fn test_samples_per_frame_calculation() {
-        // Test various tick rates
-        let gen_60fps = TestToneGenerator::new(440.0, 48000, 60.0, 0.5);
-        assert_eq!(gen_60fps.samples_per_frame, 800); // 48000 / 60
-
-        let gen_30fps = TestToneGenerator::new(440.0, 48000, 30.0, 0.5);
-        assert_eq!(gen_30fps.samples_per_frame, 1600); // 48000 / 30
-
-        let gen_120fps = TestToneGenerator::new(440.0, 48000, 120.0, 0.5);
-        assert_eq!(gen_120fps.samples_per_frame, 400); // 48000 / 120
+        assert_eq!(gen.buffer_size, TestToneGenerator::BUFFER_SIZE);
     }
 
     #[test]
     fn test_generate_frame() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 60.0, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
         let frame = gen.generate_frame(0);
 
-        // At 60 FPS: 800 samples per frame
-        assert_eq!(frame.sample_count, 800);
+        // Fixed buffer size: 2048 samples
+        assert_eq!(frame.sample_count, 2048);
         assert_eq!(frame.channels, 2); // Always stereo
         assert_eq!(frame.sample_rate, 48000);
         assert_eq!(frame.frame_number, 0);
 
-        // Check samples array size (800 samples * 2 channels = 1600 total)
-        assert_eq!(frame.samples.len(), 1600);
+        // Check samples array size (2048 samples * 2 channels = 4096 total)
+        assert_eq!(frame.samples.len(), 4096);
 
         // Check that samples are non-zero (tone is playing)
         let has_non_zero = frame.samples.iter().any(|&s| s.abs() > 0.0);
@@ -321,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_frame_counter_increments() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 60.0, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
 
         let frame1 = gen.generate_frame(0);
         assert_eq!(frame1.frame_number, 0);
@@ -335,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_amplitude_control() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 60.0, 1.0);
+        let mut gen = TestToneGenerator::new(440.0, 48000, 1.0);
 
         // Test at 100% amplitude
         let frame_full = gen.generate_frame(0);
@@ -369,11 +352,11 @@ mod tests {
 
     #[test]
     fn test_stereo_output() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 60.0, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
         let frame = gen.generate_frame(0);
 
-        // At 60 FPS: 800 samples * 2 channels = 1600 total
-        assert_eq!(frame.samples.len(), 1600);
+        // Fixed buffer: 2048 samples * 2 channels = 4096 total
+        assert_eq!(frame.samples.len(), 4096);
         assert_eq!(frame.channels, 2);
 
         // Stereo should have duplicate samples (L, R pairs)
@@ -388,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_phase_continuity() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 60.0, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
 
         // Generate multiple frames
         gen.generate_frame(0);

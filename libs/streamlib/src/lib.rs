@@ -51,7 +51,7 @@
 pub mod core;
 
 // Re-export procedural macros
-pub use streamlib_macros::{processor, StreamProcessor as DeriveStreamProcessor};
+pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
 
 // Re-export core types at crate root (but not the runtime module itself)
 pub use core::{

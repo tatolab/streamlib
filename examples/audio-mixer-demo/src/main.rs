@@ -6,151 +6,166 @@
 use streamlib::{
     StreamRuntime, AudioMixerProcessor, MixingStrategy,
     TestToneGenerator, AudioOutputProcessor,
-    ClapEffectProcessor,  // Add CLAP effect support
+    ClapEffectProcessor, AudioFrame,
     Result,
 };
-
-// Import traits to access their methods
-use streamlib::core::{
-    AudioOutputProcessor as AudioOutputProcessorTrait,
-    AudioEffectProcessor as AudioEffectProcessorTrait,  // For CLAP activation
+use streamlib::core::config::{
+    TestToneConfig, AudioMixerConfig, ClapEffectConfig, AudioOutputConfig,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
+    // Initialize logging - use DEBUG level for diagnostics
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
         .init();
 
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
 
-    // Step 1: Create runtime with audio configuration
+    // Step 1: Create runtime (event-driven, no FPS parameter!)
     println!("🎛️  Creating audio runtime...");
-    let mut runtime = StreamRuntime::new(60.0); // 60 FPS tick rate
+    let mut runtime = StreamRuntime::new();
     let audio_config = runtime.audio_config();
     println!("   Sample rate: {} Hz", audio_config.sample_rate);
     println!("   Buffer size: {} samples", audio_config.buffer_size);
     println!("   Channels: {}\n", audio_config.channels);
 
-    // Step 2: Create test tone generators (A major chord: A4, C#5, E5)
-    println!("🎹 Creating test tone generators...");
+    // Calculate optimal tick rate to match audio buffer size
+    // This ensures we generate exactly the right number of samples per tick
+    // to match CoreAudio's consumption rate, eliminating buffer underruns
+    let tick_rate = audio_config.sample_rate as f64 / audio_config.buffer_size as f64;
+    println!("   Optimal tick rate: {:.2} Hz (matches buffer size)", tick_rate);
 
-    // A4 (440 Hz) - Left channel louder
-    let mut tone1 = TestToneGenerator::new(
-        440.0,                        // Frequency: A4
-        audio_config.sample_rate,
-        60.0,                         // Tick rate: 60 FPS
-        0.15,                         // Volume: 15% (quiet to avoid clipping)
-    );
-    println!("   ✅ Tone 1: 440.00 Hz (A4)  - Left channel");
+    // Step 2: Add test tone generators (A major chord: A4, C#5, E5)
+    // All generators share the same timer group for synchronized wake-ups
+    println!("🎹 Adding test tone generators...");
+    println!("   Using timer group 'audio_master' for zero-drift synchronization");
 
-    // C#5 (554.37 Hz) - Right channel louder
-    let mut tone2 = TestToneGenerator::new(
-        554.37,                       // Frequency: C#5
-        audio_config.sample_rate,
-        60.0,                         // Tick rate: 60 FPS
-        0.15,                         // Volume: 15%
-    );
-    println!("   ✅ Tone 2: 554.37 Hz (C#5) - Right channel");
+    // A4 (440 Hz)
+    let tone1 = runtime.add_processor_with_config::<TestToneGenerator>(
+        TestToneConfig {
+            frequency: 440.0,             // A4
+            amplitude: 0.15,              // 15% volume (quiet to avoid clipping)
+            sample_rate: audio_config.sample_rate,
+            timer_group_id: Some("audio_master".to_string()), // Synchronized timing
+        }
+    )?;
+    println!("   ✅ Tone 1: 440.00 Hz (A4)");
 
-    // E5 (659.25 Hz) - Centered
-    let mut tone3 = TestToneGenerator::new(
-        659.25,                       // Frequency: E5
-        audio_config.sample_rate,
-        60.0,                         // Tick rate: 60 FPS
-        0.15,                         // Volume: 15%
-    );
-    println!("   ✅ Tone 3: 659.25 Hz (E5)  - Center\n");
+    // C#5 (554.37 Hz)
+    let tone2 = runtime.add_processor_with_config::<TestToneGenerator>(
+        TestToneConfig {
+            frequency: 554.37,            // C#5
+            amplitude: 0.15,
+            sample_rate: audio_config.sample_rate,
+            timer_group_id: Some("audio_master".to_string()), // Same group = no drift
+        }
+    )?;
+    println!("   ✅ Tone 2: 554.37 Hz (C#5)");
 
-    // Step 3: Create audio mixer
-    println!("🔀 Creating audio mixer...");
-    let mut mixer = AudioMixerProcessor::new(
-        3,                                    // 3 inputs
-        MixingStrategy::SumNormalized,        // Prevents clipping
-        audio_config.sample_rate,
+    // E5 (659.25 Hz)
+    let tone3 = runtime.add_processor_with_config::<TestToneGenerator>(
+        TestToneConfig {
+            frequency: 659.25,            // E5
+            amplitude: 0.15,
+            sample_rate: audio_config.sample_rate,
+            timer_group_id: Some("audio_master".to_string()), // Shared master clock
+        }
+    )?;
+    println!("   ✅ Tone 3: 659.25 Hz (E5)\n");
+
+    // Step 3: Add audio mixer
+    println!("🔀 Adding audio mixer...");
+    let mixer = runtime.add_processor_with_config::<AudioMixerProcessor>(
+        AudioMixerConfig {
+            num_inputs: 3,                        // 3 inputs
+            strategy: MixingStrategy::SumNormalized, // Prevents clipping
+            sample_rate: audio_config.sample_rate,
+            buffer_size: audio_config.buffer_size,  // Match runtime buffer size
+            timer_group_id: Some("audio_master".to_string()), // Wake with generators
+        }
     )?;
     println!("   Strategy: Sum Normalized (no clipping)");
     println!("   Inputs: 3");
+    println!("   Timer Group: 'audio_master' (synchronized with generators)");
     println!("   Output: Stereo at {} Hz\n", audio_config.sample_rate);
 
-    // Step 4: Create CLAP reverb effect
-    println!("🎚️  Loading CLAP reverb effect...");
-    let mut reverb = ClapEffectProcessor::load_by_name(
-        "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap",
-        "Reverb 1"
+    // Step 4: Add CLAP reverb effect
+    println!("🎚️  Adding CLAP reverb effect...");
+    let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(
+        ClapEffectConfig {
+            plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
+            plugin_name: None,  // Use first plugin in bundle
+            sample_rate: audio_config.sample_rate,
+            buffer_size: audio_config.buffer_size,
+        }
     )?;
+    println!("   Loaded: Surge XT Effect (first in bundle)");
+    println!("   Plugin will activate on runtime start\n");
 
-    // Activate with runtime's audio config for consistency
-    // NOTE: We're passing config.buffer_size (2048) but will receive 800-sample frames
-    // This tests if CLAP plugins handle variable buffer sizes correctly!
-    reverb.activate(audio_config.sample_rate, audio_config.buffer_size)?;
-    println!("   Loaded: Surge XT Reverb");
-    println!("   Activated at {}Hz, max {} frames", audio_config.sample_rate, audio_config.buffer_size);
-    println!("   ⚠️  Testing: Will receive 800-sample frames (60 FPS) despite max 2048!\n");
+    // Step 5: Add speaker output
+    println!("🔊 Adding speaker output...");
+    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
+        AudioOutputConfig {
+            device_id: None, // Use default speaker
+        }
+    )?;
+    println!("   Using default audio device\n");
 
-    // Step 5: Create speaker output
-    println!("🔊 Setting up speaker output...");
-    let mut speaker = AudioOutputProcessor::new(None)?;
-    println!("   Using: {}\n", speaker.current_device().name);
-
-    // Step 5: Connect the audio pipeline
+    // Step 6: Connect the audio pipeline using type-safe handles
     println!("🔗 Building audio pipeline...");
 
     // Connect tone generators to mixer inputs
     runtime.connect(
-        &mut tone1.output_ports().audio,
-        &mut mixer.input_ports().inputs.get_mut("input_0").unwrap().lock()
+        tone1.output_port::<AudioFrame>("audio"),
+        mixer.input_port::<AudioFrame>("input_0"),
     )?;
     println!("   ✅ Tone 1 → Mixer Input 0");
 
     runtime.connect(
-        &mut tone2.output_ports().audio,
-        &mut mixer.input_ports().inputs.get_mut("input_1").unwrap().lock()
+        tone2.output_port::<AudioFrame>("audio"),
+        mixer.input_port::<AudioFrame>("input_1"),
     )?;
     println!("   ✅ Tone 2 → Mixer Input 1");
 
     runtime.connect(
-        &mut tone3.output_ports().audio,
-        &mut mixer.input_ports().inputs.get_mut("input_2").unwrap().lock()
+        tone3.output_port::<AudioFrame>("audio"),
+        mixer.input_port::<AudioFrame>("input_2"),
     )?;
     println!("   ✅ Tone 3 → Mixer Input 2");
 
     // Connect mixer output to reverb input
     runtime.connect(
-        &mut mixer.output_ports().audio,
-        &mut reverb.input_ports().audio
+        mixer.output_port::<AudioFrame>("audio"),
+        reverb.input_port::<AudioFrame>("audio"),
     )?;
     println!("   ✅ Mixer → Reverb");
 
     // Connect reverb output to speaker
     runtime.connect(
-        &mut reverb.output_ports().audio,
-        &mut speaker.input_ports().audio
+        reverb.output_port::<AudioFrame>("audio"),
+        speaker.input_port::<AudioFrame>("audio"),
     )?;
     println!("   ✅ Reverb → Speaker\n");
-
-    // Step 6: Add all processors to runtime
-    runtime.add_processor(Box::new(tone1));
-    runtime.add_processor(Box::new(tone2));
-    runtime.add_processor(Box::new(tone3));
-    runtime.add_processor(Box::new(mixer));
-    runtime.add_processor(Box::new(reverb));  // Add CLAP reverb
-    runtime.add_processor(Box::new(speaker));
 
     // Step 7: Start the runtime
     println!("▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
     println!("🎵 You should hear an A major chord (A4 + C#5 + E5) with reverb!\n");
     println!("💡 Audio pipeline:");
-    println!("   • 440 Hz (A4)  → Mixer (Left)");
-    println!("   • 554 Hz (C#5) → Mixer (Right)");
-    println!("   • 659 Hz (E5)  → Mixer (Center)");
+    println!("   • 440 Hz (A4)  → Mixer Input 0");
+    println!("   • 554 Hz (C#5) → Mixer Input 1");
+    println!("   • 659 Hz (E5)  → Mixer Input 2");
     println!("   • Mixed → CLAP Reverb → Speaker\n");
-    println!("🧪 Testing buffer size compatibility:");
-    println!("   • TestToneGenerator: 800 samples/frame (60 FPS)");
-    println!("   • CLAP plugin activated: max 2048 samples");
-    println!("   • Actual frames received: 800 samples\n");
+    println!("⏰ Timer Groups (Clock Domains):");
+    println!("   • Group: 'audio_master' @ {:.2} Hz", tick_rate);
+    println!("   • Members: Tone 1, Tone 2, Tone 3, Mixer");
+    println!("   • All processors wake simultaneously (zero clock drift)");
+    println!("   • Inspired by GStreamer pipeline clocks & PipeWire graph timing\n");
+    println!("📡 Event-driven architecture:");
+    println!("   • No FPS parameter in runtime");
+    println!("   • Timer groups for synchronized sources");
+    println!("   • Type-safe connections verified at compile time\n");
 
     runtime.start().await?;
 

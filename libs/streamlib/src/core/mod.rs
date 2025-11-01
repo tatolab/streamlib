@@ -6,9 +6,11 @@
 
 pub mod buffers;
 pub mod clock;
+pub mod config;
 pub mod error;
 pub mod events;
 pub mod gpu_context;
+pub mod handles;
 pub mod messages;
 pub mod registry;
 pub mod schema;
@@ -23,9 +25,14 @@ pub mod topology;
 // Re-export core types
 pub use buffers::RingBuffer;
 pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
+pub use config::{
+    EmptyConfig, CameraConfig, DisplayConfig, AudioCaptureConfig, AudioOutputConfig,
+    ClapEffectConfig, TestToneConfig, AudioMixerConfig,
+};
 pub use error::{StreamError, Result};
 pub use events::TickBroadcaster;
 pub use gpu_context::GpuContext;
+pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use messages::{VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue};
 pub use stream_processor::StreamProcessor;
 pub use ports::{
@@ -50,7 +57,7 @@ pub use processors::{
 pub use processors::{
     PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
 };
-pub use runtime::{StreamRuntime, ShaderId};
+pub use runtime::{StreamRuntime, ShaderId, WakeupEvent};
 pub use schema::{
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
@@ -63,7 +70,7 @@ pub use schema::{
 pub use sync::{
     timestamp_delta_ms, video_audio_delta_ms,
     are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
-    MultimodalBuffer, DEFAULT_SYNC_TOLERANCE_MS,
+    MultimodalBuffer, SampleAndHoldBuffer, DEFAULT_SYNC_TOLERANCE_MS,
 };
 pub use registry::{
     ProcessorRegistry, ProcessorRegistration,

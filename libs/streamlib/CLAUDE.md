@@ -2,6 +2,41 @@
 
 This is the **user-facing crate** that provides a platform-agnostic API.
 
+## ⚠️ Creating Processors: Use the Macro
+
+**ALWAYS use `#[derive(StreamProcessor)]` for new processors:**
+
+```rust
+use streamlib::{StreamInput, StreamOutput, VideoFrame};
+
+#[derive(StreamProcessor)]
+struct MyProcessor {
+    #[input()]
+    input: StreamInput<VideoFrame>,
+
+    #[output()]
+    output: StreamOutput<VideoFrame>,
+
+    // Config fields
+    strength: f32,
+}
+
+impl MyProcessor {
+    fn process(&mut self) -> Result<()> {
+        // Your logic
+        Ok(())
+    }
+}
+```
+
+**Benefits:**
+- Reduces boilerplate from ~90 lines to ~10 lines
+- Type-safe schemas extracted at compile time
+- Full MCP compatibility automatically
+- Smart defaults for descriptions, tags, examples
+
+See root `CLAUDE.md` and `libs/streamlib-macros/CLAUDE.md` for details.
+
 ## Architecture Overview
 
 ```text
@@ -12,7 +47,8 @@ streamlib (this crate - public API)
 ├── src/linux/ (Linux implementations - INTERNAL, future)
 ├── src/windows/ (Windows implementations - INTERNAL, future)
 ├── src/python/ (PyO3 bindings)
-└── src/mcp/ (MCP server for AI agents)
+├── src/mcp/ (MCP server for AI agents)
+└── ../streamlib-macros/ (Procedural macros)
 ```
 
 ## The Three-Layer Design

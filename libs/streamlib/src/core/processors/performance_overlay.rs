@@ -831,6 +831,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 #[cfg(feature = "debug-overlay")]
 impl StreamProcessor for PerformanceOverlayProcessor {
+    type Config = crate::core::config::PerformanceOverlayConfig;
+
+    fn from_config(_config: Self::Config) -> Result<Self> {
+        Self::new()
+    }
+
     fn on_start(&mut self, gpu_context: &GpuContext) -> Result<()> {
         self.gpu_context = Some(gpu_context.clone());
 
@@ -855,7 +861,7 @@ impl StreamProcessor for PerformanceOverlayProcessor {
         Ok(())
     }
 
-    fn process(&mut self, _tick: crate::core::clock::TimedTick) -> Result<()> {
+    fn process(&mut self) -> Result<()> {
         // Read input frame
         let input = match self.input_ports.video.read_latest() {
             Some(frame) => frame,

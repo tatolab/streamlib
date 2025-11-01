@@ -5,17 +5,18 @@
 
 use crate::core::{
     StreamProcessor, DisplayProcessor, DisplayInputPorts, WindowId,
-    TimedTick, Result, StreamError,
+    Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::schema::TimerRequirements;
-use crate::apple::{metal::MetalDevice, WgpuBridge};
-use objc2::{rc::Retained, MainThreadOnly, MainThreadMarker};
+use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread};
+use objc2::{rc::Retained, MainThreadMarker};
 use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
 use objc2_app_kit::{NSWindow, NSBackingStoreType, NSWindowStyleMask, NSApplication, NSApplicationActivationPolicy};
 use objc2_quartz_core::{CAMetalLayer, CAMetalDrawable};
 use objc2_metal::MTLPixelFormat;
-use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
+use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc};
+use parking_lot::Mutex;
 use metal;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
@@ -30,9 +31,12 @@ static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 /// - Blits to CAMetalLayer drawable with automatic RGBA→BGRA conversion
 /// - Presents frames at runtime tick rate (typically 60 FPS)
 pub struct AppleDisplayProcessor {
-    // Window components (will be created on start)
+    // Window components (will be created async on start)
     window: Option<Retained<NSWindow>>,
     metal_layer: Option<Retained<CAMetalLayer>>,
+
+    // Layer address for thread-safe access (0 = not created yet)
+    layer_addr: Arc<AtomicUsize>,
     #[allow(dead_code)] // Stored for potential future direct Metal API usage
     metal_device: MetalDevice,
     metal_command_queue: metal::CommandQueue,
@@ -50,6 +54,7 @@ pub struct AppleDisplayProcessor {
     width: u32,
     height: u32,
     frames_rendered: u64,
+    window_creation_dispatched: bool,
 }
 
 // SAFETY: NSWindow, CAMetalLayer, and Metal objects are Objective-C objects that can be sent between threads.
@@ -70,8 +75,6 @@ impl AppleDisplayProcessor {
         let window_id = WindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
         let metal_device = MetalDevice::new()?;
 
-        // WgpuBridge will be created from runtime's shared device in on_start()
-
         // Create Metal command queue for blit operations
         let metal_command_queue = {
             use metal::foreign_types::ForeignTypeRef;
@@ -84,58 +87,12 @@ impl AppleDisplayProcessor {
 
         let window_title = "streamlib Display".to_string();
 
-        // Create window and Metal layer on construction (main thread)
-        let (window, metal_layer) = unsafe {
-            let mtm = MainThreadMarker::new().expect("DisplayProcessor must be created on main thread");
-
-            // Initialize NSApplication (required for windows to show)
-            let app = NSApplication::sharedApplication(mtm);
-            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-
-            // Create CAMetalLayer
-            let metal_layer = CAMetalLayer::new();
-            metal_layer.setDevice(Some(metal_device.device()));
-            metal_layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
-            metal_layer.setFramebufferOnly(false);
-
-            let drawable_size = NSSize::new(width as f64, height as f64);
-            metal_layer.setDrawableSize(drawable_size);
-
-            // Create NSWindow
-            let content_rect = NSRect::new(
-                NSPoint::new(100.0, 100.0),
-                NSSize::new(width as f64, height as f64),
-            );
-
-            let style_mask = NSWindowStyleMask::Titled
-                | NSWindowStyleMask::Closable
-                | NSWindowStyleMask::Resizable;
-
-            let window = NSWindow::initWithContentRect_styleMask_backing_defer(
-                NSWindow::alloc(mtm),
-                content_rect,
-                style_mask,
-                NSBackingStoreType::Buffered,
-                false,
-            );
-
-            window.setTitle(&NSString::from_str(&window_title));
-
-            // Set metal layer as content view's layer
-            let content_view = window.contentView()
-                .ok_or_else(|| StreamError::Configuration("No content view".into()))?;
-            content_view.setWantsLayer(true);
-            content_view.setLayer(Some(&metal_layer));
-
-            // Show window immediately (must be done on main thread)
-            window.makeKeyAndOrderFront(None);
-
-            (window, metal_layer)
-        };
+        // Window and layer will be created in on_start() on the main thread
 
         Ok(Self {
-            window: Some(window),
-            metal_layer: Some(metal_layer),
+            window: None,  // Created async in on_start()
+            metal_layer: None,  // Created async in on_start()
+            layer_addr: Arc::new(AtomicUsize::new(0)),  // 0 = not created yet
             metal_device,
             metal_command_queue,
             gpu_context: None,  // Will be set by runtime in on_start()
@@ -148,6 +105,7 @@ impl AppleDisplayProcessor {
             width,
             height,
             frames_rendered: 0,
+            window_creation_dispatched: false,
         })
     }
 }
@@ -156,9 +114,24 @@ impl DisplayProcessor for AppleDisplayProcessor {
     fn set_window_title(&mut self, title: &str) {
         self.window_title = title.to_string();
 
-        // If window already exists, update it
+        // If window already exists, update it on main thread
         if let Some(ref window) = self.window {
-            window.setTitle(&NSString::from_str(title));
+            let title_str = title.to_string();
+
+            // Convert to usize (usize IS Send, unlike raw pointers)
+            let window_addr = Retained::as_ptr(window) as usize;
+
+            let _ = execute_on_main_thread(move || {
+                // SAFETY: Window is still alive (we hold a reference in self.window)
+                let window = unsafe {
+                    Retained::from_raw(window_addr as *mut NSWindow).unwrap()
+                };
+                window.setTitle(&NSString::from_str(&title_str));
+
+                // Don't drop the window - put it back as raw pointer
+                let _ = Retained::into_raw(window);
+                Ok(())
+            });
         }
     }
 
@@ -172,9 +145,18 @@ impl DisplayProcessor for AppleDisplayProcessor {
 }
 
 impl StreamProcessor for AppleDisplayProcessor {
+    type Config = crate::core::config::DisplayConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        Self::with_size(config.width, config.height)
+        // Note: title is stored in config but not used during construction
+        // It can be set later via window APIs if needed
+    }
+
     fn process(&mut self) -> Result<()> {
         // Read latest video frame
         if let Some(frame) = self.ports.video.read_latest() {
+
             // Get the WebGPU texture from the frame
             let wgpu_texture = &frame.texture;
 
@@ -186,9 +168,22 @@ impl StreamProcessor for AppleDisplayProcessor {
                 wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)
             }?;
 
-            // Get the next drawable from CAMetalLayer
-            let metal_layer = self.metal_layer.as_ref()
-                .ok_or_else(|| StreamError::Configuration("No Metal layer".into()))?;
+            // Get CAMetalLayer from atomic address (0 = not created yet)
+            let layer_addr = self.layer_addr.load(Ordering::Acquire);
+            if layer_addr == 0 {
+                // Window not created yet - drop this frame
+                return Ok(());
+            }
+
+
+            // SAFETY: Layer was created on main thread and address stored atomically
+            // We reconstruct it here just for this frame's operations
+            // CAMetalLayer.nextDrawable() is thread-safe according to Apple docs
+            let metal_layer = unsafe {
+                // Don't take ownership - just borrow for this frame
+                let ptr = layer_addr as *const CAMetalLayer;
+                &*ptr
+            };
 
             unsafe {
                 if let Some(drawable) = metal_layer.nextDrawable() {
@@ -258,6 +253,7 @@ impl StreamProcessor for AppleDisplayProcessor {
     }
 
     fn on_start(&mut self, gpu_context: &crate::core::GpuContext) -> Result<()> {
+
         // Store the shared GPU context from runtime
         self.gpu_context = Some(gpu_context.clone());
 
@@ -291,8 +287,105 @@ impl StreamProcessor for AppleDisplayProcessor {
             self.window_title
         );
 
-        // Window was already shown in constructor (on main thread)
-        tracing::info!("Display {}: Ready to process frames", self.window_id.0);
+        // Dispatch window creation to main thread asynchronously
+        // This avoids blocking and potential deadlocks
+        tracing::info!("Display {}: Dispatching window creation to main thread (async)", self.window_id.0);
+
+        let width = self.width;
+        let height = self.height;
+        let window_title = self.window_title.clone();
+        let metal_device = self.metal_device.clone_device();
+        let window_id = self.window_id;
+        let layer_addr = Arc::clone(&self.layer_addr);
+
+        // Use GCD to dispatch window creation to main thread asynchronously
+        use dispatch2::DispatchQueue;
+
+        DispatchQueue::main().exec_async(move || {
+            // SAFETY: This closure executes on the main thread via GCD
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+
+            tracing::info!("Display {}: Creating window on main thread...", window_id.0);
+
+            // Create window frame
+            let frame = NSRect::new(
+                NSPoint::new(100.0, 100.0),
+                NSSize::new(width as f64, height as f64),
+            );
+
+            // Create window with standard style
+            let style_mask = NSWindowStyleMask::Titled
+                | NSWindowStyleMask::Closable
+                | NSWindowStyleMask::Miniaturizable
+                | NSWindowStyleMask::Resizable;
+
+            let window = unsafe {
+                NSWindow::initWithContentRect_styleMask_backing_defer(
+                    mtm.alloc(),
+                    frame,
+                    style_mask,
+                    NSBackingStoreType::Buffered,
+                    false,
+                )
+            };
+
+            window.setTitle(&NSString::from_str(&window_title));
+
+            // Create Metal layer
+            let metal_layer = unsafe { CAMetalLayer::new() };
+            metal_layer.setDevice(Some(&metal_device));
+            metal_layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+
+            // Set drawable size using objc2's CGSize
+            unsafe {
+                use objc2::{msg_send, Encode, Encoding};
+
+                // CGSize is just {width: f64, height: f64}
+                #[repr(C)]
+                struct CGSize {
+                    width: f64,
+                    height: f64,
+                }
+
+                // SAFETY: CGSize is repr(C) with two f64 fields
+                unsafe impl Encode for CGSize {
+                    const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+                }
+
+                let size = CGSize {
+                    width: width as f64,
+                    height: height as f64,
+                };
+
+                let _: () = msg_send![&metal_layer, setDrawableSize: size];
+            }
+
+            // Attach layer to window's content view
+            if let Some(content_view) = window.contentView() {
+                content_view.setWantsLayer(true);
+                content_view.setLayer(Some(&metal_layer));
+            }
+
+            // Show window
+            window.makeKeyAndOrderFront(None);
+
+            // Activate app if not already active
+            let app = NSApplication::sharedApplication(mtm);
+            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+            app.activateIgnoringOtherApps(true);
+
+
+            // Store layer address atomically so process() can access it
+            // Window will be leaked (stays alive until app exits)
+            let _ = Retained::into_raw(window);  // Leak window
+            let addr = Retained::into_raw(metal_layer) as usize;
+            layer_addr.store(addr, Ordering::Release);
+
+        });
+
+        self.window_creation_dispatched = true;
+
+        tracing::info!("Display {}: Window creation dispatched, processor ready", self.window_id.0);
         Ok(())
     }
 
@@ -303,12 +396,22 @@ impl StreamProcessor for AppleDisplayProcessor {
             self.frames_rendered
         );
 
-        // Close window
-        if let Some(ref window) = self.window {
-            window.close();
+        // Close window on main thread (CRITICAL for AppKit)
+        if let Some(window) = self.window.take() {
+            // Convert to usize (usize IS Send, unlike raw pointers)
+            let window_addr = Retained::into_raw(window) as usize;
+
+            execute_on_main_thread(move || {
+                // SAFETY: We just took ownership and converted to usize
+                let window = unsafe {
+                    Retained::from_raw(window_addr as *mut NSWindow).unwrap()
+                };
+                window.close();
+                // Window is dropped here (ownership transferred to this closure)
+                Ok(())
+            })?;
         }
 
-        self.window = None;
         self.metal_layer = None;
 
         Ok(())
@@ -376,6 +479,7 @@ impl StreamProcessor for AppleDisplayProcessor {
             ))
             .with_timer_requirements(TimerRequirements {
                 rate_hz: 60.0,
+                group_id: None,
                 description: Some("Display refresh at 60 FPS for smooth rendering".into()),
             })
             .with_tags(vec!["sink", "display", "window", "output", "render"])
@@ -384,6 +488,48 @@ impl StreamProcessor for AppleDisplayProcessor {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn take_output_consumer(&mut self, _port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+        // Display has no video outputs - it's a sink processor
+        None
+    }
+
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::stream_processor::PortConsumer) -> bool {
+        use crate::core::stream_processor::PortProvider;
+
+        // Extract the VideoFrame consumer from the enum
+        let video_consumer = match consumer {
+            crate::core::stream_processor::PortConsumer::Video(c) => c,
+            _ => return false,  // Wrong type - type safety via enum pattern match
+        };
+
+        // Use PortProvider to access the video input port
+        self.with_video_input_mut(port_name, |input| {
+            input.connect_consumer(video_consumer);
+            true
+        })
+        .unwrap_or(false)
+    }
+}
+
+// Implement PortProvider for dynamic port access (used by runtime for connection wiring)
+impl crate::core::stream_processor::PortProvider for AppleDisplayProcessor {
+    fn with_video_input_mut<F, R>(&mut self, name: &str, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut crate::core::StreamInput<crate::core::VideoFrame>) -> R,
+    {
+        match name {
+            "video" => Some(f(&mut self.ports.video)),
+            _ => None,
+        }
+    }
+
+    fn with_video_output_mut<F, R>(&mut self, _name: &str, _f: F) -> Option<R>
+    where
+        F: FnOnce(&mut crate::core::StreamOutput<crate::core::VideoFrame>) -> R,
+    {
+        None  // Display has no video outputs - it's a sink processor
     }
 }
 

@@ -111,6 +111,45 @@ impl VideoFrame {
             metadata: Some(metadata),
         }
     }
+
+    /// Create example 720p video frame metadata for MCP/macro use
+    ///
+    /// Returns a JSON representation suitable for ProcessorExample.
+    /// Note: This is metadata only (no actual texture), used by MCP for documentation.
+    pub fn example_720p() -> serde_json::Value {
+        serde_json::json!({
+            "width": 1280,
+            "height": 720,
+            "format": "Rgba8Unorm",
+            "timestamp": 0.033,
+            "frame_number": 1,
+            "metadata": {}
+        })
+    }
+
+    /// Create example 1080p video frame metadata for MCP/macro use
+    pub fn example_1080p() -> serde_json::Value {
+        serde_json::json!({
+            "width": 1920,
+            "height": 1080,
+            "format": "Rgba8Unorm",
+            "timestamp": 0.033,
+            "frame_number": 1,
+            "metadata": {}
+        })
+    }
+
+    /// Create example 4K video frame metadata for MCP/macro use
+    pub fn example_4k() -> serde_json::Value {
+        serde_json::json!({
+            "width": 3840,
+            "height": 2160,
+            "format": "Rgba8Unorm",
+            "timestamp": 0.033,
+            "frame_number": 1,
+            "metadata": {}
+        })
+    }
 }
 
 /// Audio sample format
@@ -292,6 +331,48 @@ impl AudioFrame {
     pub fn timestamp_seconds(&self) -> f64 {
         self.timestamp_ns as f64 / 1_000_000_000.0
     }
+
+    /// Create example stereo 48kHz audio frame metadata for MCP/macro use
+    ///
+    /// Returns a JSON representation suitable for ProcessorExample.
+    /// Note: This is metadata only (no actual samples), used by MCP for documentation.
+    pub fn example_stereo_48k() -> serde_json::Value {
+        serde_json::json!({
+            "sample_count": 2048,
+            "sample_rate": 48000,
+            "channels": 2,
+            "format": "F32",
+            "timestamp_ns": 0,
+            "frame_number": 1,
+            "metadata": {}
+        })
+    }
+
+    /// Create example mono 48kHz audio frame metadata for MCP/macro use
+    pub fn example_mono_48k() -> serde_json::Value {
+        serde_json::json!({
+            "sample_count": 2048,
+            "sample_rate": 48000,
+            "channels": 1,
+            "format": "F32",
+            "timestamp_ns": 0,
+            "frame_number": 1,
+            "metadata": {}
+        })
+    }
+
+    /// Create example stereo 44.1kHz audio frame metadata for MCP/macro use
+    pub fn example_stereo_44_1k() -> serde_json::Value {
+        serde_json::json!({
+            "sample_count": 2048,
+            "sample_rate": 44100,
+            "channels": 2,
+            "format": "F32",
+            "timestamp_ns": 0,
+            "frame_number": 1,
+            "metadata": {}
+        })
+    }
 }
 
 /// Generic data message
@@ -392,11 +473,35 @@ impl PortMessage for VideoFrame {
     fn port_type() -> PortType {
         PortType::Video
     }
+
+    fn schema() -> std::sync::Arc<crate::core::Schema> {
+        std::sync::Arc::clone(&crate::core::SCHEMA_VIDEO_FRAME)
+    }
+
+    fn examples() -> Vec<(&'static str, serde_json::Value)> {
+        vec![
+            ("720p video", Self::example_720p()),
+            ("1080p video", Self::example_1080p()),
+            ("4K video", Self::example_4k()),
+        ]
+    }
 }
 
 impl PortMessage for AudioFrame {
     fn port_type() -> PortType {
         PortType::Audio
+    }
+
+    fn schema() -> std::sync::Arc<crate::core::Schema> {
+        std::sync::Arc::clone(&crate::core::SCHEMA_AUDIO_FRAME)
+    }
+
+    fn examples() -> Vec<(&'static str, serde_json::Value)> {
+        vec![
+            ("Stereo 48kHz", Self::example_stereo_48k()),
+            ("Mono 48kHz", Self::example_mono_48k()),
+            ("Stereo 44.1kHz", Self::example_stereo_44_1k()),
+        ]
     }
 }
 
@@ -404,6 +509,10 @@ impl PortMessage for AudioFrame {
 impl PortMessage for DataMessage {
     fn port_type() -> PortType {
         PortType::Data
+    }
+
+    fn schema() -> std::sync::Arc<crate::core::Schema> {
+        std::sync::Arc::clone(&crate::core::SCHEMA_DATA_MESSAGE)
     }
 }
 

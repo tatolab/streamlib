@@ -587,16 +587,45 @@ impl AudioRequirements {
 /// # Example
 ///
 /// ```ignore
+/// // Display processor with independent timer
 /// ProcessorDescriptor::new("DisplayProcessor", "Renders video to window")
 ///     .with_timer_requirements(TimerRequirements {
 ///         rate_hz: 60.0,  // 60 FPS rendering
+///         group_id: None,  // Independent timer
 ///         description: Some("Display refresh rate".into()),
+///     });
+///
+/// // Audio generator in synchronized timer group
+/// ProcessorDescriptor::new("TestToneGenerator", "Generates test tones")
+///     .with_timer_requirements(TimerRequirements {
+///         rate_hz: 23.44,  // 48000 Hz / 2048 samples
+///         group_id: Some("audio_master".to_string()),  // Share timer with other audio processors
+///         description: Some("Audio generation clock".into()),
 ///     })
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerRequirements {
-    /// Timer rate in Hz (e.g., 60.0 for 60 FPS)
+    /// Timer rate in Hz (e.g., 60.0 for 60 FPS, 23.44 for audio)
     pub rate_hz: f64,
+
+    /// Optional timer group ID (clock domain name)
+    ///
+    /// Processors with the same group_id share a master timer thread,
+    /// ensuring synchronized wake-ups with no clock drift.
+    ///
+    /// Use cases:
+    /// - Multiple audio generators feeding a mixer: "audio_master"
+    /// - Synchronized video sources: "video_60fps"
+    /// - Multi-camera stereo rig: "stereo_cameras"
+    ///
+    /// If None, processor gets an independent timer (default behavior).
+    ///
+    /// Inspired by:
+    /// - GStreamer's pipeline clock
+    /// - Core Audio's clock domains
+    /// - PipeWire's clock naming
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
 
     /// Description of what the timer is used for
     #[serde(skip_serializing_if = "Option::is_none")]

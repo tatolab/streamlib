@@ -2,6 +2,41 @@
 
 **This is what you should use!**
 
+## ⚠️ CRITICAL: Always Use the StreamProcessor Macro
+
+**When creating new processors, ALWAYS use `#[derive(StreamProcessor)]`:**
+
+```rust
+use streamlib::{StreamInput, StreamOutput, VideoFrame};
+
+#[derive(StreamProcessor)]
+struct MyProcessor {
+    #[input()]
+    video_in: StreamInput<VideoFrame>,
+
+    #[output()]
+    video_out: StreamOutput<VideoFrame>,
+
+    config_field: f32,  // Auto-becomes config
+}
+
+impl MyProcessor {
+    fn process(&mut self) -> Result<()> {
+        // Your logic here
+        Ok(())
+    }
+}
+```
+
+The macro auto-generates 90+ lines of boilerplate including:
+- Config struct
+- `from_config()` constructor
+- `descriptor()` with type-safe schemas
+- Descriptions, tags, examples
+- Full MCP compatibility
+
+See `CLAUDE.md` (root) and `libs/streamlib-macros/CLAUDE.md` for details.
+
 ## What This Is
 
 The **core** module contains platform-agnostic traits, types, and runtime logic that work everywhere:
@@ -11,6 +46,7 @@ The **core** module contains platform-agnostic traits, types, and runtime logic 
 - **Schemas**: Type definitions for AI/MCP discoverability
 - **Runtime**: Clock, tick broadcaster, processor lifecycle
 - **Ports**: Type-safe connection system
+- **Macros**: `#[derive(StreamProcessor)]` for automatic trait implementation
 
 ## The Key Design Pattern
 

@@ -116,6 +116,12 @@ mod tests {
     struct MockCameraProcessor;
 
     impl StreamProcessor for MockCameraProcessor {
+        type Config = crate::core::config::EmptyConfig;
+
+        fn from_config(_config: Self::Config) -> Result<Self> {
+            Ok(Self)
+        }
+
         fn process(&mut self) -> Result<()> {
             Ok(())
         }

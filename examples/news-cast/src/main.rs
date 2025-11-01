@@ -13,19 +13,11 @@
 //!
 //! Everything stays on GPU - no CPU copies!
 
-use streamlib::{Result, StreamRuntime};
-
-// Import platform-specific processor implementations
-use streamlib::{CameraProcessor, DisplayProcessor};
+use streamlib::{Result, StreamRuntime, CameraProcessor, DisplayProcessor, VideoFrame};
+use streamlib::core::config::{CameraConfig, DisplayConfig, PerformanceOverlayConfig};
 
 // Import core processors (performance overlay requires debug-overlay feature)
 use streamlib::core::PerformanceOverlayProcessor;
-
-// Import traits for their methods
-use streamlib::core::processors::{
-    CameraProcessor as CameraProcessorTrait,
-    DisplayProcessor as DisplayProcessorTrait,
-};
 
 mod lower_third;
 use lower_third::LowerThirdProcessor;
@@ -40,49 +32,56 @@ async fn main() -> Result<()> {
     tracing::info!("=== News-Cast Example ===");
     tracing::info!("Pipeline: Camera → Lower Third → Performance Overlay → Display");
 
-    // Create runtime at 60fps
-    let mut runtime = StreamRuntime::new(60.0);
+    // Create runtime (event-driven, no FPS parameter!)
+    let mut runtime = StreamRuntime::new();
 
-    // 1. Camera processor (captures from default camera)
-    tracing::info!("Creating camera processor...");
-    let mut camera = CameraProcessor::with_device_id("0x1424001bcf2284")?;
-
-    // 2. Lower third effect processor
-    tracing::info!("Creating lower third effect processor...");
-    let mut lower_third = LowerThirdProcessor::new(
-        "BREAKING NEWS".to_string(),
-        "StreamLib Rust Migration Complete".to_string(),
+    // 1. Add camera processor using config-based API
+    tracing::info!("Adding camera processor...");
+    let camera = runtime.add_processor_with_config::<CameraProcessor>(
+        CameraConfig {
+            device_id: Some("0x1424001bcf2284".to_string()),
+        }
     )?;
 
-    // 3. Performance overlay processor
-    tracing::info!("Creating performance overlay processor...");
-    let mut perf_overlay = PerformanceOverlayProcessor::new()?;
+    // 2. Add lower third effect processor (custom processor - needs config struct)
+    tracing::info!("Adding lower third effect processor...");
+    let lower_third = runtime.add_processor_with_config::<LowerThirdProcessor>(
+        lower_third::LowerThirdConfig {
+            headline: "BREAKING NEWS".to_string(),
+            subtitle: "StreamLib Rust Migration Complete".to_string(),
+        }
+    )?;
 
-    // 4. Display processor
-    tracing::info!("Creating display processor...");
-    let mut display = DisplayProcessor::with_size(1920, 1080)?;
-    display.set_window_title("News Cast - StreamLib Demo");
+    // 3. Add performance overlay processor
+    tracing::info!("Adding performance overlay processor...");
+    let perf_overlay = runtime.add_processor_with_config::<PerformanceOverlayProcessor>(
+        PerformanceOverlayConfig {}
+    )?;
 
-    // Connect pipeline: Camera → Lower Third → Performance Overlay → Display
+    // 4. Add display processor
+    tracing::info!("Adding display processor...");
+    let display = runtime.add_processor_with_config::<DisplayProcessor>(
+        DisplayConfig {
+            width: 1920,
+            height: 1080,
+            title: Some("News Cast - StreamLib Demo".to_string()),
+        }
+    )?;
+
+    // Connect pipeline using type-safe handles: Camera → Lower Third → Performance Overlay → Display
     tracing::info!("Connecting pipeline...");
     runtime.connect(
-        &mut camera.output_ports().video,
-        &mut lower_third.input_ports().video,
+        camera.output_port::<VideoFrame>("video"),
+        lower_third.input_port::<VideoFrame>("video"),
     )?;
     runtime.connect(
-        &mut lower_third.output_ports().video,
-        &mut perf_overlay.input_ports().video,
+        lower_third.output_port::<VideoFrame>("video"),
+        perf_overlay.input_port::<VideoFrame>("video"),
     )?;
     runtime.connect(
-        &mut perf_overlay.output_ports().video,
-        &mut display.input_ports().video,
+        perf_overlay.output_port::<VideoFrame>("video"),
+        display.input_port::<VideoFrame>("video"),
     )?;
-
-    // Add processors to runtime
-    runtime.add_processor(Box::new(camera));
-    runtime.add_processor(Box::new(lower_third));
-    runtime.add_processor(Box::new(perf_overlay));
-    runtime.add_processor(Box::new(display));
 
     // Start the runtime
     tracing::info!("Starting runtime...");

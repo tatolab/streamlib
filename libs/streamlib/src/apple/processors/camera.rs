@@ -70,6 +70,7 @@ define_class!(
             // Extract CVPixelBuffer from sample buffer
             let pixel_buffer_ref = CMSampleBufferGetImageBuffer(sample_buffer);
             if pixel_buffer_ref.is_null() {
+                eprintln!("Camera: Sample buffer has no image buffer!");
                 return;
             }
 
@@ -79,9 +80,10 @@ define_class!(
 
             // Store in global frame holder
             if let Some(storage) = FRAME_STORAGE.get() {
-                let frame_holder = FrameHolder { pixel_buffer };
+                let frame_holder = FrameHolder { pixel_buffer: pixel_buffer.clone() };
                 let mut latest = storage.lock();
                 *latest = Some(frame_holder);
+
 
                 // Phase 3: Trigger push-based wakeup when frame arrives
                 if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
@@ -90,6 +92,8 @@ define_class!(
                         let _ = tx.send(crate::core::runtime::WakeupEvent::DataAvailable);
                     }
                 }
+            } else {
+                eprintln!("Camera: FRAME_STORAGE not initialized!");
             }
         }
     }
@@ -150,7 +154,6 @@ impl AppleCameraProcessor {
     }
 
     fn with_device_id_opt(device_id: Option<&str>) -> Result<Self> {
-        eprintln!("Camera: Starting with_device_id_opt");
 
         // Must be on main thread for AVFoundation
         let mtm = MainThreadMarker::new()
@@ -158,40 +161,32 @@ impl AppleCameraProcessor {
                 "CameraProcessor must be created on main thread".into()
             ))?;
 
-        eprintln!("Camera: Have main thread marker");
         tracing::info!("Camera: Initializing AVFoundation capture session");
 
         // Create Metal device (for IOSurface → Metal texture conversion)
         // WebGPU device/queue will be provided by runtime via on_start()
         let metal_device = MetalDevice::new()?;
-        eprintln!("Camera: Created Metal device (WebGPU context will be provided by runtime)");
 
         let latest_frame = Arc::new(Mutex::new(None));
 
         // Create capture session
         let session = unsafe { AVCaptureSession::new() };
-        eprintln!("Camera: Created capture session");
 
         // Configure session (must be done before adding inputs/outputs)
         unsafe {
             session.beginConfiguration();
         }
-        eprintln!("Camera: Began configuration");
 
         // Get camera device
-        eprintln!("Camera: About to get camera device");
         let device = unsafe {
             if let Some(id) = device_id {
-                eprintln!("Camera: Looking for device with ID: {}", id);
                 let id_str = NSString::from_str(id);
                 let dev = AVCaptureDevice::deviceWithUniqueID(&id_str);
                 if dev.is_none() {
-                    eprintln!("Camera: Device with ID {} not found!", id);
                     return Err(StreamError::Configuration(
                         format!("Camera not found with ID: {}. The device may have been disconnected or the ID changed.", id)
                     ));
                 }
-                eprintln!("Camera: Found device by ID");
                 dev.unwrap()
             } else {
                 // Just use the default device - accessing device list can crash on Continuity Cameras
@@ -199,7 +194,6 @@ impl AppleCameraProcessor {
                     "AVMediaTypeVideo not available".into()
                 ))?;
 
-                eprintln!("Camera: Using default device");
                 AVCaptureDevice::defaultDeviceWithMediaType(media_type)
                     .ok_or_else(|| StreamError::Configuration(
                         "No camera found".into()
@@ -211,13 +205,10 @@ impl AppleCameraProcessor {
         let device_unique_id = unsafe { device.uniqueID().to_string() };
         let device_model = unsafe { device.modelID().to_string() };
         let device_manufacturer = unsafe { device.manufacturer().to_string() };
-        eprintln!("Camera: Got camera device: {} (ID: {})", device_name, device_unique_id);
-        eprintln!("Camera: Model: {}, Manufacturer: {}", device_model, device_manufacturer);
 
         tracing::info!("Camera: Found device: {} ({})", device_name, device_model);
 
         // Check camera permission status
-        eprintln!("Camera: Checking camera permission...");
         let media_type = unsafe {
             AVMediaTypeVideo.ok_or_else(|| StreamError::Configuration(
                 "AVMediaTypeVideo not available".into()
@@ -228,13 +219,11 @@ impl AppleCameraProcessor {
         // The first time this runs, it will fail, but macOS will automatically prompt for permission.
         // On subsequent runs, it will work if permission was granted.
         let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
-        eprintln!("Camera: Authorization status = {:?}", status);
 
         // If not determined yet, macOS will prompt when we try to create the input
         // We'll let the deviceInputWithDevice_error call handle the permission prompt
 
         // Lock device for configuration
-        eprintln!("Camera: Attempting to lock device for configuration");
         unsafe {
             if let Err(e) = device.lockForConfiguration() {
                 eprintln!("Camera: Failed to lock device: {:?}", e);
@@ -242,42 +231,32 @@ impl AppleCameraProcessor {
                     format!("Failed to lock camera device: {:?}", e)
                 ));
             }
-            eprintln!("Camera: Device locked successfully");
             device.unlockForConfiguration();
-            eprintln!("Camera: Device unlocked");
         }
 
         // Create input
-        eprintln!("Camera: About to create input");
         let input = unsafe {
             AVCaptureDeviceInput::deviceInputWithDevice_error(&device)
                 .map_err(|e| StreamError::Configuration(
                     format!("Failed to create camera input: {:?}", e)
                 ))?
         };
-        eprintln!("Camera: Created input successfully!");
 
-        eprintln!("Camera: Checking if session can add input");
         let can_add = unsafe { session.canAddInput(&input) };
-        eprintln!("Camera: canAddInput returned: {}", can_add);
 
         if !can_add {
-            eprintln!("Camera: Session cannot add input!");
             return Err(StreamError::Configuration(
                 "Session cannot add camera input. The camera may be in use by another application.".into()
             ));
         }
 
-        eprintln!("Camera: About to call session.addInput");
         unsafe {
             // This is where the crash happens - AVFoundation throws an Objective-C exception
             // when trying to add certain USB cameras (especially on macOS 15.6+)
             session.addInput(&input);
         }
-        eprintln!("Camera: Input added successfully");
 
         // Initialize global frame storage
-        eprintln!("Camera: Initializing frame storage");
         let _ = FRAME_STORAGE.set(latest_frame.clone());
 
         // Initialize global wakeup channel storage (Phase 3: push-based operation)
@@ -285,10 +264,8 @@ impl AppleCameraProcessor {
             Arc::new(Mutex::new(None));
         let _ = WAKEUP_CHANNEL.set(wakeup_holder.clone());
 
-        eprintln!("Camera: Creating AVCaptureVideoDataOutput");
         // Create output
         let output = unsafe { AVCaptureVideoDataOutput::new() };
-        eprintln!("Camera: Created output");
 
         // NOTE: AVFoundation on macOS does NOT provide IOSurface-backed CVPixelBuffers
         // by default from USB cameras. This is a known limitation.
@@ -302,7 +279,6 @@ impl AppleCameraProcessor {
 
         // Request BGRA format explicitly (AVFoundation defaults to YUV which requires
         // special handling with multiple textures)
-        eprintln!("Camera: Setting pixel format to BGRA");
         use objc2_foundation::NSNumber;
 
         // kCVPixelFormatType_32BGRA = 'BGRA' = 0x42475241
@@ -327,15 +303,11 @@ impl AppleCameraProcessor {
         // Use msg_send directly to set video settings (bypassing type check)
         unsafe {
             let _: () = msg_send![&output, setVideoSettings: video_settings_ptr];
-            eprintln!("Camera: Pixel format set to BGRA");
         }
 
-        eprintln!("Camera: Creating delegate");
         // Create delegate to receive frames
         let delegate = CameraDelegate::new(mtm);
-        eprintln!("Camera: Delegate created");
 
-        eprintln!("Camera: Setting delegate on output with dispatch2::DispatchQueue");
         // Use dispatch2 to create a proper queue for the delegate
         // Using None for queue was causing crashes on macOS 15.6+
         unsafe {
@@ -350,22 +322,16 @@ impl AppleCameraProcessor {
                 Some(&queue),
             );
         }
-        eprintln!("Camera: Delegate set successfully");
 
-        eprintln!("Camera: Checking if can add output");
         let can_add_output = unsafe { session.canAddOutput(&output) };
-        eprintln!("Camera: canAddOutput returned: {}", can_add_output);
 
         if !can_add_output {
-            eprintln!("Camera: Session cannot add output!");
             return Err(StreamError::Configuration("Cannot add camera output".into()));
         }
 
-        eprintln!("Camera: About to call session.addOutput");
         unsafe {
             session.addOutput(&output);
         }
-        eprintln!("Camera: Output added successfully");
 
         let camera_name = unsafe { device.localizedName().to_string() };
 
@@ -373,19 +339,15 @@ impl AppleCameraProcessor {
         unsafe {
             session.commitConfiguration();
         }
-        eprintln!("Camera: Committed configuration");
 
         // Start session
-        eprintln!("Camera: About to start AVFoundation session");
         tracing::info!("Camera: Starting capture session");
         unsafe { session.startRunning(); }
-        eprintln!("Camera: AVFoundation session.startRunning() called");
 
         // Session runs independently on main thread
         // We intentionally leak it so it stays alive
         // TODO: Properly manage session lifecycle
         std::mem::forget(session);
-        eprintln!("Camera: Session leaked (will continue running)");
 
         tracing::info!("Camera: AVFoundation session running (will capture frames)");
 
@@ -457,7 +419,17 @@ impl CameraProcessor for AppleCameraProcessor {
 }
 
 impl StreamProcessor for AppleCameraProcessor {
+    type Config = crate::core::config::CameraConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        match config.device_id {
+            Some(device_id) => Self::with_device_id(&device_id),
+            None => Self::new(),
+        }
+    }
+
     fn process(&mut self) -> Result<()> {
+
         // Try to get the latest frame from the delegate
         let frame_holder = {
             let mut latest = self.latest_frame.lock();
@@ -472,9 +444,7 @@ impl StreamProcessor for AppleCameraProcessor {
                 // Get IOSurface from CVPixelBuffer
                 let iosurface_ref = CVPixelBufferGetIOSurface(pixel_buffer_ref);
                 if iosurface_ref.is_null() {
-                    // USB cameras on macOS don't provide IOSurface-backed buffers
-                    // We need to copy the data to our own IOSurface for GPU access
-                    tracing::warn!("Camera: Skipping frame {} (no IOSurface backing)", self.frame_count);
+                    eprintln!("Camera: Frame has no IOSurface backing - this shouldn't happen!");
                     return Ok(());
                 }
 
@@ -743,6 +713,42 @@ impl StreamProcessor for AppleCameraProcessor {
             *wakeup_storage.lock() = Some(wakeup_tx);
             tracing::debug!("CameraProcessor: Push-based wakeup enabled (AVFoundation callback will trigger processing)");
         }
+    }
+
+    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+        use crate::core::stream_processor::PortProvider;
+
+        // Use PortProvider to access the video output port
+        self.with_video_output_mut(port_name, |output| {
+            output.consumer_holder().lock().take()
+        })
+        .flatten()
+        .map(crate::core::stream_processor::PortConsumer::Video)
+    }
+
+    fn connect_input_consumer(&mut self, _port_name: &str, _consumer: crate::core::stream_processor::PortConsumer) -> bool {
+        // Camera has no video inputs - it's a source processor
+        false
+    }
+}
+
+// Implement PortProvider for dynamic port access (used by runtime for connection wiring)
+impl crate::core::stream_processor::PortProvider for AppleCameraProcessor {
+    fn with_video_output_mut<F, R>(&mut self, name: &str, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut crate::core::StreamOutput<crate::core::VideoFrame>) -> R,
+    {
+        match name {
+            "video" => Some(f(&mut self.ports.video)),
+            _ => None,
+        }
+    }
+
+    fn with_video_input_mut<F, R>(&mut self, _name: &str, _f: F) -> Option<R>
+    where
+        F: FnOnce(&mut crate::core::StreamInput<crate::core::VideoFrame>) -> R,
+    {
+        None  // Camera has no video inputs - it's a source processor
     }
 }
 

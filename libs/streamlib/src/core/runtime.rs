@@ -46,6 +46,7 @@
 use super::clock::{Clock, SoftwareClock};
 use super::events::TickBroadcaster;
 use super::stream_processor::StreamProcessor;
+use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
 use std::collections::HashMap;
 use std::future::Future;
@@ -60,6 +61,20 @@ pub struct ShaderId(pub u64);
 
 /// Unique identifier for processors in the runtime
 pub type ProcessorId = String;
+
+/// Wakeup event for event-driven processors
+///
+/// Processors can wake up on different events instead of just global clock ticks.
+/// This enables push-based operation where producers wake consumers when data is ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeupEvent {
+    /// Data is available on an input port
+    DataAvailable,
+    /// Timer tick from global clock
+    TimerTick,
+    /// Shutdown signal
+    Shutdown,
+}
 
 /// Global audio configuration for the runtime
 ///
@@ -88,6 +103,53 @@ impl Default for AudioConfig {
     }
 }
 
+/// Clock source for timer group (clock domain)
+///
+/// Defines what drives the timing for processors in a timer group.
+/// Phase 1 uses software timers, future phases can add hardware clocks.
+#[derive(Debug, Clone)]
+pub enum ClockSource {
+    /// Software timer using std::thread::sleep
+    ///
+    /// Simple, portable, no hardware dependency.
+    /// Suitable for processors that don't need hardware-accurate timing.
+    Software {
+        /// Timer rate in Hz (e.g., 23.44 for audio, 60.0 for video)
+        rate_hz: f64,
+    },
+
+    // Future: Hardware audio callback, PTP clock, etc.
+    // HardwareAudio { driver_processor_id: ProcessorId },
+}
+
+/// Timer group (clock domain) - processors that share a timing source
+///
+/// Multiple processors can join the same timer group to synchronize their
+/// wake-ups and eliminate clock drift between independent timers.
+///
+/// Inspired by:
+/// - GStreamer's pipeline clock
+/// - Core Audio's clock domains
+/// - PipeWire's graph scheduling
+/// - JACK's sample-accurate synchronization
+struct TimerGroup {
+    /// Unique group ID (e.g., "audio_master", "video_60fps")
+    id: String,
+
+    /// Clock source driving this group
+    clock_source: ClockSource,
+
+    /// Processors in this group
+    processor_ids: Vec<ProcessorId>,
+
+    /// Wakeup channels for all processors in group
+    /// All channels receive WakeupEvent::TimerTick simultaneously
+    wakeup_channels: Vec<crossbeam_channel::Sender<WakeupEvent>>,
+
+    /// Timer thread handle
+    timer_thread: Option<std::thread::JoinHandle<()>>,
+}
+
 /// Status of a processor in the runtime
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessorStatus {
@@ -102,7 +164,19 @@ pub enum ProcessorStatus {
 }
 
 /// Handle to a running processor
-pub struct ProcessorHandle {
+/// Type alias for a type-erased processor stored at runtime
+///
+/// Since processors are constructed before being boxed, we don't need the Config
+/// type information in the trait object. We use Box<dyn Any> for type erasure
+/// and downcast when needed for port access.
+type DynProcessor = Box<dyn super::stream_processor::DynStreamProcessor>;
+
+/// Internal handle for tracking a running processor's state
+///
+/// This is different from the public-facing `ProcessorHandle` in handles.rs,
+/// which is returned by `add_processor()` and used for making connections.
+/// This internal handle tracks the processor's thread, shutdown channel, etc.
+pub(crate) struct RuntimeProcessorHandle {
     /// Unique processor ID
     pub id: ProcessorId,
 
@@ -115,13 +189,16 @@ pub struct ProcessorHandle {
     /// Channel for sending shutdown signal to processor thread
     shutdown_tx: crossbeam_channel::Sender<()>,
 
+    /// Channel for sending wakeup events to processor thread
+    pub(crate) wakeup_tx: crossbeam_channel::Sender<WakeupEvent>,
+
     /// Current processor status
     pub(crate) status: Arc<Mutex<ProcessorStatus>>,
 
     /// Shared reference to the processor (for dynamic connections at runtime)
     /// Wrapped in Arc<Mutex<>> so it can be accessed from both the processing thread
-    /// and connection operations
-    pub(crate) processor: Option<Arc<Mutex<Box<dyn StreamProcessor>>>>,
+    /// and connection operations. Uses Any for type erasure since Config is not needed at runtime.
+    pub(crate) processor: Option<Arc<Mutex<DynProcessor>>>,
 }
 
 /// Unique identifier for connections
@@ -198,14 +275,15 @@ pub struct StreamRuntime {
     /// Broadcaster for distributing ticks to handlers
     broadcaster: Arc<Mutex<TickBroadcaster>>,
 
-    /// Processor registry (maps ID -> ProcessorHandle)
+    /// Processor registry (maps ID -> RuntimeProcessorHandle)
     /// Tracks all processors (pending, running, stopped)
-    pub(crate) processors: Arc<Mutex<HashMap<ProcessorId, ProcessorHandle>>>,
+    pub(crate) processors: Arc<Mutex<HashMap<ProcessorId, RuntimeProcessorHandle>>>,
 
     /// Processors waiting to be started (drained on start)
     /// Stores: (processor_id, processor, shutdown_receiver)
+    /// Processor is type-erased as DynProcessor since Config type is no longer needed after construction
     /// TODO: Remove after full migration to processor registry
-    pending_processors: Vec<(ProcessorId, Box<dyn StreamProcessor>, crossbeam_channel::Receiver<()>)>,
+    pending_processors: Vec<(ProcessorId, DynProcessor, crossbeam_channel::Receiver<()>)>,
 
     /// Handler threads (spawned on start)
     /// TODO: Remove after full migration to processor registry
@@ -238,23 +316,30 @@ pub struct StreamRuntime {
     /// Global audio configuration
     /// All audio processors should use these settings for sample rate compatibility
     audio_config: AudioConfig,
+
+    /// Pending connections waiting to be wired during start()
+    /// Stores connection information before processors are added to runtime
+    pending_connections: Vec<PendingConnection>,
+
+    /// Timer groups registry (maps group_id -> TimerGroup)
+    /// Processors with same timer group share a master timer thread for synchronization
+    timer_groups: Arc<Mutex<HashMap<String, TimerGroup>>>,
 }
 
 impl StreamRuntime {
     /// Create a new runtime with software clock
     ///
-    /// # Arguments
-    ///
-    /// * `fps` - Target frames per second for clock
+    /// Defaults to 60 FPS for the internal clock.
     ///
     /// # Example
     ///
     /// ```
     /// use streamlib_core::StreamRuntime;
     ///
-    /// let runtime = StreamRuntime::new(60.0);
+    /// let runtime = StreamRuntime::new();
     /// ```
-    pub fn new(fps: f64) -> Self {
+    pub fn new() -> Self {
+        let fps = 60.0; // Default FPS
         Self {
             clock: Some(Box::new(SoftwareClock::new(fps))),
             fps,
@@ -270,6 +355,8 @@ impl StreamRuntime {
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
             audio_config: AudioConfig::default(),
+            pending_connections: Vec::new(),
+            timer_groups: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -379,6 +466,8 @@ impl StreamRuntime {
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
             audio_config: AudioConfig::default(),
+            pending_connections: Vec::new(),
+            timer_groups: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -405,33 +494,76 @@ impl StreamRuntime {
         self.gpu_context.as_ref()
     }
 
-    /// Add a processor to the runtime
+    /// Add a processor to the runtime using default configuration
     ///
-    /// Processors are held until `start()` is called, then spawned into threads.
+    /// This is the idiomatic Rust way to add processors with default config.
+    /// For processors that need configuration, use `add_processor_with_config()`.
     ///
-    /// # Arguments
+    /// # Type Parameters
     ///
-    /// * `processor` - Boxed processor implementation
+    /// * `P` - The processor type (e.g., TestToneGenerator, AudioMixerProcessor)
     ///
     /// # Returns
     ///
-    /// The generated ProcessorId for this processor
+    /// * `Ok(ProcessorHandle)` - Handle to the processor for making connections
+    /// * `Err(StreamError)` - If runtime is running or processor construction fails
     ///
     /// # Example
     ///
     /// ```ignore
-    /// use streamlib_core::StreamRuntime;
+    /// let tone = runtime.add_processor::<TestToneGenerator>()?;
+    /// let mixer = runtime.add_processor::<AudioMixerProcessor>()?;
     ///
-    /// let mut runtime = StreamRuntime::new(60.0);
-    ///
-    /// let processor = MyProcessor::new();
-    /// let processor_id = runtime.add_processor(Box::new(processor));
+    /// runtime.connect(
+    ///     tone.output_port::<AudioFrame>("audio"),
+    ///     mixer.input_port::<AudioFrame>("input_1")
+    /// )?;
     /// ```
-    pub fn add_processor(&mut self, processor: Box<dyn StreamProcessor>) -> ProcessorId {
+    pub fn add_processor<P: StreamProcessor>(&mut self) -> Result<ProcessorHandle> {
+        self.add_processor_with_config::<P>(P::Config::default())
+    }
+
+    /// Add a processor to the runtime with custom configuration
+    ///
+    /// Use this for processors that need configuration (camera device ID, window size, etc.).
+    /// For processors with no config needs, use the simpler `add_processor()`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - The processor type (e.g., CameraProcessor, DisplayProcessor)
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration for this processor type
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ProcessorHandle)` - Handle to the processor for making connections
+    /// * `Err(StreamError)` - If runtime is running or processor construction fails
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let camera = runtime.add_processor_with_config::<CameraProcessor>(
+    ///     CameraConfig { device_id: Some("0x1234".to_string()) }
+    /// )?;
+    ///
+    /// let display = runtime.add_processor_with_config::<DisplayProcessor>(
+    ///     DisplayConfig { width: 1920, height: 1080, title: Some("Demo".to_string()) }
+    /// )?;
+    /// ```
+    pub fn add_processor_with_config<P: StreamProcessor>(
+        &mut self,
+        config: P::Config,
+    ) -> Result<ProcessorHandle> {
         if self.running {
-            eprintln!("[Runtime] Warning: Cannot add processor while running");
-            return String::new();
+            return Err(StreamError::Runtime(
+                "Cannot add processor while runtime is running. Use add_processor_runtime() instead.".into()
+            ));
         }
+
+        // Construct processor from config
+        let processor = P::from_config(config)?;
 
         // Generate unique ID
         let id = format!("processor_{}", self.next_processor_id);
@@ -440,12 +572,16 @@ impl StreamRuntime {
         // Create shutdown channel for this processor
         let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
 
-        // Create processor handle with Pending status
-        let handle = ProcessorHandle {
+        // Create dummy wakeup channel (will be replaced in spawn_handler_threads)
+        let (dummy_wakeup_tx, _dummy_wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
+
+        // Create internal processor handle with Pending status
+        let handle = RuntimeProcessorHandle {
             id: id.clone(),
             name: format!("Processor {}", self.next_processor_id - 1),
             thread: None,
             shutdown_tx,
+            wakeup_tx: dummy_wakeup_tx,  // Dummy channel, will be replaced
             status: Arc::new(Mutex::new(ProcessorStatus::Pending)),
             processor: None,  // Will be set when processor is started
         };
@@ -458,10 +594,13 @@ impl StreamRuntime {
 
         // Add to pending list (will be spawned on start())
         // Store the shutdown_rx so we can use it when spawning the thread
-        self.pending_processors.push((id.clone(), processor, shutdown_rx));
+        // Box as Any for type erasure (Config type no longer needed after construction)
+        self.pending_processors.push((id.clone(), Box::new(processor) as DynProcessor, shutdown_rx));
 
         tracing::info!("Added processor with ID: {}", id);
-        id
+
+        // Return public-facing handle for making connections
+        Ok(ProcessorHandle::new(id))
     }
 
     /// Add a processor to a running runtime
@@ -487,7 +626,7 @@ impl StreamRuntime {
     /// ```
     pub async fn add_processor_runtime(
         &mut self,
-        processor: Box<dyn StreamProcessor>,
+        processor: Box<dyn super::stream_processor::DynStreamProcessor>,
     ) -> Result<ProcessorId> {
         // 1. Verify runtime is running
         if !self.running {
@@ -512,14 +651,53 @@ impl StreamRuntime {
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
             .clone();
 
-        // 5. Subscribe processor to broadcaster
-        let tick_rx = {
-            let mut broadcaster = self.broadcaster.lock();
-            broadcaster.subscribe()
-        };
+        // 5. Create wakeup channel for this processor (replaces tick broadcaster)
+        let (wakeup_tx, wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
 
         // 6. Wrap processor in Arc<Mutex<>> for shared access (enables dynamic connections)
         let processor_arc = Arc::new(Mutex::new(processor));
+
+        // Pass wakeup channel to processor
+        {
+            let mut processor = processor_arc.lock();
+            processor.set_wakeup_channel_dyn(wakeup_tx.clone());
+        }
+
+        // Check if processor needs timer ticks
+        let needs_timer = {
+            let processor = processor_arc.lock();
+            if let Some(descriptor) = processor.descriptor_instance_dyn() {
+                descriptor.timer_requirements.is_some()
+            } else {
+                false
+            }
+        };
+
+        // Spawn timer thread if processor requests it
+        if needs_timer {
+            let processor = processor_arc.lock();
+            if let Some(descriptor) = processor.descriptor_instance_dyn() {
+                if let Some(timer_req) = descriptor.timer_requirements {
+                    let wakeup_tx_timer = wakeup_tx.clone();
+                    let id_for_timer = processor_id.clone();
+                    let rate_hz = timer_req.rate_hz;
+
+                    std::thread::spawn(move || {
+                        let interval = std::time::Duration::from_secs_f64(1.0 / rate_hz);
+                        tracing::info!("[{}] Timer thread started at {} Hz", id_for_timer, rate_hz);
+
+                        loop {
+                            std::thread::sleep(interval);
+                            tracing::debug!("[{}] Timer thread sending TimerTick", id_for_timer);
+                            if wakeup_tx_timer.send(WakeupEvent::TimerTick).is_err() {
+                                tracing::debug!("[{}] Timer thread stopped (processor terminated)", id_for_timer);
+                                break;
+                            }
+                        }
+                    });
+                }
+            }
+        }
 
         // 7. Clone variables for thread
         let id_for_thread = processor_id.clone();
@@ -533,27 +711,40 @@ impl StreamRuntime {
             // Call on_start lifecycle hook with GPU context
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_start(&processor_gpu_context) {
+                if let Err(e) = processor.on_start_dyn(&processor_gpu_context) {
                     tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                     return;
                 }
             }
 
-            // Process ticks until shutdown signal or channel closes
+            // Process wakeup events until shutdown
             loop {
                 crossbeam_channel::select! {
-                    recv(tick_rx) -> result => {
+                    recv(wakeup_rx) -> result => {
                         match result {
-                            Ok(tick) => {
+                            Ok(WakeupEvent::DataAvailable) => {
+                                tracing::debug!("[{}] Received DataAvailable wakeup", id_for_thread);
                                 let mut processor = processor_for_thread.lock();
-                                if let Err(e) = processor.process(tick) {
-                                    tracing::error!("[{}] process() error: {}", id_for_thread, e);
+                                if let Err(e) = processor.process_dyn() {
+                                    tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                     // Continue processing (errors are isolated)
                                 }
                             }
+                            Ok(WakeupEvent::TimerTick) => {
+                                tracing::debug!("[{}] Received TimerTick wakeup", id_for_thread);
+                                let mut processor = processor_for_thread.lock();
+                                if let Err(e) = processor.process_dyn() {
+                                    tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
+                                    // Continue processing (errors are isolated)
+                                }
+                            }
+                            Ok(WakeupEvent::Shutdown) => {
+                                tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
+                                break;
+                            }
                             Err(_) => {
-                                // Tick channel closed (runtime stopped)
-                                tracing::debug!("[{}] Tick channel closed", id_for_thread);
+                                // Wakeup channel closed
+                                tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
                                 break;
                             }
                         }
@@ -573,7 +764,7 @@ impl StreamRuntime {
             // Call on_stop lifecycle hook
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_stop() {
+                if let Err(e) = processor.on_stop_dyn() {
                     tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
                 }
             }
@@ -582,11 +773,12 @@ impl StreamRuntime {
         });
 
         // 9. Create and register processor handle (with processor reference for dynamic connections)
-        let proc_handle = ProcessorHandle {
+        let proc_handle = RuntimeProcessorHandle {
             id: processor_id.clone(),
             name: format!("Processor {}", self.next_processor_id - 1),
             thread: Some(handle),
             shutdown_tx,
+            wakeup_tx,  // Store for connection wiring
             status: Arc::new(Mutex::new(ProcessorStatus::Running)),
             processor: Some(processor_arc),  // Store for dynamic connections
         };
@@ -600,23 +792,63 @@ impl StreamRuntime {
         Ok(processor_id)
     }
 
+    /// Connect two processors using type-safe port references
+    ///
+    /// This is the type-safe connection API that should be used in Rust code.
+    /// The generic type parameter `T` ensures that only compatible ports can be connected
+    /// (e.g., you can't connect AudioFrame to VideoFrame).
+    ///
+    /// Connections are stored as pending until `start()` is called, at which point
+    /// the wakeup channels will be wired up.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The message type (VideoFrame, AudioFrame, etc.)
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - Output port reference from source processor
+    /// * `input` - Input port reference from destination processor
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Connection registered successfully
+    /// * `Err(StreamError)` - If processors not found or ports invalid
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let camera = runtime.add_processor::<CameraProcessor>()?;
+    /// let display = runtime.add_processor::<DisplayProcessor>()?;
+    ///
+    /// runtime.connect(
+    ///     camera.output_port::<VideoFrame>("video"),
+    ///     display.input_port::<VideoFrame>("video")
+    /// )?;
+    /// ```
     pub fn connect<T: crate::core::ports::PortMessage>(
         &mut self,
-        output: &mut crate::core::ports::StreamOutput<T>,
-        input: &mut crate::core::ports::StreamInput<T>,
+        output: crate::core::handles::OutputPortRef<T>,
+        input: crate::core::handles::InputPortRef<T>,
     ) -> Result<()> {
-        // Perform the actual connection (works both before and during runtime)
-        input.connect(output.buffer().clone());
+        // Store pending connection - will be wired during start()
+        let pending = PendingConnection::new(
+            output.processor_id().clone(),
+            output.port_name().to_string(),
+            input.processor_id().clone(),
+            input.port_name().to_string(),
+        );
+
+        self.pending_connections.push(pending.clone());
 
         // Register connection in the registry for tracking
-        // TODO: Use actual processor IDs and port names when metadata is available
         let connection_id = format!("connection_{}", self.next_connection_id);
         self.next_connection_id += 1;
 
         let connection = Connection::new(
             connection_id.clone(),
-            "unknown_output".to_string(),  // Will be enhanced in Phase 5
-            "unknown_input".to_string(),   // Will be enhanced in Phase 5
+            format!("{}.{}", output.processor_id(), output.port_name()),
+            format!("{}.{}", input.processor_id(), input.port_name()),
         );
 
         {
@@ -624,108 +856,17 @@ impl StreamRuntime {
             connections.insert(connection_id.clone(), connection);
         }
 
-        tracing::debug!("Registered connection: {}", connection_id);
+        tracing::debug!(
+            "Registered pending connection: {} ({}.{} → {}.{})",
+            connection_id,
+            output.processor_id(), output.port_name(),
+            input.processor_id(), input.port_name()
+        );
+
         Ok(())
     }
 
-    /// Helper: Get output buffer from a processor by port name
-    ///
-    /// Tries to downcast to known processor types and access their output ports.
-    fn get_output_buffer(
-        processor: &mut dyn StreamProcessor,
-        port_name: &str,
-        processor_id: &str,
-    ) -> Result<Arc<crate::core::buffers::RingBuffer<crate::core::VideoFrame>>> {
-        #[cfg(feature = "debug-overlay")]
-        use crate::core::processors::PerformanceOverlayProcessor;
-
-        #[cfg(any(feature = "python", feature = "python-embed"))]
-        use crate::python::PythonProcessor;
-
-        // Try AppleCameraProcessor (via CameraProcessor trait)
-        #[cfg(target_os = "macos")]
-        if let Some(camera) = processor.as_any_mut().downcast_mut::<crate::apple::AppleCameraProcessor>() {
-            use crate::core::CameraProcessor;
-            if port_name == "video" {
-                return Ok(camera.output_ports().video.buffer().clone());
-            }
-        }
-
-        // Try PerformanceOverlayProcessor
-        #[cfg(feature = "debug-overlay")]
-        if let Some(perf) = processor.as_any_mut().downcast_mut::<PerformanceOverlayProcessor>() {
-            if port_name == "video" {
-                return Ok(perf.output_ports().video.buffer().clone());
-            }
-        }
-
-        // Try PythonProcessor
-        #[cfg(any(feature = "python", feature = "python-embed"))]
-        if let Some(python) = processor.as_any_mut().downcast_mut::<PythonProcessor>() {
-            if let Some(port_arc) = python.output_ports().ports.get(port_name) {
-                let port = port_arc.lock();
-                return Ok(port.buffer().clone());
-            }
-        }
-
-        Err(StreamError::Configuration(format!(
-            "Processor '{}' does not have output port '{}' or is not a supported type",
-            processor_id, port_name
-        )))
-    }
-
-    /// Helper: Connect input port to output buffer
-    ///
-    /// Tries to downcast to known processor types and connect their input ports.
-    fn connect_input_port(
-        processor: &mut dyn StreamProcessor,
-        port_name: &str,
-        buffer: Arc<crate::core::buffers::RingBuffer<crate::core::VideoFrame>>,
-        processor_id: &str,
-    ) -> Result<()> {
-
-        #[cfg(feature = "debug-overlay")]
-        use crate::core::processors::PerformanceOverlayProcessor;
-
-        #[cfg(any(feature = "python", feature = "python-embed"))]
-        use crate::python::PythonProcessor;
-
-        // Try AppleDisplayProcessor (via DisplayProcessor trait)
-        #[cfg(target_os = "macos")]
-        if let Some(display) = processor.as_any_mut().downcast_mut::<crate::apple::AppleDisplayProcessor>() {
-            use crate::core::DisplayProcessor;
-            if port_name == "video" {
-                display.input_ports().video.connect(buffer);
-                return Ok(());
-            }
-        }
-
-        // Try PerformanceOverlayProcessor
-        #[cfg(feature = "debug-overlay")]
-        if let Some(perf) = processor.as_any_mut().downcast_mut::<PerformanceOverlayProcessor>() {
-            if port_name == "video" {
-                perf.input_ports().video.connect(buffer);
-                return Ok(());
-            }
-        }
-
-        // Try PythonProcessor
-        #[cfg(any(feature = "python", feature = "python-embed"))]
-        if let Some(python) = processor.as_any_mut().downcast_mut::<PythonProcessor>() {
-            if let Some(port_arc) = python.input_ports().ports.get(port_name) {
-                let mut port = port_arc.lock();
-                port.connect(buffer);
-                return Ok(());
-            }
-        }
-
-        Err(StreamError::Configuration(format!(
-            "Processor '{}' does not have input port '{}' or is not a supported type",
-            processor_id, port_name
-        )))
-    }
-
-    /// Connect two processors at runtime (Phase 5)
+    /// Connect two processors at runtime using string-based port references
     ///
     /// This method connects processors while the runtime is running.
     /// It parses processor IDs and port names from the source/destination strings
@@ -814,8 +955,8 @@ impl StreamRuntime {
             let dest_guard = dest_processor.lock();
 
             // Get descriptors using the StreamProcessor trait
-            let source_descriptor = source_guard.descriptor_instance();
-            let dest_descriptor = dest_guard.descriptor_instance();
+            let source_descriptor = source_guard.descriptor_instance_dyn();
+            let dest_descriptor = dest_guard.descriptor_instance_dyn();
 
             // If both processors have audio requirements, validate compatibility
             if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
@@ -838,21 +979,33 @@ impl StreamRuntime {
             }
         }
 
-        // 3. Connect the ports by trying to access them from known processor types
-        // This approach uses downcasting but supports any registered processor type
+        // 3. Wire up the ports using DynStreamProcessor port methods
         {
-            // Lock both processors
             let mut source = source_processor.lock();
             let mut dest = dest_processor.lock();
 
-            // Try to get output buffer from source processor
-            let output_buffer = Self::get_output_buffer(&mut **source, source_port, source_proc_id)?;
+            // Extract consumer from source output port (platform-agnostic)
+            let consumer = source
+                .take_output_consumer_dyn(source_port)
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Source processor '{}' does not have output port '{}'",
+                        source_proc_id, source_port
+                    ))
+                })?;
 
-            // Connect input port to output buffer
-            Self::connect_input_port(&mut **dest, dest_port, output_buffer, dest_proc_id)?;
+            // Connect consumer to destination input port (platform-agnostic)
+            let connected = dest.connect_input_consumer_dyn(dest_port, consumer);
+
+            if !connected {
+                return Err(StreamError::Configuration(format!(
+                    "Destination processor '{}' does not have input port '{}' or port type mismatch",
+                    dest_proc_id, dest_port
+                )));
+            }
 
             tracing::info!(
-                "Connected {} ({}) → {} ({})",
+                "Connected {} ({}) → {} ({}) via rtrb ring buffer",
                 source_proc_id,
                 source_port,
                 dest_proc_id,
@@ -875,11 +1028,163 @@ impl StreamRuntime {
         Ok(connection_id)
     }
 
+    /// Wire up pending connections by transferring rtrb consumers from outputs to inputs
+    ///
+    /// This connects the actual port ring buffers after processors have been spawned.
+    /// Each connection transfers the rtrb::Consumer from the source's StreamOutput
+    /// to the destination's StreamInput, enabling lock-free data flow.
+    async fn wire_pending_connections(&mut self) -> Result<()> {
+        if self.pending_connections.is_empty() {
+            tracing::debug!("No pending connections to wire");
+            return Ok(());
+        }
+
+        tracing::info!("Wiring {} pending connections...", self.pending_connections.len());
+
+        // Drain pending connections and wire them up
+        let connections_to_wire = std::mem::take(&mut self.pending_connections);
+
+        for pending in connections_to_wire {
+            let source = format!("{}.{}", pending.source_processor_id, pending.source_port_name);
+            let destination = format!("{}.{}", pending.dest_processor_id, pending.dest_port_name);
+
+            tracing::info!(
+                "Wiring connection: {} → {}",
+                source,
+                destination
+            );
+
+            // Look up both processors
+            let (source_processor, dest_processor) = {
+                let processors = self.processors.lock();
+
+                let source_handle = processors.get(&pending.source_processor_id).ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Source processor '{}' not found",
+                        pending.source_processor_id
+                    ))
+                })?;
+
+                let dest_handle = processors.get(&pending.dest_processor_id).ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Destination processor '{}' not found",
+                        pending.dest_processor_id
+                    ))
+                })?;
+
+                // Get processor references (Arc<Mutex<>>)
+                let source_proc = source_handle.processor.as_ref().ok_or_else(|| {
+                    StreamError::Runtime(format!(
+                        "Source processor '{}' has no processor reference (not started?)",
+                        pending.source_processor_id
+                    ))
+                })?;
+
+                let dest_proc = dest_handle.processor.as_ref().ok_or_else(|| {
+                    StreamError::Runtime(format!(
+                        "Destination processor '{}' has no processor reference (not started?)",
+                        pending.dest_processor_id
+                    ))
+                })?;
+
+                (Arc::clone(source_proc), Arc::clone(dest_proc))
+            };
+
+            // Validate audio requirements compatibility (if applicable)
+            {
+                let source_guard = source_processor.lock();
+                let dest_guard = dest_processor.lock();
+
+                let source_descriptor = source_guard.descriptor_instance_dyn();
+                let dest_descriptor = dest_guard.descriptor_instance_dyn();
+
+                if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
+                    if let (Some(source_audio), Some(dest_audio)) =
+                        (&source_desc.audio_requirements, &dest_desc.audio_requirements)
+                    {
+                        if !source_audio.compatible_with(dest_audio) {
+                            let error_msg = source_audio.compatibility_error(dest_audio);
+                            return Err(StreamError::Configuration(format!(
+                                "Audio requirements incompatible when connecting {} → {}: {}",
+                                source, destination, error_msg
+                            )));
+                        }
+
+                        tracing::debug!(
+                            "Audio requirements validated: {} → {} (compatible)",
+                            pending.source_processor_id, pending.dest_processor_id
+                        );
+                    }
+                }
+            }
+
+            // Wire up the ports using DynStreamProcessor port methods
+            {
+                let mut source = source_processor.lock();
+                let mut dest = dest_processor.lock();
+
+                // Extract consumer from source output port (platform-agnostic)
+                let consumer = source
+                    .take_output_consumer_dyn(&pending.source_port_name)
+                    .ok_or_else(|| {
+                        StreamError::Configuration(format!(
+                            "Source processor '{}' does not have output port '{}'",
+                            pending.source_processor_id, pending.source_port_name
+                        ))
+                    })?;
+
+                // Connect consumer to destination input port (platform-agnostic)
+                let connected = dest.connect_input_consumer_dyn(&pending.dest_port_name, consumer);
+
+                if !connected {
+                    return Err(StreamError::Configuration(format!(
+                        "Destination processor '{}' does not have input port '{}' or port type mismatch",
+                        pending.dest_processor_id, pending.dest_port_name
+                    )));
+                }
+
+                tracing::info!(
+                    "Wired connection: {} ({}) → {} ({}) via rtrb ring buffer",
+                    pending.source_processor_id,
+                    pending.source_port_name,
+                    pending.dest_processor_id,
+                    pending.dest_port_name
+                );
+            }
+
+            // Wire wakeup notifications so output port can wake downstream processor
+            {
+                let processors = self.processors.lock();
+
+                // Get destination processor's wakeup channel
+                if let Some(dest_handle) = processors.get(&pending.dest_processor_id) {
+                    let dest_wakeup_tx = dest_handle.wakeup_tx.clone();
+
+                    // Set wakeup channel on source processor's output port
+                    let mut source = source_processor.lock();
+                    source.set_output_wakeup_dyn(&pending.source_port_name, dest_wakeup_tx);
+
+                    tracing::debug!(
+                        "Wired wakeup notification: {} ({}) → {} ({})",
+                        pending.source_processor_id,
+                        pending.source_port_name,
+                        pending.dest_processor_id,
+                        pending.dest_port_name
+                    );
+                }
+            }
+        }
+
+        tracing::info!("All pending connections wired successfully");
+        Ok(())
+    }
+
     /// Start the runtime
     ///
     /// This spawns:
     /// 1. Clock task (tokio) - generates ticks
     /// 2. Handler threads (OS) - process ticks
+    /// 3. Wires up pending connections
     ///
     /// After calling start(), the runtime is running and handlers
     /// begin receiving ticks.
@@ -932,6 +1237,9 @@ impl StreamRuntime {
 
         // 2. Spawn handler threads (OS threads)
         self.spawn_handler_threads()?;
+
+        // 3. Wire up pending connections now that processors are running
+        self.wire_pending_connections().await?;
 
         tracing::info!("Runtime started successfully");
         Ok(())
@@ -1013,7 +1321,18 @@ impl StreamRuntime {
         }
         tracing::debug!("Broadcaster channels closed");
 
-        // 3. Wait for handler threads to finish
+        // 3. Send shutdown signals to all processors
+        {
+            let processors = self.processors.lock();
+            for (processor_id, proc_handle) in processors.iter() {
+                if let Err(e) = proc_handle.shutdown_tx.send(()) {
+                    tracing::warn!("[{}] Failed to send shutdown signal: {}", processor_id, e);
+                }
+            }
+        }
+        tracing::debug!("Shutdown signals sent to all processors");
+
+        // 4. Wait for handler threads to finish
         let processor_ids: Vec<ProcessorId> = {
             let processors = self.processors.lock();
             processors.keys().cloned().collect()
@@ -1227,12 +1546,46 @@ impl StreamRuntime {
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
             .clone();
 
-        for (processor_id, mut processor, shutdown_rx) in self.pending_processors.drain(..) {
-            // Subscribe processor to broadcaster
-            let tick_rx = {
-                let mut broadcaster = self.broadcaster.lock();
-                broadcaster.subscribe()
-            };
+        // Collect timer requirements for grouping
+        // Maps group_id -> Vec<(processor_id, rate_hz, wakeup_tx)>
+        let mut timer_groups_map: HashMap<String, Vec<(ProcessorId, f64, crossbeam_channel::Sender<WakeupEvent>)>> = HashMap::new();
+        // Solo timers (no group_id)
+        let mut solo_timers: Vec<(ProcessorId, f64, crossbeam_channel::Sender<WakeupEvent>)> = Vec::new();
+
+        for (processor_id, processor, shutdown_rx) in self.pending_processors.drain(..) {
+            // Create wakeup channel for this processor
+            // This replaces the tick broadcaster subscription
+            let (wakeup_tx, wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
+
+            // Wrap processor in Arc<Mutex<>> for shared access (enables dynamic connections)
+            let processor_arc = Arc::new(Mutex::new(processor));
+
+            // Pass wakeup channel to processor via set_wakeup_channel
+            {
+                let mut processor = processor_arc.lock();
+                processor.set_wakeup_channel_dyn(wakeup_tx.clone());
+            }
+
+            // Collect timer requirements for later grouping
+            {
+                let processor = processor_arc.lock();
+                if let Some(descriptor) = processor.descriptor_instance_dyn() {
+                    if let Some(timer_req) = descriptor.timer_requirements {
+                        let rate_hz = timer_req.rate_hz;
+                        let wakeup_tx_timer = wakeup_tx.clone();
+
+                        if let Some(group_id) = timer_req.group_id {
+                            // Join timer group
+                            timer_groups_map.entry(group_id)
+                                .or_default()
+                                .push((processor_id.clone(), rate_hz, wakeup_tx_timer));
+                        } else {
+                            // Independent timer
+                            solo_timers.push((processor_id.clone(), rate_hz, wakeup_tx_timer));
+                        }
+                    }
+                }
+            }
 
             // Clone GPU context for this processor thread
             let processor_gpu_context = gpu_context.clone();
@@ -1240,30 +1593,48 @@ impl StreamRuntime {
             // Clone processor ID for thread logging
             let id_for_thread = processor_id.clone();
 
+            // Clone processor reference for thread
+            let processor_for_thread = Arc::clone(&processor_arc);
+
             // Spawn OS thread for this processor
             let handle = std::thread::spawn(move || {
                 tracing::info!("[{}] Thread started", id_for_thread);
 
                 // Call on_start lifecycle hook with GPU context
-                if let Err(e) = processor.on_start(&processor_gpu_context) {
-                    tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
-                    return;
+                {
+                    let mut processor = processor_for_thread.lock();
+                    if let Err(e) = processor.on_start_dyn(&processor_gpu_context) {
+                        tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
+                        return;
+                    }
                 }
 
-                // Process ticks until shutdown signal or channel closes
+                // Process wakeup events until shutdown
                 loop {
                     crossbeam_channel::select! {
-                        recv(tick_rx) -> result => {
+                        recv(wakeup_rx) -> result => {
                             match result {
-                                Ok(tick) => {
-                                    if let Err(e) = processor.process(tick) {
-                                        tracing::error!("[{}] process() error: {}", id_for_thread, e);
+                                Ok(WakeupEvent::DataAvailable) => {
+                                    let mut processor = processor_for_thread.lock();
+                                    if let Err(e) = processor.process_dyn() {
+                                        tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                         // Continue processing (errors are isolated)
                                     }
                                 }
+                                Ok(WakeupEvent::TimerTick) => {
+                                    let mut processor = processor_for_thread.lock();
+                                    if let Err(e) = processor.process_dyn() {
+                                        tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
+                                        // Continue processing (errors are isolated)
+                                    }
+                                }
+                                Ok(WakeupEvent::Shutdown) => {
+                                    tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
+                                    break;
+                                }
                                 Err(_) => {
-                                    // Tick channel closed (runtime stopped)
-                                    tracing::debug!("[{}] Tick channel closed", id_for_thread);
+                                    // Wakeup channel closed (should not happen normally)
+                                    tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
                                     break;
                                 }
                             }
@@ -1281,18 +1652,23 @@ impl StreamRuntime {
                 }
 
                 // Call on_stop lifecycle hook
-                if let Err(e) = processor.on_stop() {
-                    tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
+                {
+                    let mut processor = processor_for_thread.lock();
+                    if let Err(e) = processor.on_stop_dyn() {
+                        tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
+                    }
                 }
 
                 tracing::info!("[{}] Thread stopped", id_for_thread);
             });
 
-            // Update processor handle in registry with thread and Running status
+            // Update processor handle in registry with thread, processor reference, wakeup channel, and Running status
             {
                 let mut processors = self.processors.lock();
                 if let Some(proc_handle) = processors.get_mut(&processor_id) {
                     proc_handle.thread = Some(handle);
+                    proc_handle.processor = Some(processor_arc);  // Store for connection wiring
+                    proc_handle.wakeup_tx = wakeup_tx;  // Store for connection wiring
                     *proc_handle.status.lock() = ProcessorStatus::Running;
                 } else {
                     tracing::error!("Processor {} not found in registry", processor_id);
@@ -1301,7 +1677,91 @@ impl StreamRuntime {
 
             // Also push to handler_threads for backward compatibility
             // TODO: Remove after full migration
-            // (Can't push handle here since it was moved to the ProcessorHandle)
+            // (Can't push handle here since it was moved to the RuntimeProcessorHandle)
+        }
+
+        // Spawn timer threads for groups
+        for (group_id, members) in timer_groups_map {
+            // Validate all members have same rate_hz
+            let rates: Vec<f64> = members.iter().map(|(_, rate, _)| *rate).collect();
+            let first_rate = rates[0];
+            if !rates.iter().all(|&r| (r - first_rate).abs() < 0.01) {
+                return Err(StreamError::Configuration(
+                    format!("Timer group '{}' has mismatched rates: {:?}", group_id, rates)
+                ));
+            }
+
+            let rate_hz = first_rate;
+            let processor_ids: Vec<ProcessorId> = members.iter().map(|(id, _, _)| id.clone()).collect();
+            let wakeup_channels: Vec<crossbeam_channel::Sender<WakeupEvent>> =
+                members.iter().map(|(_, _, tx)| tx.clone()).collect();
+
+            tracing::info!(
+                "[TimerGroup:{}] Created with {} processors at {:.2} Hz: {:?}",
+                group_id, processor_ids.len(), rate_hz, processor_ids
+            );
+
+            // Spawn master timer thread for group
+            let group_id_clone = group_id.clone();
+            let wakeup_channels_clone = wakeup_channels.clone();
+            let timer_thread = std::thread::spawn(move || {
+                let interval = std::time::Duration::from_secs_f64(1.0 / rate_hz);
+                let mut tick_count = 0u64;
+
+                tracing::info!("[TimerGroup:{}] Timer thread started at {:.2} Hz", group_id_clone, rate_hz);
+
+                loop {
+                    std::thread::sleep(interval);
+                    tick_count += 1;
+
+                    // Send TimerTick to ALL processors in group simultaneously
+                    let mut active_count = 0;
+                    for tx in &wakeup_channels_clone {
+                        if tx.send(WakeupEvent::TimerTick).is_ok() {
+                            active_count += 1;
+                        }
+                    }
+
+                    if active_count == 0 {
+                        tracing::info!("[TimerGroup:{}] All processors terminated, stopping timer", group_id_clone);
+                        break;
+                    }
+
+                    if tick_count % 100 == 0 {
+                        tracing::debug!(
+                            "[TimerGroup:{}] Tick #{}, {} active processors",
+                            group_id_clone, tick_count, active_count
+                        );
+                    }
+                }
+            });
+
+            // Store timer group
+            let mut groups = self.timer_groups.lock();
+            groups.insert(group_id.clone(), TimerGroup {
+                id: group_id,
+                clock_source: ClockSource::Software { rate_hz },
+                processor_ids,
+                wakeup_channels,
+                timer_thread: Some(timer_thread),
+            });
+        }
+
+        // Spawn individual timers for solo processors (existing behavior)
+        for (processor_id, rate_hz, wakeup_tx) in solo_timers {
+            let processor_id_clone = processor_id.clone();
+            std::thread::spawn(move || {
+                let interval = std::time::Duration::from_secs_f64(1.0 / rate_hz);
+                tracing::info!("[Timer:{}] Solo timer started at {:.2} Hz", processor_id_clone, rate_hz);
+
+                loop {
+                    std::thread::sleep(interval);
+                    if wakeup_tx.send(WakeupEvent::TimerTick).is_err() {
+                        tracing::debug!("[Timer:{}] Timer stopped (processor terminated)", processor_id_clone);
+                        break;
+                    }
+                }
+            });
         }
 
         Ok(())
@@ -1320,22 +1780,34 @@ pub struct RuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::clock::TimedTick;
     use crate::core::stream_processor::StreamProcessor;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Clone)]
+    struct CounterConfig {
+        count: Arc<AtomicU64>,
+    }
+
+    impl Default for CounterConfig {
+        fn default() -> Self {
+            Self {
+                count: Arc::new(AtomicU64::new(0)),
+            }
+        }
+    }
 
     struct CounterProcessor {
         count: Arc<AtomicU64>,
     }
 
-    impl CounterProcessor {
-        fn new(count: Arc<AtomicU64>) -> Self {
-            Self { count }
-        }
-    }
-
     impl StreamProcessor for CounterProcessor {
-        fn process(&mut self, _tick: TimedTick) -> Result<()> {
+        type Config = CounterConfig;
+
+        fn from_config(config: Self::Config) -> Result<Self> {
+            Ok(Self { count: config.count })
+        }
+
+        fn process(&mut self) -> Result<()> {
             self.count.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
@@ -1347,37 +1819,39 @@ mod tests {
 
     #[test]
     fn test_runtime_creation() {
-        let runtime = StreamRuntime::new(60.0);
+        let runtime = StreamRuntime::new();
         assert!(!runtime.running);
-        assert_eq!(runtime.fps, 60.0);
         assert_eq!(runtime.pending_processors.len(), 0);
     }
 
     #[test]
     fn test_add_processor() {
-        let mut runtime = StreamRuntime::new(60.0);
+        let mut runtime = StreamRuntime::new();
 
         let count = Arc::new(AtomicU64::new(0));
-        let processor = CounterProcessor::new(count);
+        let config = CounterConfig { count };
 
-        runtime.add_processor(Box::new(processor));
+        let _handle = runtime.add_processor_with_config::<CounterProcessor>(config).unwrap();
         assert_eq!(runtime.pending_processors.len(), 1);
     }
 
     #[tokio::test]
     async fn test_runtime_lifecycle() {
-        let mut runtime = StreamRuntime::new(100.0);
+        let mut runtime = StreamRuntime::new();
 
         let count1 = Arc::new(AtomicU64::new(0));
         let count2 = Arc::new(AtomicU64::new(0));
 
-        runtime.add_processor(Box::new(CounterProcessor::new(Arc::clone(&count1))));
-        runtime.add_processor(Box::new(CounterProcessor::new(Arc::clone(&count2))));
+        let config1 = CounterConfig { count: Arc::clone(&count1) };
+        let config2 = CounterConfig { count: Arc::clone(&count2) };
+
+        runtime.add_processor_with_config::<CounterProcessor>(config1).unwrap();
+        runtime.add_processor_with_config::<CounterProcessor>(config2).unwrap();
 
         runtime.start().await.unwrap();
         assert!(runtime.running);
 
-        // Check processor registry instead of handler_threads
+        // Check processor registry
         {
             let processors = runtime.processors.lock();
             assert_eq!(processors.len(), 2);
@@ -1399,20 +1873,47 @@ mod tests {
     async fn test_true_parallelism() {
         use std::time::Instant;
 
-        struct WorkProcessor {
+        #[derive(Clone)]
+        struct WorkConfig {
             work_duration_ms: u64,
             start_times: Arc<Mutex<Vec<Instant>>>,
         }
 
+        impl Default for WorkConfig {
+            fn default() -> Self {
+                Self {
+                    work_duration_ms: 50,
+                    start_times: Arc::new(Mutex::new(Vec::new())),
+                }
+            }
+        }
+
+        struct WorkProcessor {
+            work_duration_ms: u64,
+            start_times: Arc<Mutex<Vec<Instant>>>,
+            work_counter: u64,
+        }
+
         impl StreamProcessor for WorkProcessor {
-            fn process(&mut self, tick: TimedTick) -> Result<()> {
+            type Config = WorkConfig;
+
+            fn from_config(config: Self::Config) -> Result<Self> {
+                Ok(Self {
+                    work_duration_ms: config.work_duration_ms,
+                    start_times: config.start_times,
+                    work_counter: 0,
+                })
+            }
+
+            fn process(&mut self) -> Result<()> {
                 self.start_times.lock().push(Instant::now());
 
                 let start = Instant::now();
                 let mut sum = 0u64;
                 while start.elapsed().as_millis() < self.work_duration_ms as u128 {
-                    sum = sum.wrapping_add(tick.frame_number);
+                    sum = sum.wrapping_add(self.work_counter);
                 }
+                self.work_counter += 1;
 
                 if sum == u64::MAX {
                     println!("Never happens");
@@ -1426,20 +1927,23 @@ mod tests {
             }
         }
 
-        let mut runtime = StreamRuntime::new(10.0);
+        let mut runtime = StreamRuntime::new();
 
         let start_times1 = Arc::new(Mutex::new(Vec::new()));
         let start_times2 = Arc::new(Mutex::new(Vec::new()));
 
-        runtime.add_processor(Box::new(WorkProcessor {
+        let config1 = WorkConfig {
             work_duration_ms: 50,
             start_times: Arc::clone(&start_times1),
-        }));
+        };
 
-        runtime.add_processor(Box::new(WorkProcessor {
+        let config2 = WorkConfig {
             work_duration_ms: 50,
             start_times: Arc::clone(&start_times2),
-        }));
+        };
+
+        runtime.add_processor_with_config::<WorkProcessor>(config1).unwrap();
+        runtime.add_processor_with_config::<WorkProcessor>(config2).unwrap();
 
         runtime.start().await.unwrap();
 
@@ -1469,7 +1973,7 @@ mod tests {
 
     #[test]
     fn test_audio_config_validation() {
-        let runtime = StreamRuntime::new(60.0);
+        let runtime = StreamRuntime::new();
 
         // Test matching config - should succeed
         let matching_frame = crate::core::AudioFrame::new(
@@ -1508,7 +2012,7 @@ mod tests {
 
     #[test]
     fn test_audio_config_getter_setter() {
-        let mut runtime = StreamRuntime::new(60.0);
+        let mut runtime = StreamRuntime::new();
 
         // Test default config
         let config = runtime.audio_config();

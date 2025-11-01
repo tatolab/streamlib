@@ -4,7 +4,7 @@
 //! for the current platform. Users just call `StreamRuntime::new()` and
 //! the runtime handles platform-specific setup (like NSApplication on macOS).
 
-use crate::core::{Result, StreamProcessor, StreamInput, StreamOutput, ports::PortMessage};
+use crate::core::{Result, StreamProcessor, ports::PortMessage};
 
 // Re-export AudioConfig from core
 pub use crate::core::runtime::AudioConfig;
@@ -22,23 +22,46 @@ impl StreamRuntime {
     pub fn new() -> Self {
         let mut inner = crate::core::StreamRuntime::new();
 
-        // Configure platform-specific event loop
+        // Platform-specific configuration
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            crate::apple::runtime_ext::configure_macos_event_loop(&mut inner);
+            crate::apple::configure_macos_event_loop(&mut inner);
         }
 
         Self { inner }
     }
 
-    /// Add a processor to the runtime
-    pub fn add_processor(&mut self, processor: Box<dyn StreamProcessor>) {
-        self.inner.add_processor(processor);
+    /// Add a processor to the runtime (legacy API - prefer add_processor::<P>())
+    pub fn add_processor_runtime(
+        &mut self,
+        processor: Box<dyn crate::core::stream_processor::DynStreamProcessor>,
+    ) -> Result<String> {
+        // This is the old API - new code should use add_processor::<P>()
+        tokio::runtime::Handle::current().block_on(async {
+            self.inner.add_processor_runtime(processor).await
+        })
     }
 
-    /// Connect two ports
-    pub fn connect<T: PortMessage>(&mut self, output: &mut StreamOutput<T>, input: &mut StreamInput<T>) -> Result<()> {
+    /// Connect two ports using handles (new API)
+    pub fn connect<T: PortMessage>(
+        &mut self,
+        output: crate::core::handles::OutputPortRef<T>,
+        input: crate::core::handles::InputPortRef<T>,
+    ) -> Result<()> {
         self.inner.connect(output, input)
+    }
+
+    /// Add a processor with default config
+    pub fn add_processor<P: StreamProcessor>(&mut self) -> Result<crate::core::handles::ProcessorHandle> {
+        self.inner.add_processor::<P>()
+    }
+
+    /// Add a processor with custom config
+    pub fn add_processor_with_config<P: StreamProcessor>(
+        &mut self,
+        config: P::Config,
+    ) -> Result<crate::core::handles::ProcessorHandle> {
+        self.inner.add_processor_with_config::<P>(config)
     }
 
     /// Start the runtime

@@ -110,6 +110,12 @@ mod tests {
     struct MockDisplayProcessor;
 
     impl StreamProcessor for MockDisplayProcessor {
+        type Config = crate::core::config::EmptyConfig;
+
+        fn from_config(_config: Self::Config) -> crate::Result<Self> {
+            Ok(Self)
+        }
+
         fn process(&mut self) -> crate::Result<()> {
             Ok(())
         }

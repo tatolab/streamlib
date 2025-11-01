@@ -5,7 +5,7 @@
 
 use streamlib::{
     StreamProcessor, StreamInput, StreamOutput, VideoFrame,
-    TimedTick, Result, StreamError,
+    Result, StreamError,
 };
 use std::sync::Arc;
 use wgpu;
@@ -15,6 +15,13 @@ use vello::{
     util::RenderContext,
     AaSupport, RenderParams, Renderer, RendererOptions, Scene,
 };
+
+/// Configuration for lower third processor
+#[derive(Clone, Default)]
+pub struct LowerThirdConfig {
+    pub headline: String,
+    pub subtitle: String,
+}
 
 /// Input ports for lower third processor
 pub struct LowerThirdInputPorts {
@@ -37,6 +44,7 @@ pub struct LowerThirdProcessor {
 
     // Animation state
     animation_time: f32,
+    last_frame_timestamp: Option<f64>,  // For calculating delta time
 
     // Stream I/O (using ports pattern like camera/display)
     input_ports: LowerThirdInputPorts,
@@ -56,17 +64,15 @@ pub struct LowerThirdProcessor {
 }
 
 impl LowerThirdProcessor {
-    pub fn new(
-        title: String,
-        subtitle: String,
-    ) -> Result<Self> {
+    pub fn from_config(config: LowerThirdConfig) -> Result<Self> {
         tracing::info!("LowerThird: Initializing (GPU context will be provided by runtime)");
 
         Ok(Self {
             gpu_context: None,  // Will be set by runtime in on_start()
-            title,
-            subtitle,
+            title: config.headline,
+            subtitle: config.subtitle,
             animation_time: 0.0,
+            last_frame_timestamp: None,
             input_ports: LowerThirdInputPorts {
                 video: StreamInput::new("video"),
             },
@@ -432,13 +438,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 impl StreamProcessor for LowerThirdProcessor {
-    fn process(&mut self, tick: TimedTick) -> Result<()> {
-        // Update animation
-        self.animation_time += tick.delta_time as f32;
+    type Config = LowerThirdConfig;
 
+    fn from_config(config: Self::Config) -> Result<Self> {
+        Self::from_config(config)
+    }
+
+    fn process(&mut self) -> Result<()> {
         // Read input frame
         let input = match self.input_ports.video.read_latest() {
             Some(frame) => {
+                // Calculate delta time from frame timestamps for animation
+                let delta_time = if let Some(last_ts) = self.last_frame_timestamp {
+                    (frame.timestamp - last_ts) as f32
+                } else {
+                    0.016  // First frame: assume ~60fps (16ms)
+                };
+                self.last_frame_timestamp = Some(frame.timestamp);
+                self.animation_time += delta_time;
+
                 // Debug: Log every 60 frames (once per second at 60fps)
                 if frame.frame_number % 60 == 0 {
                     tracing::info!(
