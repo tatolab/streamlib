@@ -50,7 +50,7 @@ use crate::core::{
     Result, StreamError, StreamProcessor, GpuContext,
     AudioFrame, StreamInput, StreamOutput,
     ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
-    AudioRequirements,
+    AudioRequirements, SampleAndHoldBuffer,
 };
 
 use parking_lot::Mutex;
@@ -152,6 +152,21 @@ pub struct AudioMixerProcessor {
     /// Pre-allocated resampling output buffers
     /// Key: input port name, Value: buffer for resampled output
     resample_buffers: HashMap<String, Vec<Vec<f32>>>,
+
+    /// Buffer size (samples per channel) - determines mix rate
+    buffer_size: usize,
+
+    /// Sample-and-hold buffer for synchronizing async inputs
+    /// Holds last received frame from each input to ensure all inputs are mixed together
+    sample_hold_buffer: SampleAndHoldBuffer<(Vec<f32>, i64, u64)>,  // (samples, timestamp, frame_number)
+
+    /// Track last mixed timestamps to avoid duplicate mixes
+    /// Key: input name (e.g., "input_0"), Value: last mixed timestamp_ns
+    last_mixed_timestamps: HashMap<String, i64>,
+
+    /// Track last mixed frame numbers for frame-aligned mixing
+    /// Key: input name (e.g., "input_0"), Value: last mixed frame_number
+    last_mixed_frame_numbers: HashMap<String, u64>,
 }
 
 impl AudioMixerProcessor {
@@ -162,6 +177,7 @@ impl AudioMixerProcessor {
     /// * `num_inputs` - Number of input ports to create
     /// * `strategy` - Mixing strategy (SumNormalized or SumClipped)
     /// * `sample_rate` - Target output sample rate in Hz (e.g., 48000)
+    /// * `buffer_size` - Buffer size in samples per channel (e.g., 2048)
     ///
     /// # Returns
     ///
@@ -170,13 +186,14 @@ impl AudioMixerProcessor {
     /// # Example
     ///
     /// ```ignore
-    /// // Create mixer for 4 inputs at 48kHz
-    /// let mixer = AudioMixerProcessor::new(4, MixingStrategy::SumNormalized, 48000)?;
+    /// // Create mixer for 4 inputs at 48kHz with 2048 buffer size
+    /// let mixer = AudioMixerProcessor::new(4, MixingStrategy::SumNormalized, 48000, 2048)?;
     /// ```
     pub fn new(
         num_inputs: usize,
         strategy: MixingStrategy,
         sample_rate: u32,
+        buffer_size: usize,
     ) -> Result<Self> {
         if num_inputs == 0 {
             return Err(StreamError::Configuration(
@@ -202,6 +219,12 @@ impl AudioMixerProcessor {
         // Pre-allocate mix buffer (max_buffer_size * channels)
         let mix_buffer = vec![0.0; max_buffer_size * target_channels as usize];
 
+        // Create sample-and-hold buffer with input names
+        let input_names: Vec<String> = (0..num_inputs)
+            .map(|i| format!("input_{}", i))
+            .collect();
+        let sample_hold_buffer = SampleAndHoldBuffer::new(input_names);
+
         Ok(Self {
             num_inputs,
             strategy,
@@ -219,6 +242,10 @@ impl AudioMixerProcessor {
             max_buffer_size,
             resamplers: HashMap::new(),
             resample_buffers: HashMap::new(),
+            buffer_size,
+            sample_hold_buffer,
+            last_mixed_timestamps: HashMap::new(),
+            last_mixed_frame_numbers: HashMap::new(),
         })
     }
 
@@ -389,6 +416,12 @@ impl AudioMixerProcessor {
 }
 
 impl StreamProcessor for AudioMixerProcessor {
+    type Config = crate::core::config::AudioMixerConfig;
+
+    fn from_config(config: Self::Config) -> crate::core::Result<Self> {
+        Self::new(config.num_inputs, config.strategy, config.sample_rate, config.buffer_size)
+    }
+
     fn descriptor() -> Option<ProcessorDescriptor> {
         // Note: AudioMixerProcessor instances have dynamic input counts,
         // so the descriptor here is generic. Specific instances would need
@@ -430,9 +463,11 @@ impl StreamProcessor for AudioMixerProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // Collect audio frames from all inputs
-        let mut input_samples = Vec::new();
+        // Process using sample-and-hold: update buffer with incoming frames,
+        // then collect ALL inputs (using held values where needed)
+        tracing::debug!("[AudioMixer] process() called");
 
+        // Step 1: Update sample-and-hold buffer with any incoming frames
         for i in 0..self.num_inputs {
             let input_name = format!("input_{}", i);
 
@@ -445,6 +480,11 @@ impl StreamProcessor for AudioMixerProcessor {
             };
 
             if let Some(mut frame) = frame_opt {
+                tracing::debug!(
+                    "[AudioMixer] Received NEW frame from {} - {} samples, {} channels, {} Hz, frame #{}",
+                    input_name, frame.sample_count, frame.channels, frame.sample_rate, frame.frame_number
+                );
+
                 // Convert mono to stereo if needed
                 if frame.channels == 1 {
                     let stereo_samples = self.mono_to_stereo(&frame.samples);
@@ -453,22 +493,81 @@ impl StreamProcessor for AudioMixerProcessor {
                     frame.sample_count = frame.sample_count; // Same sample count, but now stereo
                 }
 
-                // Resample if needed (lock is already dropped, so we can borrow self mutably)
+                // Resample if needed
                 let samples = self.resample_if_needed(&frame, &input_name)?;
 
-                // Track timestamp from first input
-                if input_samples.is_empty() {
-                    self.current_timestamp_ns = frame.timestamp_ns;
-                }
-
-                input_samples.push(samples);
+                // Store processed samples + timestamp + frame_number in sample-and-hold buffer
+                self.sample_hold_buffer.update(&input_name, (samples, frame.timestamp_ns, frame.frame_number));
             }
         }
 
-        // If no inputs have data, skip this tick (drop frame)
-        if input_samples.is_empty() {
+        // Step 2: Check if ALL inputs have data (cold start check)
+        if !self.sample_hold_buffer.all_ready() {
+            tracing::debug!("[AudioMixer] Not all inputs have data yet (cold start), skipping mix");
             return Ok(());
         }
+
+        // Step 3: Collect ALL inputs using sample-and-hold
+        let all_inputs = self.sample_hold_buffer.collect_all()
+            .expect("all_ready() returned true, so collect_all() must succeed");
+
+        // Step 4: Check if ALL inputs have NEW data (prevent partial mixes)
+        // Only mix when ALL inputs have progressed, not just when ANY input changes
+        let all_inputs_named = self.sample_hold_buffer.collect_all_named()
+            .expect("all_ready() returned true, so collect_all_named() must succeed");
+
+        // Check that ALL inputs have new timestamps
+        let mut all_inputs_new = true;
+        for (input_name, (_samples, timestamp, _frame_num)) in &all_inputs_named {
+            if let Some(&last_ts) = self.last_mixed_timestamps.get(input_name) {
+                if *timestamp == last_ts {
+                    // This input hasn't changed since last mix
+                    all_inputs_new = false;
+                    break;
+                }
+            }
+            // If we haven't seen this input before, it counts as "new"
+        }
+
+        if !all_inputs_new {
+            tracing::debug!("[AudioMixer] Waiting for ALL inputs to have new data (event-driven sync)");
+            return Ok(());
+        }
+
+        // Step 5: Check that ALL inputs have SIMILAR frame numbers (frame-aligned mixing)
+        // Allow ±1 frame tolerance to account for timing jitter in parallel processing
+        let frame_numbers: Vec<u64> = all_inputs_named.values()
+            .map(|(_samples, _ts, frame_num)| *frame_num)
+            .collect();
+
+        let min_frame = *frame_numbers.iter().min().unwrap();
+        let max_frame = *frame_numbers.iter().max().unwrap();
+        let frame_spread = max_frame - min_frame;
+
+        // Allow up to 1 frame difference (e.g., [100, 101] is OK, [100, 102] is not)
+        const MAX_FRAME_SPREAD: u64 = 1;
+
+        if frame_spread > MAX_FRAME_SPREAD {
+            tracing::debug!(
+                "[AudioMixer] Frame numbers spread too wide ({} frames apart) - waiting for alignment. Frames: {:?}",
+                frame_spread,
+                frame_numbers
+            );
+            return Ok(());
+        }
+
+        tracing::debug!(
+            "[AudioMixer] Inputs within acceptable alignment (frames {} to {}, spread={}) - proceeding with mix",
+            min_frame, max_frame, frame_spread
+        );
+
+        tracing::debug!("[AudioMixer] Mixing ALL {} input streams (sample-and-hold)", all_inputs.len());
+
+        // Extract samples, timestamp, and frame number
+        let input_samples: Vec<Vec<f32>> = all_inputs.iter().map(|(samples, _ts, _frame)| samples.clone()).collect();
+        let first_timestamp = all_inputs[0].1; // Use timestamp from first input
+
+        self.current_timestamp_ns = first_timestamp;
 
         // Ensure all inputs have the same length (should be true after resampling)
         let target_len = input_samples[0].len();
@@ -498,10 +597,20 @@ impl StreamProcessor for AudioMixerProcessor {
 
         // Write to output
         self.output_ports.audio.write(output_frame);
+        tracing::debug!(
+            "[AudioMixer] Wrote mixed frame #{} - {} samples, {} Hz",
+            self.frame_counter, sample_count, self.target_sample_rate
+        );
 
         // Update counters
         self.frame_counter += 1;
         self.current_timestamp_ns += (sample_count as i64 * 1_000_000_000) / self.target_sample_rate as i64;
+
+        // Update last mixed timestamps and frame numbers to prevent duplicate mixes on next wakeup
+        for (input_name, (_samples, timestamp, frame_num)) in all_inputs_named {
+            self.last_mixed_timestamps.insert(input_name.clone(), timestamp);
+            self.last_mixed_frame_numbers.insert(input_name, frame_num);
+        }
 
         Ok(())
     }
@@ -513,6 +622,41 @@ impl StreamProcessor for AudioMixerProcessor {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+        // AudioMixer has one audio output port
+        match port_name {
+            "audio" => {
+                self.output_ports.audio.consumer_holder().lock().take()
+                    .map(crate::core::stream_processor::PortConsumer::Audio)
+            }
+            _ => None,
+        }
+    }
+
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::stream_processor::PortConsumer) -> bool {
+        // Extract the AudioFrame consumer from the enum
+        let audio_consumer = match consumer {
+            crate::core::stream_processor::PortConsumer::Audio(c) => c,
+            _ => return false,  // Wrong type - type safety via enum pattern match
+        };
+
+        // AudioMixer has dynamic input ports: "input_0", "input_1", etc.
+        if let Some(input_arc) = self.input_ports.inputs.get(port_name) {
+            let mut input = input_arc.lock();
+            input.connect_consumer(audio_consumer);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        match port_name {
+            "audio" => self.output_ports.audio.set_downstream_wakeup(wakeup_tx),
+            _ => {}
+        }
     }
 }
 
