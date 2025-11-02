@@ -1,55 +1,47 @@
-//! Standard processor traits
+//! Stream processor organization
 //!
-//! Defines common processor types (Camera, Display, Audio) that platform implementations
-//! provide concrete implementations for.
+//! Processors are organized by their I/O pattern following GStreamer's architecture.
 //!
-//! ## Organization (v2.0.0 Architecture)
+//! **Note:** Processor implementations have been moved to:
+//! - `core::sources` - Source processors (no inputs, only outputs)
+//! - `core::sinks` - Sink processors (only inputs, no outputs)
+//! - `core::transformers` - Transform processors (inputs and outputs)
 //!
-//! - **sources/**: Source processors (StreamSource trait)
-//! - **sinks/**: Sink processors (StreamSink trait) - Phase 3
-//! - **transforms/**: Transform processors (StreamTransform trait) - Phase 4
-//! - **Legacy processors**: Still using old StreamProcessor trait (will be migrated)
+//! This module re-exports them for backward compatibility.
+//!
+//! ## Trait Hierarchy
+//!
+//! ```text
+//! StreamElement (base trait)
+//!     ├─ StreamSource (generate data)
+//!     ├─ StreamSink (consume data)
+//!     └─ StreamTransform (process data)
+//! ```
 
-// New v2.0.0 architecture
-pub mod sources;
+// Re-export all processors from their categorized modules at core level
+pub use crate::core::sources::{
+    TestToneGenerator, TestToneGeneratorOutputPorts,
+    CameraProcessor, CameraDevice, CameraOutputPorts,
+    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts,
+};
 
-// Legacy processors (to be migrated)
-pub mod camera;
-pub mod display;
-pub mod audio_output;
-pub mod audio_capture;
-pub mod audio_effect;
-pub mod audio_mixer;
-pub mod clap_effect;
-pub mod parameter_modulation;
-pub mod parameter_automation;
-pub mod simple_passthrough;
+pub use crate::core::sinks::{
+    DisplayProcessor, WindowId, DisplayInputPorts,
+    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts,
+};
 
-#[cfg(feature = "debug-overlay")]
-pub mod performance_overlay;
-
-// v2.0.0 architecture exports (new trait system)
-pub use sources::{TestToneGenerator, TestToneGeneratorOutputPorts};
-
-// Legacy exports (old StreamProcessor trait)
-pub use camera::{CameraProcessor, CameraDevice, CameraOutputPorts};
-pub use display::{DisplayProcessor, WindowId, DisplayInputPorts};
-pub use audio_output::{AudioOutputProcessor, AudioDevice, AudioOutputInputPorts};
-pub use audio_capture::{AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts};
-pub use audio_effect::{
+pub use crate::core::transformers::{
     AudioEffectProcessor, ParameterInfo, PluginInfo,
     AudioEffectInputPorts, AudioEffectOutputPorts,
-};
-pub use audio_mixer::{
     AudioMixerProcessor, MixingStrategy,
     AudioMixerInputPorts, AudioMixerOutputPorts,
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo,
+    ParameterModulator, LfoWaveform,
+    ParameterAutomation,
+    SimplePassthroughProcessor,
 };
-pub use clap_effect::{ClapEffectProcessor, ClapScanner, ClapPluginInfo};
-pub use parameter_modulation::{ParameterModulator, LfoWaveform};
-pub use parameter_automation::ParameterAutomation;
-pub use simple_passthrough::SimplePassthroughProcessor;
 
 #[cfg(feature = "debug-overlay")]
-pub use performance_overlay::{
+pub use crate::core::transformers::{
     PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
 };

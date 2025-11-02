@@ -4,7 +4,6 @@
 //! real-time video processing system. Platform-specific implementations
 //! (Metal, Vulkan) are provided by separate crates.
 
-pub mod buffers;
 pub mod clock;
 pub mod config;
 pub mod error;
@@ -19,13 +18,15 @@ pub mod stream_processor;
 pub mod ports;
 pub mod processors;
 pub mod runtime;
+pub mod sources;
+pub mod sinks;
+pub mod transformers;
 pub mod sync;
 pub mod texture;
 pub mod topology;
 pub mod traits;
 
 // Re-export core types
-pub use buffers::RingBuffer;
 pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
 pub use config::{
     EmptyConfig, CameraConfig, DisplayConfig, AudioCaptureConfig, AudioOutputConfig,
