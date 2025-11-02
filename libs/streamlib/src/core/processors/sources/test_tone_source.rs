@@ -346,7 +346,7 @@ mod tests {
             sample_rate: 48000,
             timer_group_id: Some("audio_master".to_string()),
         };
-        let gen = TestToneGenerator::from_config(config).unwrap();
+        let gen = <TestToneGenerator as StreamSource>::from_config(config).unwrap();
         assert_eq!(gen.frequency, 440.0);
         assert_eq!(gen.amplitude, 0.5);
         assert_eq!(gen.sample_rate, 48000);

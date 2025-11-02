@@ -457,7 +457,7 @@ mod tests {
         };
 
         // Default implementations should not error
-        assert!(source.start().is_ok());
+        // Note: start() requires RuntimeContext, tested in integration tests
         assert!(source.stop().is_ok());
         assert!(source.shutdown().is_ok());
     }
