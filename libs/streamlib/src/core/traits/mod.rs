@@ -51,6 +51,7 @@ pub mod element;
 pub mod source;
 pub mod sink;
 pub mod transform;
+pub mod dyn_element;
 
 // Re-export core traits and types
 pub use element::{
@@ -73,3 +74,5 @@ pub use sink::{
 };
 
 pub use transform::StreamTransform;
+
+pub use dyn_element::DynStreamElement;

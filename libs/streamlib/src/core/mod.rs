@@ -88,6 +88,7 @@ pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edg
 pub use traits::{
     StreamElement, ElementType,
     StreamSource, StreamSink, StreamTransform,
+    DynStreamElement,
     SchedulingConfig, SchedulingMode, ClockSource,
     ClockConfig, ClockType, SyncMode,
 };
