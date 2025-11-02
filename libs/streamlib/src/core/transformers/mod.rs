@@ -18,28 +18,22 @@
 //! - **SimplePassthroughProcessor**: Simple data passthrough for testing
 //! - **PerformanceOverlayProcessor**: Video performance metrics overlay (debug feature)
 
-pub mod audio_effect;
 pub mod audio_mixer;
 pub mod clap_effect;
-pub mod parameter_modulation;
-pub mod parameter_automation;
 pub mod simple_passthrough;
 
 #[cfg(feature = "debug-overlay")]
 pub mod performance_overlay;
 
-pub use audio_effect::{
-    AudioEffectProcessor, ParameterInfo, PluginInfo,
-    AudioEffectInputPorts, AudioEffectOutputPorts,
-};
 pub use audio_mixer::{
     AudioMixerProcessor, MixingStrategy,
     AudioMixerInputPorts, AudioMixerOutputPorts,
     AudioMixerConfig,
 };
-pub use clap_effect::{ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig};
-pub use parameter_modulation::{ParameterModulator, LfoWaveform};
-pub use parameter_automation::ParameterAutomation;
+pub use clap_effect::{
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
+    ClapEffectInputPorts, ClapEffectOutputPorts,
+};
 pub use simple_passthrough::SimplePassthroughProcessor;
 
 #[cfg(feature = "debug-overlay")]

@@ -381,23 +381,15 @@ impl AppleAudioOutputProcessor {
     /// Ok if frame was queued successfully
     pub fn push_frame(&mut self, frame: &AudioFrame) -> Result<()> {
         tracing::debug!(
-            "[AudioOutput] push_frame: frame #{}, {} samples ({} channels @ {} Hz)",
-            frame.frame_number, frame.sample_count, frame.channels, frame.sample_rate
+            "[AudioOutput] push_frame: frame #{}, {} samples ({} channels)",
+            frame.frame_number, frame.sample_count(), frame.channels
         );
 
         // Convert AudioFrame to output format if needed
         let mut samples = Vec::new();
 
-        // Handle sample rate conversion if needed
-        if frame.sample_rate != self.sample_rate {
-            // Simple linear interpolation for sample rate conversion
-            // TODO: Use a better resampler (e.g., rubato crate) for production
-            tracing::warn!(
-                "Sample rate conversion needed: {} -> {}",
-                frame.sample_rate,
-                self.sample_rate
-            );
-        }
+        // NOTE: Sample rate is enforced by RuntimeContext, so no conversion needed
+        // All audio frames should already match the system-wide sample rate
 
         // Handle channel conversion if needed
         if frame.channels != self.channels {

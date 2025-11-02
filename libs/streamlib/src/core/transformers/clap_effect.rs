@@ -58,16 +58,23 @@ use crate::core::{
 };
 use crate::core::traits::{StreamElement, StreamTransform, ElementType};
 use crate::core::schema::{PortDescriptor, SCHEMA_AUDIO_FRAME};
-
-use super::audio_effect::{
-    AudioEffectProcessor, ParameterInfo, PluginInfo,
-    AudioEffectInputPorts, AudioEffectOutputPorts,
-};
+use crate::core::clap::{ParameterInfo, PluginInfo};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use serde::{Serialize, Deserialize};
+use dasp::{Frame, frame::Stereo};
+
+/// Input ports for CLAP effect processors
+pub struct ClapEffectInputPorts {
+    pub audio: StreamInput<AudioFrame>,
+}
+
+/// Output ports for CLAP effect processors
+pub struct ClapEffectOutputPorts {
+    pub audio: StreamOutput<AudioFrame>,
+}
 
 /// Configuration for CLAP effect processors
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,10 +181,10 @@ pub struct ClapEffectProcessor {
     buffer_size: usize,
 
     /// Input ports
-    input_ports: AudioEffectInputPorts,
+    input_ports: ClapEffectInputPorts,
 
     /// Output ports
-    output_ports: AudioEffectOutputPorts,
+    output_ports: ClapEffectOutputPorts,
 }
 
 // SAFETY: ClapEffectProcessor is Send despite PluginBundle containing raw pointers
@@ -225,10 +232,11 @@ fn deinterleave_audio_frame(frame: &AudioFrame) -> (Vec<f32>, Vec<f32>) {
     let mut left = Vec::with_capacity(num_samples);
     let mut right = Vec::with_capacity(num_samples);
 
-    // Deinterleave: LRLRLR... → LL...L, RR...R
-    for i in 0..num_samples {
-        left.push(samples[i * 2]);
-        right.push(samples[i * 2 + 1]);
+    // Use dasp to safely deinterleave stereo frames
+    for stereo_frame in samples.chunks_exact(2) {
+        let frame = Stereo::<f32>::from_fn(|ch| stereo_frame[ch]);
+        left.push(frame.channels()[0]);
+        right.push(frame.channels()[1]);
     }
 
     (left, right)
@@ -257,7 +265,6 @@ fn deinterleave_audio_frame(frame: &AudioFrame) -> (Vec<f32>, Vec<f32>) {
 fn interleave_to_audio_frame(
     left: &[f32],
     right: &[f32],
-    sample_rate: u32,
     timestamp_ns: i64,
     frame_number: u64,
 ) -> AudioFrame {
@@ -266,10 +273,10 @@ fn interleave_to_audio_frame(
     let num_samples = left.len();
     let mut samples = Vec::with_capacity(num_samples * 2);
 
-    // Interleave: LL...L, RR...R → LRLRLR...
+    // Use dasp to safely interleave stereo frames
     for i in 0..num_samples {
-        samples.push(left[i]);
-        samples.push(right[i]);
+        let frame = Stereo::<f32>::from_fn(|ch| if ch == 0 { left[i] } else { right[i] });
+        samples.extend_from_slice(frame.channels());
     }
 
     AudioFrame::new(samples, timestamp_ns, frame_number, sample_rate, 2)
@@ -452,11 +459,11 @@ impl ClapEffectProcessor {
         }));
 
         // Create input and output ports
-        let input_ports = AudioEffectInputPorts {
+        let input_ports = ClapEffectInputPorts {
             audio: StreamInput::new("audio".to_string()),
         };
 
-        let output_ports = AudioEffectOutputPorts {
+        let output_ports = ClapEffectOutputPorts {
             audio: StreamOutput::new("audio".to_string()),
         };
 
@@ -476,7 +483,8 @@ impl ClapEffectProcessor {
     }
 }
 
-impl AudioEffectProcessor for ClapEffectProcessor {
+// Public CLAP-specific methods
+impl ClapEffectProcessor {
     /// Load the first plugin from a CLAP bundle
     ///
     /// For bundles with multiple plugins, use `load_by_name()` or `load_by_index()`
@@ -619,7 +627,6 @@ impl AudioEffectProcessor for ClapEffectProcessor {
         let output = interleave_to_audio_frame(
             &all_output_channels[0],
             &all_output_channels[1],
-            input.sample_rate,
             input.timestamp_ns,
             input.frame_number,
         );
@@ -837,11 +844,11 @@ impl AudioEffectProcessor for ClapEffectProcessor {
     // Current version of clack-host doesn't expose these CLAP extension methods
     // Parameter changes are still batched via ParamValueEvents in process_audio()
 
-    fn input_ports(&mut self) -> &mut AudioEffectInputPorts {
+    fn input_ports(&mut self) -> &mut ClapEffectInputPorts {
         &mut self.input_ports
     }
 
-    fn output_ports(&mut self) -> &mut AudioEffectOutputPorts {
+    fn output_ports(&mut self) -> &mut ClapEffectOutputPorts {
         &mut self.output_ports
     }
 }
@@ -898,6 +905,24 @@ impl StreamElement for ClapEffectProcessor {
             tracing::info!("[ClapEffect] Deactivated plugin '{}'", self.plugin_info.name);
         }
         Ok(())
+    }
+}
+
+// ============================================================
+// ClapParameterControl Implementation (for automation)
+// ============================================================
+
+impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
+    fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
+        self.set_parameter(id, value)
+    }
+
+    fn begin_edit(&mut self, id: u32) -> Result<()> {
+        self.begin_edit(id)
+    }
+
+    fn end_edit(&mut self, id: u32) -> Result<()> {
+        self.end_edit(id)
     }
 }
 
@@ -1455,7 +1480,6 @@ mod tests {
 
         #[test]
         fn test_clap_plugin_parameter_enumeration() {
-            use crate::core::AudioEffectProcessor;
 
             let plugin_path = "/Users/fonta/Repositories/tatolab/clap-plugins/build/plugins/clap-plugins.clap/Contents/MacOS/clap-plugins";
 
@@ -1495,7 +1519,6 @@ mod tests {
 
         #[test]
         fn test_clap_plugin_parameter_actual_values() {
-            use crate::core::AudioEffectProcessor;
 
             let plugin_path = "/Users/fonta/Repositories/tatolab/streamlib/build/plugins/clap-plugins.clap/Contents/MacOS/clap-plugins";
 
@@ -1549,7 +1572,6 @@ mod tests {
 
         #[test]
         fn test_clap_plugin_parameter_audio_processing() {
-            use crate::core::AudioEffectProcessor;
 
             let plugin_path = "/Users/fonta/Repositories/tatolab/clap-plugins/build/plugins/clap-plugins.clap/Contents/MacOS/clap-plugins";
 

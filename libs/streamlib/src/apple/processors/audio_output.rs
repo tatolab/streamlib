@@ -338,8 +338,8 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         let mut frame_count = 0;
         for frame in self.ports.audio.read_all() {
             tracing::debug!(
-                "[AudioOutput] Got frame #{} - {} samples, {} channels, {} Hz",
-                frame.frame_number, frame.sample_count, frame.channels, frame.sample_rate
+                "[AudioOutput] Got frame #{} - {} samples, {} channels",
+                frame.frame_number, frame.sample_count(), frame.channels
             );
             self.push_frame(&frame)?;
             frame_count += 1;

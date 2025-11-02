@@ -1,4 +1,4 @@
-//! Message types for stream data
+//! Frame types for stream data
 //!
 //! These types define the **data contracts** between processors.
 //! All GPU data uses **WebGPU (wgpu)** as the intermediate representation.
@@ -11,7 +11,7 @@
 //! - Platform-agnostic shader effects
 //! - Simple, concrete types (no trait objects)
 //!
-//! ## Message Types
+//! ## Frame Types
 //!
 //! - **VideoFrame**: GPU-resident video frames (WebGPU textures)
 //! - **AudioFrame**: CPU-resident audio samples (with optional GPU buffer)
@@ -24,6 +24,6 @@ pub mod data_frame;
 pub mod metadata;
 
 pub use video_frame::VideoFrame;
-pub use audio_frame::{AudioFrame, AudioFormat};
+pub use audio_frame::AudioFrame;
 pub use data_frame::DataFrame;
 pub use metadata::MetadataValue;

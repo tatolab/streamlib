@@ -75,7 +75,7 @@ clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["cla
 rubato = "0.16"
 
 # Professional DSP operations (mixing, amplitude scaling, clipping)
-dasp = "0.11"
+dasp = { version = "0.11", features = ["slice"] }
 
 # Optional: Debug overlay dependencies
 vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }

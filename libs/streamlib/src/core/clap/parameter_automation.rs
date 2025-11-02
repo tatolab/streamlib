@@ -34,8 +34,22 @@
 
 use crate::core::Result;
 use super::parameter_modulation::ParameterModulator;
-use super::audio_effect::AudioEffectProcessor;
 use std::collections::HashMap;
+
+/// Trait for CLAP processors that support parameter control
+///
+/// This is automatically implemented by ClapEffectProcessor and allows
+/// ParameterAutomation to work with it.
+pub trait ClapParameterControl {
+    /// Set a parameter value
+    fn set_parameter(&mut self, id: u32, value: f64) -> Result<()>;
+
+    /// Begin parameter edit transaction
+    fn begin_edit(&mut self, id: u32) -> Result<()>;
+
+    /// End parameter edit transaction
+    fn end_edit(&mut self, id: u32) -> Result<()>;
+}
 
 /// Scheduled parameter change at a specific time
 #[derive(Debug, Clone)]
@@ -166,10 +180,15 @@ impl ParameterAutomation {
     /// Processes all scheduled changes and applies active modulators.
     /// Call this in your audio loop with the current time.
     ///
+    /// Works with any CLAP plugin processor that has:
+    /// - `set_parameter(id, value)` method
+    /// - `begin_edit(id)` method
+    /// - `end_edit(id)` method
+    ///
     /// # Arguments
     ///
     /// * `time` - Current time (seconds)
-    /// * `processor` - Audio effect processor to update
+    /// * `processor` - CLAP effect processor to update
     ///
     /// # Returns
     ///
@@ -178,16 +197,22 @@ impl ParameterAutomation {
     /// # Example
     ///
     /// ```ignore
+    /// use streamlib::ClapEffectProcessor;
+    ///
+    /// let mut plugin = ClapEffectProcessor::load("plugin.clap")?;
     /// let updates = automation.update(current_time, &mut plugin)?;
     /// if updates > 0 {
     ///     tracing::debug!("Updated {} parameters", updates);
     /// }
     /// ```
-    pub fn update<P: AudioEffectProcessor>(
+    pub fn update<P>(
         &mut self,
         time: f64,
         processor: &mut P,
-    ) -> Result<usize> {
+    ) -> Result<usize>
+    where
+        P: ClapParameterControl,
+    {
         let mut updates = 0;
 
         // Process scheduled changes that are due

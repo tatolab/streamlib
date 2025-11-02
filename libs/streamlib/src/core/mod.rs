@@ -4,11 +4,12 @@
 //! real-time video processing system. Platform-specific implementations
 //! (Metal, Vulkan) are provided by separate crates.
 
+pub mod clap;
 pub mod clocks;
 pub mod context;
 pub mod error;
+pub mod frames;
 pub mod handles;
-pub mod messages;
 pub mod registry;
 pub mod runtime;
 pub mod schema;
@@ -23,12 +24,17 @@ pub mod topology;
 pub mod traits;
 
 // Re-export core types
+pub use clap::{
+    ParameterInfo, PluginInfo,
+    ParameterModulator, LfoWaveform,
+    ParameterAutomation, ClapParameterControl,
+};
 pub use clocks::{Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock};
-pub use context::{GpuContext, RuntimeContext};
+pub use context::{GpuContext, AudioContext, RuntimeContext};
 pub use error::{StreamError, Result};
 pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
-pub use messages::{VideoFrame, AudioFrame, AudioFormat, DataFrame, MetadataValue};
+pub use frames::{VideoFrame, AudioFrame, DataFrame, MetadataValue};
 pub use traits::{StreamProcessor, EmptyConfig, DynStreamProcessor, PortConsumer, PortProvider};
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
@@ -45,11 +51,8 @@ pub use sinks::{
     AudioOutputProcessor, AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
 };
 pub use transformers::{
-    AudioEffectProcessor, ParameterInfo, PluginInfo,
-    AudioEffectInputPorts, AudioEffectOutputPorts,
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
-    ParameterModulator, LfoWaveform,
-    ParameterAutomation,
+    ClapEffectInputPorts, ClapEffectOutputPorts,
     AudioMixerProcessor, MixingStrategy,
     AudioMixerInputPorts, AudioMixerOutputPorts, AudioMixerConfig,
 };

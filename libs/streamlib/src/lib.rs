@@ -56,8 +56,8 @@ pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
 // Re-export core types at crate root (but not the runtime module itself)
 pub use core::{
     Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock,
-    StreamError, Result, GpuContext,
-    VideoFrame, AudioFrame, AudioFormat, DataFrame, MetadataValue,
+    StreamError, Result, GpuContext, AudioContext, RuntimeContext,
+    VideoFrame, AudioFrame, DataFrame, MetadataValue,
     StreamProcessor, StreamOutput, StreamInput, PortType, PortMessage,
     EmptyConfig,  // Generic config for processors without configuration
     // Note: CameraProcessor, DisplayProcessor, and AudioProcessor traits are in core,
@@ -66,9 +66,8 @@ pub use core::{
     WindowId, DisplayInputPorts, DisplayConfig,
     AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
     AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
-    AudioEffectProcessor, ParameterInfo, PluginInfo,
-    AudioEffectInputPorts, AudioEffectOutputPorts,
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
+    ParameterInfo, PluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
     TestToneGenerator, TestToneGeneratorOutputPorts, TestToneConfig,

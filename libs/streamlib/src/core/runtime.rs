@@ -142,15 +142,8 @@ impl StreamRuntime {
     }
 
     pub fn validate_audio_frame(&self, frame: &crate::core::AudioFrame) -> Result<()> {
-        if frame.sample_rate != self.audio_config.sample_rate {
-            return Err(StreamError::Configuration(format!(
-                "AudioFrame sample rate mismatch: expected {}Hz (runtime config), got {}Hz. \
-                 This can cause pitch shifts and audio artifacts. \
-                 Ensure all audio processors use runtime.audio_config() when activating.",
-                self.audio_config.sample_rate,
-                frame.sample_rate
-            )));
-        }
+        // NOTE: Sample rate is enforced by RuntimeContext, not validated here
+        // All audio frames should already be at the system-wide sample rate
 
         if frame.channels != self.audio_config.channels {
             return Err(StreamError::Configuration(format!(

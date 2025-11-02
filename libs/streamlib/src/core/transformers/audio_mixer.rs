@@ -334,11 +334,16 @@ impl AudioMixerProcessor {
         frame: &AudioFrame,
         input_name: &str,
     ) -> Result<Vec<f32>> {
-        // If sample rates match, no resampling needed
-        if frame.sample_rate == self.target_sample_rate {
-            return Ok(frame.samples.as_ref().clone());
-        }
+        // NOTE: With RuntimeContext enforcing system-wide sample rate,
+        // all frames should already be at target_sample_rate.
+        // This resampling code is kept for backwards compatibility but should not trigger.
 
+        // No resampling needed - sample rate is enforced by RuntimeContext
+        return Ok(frame.samples.as_ref().clone());
+
+        // Dead code below - keeping for reference but removing sample_rate access
+        #[allow(unreachable_code)]
+        {
         // Get or create resampler for this input
         if !self.resamplers.contains_key(input_name) {
             // Create new resampler
@@ -351,10 +356,10 @@ impl AudioMixerProcessor {
             };
 
             let resampler = SincFixedIn::<f32>::new(
-                self.target_sample_rate as f64 / frame.sample_rate as f64,
+                1.0, // No resampling - sample rates already match
                 2.0, // max_resample_ratio_relative
                 params,
-                frame.sample_count,
+                frame.sample_count(),
                 frame.channels as usize,
             ).map_err(|e| StreamError::Configuration(format!("Failed to create resampler: {}", e)))?;
 
@@ -579,8 +584,8 @@ impl StreamTransform for AudioMixerProcessor {
 
             if let Some(mut frame) = frame_opt {
                 tracing::debug!(
-                    "[AudioMixer] Received NEW frame from {} - {} samples, {} channels, {} Hz, frame #{}",
-                    input_name, frame.sample_count, frame.channels, frame.sample_rate, frame.frame_number
+                    "[AudioMixer] Received NEW frame from {} - {} samples, {} channels, frame #{}",
+                    input_name, frame.sample_count(), frame.channels, frame.frame_number
                 );
 
                 // Convert mono to stereo if needed
