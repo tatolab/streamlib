@@ -9,6 +9,27 @@ use crate::core::{
 use std::sync::Arc;
 use serde_json::json;
 
+/// Configuration for display processors
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DisplayConfig {
+    /// Window width in pixels
+    pub width: u32,
+    /// Window height in pixels
+    pub height: u32,
+    /// Optional window title
+    pub title: Option<String>,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            width: 1920,
+            height: 1080,
+            title: None,
+        }
+    }
+}
+
 /// Unique identifier for a display window
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64);
@@ -110,7 +131,7 @@ mod tests {
     struct MockDisplayProcessor;
 
     impl StreamProcessor for MockDisplayProcessor {
-        type Config = crate::core::config::EmptyConfig;
+        type Config = crate::core::EmptyConfig;
 
         fn from_config(_config: Self::Config) -> crate::Result<Self> {
             Ok(Self)

@@ -18,6 +18,6 @@ pub mod test_tone_source;
 pub mod camera;
 pub mod audio_capture;
 
-pub use test_tone_source::{TestToneGenerator, TestToneGeneratorOutputPorts};
-pub use camera::{CameraProcessor, CameraDevice, CameraOutputPorts};
-pub use audio_capture::{AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts};
+pub use test_tone_source::{TestToneGenerator, TestToneGeneratorOutputPorts, TestToneConfig};
+pub use camera::{CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig};
+pub use audio_capture::{AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig};

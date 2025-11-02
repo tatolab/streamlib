@@ -34,7 +34,7 @@ impl StreamRuntime {
     /// Add a processor to the runtime (legacy API - prefer add_processor::<P>())
     pub fn add_processor_runtime(
         &mut self,
-        processor: Box<dyn crate::core::stream_processor::DynStreamProcessor>,
+        processor: Box<dyn crate::core::DynStreamProcessor>,
     ) -> Result<String> {
         // This is the old API - new code should use add_processor::<P>()
         tokio::runtime::Handle::current().block_on(async {

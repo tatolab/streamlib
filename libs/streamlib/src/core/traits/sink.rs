@@ -48,71 +48,8 @@
 use super::{StreamElement, ElementType};
 use crate::core::error::Result;
 use crate::core::schema::ProcessorDescriptor;
+use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
 use serde::{Deserialize, Serialize};
-
-/// Clock configuration for sinks
-///
-/// Determines whether this sink provides a clock to the pipeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClockConfig {
-    /// Whether this sink provides a clock
-    ///
-    /// True for audio output (CoreAudio callback is master clock)
-    /// True for display with vsync (CVDisplayLink is master clock)
-    pub provides_clock: bool,
-
-    /// Clock type provided (if any)
-    pub clock_type: Option<ClockType>,
-
-    /// Clock name for debugging
-    pub clock_name: Option<String>,
-}
-
-impl Default for ClockConfig {
-    fn default() -> Self {
-        Self {
-            provides_clock: false,
-            clock_type: None,
-            clock_name: None,
-        }
-    }
-}
-
-/// Type of clock provided by a sink
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClockType {
-    /// Audio hardware clock (sample-accurate)
-    Audio,
-
-    /// Video vsync clock (frame-accurate)
-    Vsync,
-
-    /// Network clock (RTP, PTP)
-    Network,
-
-    /// System clock
-    System,
-}
-
-/// Synchronization mode for sinks
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SyncMode {
-    /// Sync to buffer timestamps (default)
-    ///
-    /// Compare buffer timestamp to clock, render at correct time.
-    /// Used by most sinks (display, audio, file with timestamps)
-    Timestamp,
-
-    /// No sync - render immediately
-    ///
-    /// Used for file sinks without timing requirements
-    None,
-
-    /// Sync to external clock
-    ///
-    /// Used for genlock, network sync
-    External,
-}
 
 /// Trait for data sink processors
 ///

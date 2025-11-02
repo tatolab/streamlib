@@ -1,156 +1,12 @@
-//! Message types for stream data
+//! Audio frame message type
 //!
-//! These types define the **data contracts** between processors.
-//! All GPU data uses **WebGPU (wgpu)** as the intermediate representation.
-//!
-//! Platform-specific crates (streamlib-apple, streamlib-linux) convert
-//! their native GPU types (Metal, Vulkan) to/from WebGPU internally.
-//!
-//! This provides:
-//! - Zero-copy GPU operations (via wgpu-hal bridges)
-//! - Platform-agnostic shader effects
-//! - Simple, concrete types (no trait objects)
+//! Represents a chunk of audio data with CPU-first architecture.
+//! Unlike VideoFrame (GPU-first), audio is primarily CPU-based.
 
-use super::ports::{PortMessage, PortType};
+use super::metadata::MetadataValue;
+use super::super::ports::{PortMessage, PortType};
 use std::sync::Arc;
 use std::collections::HashMap;
-
-/// Video frame message
-///
-/// Represents a single frame of video data as a WebGPU texture.
-/// Platform-specific processors convert their native GPU types internally.
-///
-/// # Architecture
-///
-/// - Camera processors (streamlib-apple): Metal → WebGPU
-/// - Display processors (streamlib-apple): WebGPU → Metal (if needed)
-/// - Effect processors: Work directly with WebGPU shaders
-///
-/// # Example
-///
-/// ```ignore
-/// use streamlib_core::messages::VideoFrame;
-///
-/// // In a processor
-/// let frame = video_input.read_latest().unwrap();
-/// println!("Frame {}x{} @ {:.3}s",
-///     frame.width, frame.height, frame.timestamp);
-///
-/// // Access WebGPU texture directly
-/// let texture: &wgpu::Texture = &frame.texture;
-/// ```
-#[derive(Clone)]
-pub struct VideoFrame {
-    /// WebGPU texture containing the frame data
-    ///
-    /// This is the universal GPU representation. Platform processors
-    /// convert to/from their native types (Metal, Vulkan) internally.
-    pub texture: Arc<wgpu::Texture>,
-
-    /// Texture format (Rgba8Unorm or Bgra8Unorm)
-    ///
-    /// Cached for performance. Should always match `texture.format()`.
-    /// - **Internal pipeline standard**: Rgba8Unorm (used by most processors)
-    /// - **Platform edges**: Bgra8Unorm (camera input, display output on some platforms)
-    pub format: wgpu::TextureFormat,
-
-    /// Timestamp in seconds since stream start
-    pub timestamp: f64,
-
-    /// Sequential frame number
-    pub frame_number: u64,
-
-    /// Frame width in pixels
-    pub width: u32,
-
-    /// Frame height in pixels
-    pub height: u32,
-
-    /// Optional metadata (detection boxes, ML results, etc.)
-    pub metadata: Option<HashMap<String, MetadataValue>>,
-}
-
-impl VideoFrame {
-    /// Create a new video frame
-    pub fn new(
-        texture: Arc<wgpu::Texture>,
-        format: wgpu::TextureFormat,
-        timestamp: f64,
-        frame_number: u64,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        Self {
-            texture,
-            format,
-            timestamp,
-            frame_number,
-            width,
-            height,
-            metadata: None,
-        }
-    }
-
-    /// Create a video frame with metadata
-    pub fn with_metadata(
-        texture: Arc<wgpu::Texture>,
-        format: wgpu::TextureFormat,
-        timestamp: f64,
-        frame_number: u64,
-        width: u32,
-        height: u32,
-        metadata: HashMap<String, MetadataValue>,
-    ) -> Self {
-        Self {
-            texture,
-            format,
-            timestamp,
-            frame_number,
-            width,
-            height,
-            metadata: Some(metadata),
-        }
-    }
-
-    /// Create example 720p video frame metadata for MCP/macro use
-    ///
-    /// Returns a JSON representation suitable for ProcessorExample.
-    /// Note: This is metadata only (no actual texture), used by MCP for documentation.
-    pub fn example_720p() -> serde_json::Value {
-        serde_json::json!({
-            "width": 1280,
-            "height": 720,
-            "format": "Rgba8Unorm",
-            "timestamp": 0.033,
-            "frame_number": 1,
-            "metadata": {}
-        })
-    }
-
-    /// Create example 1080p video frame metadata for MCP/macro use
-    pub fn example_1080p() -> serde_json::Value {
-        serde_json::json!({
-            "width": 1920,
-            "height": 1080,
-            "format": "Rgba8Unorm",
-            "timestamp": 0.033,
-            "frame_number": 1,
-            "metadata": {}
-        })
-    }
-
-    /// Create example 4K video frame metadata for MCP/macro use
-    pub fn example_4k() -> serde_json::Value {
-        serde_json::json!({
-            "width": 3840,
-            "height": 2160,
-            "format": "Rgba8Unorm",
-            "timestamp": 0.033,
-            "frame_number": 1,
-            "metadata": {}
-        })
-    }
-}
 
 /// Audio sample format
 ///
@@ -188,7 +44,7 @@ pub enum AudioFormat {
 /// # Example
 ///
 /// ```ignore
-/// use streamlib_core::messages::AudioFrame;
+/// use streamlib::AudioFrame;
 ///
 /// // Create stereo audio frame at 48kHz
 /// let samples = vec![0.0, 0.0, 0.1, -0.1, 0.2, -0.2]; // 3 frames, 2 channels
@@ -375,118 +231,6 @@ impl AudioFrame {
     }
 }
 
-/// Generic data message
-///
-/// For custom data types that don't fit VideoFrame or AudioFrame.
-/// Uses WebGPU buffer for GPU-resident data.
-///
-/// # Example
-///
-/// ```ignore
-/// use streamlib_core::messages::DataMessage;
-///
-/// // ML detection results in GPU buffer
-/// let detections = DataMessage::new(
-///     detection_buffer,
-///     timestamp,
-///     Some(hashmap!{ "model".into() => "yolov8".into() })
-/// );
-/// ```
-#[derive(Clone)]
-pub struct DataMessage {
-    /// WebGPU buffer containing custom data
-    pub buffer: Arc<wgpu::Buffer>,
-
-    /// Timestamp in seconds since stream start
-    pub timestamp: f64,
-
-    /// Optional metadata
-    pub metadata: Option<HashMap<String, MetadataValue>>,
-}
-
-impl DataMessage {
-    /// Create a new data message
-    pub fn new(
-        buffer: Arc<wgpu::Buffer>,
-        timestamp: f64,
-        metadata: Option<HashMap<String, MetadataValue>>,
-    ) -> Self {
-        Self {
-            buffer,
-            timestamp,
-            metadata,
-        }
-    }
-}
-
-/// Metadata value types
-///
-/// Supports common metadata value types for flexibility.
-#[derive(Debug, Clone)]
-pub enum MetadataValue {
-    /// String value
-    String(String),
-    /// Integer value
-    Int(i64),
-    /// Float value
-    Float(f64),
-    /// Boolean value
-    Bool(bool),
-    /// Nested metadata
-    Map(HashMap<String, MetadataValue>),
-    /// Array of values
-    Array(Vec<MetadataValue>),
-}
-
-impl From<String> for MetadataValue {
-    fn from(s: String) -> Self {
-        MetadataValue::String(s)
-    }
-}
-
-impl From<&str> for MetadataValue {
-    fn from(s: &str) -> Self {
-        MetadataValue::String(s.to_string())
-    }
-}
-
-impl From<i64> for MetadataValue {
-    fn from(i: i64) -> Self {
-        MetadataValue::Int(i)
-    }
-}
-
-impl From<f64> for MetadataValue {
-    fn from(f: f64) -> Self {
-        MetadataValue::Float(f)
-    }
-}
-
-impl From<bool> for MetadataValue {
-    fn from(b: bool) -> Self {
-        MetadataValue::Bool(b)
-    }
-}
-
-// Implement PortMessage trait for message types
-impl PortMessage for VideoFrame {
-    fn port_type() -> PortType {
-        PortType::Video
-    }
-
-    fn schema() -> std::sync::Arc<crate::core::Schema> {
-        std::sync::Arc::clone(&crate::core::SCHEMA_VIDEO_FRAME)
-    }
-
-    fn examples() -> Vec<(&'static str, serde_json::Value)> {
-        vec![
-            ("720p video", Self::example_720p()),
-            ("1080p video", Self::example_1080p()),
-            ("4K video", Self::example_4k()),
-        ]
-    }
-}
-
 impl PortMessage for AudioFrame {
     fn port_type() -> PortType {
         PortType::Audio
@@ -505,28 +249,9 @@ impl PortMessage for AudioFrame {
     }
 }
 
-
-impl PortMessage for DataMessage {
-    fn port_type() -> PortType {
-        PortType::Data
-    }
-
-    fn schema() -> std::sync::Arc<crate::core::Schema> {
-        std::sync::Arc::clone(&crate::core::SCHEMA_DATA_MESSAGE)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_metadata_value_conversions() {
-        let _str_val: MetadataValue = "test".into();
-        let _int_val: MetadataValue = 42i64.into();
-        let _float_val: MetadataValue = 2.71f64.into();
-        let _bool_val: MetadataValue = true.into();
-    }
 
     #[test]
     fn test_audioframe_creation() {
@@ -590,8 +315,4 @@ mod tests {
         let frame = AudioFrame::new(samples, 0, 0, 48000, 2);
         let _ = frame.channel_samples(2); // Invalid channel for stereo
     }
-
-    // Note: VideoFrame and AudioBuffer tests require actual wgpu::Device
-    // to create textures/buffers. Integration tests in platform crates
-    // (streamlib-apple, etc.) test the full pipeline.
 }

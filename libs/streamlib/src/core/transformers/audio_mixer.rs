@@ -49,10 +49,10 @@
 use dasp::Frame;
 
 use crate::core::{
-    Result, StreamError, StreamProcessor, GpuContext,
+    Result, StreamError, GpuContext,
     AudioFrame, StreamInput, StreamOutput,
     ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
-    AudioRequirements, SampleAndHoldBuffer,
+    AudioRequirements,
 };
 use crate::core::traits::{StreamElement, StreamTransform, ElementType};
 
@@ -63,6 +63,34 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters,
     WindowFunction,
 };
+use serde::{Serialize, Deserialize};
+
+/// Configuration for audio mixer processor
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioMixerConfig {
+    /// Number of input ports
+    pub num_inputs: usize,
+    /// Mixing strategy
+    pub strategy: MixingStrategy,
+    /// Sample rate in Hz
+    pub sample_rate: u32,
+    /// Buffer size in samples per channel
+    pub buffer_size: usize,
+    /// Optional timer group ID (same as input sources for deterministic ordering)
+    pub timer_group_id: Option<String>,
+}
+
+impl Default for AudioMixerConfig {
+    fn default() -> Self {
+        Self {
+            num_inputs: 2,
+            strategy: MixingStrategy::SumNormalized,
+            sample_rate: 48000,
+            buffer_size: 2048,
+            timer_group_id: None,
+        }
+    }
+}
 
 /// Mixing strategy for combining audio streams
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -162,14 +190,15 @@ pub struct AudioMixerProcessor {
     /// Optional timer group ID for synchronized timing with input sources
     timer_group_id: Option<String>,
 
-    /// Sample-and-hold buffer for synchronizing async inputs
-    /// Holds last received frame from each input to ensure all inputs are mixed together
-    sample_hold_buffer: SampleAndHoldBuffer<(Vec<f32>, i64, u64)>,  // (samples, timestamp, frame_number)
-
     /// Track last mixed timestamps to prevent duplicate mixes on spurious wakeups
     /// Key: input name (e.g., "input_0"), Value: last mixed timestamp_ns
     /// Timestamp-based deduplication is more robust than frame numbers
     last_mixed_timestamps: HashMap<String, i64>,
+
+    /// Cache for processed inputs (post-resampling/channel-conversion)
+    /// Key: input name, Value: (samples, timestamp, frame_number)
+    /// This provides sample-and-hold behavior similar to StreamInput::read_latest()
+    input_cache: HashMap<String, Option<(Vec<f32>, i64, u64)>>,
 }
 
 impl AudioMixerProcessor {
@@ -222,11 +251,11 @@ impl AudioMixerProcessor {
         // Pre-allocate mix buffer (max_buffer_size * channels)
         let mix_buffer = vec![0.0; max_buffer_size * target_channels as usize];
 
-        // Create sample-and-hold buffer with input names
-        let input_names: Vec<String> = (0..num_inputs)
-            .map(|i| format!("input_{}", i))
-            .collect();
-        let sample_hold_buffer = SampleAndHoldBuffer::new(input_names);
+        // Initialize input cache for sample-and-hold behavior
+        let mut input_cache = HashMap::new();
+        for i in 0..num_inputs {
+            input_cache.insert(format!("input_{}", i), None);
+        }
 
         Ok(Self {
             num_inputs,
@@ -247,8 +276,8 @@ impl AudioMixerProcessor {
             resample_buffers: HashMap::new(),
             buffer_size,
             timer_group_id: None,
-            sample_hold_buffer,
             last_mixed_timestamps: HashMap::new(),
+            input_cache,
         })
     }
 
@@ -481,8 +510,10 @@ impl StreamElement for AudioMixerProcessor {
     }
 
     fn stop(&mut self) -> Result<()> {
-        // Clear sample-and-hold buffer
-        self.sample_hold_buffer.clear();
+        // Clear input cache
+        for value in self.input_cache.values_mut() {
+            *value = None;
+        }
         tracing::info!("AudioMixer: Stopped");
         Ok(())
     }
@@ -493,7 +524,7 @@ impl StreamElement for AudioMixerProcessor {
 // ============================================================
 
 impl StreamTransform for AudioMixerProcessor {
-    type Config = crate::core::config::AudioMixerConfig;
+    type Config = crate::core::AudioMixerConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         Self::new(
@@ -504,11 +535,7 @@ impl StreamTransform for AudioMixerProcessor {
         )
     }
 
-    fn process(&mut self) -> Result<()> {
-        // Reuse existing process() implementation
-        // (The complex logic is already in the StreamProcessor impl below)
-        <AudioMixerProcessor as StreamProcessor>::process(self)
-    }
+    // process() is implemented directly in the impl block below
 
     fn descriptor() -> Option<ProcessorDescriptor> {
         use crate::core::schema::ProcessorDescriptor;
@@ -532,84 +559,13 @@ impl StreamTransform for AudioMixerProcessor {
             .with_tags(vec!["audio", "mixer", "transform", "multi-input"])
         )
     }
-}
-
-impl StreamProcessor for AudioMixerProcessor {
-    type Config = crate::core::config::AudioMixerConfig;
-
-    fn from_config(config: Self::Config) -> crate::core::Result<Self> {
-        let mut mixer = Self::new(config.num_inputs, config.strategy, config.sample_rate, config.buffer_size)?;
-        mixer.timer_group_id = config.timer_group_id;
-        Ok(mixer)
-    }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        // Note: AudioMixerProcessor instances have dynamic input counts,
-        // so the descriptor here is generic. Specific instances would need
-        // custom descriptors based on their num_inputs.
-        Some(
-            ProcessorDescriptor::new(
-                "AudioMixer",
-                "Combines multiple audio streams into a single output with real-time mixing"
-            )
-            .with_usage_context(
-                "Use when you need to mix multiple audio sources (microphone + music, \
-                multiple microphones, audio effects chains). Supports different sample rates \
-                and automatic channel conversion."
-            )
-            .with_output(PortDescriptor::new(
-                "audio",
-                Arc::clone(&SCHEMA_AUDIO_FRAME),
-                true,
-                "Mixed audio output (stereo)"
-            ))
-            .with_tags(vec!["audio", "mixer", "processing", "real-time"])
-            .with_audio_requirements(AudioRequirements::flexible())
-        )
-    }
-
-    fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
-        use crate::core::schema::TimerRequirements;
-
-        // Calculate timer rate from buffer size and sample rate
-        let rate_hz = self.target_sample_rate as f64 / self.buffer_size as f64;
-
-        // Get base descriptor and add instance-specific TimerRequirements
-        <AudioMixerProcessor as StreamProcessor>::descriptor().map(|desc| {
-            desc.with_timer_requirements(TimerRequirements {
-                rate_hz,
-                group_id: self.timer_group_id.clone(),
-                description: Some(format!(
-                    "Mix audio buffers at {:.2} Hz ({} samples at {} Hz sample rate)",
-                    rate_hz,
-                    self.buffer_size,
-                    self.target_sample_rate
-                )),
-            })
-        })
-    }
-
-    fn on_start(&mut self, _gpu_context: &GpuContext) -> Result<()> {
-        tracing::info!(
-            "[AudioMixer] Started with {} inputs, strategy: {:?}, target: {}Hz stereo",
-            self.num_inputs,
-            self.strategy,
-            self.target_sample_rate
-        );
-
-        // Reset state
-        self.frame_counter = 0;
-        self.current_timestamp_ns = 0;
-
-        Ok(())
-    }
 
     fn process(&mut self) -> Result<()> {
-        // Process using sample-and-hold: update buffer with incoming frames,
-        // then collect ALL inputs (using held values where needed)
+        // Process using cached inputs (sample-and-hold pattern):
+        // Update cache with incoming frames, then mix ALL inputs using held values
         tracing::debug!("[AudioMixer] process() called");
 
-        // Step 1: Update sample-and-hold buffer with any incoming frames
+        // Step 1: Update input cache with any incoming frames
         for i in 0..self.num_inputs {
             let input_name = format!("input_{}", i);
 
@@ -638,21 +594,27 @@ impl StreamProcessor for AudioMixerProcessor {
                 // Resample if needed
                 let samples = self.resample_if_needed(&frame, &input_name)?;
 
-                // Store processed samples + timestamp + frame_number in sample-and-hold buffer
-                self.sample_hold_buffer.update(&input_name, (samples, frame.timestamp_ns, frame.frame_number));
+                // Store processed samples in input cache
+                if let Some(slot) = self.input_cache.get_mut(&input_name) {
+                    *slot = Some((samples, frame.timestamp_ns, frame.frame_number));
+                }
             }
         }
 
         // Step 2: Check if ALL inputs have data (cold start check)
-        if !self.sample_hold_buffer.all_ready() {
+        let all_ready = self.input_cache.values().all(|v| v.is_some());
+        if !all_ready {
             tracing::debug!("[AudioMixer] Not all inputs have data yet (cold start), skipping mix");
             return Ok(());
         }
 
-        // Step 3: Check for duplicate mixes using timestamp-based deduplication
-        // Prevents re-mixing the same data when woken multiple times (e.g., from downstream)
-        let all_inputs_named = self.sample_hold_buffer.collect_all_named()
-            .expect("all_ready() returned true, so collect_all_named() must succeed");
+        // Step 3: Collect all cached inputs and check for duplicates
+        let mut all_inputs_named: HashMap<String, (Vec<f32>, i64, u64)> = HashMap::new();
+        for (name, value_opt) in &self.input_cache {
+            if let Some(value) = value_opt {
+                all_inputs_named.insert(name.clone(), value.clone());
+            }
+        }
 
         // Check if ALL inputs have the SAME timestamps as last mix (duplicate wakeup)
         let mut all_inputs_unchanged = true;
@@ -675,23 +637,25 @@ impl StreamProcessor for AudioMixerProcessor {
             return Ok(());
         }
 
-        // Step 4: Collect ALL inputs using sample-and-hold
-        let all_inputs = self.sample_hold_buffer.collect_all()
-            .expect("all_ready() returned true, so collect_all() must succeed");
-
-        // Step 5: Mix based on timestamps using sample-and-hold
+        // Step 4: Mix using cached inputs (sample-and-hold pattern)
         // Timer groups ensure all inputs wake up simultaneously, eliminating clock drift.
-        // Sample-and-hold buffer provides latest data from each input.
+        // Input cache provides latest data from each input.
         // Timestamp deduplication prevents re-mixing on spurious wakeups.
 
         tracing::debug!(
-            "[AudioMixer] Mixing ALL {} input streams (timestamp-synchronized via sample-and-hold)",
-            all_inputs.len()
+            "[AudioMixer] Mixing ALL {} input streams (cached, sample-and-hold pattern)",
+            all_inputs_named.len()
         );
 
         // Extract samples, timestamp, and frame number
-        let input_samples: Vec<Vec<f32>> = all_inputs.iter().map(|(samples, _ts, _frame)| samples.clone()).collect();
-        let first_timestamp = all_inputs[0].1; // Use timestamp from first input
+        let mut sorted_names: Vec<_> = all_inputs_named.keys().collect();
+        sorted_names.sort();
+
+        let input_samples: Vec<Vec<f32>> = sorted_names.iter()
+            .map(|name| all_inputs_named.get(*name).unwrap().0.clone())
+            .collect();
+
+        let first_timestamp = all_inputs_named.values().next().unwrap().1; // Use timestamp from first input
 
         self.current_timestamp_ns = first_timestamp;
 
@@ -738,50 +702,6 @@ impl StreamProcessor for AudioMixerProcessor {
         }
 
         Ok(())
-    }
-
-    fn on_stop(&mut self) -> Result<()> {
-        tracing::info!("[AudioMixer] Stopped (processed {} frames)", self.frame_counter);
-        Ok(())
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
-        // AudioMixer has one audio output port
-        match port_name {
-            "audio" => {
-                self.output_ports.audio.consumer_holder().lock().take()
-                    .map(crate::core::stream_processor::PortConsumer::Audio)
-            }
-            _ => None,
-        }
-    }
-
-    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::stream_processor::PortConsumer) -> bool {
-        // Extract the AudioFrame consumer from the enum
-        let audio_consumer = match consumer {
-            crate::core::stream_processor::PortConsumer::Audio(c) => c,
-            _ => return false,  // Wrong type - type safety via enum pattern match
-        };
-
-        // AudioMixer has dynamic input ports: "input_0", "input_1", etc.
-        if let Some(input_arc) = self.input_ports.inputs.get(port_name) {
-            let mut input = input_arc.lock();
-            input.connect_consumer(audio_consumer);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
-        match port_name {
-            "audio" => self.output_ports.audio.set_downstream_wakeup(wakeup_tx),
-            _ => {}
-        }
     }
 }
 
@@ -841,11 +761,10 @@ mod tests {
 
     #[test]
     fn test_descriptor() {
-        let desc = <AudioMixerProcessor as StreamProcessor>::descriptor().unwrap();
-        assert_eq!(desc.name, "AudioMixer");
-        assert_eq!(desc.outputs.len(), 1);
-        assert_eq!(desc.outputs[0].name, "audio");
+        let desc = <AudioMixerProcessor as StreamTransform>::descriptor().unwrap();
+        assert_eq!(desc.name, "AudioMixerProcessor");
         assert!(desc.tags.contains(&"audio".to_string()));
         assert!(desc.tags.contains(&"mixer".to_string()));
+        assert!(desc.tags.contains(&"transform".to_string()));
     }
 }

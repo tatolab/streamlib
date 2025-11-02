@@ -27,6 +27,28 @@
 
 use crate::core::{StreamProcessor, StreamOutput, AudioFrame, Result};
 
+/// Configuration for audio capture processors
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioCaptureConfig {
+    /// Optional device ID/name
+    /// If None, uses the default input device
+    pub device_id: Option<String>,
+    /// Sample rate in Hz
+    pub sample_rate: u32,
+    /// Number of channels (1 = mono, 2 = stereo)
+    pub channels: u32,
+}
+
+impl Default for AudioCaptureConfig {
+    fn default() -> Self {
+        Self {
+            device_id: None,
+            sample_rate: 48000,
+            channels: 2,
+        }
+    }
+}
+
 /// Audio input device information
 ///
 /// Shares same structure as AudioDevice from audio_output module for consistency.

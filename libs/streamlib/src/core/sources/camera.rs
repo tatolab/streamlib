@@ -12,6 +12,26 @@ use serde_json::json;
 // Re-import Result type for trait methods
 type Result<T> = std::result::Result<T, crate::StreamError>;
 
+/// Configuration for camera processors
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CameraConfig {
+    /// Optional device ID to use (e.g., "0x1234" on macOS)
+    /// If None, uses the default camera
+    pub device_id: Option<String>,
+}
+
+impl Default for CameraConfig {
+    fn default() -> Self {
+        Self { device_id: None }
+    }
+}
+
+impl From<()> for CameraConfig {
+    fn from(_: ()) -> Self {
+        Self::default()
+    }
+}
+
 /// Information about an available camera device
 #[derive(Debug, Clone)]
 pub struct CameraDevice {
@@ -116,7 +136,7 @@ mod tests {
     struct MockCameraProcessor;
 
     impl StreamProcessor for MockCameraProcessor {
-        type Config = crate::core::config::EmptyConfig;
+        type Config = crate::core::EmptyConfig;
 
         fn from_config(_config: Self::Config) -> Result<Self> {
             Ok(Self)

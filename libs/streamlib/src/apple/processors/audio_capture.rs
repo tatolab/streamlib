@@ -8,8 +8,8 @@ use crate::core::{
     AudioFrame, Result, StreamError, StreamProcessor, StreamOutput, ProcessorDescriptor,
     PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSource, ElementType,
-    SchedulingConfig, SchedulingMode, ClockSource};
+use crate::core::traits::{StreamElement, StreamSource, ElementType};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -274,7 +274,7 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
 }
 
 impl StreamProcessor for AppleAudioCaptureProcessor {
-    type Config = crate::core::config::AudioCaptureConfig;
+    type Config = crate::core::AudioCaptureConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         // Parse device_id string to usize if provided
@@ -378,7 +378,7 @@ impl StreamElement for AppleAudioCaptureProcessor {
 // StreamSource implementation - GStreamer-inspired source trait
 impl StreamSource for AppleAudioCaptureProcessor {
     type Output = AudioFrame;
-    type Config = crate::core::config::AudioCaptureConfig;
+    type Config = crate::core::AudioCaptureConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         // Parse device_id string to usize if provided
@@ -427,6 +427,7 @@ impl StreamSource for AppleAudioCaptureProcessor {
         // Audio capture is callback-driven - CoreAudio/cpal callback triggers processing
         SchedulingConfig {
             mode: SchedulingMode::Callback,
+            priority: ThreadPriority::RealTime,  // Audio I/O requires real-time priority
             clock: ClockSource::Audio, // Audio hardware provides timing
             rate_hz: None, // Not applicable for callback mode
             provide_clock: false, // Capture doesn't provide pipeline clock

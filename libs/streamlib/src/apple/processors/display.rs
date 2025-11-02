@@ -145,7 +145,7 @@ impl DisplayProcessor for AppleDisplayProcessor {
 }
 
 impl StreamProcessor for AppleDisplayProcessor {
-    type Config = crate::core::config::DisplayConfig;
+    type Config = crate::core::DisplayConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         Self::with_size(config.width, config.height)
@@ -490,17 +490,17 @@ impl StreamProcessor for AppleDisplayProcessor {
         self
     }
 
-    fn take_output_consumer(&mut self, _port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+    fn take_output_consumer(&mut self, _port_name: &str) -> Option<crate::core::PortConsumer> {
         // Display has no video outputs - it's a sink processor
         None
     }
 
-    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::stream_processor::PortConsumer) -> bool {
-        use crate::core::stream_processor::PortProvider;
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::PortConsumer) -> bool {
+        use crate::core::PortProvider;
 
         // Extract the VideoFrame consumer from the enum
         let video_consumer = match consumer {
-            crate::core::stream_processor::PortConsumer::Video(c) => c,
+            crate::core::PortConsumer::Video(c) => c,
             _ => return false,  // Wrong type - type safety via enum pattern match
         };
 
@@ -514,7 +514,7 @@ impl StreamProcessor for AppleDisplayProcessor {
 }
 
 // Implement PortProvider for dynamic port access (used by runtime for connection wiring)
-impl crate::core::stream_processor::PortProvider for AppleDisplayProcessor {
+impl crate::core::PortProvider for AppleDisplayProcessor {
     fn with_video_input_mut<F, R>(&mut self, name: &str, f: F) -> Option<R>
     where
         F: FnOnce(&mut crate::core::StreamInput<crate::core::VideoFrame>) -> R,

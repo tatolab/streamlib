@@ -10,7 +10,8 @@ use crate::core::{
     Result, StreamError, VideoFrame, StreamProcessor, GpuContext,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSink, ElementType, ClockConfig, ClockType, SyncMode};
+use crate::core::traits::{StreamElement, StreamSink, ElementType};
+use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
 use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread};
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
@@ -191,7 +192,7 @@ impl StreamElement for AppleDisplayProcessor {
 
 impl StreamSink for AppleDisplayProcessor {
     type Input = VideoFrame;
-    type Config = crate::core::config::DisplayConfig;
+    type Config = crate::core::DisplayConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         let mut processor = Self::with_size(config.width, config.height)?;

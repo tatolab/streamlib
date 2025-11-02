@@ -300,7 +300,7 @@ impl AudioOutputProcessorTrait for AppleAudioOutputProcessor {
 }
 
 impl StreamProcessor for AppleAudioOutputProcessor {
-    type Config = crate::core::config::AudioOutputConfig;
+    type Config = crate::core::AudioOutputConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         // Parse device_id string to usize if provided
@@ -362,15 +362,15 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         self
     }
 
-    fn take_output_consumer(&mut self, _port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+    fn take_output_consumer(&mut self, _port_name: &str) -> Option<crate::core::PortConsumer> {
         // AppleAudioOutputProcessor has no outputs - it's a sink processor
         None
     }
 
-    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::stream_processor::PortConsumer) -> bool {
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::PortConsumer) -> bool {
         // Extract the AudioFrame consumer from the enum
         let audio_consumer = match consumer {
-            crate::core::stream_processor::PortConsumer::Audio(c) => c,
+            crate::core::PortConsumer::Audio(c) => c,
             _ => return false,  // Wrong type - type safety via enum pattern match
         };
 

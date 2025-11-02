@@ -35,8 +35,9 @@ pub use audio_effect::{
 pub use audio_mixer::{
     AudioMixerProcessor, MixingStrategy,
     AudioMixerInputPorts, AudioMixerOutputPorts,
+    AudioMixerConfig,
 };
-pub use clap_effect::{ClapEffectProcessor, ClapScanner, ClapPluginInfo};
+pub use clap_effect::{ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig};
 pub use parameter_modulation::{ParameterModulator, LfoWaveform};
 pub use parameter_automation::ParameterAutomation;
 pub use simple_passthrough::SimplePassthroughProcessor;
@@ -44,4 +45,5 @@ pub use simple_passthrough::SimplePassthroughProcessor;
 #[cfg(feature = "debug-overlay")]
 pub use performance_overlay::{
     PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+    PerformanceOverlayConfig,
 };

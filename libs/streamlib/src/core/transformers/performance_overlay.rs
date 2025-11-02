@@ -13,6 +13,12 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Configuration for performance overlay processor (debug-overlay feature)
+#[derive(Debug, Clone, Default)]
+pub struct PerformanceOverlayConfig {
+    // No configuration needed - overlay automatically displays performance metrics
+}
+
 #[cfg(feature = "debug-overlay")]
 use vello::{
     kurbo::{Affine, Line, Rect},
@@ -831,7 +837,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 #[cfg(feature = "debug-overlay")]
 impl StreamProcessor for PerformanceOverlayProcessor {
-    type Config = crate::core::config::PerformanceOverlayConfig;
+    type Config = crate::core::PerformanceOverlayConfig;
 
     fn from_config(_config: Self::Config) -> Result<Self> {
         Self::new()

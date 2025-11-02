@@ -16,7 +16,7 @@
 //! Any type implementing `StreamElement` automatically gets `DynStreamElement` for free.
 
 use crate::core::{RuntimeContext, Result};
-use crate::core::stream_processor::PortConsumer;
+use crate::core::traits::PortConsumer;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::runtime::WakeupEvent;
 use crate::core::traits::ElementType;

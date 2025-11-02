@@ -1013,13 +1013,13 @@ pub static SCHEMA_AUDIO_FRAME: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     )
 });
 
-/// Standard schema for generic data messages
+/// Standard schema for generic data frames
 ///
 /// For custom data types that don't fit VideoFrame or AudioBuffer.
 pub static SCHEMA_DATA_MESSAGE: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     Arc::new(
         Schema::new(
-            "DataMessage",
+            "DataFrame",
             SemanticVersion::new(1, 0, 0),
             vec![
                 Field::new("buffer", FieldType::Buffer {

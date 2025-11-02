@@ -55,25 +55,25 @@ pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
 
 // Re-export core types at crate root (but not the runtime module itself)
 pub use core::{
-    Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock,
-    StreamError, Result, TickBroadcaster, GpuContext,
-    VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue,
+    Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock,
+    StreamError, Result, GpuContext,
+    VideoFrame, AudioFrame, AudioFormat, DataFrame, MetadataValue,
     StreamProcessor, StreamOutput, StreamInput, PortType, PortMessage,
+    EmptyConfig,  // Generic config for processors without configuration
     // Note: CameraProcessor, DisplayProcessor, and AudioProcessor traits are in core,
     // but we'll re-export platform implementations below
-    CameraDevice, CameraOutputPorts,
-    WindowId, DisplayInputPorts,
-    AudioDevice, AudioOutputInputPorts,
-    AudioInputDevice, AudioCaptureOutputPorts,
+    CameraDevice, CameraOutputPorts, CameraConfig,
+    WindowId, DisplayInputPorts, DisplayConfig,
+    AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
+    AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
     AudioEffectProcessor, ParameterInfo, PluginInfo,
     AudioEffectInputPorts, AudioEffectOutputPorts,
-    ClapEffectProcessor, ClapScanner, ClapPluginInfo,
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    TestToneGenerator, TestToneGeneratorOutputPorts,
+    TestToneGenerator, TestToneGeneratorOutputPorts, TestToneConfig,
     AudioMixerProcessor, MixingStrategy,
-    AudioMixerInputPorts, AudioMixerOutputPorts,
-    ShaderId, // from runtime, but we'll override StreamRuntime below
+    AudioMixerInputPorts, AudioMixerOutputPorts, AudioMixerConfig,
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
     AudioRequirements, TimerRequirements,
@@ -82,7 +82,7 @@ pub use core::{
     // Sync utilities
     timestamp_delta_ms, video_audio_delta_ms,
     are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
-    MultimodalBuffer, DEFAULT_SYNC_TOLERANCE_MS,
+    DEFAULT_SYNC_TOLERANCE_MS,
     ProcessorRegistry, ProcessorRegistration,
     DescriptorProvider, global_registry,
     register_processor,

@@ -18,12 +18,12 @@ pub type ProcessorId = String;
 /// # Example
 ///
 /// ```ignore
-/// let camera = runtime.add_processor::<CameraProcessor>(())?;
-/// let display = runtime.add_processor::<DisplayProcessor>(())?;
+/// let camera = runtime.add_processor::<CameraProcessor>()?;
+/// let display = runtime.add_processor::<DisplayProcessor>()?;
 ///
 /// runtime.connect(
-///     camera.output_port::<VideoFrame>("video")?,
-///     display.input_port::<VideoFrame>("video")?
+///     camera.output_port::<VideoFrame>("video"),
+///     display.input_port::<VideoFrame>("video")
 /// )?;
 /// ```
 #[derive(Debug, Clone)]
@@ -56,7 +56,7 @@ impl ProcessorHandle {
     /// # Example
     ///
     /// ```ignore
-    /// let video_out = camera.output_port::<VideoFrame>("video")?;
+    /// let video_out = camera.output_port::<VideoFrame>("video");
     /// ```
     pub fn output_port<T: PortMessage>(&self, name: &str) -> OutputPortRef<T> {
         OutputPortRef {
@@ -79,7 +79,7 @@ impl ProcessorHandle {
     /// # Example
     ///
     /// ```ignore
-    /// let video_in = display.input_port::<VideoFrame>("video")?;
+    /// let video_in = display.input_port::<VideoFrame>("video");
     /// ```
     pub fn input_port<T: PortMessage>(&self, name: &str) -> InputPortRef<T> {
         InputPortRef {

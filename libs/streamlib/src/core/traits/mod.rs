@@ -53,26 +53,29 @@ pub mod sink;
 pub mod transform;
 pub mod dyn_element;
 
+// Legacy StreamProcessor trait hierarchy (being phased out)
+pub mod config;
+pub mod port_consumer;
+pub mod port_provider;
+pub mod stream_processor;
+pub mod dyn_processor;
+
 // Re-export core traits and types
 pub use element::{
     StreamElement,
     ElementType,
 };
 
-pub use source::{
-    StreamSource,
-    SchedulingConfig,
-    SchedulingMode,
-    ClockSource,
-};
-
-pub use sink::{
-    StreamSink,
-    ClockConfig,
-    ClockType,
-    SyncMode,
-};
+pub use source::StreamSource;
+pub use sink::StreamSink;
 
 pub use transform::StreamTransform;
 
 pub use dyn_element::DynStreamElement;
+
+// Re-export legacy StreamProcessor traits
+pub use config::EmptyConfig;
+pub use port_consumer::PortConsumer;
+pub use port_provider::PortProvider;
+pub use stream_processor::StreamProcessor;
+pub use dyn_processor::DynStreamProcessor;

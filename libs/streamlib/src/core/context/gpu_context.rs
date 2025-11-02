@@ -6,7 +6,7 @@
 //!
 //! This is equivalent to Python streamlib's `gpu_ctx`.
 
-use super::{Result, StreamError};
+use crate::core::{Result, StreamError};
 use std::sync::Arc;
 use wgpu;
 

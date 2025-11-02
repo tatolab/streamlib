@@ -59,93 +59,9 @@
 use super::{StreamElement, ElementType};
 use crate::core::error::Result;
 use crate::core::schema::ProcessorDescriptor;
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-
-/// Configuration for source scheduling
-///
-/// Determines how the runtime executes this source's generate() method.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SchedulingConfig {
-    /// Scheduling mode
-    pub mode: SchedulingMode,
-
-    /// Clock source for synchronization
-    pub clock: ClockSource,
-
-    /// Rate in Hz (for loop mode)
-    ///
-    /// Example: 23.44 Hz for audio at 48kHz/2048 buffer
-    pub rate_hz: Option<f64>,
-
-    /// Whether this source provides the clock for the pipeline
-    ///
-    /// Typically true for audio output (CoreAudio callback drives timing)
-    pub provide_clock: bool,
-}
-
-impl Default for SchedulingConfig {
-    fn default() -> Self {
-        Self {
-            mode: SchedulingMode::Loop,
-            clock: ClockSource::Software,
-            rate_hz: Some(60.0), // Default 60 Hz
-            provide_clock: false,
-        }
-    }
-}
-
-/// Scheduling mode for sources
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SchedulingMode {
-    /// Continuous loop at specified rate
-    ///
-    /// Runtime spawns thread calling generate() in loop.
-    /// Used by: TestToneGenerator, pattern generators
-    Loop,
-
-    /// Hardware callback-driven
-    ///
-    /// Hardware (CoreAudio, V4L2) calls generate() when data ready.
-    /// Used by: Camera, microphone (hardware determines timing)
-    Callback,
-
-    /// Reactive to external events
-    ///
-    /// Source waits for network packets, file I/O, etc.
-    /// Used by: RTP receiver, file reader
-    Reactive,
-
-    /// Pull-based (on-demand)
-    ///
-    /// Only generates when downstream requests data.
-    /// Used by: Image loader, database query
-    Pull,
-}
-
-/// Clock source for synchronization
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClockSource {
-    /// Audio hardware clock (sample-accurate)
-    ///
-    /// Provided by CoreAudio, ALSA, WASAPI
-    Audio,
-
-    /// Video vsync clock (frame-accurate)
-    ///
-    /// Provided by CVDisplayLink, DRM vsync
-    Vsync,
-
-    /// Software clock (CPU timestamps)
-    ///
-    /// Used when no hardware clock available
-    Software,
-
-    /// Custom clock (user-provided)
-    ///
-    /// For specialized timing (genlock, PTP)
-    Custom(String),
-}
 
 /// Trait for data source processors
 ///
@@ -405,6 +321,7 @@ mod tests {
                 clock: ClockSource::Audio,
                 rate_hz: Some(23.44),
                 provide_clock: false,
+                priority: crate::core::scheduling::ThreadPriority::Normal,
             }
         }
 

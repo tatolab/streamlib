@@ -66,7 +66,32 @@ use super::audio_effect::{
 
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use serde::{Serialize, Deserialize};
+
+/// Configuration for CLAP effect processors
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClapEffectConfig {
+    /// Path to the CLAP plugin file
+    pub plugin_path: PathBuf,
+    /// Optional plugin name (if bundle contains multiple)
+    pub plugin_name: Option<String>,
+    /// Sample rate for audio processing
+    pub sample_rate: u32,
+    /// Buffer size for audio processing
+    pub buffer_size: usize,
+}
+
+impl Default for ClapEffectConfig {
+    fn default() -> Self {
+        Self {
+            plugin_path: PathBuf::new(), // Empty path - must be set by user
+            plugin_name: None,
+            sample_rate: 48000,  // Standard audio sample rate
+            buffer_size: 2048,   // Standard CLAP buffer size
+        }
+    }
+}
 
 /// CLAP plugin effect processor
 ///
@@ -881,7 +906,7 @@ impl StreamElement for ClapEffectProcessor {
 // ============================================================
 
 impl StreamTransform for ClapEffectProcessor {
-    type Config = crate::core::config::ClapEffectConfig;
+    type Config = crate::core::ClapEffectConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         Self::load_internal(
@@ -938,7 +963,7 @@ impl StreamTransform for ClapEffectProcessor {
 }
 
 impl StreamProcessor for ClapEffectProcessor {
-    type Config = crate::core::config::ClapEffectConfig;
+    type Config = crate::core::ClapEffectConfig;
 
     fn from_config(config: Self::Config) -> crate::core::Result<Self> {
         Self::load_internal(
@@ -997,7 +1022,7 @@ impl StreamProcessor for ClapEffectProcessor {
         Ok(())
     }
 
-    fn on_start(&mut self, _gpu_context: &crate::core::gpu_context::GpuContext) -> Result<()> {
+    fn on_start(&mut self, _gpu_context: &crate::core::context::GpuContext) -> Result<()> {
         // Activate the plugin with the configured sample rate and buffer size
         if !self.is_activated {
             self.activate(self.sample_rate, self.buffer_size)?;
@@ -1011,21 +1036,21 @@ impl StreamProcessor for ClapEffectProcessor {
         self
     }
 
-    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
+    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::PortConsumer> {
         // ClapEffectProcessor has one audio output port
         match port_name {
             "audio" => {
                 self.output_ports.audio.consumer_holder().lock().take()
-                    .map(crate::core::stream_processor::PortConsumer::Audio)
+                    .map(crate::core::PortConsumer::Audio)
             }
             _ => None,
         }
     }
 
-    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::stream_processor::PortConsumer) -> bool {
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::PortConsumer) -> bool {
         // Extract the AudioFrame consumer from the enum
         let audio_consumer = match consumer {
-            crate::core::stream_processor::PortConsumer::Audio(c) => c,
+            crate::core::PortConsumer::Audio(c) => c,
             _ => return false,  // Wrong type - type safety via enum pattern match
         };
 

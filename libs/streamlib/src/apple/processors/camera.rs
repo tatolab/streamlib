@@ -7,7 +7,8 @@ use crate::core::{
     VideoFrame, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSource, ElementType, SchedulingConfig, SchedulingMode, ClockSource};
+use crate::core::traits::{StreamElement, StreamSource, ElementType};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::ffi::c_void;
@@ -420,7 +421,7 @@ impl CameraProcessor for AppleCameraProcessor {
 }
 
 impl StreamProcessor for AppleCameraProcessor {
-    type Config = crate::core::config::CameraConfig;
+    type Config = crate::core::CameraConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         match config.device_id {
@@ -575,25 +576,25 @@ impl StreamProcessor for AppleCameraProcessor {
         }
     }
 
-    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
-        use crate::core::stream_processor::PortProvider;
+    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::PortConsumer> {
+        use crate::core::PortProvider;
 
         // Use PortProvider to access the video output port
         self.with_video_output_mut(port_name, |output| {
             output.consumer_holder().lock().take()
         })
         .flatten()
-        .map(crate::core::stream_processor::PortConsumer::Video)
+        .map(crate::core::PortConsumer::Video)
     }
 
-    fn connect_input_consumer(&mut self, _port_name: &str, _consumer: crate::core::stream_processor::PortConsumer) -> bool {
+    fn connect_input_consumer(&mut self, _port_name: &str, _consumer: crate::core::PortConsumer) -> bool {
         // Camera has no video inputs - it's a source processor
         false
     }
 }
 
 // Implement PortProvider for dynamic port access (used by runtime for connection wiring)
-impl crate::core::stream_processor::PortProvider for AppleCameraProcessor {
+impl crate::core::PortProvider for AppleCameraProcessor {
     fn with_video_output_mut<F, R>(&mut self, name: &str, f: F) -> Option<R>
     where
         F: FnOnce(&mut crate::core::StreamOutput<crate::core::VideoFrame>) -> R,
@@ -653,7 +654,7 @@ impl StreamElement for AppleCameraProcessor {
 // StreamSource implementation - GStreamer-inspired source trait
 impl StreamSource for AppleCameraProcessor {
     type Output = VideoFrame;
-    type Config = crate::core::config::CameraConfig;
+    type Config = crate::core::CameraConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         match config.device_id {
@@ -808,6 +809,7 @@ impl StreamSource for AppleCameraProcessor {
         // Camera is callback-driven - AVFoundation callback triggers processing
         SchedulingConfig {
             mode: SchedulingMode::Callback,
+            priority: ThreadPriority::High,  // Camera capture needs high priority
             clock: ClockSource::Software, // Camera generates frames on its own timing
             rate_hz: None, // Not applicable for callback mode
             provide_clock: false, // Camera doesn't provide pipeline clock

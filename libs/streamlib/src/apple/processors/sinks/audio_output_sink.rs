@@ -8,7 +8,8 @@ use crate::core::{
     AudioFrame, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSink, ElementType, ClockConfig, ClockType, SyncMode};
+use crate::core::traits::{StreamElement, StreamSink, ElementType};
+use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -304,7 +305,7 @@ impl StreamElement for AppleAudioOutputProcessor {
 
 impl StreamSink for AppleAudioOutputProcessor {
     type Input = AudioFrame;
-    type Config = crate::core::config::AudioOutputConfig;
+    type Config = crate::core::AudioOutputConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         // Parse device_id string to usize if provided

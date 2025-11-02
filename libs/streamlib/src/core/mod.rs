@@ -4,20 +4,16 @@
 //! real-time video processing system. Platform-specific implementations
 //! (Metal, Vulkan) are provided by separate crates.
 
-pub mod clock;
-pub mod config;
+pub mod clocks;
+pub mod context;
 pub mod error;
-pub mod events;
-pub mod gpu_context;
 pub mod handles;
 pub mod messages;
 pub mod registry;
-pub mod runtime_context;
-pub mod schema;
-pub mod stream_processor;
-pub mod ports;
-pub mod processors;
 pub mod runtime;
+pub mod schema;
+pub mod scheduling;
+pub mod ports;
 pub mod sources;
 pub mod sinks;
 pub mod transformers;
@@ -27,41 +23,42 @@ pub mod topology;
 pub mod traits;
 
 // Re-export core types
-pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
-pub use config::{
-    EmptyConfig, CameraConfig, DisplayConfig, AudioCaptureConfig, AudioOutputConfig,
-    ClapEffectConfig, TestToneConfig, AudioMixerConfig,
-};
+pub use clocks::{Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock};
+pub use context::{GpuContext, RuntimeContext};
 pub use error::{StreamError, Result};
-pub use events::TickBroadcaster;
-pub use gpu_context::GpuContext;
-pub use runtime_context::RuntimeContext;
+pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
-pub use messages::{VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue};
-pub use stream_processor::StreamProcessor;
+pub use messages::{VideoFrame, AudioFrame, AudioFormat, DataFrame, MetadataValue};
+pub use traits::{StreamProcessor, EmptyConfig, DynStreamProcessor, PortConsumer, PortProvider};
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
 };
-pub use processors::{
-    CameraProcessor, CameraDevice, CameraOutputPorts,
-    DisplayProcessor, WindowId, DisplayInputPorts,
-    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts,
-    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts,
+
+// Re-export processor types and their configs from sources/sinks/transformers
+pub use sources::{
+    CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig,
+    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
+    TestToneGenerator, TestToneGeneratorOutputPorts, TestToneConfig,
+};
+pub use sinks::{
+    DisplayProcessor, WindowId, DisplayInputPorts, DisplayConfig,
+    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
+};
+pub use transformers::{
     AudioEffectProcessor, ParameterInfo, PluginInfo,
     AudioEffectInputPorts, AudioEffectOutputPorts,
-    ClapEffectProcessor, ClapScanner, ClapPluginInfo,
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    TestToneGenerator, TestToneGeneratorOutputPorts,
     AudioMixerProcessor, MixingStrategy,
-    AudioMixerInputPorts, AudioMixerOutputPorts,
+    AudioMixerInputPorts, AudioMixerOutputPorts, AudioMixerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]
-pub use processors::{
+pub use transformers::{
     PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+    PerformanceOverlayConfig,
 };
-pub use runtime::{StreamRuntime, ShaderId, WakeupEvent};
 pub use schema::{
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
@@ -74,7 +71,7 @@ pub use schema::{
 pub use sync::{
     timestamp_delta_ms, video_audio_delta_ms,
     are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
-    MultimodalBuffer, SampleAndHoldBuffer, DEFAULT_SYNC_TOLERANCE_MS,
+    DEFAULT_SYNC_TOLERANCE_MS,
 };
 pub use registry::{
     ProcessorRegistry, ProcessorRegistration,
@@ -86,10 +83,12 @@ pub use registry::{
 };
 pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
+pub use scheduling::{
+    SchedulingConfig, SchedulingMode, ThreadPriority,
+    ClockSource, ClockConfig, ClockType, SyncMode,
+};
 pub use traits::{
     StreamElement, ElementType,
     StreamSource, StreamSink, StreamTransform,
     DynStreamElement,
-    SchedulingConfig, SchedulingMode, ClockSource,
-    ClockConfig, ClockType, SyncMode,
 };

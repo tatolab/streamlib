@@ -5,11 +5,36 @@
 //!
 //! This is a **source processor** - it generates data without consuming inputs.
 
-use crate::core::traits::{StreamElement, StreamSource, ElementType, SchedulingConfig, SchedulingMode, ClockSource};
+use crate::core::traits::{StreamElement, StreamSource, ElementType};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use crate::core::{AudioFrame, Result, StreamOutput, StreamProcessor, GpuContext};
 use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements, TimerRequirements, SCHEMA_AUDIO_FRAME};
-use crate::core::config::TestToneConfig;
 use std::f64::consts::PI;
+use serde::{Serialize, Deserialize};
+
+/// Configuration for test tone generator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestToneConfig {
+    /// Frequency in Hz
+    pub frequency: f64,
+    /// Amplitude (0.0 to 1.0)
+    pub amplitude: f64,
+    /// Sample rate in Hz
+    pub sample_rate: u32,
+    /// Optional timer group ID for synchronized timing with other processors
+    pub timer_group_id: Option<String>,
+}
+
+impl Default for TestToneConfig {
+    fn default() -> Self {
+        Self {
+            frequency: 440.0,
+            amplitude: 0.5,
+            sample_rate: 48000,
+            timer_group_id: None,
+        }
+    }
+}
 
 /// Output ports for TestToneGenerator
 pub struct TestToneGeneratorOutputPorts {
@@ -234,6 +259,7 @@ impl StreamSource for TestToneGenerator {
     fn scheduling_config(&self) -> SchedulingConfig {
         SchedulingConfig {
             mode: SchedulingMode::Loop,
+            priority: ThreadPriority::High,  // Audio processing requires high priority
             clock: ClockSource::Audio,
             rate_hz: Some(self.timer_rate_hz()),
             provide_clock: false,

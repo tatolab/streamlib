@@ -3,7 +3,7 @@
 //! Provides access to shared runtime resources like GPU context, clocks,
 //! and potentially allocators, shared buffers, etc. in the future.
 
-use crate::core::GpuContext;
+use super::GpuContext;
 use std::sync::Arc;
 
 /// Runtime context passed to elements during initialization

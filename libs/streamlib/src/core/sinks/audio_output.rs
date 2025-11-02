@@ -27,6 +27,20 @@
 
 use crate::core::{StreamProcessor, StreamInput, AudioFrame, Result};
 
+/// Configuration for audio output processors
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioOutputConfig {
+    /// Optional device ID/name
+    /// If None, uses the default output device
+    pub device_id: Option<String>,
+}
+
+impl Default for AudioOutputConfig {
+    fn default() -> Self {
+        Self { device_id: None }
+    }
+}
+
 /// Audio output device information
 #[derive(Debug, Clone)]
 pub struct AudioDevice {
