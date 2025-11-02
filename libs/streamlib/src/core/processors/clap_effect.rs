@@ -856,7 +856,7 @@ impl StreamElement for ClapEffectProcessor {
         }]
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
         // Activate the plugin with the configured sample rate and buffer size
         if !self.is_activated {
             self.activate(self.sample_rate, self.buffer_size)?;

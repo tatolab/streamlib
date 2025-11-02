@@ -701,17 +701,17 @@ impl StreamRuntime {
 
         // 7. Clone variables for thread
         let id_for_thread = processor_id.clone();
-        let processor_gpu_context = gpu_context.clone();
+        let runtime_context = crate::core::RuntimeContext::new(gpu_context.clone());
         let processor_for_thread = Arc::clone(&processor_arc);
 
         // 8. Spawn OS thread for this processor (on_start called within thread)
         let handle = std::thread::spawn(move || {
             tracing::info!("[{}] Thread started", id_for_thread);
 
-            // Call on_start lifecycle hook with GPU context
+            // Call on_start lifecycle hook with runtime context
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_start_dyn(&processor_gpu_context) {
+                if let Err(e) = processor.on_start_dyn(&runtime_context) {
                     tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                     return;
                 }
@@ -1587,8 +1587,8 @@ impl StreamRuntime {
                 }
             }
 
-            // Clone GPU context for this processor thread
-            let processor_gpu_context = gpu_context.clone();
+            // Create runtime context for this processor thread
+            let runtime_context = crate::core::RuntimeContext::new(gpu_context.clone());
 
             // Clone processor ID for thread logging
             let id_for_thread = processor_id.clone();
@@ -1600,10 +1600,10 @@ impl StreamRuntime {
             let handle = std::thread::spawn(move || {
                 tracing::info!("[{}] Thread started", id_for_thread);
 
-                // Call on_start lifecycle hook with GPU context
+                // Call on_start lifecycle hook with runtime context
                 {
                     let mut processor = processor_for_thread.lock();
-                    if let Err(e) = processor.on_start_dyn(&processor_gpu_context) {
+                    if let Err(e) = processor.on_start_dyn(&runtime_context) {
                         tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                         return;
                     }

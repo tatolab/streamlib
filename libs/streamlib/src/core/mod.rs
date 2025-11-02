@@ -13,6 +13,7 @@ pub mod gpu_context;
 pub mod handles;
 pub mod messages;
 pub mod registry;
+pub mod runtime_context;
 pub mod schema;
 pub mod stream_processor;
 pub mod ports;
@@ -33,6 +34,7 @@ pub use config::{
 pub use error::{StreamError, Result};
 pub use events::TickBroadcaster;
 pub use gpu_context::GpuContext;
+pub use runtime_context::RuntimeContext;
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use messages::{VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue};
 pub use stream_processor::StreamProcessor;

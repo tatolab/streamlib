@@ -362,7 +362,7 @@ impl StreamElement for AppleAudioCaptureProcessor {
         }]
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
         tracing::info!("AudioCapture {}: Starting ({}Hz, {} channels)",
             self.device_info.name, self.sample_rate, self.channels);
         Ok(())

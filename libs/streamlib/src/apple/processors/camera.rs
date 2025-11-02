@@ -639,7 +639,7 @@ impl StreamElement for AppleCameraProcessor {
         }]
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
         tracing::info!("Camera {}: Starting (AVFoundation session already running)", self.camera_name);
         Ok(())
     }

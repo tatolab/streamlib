@@ -50,6 +50,7 @@
 
 use crate::core::schema::{ProcessorDescriptor, PortDescriptor};
 use crate::core::error::Result;
+use crate::core::RuntimeContext;
 
 /// Type of stream element
 ///
@@ -163,7 +164,18 @@ pub trait StreamElement: Send + 'static {
     /// Called when the runtime starts. Allocate resources, verify connections,
     /// and prepare for processing.
     ///
+    /// The runtime context provides access to shared resources:
+    /// - GPU context (device + queue)
+    /// - Future: clocks, allocators, buffer pools, etc.
+    ///
+    /// Elements can store whatever they need from the context in their fields.
+    /// This follows GStreamer's GstContext pattern.
+    ///
     /// Default implementation does nothing (stateless processors).
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - Runtime context providing access to shared resources
     ///
     /// # Errors
     ///
@@ -175,12 +187,16 @@ pub trait StreamElement: Send + 'static {
     /// # Example
     ///
     /// ```rust,ignore
-    /// fn start(&mut self) -> Result<()> {
+    /// fn start(&mut self, ctx: &RuntimeContext) -> Result<()> {
+    ///     // Store GPU context for later use
+    ///     self.gpu_context = Some(ctx.gpu.clone());
+    ///
+    ///     // Initialize hardware
     ///     self.device = open_camera_device()?;
     ///     Ok(())
     /// }
     /// ```
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
 

@@ -278,7 +278,7 @@ impl StreamElement for AppleAudioOutputProcessor {
         }]
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
         tracing::info!(
             "AudioOutput {}: Starting ({} Hz, {} channels)",
             self.device_name,

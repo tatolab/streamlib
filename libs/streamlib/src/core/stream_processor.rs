@@ -1,4 +1,5 @@
 use super::gpu_context::GpuContext;
+use super::runtime_context::RuntimeContext;
 use super::schema::ProcessorDescriptor;
 use super::ports::{StreamInput, StreamOutput};
 use super::{VideoFrame, AudioFrame};
@@ -31,7 +32,7 @@ pub trait DynStreamProcessor: Send + 'static {
     fn process_dyn(&mut self) -> Result<()>;
 
     /// Called when the processor starts - lifecycle hook
-    fn on_start_dyn(&mut self, gpu_context: &GpuContext) -> Result<()>;
+    fn on_start_dyn(&mut self, ctx: &RuntimeContext) -> Result<()>;
 
     /// Called when the processor stops - lifecycle hook
     fn on_stop_dyn(&mut self) -> Result<()>;
@@ -442,8 +443,8 @@ impl<T: StreamProcessor> DynStreamProcessor for T {
         self.process()
     }
 
-    fn on_start_dyn(&mut self, gpu_context: &GpuContext) -> Result<()> {
-        self.on_start(gpu_context)
+    fn on_start_dyn(&mut self, ctx: &RuntimeContext) -> Result<()> {
+        self.on_start(&ctx.gpu)
     }
 
     fn on_stop_dyn(&mut self) -> Result<()> {

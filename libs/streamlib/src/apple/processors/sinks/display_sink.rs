@@ -138,9 +138,10 @@ impl StreamElement for AppleDisplayProcessor {
         }]
     }
 
-    fn start(&mut self) -> Result<()> {
-        // Note: GPU context initialization happens via separate method
-        // This is called by runtime after GPU context is available
+    fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+        // Store GPU context for rendering
+        self.gpu_context = Some(ctx.gpu.clone());
+
         tracing::info!(
             "Display {}: Starting ({}x{}, title=\"{}\")",
             self.window_id.0,

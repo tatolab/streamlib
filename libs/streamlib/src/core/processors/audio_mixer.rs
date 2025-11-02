@@ -469,7 +469,7 @@ impl StreamElement for AudioMixerProcessor {
         }]
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
         tracing::info!(
             "AudioMixer: Starting ({} inputs, {} Hz, {} samples buffer, strategy: {:?})",
             self.num_inputs,
