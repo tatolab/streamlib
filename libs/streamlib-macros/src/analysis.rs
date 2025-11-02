@@ -240,6 +240,15 @@ pub fn is_audio_frame_type(ty: &Type) -> bool {
 }
 
 /// Check if a type is VideoFrame
+pub fn is_video_frame_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return segment.ident == "VideoFrame";
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

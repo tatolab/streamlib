@@ -4,13 +4,14 @@
 //! Each processor has an associated Config type that is passed to its constructor.
 
 use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 
 /// Empty configuration for processors that don't need configuration
 #[derive(Debug, Clone, Default)]
 pub struct EmptyConfig;
 
 /// Configuration for camera processors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CameraConfig {
     /// Optional device ID to use (e.g., "0x1234" on macOS)
     /// If None, uses the default camera
@@ -30,7 +31,7 @@ impl From<()> for CameraConfig {
 }
 
 /// Configuration for display processors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DisplayConfig {
     /// Window width in pixels
     pub width: u32,
@@ -51,7 +52,7 @@ impl Default for DisplayConfig {
 }
 
 /// Configuration for audio capture processors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioCaptureConfig {
     /// Optional device ID/name
     /// If None, uses the default input device
@@ -73,7 +74,7 @@ impl Default for AudioCaptureConfig {
 }
 
 /// Configuration for audio output processors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioOutputConfig {
     /// Optional device ID/name
     /// If None, uses the default output device
@@ -87,7 +88,7 @@ impl Default for AudioOutputConfig {
 }
 
 /// Configuration for CLAP effect processors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClapEffectConfig {
     /// Path to the CLAP plugin file
     pub plugin_path: PathBuf,
@@ -111,7 +112,7 @@ impl Default for ClapEffectConfig {
 }
 
 /// Configuration for test tone generator
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestToneConfig {
     /// Frequency in Hz
     pub frequency: f64,
@@ -135,7 +136,7 @@ impl Default for TestToneConfig {
 }
 
 /// Configuration for audio mixer processor
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AudioMixerConfig {
     /// Number of input ports
     pub num_inputs: usize,

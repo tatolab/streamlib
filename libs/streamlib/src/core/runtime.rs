@@ -1781,6 +1781,7 @@ pub struct RuntimeStatus {
 mod tests {
     use super::*;
     use crate::core::stream_processor::StreamProcessor;
+    use crate::core::{schema, ProcessorDescriptor};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[derive(Clone)]
@@ -1810,6 +1811,20 @@ mod tests {
         fn process(&mut self) -> Result<()> {
             self.count.fetch_add(1, Ordering::Relaxed);
             Ok(())
+        }
+
+        fn descriptor() -> Option<ProcessorDescriptor> {
+            Some(
+                ProcessorDescriptor::new(
+                    "CounterProcessor",
+                    "Test processor that increments a counter"
+                )
+                .with_timer_requirements(schema::TimerRequirements {
+                    rate_hz: 60.0, // Run at 60 Hz
+                    group_id: None,
+                    description: Some("Counter test processor".to_string()),
+                })
+            )
         }
 
         fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -1920,6 +1935,20 @@ mod tests {
                 }
 
                 Ok(())
+            }
+
+            fn descriptor() -> Option<ProcessorDescriptor> {
+                Some(
+                    ProcessorDescriptor::new(
+                        "WorkProcessor",
+                        "Test processor that performs CPU work"
+                    )
+                    .with_timer_requirements(schema::TimerRequirements {
+                        rate_hz: 60.0, // Run at 60 Hz
+                        group_id: None,
+                        description: Some("Work test processor".to_string()),
+                    })
+                )
             }
 
             fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

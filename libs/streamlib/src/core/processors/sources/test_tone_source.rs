@@ -1,9 +1,14 @@
-//! Test tone generator processor
+//! Test tone generator source processor
 //!
 //! Generates sine wave test tones for audio testing and validation.
 //! Useful for testing audio output without requiring microphone input.
+//!
+//! This is a **source processor** - it generates data without consuming inputs.
 
-use crate::core::{AudioFrame, Result, StreamProcessor, StreamOutput};
+use crate::core::traits::{StreamElement, StreamSource, ElementType, SchedulingConfig, SchedulingMode, ClockSource};
+use crate::core::{AudioFrame, Result, StreamOutput, StreamProcessor, GpuContext};
+use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements, TimerRequirements, SCHEMA_AUDIO_FRAME};
+use crate::core::config::TestToneConfig;
 use std::f64::consts::PI;
 
 /// Output ports for TestToneGenerator
@@ -12,25 +17,35 @@ pub struct TestToneGeneratorOutputPorts {
     pub audio: StreamOutput<AudioFrame>,
 }
 
-/// Test tone generator processor
+/// Test tone generator source processor
 ///
 /// Generates a continuous sine wave at a specified frequency.
 /// Useful for testing audio output processors and validating the audio pipeline.
 ///
-/// Wakes up periodically via TimerRequirements to generate audio buffers at the optimal rate.
+/// Implements the **StreamSource** trait - runs in a loop generating audio buffers.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use streamlib::TestToneGenerator;
+/// use streamlib::{TestToneGenerator, TestToneConfig, StreamRuntime};
 ///
-/// // Generate 440Hz (A4) tone at 48kHz stereo with 50% volume
-/// let mut tone_gen = TestToneGenerator::new(440.0, 48000, 0.5);
+/// let mut runtime = StreamRuntime::new();
 ///
-/// // Connect to output
-/// runtime.connect(&mut tone_gen.output_ports().audio, &mut speaker.input_ports().audio)?;
+/// let tone = runtime.add_processor_with_config::<TestToneGenerator>(
+///     TestToneConfig {
+///         frequency: 440.0,
+///         amplitude: 0.5,
+///         sample_rate: 48000,
+///         timer_group_id: None,
+///     }
+/// )?;
+///
+/// runtime.start().await?;
 /// ```
 pub struct TestToneGenerator {
+    /// Processor name
+    name: String,
+
     /// Frequency in Hz (e.g., 440.0 for A4)
     frequency: f64,
 
@@ -61,29 +76,18 @@ pub struct TestToneGenerator {
 
 impl TestToneGenerator {
     /// Fixed buffer size for audio generation (2048 samples is standard)
-    const BUFFER_SIZE: usize = 2048;
+    pub const BUFFER_SIZE: usize = 2048;
 
     /// Create new test tone generator
-    ///
-    /// Generates audio buffers at the optimal rate for the given sample rate.
-    /// Uses TimerRequirements to wake up periodically.
     ///
     /// # Arguments
     ///
     /// * `frequency` - Frequency in Hz (e.g., 440.0 for A4 note)
     /// * `sample_rate` - Sample rate in Hz (e.g., 48000)
     /// * `amplitude` - Volume (0.0 to 1.0, where 0.5 is 50% volume)
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use streamlib::TestToneGenerator;
-    ///
-    /// // 440Hz tone at 48kHz, 50% volume
-    /// let gen = TestToneGenerator::new(440.0, 48000, 0.5);
-    /// ```
     pub fn new(frequency: f64, sample_rate: u32, amplitude: f64) -> Self {
         Self {
+            name: "test_tone".to_string(),
             frequency,
             sample_rate,
             channels: 2, // Always stereo for compatibility
@@ -120,8 +124,9 @@ impl TestToneGenerator {
 
     /// Generate next audio buffer
     ///
+    /// Called by the runtime's source loop.
     /// Generates buffer_size samples at the configured frequency and amplitude.
-    pub fn generate_frame(&mut self, timestamp_ns: i64) -> AudioFrame {
+    fn generate_frame(&mut self, timestamp_ns: i64) -> AudioFrame {
         let mut samples = Vec::with_capacity(self.buffer_size * self.channels as usize);
 
         // Phase increment per sample
@@ -160,10 +165,50 @@ impl TestToneGenerator {
     }
 }
 
-impl StreamProcessor for TestToneGenerator {
-    type Config = crate::core::config::TestToneConfig;
+// ============================================================
+// StreamElement Implementation (Base Trait)
+// ============================================================
 
-    fn from_config(config: Self::Config) -> crate::core::Result<Self> {
+impl StreamElement for TestToneGenerator {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn element_type(&self) -> ElementType {
+        ElementType::Source
+    }
+
+    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+        <TestToneGenerator as StreamSource>::descriptor()
+    }
+
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        vec![PortDescriptor {
+            name: "audio".to_string(),
+            schema: SCHEMA_AUDIO_FRAME.clone(),
+            required: true,
+            description: "Generated sine wave audio output".to_string(),
+        }]
+    }
+
+    fn as_source(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn as_source_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+// ============================================================
+// StreamSource Implementation (Specialized Trait)
+// ============================================================
+
+impl StreamSource for TestToneGenerator {
+    type Output = AudioFrame;
+    type Config = TestToneConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
         let mut gen = Self::new(
             config.frequency,
             config.sample_rate,
@@ -173,9 +218,29 @@ impl StreamProcessor for TestToneGenerator {
         Ok(gen)
     }
 
-    fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
-        use crate::core::schema::{ProcessorDescriptor, AudioRequirements};
+    fn generate(&mut self) -> Result<Self::Output> {
+        tracing::debug!("TestToneGenerator: generate() called, frame {}", self.frame_number);
 
+        let timestamp_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
+
+        let frame = self.generate_frame(timestamp_ns);
+
+        Ok(frame)
+    }
+
+    fn scheduling_config(&self) -> SchedulingConfig {
+        SchedulingConfig {
+            mode: SchedulingMode::Loop,
+            clock: ClockSource::Audio,
+            rate_hz: Some(self.timer_rate_hz()),
+            provide_clock: false,
+        }
+    }
+
+    fn descriptor() -> Option<ProcessorDescriptor> {
         Some(
             ProcessorDescriptor::new(
                 "TestToneGenerator",
@@ -192,20 +257,49 @@ impl StreamProcessor for TestToneGenerator {
                 supported_sample_rates: vec![],      // Any sample rate supported
                 required_channels: None,             // Always outputs stereo
             })
-            .with_tags(vec!["audio", "generator", "test", "real-time"])
+            .with_tags(vec!["audio", "source", "generator", "test", "real-time"])
         )
     }
+}
 
-    fn descriptor_instance(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
-        use crate::core::schema::TimerRequirements;
+// ============================================================
+// StreamProcessor Implementation (Legacy Compatibility)
+// ============================================================
 
+impl StreamProcessor for TestToneGenerator {
+    type Config = TestToneConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        <Self as StreamSource>::from_config(config)
+    }
+
+    fn process(&mut self) -> Result<()> {
+        // Phase 6: Delegate to StreamSource::generate() for clean separation
+        // generate() produces the frame, process() writes it to the output port
+        match <Self as StreamSource>::generate(self) {
+            Ok(frame) => {
+                self.output_ports.audio.write(frame);
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("TestToneGenerator: Error generating frame: {:?}", e);
+                Err(e)
+            }
+        }
+    }
+
+    fn descriptor() -> Option<ProcessorDescriptor> {
+        <Self as StreamSource>::descriptor()
+    }
+
+    fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
         // Get base descriptor and add instance-specific TimerRequirements
-        Self::descriptor().map(|desc| {
+        <Self as StreamSource>::descriptor().map(|desc| {
             desc.with_timer_requirements(TimerRequirements {
                 rate_hz: self.timer_rate_hz(),
                 group_id: self.timer_group_id.clone(),
                 description: Some(format!(
-                    "Generate audio buffers at {} Hz ({} samples at {} Hz sample rate)",
+                    "Generate audio buffers at {:.2} Hz ({} samples at {} Hz sample rate)",
                     self.timer_rate_hz(),
                     self.buffer_size,
                     self.sample_rate
@@ -214,47 +308,17 @@ impl StreamProcessor for TestToneGenerator {
         })
     }
 
-    fn process(&mut self) -> Result<()> {
-        // Generate audio buffer on every timer tick
-        // Timer rate is set via TimerRequirements to match optimal audio generation rate
-        tracing::debug!("TestToneGenerator: process() called, generating frame {}", self.frame_number);
-
-        let timestamp_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
-
-        let frame = self.generate_frame(timestamp_ns);
-        self.output_ports.audio.write(frame);
-
-        Ok(())
-    }
-
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 
-    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::stream_processor::PortConsumer> {
-        // TestToneGenerator only has audio output
-        match port_name {
-            "audio" => {
-                self.output_ports.audio.consumer_holder().lock().take()
-                    .map(crate::core::stream_processor::PortConsumer::Audio)
-            }
-            _ => None,
-        }
-    }
-
-    fn connect_input_consumer(&mut self, _port_name: &str, _consumer: crate::core::stream_processor::PortConsumer) -> bool {
-        // TestToneGenerator has no inputs - it's a source processor
-        false
-    }
-
-    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
-        match port_name {
-            "audio" => self.output_ports.audio.set_downstream_wakeup(wakeup_tx),
-            _ => {}
-        }
+    fn on_start(&mut self, _gpu_context: &GpuContext) -> Result<()> {
+        tracing::info!(
+            "[TestToneGenerator] Started: {}Hz tone at {}Hz sample rate",
+            self.frequency,
+            self.sample_rate
+        );
+        Ok(())
     }
 }
 
@@ -272,6 +336,21 @@ mod tests {
         assert_eq!(gen.phase, 0.0);
         assert_eq!(gen.frame_number, 0);
         assert_eq!(gen.buffer_size, TestToneGenerator::BUFFER_SIZE);
+    }
+
+    #[test]
+    fn test_from_config() {
+        let config = TestToneConfig {
+            frequency: 440.0,
+            amplitude: 0.5,
+            sample_rate: 48000,
+            timer_group_id: Some("audio_master".to_string()),
+        };
+        let gen = TestToneGenerator::from_config(config).unwrap();
+        assert_eq!(gen.frequency, 440.0);
+        assert_eq!(gen.amplitude, 0.5);
+        assert_eq!(gen.sample_rate, 48000);
+        assert_eq!(gen.timer_group_id, Some("audio_master".to_string()));
     }
 
     #[test]
@@ -300,6 +379,14 @@ mod tests {
                 sample
             );
         }
+    }
+
+    #[test]
+    fn test_generate() {
+        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let frame = gen.generate().unwrap();
+        assert_eq!(frame.sample_count, 2048);
+        assert_eq!(frame.samples.len(), 4096);
     }
 
     #[test]
@@ -381,5 +468,39 @@ mod tests {
         // Phase should have advanced but stayed within [0, 2π)
         assert!(gen.phase >= 0.0);
         assert!(gen.phase < 2.0 * PI);
+    }
+
+    #[test]
+    fn test_element_type() {
+        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        assert_eq!(gen.element_type(), ElementType::Source);
+    }
+
+    #[test]
+    fn test_scheduling_config() {
+        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let sched = gen.scheduling_config();
+        assert_eq!(sched.mode, SchedulingMode::Loop);
+        assert_eq!(sched.clock, ClockSource::Audio);
+        assert_eq!(sched.rate_hz, Some(23.4375)); // 48000 / 2048
+        assert!(!sched.provide_clock);
+    }
+
+    #[test]
+    fn test_output_ports_descriptor() {
+        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let ports = gen.output_ports();
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].name, "audio");
+        assert_eq!(ports[0].schema.name, "AudioFrame");
+    }
+
+    #[test]
+    fn test_processor_descriptor() {
+        let desc = <TestToneGenerator as StreamSource>::descriptor().unwrap();
+        assert_eq!(desc.name, "TestToneGenerator");
+        assert!(desc.description.contains("sine wave"));
+        assert!(desc.tags.contains(&"source".to_string()));
+        assert!(desc.tags.contains(&"audio".to_string()));
     }
 }

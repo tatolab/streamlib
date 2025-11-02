@@ -8,6 +8,8 @@ use crate::core::{
     AudioFrame, Result, StreamError, StreamProcessor, StreamOutput, ProcessorDescriptor,
     PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
+use crate::core::traits::{StreamElement, StreamSource, ElementType,
+    SchedulingConfig, SchedulingMode, ClockSource};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -281,47 +283,24 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // Phase 3: Push-based operation - process all available samples
-        // No longer tied to 60 FPS ticks, hardware drives the rate
-
-        // Read all captured samples from ring buffer
-        let samples = {
-            let mut buffer = self.sample_buffer.lock();
-
-            // Check if we have enough samples for a reasonable chunk
-            // Use 512 samples per channel as minimum (good balance for most audio processing)
-            let min_chunk_size = 512 * self.channels as usize;
-
-            if buffer.len() >= min_chunk_size {
-                // Extract all available samples
-                let samples: Vec<f32> = buffer.drain(..).collect();
-                samples
-            } else {
-                // Not enough samples yet for a meaningful chunk
-                // This is normal at startup or during audio gaps
-                return Ok(());
+        // Phase 6: Delegate to StreamSource::generate() for clean separation
+        // generate() produces the frame, process() writes it to the output port
+        match <Self as StreamSource>::generate(self) {
+            Ok(frame) => {
+                // Write to output port (this will trigger downstream via push notification)
+                self.ports.audio.write(frame);
+                Ok(())
             }
-        };
-
-        // Create AudioFrame from captured samples
-        let frame_number = self.frame_counter.fetch_add(1, Ordering::Relaxed);
-        let timestamp_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
-
-        let audio_frame = AudioFrame::new(
-            samples,
-            timestamp_ns,
-            frame_number,
-            self.sample_rate,
-            self.channels,
-        );
-
-        // Write to output port (this will trigger downstream via push notification)
-        self.ports.audio.write(audio_frame);
-
-        Ok(())
+            Err(StreamError::Runtime(msg)) if msg.contains("Not enough samples") => {
+                // Not enough samples yet - this is normal for callback-driven sources
+                // at startup or during audio gaps
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("AudioCapture: Error generating frame: {:?}", e);
+                Err(e)
+            }
+        }
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> {
@@ -353,6 +332,109 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
     fn set_wakeup_channel(&mut self, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
         *self.wakeup_tx.lock() = Some(wakeup_tx);
         tracing::debug!("AudioCaptureProcessor: Push-based wakeup enabled");
+    }
+}
+
+// StreamElement implementation - GStreamer-inspired base trait
+impl StreamElement for AppleAudioCaptureProcessor {
+    fn name(&self) -> &str {
+        &self.device_info.name
+    }
+
+    fn element_type(&self) -> ElementType {
+        ElementType::Source
+    }
+
+    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+        <AppleAudioCaptureProcessor as StreamProcessor>::descriptor()
+    }
+
+    fn input_ports(&self) -> Vec<PortDescriptor> {
+        Vec::new() // Sources have no inputs
+    }
+
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        vec![PortDescriptor {
+            name: "audio".to_string(),
+            schema: SCHEMA_AUDIO_FRAME.clone(),
+            required: true,
+            description: "Captured audio frames from the microphone".to_string(),
+        }]
+    }
+
+    fn start(&mut self) -> Result<()> {
+        tracing::info!("AudioCapture {}: Starting ({}Hz, {} channels)",
+            self.device_info.name, self.sample_rate, self.channels);
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        tracing::info!("AudioCapture {}: Stopping (captured {} frames)",
+            self.device_info.name, self.frame_counter.load(Ordering::Relaxed));
+        Ok(())
+    }
+}
+
+// StreamSource implementation - GStreamer-inspired source trait
+impl StreamSource for AppleAudioCaptureProcessor {
+    type Output = AudioFrame;
+    type Config = crate::core::config::AudioCaptureConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        // Parse device_id string to usize if provided
+        let device_id = config.device_id.as_ref().and_then(|s| s.parse::<usize>().ok());
+        Self::new_internal(device_id, config.sample_rate, config.channels)
+    }
+
+    fn generate(&mut self) -> Result<Self::Output> {
+        // Read captured samples from ring buffer
+        let samples = {
+            let mut buffer = self.sample_buffer.lock();
+
+            // Check if we have enough samples for a reasonable chunk
+            // Use 512 samples per channel as minimum (good balance for audio processing)
+            let min_chunk_size = 512 * self.channels as usize;
+
+            if buffer.len() >= min_chunk_size {
+                // Extract all available samples
+                let samples: Vec<f32> = buffer.drain(..).collect();
+                samples
+            } else {
+                // Not enough samples yet - return error so runtime can retry
+                return Err(StreamError::Runtime(
+                    format!("Not enough samples available ({} < {})", buffer.len(), min_chunk_size)
+                ));
+            }
+        };
+
+        // Create AudioFrame from captured samples
+        let frame_number = self.frame_counter.fetch_add(1, Ordering::Relaxed);
+        let timestamp_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
+
+        Ok(AudioFrame::new(
+            samples,
+            timestamp_ns,
+            frame_number,
+            self.sample_rate,
+            self.channels,
+        ))
+    }
+
+    fn scheduling_config(&self) -> SchedulingConfig {
+        // Audio capture is callback-driven - CoreAudio/cpal callback triggers processing
+        SchedulingConfig {
+            mode: SchedulingMode::Callback,
+            clock: ClockSource::Audio, // Audio hardware provides timing
+            rate_hz: None, // Not applicable for callback mode
+            provide_clock: false, // Capture doesn't provide pipeline clock
+        }
+    }
+
+    fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
+        <AppleAudioCaptureProcessor as StreamProcessor>::descriptor()
     }
 }
 

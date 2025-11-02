@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod sync;
 pub mod texture;
 pub mod topology;
+pub mod traits;
 
 // Re-export core types
 pub use buffers::RingBuffer;
@@ -82,3 +83,9 @@ pub use registry::{
 };
 pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
+pub use traits::{
+    StreamElement, ElementType,
+    StreamSource, StreamSink, StreamTransform,
+    SchedulingConfig, SchedulingMode, ClockSource,
+    ClockConfig, ClockType, SyncMode,
+};

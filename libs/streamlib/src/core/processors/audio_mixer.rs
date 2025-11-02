@@ -54,6 +54,7 @@ use crate::core::{
     ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
     AudioRequirements, SampleAndHoldBuffer,
 };
+use crate::core::traits::{StreamElement, StreamTransform, ElementType};
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -64,7 +65,7 @@ use rubato::{
 };
 
 /// Mixing strategy for combining audio streams
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MixingStrategy {
     /// Sum all inputs and divide by active input count (prevents clipping)
     SumNormalized,
@@ -430,6 +431,109 @@ impl AudioMixerProcessor {
     }
 }
 
+// ============================================================
+// StreamElement Implementation (v2.0.0 Architecture)
+// ============================================================
+
+impl StreamElement for AudioMixerProcessor {
+    fn name(&self) -> &str {
+        "audio_mixer"
+    }
+
+    fn element_type(&self) -> ElementType {
+        ElementType::Transform
+    }
+
+    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+        <AudioMixerProcessor as StreamTransform>::descriptor()
+    }
+
+    fn input_ports(&self) -> Vec<PortDescriptor> {
+        // Return descriptors for all dynamic inputs
+        (0..self.num_inputs)
+            .map(|i| PortDescriptor {
+                name: format!("input_{}", i),
+                schema: SCHEMA_AUDIO_FRAME.clone(),
+                required: true,
+                description: format!("Audio input {} for mixing", i),
+            })
+            .collect()
+    }
+
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        vec![PortDescriptor {
+            name: "audio".to_string(),
+            schema: SCHEMA_AUDIO_FRAME.clone(),
+            required: true,
+            description: "Mixed audio output".to_string(),
+        }]
+    }
+
+    fn start(&mut self) -> Result<()> {
+        tracing::info!(
+            "AudioMixer: Starting ({} inputs, {} Hz, {} samples buffer, strategy: {:?})",
+            self.num_inputs,
+            self.target_sample_rate,
+            self.buffer_size,
+            self.strategy
+        );
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        // Clear sample-and-hold buffer
+        self.sample_hold_buffer.clear();
+        tracing::info!("AudioMixer: Stopped");
+        Ok(())
+    }
+}
+
+// ============================================================
+// StreamTransform Implementation (v2.0.0 Architecture)
+// ============================================================
+
+impl StreamTransform for AudioMixerProcessor {
+    type Config = crate::core::config::AudioMixerConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        Self::new(
+            config.num_inputs,
+            config.strategy,
+            config.sample_rate,
+            config.buffer_size,
+        )
+    }
+
+    fn process(&mut self) -> Result<()> {
+        // Reuse existing process() implementation
+        // (The complex logic is already in the StreamProcessor impl below)
+        <AudioMixerProcessor as StreamProcessor>::process(self)
+    }
+
+    fn descriptor() -> Option<ProcessorDescriptor> {
+        use crate::core::schema::ProcessorDescriptor;
+
+        Some(
+            ProcessorDescriptor::new(
+                "AudioMixerProcessor",
+                "Mixes multiple audio streams into a single output with real-time safe processing"
+            )
+            .with_usage_context(
+                "Use when you need to combine multiple audio sources into one stream. \
+                 Supports dynamic input count, sample rate conversion, and channel mixing. \
+                 All mixing is real-time safe with pre-allocated buffers."
+            )
+            .with_audio_requirements(AudioRequirements {
+                preferred_buffer_size: Some(2048),
+                required_buffer_size: None,  // Flexible
+                supported_sample_rates: vec![44100, 48000, 96000],
+                required_channels: Some(2),  // Always outputs stereo
+            })
+            .with_tags(vec!["audio", "mixer", "transform", "multi-input"])
+        )
+    }
+}
+
 impl StreamProcessor for AudioMixerProcessor {
     type Config = crate::core::config::AudioMixerConfig;
 
@@ -471,7 +575,7 @@ impl StreamProcessor for AudioMixerProcessor {
         let rate_hz = self.target_sample_rate as f64 / self.buffer_size as f64;
 
         // Get base descriptor and add instance-specific TimerRequirements
-        Self::descriptor().map(|desc| {
+        <AudioMixerProcessor as StreamProcessor>::descriptor().map(|desc| {
             desc.with_timer_requirements(TimerRequirements {
                 rate_hz,
                 group_id: self.timer_group_id.clone(),
@@ -737,7 +841,7 @@ mod tests {
 
     #[test]
     fn test_descriptor() {
-        let desc = AudioMixerProcessor::descriptor().unwrap();
+        let desc = <AudioMixerProcessor as StreamProcessor>::descriptor().unwrap();
         assert_eq!(desc.name, "AudioMixer");
         assert_eq!(desc.outputs.len(), 1);
         assert_eq!(desc.outputs[0].name, "audio");

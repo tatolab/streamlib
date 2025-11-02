@@ -56,6 +56,8 @@ use crate::core::{
     Result, StreamError, StreamProcessor, AudioFrame,
     StreamInput, StreamOutput,
 };
+use crate::core::traits::{StreamElement, StreamTransform, ElementType};
+use crate::core::schema::{PortDescriptor, SCHEMA_AUDIO_FRAME};
 
 use super::audio_effect::{
     AudioEffectProcessor, ParameterInfo, PluginInfo,
@@ -819,6 +821,122 @@ impl AudioEffectProcessor for ClapEffectProcessor {
     }
 }
 
+// ============================================================
+// StreamElement Implementation (v2.0.0 Architecture)
+// ============================================================
+
+impl StreamElement for ClapEffectProcessor {
+    fn name(&self) -> &str {
+        &self.plugin_info.name
+    }
+
+    fn element_type(&self) -> ElementType {
+        ElementType::Transform
+    }
+
+    fn descriptor(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
+        <ClapEffectProcessor as StreamTransform>::descriptor()
+    }
+
+    fn input_ports(&self) -> Vec<PortDescriptor> {
+        vec![PortDescriptor {
+            name: "audio".to_string(),
+            schema: SCHEMA_AUDIO_FRAME.clone(),
+            required: true,
+            description: "Audio input to process through CLAP plugin".to_string(),
+        }]
+    }
+
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        vec![PortDescriptor {
+            name: "audio".to_string(),
+            schema: SCHEMA_AUDIO_FRAME.clone(),
+            required: true,
+            description: "Processed audio output from CLAP plugin".to_string(),
+        }]
+    }
+
+    fn start(&mut self) -> Result<()> {
+        // Activate the plugin with the configured sample rate and buffer size
+        if !self.is_activated {
+            self.activate(self.sample_rate, self.buffer_size)?;
+            tracing::info!("[ClapEffect] Activated plugin '{}' at {} Hz with {} samples buffer",
+                self.plugin_info.name, self.sample_rate, self.buffer_size);
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        // Deactivate the plugin
+        if self.is_activated {
+            self.deactivate()?;
+            tracing::info!("[ClapEffect] Deactivated plugin '{}'", self.plugin_info.name);
+        }
+        Ok(())
+    }
+}
+
+// ============================================================
+// StreamTransform Implementation (v2.0.0 Architecture)
+// ============================================================
+
+impl StreamTransform for ClapEffectProcessor {
+    type Config = crate::core::config::ClapEffectConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        Self::load_internal(
+            &config.plugin_path,
+            config.plugin_name.as_deref(),
+            config.sample_rate,
+            config.buffer_size,
+        )
+    }
+
+    fn process(&mut self) -> Result<()> {
+        tracing::debug!("[ClapEffect] process() called");
+
+        // Read audio frame from input port
+        if let Some(input_frame) = self.input_ports.audio.read_latest() {
+            tracing::debug!("[ClapEffect] Got input frame - {} samples, frame #{}",
+                input_frame.sample_count, input_frame.frame_number);
+
+            // Process through CLAP plugin
+            let output_frame = self.process_audio(&input_frame)?;
+
+            // Write to output port
+            self.output_ports.audio.write(output_frame);
+            tracing::debug!("[ClapEffect] Wrote output frame");
+        } else {
+            tracing::debug!("[ClapEffect] No input available");
+        }
+
+        Ok(())
+    }
+
+    fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
+        use crate::core::schema::{ProcessorDescriptor, AudioRequirements};
+
+        Some(
+            ProcessorDescriptor::new(
+                "ClapEffectProcessor",
+                "CLAP audio plugin processor with parameter control and automation"
+            )
+            .with_usage_context(
+                "Use for loading and processing audio through CLAP plugins. \
+                 Supports parameter enumeration, modification, transactions (begin_edit/end_edit), \
+                 and automation. Most CLAP plugins require stereo input at specific buffer sizes."
+            )
+            .with_audio_requirements(AudioRequirements {
+                preferred_buffer_size: Some(2048),  // Standard CLAP buffer size
+                required_buffer_size: Some(2048),    // Many plugins require this
+                supported_sample_rates: vec![44100, 48000, 96000],  // Common rates
+                required_channels: Some(2),          // Most plugins expect stereo
+            })
+            .with_tags(vec!["audio", "effect", "clap", "plugin", "transform"])
+        )
+    }
+}
+
 impl StreamProcessor for ClapEffectProcessor {
     type Config = crate::core::config::ClapEffectConfig;
 
@@ -855,7 +973,7 @@ impl StreamProcessor for ClapEffectProcessor {
     }
 
     fn descriptor_instance(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
-        Self::descriptor()
+        <ClapEffectProcessor as StreamProcessor>::descriptor()
     }
 
     fn process(&mut self) -> Result<()> {
@@ -1264,6 +1382,9 @@ mod tests {
             println!("   Vendor: {}", plugin.plugin_info().vendor);
             println!("   Version: {}", plugin.plugin_info().version);
 
+            // Activate the plugin
+            plugin.activate(sample_rate, max_frames)
+                .expect("Failed to activate plugin");
             println!("✅ Plugin activated at {}Hz", sample_rate);
 
             // Create test audio frame (1 second tone at 440 Hz)
@@ -1320,6 +1441,10 @@ mod tests {
 
             let mut plugin = ClapEffectProcessor::load_by_name(plugin_path, "Gain", 48000, 512)
                 .expect("Failed to load Gain plugin");
+
+            // Activate the plugin (required for parameter enumeration)
+            plugin.activate(48000, 512)
+                .expect("Failed to activate plugin");
 
             println!("✅ Testing parameter enumeration...");
 
@@ -1410,6 +1535,10 @@ mod tests {
 
             let mut plugin = ClapEffectProcessor::load_by_name(plugin_path, "Gain", 48000, 512)
                 .expect("Failed to load Gain plugin");
+
+            // Activate the plugin (required for parameter enumeration and audio processing)
+            plugin.activate(48000, 512)
+                .expect("Failed to activate plugin");
 
             println!("✅ Testing that parameters actually affect audio output...");
 

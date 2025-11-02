@@ -42,6 +42,7 @@ async fn main() -> Result<()> {
             frequency: 440.0,
             amplitude: 0.3,  // 30% volume to avoid clipping
             sample_rate: audio_config.sample_rate,
+            timer_group_id: None,
         }
     )?;
     println!("✓ Test tone added\n");

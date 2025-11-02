@@ -7,6 +7,7 @@ use crate::core::{
     VideoFrame, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
+use crate::core::traits::{StreamElement, StreamSource, ElementType, SchedulingConfig, SchedulingMode, ClockSource};
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::ffi::c_void;
@@ -429,163 +430,22 @@ impl StreamProcessor for AppleCameraProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-
-        // Try to get the latest frame from the delegate
-        let frame_holder = {
-            let mut latest = self.latest_frame.lock();
-            latest.take() // Take ownership, leaving None
-        };
-
-        if let Some(holder) = frame_holder {
-            // Convert CVPixelBuffer → IOSurface → Metal Texture → WebGPU Texture
-            let result: Result<()> = unsafe {
-                let pixel_buffer_ref = &*holder.pixel_buffer as *const CVPixelBuffer;
-
-                // Get IOSurface from CVPixelBuffer
-                let iosurface_ref = CVPixelBufferGetIOSurface(pixel_buffer_ref);
-                if iosurface_ref.is_null() {
-                    eprintln!("Camera: Frame has no IOSurface backing - this shouldn't happen!");
-                    return Ok(());
-                }
-
-                let iosurface = Retained::retain(iosurface_ref)
-                    .expect("Failed to retain IOSurface");
-
-                // Get dimensions from CVPixelBuffer
-                let width = CVPixelBufferGetWidth(pixel_buffer_ref);
-                let height = CVPixelBufferGetHeight(pixel_buffer_ref);
-
-                // Create Metal texture from IOSurface (zero-copy)
-                let metal_device = self.metal_device.as_ref()
-                    .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
-
-                let metal_texture = iosurface::create_metal_texture_from_iosurface(
-                    metal_device.device(),
-                    &iosurface,
-                    0, // plane 0 for BGRA
-                )?;
-
-                // Convert IOSurface Metal texture to pure WebGPU-owned texture
-                // This ensures downstream processors can use it with any usage flags (including compute shaders)
-                let wgpu_bridge = self.wgpu_bridge.as_ref()
-                    .ok_or_else(|| StreamError::Configuration("No WebGPU bridge".into()))?;
-
-                // Step 1: Wrap IOSurface as temporary WebGPU texture (for reading only)
-                let _iosurface_texture = wgpu_bridge.wrap_metal_texture(
-                    &metal_texture,
-                    wgpu::TextureFormat::Bgra8Unorm,
-                    wgpu::TextureUsages::COPY_SRC,  // Only need COPY_SRC for reading
-                )?;
-
-                // Step 2: Convert BGRA→RGBA using Metal blit encoder (GPU-accelerated format conversion)
-                // First, create Metal RGBA texture for the destination (using objc2_metal)
-                let metal_device = self.metal_device.as_ref()
-                    .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
-
-                let metal_rgba_texture = {
-                    use objc2_metal::{MTLTextureDescriptor, MTLPixelFormat, MTLTextureUsage, MTLDevice};
-
-                    let desc = MTLTextureDescriptor::new();
-                    desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-                    desc.setWidth(width);  // width is already usize
-                    desc.setHeight(height);  // height is already usize
-                    desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
-
-                    metal_device.device().newTextureWithDescriptor(&desc)
-                        .ok_or_else(|| StreamError::GpuError("Failed to create RGBA texture".into()))?
-                };
-
-                // Use Metal blit encoder to convert BGRA→RGBA (GPU-accelerated, sub-millisecond)
-                // Convert objc2_metal types to metal crate types for blit encoder
-                let command_queue = self.metal_command_queue.as_ref()
-                    .ok_or_else(|| StreamError::Configuration("Metal command queue not initialized".into()))?;
-
-                use metal::foreign_types::ForeignTypeRef;
-
-                // Convert source texture (objc2_metal → metal crate)
-                let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
-                let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
-
-                // Convert destination texture (objc2_metal → metal crate)
-                let dest_texture_ptr = &*metal_rgba_texture as *const _ as *mut std::ffi::c_void;
-                let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
-
-                let command_buffer = command_queue.new_command_buffer();
-                let blit_encoder = command_buffer.new_blit_command_encoder();
-
-                use metal::MTLOrigin;
-                use metal::MTLSize;
-
-                let origin = MTLOrigin { x: 0, y: 0, z: 0 };
-                let size = MTLSize {
-                    width: width as u64,
-                    height: height as u64,
-                    depth: 1,
-                };
-
-                // Blit from BGRA IOSurface texture to RGBA texture
-                // Metal blit encoder automatically handles BGRA→RGBA conversion!
-                blit_encoder.copy_from_texture(
-                    source_texture_ref,
-                    0,  // source slice
-                    0,  // source mip level
-                    origin,
-                    size,
-                    dest_texture_ref,
-                    0,  // dest slice
-                    0,  // dest mip level
-                    origin,
-                );
-
-                blit_encoder.end_encoding();
-                command_buffer.commit();
-                command_buffer.wait_until_completed();
-
-                // Step 3: Wrap Metal RGBA texture as WebGPU texture
-                let output_texture = wgpu_bridge.wrap_metal_texture(
-                    &metal_rgba_texture,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                )?;
-
-                // Step 4: Create VideoFrame with RGBA texture
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs_f64();
-
-                let frame = VideoFrame::new(
-                    Arc::new(output_texture),
-                    wgpu::TextureFormat::Rgba8Unorm,  // Explicit format
-                    timestamp,
-                    self.frame_count,
-                    width as u32,
-                    height as u32,
-                );
-
+        // Phase 6: Delegate to StreamSource::generate() for clean separation
+        // generate() produces the frame, process() writes it to the output port
+        match <Self as StreamSource>::generate(self) {
+            Ok(frame) => {
                 self.ports.video.write(frame);
-                self.frame_count += 1;
-
-                // Debug: Log every 60 frames (once per second at 60fps)
-                if self.frame_count.is_multiple_of(60) {
-                    tracing::info!(
-                        "Camera: Wrote frame {} ({}x{}) to output port (WebGPU-owned texture, format=Rgba8Unorm)",
-                        self.frame_count,
-                        width,
-                        height
-                    );
-                }
-
                 Ok(())
-            };
-
-            if let Err(e) = result {
-                tracing::error!("Camera: Error processing frame: {:?}", e);
-                return Err(e);
+            }
+            Err(StreamError::Runtime(msg)) if msg.contains("No frame available") => {
+                // No frame available yet - this is normal for callback-driven sources
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Camera: Error generating frame: {:?}", e);
+                Err(e)
             }
         }
-
-        Ok(())
     }
 
     fn on_start(&mut self, gpu_context: &crate::core::GpuContext) -> Result<()> {
@@ -749,6 +609,213 @@ impl crate::core::stream_processor::PortProvider for AppleCameraProcessor {
         F: FnOnce(&mut crate::core::StreamInput<crate::core::VideoFrame>) -> R,
     {
         None  // Camera has no video inputs - it's a source processor
+    }
+}
+
+// StreamElement implementation - GStreamer-inspired base trait
+impl StreamElement for AppleCameraProcessor {
+    fn name(&self) -> &str {
+        &self.camera_name
+    }
+
+    fn element_type(&self) -> ElementType {
+        ElementType::Source
+    }
+
+    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+        <AppleCameraProcessor as StreamProcessor>::descriptor()
+    }
+
+    fn input_ports(&self) -> Vec<PortDescriptor> {
+        Vec::new() // Sources have no inputs
+    }
+
+    fn output_ports(&self) -> Vec<PortDescriptor> {
+        vec![PortDescriptor {
+            name: "video".to_string(),
+            schema: SCHEMA_VIDEO_FRAME.clone(),
+            required: true,
+            description: "Live video frames from the camera. Each frame is a WebGPU texture with timestamp and metadata.".to_string(),
+        }]
+    }
+
+    fn start(&mut self) -> Result<()> {
+        tracing::info!("Camera {}: Starting (AVFoundation session already running)", self.camera_name);
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        tracing::info!("Camera {}: Stopping (generated {} frames)", self.camera_name, self.frame_count);
+        Ok(())
+    }
+}
+
+// StreamSource implementation - GStreamer-inspired source trait
+impl StreamSource for AppleCameraProcessor {
+    type Output = VideoFrame;
+    type Config = crate::core::config::CameraConfig;
+
+    fn from_config(config: Self::Config) -> Result<Self> {
+        match config.device_id {
+            Some(device_id) => Self::with_device_id(&device_id),
+            None => Self::new(),
+        }
+    }
+
+    fn generate(&mut self) -> Result<Self::Output> {
+        // Try to get the latest frame from the AVFoundation delegate
+        let frame_holder = {
+            let mut latest = self.latest_frame.lock();
+            latest.take() // Take ownership, leaving None
+        };
+
+        let holder = frame_holder.ok_or_else(|| {
+            StreamError::Runtime("No frame available from camera callback".into())
+        })?;
+
+        // Convert CVPixelBuffer → IOSurface → Metal Texture → WebGPU Texture
+        unsafe {
+            let pixel_buffer_ref = &*holder.pixel_buffer as *const CVPixelBuffer;
+
+            // Get IOSurface from CVPixelBuffer
+            let iosurface_ref = CVPixelBufferGetIOSurface(pixel_buffer_ref);
+            if iosurface_ref.is_null() {
+                return Err(StreamError::GpuError("Frame has no IOSurface backing".into()));
+            }
+
+            let iosurface = Retained::retain(iosurface_ref)
+                .expect("Failed to retain IOSurface");
+
+            // Get dimensions from CVPixelBuffer
+            let width = CVPixelBufferGetWidth(pixel_buffer_ref);
+            let height = CVPixelBufferGetHeight(pixel_buffer_ref);
+
+            // Create Metal texture from IOSurface (zero-copy)
+            let metal_device = self.metal_device.as_ref()
+                .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
+
+            let metal_texture = iosurface::create_metal_texture_from_iosurface(
+                metal_device.device(),
+                &iosurface,
+                0, // plane 0 for BGRA
+            )?;
+
+            // Convert IOSurface Metal texture to pure WebGPU-owned texture
+            let wgpu_bridge = self.wgpu_bridge.as_ref()
+                .ok_or_else(|| StreamError::Configuration("No WebGPU bridge".into()))?;
+
+            // Step 1: Wrap IOSurface as temporary WebGPU texture (for reading only)
+            let _iosurface_texture = wgpu_bridge.wrap_metal_texture(
+                &metal_texture,
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::TextureUsages::COPY_SRC,
+            )?;
+
+            // Step 2: Convert BGRA→RGBA using Metal blit encoder
+            let metal_rgba_texture = {
+                use objc2_metal::{MTLTextureDescriptor, MTLPixelFormat, MTLTextureUsage, MTLDevice};
+
+                let desc = MTLTextureDescriptor::new();
+                desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+                desc.setWidth(width);
+                desc.setHeight(height);
+                desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+
+                metal_device.device().newTextureWithDescriptor(&desc)
+                    .ok_or_else(|| StreamError::GpuError("Failed to create RGBA texture".into()))?
+            };
+
+            // Use Metal blit encoder to convert BGRA→RGBA
+            let command_queue = self.metal_command_queue.as_ref()
+                .ok_or_else(|| StreamError::Configuration("Metal command queue not initialized".into()))?;
+
+            use metal::foreign_types::ForeignTypeRef;
+
+            let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
+            let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
+
+            let dest_texture_ptr = &*metal_rgba_texture as *const _ as *mut std::ffi::c_void;
+            let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
+
+            let command_buffer = command_queue.new_command_buffer();
+            let blit_encoder = command_buffer.new_blit_command_encoder();
+
+            use metal::MTLOrigin;
+            use metal::MTLSize;
+
+            let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+            let size = MTLSize {
+                width: width as u64,
+                height: height as u64,
+                depth: 1,
+            };
+
+            blit_encoder.copy_from_texture(
+                source_texture_ref,
+                0,
+                0,
+                origin,
+                size,
+                dest_texture_ref,
+                0,
+                0,
+                origin,
+            );
+
+            blit_encoder.end_encoding();
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+
+            // Step 3: Wrap Metal RGBA texture as WebGPU texture
+            let output_texture = wgpu_bridge.wrap_metal_texture(
+                &metal_rgba_texture,
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            )?;
+
+            // Step 4: Create VideoFrame
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+
+            let frame = VideoFrame::new(
+                Arc::new(output_texture),
+                wgpu::TextureFormat::Rgba8Unorm,
+                timestamp,
+                self.frame_count,
+                width as u32,
+                height as u32,
+            );
+
+            self.frame_count += 1;
+
+            // Debug: Log every 60 frames
+            if self.frame_count.is_multiple_of(60) {
+                tracing::info!(
+                    "Camera: Generated frame {} ({}x{}) - WebGPU texture, format=Rgba8Unorm",
+                    self.frame_count,
+                    width,
+                    height
+                );
+            }
+
+            Ok(frame)
+        }
+    }
+
+    fn scheduling_config(&self) -> SchedulingConfig {
+        // Camera is callback-driven - AVFoundation callback triggers processing
+        SchedulingConfig {
+            mode: SchedulingMode::Callback,
+            clock: ClockSource::Software, // Camera generates frames on its own timing
+            rate_hz: None, // Not applicable for callback mode
+            provide_clock: false, // Camera doesn't provide pipeline clock
+        }
+    }
+
+    fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
+        <AppleCameraProcessor as StreamProcessor>::descriptor()
     }
 }
 
