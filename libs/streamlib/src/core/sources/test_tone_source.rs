@@ -19,8 +19,6 @@ pub struct TestToneConfig {
     pub frequency: f64,
     /// Amplitude (0.0 to 1.0)
     pub amplitude: f64,
-    /// Optional timer group ID for synchronized timing with other processors
-    pub timer_group_id: Option<String>,
 }
 
 impl Default for TestToneConfig {
@@ -28,7 +26,6 @@ impl Default for TestToneConfig {
         Self {
             frequency: 440.0,
             amplitude: 0.5,
-            timer_group_id: None,
         }
     }
 }
@@ -61,7 +58,6 @@ pub struct TestToneGeneratorOutputPorts {
 ///     TestToneConfig {
 ///         frequency: 440.0,
 ///         amplitude: 0.5,
-///         timer_group_id: None,
 ///     }
 /// )?;
 ///
@@ -92,9 +88,6 @@ pub struct TestToneGenerator {
     /// Samples per buffer - read from RuntimeContext.audio during start()
     buffer_size: usize,
 
-    /// Optional timer group ID for synchronized wakeups
-    timer_group_id: Option<String>,
-
     /// Output ports
     output_ports: TestToneGeneratorOutputPorts,
 }
@@ -121,8 +114,7 @@ impl TestToneGenerator {
             phase: 0.0,
             amplitude: amplitude.clamp(0.0, 1.0),
             frame_number: 0,
-            buffer_size: 512,    // Placeholder - will be set during start()
-            timer_group_id: None,
+            buffer_size: 512,
             output_ports: TestToneGeneratorOutputPorts {
                 audio: StreamOutput::new("audio"),
             },
@@ -250,12 +242,10 @@ impl StreamSource for TestToneGenerator {
     type Config = TestToneConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
-        let mut gen = Self::new(
+        Ok(Self::new(
             config.frequency,
             config.amplitude,
-        );
-        gen.timer_group_id = config.timer_group_id;
-        Ok(gen)
+        ))
     }
 
     fn generate(&mut self) -> Result<Self::Output> {
@@ -332,13 +322,10 @@ mod tests {
         let config = TestToneConfig {
             frequency: 440.0,
             amplitude: 0.5,
-            timer_group_id: Some("audio_master".to_string()),
         };
         let gen = <TestToneGenerator as StreamSource>::from_config(config).unwrap();
         assert_eq!(gen.frequency, 440.0);
         assert_eq!(gen.amplitude, 0.5);
-        assert_eq!(gen.timer_group_id, Some("audio_master".to_string()));
-        // Note: sample_rate and buffer_size are placeholders until start() is called
     }
 
     #[test]

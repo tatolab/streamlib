@@ -38,7 +38,7 @@ pub enum SchedulingMode {
     /// Runtime spawns thread calling the processor in a loop.
     /// Used by: TestToneGenerator, pattern generators, software sources
     ///
-    /// **Rate**: Specified by `rate_hz` in SchedulingConfig
+    /// **Rate**: Calculated by source from buffer characteristics
     ///
     /// **Thread**: Spawned by runtime with configured priority
     ///
@@ -73,8 +73,6 @@ pub enum SchedulingMode {
     ///
     /// Runtime executes processor at fixed intervals.
     /// Used by: Metrics collectors, cleanup jobs, periodic tasks
-    ///
-    /// **Rate**: Specified by `rate_hz` in SchedulingConfig
     ///
     /// **Thread**: Timer thread pool
     ///

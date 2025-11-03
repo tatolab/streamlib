@@ -364,10 +364,9 @@ impl StreamSource for AppleAudioCaptureProcessor {
         // Audio capture is callback-driven - CoreAudio/cpal callback triggers processing
         SchedulingConfig {
             mode: SchedulingMode::Callback,
-            priority: ThreadPriority::RealTime,  // Audio I/O requires real-time priority
-            clock: ClockSource::Audio, // Audio hardware provides timing
-            rate_hz: None, // Not applicable for callback mode
-            provide_clock: false, // Capture doesn't provide pipeline clock
+            priority: ThreadPriority::RealTime,
+            clock: ClockSource::Audio,
+            provide_clock: false,
         }
     }
 

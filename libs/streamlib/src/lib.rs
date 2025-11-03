@@ -76,7 +76,7 @@ pub use core::{
     AudioMixerInputPorts, AudioMixerOutputPorts, AudioMixerConfig,
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
-    AudioRequirements, TimerRequirements,
+    AudioRequirements,
     SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
     // Sync utilities

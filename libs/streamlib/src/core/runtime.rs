@@ -1,7 +1,8 @@
-use super::clocks::{Clock, SoftwareClock};
+use super::clocks::{Clock, SoftwareClock, AudioClock};
 use super::traits::{StreamProcessor, DynStreamProcessor};
 use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
+use super::scheduling::ClockSource;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -94,6 +95,8 @@ pub struct StreamRuntime {
     next_connection_id: usize,
     audio_config: AudioConfig,
     pending_connections: Vec<PendingConnection>,
+    master_clock: Option<Arc<dyn Clock>>,
+    audio_clock: Option<Arc<AudioClock>>,
 }
 
 impl StreamRuntime {
@@ -110,7 +113,31 @@ impl StreamRuntime {
             next_connection_id: 0,
             audio_config: AudioConfig::default(),
             pending_connections: Vec::new(),
+            master_clock: None,
+            audio_clock: None,
         }
+    }
+
+    pub fn register_audio_clock(&mut self, clock: Arc<AudioClock>) {
+        self.audio_clock = Some(clock.clone());
+        self.master_clock = Some(clock);
+    }
+
+    pub fn get_clock(&self, preference: ClockSource) -> Arc<dyn Clock> {
+        match preference {
+            ClockSource::Audio => {
+                if let Some(ref clock) = self.audio_clock {
+                    return clock.clone();
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(ref clock) = self.master_clock {
+            return clock.clone();
+        }
+
+        Arc::new(SoftwareClock::new("Fallback Software Clock".to_string()))
     }
 
     pub fn audio_config(&self) -> AudioConfig {
@@ -973,11 +1000,6 @@ mod tests {
                     "CounterProcessor",
                     "Test processor that increments a counter"
                 )
-                .with_timer_requirements(schema::TimerRequirements {
-                    rate_hz: 60.0,
-                    group_id: None,
-                    description: Some("Counter test processor".to_string()),
-                })
             )
         }
 
@@ -1096,11 +1118,6 @@ mod tests {
                         "WorkProcessor",
                         "Test processor that performs CPU work"
                     )
-                    .with_timer_requirements(schema::TimerRequirements {
-                        rate_hz: 60.0,
-                        group_id: None,
-                        description: Some("Work test processor".to_string()),
-                    })
                 )
             }
 

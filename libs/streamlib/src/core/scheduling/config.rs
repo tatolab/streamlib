@@ -24,21 +24,19 @@ use serde::{Deserialize, Serialize};
 /// ## Examples
 ///
 /// ```rust,ignore
-/// // Audio effect processor
+/// // Audio effect processor (loop-based)
 /// SchedulingConfig {
 ///     mode: SchedulingMode::Loop,
 ///     priority: ThreadPriority::RealTime,
 ///     clock: ClockSource::Audio,
-///     rate_hz: Some(23.44),  // 48kHz / 2048 samples
 ///     provide_clock: false,
 /// }
 ///
-/// // Video effect processor
+/// // Video effect processor (reactive)
 /// SchedulingConfig {
 ///     mode: SchedulingMode::Reactive,
 ///     priority: ThreadPriority::High,
 ///     clock: ClockSource::Vsync,
-///     rate_hz: None,  // Reactive to input
 ///     provide_clock: false,
 /// }
 ///
@@ -47,7 +45,6 @@ use serde::{Deserialize, Serialize};
 ///     mode: SchedulingMode::Reactive,
 ///     priority: ThreadPriority::Normal,
 ///     clock: ClockSource::Software,
-///     rate_hz: None,
 ///     provide_clock: false,
 /// }
 ///
@@ -56,7 +53,6 @@ use serde::{Deserialize, Serialize};
 ///     mode: SchedulingMode::Callback,
 ///     priority: ThreadPriority::High,
 ///     clock: ClockSource::Vsync,
-///     rate_hz: None,  // Hardware determines rate
 ///     provide_clock: false,
 /// }
 /// ```
@@ -79,16 +75,6 @@ pub struct SchedulingConfig {
     /// Clock source for synchronization
     pub clock: ClockSource,
 
-    /// Rate in Hz (for loop/timer modes)
-    ///
-    /// **Examples**:
-    /// - 23.44 Hz for audio at 48kHz/2048 buffer
-    /// - 60.0 Hz for 60fps video generation
-    /// - 1.0 Hz for periodic metrics collection
-    ///
-    /// **Ignored for**: Reactive and Callback modes
-    pub rate_hz: Option<f64>,
-
     /// Whether this processor provides the clock for the pipeline
     ///
     /// Typically true for:
@@ -105,7 +91,6 @@ impl Default for SchedulingConfig {
             mode: SchedulingMode::Reactive,
             priority: ThreadPriority::Normal,
             clock: ClockSource::Software,
-            rate_hz: None,
             provide_clock: false,
         }
     }
@@ -117,12 +102,11 @@ impl SchedulingConfig {
     /// **Preset**: Loop mode, real-time priority, audio clock
     ///
     /// **Use for**: Audio effects, test tone generators
-    pub fn audio_realtime(rate_hz: f64) -> Self {
+    pub fn audio_realtime() -> Self {
         Self {
             mode: SchedulingMode::Loop,
             priority: ThreadPriority::RealTime,
             clock: ClockSource::Audio,
-            rate_hz: Some(rate_hz),
             provide_clock: false,
         }
     }
@@ -137,7 +121,6 @@ impl SchedulingConfig {
             mode: SchedulingMode::Reactive,
             priority: ThreadPriority::High,
             clock: ClockSource::Vsync,
-            rate_hz: None,
             provide_clock: false,
         }
     }
@@ -161,58 +144,15 @@ impl SchedulingConfig {
             mode: SchedulingMode::Callback,
             priority: ThreadPriority::High,
             clock,
-            rate_hz: None,
             provide_clock: false,
         }
     }
 
-    /// Create config for periodic tasks
-    ///
-    /// **Preset**: Timer mode, normal priority, software clock
-    ///
-    /// **Use for**: Metrics, cleanup, periodic tasks
-    pub fn periodic(rate_hz: f64) -> Self {
-        Self {
-            mode: SchedulingMode::Timer,
-            priority: ThreadPriority::Normal,
-            clock: ClockSource::Software,
-            rate_hz: Some(rate_hz),
-            provide_clock: false,
-        }
-    }
-
-    /// Validate configuration
-    ///
-    /// Checks for common errors:
-    /// - Loop/Timer modes require rate_hz
-    /// - Real-time priority with inappropriate modes
     pub fn validate(&self) -> Result<(), String> {
-        // Loop and Timer modes require rate_hz
-        match self.mode {
-            SchedulingMode::Loop | SchedulingMode::Timer => {
-                if self.rate_hz.is_none() {
-                    return Err(format!(
-                        "{:?} mode requires rate_hz to be specified",
-                        self.mode
-                    ));
-                }
-                if let Some(rate) = self.rate_hz {
-                    if rate <= 0.0 {
-                        return Err(format!("rate_hz must be positive, got {}", rate));
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // Warn about real-time priority without real-time mode
         if self.priority == ThreadPriority::RealTime {
             match self.mode {
-                SchedulingMode::Loop | SchedulingMode::Callback => {
-                    // These are fine for RT
-                }
+                SchedulingMode::Loop | SchedulingMode::Callback => {}
                 _ => {
-                    // This is unusual but not invalid
                     tracing::warn!(
                         "Real-time priority with {:?} mode is unusual - ensure RT safety",
                         self.mode
@@ -222,13 +162,6 @@ impl SchedulingConfig {
         }
 
         Ok(())
-    }
-
-    /// Get expected execution interval in milliseconds
-    ///
-    /// Returns None for reactive/callback modes (event-driven).
-    pub fn execution_interval_ms(&self) -> Option<f64> {
-        self.rate_hz.map(|rate| 1000.0 / rate)
     }
 
     /// Get latency budget from thread priority
@@ -249,17 +182,15 @@ mod tests {
         assert_eq!(config.mode, SchedulingMode::Reactive);
         assert_eq!(config.priority, ThreadPriority::Normal);
         assert_eq!(config.clock, ClockSource::Software);
-        assert_eq!(config.rate_hz, None);
         assert!(!config.provide_clock);
     }
 
     #[test]
     fn test_audio_realtime_preset() {
-        let config = SchedulingConfig::audio_realtime(23.44);
+        let config = SchedulingConfig::audio_realtime();
         assert_eq!(config.mode, SchedulingMode::Loop);
         assert_eq!(config.priority, ThreadPriority::RealTime);
         assert_eq!(config.clock, ClockSource::Audio);
-        assert_eq!(config.rate_hz, Some(23.44));
     }
 
     #[test]
@@ -268,7 +199,6 @@ mod tests {
         assert_eq!(config.mode, SchedulingMode::Reactive);
         assert_eq!(config.priority, ThreadPriority::High);
         assert_eq!(config.clock, ClockSource::Vsync);
-        assert_eq!(config.rate_hz, None);
     }
 
     #[test]
@@ -287,51 +217,17 @@ mod tests {
     }
 
     #[test]
-    fn test_periodic_preset() {
-        let config = SchedulingConfig::periodic(1.0);
-        assert_eq!(config.mode, SchedulingMode::Timer);
-        assert_eq!(config.priority, ThreadPriority::Normal);
-        assert_eq!(config.rate_hz, Some(1.0));
-    }
-
-    #[test]
-    fn test_validate_loop_requires_rate() {
-        let mut config = SchedulingConfig::default();
-        config.mode = SchedulingMode::Loop;
-        assert!(config.validate().is_err());
-
-        config.rate_hz = Some(60.0);
+    fn test_validate() {
+        let config = SchedulingConfig::default();
         assert!(config.validate().is_ok());
-    }
 
-    #[test]
-    fn test_validate_timer_requires_rate() {
-        let mut config = SchedulingConfig::default();
-        config.mode = SchedulingMode::Timer;
-        assert!(config.validate().is_err());
-
-        config.rate_hz = Some(1.0);
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_negative_rate() {
-        let mut config = SchedulingConfig::default();
-        config.mode = SchedulingMode::Loop;
-        config.rate_hz = Some(-1.0);
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_execution_interval() {
-        let config = SchedulingConfig::audio_realtime(23.44);
-        let interval = config.execution_interval_ms().unwrap();
-        assert!((interval - 42.66).abs() < 0.1);  // 1000 / 23.44 ≈ 42.66ms
+        let loop_config = SchedulingConfig::audio_realtime();
+        assert!(loop_config.validate().is_ok());
     }
 
     #[test]
     fn test_latency_budget() {
-        let rt_config = SchedulingConfig::audio_realtime(23.44);
+        let rt_config = SchedulingConfig::audio_realtime();
         assert_eq!(rt_config.latency_budget_ms(), Some(10.0));
 
         let high_config = SchedulingConfig::video_realtime();
@@ -343,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_scheduling_config_serde() {
-        let config = SchedulingConfig::audio_realtime(23.44);
+        let config = SchedulingConfig::audio_realtime();
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: SchedulingConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config.mode, deserialized.mode);

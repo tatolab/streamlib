@@ -579,58 +579,6 @@ impl AudioRequirements {
     }
 }
 
-/// Timer requirements for processors that need periodic wakeups
-///
-/// Processors like displays need to refresh at fixed rates (e.g., 60 Hz rendering).
-/// This declares timer requirements for event-driven architecture.
-///
-/// # Example
-///
-/// ```ignore
-/// // Display processor with independent timer
-/// ProcessorDescriptor::new("DisplayProcessor", "Renders video to window")
-///     .with_timer_requirements(TimerRequirements {
-///         rate_hz: 60.0,  // 60 FPS rendering
-///         group_id: None,  // Independent timer
-///         description: Some("Display refresh rate".into()),
-///     });
-///
-/// // Audio generator in synchronized timer group
-/// ProcessorDescriptor::new("TestToneGenerator", "Generates test tones")
-///     .with_timer_requirements(TimerRequirements {
-///         rate_hz: 23.44,  // 48000 Hz / 2048 samples
-///         group_id: Some("audio_master".to_string()),  // Share timer with other audio processors
-///         description: Some("Audio generation clock".into()),
-///     })
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimerRequirements {
-    /// Timer rate in Hz (e.g., 60.0 for 60 FPS, 23.44 for audio)
-    pub rate_hz: f64,
-
-    /// Optional timer group ID (clock domain name)
-    ///
-    /// Processors with the same group_id share a master timer thread,
-    /// ensuring synchronized wake-ups with no clock drift.
-    ///
-    /// Use cases:
-    /// - Multiple audio generators feeding a mixer: "audio_master"
-    /// - Synchronized video sources: "video_60fps"
-    /// - Multi-camera stereo rig: "stereo_cameras"
-    ///
-    /// If None, processor gets an independent timer (default behavior).
-    ///
-    /// Inspired by:
-    /// - GStreamer's pipeline clock
-    /// - Core Audio's clock domains
-    /// - PipeWire's clock naming
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub group_id: Option<String>,
-
-    /// Description of what the timer is used for
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
 
 /// Processor descriptor for AI discovery
 ///
@@ -674,24 +622,6 @@ pub struct ProcessorDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_requirements: Option<AudioRequirements>,
 
-    /// Timer requirements (optional)
-    ///
-    /// If this processor needs periodic wakeups (e.g., displays at 60 Hz),
-    /// declare timer requirements here. The runtime will spawn a dedicated
-    /// timer thread that sends WakeupEvent::TimerTick at the requested rate.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// ProcessorDescriptor::new("DisplayProcessor", "...")
-    ///     .with_timer_requirements(TimerRequirements {
-    ///         rate_hz: 60.0,
-    ///         description: Some("Display refresh rate".into()),
-    ///     })
-    /// ```
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timer_requirements: Option<TimerRequirements>,
-
     /// Additional metadata
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
@@ -712,7 +642,6 @@ impl ProcessorDescriptor {
             examples: Vec::new(),
             tags: Vec::new(),
             audio_requirements: None,
-            timer_requirements: None,
             metadata: None,
         }
     }
@@ -766,26 +695,6 @@ impl ProcessorDescriptor {
     /// ```
     pub fn with_audio_requirements(mut self, requirements: AudioRequirements) -> Self {
         self.audio_requirements = Some(requirements);
-        self
-    }
-
-    /// Add timer requirements (builder pattern)
-    ///
-    /// Use this for processors that need periodic wakeups at fixed rates.
-    /// The runtime will spawn a timer thread that sends WakeupEvent::TimerTick
-    /// at the requested rate.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// ProcessorDescriptor::new("DisplayProcessor", "Renders video to window")
-    ///     .with_timer_requirements(TimerRequirements {
-    ///         rate_hz: 60.0,
-    ///         description: Some("Display refresh rate".into()),
-    ///     })
-    /// ```
-    pub fn with_timer_requirements(mut self, requirements: TimerRequirements) -> Self {
-        self.timer_requirements = Some(requirements);
         self
     }
 

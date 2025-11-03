@@ -23,7 +23,7 @@
 //!
 //! ```rust,ignore
 //! #[derive(StreamSource)]
-//! #[scheduling(mode = "loop", clock = "audio", rate_hz = 23.44)]
+//! #[scheduling(mode = "loop", clock = "audio")]
 //! struct TestToneGenerator {
 //!     #[output()]
 //!     audio: StreamOutput<AudioFrame>,
@@ -49,7 +49,6 @@
 //!         frequency: 440.0,
 //!         amplitude: 0.5,
 //!         sample_rate: 48000,
-//!         timer_group_id: Some("audio_master".to_string()),
 //!     }
 //! )?;
 //!
@@ -121,9 +120,12 @@ use std::time::Duration;
 ///         SchedulingConfig {
 ///             mode: SchedulingMode::Loop,
 ///             clock: ClockSource::Audio,
-///             rate_hz: Some(23.44), // 48000 / 2048
 ///             provide_clock: false,
 ///         }
+///     }
+///
+///     fn frame_duration_ns(&self) -> Option<i64> {
+///         Some((1_000_000_000.0 / 23.44) as i64)
 ///     }
 ///
 ///     fn descriptor() -> Option<ProcessorDescriptor> {
@@ -164,7 +166,7 @@ pub trait StreamSource: StreamElement {
     ///
     /// # Timing
     ///
-    /// For loop-based sources, called at rate_hz frequency.
+    /// For loop-based sources, called at rate calculated from buffer characteristics.
     /// For callback sources, called when hardware has data.
     ///
     /// # Errors
@@ -210,9 +212,12 @@ pub trait StreamSource: StreamElement {
     ///     SchedulingConfig {
     ///         mode: SchedulingMode::Loop,
     ///         clock: ClockSource::Audio,
-    ///         rate_hz: Some(48000.0 / 2048.0), // 23.44 Hz
     ///         provide_clock: false,
     ///     }
+    /// }
+    ///
+    /// fn frame_duration_ns(&self) -> Option<i64> {
+    ///     Some((1_000_000_000.0 / 23.44) as i64)
     /// }
     /// ```
     fn scheduling_config(&self) -> SchedulingConfig;
@@ -254,6 +259,55 @@ pub trait StreamSource: StreamElement {
     fn descriptor() -> Option<ProcessorDescriptor>
     where
         Self: Sized;
+
+    fn frame_duration_ns(&self) -> Option<i64> {
+        None
+    }
+
+    fn run_source_loop(
+        &mut self,
+        clock: std::sync::Arc<dyn crate::core::clocks::Clock>,
+        shutdown: crossbeam_channel::Receiver<()>,
+    ) -> Result<()> {
+        let config = self.scheduling_config();
+
+        if config.mode != SchedulingMode::Loop {
+            return Ok(());
+        }
+
+        let frame_duration_ns = self.frame_duration_ns().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "Loop mode sources must implement frame_duration_ns()".to_string()
+            )
+        })?;
+
+        let mut next_frame_time = clock.now_ns();
+
+        loop {
+            if shutdown.try_recv().is_ok() {
+                break;
+            }
+
+            let now = clock.now_ns();
+            if now < next_frame_time {
+                let sleep_ns = (next_frame_time - now) as u64;
+                std::thread::sleep(std::time::Duration::from_nanos(sleep_ns));
+            }
+
+            if let Err(e) = self.generate() {
+                tracing::error!("Source generate() error: {}", e);
+            }
+
+            next_frame_time += frame_duration_ns;
+
+            if clock.now_ns() > next_frame_time {
+                tracing::warn!("Source running behind schedule");
+                next_frame_time = clock.now_ns();
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -319,10 +373,13 @@ mod tests {
             SchedulingConfig {
                 mode: SchedulingMode::Loop,
                 clock: ClockSource::Audio,
-                rate_hz: Some(23.44),
                 provide_clock: false,
                 priority: crate::core::scheduling::ThreadPriority::Normal,
             }
+        }
+
+        fn frame_duration_ns(&self) -> Option<i64> {
+            Some((1_000_000_000.0 / 23.44) as i64)
         }
 
         fn descriptor() -> Option<ProcessorDescriptor> {
@@ -355,8 +412,8 @@ mod tests {
         let sched = source.scheduling_config();
         assert_eq!(sched.mode, SchedulingMode::Loop);
         assert_eq!(sched.clock, ClockSource::Audio);
-        assert_eq!(sched.rate_hz, Some(23.44));
         assert!(!sched.provide_clock);
+        assert_eq!(source.frame_duration_ns(), Some((1_000_000_000.0 / 23.44) as i64));
     }
 
     #[test]

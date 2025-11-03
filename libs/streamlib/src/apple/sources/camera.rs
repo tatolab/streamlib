@@ -637,10 +637,9 @@ impl StreamSource for AppleCameraProcessor {
         // Camera is callback-driven - AVFoundation callback triggers processing
         SchedulingConfig {
             mode: SchedulingMode::Callback,
-            priority: ThreadPriority::High,  // Camera capture needs high priority
-            clock: ClockSource::Software, // Camera generates frames on its own timing
-            rate_hz: None, // Not applicable for callback mode
-            provide_clock: false, // Camera doesn't provide pipeline clock
+            priority: ThreadPriority::High,
+            clock: ClockSource::Software,
+            provide_clock: false,
         }
     }
 

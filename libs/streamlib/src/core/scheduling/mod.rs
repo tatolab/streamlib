@@ -25,7 +25,6 @@
 //!     mode: SchedulingMode::Loop,
 //!     priority: ThreadPriority::High,
 //!     clock: ClockSource::Audio,
-//!     rate_hz: Some(23.44),
 //! }
 //! ```
 //!
@@ -47,7 +46,6 @@
 //!     mode: SchedulingMode::Loop,
 //!     priority: ThreadPriority::High,
 //!     clock: ClockSource::Audio,
-//!     rate_hz: Some(48000.0 / 2048.0),  // 23.44 Hz
 //! };
 //!
 //! // ML inference - normal priority reactive
@@ -55,7 +53,6 @@
 //!     mode: SchedulingMode::Reactive,
 //!     priority: ThreadPriority::Normal,
 //!     clock: ClockSource::Software,
-//!     rate_hz: None,
 //! };
 //! ```
 

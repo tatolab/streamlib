@@ -66,9 +66,7 @@ pub use transformers::{
 pub use schema::{
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
-    AudioRequirements,  // Audio configuration requirements
-    TimerRequirements,  // Timer configuration requirements
-    // Standard schemas
+    AudioRequirements,
     SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
 };
