@@ -315,7 +315,6 @@ impl StreamElement for AppleAudioCaptureProcessor {
 
 // StreamSource implementation - GStreamer-inspired source trait
 impl StreamSource for AppleAudioCaptureProcessor {
-    type Output = AudioFrame;
     type Config = crate::core::AudioCaptureConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -324,7 +323,7 @@ impl StreamSource for AppleAudioCaptureProcessor {
         Self::new_internal(device_id, config.sample_rate, config.channels)
     }
 
-    fn generate(&mut self) -> Result<Self::Output> {
+    fn process(&mut self) -> Result<()> {
         // Read captured samples from ring buffer
         let samples = {
             let mut buffer = self.sample_buffer.lock();
@@ -352,12 +351,16 @@ impl StreamSource for AppleAudioCaptureProcessor {
             .unwrap()
             .as_nanos() as i64;
 
-        Ok(AudioFrame::new(
+        let frame = AudioFrame::new(
             samples,
             timestamp_ns,
             frame_number,
             self.channels,
-        ))
+        );
+
+        // Write directly to output port
+        self.ports.audio.write(frame);
+        Ok(())
     }
 
     fn scheduling_config(&self) -> SchedulingConfig {

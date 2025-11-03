@@ -302,6 +302,10 @@ impl StreamElement for AppleAudioOutputProcessor {
         tracing::info!("AudioOutput {}: Stopped", self.device_name);
         Ok(())
     }
+
+    fn provides_clock(&self) -> Option<Arc<dyn crate::core::clocks::Clock>> {
+        Some(self.audio_clock.clone())
+    }
 }
 
 // ============================================================
@@ -309,7 +313,6 @@ impl StreamElement for AppleAudioOutputProcessor {
 // ============================================================
 
 impl StreamSink for AppleAudioOutputProcessor {
-    type Input = AudioFrame;
     type Config = crate::core::AudioOutputConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -318,21 +321,19 @@ impl StreamSink for AppleAudioOutputProcessor {
         Self::new_internal(device_id)
     }
 
-    fn render(&mut self, frame: Self::Input) -> Result<()> {
-        tracing::debug!(
-            "[AudioOutput] render: frame #{} - {} samples, {} channels",
-            frame.frame_number, frame.sample_count(), frame.channels
-        );
+    fn process(&mut self) -> Result<()> {
+        // TODO: Add input_ports field to struct and read from it here
+        // For now, this sink doesn't have input_ports implemented yet
+        // The runtime will need to be updated to handle the new pattern
+        // where sinks read from their input ports instead of receiving frames
+        // as parameters.
+        //
+        // Expected pattern:
+        // if let Some(frame) = self.input_ports.audio.read_latest() {
+        //     self.push_frame(&frame)?;
+        // }
 
-        // Push frame to ring buffer (audio thread will pull from it)
-        self.push_frame(&frame)?;
-
-        let buffer_level = self.buffer_level();
-        tracing::debug!(
-            "[AudioOutput] Rendered frame, buffer level: {:.1}%",
-            buffer_level * 100.0
-        );
-
+        // Temporary no-op implementation until input_ports are added
         Ok(())
     }
 

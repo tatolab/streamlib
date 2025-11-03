@@ -86,7 +86,6 @@ use serde::{Deserialize, Serialize};
 /// }
 ///
 /// impl StreamSink for DisplayProcessor {
-///     type Input = VideoFrame;
 ///     type Config = DisplayConfig;
 ///
 ///     fn from_config(config: Self::Config) -> Result<Self> {
@@ -94,11 +93,17 @@ use serde::{Deserialize, Serialize};
 ///             name: "display".to_string(),
 ///             width: config.width,
 ///             height: config.height,
+///             input_ports: DisplayInputPorts {
+///                 video: StreamInput::new("video"),
+///             },
 ///         })
 ///     }
 ///
-///     fn render(&mut self, frame: Self::Input) -> Result<()> {
-///         // Render frame to screen
+///     fn process(&mut self) -> Result<()> {
+///         // Read from input port and render to screen
+///         if let Some(frame) = self.input_ports.video.read_latest() {
+///             self.render_frame(&frame)?;
+///         }
 ///         Ok(())
 ///     }
 ///
@@ -121,11 +126,6 @@ use serde::{Deserialize, Serialize};
 /// }
 /// ```
 pub trait StreamSink: StreamElement {
-    /// Input data type
-    ///
-    /// Must implement PortMessage trait for serialization/transport.
-    type Input: crate::core::ports::PortMessage;
-
     /// Configuration type
     ///
     /// Used by `from_config()` constructor.
@@ -145,15 +145,18 @@ pub trait StreamSink: StreamElement {
     where
         Self: Sized;
 
-    /// Render/consume one data unit
+    /// Process one cycle - read from input ports and render/consume data
     ///
-    /// Called by runtime when data is available on input port.
+    /// Called by runtime on each tick.
     /// Should be fast - blocking operations should be async.
+    ///
+    /// Unlike transforms, sinks have no output ports to write to.
+    /// Instead, they read from their input ports and render/consume the data.
     ///
     /// # Timing
     ///
     /// For timestamp sync: runtime calls when buffer timestamp ≤ clock time.
-    /// For no sync: runtime calls immediately when data available.
+    /// For no sync: runtime calls immediately on each tick.
     ///
     /// # Errors
     ///
@@ -164,20 +167,23 @@ pub trait StreamSink: StreamElement {
     /// # Example
     ///
     /// ```rust,ignore
-    /// fn render(&mut self, frame: VideoFrame) -> Result<()> {
-    ///     // Check timestamp vs clock
-    ///     let now = self.clock.get_time();
-    ///     let late = now - frame.timestamp_ns;
-    ///     if late > LATE_THRESHOLD {
-    ///         tracing::warn!("Frame {} is {} ns late", frame.frame_number, late);
-    ///     }
+    /// fn process(&mut self) -> Result<()> {
+    ///     // Read latest frame from input port
+    ///     if let Some(frame) = self.input_ports.video.read_latest() {
+    ///         // Check timestamp vs clock
+    ///         let now = self.clock.get_time();
+    ///         let late = now - frame.timestamp_ns;
+    ///         if late > LATE_THRESHOLD {
+    ///             tracing::warn!("Frame {} is {} ns late", frame.frame_number, late);
+    ///         }
     ///
-    ///     // Render to screen
-    ///     self.render_texture(&frame.texture)?;
+    ///         // Render to screen
+    ///         self.render_texture(&frame.texture)?;
+    ///     }
     ///     Ok(())
     /// }
     /// ```
-    fn render(&mut self, input: Self::Input) -> Result<()>;
+    fn process(&mut self) -> Result<()>;
 
     /// Get clock configuration
     ///
@@ -314,7 +320,6 @@ mod tests {
     }
 
     impl StreamSink for MockSink {
-        type Input = VideoFrame;
         type Config = MockSinkConfig;
 
         fn from_config(config: Self::Config) -> Result<Self> {
@@ -326,7 +331,9 @@ mod tests {
             })
         }
 
-        fn render(&mut self, _frame: Self::Input) -> Result<()> {
+        fn process(&mut self) -> Result<()> {
+            // Mock implementation - sinks should read from input ports here
+            // but this is just a test mock without actual ports
             self.frames_rendered += 1;
             Ok(())
         }
@@ -358,13 +365,15 @@ mod tests {
     }
 
     #[test]
-    fn test_render() {
+    fn test_process() {
         let config = MockSinkConfig { width: 1920, height: 1080 };
         let mut sink = MockSink::from_config(config).unwrap();
 
-        // Note: Can't test actual render() without GPU initialization
+        // Note: Can't test actual rendering without GPU initialization
         // Just verify frames_rendered counter works
         assert_eq!(sink.frames_rendered, 0);
+        sink.process().unwrap();
+        assert_eq!(sink.frames_rendered, 1);
     }
 
     #[test]

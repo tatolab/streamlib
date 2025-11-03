@@ -3,6 +3,7 @@
 //! Driven by CoreAudio (macOS), ALSA (Linux), or WASAPI (Windows) callbacks.
 
 use super::Clock;
+use crate::core::scheduling::ClockType;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -66,6 +67,10 @@ impl Clock for AudioClock {
 
     fn rate_hz(&self) -> Option<f64> {
         Some(self.sample_rate as f64)
+    }
+
+    fn clock_type(&self) -> ClockType {
+        ClockType::Audio
     }
 
     fn description(&self) -> &str {

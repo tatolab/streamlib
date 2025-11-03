@@ -481,7 +481,6 @@ impl StreamElement for AppleCameraProcessor {
 
 // StreamSource implementation - GStreamer-inspired source trait
 impl StreamSource for AppleCameraProcessor {
-    type Output = VideoFrame;
     type Config = crate::core::CameraConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -491,7 +490,7 @@ impl StreamSource for AppleCameraProcessor {
         }
     }
 
-    fn generate(&mut self) -> Result<Self::Output> {
+    fn process(&mut self) -> Result<()> {
         // Try to get the latest frame from the AVFoundation delegate
         let frame_holder = {
             let mut latest = self.latest_frame.lock();
@@ -629,7 +628,9 @@ impl StreamSource for AppleCameraProcessor {
                 );
             }
 
-            Ok(frame)
+            // Write directly to output port
+            self.ports.video.write(frame);
+            Ok(())
         }
     }
 

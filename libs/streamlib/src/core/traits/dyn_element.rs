@@ -8,7 +8,7 @@
 //!
 //! Inspired by GStreamer's GstElement virtual method dispatch:
 //! - Runtime calls `dispatch_dyn()` on each wakeup
-//! - `dispatch_dyn()` routes to `generate()`, `render()`, or `process()` based on element type
+//! - `dispatch_dyn()` routes to `process()` for all element types (unified API)
 //! - Type-safe downcasting via `as_source()`, `as_sink()`, `as_transform()`
 //!
 //! ## Blanket Implementation
@@ -55,10 +55,12 @@ pub trait DynStreamElement: Send + 'static {
     /// Dispatch to appropriate processing method based on element type
     ///
     /// This is the main execution method called by the runtime.
-    /// Each element type implements this to call its specialized method:
-    /// - Sources call `generate()` and write to output ports
-    /// - Sinks read from input ports and call `render()`
-    /// - Transforms read inputs, call `process()`, and write outputs
+    /// **All element types now use the unified `process()` method:**
+    /// - Sources: `process()` generates data and writes to output ports
+    /// - Sinks: `process()` reads from input ports and renders/consumes data
+    /// - Transforms: `process()` reads inputs, transforms, and writes outputs
+    ///
+    /// This unified API simplifies runtime dispatch - just call `process()` on everything.
     ///
     /// Returns Ok(()) if processing succeeded or no data available.
     fn dispatch_dyn(&mut self) -> Result<()>;

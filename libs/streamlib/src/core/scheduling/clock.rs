@@ -124,9 +124,10 @@ impl Default for ClockConfig {
     }
 }
 
-/// Type of clock provided by a sink
+/// Type of clock provided by a sink or source
 ///
-/// Categorizes the clock for runtime scheduling decisions.
+/// Categorizes the clock for runtime scheduling decisions and automatic
+/// master clock selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClockType {
     /// Audio hardware clock (sample-accurate)
@@ -139,19 +140,25 @@ pub enum ClockType {
     ///
     /// Frame-level precision - good for video.
     /// **Example**: 60Hz vsync (16.67ms resolution)
-    Vsync,
+    Video,
 
-    /// Network clock (RTP, PTP)
-    ///
-    /// For distributed systems and network sync.
-    /// **Example**: PTP grand master clock
-    Network,
-
-    /// System clock
+    /// Software/system clock
     ///
     /// Fallback - uses CPU timestamps.
     /// **Precision**: ~1ms
-    System,
+    Software,
+
+    /// PTP clock (IEEE 1588 precision time protocol)
+    ///
+    /// For distributed systems with microsecond precision.
+    /// **Example**: PTP grand master clock
+    PTP,
+
+    /// Genlock clock (SDI hardware sync)
+    ///
+    /// For broadcast equipment synchronization.
+    /// **Example**: Tri-level sync, black burst
+    Genlock,
 }
 
 /// Synchronization mode for sinks
@@ -273,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_clock_type_serde() {
-        let clock_type = ClockType::Vsync;
+        let clock_type = ClockType::Video;
         let json = serde_json::to_string(&clock_type).unwrap();
         let deserialized: ClockType = serde_json::from_str(&json).unwrap();
         assert_eq!(clock_type, deserialized);

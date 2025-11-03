@@ -3,6 +3,16 @@
 //! Transforms process data, taking inputs and producing outputs.
 //! They are the middle layer of processing pipelines.
 //!
+//! ## Unified Process API
+//!
+//! **All processor types (sources, transforms, sinks) use the same `process()` method:**
+//!
+//! - **Sources**: `process()` generates data and writes to output ports
+//! - **Transforms**: `process()` reads from input ports, transforms, writes to output ports
+//! - **Sinks**: `process()` reads from input ports and renders/consumes data
+//!
+//! This unified API simplifies the runtime and provides a consistent pattern across all processors.
+//!
 //! ## Design Philosophy
 //!
 //! Inspired by GStreamer's GstBaseTransform, transforms:

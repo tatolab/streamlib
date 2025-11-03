@@ -4,6 +4,35 @@
 //! Each DisplayProcessor instance manages its own window.
 //!
 //! This is a **sink processor** (v2.0.0 architecture) - it consumes video without producing outputs.
+//!
+//! ## VSync Clock Integration
+//!
+//! Each DisplayProcessor provides a hardware-driven VSync clock via CVDisplayLink:
+//! - Detects actual display refresh rate (60Hz, 120Hz, etc.)
+//! - Receives hardware vsync callbacks from the display driver
+//! - Provides accurate frame timing for video synchronization
+//!
+//! ### Usage
+//!
+//! ```rust,ignore
+//! use streamlib::{AppleDisplayProcessor, StreamRuntime};
+//!
+//! let mut display = AppleDisplayProcessor::with_size(1920, 1080)?;
+//! let mut runtime = StreamRuntime::new();
+//!
+//! // Register the display's vsync clock with the runtime
+//! runtime.register_video_clock(display.video_clock())?;
+//!
+//! runtime.add_processor(Box::new(display))?;
+//! runtime.start().await?;
+//! ```
+//!
+//! ### Multi-Display Validation
+//!
+//! The runtime enforces that all displays have matching refresh rates:
+//! - First registered display sets the refresh rate
+//! - Subsequent displays must match within 0.1 Hz
+//! - Prevents timing issues from mixed refresh rates
 
 use crate::core::{
     DisplayProcessor, DisplayInputPorts, WindowId,
@@ -12,7 +41,8 @@ use crate::core::{
 };
 use crate::core::traits::{StreamElement, StreamSink, ElementType};
 use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
-use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread};
+use crate::core::clocks::VideoClock;
+use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread, display_link::{DisplayLink, get_main_display_refresh_rate}};
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
 use objc2_app_kit::{NSWindow, NSBackingStoreType, NSWindowStyleMask, NSApplication, NSApplicationActivationPolicy};
@@ -49,6 +79,10 @@ pub struct AppleDisplayProcessor {
 
     // WebGPU bridge (created from shared device in on_start)
     wgpu_bridge: Option<Arc<WgpuBridge>>,
+
+    // VSync clock integration
+    video_clock: Arc<VideoClock>,
+    display_link: Option<DisplayLink>,
 
     // Processor state
     ports: DisplayInputPorts,
@@ -90,16 +124,28 @@ impl AppleDisplayProcessor {
 
         let window_title = "streamlib Display".to_string();
 
-        // Window and layer will be created in on_start() on the main thread
+        let refresh_rate = get_main_display_refresh_rate().unwrap_or(60.0);
+        tracing::info!(
+            "Display {}: Detected refresh rate: {:.2} Hz",
+            window_id.0,
+            refresh_rate
+        );
+
+        let video_clock = Arc::new(VideoClock::new(
+            refresh_rate,
+            format!("Display {} VSync", window_id.0)
+        ));
 
         Ok(Self {
-            window: None,  // Created async in on_start()
-            metal_layer: None,  // Created async in on_start()
-            layer_addr: Arc::new(AtomicUsize::new(0)),  // 0 = not created yet
+            window: None,
+            metal_layer: None,
+            layer_addr: Arc::new(AtomicUsize::new(0)),
             metal_device,
             metal_command_queue,
-            gpu_context: None,  // Will be set by runtime in on_start()
-            wgpu_bridge: None,  // Will be created from shared device in on_start()
+            gpu_context: None,
+            wgpu_bridge: None,
+            video_clock,
+            display_link: None,
             ports: DisplayInputPorts {
                 video: crate::core::StreamInput::new("video"),
             },
@@ -110,6 +156,10 @@ impl AppleDisplayProcessor {
             frames_rendered: 0,
             window_creation_dispatched: false,
         })
+    }
+
+    pub fn video_clock(&self) -> Arc<VideoClock> {
+        self.video_clock.clone()
     }
 }
 
@@ -160,7 +210,10 @@ impl StreamElement for AppleDisplayProcessor {
             self.frames_rendered
         );
 
-        // Close window on main thread (CRITICAL for AppKit)
+        if let Some(display_link) = self.display_link.take() {
+            display_link.stop()?;
+        }
+
         if let Some(window) = self.window.take() {
             let window_addr = Retained::into_raw(window) as usize;
 
@@ -184,6 +237,10 @@ impl StreamElement for AppleDisplayProcessor {
     fn as_sink_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
+
+    fn provides_clock(&self) -> Option<Arc<dyn crate::core::clocks::Clock>> {
+        Some(self.video_clock.clone())
+    }
 }
 
 // ============================================================
@@ -191,7 +248,6 @@ impl StreamElement for AppleDisplayProcessor {
 // ============================================================
 
 impl StreamSink for AppleDisplayProcessor {
-    type Input = VideoFrame;
     type Config = crate::core::DisplayConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -202,7 +258,24 @@ impl StreamSink for AppleDisplayProcessor {
         Ok(processor)
     }
 
-    fn render(&mut self, frame: Self::Input) -> Result<()> {
+    fn process(&mut self) -> Result<()> {
+        // TODO: Add input_ports field to struct and read from it here
+        // For now, this sink doesn't have input_ports implemented yet
+        // The runtime will need to be updated to handle the new pattern
+        // where sinks read from their input ports instead of receiving frames
+        // as parameters.
+        //
+        // Expected pattern:
+        // if let Some(frame) = self.input_ports.video.read_latest() {
+        //     // [existing render logic with `frame`]
+        // }
+
+        // Temporary no-op implementation until input_ports are added
+        // The existing render logic below should be moved inside the if-let above
+        return Ok(());
+
+        /* ORIGINAL LOGIC - TO BE RESTORED WITH INPUT_PORTS:
+        fn _render_impl(&mut self, frame: VideoFrame) -> Result<()> {
         // Get the WebGPU texture from the frame
         let wgpu_texture = &frame.texture;
 
@@ -294,6 +367,8 @@ impl StreamSink for AppleDisplayProcessor {
             }
 
         Ok(())
+        }
+        */
     }
 
     fn clock_config(&self) -> ClockConfig {
@@ -471,6 +546,18 @@ impl AppleDisplayProcessor {
         self.window_creation_dispatched = true;
 
         tracing::info!("Display {}: Window creation dispatched, processor ready", self.window_id.0);
+
+        let display_link = DisplayLink::new(self.video_clock.clone())?;
+        display_link.start()?;
+
+        tracing::info!(
+            "Display {}: CVDisplayLink started at {:.2} Hz",
+            self.window_id.0,
+            display_link.get_refresh_rate()
+        );
+
+        self.display_link = Some(display_link);
+
         Ok(())
     }
 

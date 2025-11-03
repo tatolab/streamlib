@@ -66,6 +66,8 @@ mod runtime_helpers;
 
 pub mod time;
 
+pub mod display_link;
+
 // Re-export core types (Result and StreamError are internal, not re-exported)
 
 // Re-export wrapper types

@@ -4,6 +4,7 @@
 
 use super::Clock;
 use super::software_clock::SoftwareClock;
+use crate::core::scheduling::ClockType;
 
 /// IEEE 1588 Precision Time Protocol clock (stub)
 ///
@@ -42,6 +43,10 @@ impl Default for PTPClock {
 impl Clock for PTPClock {
     fn now_ns(&self) -> i64 {
         self.fallback.now_ns()
+    }
+
+    fn clock_type(&self) -> ClockType {
+        ClockType::PTP
     }
 
     fn description(&self) -> &str {

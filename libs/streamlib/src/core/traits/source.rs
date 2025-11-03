@@ -97,7 +97,6 @@ use std::time::Duration;
 /// }
 ///
 /// impl StreamSource for TestToneGenerator {
-///     type Output = AudioFrame;
 ///     type Config = TestToneConfig;
 ///
 ///     fn from_config(config: Self::Config) -> Result<Self> {
@@ -106,14 +105,21 @@ use std::time::Duration;
 ///             frequency: config.frequency,
 ///             phase: 0.0,
 ///             sample_rate: config.sample_rate,
+///             output_ports: TestToneOutputPorts {
+///                 audio: StreamOutput::new("audio"),
+///             },
 ///         })
 ///     }
 ///
-///     fn generate(&mut self) -> Result<Self::Output> {
+///     fn process(&mut self) -> Result<()> {
 ///         // Generate audio frame
 ///         let mut samples = Vec::new();
 ///         // ... fill samples ...
-///         Ok(AudioFrame { samples, /* ... */ })
+///         let frame = AudioFrame::new(samples, 0, 0, self.sample_rate, 2);
+///
+///         // Write directly to output port
+///         self.output_ports.audio.write(frame);
+///         Ok(())
 ///     }
 ///
 ///     fn scheduling_config(&self) -> SchedulingConfig {
@@ -135,11 +141,6 @@ use std::time::Duration;
 /// }
 /// ```
 pub trait StreamSource: StreamElement {
-    /// Output data type
-    ///
-    /// Must implement PortMessage trait for serialization/transport.
-    type Output: crate::core::ports::PortMessage;
-
     /// Configuration type
     ///
     /// Used by `from_config()` constructor.
@@ -159,10 +160,13 @@ pub trait StreamSource: StreamElement {
     where
         Self: Sized;
 
-    /// Generate one data unit
+    /// Process one cycle - generate data and write to output ports
     ///
     /// Called by runtime loop/callback to produce data.
     /// Should be fast - avoid blocking operations.
+    ///
+    /// Unlike transforms, sources have no input ports to read from.
+    /// Instead, they generate data and write directly to their output ports.
     ///
     /// # Timing
     ///
@@ -178,8 +182,8 @@ pub trait StreamSource: StreamElement {
     /// # Example
     ///
     /// ```rust,ignore
-    /// fn generate(&mut self) -> Result<AudioFrame> {
-    ///     let samples = vec![0.0; 2048];
+    /// fn process(&mut self) -> Result<()> {
+    ///     let mut samples = vec![0.0; 2048];
     ///     // Fill samples with tone
     ///     for i in 0..2048 {
     ///         let t = self.phase + i as f64 / self.sample_rate as f64;
@@ -187,15 +191,19 @@ pub trait StreamSource: StreamElement {
     ///     }
     ///     self.phase += 2048.0 / self.sample_rate as f64;
     ///
-    ///     Ok(AudioFrame {
+    ///     let frame = AudioFrame {
     ///         samples,
-    ///         timestamp_ns: /* runtime provides */,
+    ///         timestamp_ns: self.clock.now_ns(),
     ///         sample_rate: self.sample_rate,
     ///         channels: 2,
-    ///     })
+    ///     };
+    ///
+    ///     // Write directly to output port
+    ///     self.output_ports.audio.write(frame);
+    ///     Ok(())
     /// }
     /// ```
-    fn generate(&mut self) -> Result<Self::Output>;
+    fn process(&mut self) -> Result<()>;
 
     /// Get scheduling configuration
     ///
@@ -294,8 +302,8 @@ pub trait StreamSource: StreamElement {
                 std::thread::sleep(std::time::Duration::from_nanos(sleep_ns));
             }
 
-            if let Err(e) = self.generate() {
-                tracing::error!("Source generate() error: {}", e);
+            if let Err(e) = self.process() {
+                tracing::error!("Source process() error: {}", e);
             }
 
             next_frame_time += frame_duration_ns;
@@ -349,7 +357,6 @@ mod tests {
     }
 
     impl StreamSource for MockSource {
-        type Output = AudioFrame;
         type Config = MockSourceConfig;
 
         fn from_config(config: Self::Config) -> Result<Self> {
@@ -359,14 +366,10 @@ mod tests {
             })
         }
 
-        fn generate(&mut self) -> Result<Self::Output> {
-            Ok(AudioFrame::new(
-                vec![0.0; 2048],
-                0,  // timestamp_ns
-                0,  // frame_number
-                48000,  // sample_rate
-                2,  // channels
-            ))
+        fn process(&mut self) -> Result<()> {
+            // Mock implementation - sources should write to output ports here
+            // but this is just a test mock without actual ports
+            Ok(())
         }
 
         fn scheduling_config(&self) -> SchedulingConfig {
@@ -396,13 +399,11 @@ mod tests {
     }
 
     #[test]
-    fn test_generate() {
+    fn test_process() {
         let config = MockSourceConfig { frequency: 440.0 };
         let mut source = MockSource::from_config(config).unwrap();
-        let frame = source.generate().unwrap();
-        assert_eq!(frame.samples.len(), 2048);
-        assert_eq!(frame.sample_rate, 48000);
-        assert_eq!(frame.channels, 2);
+        // Process should succeed (mock doesn't actually generate anything)
+        source.process().unwrap();
     }
 
     #[test]

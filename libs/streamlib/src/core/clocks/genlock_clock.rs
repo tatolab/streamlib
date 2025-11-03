@@ -4,6 +4,7 @@
 
 use super::Clock;
 use super::software_clock::SoftwareClock;
+use crate::core::scheduling::ClockType;
 
 /// SDI hardware sync clock (genlock) - stub
 ///
@@ -42,6 +43,10 @@ impl Default for GenlockClock {
 impl Clock for GenlockClock {
     fn now_ns(&self) -> i64 {
         self.fallback.now_ns()
+    }
+
+    fn clock_type(&self) -> ClockType {
+        ClockType::Genlock
     }
 
     fn description(&self) -> &str {
