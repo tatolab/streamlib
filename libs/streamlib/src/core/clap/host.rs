@@ -586,9 +586,12 @@ impl ClapPluginHost {
     ///
     /// Handles buffer conversion internally. For more control, use `process_audio_channels()`.
     pub fn process_audio(&mut self, input: &AudioFrame) -> Result<AudioFrame> {
-        let (left_in, right_in) = deinterleave_audio_frame(input);
-        let (left_out, right_out) = self.process_audio_channels(&left_in, &right_in)?;
-        Ok(interleave_to_audio_frame(&left_out, &right_out, input.timestamp_ns, input.frame_number))
+        let channel_buffers = deinterleave_audio_frame(input);
+
+        assert!(channel_buffers.len() >= 2, "CLAP plugins require at least stereo input");
+
+        let (left_out, right_out) = self.process_audio_channels(&channel_buffers[0], &channel_buffers[1])?;
+        Ok(interleave_to_audio_frame(&[left_out, right_out], input.timestamp_ns, input.frame_number))
     }
 
     /// Process audio through the plugin (low-level API)

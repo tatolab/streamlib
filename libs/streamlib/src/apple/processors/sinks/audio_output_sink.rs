@@ -315,8 +315,8 @@ impl StreamSink for AppleAudioOutputProcessor {
 
     fn render(&mut self, frame: Self::Input) -> Result<()> {
         tracing::debug!(
-            "[AudioOutput] render: frame #{} - {} samples, {} channels, {} Hz",
-            frame.frame_number, frame.sample_count, frame.channels, frame.sample_rate
+            "[AudioOutput] render: frame #{} - {} samples, {} channels",
+            frame.frame_number, frame.sample_count(), frame.channels
         );
 
         // Push frame to ring buffer (audio thread will pull from it)

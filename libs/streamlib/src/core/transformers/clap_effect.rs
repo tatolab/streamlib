@@ -35,12 +35,12 @@
 //! ```
 
 use crate::core::{
-    Result, StreamError, AudioFrame,
+    Result, AudioFrame,
     StreamInput, StreamOutput,
 };
 use crate::core::traits::{StreamElement, StreamTransform, ElementType};
 use crate::core::schema::{PortDescriptor, SCHEMA_AUDIO_FRAME};
-use crate::core::clap::{ClapPluginHost, ClapScanner, ParameterInfo, PluginInfo, ClapPluginInfo};
+use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 
 use std::path::{Path, PathBuf};
 use serde::{Serialize, Deserialize};
@@ -362,8 +362,7 @@ impl StreamTransform for ClapEffectProcessor {
     }
 }
 
-// Re-export scanner for convenience
-pub use crate::core::clap::scanner::{ClapScanner, ClapPluginInfo};
+pub use crate::core::clap::{ClapScanner, ClapPluginInfo};
 
 #[cfg(test)]
 mod tests {

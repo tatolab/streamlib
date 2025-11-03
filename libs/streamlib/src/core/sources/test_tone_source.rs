@@ -180,7 +180,6 @@ impl TestToneGenerator {
             samples,
             timestamp_ns,
             self.frame_number,
-            self.sample_rate,
             self.channels,
         );
 

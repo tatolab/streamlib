@@ -7,12 +7,10 @@
 //! **INTERNAL USE ONLY** - Not exposed in public API
 
 use crate::core::AudioFrame;
-use dasp::{Frame, frame::Stereo};
 
 /// Convert interleaved AudioFrame to separate channel buffers for CLAP
 ///
-/// AudioFrame stores samples interleaved (LRLRLR...), but CLAP expects
-/// separate channel buffers (LLL... RRR...).
+/// AudioFrame stores samples interleaved, but CLAP expects separate channel buffers.
 ///
 /// # Arguments
 ///
@@ -20,67 +18,64 @@ use dasp::{Frame, frame::Stereo};
 ///
 /// # Returns
 ///
-/// Tuple of (left_channel, right_channel) as separate Vec<f32>
-///
-/// # Panics
-///
-/// Panics if frame is not stereo (2 channels)
-pub(crate) fn deinterleave_audio_frame(frame: &AudioFrame) -> (Vec<f32>, Vec<f32>) {
-    assert_eq!(frame.channels, 2, "Only stereo audio supported for CLAP plugins");
-
-    let samples = &frame.samples;
+/// Vec of channel buffers, where each Vec<f32> is one channel
+pub(crate) fn deinterleave_audio_frame(frame: &AudioFrame) -> Vec<Vec<f32>> {
+    let num_channels = frame.channels as usize;
     let num_samples = frame.sample_count();
 
-    let mut left = Vec::with_capacity(num_samples);
-    let mut right = Vec::with_capacity(num_samples);
+    let mut channels: Vec<Vec<f32>> = (0..num_channels)
+        .map(|_| Vec::with_capacity(num_samples))
+        .collect();
 
-    // Use dasp to safely deinterleave stereo frames
-    for stereo_frame in samples.chunks_exact(2) {
-        let frame = Stereo::<f32>::from_fn(|ch| stereo_frame[ch]);
-        left.push(frame.channels()[0]);
-        right.push(frame.channels()[1]);
+    for chunk in frame.samples.chunks_exact(num_channels) {
+        for (ch_idx, sample) in chunk.iter().enumerate() {
+            channels[ch_idx].push(*sample);
+        }
     }
 
-    (left, right)
+    channels
 }
 
 /// Convert separate channel buffers from CLAP to interleaved AudioFrame
 ///
-/// CLAP returns separate channel buffers (LLL... RRR...), but AudioFrame
-/// stores samples interleaved (LRLRLR...).
+/// CLAP returns separate channel buffers, but AudioFrame stores samples interleaved.
 ///
 /// # Arguments
 ///
-/// * `left` - Left channel samples
-/// * `right` - Right channel samples
+/// * `channel_buffers` - Vec of channel buffers (each Vec<f32> is one channel)
 /// * `timestamp_ns` - Timestamp in nanoseconds
 /// * `frame_number` - Frame number
 ///
 /// # Returns
 ///
-/// AudioFrame with interleaved stereo data
+/// AudioFrame with interleaved data
 ///
 /// # Panics
 ///
-/// Panics if left and right have different lengths
+/// Panics if channel buffers have different lengths or if there are no channels
 pub(crate) fn interleave_to_audio_frame(
-    left: &[f32],
-    right: &[f32],
+    channel_buffers: &[Vec<f32>],
     timestamp_ns: i64,
     frame_number: u64,
 ) -> AudioFrame {
-    assert_eq!(left.len(), right.len(), "Channel buffers must have same length");
+    assert!(!channel_buffers.is_empty(), "Must have at least one channel");
 
-    let num_samples = left.len();
-    let mut samples = Vec::with_capacity(num_samples * 2);
+    let num_channels = channel_buffers.len();
+    let num_samples = channel_buffers[0].len();
 
-    // Use dasp to safely interleave stereo frames
-    for i in 0..num_samples {
-        let frame = Stereo::<f32>::from_fn(|ch| if ch == 0 { left[i] } else { right[i] });
-        samples.extend_from_slice(frame.channels());
+    for (i, buf) in channel_buffers.iter().enumerate() {
+        assert_eq!(buf.len(), num_samples, "Channel {} has different length", i);
     }
 
-    AudioFrame::new(samples, timestamp_ns, frame_number, 2)
+    let mut samples = Vec::with_capacity(num_samples * num_channels);
+
+    for sample_idx in 0..num_samples {
+        for ch_buf in channel_buffers.iter() {
+            samples.push(ch_buf[sample_idx]);
+        }
+    }
+
+    AudioFrame::new(samples, timestamp_ns, frame_number, num_channels as u32)
 }
 
 #[cfg(test)]
@@ -88,30 +83,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_deinterleave_audio_frame() {
-        // Create test frame: 4 samples stereo (L1 R1 L2 R2 L3 R3 L4 R4)
+    fn test_deinterleave_audio_frame_stereo() {
         let frame = AudioFrame::new(
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            0,      // timestamp_ns
-            0,      // frame_number
-            2,      // channels
+            0,
+            0,
+            2,
         );
 
-        let (left, right) = deinterleave_audio_frame(&frame);
+        let channels = deinterleave_audio_frame(&frame);
 
-        assert_eq!(left.len(), 4);
-        assert_eq!(right.len(), 4);
-        assert_eq!(left, vec![1.0, 3.0, 5.0, 7.0]);
-        assert_eq!(right, vec![2.0, 4.0, 6.0, 8.0]);
+        assert_eq!(channels.len(), 2);
+        assert_eq!(channels[0], vec![1.0, 3.0, 5.0, 7.0]);
+        assert_eq!(channels[1], vec![2.0, 4.0, 6.0, 8.0]);
     }
 
     #[test]
-    fn test_interleave_to_audio_frame() {
-        // Create test CLAP buffers (separate L/R channels)
-        let left: Vec<f32> = vec![1.0, 3.0, 5.0, 7.0];
-        let right: Vec<f32> = vec![2.0, 4.0, 6.0, 8.0];
+    fn test_deinterleave_audio_frame_quad() {
+        let frame = AudioFrame::new(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            0,
+            0,
+            4,
+        );
 
-        let frame = interleave_to_audio_frame(&left, &right, 1000, 1);
+        let channels = deinterleave_audio_frame(&frame);
+
+        assert_eq!(channels.len(), 4);
+        assert_eq!(channels[0], vec![1.0, 5.0]);
+        assert_eq!(channels[1], vec![2.0, 6.0]);
+        assert_eq!(channels[2], vec![3.0, 7.0]);
+        assert_eq!(channels[3], vec![4.0, 8.0]);
+    }
+
+    #[test]
+    fn test_interleave_to_audio_frame_stereo() {
+        let left = vec![1.0, 3.0, 5.0, 7.0];
+        let right = vec![2.0, 4.0, 6.0, 8.0];
+
+        let frame = interleave_to_audio_frame(&[left, right], 1000, 1);
 
         assert_eq!(frame.channels, 2);
         assert_eq!(frame.samples.len(), 8);
@@ -119,19 +129,33 @@ mod tests {
     }
 
     #[test]
+    fn test_interleave_to_audio_frame_5_1() {
+        let ch1 = vec![1.0, 7.0];
+        let ch2 = vec![2.0, 8.0];
+        let ch3 = vec![3.0, 9.0];
+        let ch4 = vec![4.0, 10.0];
+        let ch5 = vec![5.0, 11.0];
+        let ch6 = vec![6.0, 12.0];
+
+        let frame = interleave_to_audio_frame(&[ch1, ch2, ch3, ch4, ch5, ch6], 1000, 1);
+
+        assert_eq!(frame.channels, 6);
+        assert_eq!(frame.samples.len(), 12);
+        assert_eq!(*frame.samples, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    }
+
+    #[test]
     fn test_roundtrip_conversion() {
-        // Test that deinterleave → interleave is lossless
         let original = AudioFrame::new(
             vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-            5000,   // timestamp_ns
-            42,     // frame_number
-            2,      // channels
+            5000,
+            42,
+            2,
         );
 
-        let (left, right) = deinterleave_audio_frame(&original);
+        let channels = deinterleave_audio_frame(&original);
         let roundtrip = interleave_to_audio_frame(
-            &left,
-            &right,
+            &channels,
             original.timestamp_ns,
             original.frame_number,
         );

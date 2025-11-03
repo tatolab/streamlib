@@ -418,7 +418,6 @@ impl StreamSource for AppleAudioCaptureProcessor {
             samples,
             timestamp_ns,
             frame_number,
-            self.sample_rate,
             self.channels,
         ))
     }
