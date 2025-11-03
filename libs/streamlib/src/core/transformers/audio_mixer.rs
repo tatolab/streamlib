@@ -1,55 +1,5 @@
-//! Audio Mixer Processor
-//!
-//! Combines multiple audio streams into a single output stream.
-//! Supports dynamic input count, sample rate conversion, and channel mixing.
-//!
-//! # Architecture
-//!
-//! ```text
-//! AudioMixerProcessor
-//!   ├─ Dynamic Input Ports (HashMap: "input_0", "input_1", ...)
-//!   ├─ Single Output Port (mixed audio)
-//!   ├─ Mixing Strategy (sum normalized, sum clipped, weighted)
-//!   ├─ Resampling (rubato for real-time safe sample rate conversion)
-//!   └─ Channel Conversion (mono → stereo auto-conversion)
-//! ```
-//!
-//! # Real-time Safety
-//!
-//! - All buffers pre-allocated in `new()` and `on_start()`
-//! - Uses rubato's `process_into_buffer()` (no allocations in audio thread)
-//! - No HashMap insertions during `process()` (only reads)
-//! - Drop frames gracefully when inputs unavailable (no buffering)
-//!
-//! # Example
-//!
-//! ```ignore
-//! use streamlib::{AudioMixerProcessor, MixingStrategy};
-//!
-//! // Create mixer with 4 inputs, sum with normalization at 48kHz
-//! let mut mixer = AudioMixerProcessor::new(
-//!     4,
-//!     MixingStrategy::SumNormalized,
-//!     48000
-//! )?;
-//!
-//! // Connect inputs
-//! runtime.connect(
-//!     &mut mic1.output_ports().audio,
-//!     &mut mixer.input_ports().inputs.get_mut("input_0").unwrap().lock()
-//! )?;
-//!
-//! // Connect output to speaker
-//! runtime.connect(
-//!     &mut mixer.output_ports().audio,
-//!     &mut speaker.input_ports().audio
-//! )?;
-//! ```
-
-use dasp::Frame;
-
 use crate::core::{
-    Result, StreamError, GpuContext,
+    Result, StreamError,
     AudioFrame, StreamInput, StreamOutput,
     ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
     AudioRequirements,
@@ -59,25 +9,13 @@ use crate::core::traits::{StreamElement, StreamTransform, ElementType};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters,
-    WindowFunction,
-};
 use serde::{Serialize, Deserialize};
 
-/// Configuration for audio mixer processor
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioMixerConfig {
-    /// Number of input ports
     pub num_inputs: usize,
-    /// Mixing strategy
     pub strategy: MixingStrategy,
-    /// Sample rate in Hz
-    pub sample_rate: u32,
-    /// Buffer size in samples per channel
-    pub buffer_size: usize,
-    /// Optional timer group ID (same as input sources for deterministic ordering)
-    pub timer_group_id: Option<String>,
+    pub channel_mode: ChannelMode,
 }
 
 impl Default for AudioMixerConfig {
@@ -85,24 +23,16 @@ impl Default for AudioMixerConfig {
         Self {
             num_inputs: 2,
             strategy: MixingStrategy::SumNormalized,
-            sample_rate: 48000,
-            buffer_size: 2048,
-            timer_group_id: None,
+            channel_mode: ChannelMode::MixUp,
         }
     }
 }
 
-/// Mixing strategy for combining audio streams
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MixingStrategy {
-    /// Sum all inputs and divide by active input count (prevents clipping)
+    Sum,
     SumNormalized,
-
-    /// Sum all inputs and clamp to [-1.0, 1.0] (may cause distortion)
     SumClipped,
-
-    // TODO: Weighted - Per-input gain control for advanced mixing
-    // Weighted,
 }
 
 impl Default for MixingStrategy {
@@ -111,147 +41,73 @@ impl Default for MixingStrategy {
     }
 }
 
-/// Input ports for AudioMixerProcessor (dynamic count)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ChannelMode {
+    MixUp,
+    MixDown,
+}
+
+impl Default for ChannelMode {
+    fn default() -> Self {
+        ChannelMode::MixUp
+    }
+}
+
 pub struct AudioMixerInputPorts {
-    /// Dynamic input ports: "input_0", "input_1", "input_2", ...
-    ///
-    /// Wrapped in Arc<Mutex<>> for thread-safe access during connections.
-    /// Use `.lock()` to access the underlying StreamInput.
     pub inputs: HashMap<String, Arc<Mutex<StreamInput<AudioFrame>>>>,
 }
 
-/// Output ports for AudioMixerProcessor
 pub struct AudioMixerOutputPorts {
-    /// Mixed audio output
     pub audio: StreamOutput<AudioFrame>,
 }
 
-/// Audio Mixer Processor
-///
-/// Combines multiple audio streams into a single output with real-time safe processing.
-///
-/// # Features
-///
-/// - **Dynamic inputs**: Configurable number of inputs at creation time
-/// - **Sample rate conversion**: Uses rubato for real-time safe resampling
-/// - **Channel mixing**: Auto-converts mono to stereo
-/// - **Mixing strategies**: Normalized sum (default) or clipped sum
-/// - **Real-time safe**: No allocations in audio processing thread
-///
-/// # Thread Safety
-///
-/// - Input ports wrapped in Arc<Mutex<>> for safe concurrent access
-/// - All resampling buffers pre-allocated
-/// - No allocations during `process()`
 pub struct AudioMixerProcessor {
-    /// Number of input ports
     num_inputs: usize,
-
-    /// Mixing strategy
     strategy: MixingStrategy,
-
-    /// Input ports (dynamic count)
+    channel_mode: ChannelMode,
     input_ports: AudioMixerInputPorts,
-
-    /// Output port
     output_ports: AudioMixerOutputPorts,
-
-    /// Target sample rate for output
     target_sample_rate: u32,
-
-    /// Target channels (always 2 for stereo output)
     target_channels: u32,
-
-    /// Frame counter for output timestamps
     frame_counter: u64,
-
-    /// Current timestamp in nanoseconds
     current_timestamp_ns: i64,
-
-    /// Pre-allocated mix buffer (reused each tick for real-time safety)
-    /// Size: maximum buffer size * channels
     mix_buffer: Vec<f32>,
-
-    /// Maximum buffer size per channel (for pre-allocation)
     max_buffer_size: usize,
-
-    /// Resamplers for each input (created on-demand when different sample rate detected)
-    /// Key: input port name (e.g., "input_0")
-    /// Uses SincFixedIn for high-quality real-time resampling
-    resamplers: HashMap<String, SincFixedIn<f32>>,
-
-    /// Pre-allocated resampling output buffers
-    /// Key: input port name, Value: buffer for resampled output
-    resample_buffers: HashMap<String, Vec<Vec<f32>>>,
-
-    /// Buffer size (samples per channel) - determines mix rate
     buffer_size: usize,
-
-    /// Optional timer group ID for synchronized timing with input sources
-    timer_group_id: Option<String>,
-
-    /// Track last mixed timestamps to prevent duplicate mixes on spurious wakeups
-    /// Key: input name (e.g., "input_0"), Value: last mixed timestamp_ns
-    /// Timestamp-based deduplication is more robust than frame numbers
     last_mixed_timestamps: HashMap<String, i64>,
-
-    /// Cache for processed inputs (post-resampling/channel-conversion)
-    /// Key: input name, Value: (samples, timestamp, frame_number)
-    /// This provides sample-and-hold behavior similar to StreamInput::read_latest()
-    input_cache: HashMap<String, Option<(Vec<f32>, i64, u64)>>,
+    input_cache: HashMap<String, Option<AudioFrame>>,
+    cached_output_channels: Option<u32>,
+    cache_last_updated: u64,
+    cache_ttl_frames: u64,
 }
 
 impl AudioMixerProcessor {
-    /// Create a new audio mixer processor
-    ///
-    /// # Arguments
-    ///
-    /// * `num_inputs` - Number of input ports to create
-    /// * `strategy` - Mixing strategy (SumNormalized or SumClipped)
-    /// * `sample_rate` - Target output sample rate in Hz (e.g., 48000)
-    /// * `buffer_size` - Buffer size in samples per channel (e.g., 2048)
-    ///
-    /// # Returns
-    ///
-    /// Configured AudioMixerProcessor ready to mix streams
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Create mixer for 4 inputs at 48kHz with 2048 buffer size
-    /// let mixer = AudioMixerProcessor::new(4, MixingStrategy::SumNormalized, 48000, 2048)?;
-    /// ```
     pub fn new(
         num_inputs: usize,
         strategy: MixingStrategy,
-        sample_rate: u32,
-        buffer_size: usize,
+        channel_mode: ChannelMode,
     ) -> Result<Self> {
+        let sample_rate = 48000;
+        let buffer_size = 2048;
         if num_inputs == 0 {
             return Err(StreamError::Configuration(
                 "AudioMixerProcessor requires at least 1 input".into()
             ));
         }
 
-        // Create dynamic input ports
         let mut input_ports_map = HashMap::new();
         for i in 0..num_inputs {
             let port_name = format!("input_{}", i);
             input_ports_map.insert(
                 port_name.clone(),
-                Arc::new(Mutex::new(StreamInput::new(&port_name)))
+                Arc::new(Mutex::new(StreamInput::new(port_name.clone())))
             );
         }
 
-        // Assume maximum buffer size of 4096 samples per channel for pre-allocation
-        // This covers typical audio buffer sizes (512, 1024, 2048, 4096)
         let max_buffer_size = 4096;
-        let target_channels = 2; // Always output stereo
-
-        // Pre-allocate mix buffer (max_buffer_size * channels)
+        let target_channels = 2;
         let mix_buffer = vec![0.0; max_buffer_size * target_channels as usize];
 
-        // Initialize input cache for sample-and-hold behavior
         let mut input_cache = HashMap::new();
         for i in 0..num_inputs {
             input_cache.insert(format!("input_{}", i), None);
@@ -260,6 +116,7 @@ impl AudioMixerProcessor {
         Ok(Self {
             num_inputs,
             strategy,
+            channel_mode,
             input_ports: AudioMixerInputPorts {
                 inputs: input_ports_map,
             },
@@ -272,202 +129,111 @@ impl AudioMixerProcessor {
             current_timestamp_ns: 0,
             mix_buffer,
             max_buffer_size,
-            resamplers: HashMap::new(),
-            resample_buffers: HashMap::new(),
             buffer_size,
-            timer_group_id: None,
             last_mixed_timestamps: HashMap::new(),
             input_cache,
+            cached_output_channels: None,
+            cache_last_updated: 0,
+            cache_ttl_frames: 60,
         })
     }
 
-    /// Get mutable access to input ports
     pub fn input_ports(&mut self) -> &mut AudioMixerInputPorts {
         &mut self.input_ports
     }
 
-    /// Get mutable access to output ports
     pub fn output_ports(&mut self) -> &mut AudioMixerOutputPorts {
         &mut self.output_ports
     }
 
-    /// Convert mono audio to stereo by duplicating samples to both channels
-    ///
-    /// Uses dasp Frame operations for channel conversion.
-    ///
-    /// # Arguments
-    ///
-    /// * `mono_samples` - Mono audio samples (L, L, L, ...)
-    ///
-    /// # Returns
-    ///
-    /// Stereo samples (L, L, L, L, ...) - each mono sample duplicated to L and R
-    fn mono_to_stereo(&self, mono_samples: &[f32]) -> Vec<f32> {
-        let mut stereo = Vec::with_capacity(mono_samples.len() * 2);
+    fn determine_output_channels(&mut self, inputs: &[&AudioFrame]) -> u32 {
+        let cache_expired = self.frame_counter - self.cache_last_updated >= self.cache_ttl_frames;
 
-        // Process each mono sample as a Frame, then duplicate to stereo
-        for &sample in mono_samples {
-            // Create stereo frame by duplicating mono sample to both channels
-            let stereo_frame: [f32; 2] = [sample, sample];
-            stereo.push(stereo_frame[0]);
-            stereo.push(stereo_frame[1]);
-        }
-
-        stereo
-    }
-
-    /// Resample audio frame to target sample rate if needed
-    ///
-    /// Uses rubato's real-time safe `process_into_buffer()` method.
-    /// Resamplers are created on-demand and cached.
-    ///
-    /// # Arguments
-    ///
-    /// * `frame` - Input audio frame
-    /// * `input_name` - Input port name for resampler caching
-    ///
-    /// # Returns
-    ///
-    /// Resampled audio samples (interleaved stereo) or original if no resampling needed
-    fn resample_if_needed(
-        &mut self,
-        frame: &AudioFrame,
-        input_name: &str,
-    ) -> Result<Vec<f32>> {
-        // NOTE: With RuntimeContext enforcing system-wide sample rate,
-        // all frames should already be at target_sample_rate.
-        // This resampling code is kept for backwards compatibility but should not trigger.
-
-        // No resampling needed - sample rate is enforced by RuntimeContext
-        return Ok(frame.samples.as_ref().clone());
-
-        // Dead code below - keeping for reference but removing sample_rate access
-        #[allow(unreachable_code)]
-        {
-        // Get or create resampler for this input
-        if !self.resamplers.contains_key(input_name) {
-            // Create new resampler
-            let params = SincInterpolationParameters {
-                sinc_len: 256,
-                f_cutoff: 0.95,
-                interpolation: SincInterpolationType::Linear,
-                oversampling_factor: 256,
-                window: WindowFunction::BlackmanHarris2,
-            };
-
-            let resampler = SincFixedIn::<f32>::new(
-                1.0, // No resampling - sample rates already match
-                2.0, // max_resample_ratio_relative
-                params,
-                frame.sample_count(),
-                frame.channels as usize,
-            ).map_err(|e| StreamError::Configuration(format!("Failed to create resampler: {}", e)))?;
-
-            // Pre-allocate resampling output buffer (get size before moving resampler)
-            let output_size = resampler.output_frames_max();
-
-            self.resamplers.insert(input_name.to_string(), resampler);
-            let mut buffers = Vec::new();
-            for _ in 0..frame.channels {
-                buffers.push(vec![0.0; output_size]);
-            }
-            self.resample_buffers.insert(input_name.to_string(), buffers);
-        }
-
-        // Get resampler and buffer
-        let resampler = self.resamplers.get_mut(input_name).unwrap();
-        let output_buffer = self.resample_buffers.get_mut(input_name).unwrap();
-
-        // Deinterleave input for rubato (it expects separate channel buffers)
-        let mut input_channels = vec![Vec::new(); frame.channels as usize];
-        for (i, sample) in frame.samples.iter().enumerate() {
-            let channel = i % frame.channels as usize;
-            input_channels[channel].push(*sample);
-        }
-
-        // Convert to slices
-        let input_slices: Vec<&[f32]> = input_channels.iter().map(|v| v.as_slice()).collect();
-        let mut output_slices: Vec<&mut [f32]> = output_buffer.iter_mut().map(|v| v.as_mut_slice()).collect();
-
-        // Resample using real-time safe method
-        let (_input_frames, output_frames) = resampler.process_into_buffer(
-            &input_slices,
-            &mut output_slices,
-            None, // No specific output length requirement
-        ).map_err(|e| StreamError::Configuration(format!("Resampling failed: {}", e)))?;
-
-        // Interleave output back to single vector
-        let mut result = Vec::with_capacity(output_frames * frame.channels as usize);
-        for i in 0..output_frames {
-            for channel in 0..frame.channels as usize {
-                result.push(output_buffer[channel][i]);
+        if let Some(cached) = self.cached_output_channels {
+            if !cache_expired {
+                return cached;
             }
         }
 
-        Ok(result)
-    }
-
-    /// Mix multiple audio sample vectors according to mixing strategy
-    ///
-    /// Uses dasp Frame operations for professional-quality DSP.
-    ///
-    /// # Arguments
-    ///
-    /// * `inputs` - Vector of sample vectors to mix (all must be same length and stereo)
-    ///
-    /// # Returns
-    ///
-    /// Mixed audio samples
-    fn mix_samples(&self, inputs: Vec<Vec<f32>>) -> Vec<f32> {
         if inputs.is_empty() {
-            return Vec::new();
+            return self.target_channels;
         }
 
-        let sample_count = inputs[0].len() / 2; // Stereo: divide by 2 for frame count
-        let mut output = Vec::with_capacity(sample_count * 2);
-
-        // Process frame-by-frame using dasp
-        for frame_idx in 0..sample_count {
-            // Start with silence (equilibrium)
-            let mut mixed_frame: [f32; 2] = Frame::EQUILIBRIUM;
-
-            // Add all input frames using dasp Frame operations
-            for input in &inputs {
-                let left = input[frame_idx * 2];
-                let right = input[frame_idx * 2 + 1];
-                let input_frame: [f32; 2] = [left, right];
-                mixed_frame = mixed_frame.add_amp(input_frame);
+        let mut channel_counts: Vec<u32> = Vec::new();
+        for input in inputs {
+            if input.channels > 0 {
+                channel_counts.push(input.channels);
             }
-
-            // Apply mixing strategy
-            mixed_frame = match self.strategy {
-                MixingStrategy::SumNormalized => {
-                    // Normalize by number of inputs using dasp scale_amp
-                    mixed_frame.scale_amp(1.0 / inputs.len() as f32)
-                }
-                MixingStrategy::SumClipped => {
-                    // Clip each channel to [-1.0, 1.0]
-                    // Note: dasp doesn't have a built-in clip_amp for frames,
-                    // so we do it manually but still using Sample trait
-                    [
-                        mixed_frame[0].clamp(-1.0, 1.0),
-                        mixed_frame[1].clamp(-1.0, 1.0),
-                    ]
-                }
-            };
-
-            // Write interleaved output
-            output.push(mixed_frame[0]);
-            output.push(mixed_frame[1]);
         }
 
-        output
+        if channel_counts.is_empty() {
+            return self.target_channels;
+        }
+
+        let output_channels = match self.channel_mode {
+            ChannelMode::MixUp => *channel_counts.iter().max().unwrap(),
+            ChannelMode::MixDown => *channel_counts.iter().min().unwrap(),
+        };
+
+        self.cached_output_channels = Some(output_channels);
+        self.cache_last_updated = self.frame_counter;
+
+        tracing::debug!(
+            "[AudioMixer] Channel detection: mode={:?}, detected={} channels (cache TTL={})",
+            self.channel_mode, output_channels, self.cache_ttl_frames
+        );
+
+        output_channels
+    }
+
+    fn mix_samples(&mut self, inputs: Vec<&AudioFrame>) -> Result<AudioFrame> {
+        if inputs.is_empty() {
+            return Err(StreamError::Configuration("No inputs to mix".into()));
+        }
+
+        let timestamp_ns = inputs[0].timestamp_ns;
+        let frame_number = self.frame_counter;
+
+        let output_channels = match self.channel_mode {
+            ChannelMode::MixUp => inputs.iter().map(|f| f.channels as usize).max().unwrap(),
+            ChannelMode::MixDown => inputs.iter().map(|f| f.channels as usize).min().unwrap(),
+        };
+
+        let loop_count = inputs.iter().map(|f| f.samples.len() / f.channels as usize).max().unwrap();
+
+        let num_inputs = inputs.len() as f32;
+        let output_frames: Vec<Vec<f32>> = (0..loop_count)
+            .map(|frame_idx| {
+                (0..output_channels)
+                    .map(|ch_idx| {
+                        let sum = inputs.iter()
+                            .filter_map(|input| {
+                                let input_channels = input.channels as usize;
+                                let input_frame_count = input.samples.len() / input_channels;
+                                if frame_idx < input_frame_count {
+                                    let in_ch = ch_idx % input_channels;
+                                    let sample_idx = frame_idx * input_channels + in_ch;
+                                    Some(input.samples[sample_idx])
+                                } else {
+                                    None
+                                }
+                            })
+                            .sum::<f32>();
+
+                        match self.strategy {
+                            MixingStrategy::Sum => sum,
+                            MixingStrategy::SumNormalized => sum / num_inputs,
+                            MixingStrategy::SumClipped => sum.clamp(-1.0, 1.0),
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let output_samples: Vec<f32> = output_frames.into_iter().flatten().collect();
+        Ok(AudioFrame::new(output_samples, timestamp_ns, frame_number, output_channels as u32))
     }
 }
-
-// ============================================================
-// StreamElement Implementation (v2.0.0 Architecture)
-// ============================================================
 
 impl StreamElement for AudioMixerProcessor {
     fn name(&self) -> &str {
@@ -483,7 +249,6 @@ impl StreamElement for AudioMixerProcessor {
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
-        // Return descriptors for all dynamic inputs
         (0..self.num_inputs)
             .map(|i| PortDescriptor {
                 name: format!("input_{}", i),
@@ -503,7 +268,10 @@ impl StreamElement for AudioMixerProcessor {
         }]
     }
 
-    fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+    fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+        self.target_sample_rate = ctx.audio.sample_rate;
+        self.buffer_size = ctx.audio.buffer_size;
+
         tracing::info!(
             "AudioMixer: Starting ({} inputs, {} Hz, {} samples buffer, strategy: {:?})",
             self.num_inputs,
@@ -515,7 +283,6 @@ impl StreamElement for AudioMixerProcessor {
     }
 
     fn stop(&mut self) -> Result<()> {
-        // Clear input cache
         for value in self.input_cache.values_mut() {
             *value = None;
         }
@@ -524,10 +291,6 @@ impl StreamElement for AudioMixerProcessor {
     }
 }
 
-// ============================================================
-// StreamTransform Implementation (v2.0.0 Architecture)
-// ============================================================
-
 impl StreamTransform for AudioMixerProcessor {
     type Config = crate::core::AudioMixerConfig;
 
@@ -535,12 +298,9 @@ impl StreamTransform for AudioMixerProcessor {
         Self::new(
             config.num_inputs,
             config.strategy,
-            config.sample_rate,
-            config.buffer_size,
+            config.channel_mode,
         )
     }
-
-    // process() is implemented directly in the impl block below
 
     fn descriptor() -> Option<ProcessorDescriptor> {
         use crate::core::schema::ProcessorDescriptor;
@@ -557,24 +317,20 @@ impl StreamTransform for AudioMixerProcessor {
             )
             .with_audio_requirements(AudioRequirements {
                 preferred_buffer_size: Some(2048),
-                required_buffer_size: None,  // Flexible
+                required_buffer_size: None,
                 supported_sample_rates: vec![44100, 48000, 96000],
-                required_channels: Some(2),  // Always outputs stereo
+                required_channels: Some(2),
             })
             .with_tags(vec!["audio", "mixer", "transform", "multi-input"])
         )
     }
 
     fn process(&mut self) -> Result<()> {
-        // Process using cached inputs (sample-and-hold pattern):
-        // Update cache with incoming frames, then mix ALL inputs using held values
         tracing::debug!("[AudioMixer] process() called");
 
-        // Step 1: Update input cache with any incoming frames
         for i in 0..self.num_inputs {
             let input_name = format!("input_{}", i);
 
-            // Read frame from port (lock is dropped after this block)
             let frame_opt = if let Some(input_port) = self.input_ports.inputs.get(&input_name) {
                 let mut port = input_port.lock();
                 port.read_latest()
@@ -582,56 +338,39 @@ impl StreamTransform for AudioMixerProcessor {
                 None
             };
 
-            if let Some(mut frame) = frame_opt {
+            if let Some(frame) = frame_opt {
                 tracing::debug!(
                     "[AudioMixer] Received NEW frame from {} - {} samples, {} channels, frame #{}",
                     input_name, frame.sample_count(), frame.channels, frame.frame_number
                 );
 
-                // Convert mono to stereo if needed
-                if frame.channels == 1 {
-                    let stereo_samples = self.mono_to_stereo(&frame.samples);
-                    frame.samples = Arc::new(stereo_samples);
-                    frame.channels = 2;
-                    frame.sample_count = frame.sample_count; // Same sample count, but now stereo
-                }
-
-                // Resample if needed
-                let samples = self.resample_if_needed(&frame, &input_name)?;
-
-                // Store processed samples in input cache
                 if let Some(slot) = self.input_cache.get_mut(&input_name) {
-                    *slot = Some((samples, frame.timestamp_ns, frame.frame_number));
+                    *slot = Some(frame);
                 }
             }
         }
 
-        // Step 2: Check if ALL inputs have data (cold start check)
         let all_ready = self.input_cache.values().all(|v| v.is_some());
         if !all_ready {
             tracing::debug!("[AudioMixer] Not all inputs have data yet (cold start), skipping mix");
             return Ok(());
         }
 
-        // Step 3: Collect all cached inputs and check for duplicates
-        let mut all_inputs_named: HashMap<String, (Vec<f32>, i64, u64)> = HashMap::new();
+        let mut all_inputs_named: HashMap<String, AudioFrame> = HashMap::new();
         for (name, value_opt) in &self.input_cache {
             if let Some(value) = value_opt {
                 all_inputs_named.insert(name.clone(), value.clone());
             }
         }
 
-        // Check if ALL inputs have the SAME timestamps as last mix (duplicate wakeup)
         let mut all_inputs_unchanged = true;
-        for (input_name, (_samples, timestamp, _frame_num)) in &all_inputs_named {
+        for (input_name, frame) in &all_inputs_named {
             if let Some(&last_ts) = self.last_mixed_timestamps.get(input_name) {
-                if *timestamp != last_ts {
-                    // At least one input has a new timestamp
+                if frame.timestamp_ns != last_ts {
                     all_inputs_unchanged = false;
                     break;
                 }
             } else {
-                // First time seeing this input
                 all_inputs_unchanged = false;
                 break;
             }
@@ -642,68 +381,31 @@ impl StreamTransform for AudioMixerProcessor {
             return Ok(());
         }
 
-        // Step 4: Mix using cached inputs (sample-and-hold pattern)
-        // Timer groups ensure all inputs wake up simultaneously, eliminating clock drift.
-        // Input cache provides latest data from each input.
-        // Timestamp deduplication prevents re-mixing on spurious wakeups.
-
         tracing::debug!(
             "[AudioMixer] Mixing ALL {} input streams (cached, sample-and-hold pattern)",
             all_inputs_named.len()
         );
 
-        // Extract samples, timestamp, and frame number
         let mut sorted_names: Vec<_> = all_inputs_named.keys().collect();
         sorted_names.sort();
 
-        let input_samples: Vec<Vec<f32>> = sorted_names.iter()
-            .map(|name| all_inputs_named.get(*name).unwrap().0.clone())
+        let input_frames: Vec<&AudioFrame> = sorted_names.iter()
+            .map(|name| all_inputs_named.get(*name).unwrap())
             .collect();
 
-        let first_timestamp = all_inputs_named.values().next().unwrap().1; // Use timestamp from first input
+        let output_frame = self.mix_samples(input_frames)?;
 
-        self.current_timestamp_ns = first_timestamp;
-
-        // Ensure all inputs have the same length (should be true after resampling)
-        let target_len = input_samples[0].len();
-        for samples in &input_samples {
-            if samples.len() != target_len {
-                tracing::warn!(
-                    "[AudioMixer] Sample length mismatch: {} vs {}. Skipping frame.",
-                    samples.len(),
-                    target_len
-                );
-                return Ok(());
-            }
-        }
-
-        // Mix the samples
-        let mixed_samples = self.mix_samples(input_samples);
-
-        // Create output frame
-        let sample_count = mixed_samples.len() / self.target_channels as usize;
-        let output_frame = AudioFrame::new(
-            mixed_samples,
-            self.current_timestamp_ns,
-            self.frame_counter,
-            self.target_sample_rate,
-            self.target_channels,
-        );
-
-        // Write to output
-        self.output_ports.audio.write(output_frame);
+        self.output_ports.audio.write(output_frame.clone());
         tracing::debug!(
-            "[AudioMixer] Wrote mixed frame #{} - {} samples, {} Hz",
-            self.frame_counter, sample_count, self.target_sample_rate
+            "[AudioMixer] Wrote mixed frame #{} - {} samples, {} channels, {} Hz",
+            output_frame.frame_number, output_frame.sample_count(), output_frame.channels, self.target_sample_rate
         );
 
-        // Update counters
         self.frame_counter += 1;
-        self.current_timestamp_ns += (sample_count as i64 * 1_000_000_000) / self.target_sample_rate as i64;
+        self.current_timestamp_ns = output_frame.timestamp_ns + output_frame.duration_ns(self.target_sample_rate);
 
-        // Update last mixed timestamps to prevent duplicate mixes on next wakeup
-        for (input_name, (_samples, timestamp, _frame_num)) in all_inputs_named {
-            self.last_mixed_timestamps.insert(input_name, timestamp);
+        for (input_name, frame) in all_inputs_named {
+            self.last_mixed_timestamps.insert(input_name, frame.timestamp_ns);
         }
 
         Ok(())
@@ -715,61 +417,434 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_mixer_creation() {
-        let mixer = AudioMixerProcessor::new(4, MixingStrategy::SumNormalized, 48000, 2048).unwrap();
-        assert_eq!(mixer.num_inputs, 4);
-        assert_eq!(mixer.strategy, MixingStrategy::SumNormalized);
-        assert_eq!(mixer.target_sample_rate, 48000);
-        assert_eq!(mixer.input_ports.inputs.len(), 4);
-        assert!(mixer.input_ports.inputs.contains_key("input_0"));
-        assert!(mixer.input_ports.inputs.contains_key("input_3"));
+    fn test_mix_samples_sum_normalized_stereo() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![2.0, 3.0, 4.0, 5.0], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![3.0, 4.0, 5.0, 6.0], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 2);
+        assert_eq!(result.samples[0], 2.5);
+        assert_eq!(result.samples[1], 3.5);
+        assert_eq!(result.samples[2], 4.5);
+        assert_eq!(result.samples[3], 5.5);
     }
 
     #[test]
-    fn test_mixer_zero_inputs_fails() {
-        let result = AudioMixerProcessor::new(0, MixingStrategy::SumNormalized, 48000, 2048);
-        assert!(result.is_err());
+    fn test_mix_samples_sum_clipped_stereo() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.8, 0.9, 0.5, 0.6], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.5, 0.6, 0.3, 0.2], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 2);
+        assert_eq!(result.samples[0], 1.0);
+        assert_eq!(result.samples[1], 1.0);
+        assert_eq!(result.samples[2], 0.8);
+        assert_eq!(result.samples[3], 0.8);
     }
 
     #[test]
-    fn test_mono_to_stereo() {
-        let mixer = AudioMixerProcessor::new(1, MixingStrategy::SumNormalized, 48000, 2048).unwrap();
-        let mono = vec![0.5, 0.6, 0.7];
-        let stereo = mixer.mono_to_stereo(&mono);
-        assert_eq!(stereo, vec![0.5, 0.5, 0.6, 0.6, 0.7, 0.7]);
+    fn test_mix_samples_different_lengths() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![1.0, 2.0], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.sample_count(), 3);
+        assert_eq!(result.samples[0], 1.5);
+        assert_eq!(result.samples[1], 2.5);
+        assert_eq!(result.samples[2], 2.0);
+        assert_eq!(result.samples[3], 2.5);
+        assert_eq!(result.samples[4], 3.0);
+        assert_eq!(result.samples[5], 3.5);
     }
 
     #[test]
-    fn test_sum_normalized() {
-        let mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, 48000, 2048).unwrap();
+    fn test_mix_samples_mono_to_stereo_mixup() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
 
-        let input1 = vec![0.5, 0.5, 0.6, 0.6];
-        let input2 = vec![0.3, 0.3, 0.4, 0.4];
-        let mixed = mixer.mix_samples(vec![input1, input2]);
+        let mono_input = AudioFrame::new(vec![2.0, 4.0], 0, 0, 1);
+        let stereo_input = AudioFrame::new(vec![3.0, 5.0, 6.0, 8.0], 0, 0, 2);
 
-        // (0.5 + 0.3) / 2 = 0.4, (0.6 + 0.4) / 2 = 0.5
-        assert_eq!(mixed, vec![0.4, 0.4, 0.5, 0.5]);
+        let result = mixer.mix_samples(vec![&mono_input, &stereo_input]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 2);
+        assert_eq!(result.samples[0], 2.5);
+        assert_eq!(result.samples[1], 3.5);
+        assert_eq!(result.samples[2], 5.0);
+        assert_eq!(result.samples[3], 6.0);
     }
 
     #[test]
-    fn test_sum_clipped() {
-        let mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, 48000, 2048).unwrap();
+    fn test_mix_samples_stereo_to_mono_mixdown() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, ChannelMode::MixDown).unwrap();
 
-        let input1 = vec![0.8, 0.8, 0.9, 0.9];
-        let input2 = vec![0.7, 0.7, 0.8, 0.8];
-        let mixed = mixer.mix_samples(vec![input1, input2]);
+        let mono_input = AudioFrame::new(vec![2.0, 4.0], 0, 0, 1);
+        let stereo_input = AudioFrame::new(vec![3.0, 5.0, 6.0, 8.0], 0, 0, 2);
 
-        // 0.8 + 0.7 = 1.5 -> clipped to 1.0
-        // 0.9 + 0.8 = 1.7 -> clipped to 1.0
-        assert_eq!(mixed, vec![1.0, 1.0, 1.0, 1.0]);
+        let result = mixer.mix_samples(vec![&mono_input, &stereo_input]).unwrap();
+
+        assert_eq!(result.channels, 1);
+        assert_eq!(result.sample_count(), 2);
+        assert_eq!(result.samples[0], 2.5);
+        assert_eq!(result.samples[1], 5.0);
     }
 
     #[test]
-    fn test_descriptor() {
-        let desc = <AudioMixerProcessor as StreamTransform>::descriptor().unwrap();
-        assert_eq!(desc.name, "AudioMixerProcessor");
-        assert!(desc.tags.contains(&"audio".to_string()));
-        assert!(desc.tags.contains(&"mixer".to_string()));
-        assert!(desc.tags.contains(&"transform".to_string()));
+    fn test_basic_addition() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![2.0, 3.0], 0, 0, 1);
+        let input2 = AudioFrame::new(vec![3.0, 2.0], 0, 0, 1);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.samples[0], 2.5);
+        assert_eq!(result.samples[1], 2.5);
+    }
+
+    #[test]
+    fn test_stereo_to_quad_mixup_with_modulo() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let stereo_input = AudioFrame::new(vec![0.1, 0.2], 0, 0, 2);
+        let quad_input = AudioFrame::new(vec![0.1, 0.1, 0.2, 0.3], 0, 0, 4);
+
+        let result = mixer.mix_samples(vec![&stereo_input, &quad_input]).unwrap();
+
+        assert_eq!(result.channels, 4);
+        assert_eq!(result.sample_count(), 1);
+        assert_eq!(result.samples[0], 0.2);
+        assert_eq!(result.samples[1], 0.3);
+        assert_eq!(result.samples[2], 0.3);
+        assert_eq!(result.samples[3], 0.5);
+    }
+
+    #[test]
+    fn test_empty_input_mixed_with_data() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let empty_input = AudioFrame::new(vec![], 0, 0, 2);
+        let data_input = AudioFrame::new(vec![0.5, 0.6], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&empty_input, &data_input]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 1);
+        assert_eq!(result.samples[0], 0.5);
+        assert_eq!(result.samples[1], 0.6);
+    }
+
+    #[test]
+    fn test_mismatched_lengths_short_and_long() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let short_input = AudioFrame::new(vec![0.1, 0.2], 0, 0, 2);
+        let long_input = AudioFrame::new(vec![0.3, 0.4, 0.5, 0.6, 0.7, 0.8], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&short_input, &long_input]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 3);
+        assert_eq!(result.samples[0], 0.4);
+        assert_eq!(result.samples[1], 0.6);
+        assert_eq!(result.samples[2], 0.5);
+        assert_eq!(result.samples[3], 0.6);
+        assert_eq!(result.samples[4], 0.7);
+        assert_eq!(result.samples[5], 0.8);
+    }
+
+    #[test]
+    fn test_three_inputs_different_lengths() {
+        let mut mixer = AudioMixerProcessor::new(3, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.1, 0.2], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.2, 0.3, 0.4, 0.5], 0, 0, 2);
+        let input3 = AudioFrame::new(vec![0.3, 0.4, 0.5, 0.6, 0.7, 0.8], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2, &input3]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 3);
+        assert_eq!(result.samples[0], 0.6);
+        assert_eq!(result.samples[1], 0.9);
+        assert_eq!(result.samples[2], 0.6);
+        assert_eq!(result.samples[3], 0.8);
+        assert_eq!(result.samples[4], 0.7);
+        assert_eq!(result.samples[5], 0.8);
+    }
+
+    #[test]
+    fn test_mono_stereo_quad_mixup() {
+        let mut mixer = AudioMixerProcessor::new(3, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let mono = AudioFrame::new(vec![0.1, 0.2], 0, 0, 1);
+        let stereo = AudioFrame::new(vec![0.2, 0.3], 0, 0, 2);
+        let quad = AudioFrame::new(vec![0.1, 0.1, 0.1, 0.1], 0, 0, 4);
+
+        let result = mixer.mix_samples(vec![&mono, &stereo, &quad]).unwrap();
+
+        assert_eq!(result.channels, 4);
+        assert_eq!(result.sample_count(), 2);
+        assert_eq!(result.samples[0], 0.4);
+        assert_eq!(result.samples[1], 0.5);
+        assert_eq!(result.samples[2], 0.3);
+        assert_eq!(result.samples[3], 0.2);
+    }
+
+    #[test]
+    fn test_mono_stereo_quad_mixdown() {
+        let mut mixer = AudioMixerProcessor::new(3, MixingStrategy::Sum, ChannelMode::MixDown).unwrap();
+
+        let mono = AudioFrame::new(vec![0.1, 0.2], 0, 0, 1);
+        let stereo = AudioFrame::new(vec![0.2, 0.3], 0, 0, 2);
+        let quad = AudioFrame::new(vec![0.1, 0.1, 0.1, 0.1], 0, 0, 4);
+
+        let result = mixer.mix_samples(vec![&mono, &stereo, &quad]).unwrap();
+
+        assert_eq!(result.channels, 1);
+        assert_eq!(result.sample_count(), 2);
+        assert_eq!(result.samples[0], 0.4);
+        assert_eq!(result.samples[1], 0.5);
+    }
+
+    #[test]
+    fn test_single_sample_multiple_inputs() {
+        let mut mixer = AudioMixerProcessor::new(4, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![1.0, 2.0], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![3.0, 4.0], 0, 0, 2);
+        let input3 = AudioFrame::new(vec![5.0, 6.0], 0, 0, 2);
+        let input4 = AudioFrame::new(vec![7.0, 8.0], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2, &input3, &input4]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 1);
+        assert_eq!(result.samples[0], 16.0);
+        assert_eq!(result.samples[1], 20.0);
+    }
+
+    #[test]
+    fn test_values_exceeding_one() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.8, 0.9], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.7, 0.8], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 1.5);
+        assert_eq!(result.samples[1], 1.7);
+    }
+
+    #[test]
+    fn test_negative_values() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![-0.5, 0.3], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.2, -0.4], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], -0.3);
+        assert_eq!(result.samples[1], -0.1);
+    }
+
+    #[test]
+    fn test_all_zero_inputs() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.0, 0.0], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.0, 0.0], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 0.0);
+        assert_eq!(result.samples[1], 0.0);
+    }
+
+    #[test]
+    fn test_very_long_input() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let long_samples: Vec<f32> = (0..1000).map(|i| (i as f32) * 0.001).collect();
+        let short_samples = vec![0.1, 0.2];
+
+        let long_input = AudioFrame::new(long_samples, 0, 0, 2);
+        let short_input = AudioFrame::new(short_samples, 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&long_input, &short_input]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.sample_count(), 500);
+        assert_eq!(result.samples[0], 0.1);
+        assert_eq!(result.samples[1], 0.201);
+    }
+
+    #[test]
+    fn test_5_1_surround_mixing() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+
+        let stereo = AudioFrame::new(vec![0.1, 0.2], 0, 0, 2);
+        let surround_5_1 = AudioFrame::new(vec![0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 0, 0, 6);
+
+        let result = mixer.mix_samples(vec![&stereo, &surround_5_1]).unwrap();
+
+        assert_eq!(result.channels, 6);
+        assert_eq!(result.sample_count(), 1);
+        assert_eq!(result.samples[0], 0.2);
+        assert_eq!(result.samples[1], 0.3);
+        assert_eq!(result.samples[2], 0.2);
+        assert_eq!(result.samples[3], 0.3);
+        assert_eq!(result.samples[4], 0.2);
+        assert_eq!(result.samples[5], 0.3);
+    }
+
+    #[test]
+    fn test_normalized_strategy() {
+        let mut mixer = AudioMixerProcessor::new(3, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.9, 1.2], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.6, 0.9], 0, 0, 2);
+        let input3 = AudioFrame::new(vec![0.3, 0.6], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2, &input3]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 0.6);
+        assert_eq!(result.samples[1], 0.9);
+    }
+
+    #[test]
+    fn test_clipped_strategy() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.8, -0.7], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.5, -0.6], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 1.0);
+        assert_eq!(result.samples[1], -1.0);
+    }
+
+    #[test]
+    fn test_normalized_with_two_inputs() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.4, 0.6], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.2, 0.4], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 0.3);
+        assert_eq!(result.samples[1], 0.5);
+    }
+
+    #[test]
+    fn test_normalized_prevents_clipping() {
+        let mut mixer = AudioMixerProcessor::new(3, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.9, 0.8], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.9, 0.8], 0, 0, 2);
+        let input3 = AudioFrame::new(vec![0.9, 0.8], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2, &input3]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 0.9);
+        assert_eq!(result.samples[1], 0.8);
+    }
+
+    #[test]
+    fn test_clipped_no_clipping_needed() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.2, 0.3], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.3, 0.4], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 0.5);
+        assert_eq!(result.samples[1], 0.7);
+    }
+
+    #[test]
+    fn test_clipped_extreme_positive() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![5.0, 3.0], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![2.0, 4.0], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], 1.0);
+        assert_eq!(result.samples[1], 1.0);
+    }
+
+    #[test]
+    fn test_clipped_extreme_negative() {
+        let mut mixer = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![-5.0, -3.0], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![-2.0, -4.0], 0, 0, 2);
+
+        let result = mixer.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result.channels, 2);
+        assert_eq!(result.samples[0], -1.0);
+        assert_eq!(result.samples[1], -1.0);
+    }
+
+    #[test]
+    fn test_sum_vs_normalized_comparison() {
+        let mut mixer_sum = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+        let mut mixer_norm = AudioMixerProcessor::new(2, MixingStrategy::SumNormalized, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.4, 0.6], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.2, 0.4], 0, 0, 2);
+
+        let result_sum = mixer_sum.mix_samples(vec![&input1, &input2]).unwrap();
+        let result_norm = mixer_norm.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result_sum.samples[0], 0.6);
+        assert_eq!(result_sum.samples[1], 1.0);
+        assert_eq!(result_norm.samples[0], 0.3);
+        assert_eq!(result_norm.samples[1], 0.5);
+    }
+
+    #[test]
+    fn test_sum_vs_clipped_comparison() {
+        let mut mixer_sum = AudioMixerProcessor::new(2, MixingStrategy::Sum, ChannelMode::MixUp).unwrap();
+        let mut mixer_clip = AudioMixerProcessor::new(2, MixingStrategy::SumClipped, ChannelMode::MixUp).unwrap();
+
+        let input1 = AudioFrame::new(vec![0.8, 0.9], 0, 0, 2);
+        let input2 = AudioFrame::new(vec![0.5, 0.6], 0, 0, 2);
+
+        let result_sum = mixer_sum.mix_samples(vec![&input1, &input2]).unwrap();
+        let result_clip = mixer_clip.mix_samples(vec![&input1, &input2]).unwrap();
+
+        assert_eq!(result_sum.samples[0], 1.3);
+        assert_eq!(result_sum.samples[1], 1.5);
+        assert_eq!(result_clip.samples[0], 1.0);
+        assert_eq!(result_clip.samples[1], 1.0);
     }
 }
