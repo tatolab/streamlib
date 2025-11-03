@@ -5,7 +5,7 @@
 
 use crate::core::{
     AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioCaptureOutputPorts,
-    AudioFrame, Result, StreamError, StreamProcessor, StreamOutput, ProcessorDescriptor,
+    AudioFrame, Result, StreamError, StreamOutput, ProcessorDescriptor,
     PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamSource, ElementType};
@@ -273,68 +273,6 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
     }
 }
 
-impl StreamProcessor for AppleAudioCaptureProcessor {
-    type Config = crate::core::AudioCaptureConfig;
-
-    fn from_config(config: Self::Config) -> Result<Self> {
-        // Parse device_id string to usize if provided
-        let device_id = config.device_id.as_ref().and_then(|s| s.parse::<usize>().ok());
-        Self::new_internal(device_id, config.sample_rate, config.channels)
-    }
-
-    fn process(&mut self) -> Result<()> {
-        // Phase 6: Delegate to StreamSource::generate() for clean separation
-        // generate() produces the frame, process() writes it to the output port
-        match <Self as StreamSource>::generate(self) {
-            Ok(frame) => {
-                // Write to output port (this will trigger downstream via push notification)
-                self.ports.audio.write(frame);
-                Ok(())
-            }
-            Err(StreamError::Runtime(msg)) if msg.contains("Not enough samples") => {
-                // Not enough samples yet - this is normal for callback-driven sources
-                // at startup or during audio gaps
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("AudioCapture: Error generating frame: {:?}", e);
-                Err(e)
-            }
-        }
-    }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        Some(
-            ProcessorDescriptor::new(
-                "AppleAudioCaptureProcessor",
-                "Captures audio from microphones/line-in using CoreAudio. Outputs AudioFrames at the configured sample rate.",
-            )
-            .with_usage_context(
-                "Use when you need live audio input from a microphone or line-in source. This is typically a source \
-                 processor in an audio pipeline. Use list_devices() to enumerate available input devices, or pass None \
-                 for device_id to use the system default microphone.",
-            )
-            .with_output(PortDescriptor::new(
-                "audio",
-                Arc::clone(&SCHEMA_AUDIO_FRAME),
-                true,
-                "Captured audio frames. Each frame contains samples at the configured sample rate and channel count. \
-                 Frames are produced at the runtime's tick rate (typically 60 FPS).",
-            ))
-            .with_tags(vec!["source", "audio", "microphone", "input", "capture"])
-        )
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn set_wakeup_channel(&mut self, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
-        *self.wakeup_tx.lock() = Some(wakeup_tx);
-        tracing::debug!("AudioCaptureProcessor: Push-based wakeup enabled");
-    }
-}
-
 // StreamElement implementation - GStreamer-inspired base trait
 impl StreamElement for AppleAudioCaptureProcessor {
     fn name(&self) -> &str {
@@ -346,7 +284,7 @@ impl StreamElement for AppleAudioCaptureProcessor {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <AppleAudioCaptureProcessor as StreamProcessor>::descriptor()
+        <AppleAudioCaptureProcessor as StreamSource>::descriptor()
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
@@ -434,7 +372,7 @@ impl StreamSource for AppleAudioCaptureProcessor {
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
-        <AppleAudioCaptureProcessor as StreamProcessor>::descriptor()
+        <AppleAudioCaptureProcessor as StreamSource>::descriptor()
     }
 }
 

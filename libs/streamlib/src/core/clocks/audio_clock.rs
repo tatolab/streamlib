@@ -3,63 +3,22 @@
 //! Driven by CoreAudio (macOS), ALSA (Linux), or WASAPI (Windows) callbacks.
 
 use super::Clock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Audio hardware clock (sample-accurate)
-///
-/// Driven by CoreAudio (macOS), ALSA (Linux), or WASAPI (Windows) callbacks.
-/// Provides the most accurate timing for audio pipelines.
-///
-/// ## How It Works
-///
-/// 1. AudioOutputProcessor registers hardware callback
-/// 2. Callback fills audio buffer (e.g., 2048 samples)
-/// 3. Callback increments `samples_played` counter
-/// 4. Clock converts samples → nanoseconds
-///
-/// ## Accuracy
-///
-/// - **Sample-accurate**: Tracks exact hardware playback position
-/// - **No drift**: Hardware oscillator is ground truth
-/// - **Typical jitter**: < 1 sample (~20 μs at 48 kHz)
-///
-/// ## Usage
-///
-/// ```rust,ignore
-/// // In AudioOutputProcessor:
-/// let clock = Arc::new(AudioClock::new(48000, "CoreAudio Clock"));
-///
-/// // In hardware callback:
-/// fn audio_callback(&self, buffer: &mut [f32]) {
-///     // Fill buffer...
-///     self.clock.increment_samples(buffer.len() / 2); // stereo
-/// }
-///
-/// // In sources:
-/// let now = clock.now_ns();
-/// ```
 pub struct AudioClock {
-    /// Sample rate (e.g., 48000)
     sample_rate: u32,
 
-    /// Total samples played since start
     samples_played: AtomicU64,
 
-    /// Timestamp when clock started (nanoseconds)
     base_time_ns: i64,
 
-    /// Human-readable description
     description: String,
+
+    last_hardware_timestamp_ns: AtomicI64,
 }
 
 impl AudioClock {
-    /// Create a new audio clock
-    ///
-    /// # Arguments
-    ///
-    /// * `sample_rate` - Hardware sample rate (e.g., 48000)
-    /// * `description` - Human-readable name (e.g., "CoreAudio Clock")
     pub fn new(sample_rate: u32, description: String) -> Self {
         let base_time_ns = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -71,30 +30,23 @@ impl AudioClock {
             samples_played: AtomicU64::new(0),
             base_time_ns,
             description,
+            last_hardware_timestamp_ns: AtomicI64::new(0),
         }
     }
 
-    /// Increment sample counter (called by hardware callback)
-    ///
-    /// # Thread Safety
-    ///
-    /// Safe to call from audio callback thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `num_samples` - Number of samples rendered (mono, not frames)
     pub fn increment_samples(&self, num_samples: u64) {
         self.samples_played.fetch_add(num_samples, Ordering::Relaxed);
     }
 
-    /// Reset sample counter to zero
-    ///
-    /// Used when restarting playback.
-    pub fn reset(&self) {
-        self.samples_played.store(0, Ordering::Relaxed);
+    pub fn update_hardware_timestamp(&self, timestamp_ns: i64) {
+        self.last_hardware_timestamp_ns.store(timestamp_ns, Ordering::Relaxed);
     }
 
-    /// Get total samples played
+    pub fn reset(&self) {
+        self.samples_played.store(0, Ordering::Relaxed);
+        self.last_hardware_timestamp_ns.store(0, Ordering::Relaxed);
+    }
+
     pub fn samples(&self) -> u64 {
         self.samples_played.load(Ordering::Relaxed)
     }
@@ -102,9 +54,14 @@ impl AudioClock {
 
 impl Clock for AudioClock {
     fn now_ns(&self) -> i64 {
-        let samples = self.samples_played.load(Ordering::Relaxed);
-        let elapsed_ns = (samples as f64 / self.sample_rate as f64 * 1e9) as i64;
-        self.base_time_ns + elapsed_ns
+        let hw_timestamp = self.last_hardware_timestamp_ns.load(Ordering::Relaxed);
+        if hw_timestamp > 0 {
+            hw_timestamp
+        } else {
+            let samples = self.samples_played.load(Ordering::Relaxed);
+            let elapsed_ns = (samples as f64 / self.sample_rate as f64 * 1e9) as i64;
+            self.base_time_ns + elapsed_ns
+        }
     }
 
     fn rate_hz(&self) -> Option<f64> {

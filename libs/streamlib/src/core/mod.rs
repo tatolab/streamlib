@@ -35,7 +35,8 @@ pub use error::{StreamError, Result};
 pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use frames::{VideoFrame, AudioFrame, DataFrame, MetadataValue};
-pub use traits::{StreamProcessor, EmptyConfig, DynStreamProcessor, PortConsumer, PortProvider};
+// v2.0 traits - GStreamer-inspired hierarchy
+pub use traits::{StreamElement, ElementType, StreamSource, StreamSink, StreamTransform, DynStreamElement};
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
 };
@@ -89,9 +90,4 @@ pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edg
 pub use scheduling::{
     SchedulingConfig, SchedulingMode, ThreadPriority,
     ClockSource, ClockConfig, ClockType, SyncMode,
-};
-pub use traits::{
-    StreamElement, ElementType,
-    StreamSource, StreamSink, StreamTransform,
-    DynStreamElement,
 };

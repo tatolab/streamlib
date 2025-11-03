@@ -51,24 +51,20 @@ pub mod metal;
 pub mod texture;
 pub mod wgpu_bridge;
 
-// Source implementations
 pub mod sources;
 
-// Sink implementations
 pub mod sinks;
 
-// Platform permission handling
 pub mod permissions;
 
-// Main thread dispatcher (for AVFoundation/NSWindow operations)
 pub mod main_thread;
 
-// Runtime configuration (used by streamlib facade)
 pub mod runtime_ext;
 pub use runtime_ext::configure_macos_event_loop;
 
-// Internal helpers (not part of public API)
 mod runtime_helpers;
+
+pub mod time;
 
 // Re-export core types (Result and StreamError are internal, not re-exported)
 

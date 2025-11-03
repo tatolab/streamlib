@@ -58,8 +58,9 @@ pub use core::{
     Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock,
     StreamError, Result, GpuContext, AudioContext, RuntimeContext,
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
-    StreamProcessor, StreamOutput, StreamInput, PortType, PortMessage,
-    EmptyConfig,  // Generic config for processors without configuration
+    // v2.0 traits - GStreamer-inspired hierarchy
+    StreamElement, ElementType, StreamSource, StreamSink, StreamTransform, DynStreamElement,
+    StreamOutput, StreamInput, PortType, PortMessage,
     // Note: CameraProcessor, DisplayProcessor, and AudioProcessor traits are in core,
     // but we'll re-export platform implementations below
     CameraDevice, CameraOutputPorts, CameraConfig,

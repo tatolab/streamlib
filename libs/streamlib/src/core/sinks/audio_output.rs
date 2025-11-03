@@ -85,7 +85,7 @@ pub struct AudioDevice {
 /// **Windows (WASAPI)**:
 /// - Uses `cpal` crate
 /// - Exclusive mode for lowest latency
-pub trait AudioOutputProcessor: StreamProcessor {
+pub trait AudioOutputProcessor {
     /// Create new audio output processor
     ///
     /// # Arguments

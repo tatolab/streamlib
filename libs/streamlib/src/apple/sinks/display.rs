@@ -7,7 +7,7 @@
 
 use crate::core::{
     DisplayProcessor, DisplayInputPorts, WindowId,
-    Result, StreamError, VideoFrame, StreamProcessor, GpuContext,
+    Result, StreamError, VideoFrame, GpuContext,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamSink, ElementType};

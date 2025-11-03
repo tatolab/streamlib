@@ -10,6 +10,8 @@ use crate::core::{
 };
 use crate::core::traits::{StreamElement, StreamSink, ElementType};
 use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
+use crate::core::clocks::AudioClock;
+use crate::apple::time::mach_ticks_to_ns;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,35 +47,25 @@ use parking_lot::Mutex;
 /// speaker.render(audio_frame)?;
 /// ```
 pub struct AppleAudioOutputProcessor {
-    /// Device name (for StreamElement.name())
     device_name: String,
 
-    /// Current audio device information
     device_info: AudioDevice,
 
-    /// cpal device handle
     _device: Device,
 
-    /// cpal audio stream (keeps audio thread alive)
     _stream: Stream,
 
-    /// Ring buffer for audio samples (shared with audio thread)
-    ///
-    /// Audio frames are pushed here, audio thread pulls them
     sample_buffer: Arc<Mutex<Vec<f32>>>,
 
-    /// Whether the processor is actively playing
     is_playing: Arc<AtomicBool>,
 
-    /// Minimum buffer size before playback starts (prevents initial underruns)
-    /// Set to ~20ms - lower than steady-state to avoid stopping during normal operation
     prebuffer_samples: usize,
 
-    /// Sample rate for this output
     sample_rate: u32,
 
-    /// Number of channels (2 = stereo)
     channels: u32,
+
+    audio_clock: Arc<AudioClock>,
 }
 
 // SAFETY: AppleAudioOutputProcessor is Send despite cpal::Stream not being Send
@@ -150,8 +142,9 @@ impl AppleAudioOutputProcessor {
         let is_playing = Arc::new(AtomicBool::new(false));
         let is_playing_clone = is_playing.clone();
 
-        // Build audio stream configuration with industry-standard buffer size
-        // 512 frames = 10.7ms @ 48kHz (industry standard for mixing)
+        let audio_clock = Arc::new(AudioClock::new(sample_rate, format!("CoreAudio ({})", device_name)));
+        let audio_clock_clone = audio_clock.clone();
+
         let stream_config = StreamConfig {
             channels: channels as u16,
             sample_rate: cpal::SampleRate(sample_rate),
@@ -162,7 +155,14 @@ impl AppleAudioOutputProcessor {
         let stream = device
             .build_output_stream(
                 &stream_config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                    if let Some(callback_timestamp) = info.timestamp().callback.duration_since(&cpal::StreamInstant::ZERO) {
+                        let callback_ns = mach_ticks_to_ns(callback_timestamp.as_nanos() as u64);
+                        audio_clock_clone.update_hardware_timestamp(callback_ns);
+                    }
+
+                    audio_clock_clone.increment_samples(data.len() as u64);
+
                     // Audio thread callback - fill output buffer
                     let mut buffer = sample_buffer_clone.lock();
                     let buffer_size_before = buffer.len();
@@ -233,6 +233,7 @@ impl AppleAudioOutputProcessor {
             prebuffer_samples,
             sample_rate,
             channels,
+            audio_clock,
         })
     }
 
@@ -250,6 +251,10 @@ impl AppleAudioOutputProcessor {
     /// Check if audio is currently playing
     pub fn is_playing(&self) -> bool {
         self.is_playing.load(Ordering::Relaxed)
+    }
+
+    pub fn audio_clock(&self) -> Arc<AudioClock> {
+        self.audio_clock.clone()
     }
 }
 

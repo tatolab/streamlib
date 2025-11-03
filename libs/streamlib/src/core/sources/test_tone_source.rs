@@ -7,8 +7,8 @@
 
 use crate::core::traits::{StreamElement, StreamSource, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
-use crate::core::{AudioFrame, Result, StreamOutput, StreamProcessor, GpuContext};
-use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements, TimerRequirements, SCHEMA_AUDIO_FRAME};
+use crate::core::{AudioFrame, Result, StreamOutput};
+use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements, SCHEMA_AUDIO_FRAME};
 use std::f64::consts::PI;
 use serde::{Serialize, Deserialize};
 
@@ -19,8 +19,6 @@ pub struct TestToneConfig {
     pub frequency: f64,
     /// Amplitude (0.0 to 1.0)
     pub amplitude: f64,
-    /// Sample rate in Hz
-    pub sample_rate: u32,
     /// Optional timer group ID for synchronized timing with other processors
     pub timer_group_id: Option<String>,
 }
@@ -30,7 +28,6 @@ impl Default for TestToneConfig {
         Self {
             frequency: 440.0,
             amplitude: 0.5,
-            sample_rate: 48000,
             timer_group_id: None,
         }
     }
@@ -49,6 +46,10 @@ pub struct TestToneGeneratorOutputPorts {
 ///
 /// Implements the **StreamSource** trait - runs in a loop generating audio buffers.
 ///
+/// **Note**: Sample rate and buffer size are configured at the runtime level via
+/// `AudioContext`. The generator reads these values during `start()` to ensure
+/// consistency across all audio processors.
+///
 /// # Example
 ///
 /// ```ignore
@@ -60,7 +61,6 @@ pub struct TestToneGeneratorOutputPorts {
 ///     TestToneConfig {
 ///         frequency: 440.0,
 ///         amplitude: 0.5,
-///         sample_rate: 48000,
 ///         timer_group_id: None,
 ///     }
 /// )?;
@@ -74,7 +74,7 @@ pub struct TestToneGenerator {
     /// Frequency in Hz (e.g., 440.0 for A4)
     frequency: f64,
 
-    /// Sample rate in Hz (e.g., 48000)
+    /// Sample rate in Hz - read from RuntimeContext.audio during start()
     sample_rate: u32,
 
     /// Number of channels (always stereo for compatibility)
@@ -89,7 +89,7 @@ pub struct TestToneGenerator {
     /// Frame counter
     frame_number: u64,
 
-    /// Samples per buffer (fixed at 2048 for optimal audio processing)
+    /// Samples per buffer - read from RuntimeContext.audio during start()
     buffer_size: usize,
 
     /// Optional timer group ID for synchronized wakeups
@@ -100,26 +100,28 @@ pub struct TestToneGenerator {
 }
 
 impl TestToneGenerator {
-    /// Fixed buffer size for audio generation (2048 samples is standard)
-    pub const BUFFER_SIZE: usize = 2048;
-
     /// Create new test tone generator
     ///
     /// # Arguments
     ///
     /// * `frequency` - Frequency in Hz (e.g., 440.0 for A4 note)
-    /// * `sample_rate` - Sample rate in Hz (e.g., 48000)
     /// * `amplitude` - Volume (0.0 to 1.0, where 0.5 is 50% volume)
-    pub fn new(frequency: f64, sample_rate: u32, amplitude: f64) -> Self {
+    ///
+    /// # Note
+    ///
+    /// Sample rate and buffer size are initialized with placeholder values.
+    /// The actual values are set during `start()` when the runtime provides
+    /// the `AudioContext`.
+    pub fn new(frequency: f64, amplitude: f64) -> Self {
         Self {
             name: "test_tone".to_string(),
             frequency,
-            sample_rate,
-            channels: 2, // Always stereo for compatibility
+            sample_rate: 48000,  // Placeholder - will be set during start()
+            channels: 2,         // Always stereo for compatibility
             phase: 0.0,
             amplitude: amplitude.clamp(0.0, 1.0),
             frame_number: 0,
-            buffer_size: Self::BUFFER_SIZE,
+            buffer_size: 512,    // Placeholder - will be set during start()
             timer_group_id: None,
             output_ports: TestToneGeneratorOutputPorts {
                 audio: StreamOutput::new("audio"),
@@ -215,6 +217,21 @@ impl StreamElement for TestToneGenerator {
         }]
     }
 
+    fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+        // Read sample rate and buffer size from the runtime's AudioContext
+        self.sample_rate = ctx.audio.sample_rate;
+        self.buffer_size = ctx.audio.buffer_size;
+
+        tracing::info!(
+            "[TestToneGenerator] Started: {}Hz tone at {}Hz sample rate, {} samples/buffer",
+            self.frequency,
+            self.sample_rate,
+            self.buffer_size
+        );
+
+        Ok(())
+    }
+
     fn as_source(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }
@@ -235,7 +252,6 @@ impl StreamSource for TestToneGenerator {
     fn from_config(config: Self::Config) -> Result<Self> {
         let mut gen = Self::new(
             config.frequency,
-            config.sample_rate,
             config.amplitude,
         );
         gen.timer_group_id = config.timer_group_id;
@@ -258,7 +274,7 @@ impl StreamSource for TestToneGenerator {
     fn scheduling_config(&self) -> SchedulingConfig {
         SchedulingConfig {
             mode: SchedulingMode::Loop,
-            priority: ThreadPriority::High,  // Audio processing requires high priority
+            priority: ThreadPriority::RealTime,  // Audio processing requires realtime priority
             clock: ClockSource::Audio,
             rate_hz: Some(self.timer_rate_hz()),
             provide_clock: false,
@@ -288,64 +304,13 @@ impl StreamSource for TestToneGenerator {
 }
 
 // ============================================================
-// StreamProcessor Implementation (Legacy Compatibility)
+// NOTE: v2.0 architecture - This processor implements:
+// - StreamElement (base trait for all processors)
+// - StreamSource (specialized trait for data generators)
+//
+// The runtime will call generate() in a loop based on scheduling_config().
+// No legacy StreamProcessor trait implementation needed.
 // ============================================================
-
-impl StreamProcessor for TestToneGenerator {
-    type Config = TestToneConfig;
-
-    fn from_config(config: Self::Config) -> Result<Self> {
-        <Self as StreamSource>::from_config(config)
-    }
-
-    fn process(&mut self) -> Result<()> {
-        // Phase 6: Delegate to StreamSource::generate() for clean separation
-        // generate() produces the frame, process() writes it to the output port
-        match <Self as StreamSource>::generate(self) {
-            Ok(frame) => {
-                self.output_ports.audio.write(frame);
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("TestToneGenerator: Error generating frame: {:?}", e);
-                Err(e)
-            }
-        }
-    }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        <Self as StreamSource>::descriptor()
-    }
-
-    fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
-        // Get base descriptor and add instance-specific TimerRequirements
-        <Self as StreamSource>::descriptor().map(|desc| {
-            desc.with_timer_requirements(TimerRequirements {
-                rate_hz: self.timer_rate_hz(),
-                group_id: self.timer_group_id.clone(),
-                description: Some(format!(
-                    "Generate audio buffers at {:.2} Hz ({} samples at {} Hz sample rate)",
-                    self.timer_rate_hz(),
-                    self.buffer_size,
-                    self.sample_rate
-                )),
-            })
-        })
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn on_start(&mut self, _gpu_context: &GpuContext) -> Result<()> {
-        tracing::info!(
-            "[TestToneGenerator] Started: {}Hz tone at {}Hz sample rate",
-            self.frequency,
-            self.sample_rate
-        );
-        Ok(())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -353,14 +318,13 @@ mod tests {
 
     #[test]
     fn test_create_tone_generator() {
-        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let gen = TestToneGenerator::new(440.0, 0.5);
         assert_eq!(gen.frequency, 440.0);
-        assert_eq!(gen.sample_rate, 48000);
         assert_eq!(gen.channels, 2); // Always stereo
         assert_eq!(gen.amplitude, 0.5);
         assert_eq!(gen.phase, 0.0);
         assert_eq!(gen.frame_number, 0);
-        assert_eq!(gen.buffer_size, TestToneGenerator::BUFFER_SIZE);
+        // Note: sample_rate and buffer_size are placeholders until start() is called
     }
 
     #[test]
@@ -368,29 +332,32 @@ mod tests {
         let config = TestToneConfig {
             frequency: 440.0,
             amplitude: 0.5,
-            sample_rate: 48000,
             timer_group_id: Some("audio_master".to_string()),
         };
         let gen = <TestToneGenerator as StreamSource>::from_config(config).unwrap();
         assert_eq!(gen.frequency, 440.0);
         assert_eq!(gen.amplitude, 0.5);
-        assert_eq!(gen.sample_rate, 48000);
         assert_eq!(gen.timer_group_id, Some("audio_master".to_string()));
+        // Note: sample_rate and buffer_size are placeholders until start() is called
     }
 
     #[test]
     fn test_generate_frame() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 0.5);
+        // Manually set sample_rate and buffer_size as if start() was called
+        gen.sample_rate = 48000;
+        gen.buffer_size = 512;
+
         let frame = gen.generate_frame(0);
 
-        // Fixed buffer size: 2048 samples
-        assert_eq!(frame.sample_count, 2048);
+        // Buffer size: 512 samples
+        assert_eq!(frame.sample_count, 512);
         assert_eq!(frame.channels, 2); // Always stereo
         assert_eq!(frame.sample_rate, 48000);
         assert_eq!(frame.frame_number, 0);
 
-        // Check samples array size (2048 samples * 2 channels = 4096 total)
-        assert_eq!(frame.samples.len(), 4096);
+        // Check samples array size (512 samples * 2 channels = 1024 total)
+        assert_eq!(frame.samples.len(), 1024);
 
         // Check that samples are non-zero (tone is playing)
         let has_non_zero = frame.samples.iter().any(|&s| s.abs() > 0.0);
@@ -408,15 +375,20 @@ mod tests {
 
     #[test]
     fn test_generate() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 0.5);
+        gen.sample_rate = 48000;
+        gen.buffer_size = 512;
+
         let frame = gen.generate().unwrap();
-        assert_eq!(frame.sample_count, 2048);
-        assert_eq!(frame.samples.len(), 4096);
+        assert_eq!(frame.sample_count, 512);
+        assert_eq!(frame.samples.len(), 1024);
     }
 
     #[test]
     fn test_frame_counter_increments() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 0.5);
+        gen.sample_rate = 48000;
+        gen.buffer_size = 512;
 
         let frame1 = gen.generate_frame(0);
         assert_eq!(frame1.frame_number, 0);
@@ -430,7 +402,9 @@ mod tests {
 
     #[test]
     fn test_amplitude_control() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 1.0);
+        let mut gen = TestToneGenerator::new(440.0, 1.0);
+        gen.sample_rate = 48000;
+        gen.buffer_size = 512;
 
         // Test at 100% amplitude
         let frame_full = gen.generate_frame(0);
@@ -464,11 +438,14 @@ mod tests {
 
     #[test]
     fn test_stereo_output() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 0.5);
+        gen.sample_rate = 48000;
+        gen.buffer_size = 512;
+
         let frame = gen.generate_frame(0);
 
-        // Fixed buffer: 2048 samples * 2 channels = 4096 total
-        assert_eq!(frame.samples.len(), 4096);
+        // Buffer: 512 samples * 2 channels = 1024 total
+        assert_eq!(frame.samples.len(), 1024);
         assert_eq!(frame.channels, 2);
 
         // Stereo should have duplicate samples (L, R pairs)
@@ -483,7 +460,9 @@ mod tests {
 
     #[test]
     fn test_phase_continuity() {
-        let mut gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 0.5);
+        gen.sample_rate = 48000;
+        gen.buffer_size = 512;
 
         // Generate multiple frames
         gen.generate_frame(0);
@@ -497,23 +476,26 @@ mod tests {
 
     #[test]
     fn test_element_type() {
-        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let gen = TestToneGenerator::new(440.0, 0.5);
         assert_eq!(gen.element_type(), ElementType::Source);
     }
 
     #[test]
     fn test_scheduling_config() {
-        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let mut gen = TestToneGenerator::new(440.0, 0.5);
+        gen.sample_rate = 48000;
+        gen.buffer_size = 512;
+
         let sched = gen.scheduling_config();
         assert_eq!(sched.mode, SchedulingMode::Loop);
         assert_eq!(sched.clock, ClockSource::Audio);
-        assert_eq!(sched.rate_hz, Some(23.4375)); // 48000 / 2048
+        assert_eq!(sched.rate_hz, Some(93.75)); // 48000 / 512
         assert!(!sched.provide_clock);
     }
 
     #[test]
     fn test_output_ports_descriptor() {
-        let gen = TestToneGenerator::new(440.0, 48000, 0.5);
+        let gen = TestToneGenerator::new(440.0, 0.5);
         let ports = gen.output_ports();
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].name, "audio");

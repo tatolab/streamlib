@@ -102,7 +102,7 @@ pub fn descriptor() -> ProcessorDescriptor {
 /// to provide window/display functionality with WebGPU texture rendering.
 ///
 /// Each DisplayProcessor instance manages one window.
-pub trait DisplayProcessor: StreamProcessor {
+pub trait DisplayProcessor {
     /// Set the window title
     fn set_window_title(&mut self, title: &str);
 

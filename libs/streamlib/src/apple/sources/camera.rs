@@ -3,7 +3,7 @@
 //! Zero-copy pipeline: CVPixelBuffer → IOSurface → Metal Texture → WebGPU Texture
 
 use crate::core::{
-    StreamProcessor, CameraProcessor, CameraOutputPorts, CameraDevice,
+    CameraProcessor, CameraOutputPorts, CameraDevice,
     VideoFrame, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
@@ -420,178 +420,6 @@ impl CameraProcessor for AppleCameraProcessor {
     }
 }
 
-impl StreamProcessor for AppleCameraProcessor {
-    type Config = crate::core::CameraConfig;
-
-    fn from_config(config: Self::Config) -> Result<Self> {
-        match config.device_id {
-            Some(device_id) => Self::with_device_id(&device_id),
-            None => Self::new(),
-        }
-    }
-
-    fn process(&mut self) -> Result<()> {
-        // Phase 6: Delegate to StreamSource::generate() for clean separation
-        // generate() produces the frame, process() writes it to the output port
-        match <Self as StreamSource>::generate(self) {
-            Ok(frame) => {
-                self.ports.video.write(frame);
-                Ok(())
-            }
-            Err(StreamError::Runtime(msg)) if msg.contains("No frame available") => {
-                // No frame available yet - this is normal for callback-driven sources
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Camera: Error generating frame: {:?}", e);
-                Err(e)
-            }
-        }
-    }
-
-    fn on_start(&mut self, gpu_context: &crate::core::GpuContext) -> Result<()> {
-        // Store the shared GPU context from runtime
-        self.gpu_context = Some(gpu_context.clone());
-
-        // Log device/queue addresses to verify all processors share same context
-        tracing::info!(
-            "Camera: Received GPU context - device: {:p}, queue: {:p}",
-            gpu_context.device().as_ref(),
-            gpu_context.queue().as_ref()
-        );
-
-        // Create WgpuBridge using the shared device from runtime
-        // This ensures all processors use the same GPU device for zero-copy texture sharing
-        let metal_device = self.metal_device.as_ref()
-            .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
-
-        // Clone the device and queue from Arc (wgpu types are cheaply cloneable)
-        let device = (**gpu_context.device()).clone();
-        let queue = (**gpu_context.queue()).clone();
-
-        let bridge = WgpuBridge::from_shared_device(
-            metal_device.clone_device(),
-            device,
-            queue,
-        );
-
-        self.wgpu_bridge = Some(Arc::new(bridge));
-
-        tracing::info!("Camera: Created WgpuBridge using runtime's shared GPU device");
-
-        // Create Metal command queue for BGRA→RGBA blit conversion
-        use metal::foreign_types::ForeignTypeRef;
-        let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-        let metal_device_ref = unsafe {
-            metal::DeviceRef::from_ptr(device_ptr as *mut _)
-        };
-        let command_queue = metal_device_ref.new_command_queue();
-        self.metal_command_queue = Some(command_queue);
-
-        tracing::info!("Camera: Created Metal command queue for BGRA→RGBA blit conversion");
-        tracing::info!("Camera: Processor started (capture session already running)");
-        Ok(())
-    }
-
-    fn on_stop(&mut self) -> Result<()> {
-        tracing::info!("Camera: Processor stopped (generated {} frames)", self.frame_count);
-        // Note: AVCaptureSession continues running on main thread
-        // TODO: Implement proper session lifecycle management
-        Ok(())
-    }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        Some(
-            ProcessorDescriptor::new(
-                "CameraProcessor",
-                "Captures video frames from a camera device. Outputs WebGPU textures at the configured frame rate."
-            )
-            .with_usage_context(
-                "Use when you need live video input from a camera. This is typically the source \
-                 processor in a pipeline. Supports multiple camera devices - use set_device_id() \
-                 to select a specific camera, or use 'default' for the system default camera."
-            )
-            .with_output(PortDescriptor::new(
-                "video",
-                Arc::clone(&SCHEMA_VIDEO_FRAME),
-                true,
-                "Live video frames from the camera. Each frame is a WebGPU texture with timestamp \
-                 and metadata. Frames are produced at the camera's native frame rate (typically 30 or 60 FPS)."
-            ))
-            .with_example(ProcessorExample::new(
-                "Basic camera capture (default device)",
-                serde_json::json!({
-                    "code": "from streamlib import camera_processor\n\n@camera_processor()\ndef camera():\n    \"\"\"Zero-copy camera source - no code needed!\"\"\"\n    pass",
-                    "language": "python"
-                }),
-                serde_json::json!({})
-            ))
-            .with_example(ProcessorExample::new(
-                "Specific camera device",
-                serde_json::json!({
-                    "code": "from streamlib import camera_processor\n\n@camera_processor(device_id=\"0x1424001bcf2284\")\ndef camera():\n    \"\"\"Zero-copy camera source with specific device\"\"\"\n    pass",
-                    "language": "python"
-                }),
-                serde_json::json!({})
-            ))
-            .with_example(ProcessorExample::new(
-                "Complete pipeline: Camera → Display (MCP workflow)",
-                serde_json::json!({
-                    "steps": [
-                        {
-                            "action": "add_processor",
-                            "language": "python",
-                            "code": "from streamlib import camera_processor\n\n@camera_processor(device_id=\"0x1424001bcf2284\")\ndef camera():\n    pass",
-                            "result": "processor_0"
-                        },
-                        {
-                            "action": "add_processor",
-                            "language": "python",
-                            "code": "from streamlib import display_processor\n\n@display_processor()\ndef display():\n    pass",
-                            "result": "processor_1"
-                        },
-                        {
-                            "action": "connect_processors",
-                            "source": "processor_0.video",
-                            "destination": "processor_1.video",
-                            "note": "Connect camera OUTPUT port to display INPUT port. Ports are compatible because both use VideoFrame schema."
-                        }
-                    ]
-                }),
-                serde_json::json!({})
-            ))
-            .with_tags(vec!["source", "camera", "video", "input", "capture"])
-        )
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn set_wakeup_channel(&mut self, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
-        // Store in global wakeup channel (shared with AVFoundation delegate)
-        if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
-            *wakeup_storage.lock() = Some(wakeup_tx);
-            tracing::debug!("CameraProcessor: Push-based wakeup enabled (AVFoundation callback will trigger processing)");
-        }
-    }
-
-    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::PortConsumer> {
-        use crate::core::PortProvider;
-
-        // Use PortProvider to access the video output port
-        self.with_video_output_mut(port_name, |output| {
-            output.consumer_holder().lock().take()
-        })
-        .flatten()
-        .map(crate::core::PortConsumer::Video)
-    }
-
-    fn connect_input_consumer(&mut self, _port_name: &str, _consumer: crate::core::PortConsumer) -> bool {
-        // Camera has no video inputs - it's a source processor
-        false
-    }
-}
 
 // Implement PortProvider for dynamic port access (used by runtime for connection wiring)
 impl crate::core::PortProvider for AppleCameraProcessor {
@@ -624,7 +452,7 @@ impl StreamElement for AppleCameraProcessor {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <AppleCameraProcessor as StreamProcessor>::descriptor()
+        <AppleCameraProcessor as StreamSource>::descriptor()
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
@@ -817,7 +645,7 @@ impl StreamSource for AppleCameraProcessor {
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
-        <AppleCameraProcessor as StreamProcessor>::descriptor()
+        <AppleCameraProcessor as StreamSource>::descriptor()
     }
 }
 

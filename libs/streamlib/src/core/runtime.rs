@@ -38,21 +38,6 @@ impl Default for AudioConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ClockSource {
-    Software {
-        rate_hz: f64,
-    },
-}
-
-struct TimerGroup {
-    id: String,
-    clock_source: ClockSource,
-    processor_ids: Vec<ProcessorId>,
-    wakeup_channels: Vec<crossbeam_channel::Sender<WakeupEvent>>,
-    timer_thread: Option<std::thread::JoinHandle<()>>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessorStatus {
     Pending,
@@ -109,7 +94,6 @@ pub struct StreamRuntime {
     next_connection_id: usize,
     audio_config: AudioConfig,
     pending_connections: Vec<PendingConnection>,
-    timer_groups: Arc<Mutex<HashMap<String, TimerGroup>>>,
 }
 
 impl StreamRuntime {
@@ -126,7 +110,6 @@ impl StreamRuntime {
             next_connection_id: 0,
             audio_config: AudioConfig::default(),
             pending_connections: Vec::new(),
-            timer_groups: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -242,40 +225,6 @@ impl StreamRuntime {
         {
             let mut processor = processor_arc.lock();
             processor.set_wakeup_channel_dyn(wakeup_tx.clone());
-        }
-
-        let needs_timer = {
-            let processor = processor_arc.lock();
-            if let Some(descriptor) = processor.descriptor_instance_dyn() {
-                descriptor.timer_requirements.is_some()
-            } else {
-                false
-            }
-        };
-
-        if needs_timer {
-            let processor = processor_arc.lock();
-            if let Some(descriptor) = processor.descriptor_instance_dyn() {
-                if let Some(timer_req) = descriptor.timer_requirements {
-                    let wakeup_tx_timer = wakeup_tx.clone();
-                    let id_for_timer = processor_id.clone();
-                    let rate_hz = timer_req.rate_hz;
-
-                    std::thread::spawn(move || {
-                        let interval = std::time::Duration::from_secs_f64(1.0 / rate_hz);
-                        tracing::info!("[{}] Timer thread started at {} Hz", id_for_timer, rate_hz);
-
-                        loop {
-                            std::thread::sleep(interval);
-                            tracing::debug!("[{}] Timer thread sending TimerTick", id_for_timer);
-                            if wakeup_tx_timer.send(WakeupEvent::TimerTick).is_err() {
-                                tracing::debug!("[{}] Timer thread stopped (processor terminated)", id_for_timer);
-                                break;
-                            }
-                        }
-                    });
-                }
-            }
         }
 
         let id_for_thread = processor_id.clone();
@@ -885,9 +834,6 @@ impl StreamRuntime {
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
             .clone();
 
-        let mut timer_groups_map: HashMap<String, Vec<(ProcessorId, f64, crossbeam_channel::Sender<WakeupEvent>)>> = HashMap::new();
-        let mut solo_timers: Vec<(ProcessorId, f64, crossbeam_channel::Sender<WakeupEvent>)> = Vec::new();
-
         for (processor_id, processor, shutdown_rx) in self.pending_processors.drain(..) {
             let (wakeup_tx, wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
 
@@ -896,24 +842,6 @@ impl StreamRuntime {
             {
                 let mut processor = processor_arc.lock();
                 processor.set_wakeup_channel_dyn(wakeup_tx.clone());
-            }
-
-            {
-                let processor = processor_arc.lock();
-                if let Some(descriptor) = processor.descriptor_instance_dyn() {
-                    if let Some(timer_req) = descriptor.timer_requirements {
-                        let rate_hz = timer_req.rate_hz;
-                        let wakeup_tx_timer = wakeup_tx.clone();
-
-                        if let Some(group_id) = timer_req.group_id {
-                            timer_groups_map.entry(group_id)
-                                .or_default()
-                                .push((processor_id.clone(), rate_hz, wakeup_tx_timer));
-                        } else {
-                            solo_timers.push((processor_id.clone(), rate_hz, wakeup_tx_timer));
-                        }
-                    }
-                }
             }
 
             let runtime_context = crate::core::RuntimeContext::new(gpu_context.clone());
@@ -991,84 +919,6 @@ impl StreamRuntime {
                     tracing::error!("Processor {} not found in registry", processor_id);
                 }
             }
-        }
-
-        for (group_id, members) in timer_groups_map {
-            let rates: Vec<f64> = members.iter().map(|(_, rate, _)| *rate).collect();
-            let first_rate = rates[0];
-            if !rates.iter().all(|&r| (r - first_rate).abs() < 0.01) {
-                return Err(StreamError::Configuration(
-                    format!("Timer group '{}' has mismatched rates: {:?}", group_id, rates)
-                ));
-            }
-
-            let rate_hz = first_rate;
-            let processor_ids: Vec<ProcessorId> = members.iter().map(|(id, _, _)| id.clone()).collect();
-            let wakeup_channels: Vec<crossbeam_channel::Sender<WakeupEvent>> =
-                members.iter().map(|(_, _, tx)| tx.clone()).collect();
-
-            tracing::info!(
-                "[TimerGroup:{}] Created with {} processors at {:.2} Hz: {:?}",
-                group_id, processor_ids.len(), rate_hz, processor_ids
-            );
-
-            let group_id_clone = group_id.clone();
-            let wakeup_channels_clone = wakeup_channels.clone();
-            let timer_thread = std::thread::spawn(move || {
-                let interval = std::time::Duration::from_secs_f64(1.0 / rate_hz);
-                let mut tick_count = 0u64;
-
-                tracing::info!("[TimerGroup:{}] Timer thread started at {:.2} Hz", group_id_clone, rate_hz);
-
-                loop {
-                    std::thread::sleep(interval);
-                    tick_count += 1;
-
-                    let mut active_count = 0;
-                    for tx in &wakeup_channels_clone {
-                        if tx.send(WakeupEvent::TimerTick).is_ok() {
-                            active_count += 1;
-                        }
-                    }
-
-                    if active_count == 0 {
-                        tracing::info!("[TimerGroup:{}] All processors terminated, stopping timer", group_id_clone);
-                        break;
-                    }
-
-                    if tick_count % 100 == 0 {
-                        tracing::debug!(
-                            "[TimerGroup:{}] Tick #{}, {} active processors",
-                            group_id_clone, tick_count, active_count
-                        );
-                    }
-                }
-            });
-
-            let mut groups = self.timer_groups.lock();
-            groups.insert(group_id.clone(), TimerGroup {
-                id: group_id,
-                clock_source: ClockSource::Software { rate_hz },
-                processor_ids,
-                wakeup_channels,
-                timer_thread: Some(timer_thread),
-            });
-        }
-
-        for (processor_id, rate_hz, wakeup_tx) in solo_timers {
-            let processor_id_clone = processor_id.clone();
-            std::thread::spawn(move || {
-                let interval = std::time::Duration::from_secs_f64(1.0 / rate_hz);
-                tracing::info!("[Timer:{}] Solo timer started at {:.2} Hz", processor_id_clone, rate_hz);
-
-                loop {
-                    std::thread::sleep(interval);
-                    if wakeup_tx.send(WakeupEvent::TimerTick).is_err() {
-                        tracing::debug!("[Timer:{}] Timer stopped (processor terminated)", processor_id_clone);
-                        break;
-                    }
-                }
-            });
         }
 
         Ok(())

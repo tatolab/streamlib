@@ -3,9 +3,10 @@
 //! Defines the interface for camera capture processors across platforms.
 
 use crate::core::{
-    StreamProcessor, StreamOutput, VideoFrame,
+    StreamOutput, VideoFrame,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
+use crate::core::traits::{StreamElement, StreamSource};
 use std::sync::Arc;
 use serde_json::json;
 
@@ -50,7 +51,7 @@ pub struct CameraOutputPorts {
 /// Get the standard descriptor for camera processors
 ///
 /// Platform implementations should use this descriptor in their
-/// `StreamProcessor::descriptor()` implementation unless they need
+/// `StreamSource::descriptor()` implementation unless they need
 /// to add platform-specific information.
 pub fn descriptor() -> ProcessorDescriptor {
     ProcessorDescriptor::new(
@@ -104,7 +105,10 @@ pub fn descriptor() -> ProcessorDescriptor {
 ///
 /// Platform implementations (AppleCameraProcessor, etc.) implement this trait
 /// to provide camera capture functionality with WebGPU texture output.
-pub trait CameraProcessor: StreamProcessor {
+///
+/// This trait extends StreamElement (base trait) and StreamSource (specialized source trait)
+/// to ensure all implementations follow the v2.0 architecture.
+pub trait CameraProcessor: StreamElement + StreamSource<Output = VideoFrame, Config = CameraConfig> {
     /// Set the camera device to use
     ///
     /// # Arguments
@@ -118,9 +122,8 @@ pub trait CameraProcessor: StreamProcessor {
     fn output_ports(&mut self) -> &mut CameraOutputPorts;
 }
 
-// NOTE: Port access methods are now part of StreamProcessor trait.
-// Concrete camera processor types (AppleCameraProcessor, etc.) should override
-// the with_video_output_mut() method from StreamProcessor to provide access to their "video" output port.
+// NOTE: v2.0 architecture - Platform implementations (AppleCameraProcessor, etc.)
+// implement StreamElement + StreamSource + CameraProcessor to provide full functionality.
 
 // NOTE: Descriptor-only registration removed - platform implementations (AppleCameraProcessor, etc.)
 // register themselves with full factory support via register_processor_type! macro.
@@ -128,100 +131,41 @@ pub trait CameraProcessor: StreamProcessor {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::*;
-    use crate::core::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
-    use std::sync::Arc;
-
-    // Mock implementation for testing
-    struct MockCameraProcessor;
-
-    impl StreamProcessor for MockCameraProcessor {
-        type Config = crate::core::EmptyConfig;
-
-        fn from_config(_config: Self::Config) -> Result<Self> {
-            Ok(Self)
-        }
-
-        fn process(&mut self) -> Result<()> {
-            Ok(())
-        }
-
-        fn descriptor() -> Option<ProcessorDescriptor> {
-            Some(
-                ProcessorDescriptor::new(
-                    "CameraProcessor",
-                    "Captures video frames from a camera device. Outputs WebGPU textures at the configured frame rate."
-                )
-                .with_usage_context(
-                    "Use when you need live video input from a camera. This is typically the source \
-                     processor in a pipeline. Supports multiple camera devices - use set_device_id() \
-                     to select a specific camera, or use 'default' for the system default camera."
-                )
-                .with_output(PortDescriptor::new(
-                    "video",
-                    Arc::clone(&SCHEMA_VIDEO_FRAME),
-                    true,
-                    "Live video frames from the camera. Each frame is a WebGPU texture with timestamp \
-                     and metadata. Frames are produced at the camera's native frame rate (typically 30 or 60 FPS)."
-                ))
-                .with_tags(vec!["source", "camera", "video", "input", "capture"])
-            )
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
-
-    impl CameraProcessor for MockCameraProcessor {
-        fn set_device_id(&mut self, _device_id: &str) -> Result<()> {
-            Ok(())
-        }
-
-        fn list_devices() -> Result<Vec<CameraDevice>> {
-            Ok(vec![])
-        }
-
-        fn output_ports(&mut self) -> &mut CameraOutputPorts {
-            unimplemented!()
-        }
-    }
+    use super::*;
+    use crate::core::{ProcessorDescriptor, SCHEMA_VIDEO_FRAME};
 
     #[test]
-    fn test_camera_descriptor() {
-        let descriptor = MockCameraProcessor::descriptor().expect("Should have descriptor");
+    fn test_camera_descriptor_helper() {
+        let desc = descriptor();
 
         // Verify basic metadata
-        assert_eq!(descriptor.name, "CameraProcessor");
-        assert!(descriptor.description.contains("camera"));
-        assert!(descriptor.usage_context.is_some());
+        assert_eq!(desc.name, "CameraProcessor");
+        assert!(desc.description.contains("camera"));
+        assert!(desc.usage_context.is_some());
 
         // Verify it has no inputs (it's a source)
-        assert_eq!(descriptor.inputs.len(), 0);
+        assert_eq!(desc.inputs.len(), 0);
 
         // Verify it has video output
-        assert_eq!(descriptor.outputs.len(), 1);
-        assert_eq!(descriptor.outputs[0].name, "video");
-        assert_eq!(descriptor.outputs[0].schema.name, "VideoFrame");
-        assert!(descriptor.outputs[0].required);
+        assert_eq!(desc.outputs.len(), 1);
+        assert_eq!(desc.outputs[0].name, "video");
+        assert_eq!(desc.outputs[0].schema.name, "VideoFrame");
+        assert!(desc.outputs[0].required);
 
         // Verify tags
-        assert!(descriptor.tags.contains(&"source".to_string()));
-        assert!(descriptor.tags.contains(&"camera".to_string()));
+        assert!(desc.tags.contains(&"source".to_string()));
+        assert!(desc.tags.contains(&"camera".to_string()));
     }
 
     #[test]
     fn test_camera_descriptor_serialization() {
-        let descriptor = MockCameraProcessor::descriptor().expect("Should have descriptor");
+        let desc = descriptor();
 
         // Test JSON serialization
-        let json = descriptor.to_json().expect("Failed to serialize to JSON");
+        let json = desc.to_json().expect("Failed to serialize to JSON");
         assert!(json.contains("CameraProcessor"));
         assert!(json.contains("video"));
         assert!(json.contains("VideoFrame"));
-
-        // Note: YAML serialization not tested due to serde_yaml limitation with nested enums
-        // JSON serialization is sufficient for AI agent consumption
     }
 
     #[test]
@@ -240,5 +184,17 @@ mod tests {
         assert!(field_names.contains(&"height"));
         assert!(field_names.contains(&"timestamp"));
         assert!(field_names.contains(&"frame_number"));
+    }
+
+    #[test]
+    fn test_camera_config_default() {
+        let config = CameraConfig::default();
+        assert!(config.device_id.is_none());
+    }
+
+    #[test]
+    fn test_camera_config_from_unit() {
+        let config: CameraConfig = ().into();
+        assert!(config.device_id.is_none());
     }
 }
