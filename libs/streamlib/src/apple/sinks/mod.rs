@@ -13,8 +13,8 @@
 //! - **AppleDisplayProcessor**: Renders video to NSWindow (provides vsync clock)
 //! - **AppleAudioOutputProcessor**: Plays audio to speakers (provides audio clock)
 
-pub mod display_sink;
-pub mod audio_output_sink;
+pub mod display;
+pub mod audio_output;
 
-pub use display_sink::AppleDisplayProcessor;
-pub use audio_output_sink::AppleAudioOutputProcessor;
+pub use display::AppleDisplayProcessor;
+pub use audio_output::AppleAudioOutputProcessor;

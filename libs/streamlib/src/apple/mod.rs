@@ -51,8 +51,11 @@ pub mod metal;
 pub mod texture;
 pub mod wgpu_bridge;
 
-// StreamProcessor implementations
-pub mod processors;
+// Source implementations
+pub mod sources;
+
+// Sink implementations
+pub mod sinks;
 
 // Platform permission handling
 pub mod permissions;
@@ -73,12 +76,16 @@ mod runtime_helpers;
 pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;
 
-// Re-export processor implementations
-pub use processors::{
+// Re-export source implementations
+pub use sources::{
     AppleCameraProcessor,
+    AppleAudioCaptureProcessor,
+};
+
+// Re-export sink implementations
+pub use sinks::{
     AppleDisplayProcessor,
     AppleAudioOutputProcessor,
-    AppleAudioCaptureProcessor,
 };
 
 #[cfg(test)]
