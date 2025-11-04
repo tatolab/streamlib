@@ -166,6 +166,6 @@ pub trait AudioCaptureProcessor: StreamElement + StreamProcessor<Config = AudioC
 
 /// Output ports for AudioCaptureProcessor
 pub struct AudioCaptureOutputPorts {
-    /// Audio output port (sends AudioFrame)
-    pub audio: StreamOutput<AudioFrame>,
+    /// Audio output port (sends mono AudioFrame)
+    pub audio: StreamOutput<AudioFrame<1>>,
 }

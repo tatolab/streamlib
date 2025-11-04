@@ -3,6 +3,7 @@ use super::traits::{StreamProcessor, DynStreamElement};
 use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
 use super::scheduling::ClockSource;
+use super::ports::PortType;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -22,22 +23,8 @@ pub enum WakeupEvent {
     Shutdown,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct AudioConfig {
-    pub sample_rate: u32,
-    pub channels: u32,
-    pub buffer_size: usize,
-}
-
-impl Default for AudioConfig {
-    fn default() -> Self {
-        Self {
-            sample_rate: 48000,
-            channels: 2,
-            buffer_size: 2048,
-        }
-    }
-}
+// Re-export AudioContext as the public audio configuration type
+pub use crate::core::context::AudioContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessorStatus {
@@ -93,11 +80,12 @@ pub struct StreamRuntime {
     next_processor_id: usize,
     pub(crate) connections: Arc<Mutex<HashMap<ConnectionId, Connection>>>,
     next_connection_id: usize,
-    audio_config: AudioConfig,
+    audio_context: AudioContext,
     pending_connections: Vec<PendingConnection>,
     master_clock: Option<Arc<dyn Clock>>,
     audio_clock: Option<Arc<dyn Clock>>,
     video_clock: Option<Arc<dyn Clock>>,
+    bus: crate::core::Bus,
 }
 
 impl StreamRuntime {
@@ -112,7 +100,8 @@ impl StreamRuntime {
             next_processor_id: 0,
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
-            audio_config: AudioConfig::default(),
+            audio_context: AudioContext::default(),
+            bus: crate::core::Bus::new(),
             pending_connections: Vec::new(),
             master_clock: None,
             audio_clock: None,
@@ -200,33 +189,19 @@ impl StreamRuntime {
         self.running
     }
 
-    pub fn audio_config(&self) -> AudioConfig {
-        self.audio_config
+    pub fn audio_config(&self) -> AudioContext {
+        self.audio_context
     }
 
-    pub fn set_audio_config(&mut self, config: AudioConfig) {
+    pub fn set_audio_config(&mut self, config: AudioContext) {
         if self.running {
             tracing::warn!("Changing audio config while runtime is running may cause issues");
         }
-        self.audio_config = config;
+        self.audio_context = config;
     }
 
-    pub fn validate_audio_frame(&self, frame: &crate::core::AudioFrame) -> Result<()> {
-        // NOTE: Sample rate is enforced by RuntimeContext, not validated here
-        // All audio frames should already be at the system-wide sample rate
-
-        if frame.channels != self.audio_config.channels {
-            return Err(StreamError::Configuration(format!(
-                "AudioFrame channel count mismatch: expected {} channels (runtime config), got {} channels. \
-                 This can cause audio artifacts. \
-                 Ensure all audio processors use runtime.audio_config() when activating.",
-                self.audio_config.channels,
-                frame.channels
-            )));
-        }
-
-        Ok(())
-    }
+    // NOTE: validate_audio_frame() removed - channel count validation now done at compile time via AudioFrame<CHANNELS>
+    // Sample rate enforcement is handled by RuntimeContext when processors are started
 
 
     pub fn set_event_loop(&mut self, event_loop: EventLoopFn) {
@@ -555,7 +530,7 @@ impl StreamRuntime {
         Ok(())
     }
 
-    pub async fn connect_at_runtime(
+    pub fn connect_at_runtime(
         &mut self,
         source: &str,
         destination: &str,
@@ -641,9 +616,12 @@ impl StreamRuntime {
             }
         }
 
-        {
+        // Get port types and verify compatibility
+        let (source_port_type, dest_port_type) = {
             let source_guard = source_processor.lock();
-            let port_type = source_guard.get_output_port_type(source_port)
+            let dest_guard = dest_processor.lock();
+
+            let src_type = source_guard.get_output_port_type(source_port)
                 .ok_or_else(|| {
                     StreamError::Configuration(format!(
                         "Source processor '{}' does not have output port '{}'",
@@ -651,38 +629,128 @@ impl StreamRuntime {
                     ))
                 })?;
 
-            let bus = source_guard.create_bus_for_output(source_port)
+            let dst_type = dest_guard.get_input_port_type(dest_port)
                 .ok_or_else(|| {
                     StreamError::Configuration(format!(
-                        "Failed to create bus for output port '{}' on processor '{}'",
-                        source_port, source_proc_id
+                        "Destination processor '{}' does not have input port '{}'",
+                        dest_proc_id, dest_port
                     ))
                 })?;
-            drop(source_guard);
 
-            let mut source = source_processor.lock();
-            source.connect_bus_to_output(source_port, bus.clone());
-            drop(source);
-
-            let mut dest = dest_processor.lock();
-            let connected = dest.connect_bus_to_input(dest_port, bus);
-
-            if !connected {
+            if !src_type.compatible_with(&dst_type) {
                 return Err(StreamError::Configuration(format!(
-                    "Destination processor '{}' does not have input port '{}' or port type mismatch",
-                    dest_proc_id, dest_port
+                    "Port type mismatch: {} ({:?}) → {} ({:?})",
+                    source, src_type, destination, dst_type
                 )));
             }
 
-            tracing::info!(
-                "Connected {} ({}) → {} ({}) via bus (port type: {:?})",
-                source_proc_id,
-                source_port,
-                dest_proc_id,
-                dest_port,
-                port_type
-            );
+            (src_type, dst_type)
+        };
+
+        // Create typed connection based on port type and wire to processors
+        let connection: Arc<dyn std::any::Any + Send + Sync> = match source_port_type {
+            PortType::Audio1 => {
+                let conn = self.bus.create_audio_connection::<1>(
+                    source_proc_id.to_string(),
+                    source_port.to_string(),
+                    dest_proc_id.to_string(),
+                    dest_port.to_string(),
+                    source_port_type.default_capacity(),
+                );
+                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+            },
+            PortType::Audio2 => {
+                let conn = self.bus.create_audio_connection::<2>(
+                    source_proc_id.to_string(),
+                    source_port.to_string(),
+                    dest_proc_id.to_string(),
+                    dest_port.to_string(),
+                    source_port_type.default_capacity(),
+                );
+                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+            },
+            PortType::Audio4 => {
+                let conn = self.bus.create_audio_connection::<4>(
+                    source_proc_id.to_string(),
+                    source_port.to_string(),
+                    dest_proc_id.to_string(),
+                    dest_port.to_string(),
+                    source_port_type.default_capacity(),
+                );
+                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+            },
+            PortType::Audio6 => {
+                let conn = self.bus.create_audio_connection::<6>(
+                    source_proc_id.to_string(),
+                    source_port.to_string(),
+                    dest_proc_id.to_string(),
+                    dest_port.to_string(),
+                    source_port_type.default_capacity(),
+                );
+                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+            },
+            PortType::Audio8 => {
+                let conn = self.bus.create_audio_connection::<8>(
+                    source_proc_id.to_string(),
+                    source_port.to_string(),
+                    dest_proc_id.to_string(),
+                    dest_port.to_string(),
+                    source_port_type.default_capacity(),
+                );
+                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+            },
+            PortType::Video => {
+                let conn = self.bus.create_video_connection(
+                    source_proc_id.to_string(),
+                    source_port.to_string(),
+                    dest_proc_id.to_string(),
+                    dest_port.to_string(),
+                    source_port_type.default_capacity(),
+                );
+                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+            },
+            PortType::Data => {
+                let conn = self.bus.create_data_connection(
+                    source_proc_id.to_string(),
+                    source_port.to_string(),
+                    dest_proc_id.to_string(),
+                    dest_port.to_string(),
+                    source_port_type.default_capacity(),
+                );
+                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+            },
+        };
+
+        // Wire the connection to both processors
+        {
+            let mut source_guard = source_processor.lock();
+            let success = source_guard.wire_output_connection(source_port, connection.clone());
+            if !success {
+                return Err(StreamError::Configuration(format!(
+                    "Failed to wire connection to output port '{}' on processor '{}'",
+                    source_port, source_proc_id
+                )));
+            }
         }
+
+        {
+            let mut dest_guard = dest_processor.lock();
+            let success = dest_guard.wire_input_connection(dest_port, connection);
+            if !success {
+                return Err(StreamError::Configuration(format!(
+                    "Failed to wire connection to input port '{}' on processor '{}'",
+                    dest_port, dest_proc_id
+                )));
+            }
+        }
+
+        tracing::info!(
+            "Connected {} ({:?}) → {} ({:?}) via rtrb",
+            source,
+            source_port_type,
+            destination,
+            dest_port_type
+        );
 
         let connection_id = format!("connection_{}", self.next_connection_id);
         self.next_connection_id += 1;
@@ -708,136 +776,35 @@ impl StreamRuntime {
 
         let connections_to_wire = std::mem::take(&mut self.pending_connections);
 
+        // Use the already-fixed connect_processors_internal for each pending connection
         for pending in connections_to_wire {
             let source = format!("{}.{}", pending.source_processor_id, pending.source_port_name);
             let destination = format!("{}.{}", pending.dest_processor_id, pending.dest_port_name);
 
-            tracing::info!(
-                "Wiring connection: {} → {}",
-                source,
-                destination
-            );
+            tracing::info!("Wiring connection: {} → {}", source, destination);
 
-            let (source_processor, dest_processor) = {
-                let processors = self.processors.lock();
+            // Call the connection method
+            self.connect_at_runtime(&source, &destination)?;
 
-                let source_handle = processors.get(&pending.source_processor_id).ok_or_else(|| {
-                    StreamError::Configuration(format!(
-                        "Source processor '{}' not found",
-                        pending.source_processor_id
-                    ))
-                })?;
-
-                let dest_handle = processors.get(&pending.dest_processor_id).ok_or_else(|| {
-                    StreamError::Configuration(format!(
-                        "Destination processor '{}' not found",
-                        pending.dest_processor_id
-                    ))
-                })?;
-
-                let source_proc = source_handle.processor.as_ref().ok_or_else(|| {
-                    StreamError::Runtime(format!(
-                        "Source processor '{}' has no processor reference (not started?)",
-                        pending.source_processor_id
-                    ))
-                })?;
-
-                let dest_proc = dest_handle.processor.as_ref().ok_or_else(|| {
-                    StreamError::Runtime(format!(
-                        "Destination processor '{}' has no processor reference (not started?)",
-                        pending.dest_processor_id
-                    ))
-                })?;
-
-                (Arc::clone(source_proc), Arc::clone(dest_proc))
-            };
-
+            // Wire wakeup notifications for reactive processors
             {
-                let source_guard = source_processor.lock();
-                let dest_guard = dest_processor.lock();
+                let processors = self.processors.lock();
+                let source_handle = processors.get(&pending.source_processor_id);
+                let dest_handle = processors.get(&pending.dest_processor_id);
 
-                let source_descriptor = source_guard.descriptor_instance_dyn();
-                let dest_descriptor = dest_guard.descriptor_instance_dyn();
-
-                if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
-                    if let (Some(source_audio), Some(dest_audio)) =
-                        (&source_desc.audio_requirements, &dest_desc.audio_requirements)
-                    {
-                        if !source_audio.compatible_with(dest_audio) {
-                            let error_msg = source_audio.compatibility_error(dest_audio);
-                            return Err(StreamError::Configuration(format!(
-                                "Audio requirements incompatible when connecting {} → {}: {}",
-                                source, destination, error_msg
-                            )));
-                        }
+                if let (Some(src), Some(dst)) = (source_handle, dest_handle) {
+                    if let Some(src_proc) = src.processor.as_ref() {
+                        let mut source_guard = src_proc.lock();
+                        source_guard.set_output_wakeup_dyn(&pending.source_port_name, dst.wakeup_tx.clone());
 
                         tracing::debug!(
-                            "Audio requirements validated: {} → {} (compatible)",
-                            pending.source_processor_id, pending.dest_processor_id
+                            "Wired wakeup notification: {} ({}) → {} ({})",
+                            pending.source_processor_id,
+                            pending.source_port_name,
+                            pending.dest_processor_id,
+                            pending.dest_port_name
                         );
                     }
-                }
-            }
-
-            {
-                let source_guard = source_processor.lock();
-                let port_type = source_guard.get_output_port_type(&pending.source_port_name)
-                    .ok_or_else(|| {
-                        StreamError::Configuration(format!(
-                            "Source processor '{}' does not have output port '{}'",
-                            pending.source_processor_id, pending.source_port_name
-                        ))
-                    })?;
-
-                let bus = source_guard.create_bus_for_output(&pending.source_port_name)
-                    .ok_or_else(|| {
-                        StreamError::Configuration(format!(
-                            "Failed to create bus for output port '{}' on processor '{}'",
-                            pending.source_port_name, pending.source_processor_id
-                        ))
-                    })?;
-                drop(source_guard);
-
-                let mut source = source_processor.lock();
-                source.connect_bus_to_output(&pending.source_port_name, bus.clone());
-                drop(source);
-
-                let mut dest = dest_processor.lock();
-                let connected = dest.connect_bus_to_input(&pending.dest_port_name, bus);
-
-                if !connected {
-                    return Err(StreamError::Configuration(format!(
-                        "Destination processor '{}' does not have input port '{}' or port type mismatch",
-                        pending.dest_processor_id, pending.dest_port_name
-                    )));
-                }
-
-                tracing::info!(
-                    "Wired connection: {} ({}) → {} ({}) via bus (port type: {:?})",
-                    pending.source_processor_id,
-                    pending.source_port_name,
-                    pending.dest_processor_id,
-                    pending.dest_port_name,
-                    port_type
-                );
-            }
-
-            {
-                let processors = self.processors.lock();
-
-                if let Some(dest_handle) = processors.get(&pending.dest_processor_id) {
-                    let dest_wakeup_tx = dest_handle.wakeup_tx.clone();
-
-                    let mut source = source_processor.lock();
-                    source.set_output_wakeup_dyn(&pending.source_port_name, dest_wakeup_tx);
-
-                    tracing::debug!(
-                        "Wired wakeup notification: {} ({}) → {} ({})",
-                        pending.source_processor_id,
-                        pending.source_port_name,
-                        pending.dest_processor_id,
-                        pending.dest_port_name
-                    );
                 }
             }
         }
@@ -1476,41 +1443,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_audio_config_validation() {
-        let runtime = StreamRuntime::new();
-
-        let matching_frame = crate::core::AudioFrame::new(
-            vec![0.0; 2048],
-            0,
-            0,
-            48000,
-            2,
-        );
-        assert!(runtime.validate_audio_frame(&matching_frame).is_ok());
-
-        let wrong_sample_rate_frame = crate::core::AudioFrame::new(
-            vec![0.0; 2048],
-            0,
-            0,
-            44100,
-            2,
-        );
-        let result = runtime.validate_audio_frame(&wrong_sample_rate_frame);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("sample rate mismatch"));
-
-        let wrong_channels_frame = crate::core::AudioFrame::new(
-            vec![0.0; 1024],
-            0,
-            0,
-            48000,
-            1,
-        );
-        let result = runtime.validate_audio_frame(&wrong_channels_frame);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("channel count mismatch"));
-    }
+    // NOTE: test_audio_config_validation removed - channel validation now done at compile time via AudioFrame<CHANNELS>
 
     #[test]
     fn test_audio_config_getter_setter() {
@@ -1518,18 +1451,15 @@ mod tests {
 
         let config = runtime.audio_config();
         assert_eq!(config.sample_rate, 48000);
-        assert_eq!(config.channels, 2);
-        assert_eq!(config.buffer_size, 2048);
+        assert_eq!(config.buffer_size, 128); // AudioContext default
 
-        runtime.set_audio_config(AudioConfig {
+        runtime.set_audio_config(AudioContext {
             sample_rate: 44100,
-            channels: 1,
             buffer_size: 1024,
         });
 
         let new_config = runtime.audio_config();
         assert_eq!(new_config.sample_rate, 44100);
-        assert_eq!(new_config.channels, 1);
         assert_eq!(new_config.buffer_size, 1024);
     }
 }

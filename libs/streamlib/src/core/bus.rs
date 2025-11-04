@@ -1,212 +1,180 @@
-//! Bus system for connecting processor ports with fan-out capability
+//! Centralized bus system for all processor connections.
 //!
-//! A bus is a one-to-many communication channel where one output can feed multiple inputs.
-//! Think of it like a patch cable splitter in a modular synthesizer.
+//! The Bus wraps ConnectionManager and provides helper methods for creating
+//! audio, video, and data connections. All connections use rtrb ring buffers.
 //!
 //! # Architecture
 //!
-//! - **Output creates bus**: When an output port is first used, it creates a bus
-//! - **Inputs get readers**: Each input port connecting to the bus gets its own reader
-//! - **Independent reads**: Each reader tracks its own position (fan-out pattern)
-//! - **Type-specific implementations**:
-//!   - Audio: Uses dasp's SignalBus (lazy signal combinators)
-//!   - Video: Custom ring buffer (GPU textures, drop old frames)
-//!   - Data: Custom message queue (metadata, control messages)
+//! - **Centralized Bus**: Contains ConnectionManager for all connections
+//! - **Unified rtrb**: All frame types (AudioFrame, VideoFrame, DataFrame) use rtrb
+//! - **Fan-out support**: 1 output → N inputs = N separate rtrb connections
+//! - **Compile-time safety**: Generic CHANNELS parameter for AudioFrame
 //!
 //! # Example
 //!
 //! ```ignore
-//! // Runtime creates buses when connecting processors
-//! runtime.connect(
-//!     mixer.output_port::<StereoSignal>("audio"),
-//!     reverb.input_port::<StereoSignal>("audio"),
-//! )?;
-//! runtime.connect(
-//!     mixer.output_port::<StereoSignal>("audio"),  // Same output!
-//!     speaker.input_port::<StereoSignal>("audio"), // Different input
-//! )?;
-//! // One bus, two readers - fan-out achieved!
+//! let bus = Bus::new();
+//!
+//! // Create audio connection with 2 channels (stereo)
+//! let audio_conn = bus.create_audio_connection::<2>(
+//!     "mixer".to_string(),
+//!     "audio".to_string(),
+//!     "speaker".to_string(),
+//!     "audio".to_string(),
+//!     4,  // capacity: 4 frames
+//! );
+//!
+//! // Fan-out: Connect same output to multiple inputs
+//! let reverb_conn = bus.create_audio_connection::<2>(
+//!     "mixer".to_string(),  // Same source!
+//!     "audio".to_string(),
+//!     "reverb".to_string(),
+//!     "audio".to_string(),
+//!     4,
+//! );
 //! ```
 
-use crate::core::{VideoFrame, AudioFrame, DataFrame};
-use std::any::Any;
-use std::fmt;
+use super::connection_manager::ConnectionManager;
+use super::connection::ProcessorConnection;
+use super::frames::{AudioFrame, VideoFrame, DataFrame};
 use std::sync::Arc;
+use parking_lot::RwLock;
 
-pub mod audio;
-pub mod video;
-pub mod data;
+/// Centralized bus system for all processor connections.
+///
+/// The Bus manages all rtrb ring buffer connections between processors.
+/// It provides helper methods for creating audio, video, and data connections
+/// with type-safe channel count checking at compile time.
+pub struct Bus {
+    manager: Arc<RwLock<ConnectionManager>>,
+}
 
-pub use audio::{AudioBus, AudioBusReader};
-pub use video::{VideoBus, VideoBusReader};
-pub use data::{DataBus, DataBusReader};
-
-/// Unique identifier for a bus
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BusId(u64);
-
-impl BusId {
+impl Bus {
     pub fn new() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+        Self {
+            manager: Arc::new(RwLock::new(ConnectionManager::new())),
+        }
+    }
+
+    /// Create an audio connection with compile-time channel count checking.
+    ///
+    /// # Type Parameters
+    /// * `CHANNELS` - Number of audio channels (e.g., 1 for mono, 2 for stereo)
+    ///
+    /// # Arguments
+    /// * `source_processor` - Name of the source processor
+    /// * `source_port` - Name of the output port on the source processor
+    /// * `dest_processor` - Name of the destination processor
+    /// * `dest_port` - Name of the input port on the destination processor
+    /// * `capacity` - Ring buffer capacity (number of frames, typically 4)
+    ///
+    /// # Returns
+    /// An Arc to the created ProcessorConnection
+    pub fn create_audio_connection<const CHANNELS: usize>(
+        &self,
+        source_processor: String,
+        source_port: String,
+        dest_processor: String,
+        dest_port: String,
+        capacity: usize,
+    ) -> Arc<ProcessorConnection<AudioFrame<CHANNELS>>> {
+        self.manager.write().create_audio_connection(
+            source_processor,
+            source_port,
+            dest_processor,
+            dest_port,
+            capacity,
+        )
+    }
+
+    /// Get all audio connections from a specific output port.
+    /// Supports fan-out (1 output → N inputs).
+    pub fn get_audio_connections_from_output<const CHANNELS: usize>(
+        &self,
+        source_processor: &str,
+        source_port: &str,
+    ) -> Vec<Arc<ProcessorConnection<AudioFrame<CHANNELS>>>> {
+        self.manager.read().get_audio_connections_from_output(source_processor, source_port)
+    }
+
+    /// Create a video connection.
+    ///
+    /// # Arguments
+    /// * `source_processor` - Name of the source processor
+    /// * `source_port` - Name of the output port on the source processor
+    /// * `dest_processor` - Name of the destination processor
+    /// * `dest_port` - Name of the input port on the destination processor
+    /// * `capacity` - Ring buffer capacity (number of frames, typically 4)
+    pub fn create_video_connection(
+        &self,
+        source_processor: String,
+        source_port: String,
+        dest_processor: String,
+        dest_port: String,
+        capacity: usize,
+    ) -> Arc<ProcessorConnection<VideoFrame>> {
+        self.manager.write().create_video_connection(
+            source_processor,
+            source_port,
+            dest_processor,
+            dest_port,
+            capacity,
+        )
+    }
+
+    /// Get all video connections from a specific output port.
+    /// Supports fan-out (1 output → N inputs).
+    pub fn get_video_connections_from_output(
+        &self,
+        source_processor: &str,
+        source_port: &str,
+    ) -> Vec<Arc<ProcessorConnection<VideoFrame>>> {
+        self.manager.read().get_video_connections_from_output(source_processor, source_port)
+    }
+
+    /// Create a data connection.
+    ///
+    /// # Arguments
+    /// * `source_processor` - Name of the source processor
+    /// * `source_port` - Name of the output port on the source processor
+    /// * `dest_processor` - Name of the destination processor
+    /// * `dest_port` - Name of the input port on the destination processor
+    /// * `capacity` - Ring buffer capacity (number of frames, typically 4)
+    pub fn create_data_connection(
+        &self,
+        source_processor: String,
+        source_port: String,
+        dest_processor: String,
+        dest_port: String,
+        capacity: usize,
+    ) -> Arc<ProcessorConnection<DataFrame>> {
+        self.manager.write().create_data_connection(
+            source_processor,
+            source_port,
+            dest_processor,
+            dest_port,
+            capacity,
+        )
+    }
+
+    /// Get all data connections from a specific output port.
+    /// Supports fan-out (1 output → N inputs).
+    pub fn get_data_connections_from_output(
+        &self,
+        source_processor: &str,
+        source_port: &str,
+    ) -> Vec<Arc<ProcessorConnection<DataFrame>>> {
+        self.manager.read().get_data_connections_from_output(source_processor, source_port)
+    }
+
+    /// Get total number of connections across all types.
+    pub fn connection_count(&self) -> usize {
+        self.manager.read().connection_count()
     }
 }
 
-impl Default for BusId {
+impl Default for Bus {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl fmt::Display for BusId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Bus({})", self.0)
-    }
-}
-
-/// Trait for types that can flow through buses
-///
-/// This is automatically implemented for VideoFrame, AudioFrame, DataFrame,
-/// and AudioSignal types.
-pub trait BusMessage: Send + 'static {
-    /// Clone the message (required for fan-out)
-    fn clone_message(&self) -> Box<dyn BusMessage>;
-
-    /// Downcast to concrete type
-    fn as_any(&self) -> &dyn Any;
-}
-
-// Implement BusMessage for our core types
-impl BusMessage for VideoFrame {
-    fn clone_message(&self) -> Box<dyn BusMessage> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl BusMessage for AudioFrame {
-    fn clone_message(&self) -> Box<dyn BusMessage> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl BusMessage for DataFrame {
-    fn clone_message(&self) -> Box<dyn BusMessage> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-// AudioSignal types implement BusMessage
-impl<const CHANNELS: usize> BusMessage for crate::core::frames::AudioSignal<CHANNELS> {
-    fn clone_message(&self) -> Box<dyn BusMessage> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-/// A typed bus that can create readers for multiple consumers
-///
-/// This is the main trait for bus implementations. Each message type
-/// (AudioSignal, VideoFrame, DataFrame) has its own Bus implementation
-/// with type-specific behavior.
-pub trait Bus<T: BusMessage>: Send + Sync {
-    /// Get unique identifier for this bus
-    fn id(&self) -> BusId;
-
-    /// Create a new reader for this bus
-    ///
-    /// Each reader maintains independent position, enabling fan-out.
-    /// Multiple readers can exist for the same bus without interfering.
-    fn create_reader(&self) -> Box<dyn BusReader<T>>;
-
-    /// Write a message to the bus
-    ///
-    /// This makes the message available to all readers.
-    /// Behavior depends on implementation:
-    /// - Audio: Advances signal position
-    /// - Video: Pushes frame to ring buffer (drops oldest if full)
-    /// - Data: Enqueues message
-    fn write(&self, message: T);
-}
-
-/// A reader for consuming messages from a bus
-///
-/// Each reader tracks its own position independently, allowing
-/// multiple consumers to read from the same bus at different rates.
-pub trait BusReader<T: BusMessage>: Send {
-    /// Read the latest message available
-    ///
-    /// Returns None if no new data since last read.
-    /// Each reader tracks position independently.
-    fn read_latest(&mut self) -> Option<T>;
-
-    /// Check if data is available without consuming
-    fn has_data(&self) -> bool;
-
-    /// Clone this reader (for port cloning)
-    fn clone_reader(&self) -> Box<dyn BusReader<T>>;
-}
-
-/// Type-erased bus for runtime storage
-///
-/// The runtime stores all buses in a HashMap<BusId, Arc<dyn AnyBus>>.
-/// This trait provides the type erasure layer needed for heterogeneous storage.
-pub trait AnyBus: Send + Sync {
-    /// Get the bus ID
-    fn id(&self) -> BusId;
-
-    /// Downcast to concrete bus type
-    fn as_any(&self) -> &dyn Any;
-
-    /// Clone as Arc<dyn AnyBus>
-    fn clone_arc(&self) -> Arc<dyn AnyBus>;
-}
-
-/// Wrapper that makes any Bus into an AnyBus
-pub struct TypedBus<T: BusMessage> {
-    id: BusId,
-    inner: Arc<dyn Bus<T>>,
-}
-
-impl<T: BusMessage> TypedBus<T> {
-    pub fn new(inner: Arc<dyn Bus<T>>) -> Self {
-        let id = inner.id();
-        Self { id, inner }
-    }
-
-    pub fn inner(&self) -> &Arc<dyn Bus<T>> {
-        &self.inner
-    }
-}
-
-impl<T: BusMessage> AnyBus for TypedBus<T> {
-    fn id(&self) -> BusId {
-        self.id
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn clone_arc(&self) -> Arc<dyn AnyBus> {
-        Arc::new(Self {
-            id: self.id,
-            inner: Arc::clone(&self.inner),
-        })
     }
 }

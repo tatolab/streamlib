@@ -1,8 +1,5 @@
 
-use clack_host::{
-    bundle::PluginBundle,
-    factory::PluginDescriptor,
-};
+use clack_host::bundle::PluginBundle;
 
 use crate::core::{Result, StreamError};
 use std::path::{Path, PathBuf};

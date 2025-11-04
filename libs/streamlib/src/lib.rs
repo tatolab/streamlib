@@ -59,7 +59,6 @@ pub use core::{
     media_clock::MediaClock,
     StreamError, Result, GpuContext, AudioContext, RuntimeContext,
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
-    MonoSignal, StereoSignal, QuadSignal, FiveOneSignal,
     // v2.0 traits - GStreamer-inspired hierarchy
     StreamElement, ElementType, DynStreamElement,
     StreamOutput, StreamInput, PortType, PortMessage,
@@ -167,7 +166,7 @@ pub mod python;
 
 // Platform-configured runtime wrapper
 mod runtime;
-pub use runtime::{StreamRuntime, AudioConfig};
+pub use runtime::StreamRuntime;
 
 // Platform information
 pub mod platform {

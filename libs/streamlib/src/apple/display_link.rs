@@ -93,7 +93,7 @@ pub struct CVSMPTETime {
 pub type CVOptionFlags = u64;
 pub type CVReturn = i32;
 
-pub const kCVReturnSuccess: CVReturn = 0;
+pub const K_CVRETURN_SUCCESS: CVReturn = 0;
 
 #[link(name = "CoreVideo", kind = "framework")]
 extern "C" {
@@ -137,7 +137,7 @@ extern "C" fn display_link_callback(
         let clock = &*(context as *const Arc<VideoClock>);
         clock.increment_frames(1);
     }
-    kCVReturnSuccess
+    K_CVRETURN_SUCCESS
 }
 
 /// Safe wrapper around CVDisplayLink for hardware-driven vsync timing
@@ -179,7 +179,7 @@ impl DisplayLink {
             CVDisplayLinkCreateWithActiveCGDisplays(&mut display_link)
         };
 
-        if status != kCVReturnSuccess {
+        if status != K_CVRETURN_SUCCESS {
             return Err(StreamError::Configuration(
                 format!("Failed to create CVDisplayLink: {}", status)
             ));
@@ -196,7 +196,7 @@ impl DisplayLink {
             )
         };
 
-        if status != kCVReturnSuccess {
+        if status != K_CVRETURN_SUCCESS {
             unsafe {
                 CVDisplayLinkRelease(display_link);
                 let _ = Box::from_raw(context as *mut Arc<VideoClock>);
@@ -228,7 +228,7 @@ impl DisplayLink {
     pub fn start(&self) -> Result<()> {
         let status = unsafe { CVDisplayLinkStart(self.display_link) };
 
-        if status != kCVReturnSuccess {
+        if status != K_CVRETURN_SUCCESS {
             return Err(StreamError::Configuration(
                 format!("Failed to start CVDisplayLink: {}", status)
             ));
@@ -250,7 +250,7 @@ impl DisplayLink {
     pub fn stop(&self) -> Result<()> {
         let status = unsafe { CVDisplayLinkStop(self.display_link) };
 
-        if status != kCVReturnSuccess {
+        if status != K_CVRETURN_SUCCESS {
             return Err(StreamError::Configuration(
                 format!("Failed to stop CVDisplayLink: {}", status)
             ));

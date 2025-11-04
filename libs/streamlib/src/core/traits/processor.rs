@@ -65,19 +65,15 @@ pub trait StreamProcessor: StreamElement {
         None
     }
 
-    fn create_bus_for_output(&self, _port_name: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        None
-    }
-
-    fn connect_bus_to_output(&mut self, _port_name: &str, _bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+    /// Wire a type-erased connection to an output port.
+    /// Override this in processors that have output ports.
+    fn wire_output_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
         false
     }
 
-    fn connect_bus_to_input(&mut self, _port_name: &str, _bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        false
-    }
-
-    fn connect_reader_to_input(&mut self, _port_name: &str, _reader: Box<dyn std::any::Any + Send>) -> bool {
+    /// Wire a type-erased connection to an input port.
+    /// Override this in processors that have input ports.
+    fn wire_input_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
         false
     }
 }

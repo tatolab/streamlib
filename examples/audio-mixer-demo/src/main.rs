@@ -7,7 +7,7 @@ use streamlib::{
     StreamRuntime, AudioMixerProcessor, MixingStrategy,
     ChordGeneratorProcessor, AudioOutputProcessor,
     ClapEffectProcessor,
-    Result, MonoSignal, StereoSignal,
+    Result, AudioFrame,
 };
 use streamlib::core::sources::chord_generator::ChordGeneratorConfig;
 use streamlib::core::transformers::audio_mixer::AudioMixerConfig;
@@ -28,8 +28,7 @@ async fn main() -> Result<()> {
     let mut runtime = StreamRuntime::new();
     let audio_config = runtime.audio_config();
     println!("   Sample rate: {} Hz", audio_config.sample_rate);
-    println!("   Buffer size: {} samples", audio_config.buffer_size);
-    println!("   Channels: {}\n", audio_config.channels);
+    println!("   Buffer size: {} samples\n", audio_config.buffer_size);
 
     // Calculate optimal tick rate to match audio buffer size
     // This ensures we generate exactly the right number of samples per tick
@@ -88,34 +87,34 @@ async fn main() -> Result<()> {
 
     // Connect chord generator's 3 mono outputs to mixer inputs (like a mic array)
     runtime.connect(
-        chord_gen.output_port::<MonoSignal>("tone_c4"),
-        mixer.input_port::<MonoSignal>("input_0"),
+        chord_gen.output_port::<AudioFrame<1>>("tone_c4"),
+        mixer.input_port::<AudioFrame<1>>("input_0"),
     )?;
     println!("   ✅ Chord Generator (C4 mono) → Mixer Input 0");
 
     runtime.connect(
-        chord_gen.output_port::<MonoSignal>("tone_e4"),
-        mixer.input_port::<MonoSignal>("input_1"),
+        chord_gen.output_port::<AudioFrame<1>>("tone_e4"),
+        mixer.input_port::<AudioFrame<1>>("input_1"),
     )?;
     println!("   ✅ Chord Generator (E4 mono) → Mixer Input 1");
 
     runtime.connect(
-        chord_gen.output_port::<MonoSignal>("tone_g4"),
-        mixer.input_port::<MonoSignal>("input_2"),
+        chord_gen.output_port::<AudioFrame<1>>("tone_g4"),
+        mixer.input_port::<AudioFrame<1>>("input_2"),
     )?;
     println!("   ✅ Chord Generator (G4 mono) → Mixer Input 2");
 
     // Connect mixer output to reverb input
     runtime.connect(
-        mixer.output_port::<StereoSignal>("audio"),
-        reverb.input_port::<StereoSignal>("audio"),
+        mixer.output_port::<AudioFrame<2>>("audio"),
+        reverb.input_port::<AudioFrame<2>>("audio"),
     )?;
     println!("   ✅ Mixer (stereo) → Reverb");
 
     // Connect reverb output to speaker
     runtime.connect(
-        reverb.output_port::<StereoSignal>("audio"),
-        speaker.input_port::<StereoSignal>("audio"),
+        reverb.output_port::<AudioFrame<2>>("audio"),
+        speaker.input_port::<AudioFrame<2>>("audio"),
     )?;
     println!("   ✅ Reverb → Speaker\n");
 

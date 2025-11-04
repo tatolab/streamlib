@@ -26,7 +26,7 @@
 //! ```
 
 use crate::core::{StreamInput, Result};
-use crate::core::frames::StereoSignal;
+use crate::core::frames::AudioFrame;
 
 /// Configuration for audio output processors
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -63,14 +63,14 @@ pub struct AudioDevice {
 
 /// Audio output processor trait
 ///
-/// Platform-specific implementations receive StereoSignals from an input port
+/// Platform-specific implementations receive AudioFrame<2> from an input port
 /// and play them through the system's audio output device.
 ///
 /// # Architecture
 ///
-/// - **Input port**: `audio` (StereoSignal)
+/// - **Input port**: `audio` (AudioFrame<2>)
 /// - **Output ports**: None (audio goes to hardware)
-/// - **Processing**: Take samples from StereoSignal → platform audio buffer, play through speakers
+/// - **Processing**: Take samples from AudioFrame<2> → platform audio buffer, play through speakers
 ///
 /// # Platform Notes
 ///
@@ -95,7 +95,7 @@ pub trait AudioOutputProcessor {
     ///
     /// # Returns
     ///
-    /// Audio output processor ready to receive StereoSignals
+    /// Audio output processor ready to receive AudioFrame<2>
     ///
     /// # Example
     ///
@@ -141,6 +141,6 @@ pub trait AudioOutputProcessor {
 
 /// Input ports for AudioOutputProcessor
 pub struct AudioOutputInputPorts {
-    /// Audio input port (receives StereoSignal)
-    pub audio: StreamInput<StereoSignal>,
+    /// Audio input port (receives stereo AudioFrame)
+    pub audio: StreamInput<AudioFrame<2>>,
 }

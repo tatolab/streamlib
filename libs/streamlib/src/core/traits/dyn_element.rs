@@ -2,7 +2,6 @@ use crate::core::{RuntimeContext, Result};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::runtime::WakeupEvent;
 use crate::core::traits::ElementType;
-use crate::core::bus::{Bus, BusReader, BusMessage};
 use crate::core::ports::PortType;
 use std::sync::Arc;
 
@@ -25,8 +24,12 @@ pub trait DynStreamElement: Send + 'static {
 
     fn get_output_port_type(&self, port_name: &str) -> Option<PortType>;
     fn get_input_port_type(&self, port_name: &str) -> Option<PortType>;
-    fn create_bus_for_output(&self, port_name: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>>;
-    fn connect_bus_to_output(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool;
-    fn connect_bus_to_input(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool;
-    fn connect_reader_to_input(&mut self, port_name: &str, reader: Box<dyn std::any::Any + Send>) -> bool;
+
+    /// Wire a type-erased connection to an output port.
+    /// The connection Arc must match the port's expected type.
+    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool;
+
+    /// Wire a type-erased connection to an input port.
+    /// The connection Arc must match the port's expected type.
+    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool;
 }

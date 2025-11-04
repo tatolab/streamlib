@@ -70,7 +70,7 @@ pub fn are_synchronized(timestamp_a_ns: i64, timestamp_b_ns: i64, tolerance_ms: 
 /// Note: VideoFrame uses f64 seconds, AudioFrame uses i64 nanoseconds.
 /// This function converts VideoFrame timestamp to nanoseconds for comparison.
 #[inline]
-pub fn video_audio_delta_ms(video: &VideoFrame, audio: &AudioFrame) -> f64 {
+pub fn video_audio_delta_ms<const CHANNELS: usize>(video: &VideoFrame, audio: &AudioFrame<CHANNELS>) -> f64 {
     let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
     timestamp_delta_ms(video_ns, audio.timestamp_ns)
 }
@@ -79,16 +79,16 @@ pub fn video_audio_delta_ms(video: &VideoFrame, audio: &AudioFrame) -> f64 {
 ///
 /// Uses default tolerance of 16.6ms (one 60 Hz frame).
 #[inline]
-pub fn video_audio_synchronized(video: &VideoFrame, audio: &AudioFrame) -> bool {
+pub fn video_audio_synchronized<const CHANNELS: usize>(video: &VideoFrame, audio: &AudioFrame<CHANNELS>) -> bool {
     let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
     are_synchronized(video_ns, audio.timestamp_ns, DEFAULT_SYNC_TOLERANCE_MS)
 }
 
 /// Check if video and audio frames are synchronized with custom tolerance
 #[inline]
-pub fn video_audio_synchronized_with_tolerance(
+pub fn video_audio_synchronized_with_tolerance<const CHANNELS: usize>(
     video: &VideoFrame,
-    audio: &AudioFrame,
+    audio: &AudioFrame<CHANNELS>,
     tolerance_ms: f64,
 ) -> bool {
     let video_ns = (video.timestamp * 1_000_000_000.0) as i64;

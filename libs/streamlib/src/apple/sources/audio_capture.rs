@@ -6,10 +6,11 @@
 use crate::core::{
     AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioCaptureOutputPorts,
     AudioFrame, Result, StreamError, StreamOutput, ProcessorDescriptor,
-    PortDescriptor, SCHEMA_AUDIO_FRAME,
+    PortDescriptor,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
+use crate::core::ports::PortMessage;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -294,9 +295,9 @@ impl StreamElement for AppleAudioCaptureProcessor {
     fn output_ports(&self) -> Vec<PortDescriptor> {
         vec![PortDescriptor {
             name: "audio".to_string(),
-            schema: SCHEMA_AUDIO_FRAME.clone(),
+            schema: AudioFrame::<1>::schema(),
             required: true,
-            description: "Captured audio frames from the microphone".to_string(),
+            description: "Captured mono audio frames from the microphone".to_string(),
         }]
     }
 
@@ -351,11 +352,21 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
             .unwrap()
             .as_nanos() as i64;
 
-        let frame = AudioFrame::new(
-            samples,
+        // Microphones are always mono - convert interleaved stereo input to mono by averaging channels
+        let mono_samples: Vec<f32> = if self.channels == 2 {
+            // Stereo input: average L and R channels to create mono
+            samples.chunks_exact(2)
+                .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
+                .collect()
+        } else {
+            // Already mono
+            samples
+        };
+
+        let frame = AudioFrame::<1>::new(
+            mono_samples,
             timestamp_ns,
             frame_number,
-            self.channels,
         );
 
         // Write directly to output port
@@ -374,7 +385,46 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
-        <AppleAudioCaptureProcessor as StreamProcessor>::descriptor()
+        Some(
+            ProcessorDescriptor::new(
+                "AppleAudioCaptureProcessor",
+                "Captures mono audio from macOS microphones using CoreAudio via cpal"
+            )
+            .with_usage_context(
+                "Automatically uses default microphone if device_id not specified. \
+                 Outputs mono AudioFrame<1> at system sample rate (typically 48kHz). \
+                 Converts stereo hardware input to mono by averaging channels. \
+                 Callback-driven for low latency."
+            )
+            .with_tags(vec!["audio", "source", "microphone", "coreaudio", "macos", "mono"])
+        )
+    }
+
+    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        if port_name == "audio" {
+            self.ports.audio.set_downstream_wakeup(wakeup_tx);
+        }
+    }
+
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+        match port_name {
+            "audio" => Some(crate::core::ports::PortType::Audio1),
+            _ => None,
+        }
+    }
+
+    fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::connection::ProcessorConnection;
+        use crate::core::AudioFrame;
+
+        // Downcast to mono connection type (AudioFrame<1>)
+        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {
+            if port_name == "audio" {
+                self.ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
+                return true;
+            }
+        }
+        false
     }
 }
 

@@ -76,19 +76,11 @@ where
         StreamProcessor::get_input_port_type(self, port_name)
     }
 
-    fn create_bus_for_output(&self, port_name: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        StreamProcessor::create_bus_for_output(self, port_name)
+    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        StreamProcessor::wire_output_connection(self, port_name, connection)
     }
 
-    fn connect_bus_to_output(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        StreamProcessor::connect_bus_to_output(self, port_name, bus)
-    }
-
-    fn connect_bus_to_input(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        StreamProcessor::connect_bus_to_input(self, port_name, bus)
-    }
-
-    fn connect_reader_to_input(&mut self, port_name: &str, reader: Box<dyn std::any::Any + Send>) -> bool {
-        StreamProcessor::connect_reader_to_input(self, port_name, reader)
+    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        StreamProcessor::wire_input_connection(self, port_name, connection)
     }
 }

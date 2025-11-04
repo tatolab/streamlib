@@ -7,6 +7,8 @@
 pub mod bus;
 pub mod clap;
 pub mod clocks;
+pub mod connection;
+pub mod connection_manager;
 pub mod context;
 pub mod error;
 pub mod frames;
@@ -32,13 +34,15 @@ pub use clap::{
     ParameterAutomation, ClapParameterControl,
 };
 pub use clocks::{Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock};
+pub use connection::{ProcessorConnection, ConnectionId};
+pub use connection_manager::ConnectionManager;
+pub use bus::Bus;
 pub use context::{GpuContext, AudioContext, RuntimeContext};
 pub use error::{StreamError, Result};
 pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use frames::{
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
-    MonoSignal, StereoSignal, QuadSignal, FiveOneSignal,
 };
 // v2.0 traits - GStreamer-inspired hierarchy
 pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};

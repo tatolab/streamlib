@@ -7,9 +7,7 @@ use crate::core::StreamRuntime;
 use objc2::{MainThreadMarker, rc::Retained, msg_send};
 use objc2_app_kit::{NSApplication, NSEvent, NSEventMask};
 use objc2_foundation::NSDate;
-use std::time::Duration;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use core_foundation::runloop::CFRunLoop;
 
 // Extern C function for pumping the CFRunLoop (includes GCD queue processing)
 extern "C" {
@@ -52,9 +50,7 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
                     use core_foundation::base::TCFType;
 
                     let mode = CFString::new("kCFRunLoopDefaultMode");
-                    unsafe {
-                        CFRunLoopRunInMode(mode.as_concrete_TypeRef(), 0.016, true);
-                    }
+                    CFRunLoopRunInMode(mode.as_concrete_TypeRef(), 0.016, true);
 
                     // Process any pending NSApplication events that weren't handled by the runloop
                     loop {

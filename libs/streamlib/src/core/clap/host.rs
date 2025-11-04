@@ -484,13 +484,12 @@ impl ClapPluginHost {
         Ok(())
     }
 
-    pub fn process_audio(&mut self, input: &AudioFrame) -> Result<AudioFrame> {
-        let num_channels = input.channels as usize;
+    pub fn process_audio(&mut self, input: &AudioFrame<2>) -> Result<AudioFrame<2>> {
         let num_samples = input.sample_count();
 
-        // Deinterleave directly into pre-allocated buffers (only stereo for now)
+        // Deinterleave directly into pre-allocated buffers (stereo)
         for i in 0..num_samples {
-            let base_idx = i * num_channels;
+            let base_idx = i * 2;  // 2 channels (stereo)
             self.deinterleave_buffers[0][i] = input.samples[base_idx];
             self.deinterleave_buffers[1][i] = input.samples[base_idx + 1];
         }
@@ -506,13 +505,11 @@ impl ClapPluginHost {
             output_samples.push(self.output_buffers[1][i]);
         }
 
-        Ok(AudioFrame {
-            samples: Arc::new(output_samples),
-            timestamp_ns: input.timestamp_ns,
-            channels: input.channels,
-            frame_number: input.frame_number,
-            metadata: None,
-        })
+        Ok(AudioFrame::new(
+            output_samples,
+            input.timestamp_ns,
+            input.frame_number
+        ))
     }
 
     fn process_audio_channels_inplace(&mut self, num_samples: usize) -> Result<()> {
@@ -551,7 +548,7 @@ impl ClapPluginHost {
         let current_gen = state.parameter_generation;
         let has_param_changes = current_gen != self.last_parameter_generation;
 
-        let mut input_events = if has_param_changes {
+        let input_events = if has_param_changes {
             let mut event_buffer = EventBuffer::with_capacity(state.parameters.len());
             for (param_id, value) in state.parameters.iter() {
                 let event = ParamValueEvent::new(

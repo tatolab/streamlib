@@ -4,7 +4,7 @@ use crate::core::{
     ProcessorDescriptor, PortDescriptor,
     StreamInput,
 };
-use crate::core::frames::StereoSignal;
+use crate::core::frames::AudioFrame;
 use crate::core::ports::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
@@ -12,10 +12,9 @@ use crate::core::clocks::AudioClock;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 pub struct AudioOutputInputPorts {
-    pub audio: StreamInput<StereoSignal>,
+    pub audio: StreamInput<AudioFrame<2>>,
 }
 
 pub struct AppleAudioOutputProcessor {
@@ -80,9 +79,9 @@ impl StreamElement for AppleAudioOutputProcessor {
     fn input_ports(&self) -> Vec<PortDescriptor> {
         vec![PortDescriptor {
             name: "audio".to_string(),
-            schema: StereoSignal::schema(),
+            schema: AudioFrame::<2>::schema(),
             required: true,
-            description: "Stereo audio signal to play through speakers".to_string(),
+            description: "Stereo audio frame to play through speakers".to_string(),
         }]
     }
 
@@ -135,14 +134,14 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
         tracing::info!("AudioOutput: process() called - setting up stream now that connections are wired");
 
-        let reader = self.input_ports.audio.take_reader()
+        // Clone the input port's connection for the callback to use
+        // The callback will read AudioFrame<2> directly from the rtrb ring buffer
+        let input_connection = self.input_ports.audio.clone_connection()
             .ok_or_else(|| StreamError::Configuration("Input port not connected".into()))?;
 
-        tracing::info!("AudioOutput: Successfully took reader from input port");
+        tracing::info!("AudioOutput: Successfully cloned connection from input port");
 
-        let reader_arc = Arc::new(Mutex::new(reader));
-        let reader_for_callback = Arc::clone(&reader_arc);
-
+        let connection_for_callback = input_connection;
         let audio_clock = Arc::clone(&self.audio_clock);
 
         tracing::info!("AudioOutput: Setting up audio output with cpal");
@@ -154,14 +153,12 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
                 audio_clock.increment_samples(data.len() as u64);
 
-                let mut reader = reader_for_callback.lock();
+                // Read latest AudioFrame<2> from the ring buffer
+                if let Some(audio_frame) = connection_for_callback.read_latest() {
+                    // AudioFrame samples are already interleaved: [L, R, L, R, ...]
+                    let samples = &audio_frame.samples;
 
-                if let Some(signal) = reader.read_latest() {
-                    let num_frames = data.len() / 2;
-
-                    let samples = signal.take_interleaved(num_frames);
-
-                    tracing::debug!("AudioOutput: Got signal with {} samples", samples.len());
+                    tracing::debug!("AudioOutput: Got audio frame with {} samples", samples.len());
 
                     let copy_len = data.len().min(samples.len());
                     data[..copy_len].copy_from_slice(&samples[..copy_len]);
@@ -239,19 +236,14 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         }
     }
 
-    fn connect_bus_to_input(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        if port_name == "audio" {
-            self.input_ports.audio.connect_bus(bus)
-        } else {
-            false
-        }
-    }
+    fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::connection::ProcessorConnection;
+        use crate::core::AudioFrame;
 
-    fn connect_reader_to_input(&mut self, port_name: &str, reader: Box<dyn std::any::Any + Send>) -> bool {
-        use crate::core::frames::StereoSignal;
-        if let Ok(typed_reader) = reader.downcast::<Box<dyn crate::core::bus::BusReader<StereoSignal>>>() {
+        // Downcast to stereo connection type (AudioFrame<2>)
+        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
             if port_name == "audio" {
-                self.input_ports.audio.connect_reader(*typed_reader);
+                self.input_ports.audio.set_connection(std::sync::Arc::clone(&typed_conn));
                 return true;
             }
         }

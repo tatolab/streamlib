@@ -6,9 +6,6 @@ pub mod plugin_info;
 pub mod parameter_modulation;
 pub mod parameter_automation;
 
-// Internal modules (not exposed in public API)
-pub(crate) mod buffer_conversion;
-
 // Re-export public types
 pub use host::ClapPluginHost;
 pub use scanner::{ClapScanner, ClapPluginInfo};

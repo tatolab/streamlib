@@ -1,6 +1,6 @@
 use crate::core::{Result, ports::PortMessage};
 
-pub use crate::core::runtime::AudioConfig;
+pub use crate::core::runtime::AudioContext;
 pub use crate::core::handles::ProcessorHandle;
 
 pub struct StreamRuntime {
@@ -56,15 +56,13 @@ impl StreamRuntime {
         self.inner.stop().await
     }
 
-    pub fn audio_config(&self) -> AudioConfig {
+    pub fn audio_config(&self) -> AudioContext {
         self.inner.audio_config()
     }
 
-    pub fn set_audio_config(&mut self, config: AudioConfig) {
+    pub fn set_audio_config(&mut self, config: AudioContext) {
         self.inner.set_audio_config(config)
     }
 
-    pub fn validate_audio_frame(&self, frame: &crate::core::AudioFrame) -> Result<()> {
-        self.inner.validate_audio_frame(frame)
-    }
+    // NOTE: validate_audio_frame() removed - channel count validation now done at compile time via AudioFrame<CHANNELS>
 }

@@ -4,7 +4,7 @@
 
 use super::Clock;
 use crate::core::scheduling::ClockType;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Software clock using CPU timestamps
 ///

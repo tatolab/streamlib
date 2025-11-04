@@ -35,9 +35,9 @@
 //! - Prevents timing issues from mixed refresh rates
 
 use crate::core::{
-    DisplayProcessor, DisplayInputPorts, WindowId,
-    Result, StreamError, VideoFrame, GpuContext,
-    ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
+    DisplayInputPorts, WindowId,
+    Result, StreamError,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
@@ -49,7 +49,6 @@ use objc2_app_kit::{NSWindow, NSBackingStoreType, NSWindowStyleMask, NSApplicati
 use objc2_quartz_core::{CAMetalLayer, CAMetalDrawable};
 use objc2_metal::MTLPixelFormat;
 use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc};
-use parking_lot::Mutex;
 use metal;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
@@ -476,7 +475,7 @@ impl AppleDisplayProcessor {
             window.setTitle(&NSString::from_str(&window_title));
 
             // Create Metal layer
-            let metal_layer = unsafe { CAMetalLayer::new() };
+            let metal_layer = CAMetalLayer::new();
             metal_layer.setDevice(Some(&metal_device));
             metal_layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
 

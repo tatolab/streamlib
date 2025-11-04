@@ -5,7 +5,7 @@
 use crate::core::{
     CameraProcessor, CameraOutputPorts, CameraDevice,
     VideoFrame, Result, StreamError,
-    ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
+    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
@@ -204,9 +204,9 @@ impl AppleCameraProcessor {
         };
 
         let device_name = unsafe { device.localizedName().to_string() };
-        let device_unique_id = unsafe { device.uniqueID().to_string() };
+        let _device_unique_id = unsafe { device.uniqueID().to_string() };
         let device_model = unsafe { device.modelID().to_string() };
-        let device_manufacturer = unsafe { device.manufacturer().to_string() };
+        let _device_manufacturer = unsafe { device.manufacturer().to_string() };
 
         tracing::info!("Camera: Found device: {} ({})", device_name, device_model);
 
@@ -220,7 +220,7 @@ impl AppleCameraProcessor {
         // Note: We can't easily request permission here because we need async/callbacks.
         // The first time this runs, it will fail, but macOS will automatically prompt for permission.
         // On subsequent runs, it will work if permission was granted.
-        let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
+        let _status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
 
         // If not determined yet, macOS will prompt when we try to create the input
         // We'll let the deviceInputWithDevice_error call handle the permission prompt
@@ -625,7 +625,18 @@ impl StreamProcessor for AppleCameraProcessor {
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
-        <AppleCameraProcessor as StreamProcessor>::descriptor()
+        Some(
+            ProcessorDescriptor::new(
+                "AppleCameraProcessor",
+                "Captures video from macOS cameras using AVFoundation with zero-copy Metal/IOSurface integration"
+            )
+            .with_usage_context(
+                "Automatically uses default camera if device_id not specified. \
+                 Outputs GPU textures via Metal/IOSurface for zero-copy processing. \
+                 Runs at native camera frame rate (typically 30 or 60 fps)."
+            )
+            .with_tags(vec!["video", "source", "camera", "avfoundation", "metal", "macos"])
+        )
     }
 }
 

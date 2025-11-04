@@ -2,11 +2,11 @@ use crate::core::{
     Result, StreamError, StreamInput, StreamOutput,
     ProcessorDescriptor, PortDescriptor, AudioRequirements,
 };
-use crate::core::frames::{MonoSignal, StereoSignal};
+use crate::core::frames::AudioFrame;
 use crate::core::ports::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use std::sync::Arc;
 use serde::{Serialize, Deserialize};
+use dasp::Signal;
 
 /// Configuration for AudioMixerProcessor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,7 +38,7 @@ impl Default for MixingStrategy {
     }
 }
 
-/// AudioMixerProcessor - Mixes N MonoSignal inputs into StereoSignal output
+/// AudioMixerProcessor - Mixes N mono AudioFrame<1> inputs into stereo AudioFrame<2> output
 ///
 /// # Type Parameters
 /// - `N`: Number of mono input channels (compile-time constant)
@@ -56,16 +56,17 @@ pub struct AudioMixerProcessor<const N: usize> {
     strategy: MixingStrategy,
     sample_rate: u32,
     buffer_size: usize,
+    frame_counter: u64,
 
     /// N mono input ports
-    pub input_ports: [StreamInput<MonoSignal>; N],
+    pub input_ports: [StreamInput<AudioFrame<1>>; N],
 
     /// Stereo output port
     pub output_ports: AudioMixerOutputPorts,
 }
 
 pub struct AudioMixerOutputPorts {
-    pub audio: StreamOutput<StereoSignal>,
+    pub audio: StreamOutput<AudioFrame<2>>,
 }
 
 impl<const N: usize> AudioMixerProcessor<N> {
@@ -77,7 +78,7 @@ impl<const N: usize> AudioMixerProcessor<N> {
         }
 
         // Create array of input ports
-        let input_ports: [StreamInput<MonoSignal>; N] = std::array::from_fn(|i| {
+        let input_ports: [StreamInput<AudioFrame<1>>; N] = std::array::from_fn(|i| {
             StreamInput::new(format!("input_{}", i))
         });
 
@@ -85,6 +86,7 @@ impl<const N: usize> AudioMixerProcessor<N> {
             strategy,
             sample_rate: 48000,
             buffer_size: 2048,
+            frame_counter: 0,
             input_ports,
             output_ports: AudioMixerOutputPorts {
                 audio: StreamOutput::new("audio"),
@@ -110,7 +112,7 @@ impl<const N: usize> StreamElement for AudioMixerProcessor<N> {
         (0..N)
             .map(|i| PortDescriptor {
                 name: format!("input_{}", i),
-                schema: MonoSignal::schema(),
+                schema: AudioFrame::<1>::schema(),
                 required: true,
                 description: format!("Mono audio input {} for mixing", i),
             })
@@ -120,7 +122,7 @@ impl<const N: usize> StreamElement for AudioMixerProcessor<N> {
     fn output_ports(&self) -> Vec<PortDescriptor> {
         vec![PortDescriptor {
             name: "audio".to_string(),
-            schema: StereoSignal::schema(),
+            schema: AudioFrame::<2>::schema(),
             required: true,
             description: "Mixed stereo audio output".to_string(),
         }]
@@ -129,6 +131,7 @@ impl<const N: usize> StreamElement for AudioMixerProcessor<N> {
     fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
         self.sample_rate = ctx.audio.sample_rate;
         self.buffer_size = ctx.audio.buffer_size;
+        self.frame_counter = 0;
 
         tracing::info!(
             "AudioMixer<{}>: Starting ({} Hz, {} samples buffer, strategy: {:?})",
@@ -177,54 +180,58 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[AudioMixer<{}>] process() called", N);
 
-        // Read all input signals (these are continuous streams, created once upstream)
-        let mut input_signals: Vec<Option<MonoSignal>> = Vec::with_capacity(N);
-        for input in &mut self.input_ports {
-            input_signals.push(input.read_latest());
+        // Read all input frames
+        let mut input_frames: Vec<Option<AudioFrame<1>>> = Vec::with_capacity(N);
+        for input in &self.input_ports {
+            input_frames.push(input.read_latest());
         }
 
         // Check if all inputs have data
-        let all_ready = input_signals.iter().all(|sig| sig.is_some());
+        let all_ready = input_frames.iter().all(|frame| frame.is_some());
         if !all_ready {
             tracing::debug!("[AudioMixer<{}>] Not all inputs have data yet, skipping", N);
             return Ok(());
         }
 
-        // Create dasp signals from each input (one signal per process() call)
-        use dasp::signal::Signal;
-        use dasp::frame::Frame;
-        use crate::core::frames::BufferGenerator;
+        // Get timestamp from first frame
+        let timestamp_ns = input_frames[0].as_ref().unwrap().timestamp_ns;
 
-        let timestamp_ns = input_signals[0].as_ref().unwrap().timestamp_ns();
-
-        let mut dasp_signals: Vec<_> = input_signals.iter()
+        // Convert each AudioFrame to dasp signal and collect into Vec
+        let mut signals: Vec<_> = input_frames.iter()
             .filter_map(|opt| opt.as_ref())
-            .map(|sig| sig.create_signal())
+            .map(|frame| frame.read())
             .collect();
 
-        // Mix by iterating through signals and using add_amp on frames
-        let mut mixed_samples = Vec::with_capacity(self.buffer_size);
+        // Mix samples sample-by-sample
+        let mut mixed_samples = Vec::with_capacity(self.buffer_size * 2); // *2 for stereo
 
         for _ in 0..self.buffer_size {
-            // Get next frame from each signal and sum using add_amp
-            let mut mixed_frame = [0.0f32; 1]; // Start with silence
-
-            for signal in &mut dasp_signals {
-                let frame = signal.next();
-                mixed_frame = mixed_frame.add_amp(frame);
+            // Sum all mono inputs
+            let mut mixed_mono = 0.0f32;
+            for signal in &mut signals {
+                mixed_mono += signal.next()[0];
             }
 
-            // Convert mono frame to stereo (duplicate to both channels)
-            mixed_samples.push([mixed_frame[0], mixed_frame[0]]);
+            // Apply mixing strategy
+            let final_sample = match self.strategy {
+                MixingStrategy::Sum => mixed_mono,
+                MixingStrategy::SumNormalized => mixed_mono / N as f32,
+                MixingStrategy::SumClipped => mixed_mono.clamp(-1.0, 1.0),
+            };
+
+            // Convert mono to stereo (duplicate to both channels)
+            mixed_samples.push(final_sample);  // Left
+            mixed_samples.push(final_sample);  // Right
         }
 
-        // Create output signal from mixed samples
-        let generator = BufferGenerator::new(mixed_samples, false);
-        let mixed = StereoSignal::new(Box::new(generator), self.sample_rate, timestamp_ns);
+        // Create stereo output frame
+        let output_frame = AudioFrame::<2>::new(mixed_samples, timestamp_ns, self.frame_counter);
 
         // Write output
-        self.output_ports.audio.write(mixed);
-        tracing::debug!("[AudioMixer<{}>] Wrote mixed stereo signal", N);
+        self.output_ports.audio.write(output_frame);
+        tracing::debug!("[AudioMixer<{}>] Wrote mixed stereo frame", N);
+
+        self.frame_counter += 1;
 
         Ok(())
     }
@@ -237,56 +244,48 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
 
     fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
         match port_name {
-            "audio" => Some(self.output_ports.audio.port_type()),
+            "audio" => Some(crate::core::ports::PortType::Audio2),
             _ => None,
         }
     }
 
     fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
-        if let Some(idx_str) = port_name.strip_prefix("input_") {
-            if let Ok(idx) = idx_str.parse::<usize>() {
-                if idx < N {
-                    return Some(self.input_ports[idx].port_type());
+        // Check if the port name matches the pattern "input_N"
+        if let Some(index_str) = port_name.strip_prefix("input_") {
+            if let Ok(index) = index_str.parse::<usize>() {
+                if index < N {
+                    return Some(crate::core::ports::PortType::Audio1);
                 }
             }
         }
         None
     }
 
-    fn connect_bus_to_input(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        if let Some(idx_str) = port_name.strip_prefix("input_") {
-            if let Ok(idx) = idx_str.parse::<usize>() {
-                if idx < N {
-                    return self.input_ports[idx].connect_bus(bus);
-                }
-            }
-        }
-        false
-    }
+    fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::connection::ProcessorConnection;
+        use crate::core::AudioFrame;
 
-    fn create_bus_for_output(&self, port_name: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        match port_name {
-            "audio" => Some(self.output_ports.audio.get_or_create_bus() as Arc<dyn std::any::Any + Send + Sync>),
-            _ => None,
-        }
-    }
-
-    fn connect_bus_to_output(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        if let Some(typed_bus) = bus.downcast::<Arc<dyn crate::core::bus::Bus<StereoSignal>>>().ok() {
+        // Downcast to stereo connection type (AudioFrame<2>)
+        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
             if port_name == "audio" {
-                self.output_ports.audio.set_bus(Arc::clone(&typed_bus));
+                self.output_ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
                 return true;
             }
         }
         false
     }
 
-    fn connect_reader_to_input(&mut self, port_name: &str, reader: Box<dyn std::any::Any + Send>) -> bool {
-        if let Ok(typed_reader) = reader.downcast::<Box<dyn crate::core::bus::BusReader<MonoSignal>>>() {
-            if let Some(idx_str) = port_name.strip_prefix("input_") {
-                if let Ok(idx) = idx_str.parse::<usize>() {
-                    if idx < N {
-                        self.input_ports[idx].connect_reader(*typed_reader);
+    fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::connection::ProcessorConnection;
+        use crate::core::AudioFrame;
+
+        // Downcast to mono connection type (AudioFrame<1>)
+        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {
+            // Parse input index from port name "input_N"
+            if let Some(index_str) = port_name.strip_prefix("input_") {
+                if let Ok(index) = index_str.parse::<usize>() {
+                    if index < N {
+                        self.input_ports[index].set_connection(std::sync::Arc::clone(&typed_conn));
                         return true;
                     }
                 }

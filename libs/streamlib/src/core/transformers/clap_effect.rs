@@ -38,24 +38,23 @@ use crate::core::{
     Result,
     StreamInput, StreamOutput,
 };
-use crate::core::frames::StereoSignal;
+use crate::core::frames::AudioFrame;
 use crate::core::ports::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::schema::PortDescriptor;
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 
 /// Input ports for CLAP effect processors
 pub struct ClapEffectInputPorts {
-    pub audio: StreamInput<StereoSignal>,
+    pub audio: StreamInput<AudioFrame<2>>,
 }
 
 /// Output ports for CLAP effect processors
 pub struct ClapEffectOutputPorts {
-    pub audio: StreamOutput<StereoSignal>,
+    pub audio: StreamOutput<AudioFrame<2>>,
 }
 
 /// Configuration for CLAP effect processors
@@ -166,47 +165,19 @@ impl ClapEffectProcessor {
             .deactivate()
     }
 
-    /// Process stereo signal samples through the plugin
+    /// Process stereo audio frame through the plugin
     ///
-    /// Takes samples from the input signal, processes them through CLAP, and returns a new signal.
-    fn process_signal_through_clap(&mut self, input_signal: &StereoSignal, buffer_size: usize) -> Result<StereoSignal> {
+    /// Takes an AudioFrame, processes it through CLAP, and returns the processed frame.
+    fn process_audio_through_clap(&mut self, input_frame: &AudioFrame<2>) -> Result<AudioFrame<2>> {
         use crate::core::StreamError;
-        use crate::core::frames::BufferGenerator;
 
         let host = self.host.as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
 
-        // Take stereo samples from the input signal (interleaved: [L0, R0, L1, R1, ...])
-        let input_samples = input_signal.take_interleaved(buffer_size);
+        // Process through CLAP (samples are already interleaved)
+        let output_frame = host.process_audio(input_frame)?;
 
-        // Get plugin's internal buffers and process
-        // The CLAP host expects deinterleaved buffers internally, which it handles
-        // For now, we create a temporary AudioFrame for compatibility
-        use crate::core::AudioFrame;
-        let input_frame = AudioFrame::new(
-            input_samples,
-            input_signal.timestamp_ns(),
-            0,
-            2  // stereo
-        );
-
-        // Process through CLAP
-        let output_frame = host.process_audio(&input_frame)?;
-
-        // Convert output back to StereoSignal
-        // Create stereo frames from interleaved samples
-        let stereo_frames: Vec<[f32; 2]> = output_frame.samples
-            .chunks_exact(2)
-            .map(|chunk| [chunk[0], chunk[1]])
-            .collect();
-
-        // Wrap in a BufferGenerator and return as StereoSignal
-        let generator = BufferGenerator::new(stereo_frames, false);
-        Ok(StereoSignal::new(
-            Box::new(generator),
-            self.sample_rate,
-            input_signal.timestamp_ns()
-        ))
+        Ok(output_frame)
     }
 
     /// Get input ports
@@ -242,23 +213,23 @@ impl StreamElement for ClapEffectProcessor {
     fn input_ports(&self) -> Vec<PortDescriptor> {
         vec![PortDescriptor {
             name: "audio".to_string(),
-            schema: StereoSignal::schema(),
+            schema: AudioFrame::<2>::schema(),
             required: true,
-            description: "Stereo audio signal to process through CLAP plugin".to_string(),
+            description: "Stereo audio frame to process through CLAP plugin".to_string(),
         }]
     }
 
     fn output_ports(&self) -> Vec<PortDescriptor> {
         vec![PortDescriptor {
             name: "audio".to_string(),
-            schema: StereoSignal::schema(),
+            schema: AudioFrame::<2>::schema(),
             required: true,
-            description: "Processed stereo audio signal from CLAP plugin".to_string(),
+            description: "Processed stereo audio frame from CLAP plugin".to_string(),
         }]
     }
 
     fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        use crate::core::StreamError;
+        
 
         // Store runtime context values
         self.sample_rate = ctx.audio.sample_rate;
@@ -349,16 +320,16 @@ impl StreamProcessor for ClapEffectProcessor {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[ClapEffect] process() called");
 
-        // Read StereoSignal from input port
-        if let Some(input_signal) = self.input_ports.audio.read_latest() {
-            tracing::debug!("[ClapEffect] Got input signal, processing through CLAP");
+        // Read AudioFrame from input port
+        if let Some(input_frame) = self.input_ports.audio.read_latest() {
+            tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
 
-            // Process through CLAP plugin (takes samples, processes, returns new StereoSignal)
-            let output_signal = self.process_signal_through_clap(&input_signal, self.buffer_size)?;
+            // Process through CLAP plugin
+            let output_frame = self.process_audio_through_clap(&input_frame)?;
 
-            // Write output StereoSignal to output port
-            self.output_ports.audio.write(output_signal);
-            tracing::debug!("[ClapEffect] Wrote output signal");
+            // Write output AudioFrame to output port
+            self.output_ports.audio.write(output_frame);
+            tracing::debug!("[ClapEffect] Wrote output frame");
         } else {
             tracing::debug!("[ClapEffect] No input available");
         }
@@ -420,35 +391,28 @@ impl StreamProcessor for ClapEffectProcessor {
         }
     }
 
-    fn connect_bus_to_input(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        if port_name == "audio" {
-            self.input_ports.audio.connect_bus(bus)
-        } else {
-            false
-        }
-    }
+    fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::connection::ProcessorConnection;
+        use crate::core::AudioFrame;
 
-    fn create_bus_for_output(&self, port_name: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        match port_name {
-            "audio" => Some(self.output_ports.audio.get_or_create_bus() as Arc<dyn std::any::Any + Send + Sync>),
-            _ => None,
-        }
-    }
-
-    fn connect_bus_to_output(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        if let Some(typed_bus) = bus.downcast::<Arc<dyn crate::core::bus::Bus<StereoSignal>>>().ok() {
+        // Downcast to stereo connection type (AudioFrame<2>)
+        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
             if port_name == "audio" {
-                self.output_ports.audio.set_bus(Arc::clone(&typed_bus));
+                self.output_ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
                 return true;
             }
         }
         false
     }
 
-    fn connect_reader_to_input(&mut self, port_name: &str, reader: Box<dyn std::any::Any + Send>) -> bool {
-        if let Ok(typed_reader) = reader.downcast::<Box<dyn crate::core::bus::BusReader<StereoSignal>>>() {
+    fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::connection::ProcessorConnection;
+        use crate::core::AudioFrame;
+
+        // Downcast to stereo connection type (AudioFrame<2>)
+        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
             if port_name == "audio" {
-                self.input_ports.audio.connect_reader(*typed_reader);
+                self.input_ports.audio.set_connection(std::sync::Arc::clone(&typed_conn));
                 return true;
             }
         }
