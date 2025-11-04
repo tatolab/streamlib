@@ -26,8 +26,8 @@ pub mod simple_passthrough;
 pub mod performance_overlay;
 
 pub use audio_mixer::{
-    AudioMixerProcessor, MixingStrategy, ChannelMode,
-    AudioMixerInputPorts, AudioMixerOutputPorts,
+    AudioMixerProcessor, MixingStrategy,
+    AudioMixerOutputPorts,
     AudioMixerConfig,
 };
 pub use clap_effect::{

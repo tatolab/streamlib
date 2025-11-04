@@ -4,10 +4,10 @@
 //! Creates three test tones at different frequencies and mixes them into a chord.
 
 use streamlib::{
-    StreamRuntime, AudioMixerProcessor, MixingStrategy, ChannelMode,
+    StreamRuntime, AudioMixerProcessor, MixingStrategy,
     ChordGeneratorProcessor, AudioOutputProcessor,
-    ClapEffectProcessor, AudioFrame,
-    Result,
+    ClapEffectProcessor,
+    Result, MonoSignal, StereoSignal,
 };
 use streamlib::core::sources::chord_generator::ChordGeneratorConfig;
 use streamlib::core::transformers::audio_mixer::AudioMixerConfig;
@@ -52,30 +52,27 @@ async fn main() -> Result<()> {
     println!("   ✅ G4 (392.00 Hz) on output 'tone_g4'");
     println!("   All 3 tones generated from single synchronized source\n");
 
-    // Step 3: Add audio mixer
+    // Step 3: Add audio mixer (3 mono inputs → 1 stereo output)
     println!("🔀 Adding audio mixer...");
-    let mixer = runtime.add_element_with_config::<AudioMixerProcessor>(
+    let mixer = runtime.add_element_with_config::<AudioMixerProcessor<3>>(
         AudioMixerConfig {
-            num_inputs: 3,                        // 3 inputs
-            strategy: MixingStrategy::SumClipped, // Prevents clipping
-            channel_mode: ChannelMode::MixUp,     // Mix up to stereo
+            strategy: MixingStrategy::SumNormalized, // Prevents clipping
         }
     ).await?;
-    println!("   Strategy: Sum Normalized (no clipping)");
-    println!("   Inputs: 3");
-    println!("   Timer Group: 'audio_master' (synchronized with generators)");
-    println!("   Output: Stereo at {} Hz\n", audio_config.sample_rate);
+    println!("   Strategy: Sum Clipped (prevents distortion)");
+    println!("   Inputs: 3 mono signals");
+    println!("   Output: Stereo signal at {} Hz\n", audio_config.sample_rate);
 
-    // Step 4: Add CLAP reverb effect (COMMENTED OUT FOR TESTING)
-    // println!("🎚️  Adding CLAP reverb effect...");
-    // let reverb = runtime.add_element_with_config::<ClapEffectProcessor>(
-    //     ClapEffectConfig {
-    //         plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
-    //         plugin_name: None,
-    //     }
-    // ).await?;
-    // println!("   Loaded: Surge XT Effect (first in bundle)");
-    // println!("   Plugin will activate on runtime start\n");
+    // Step 4: Add CLAP reverb effect
+    println!("🎚️  Adding CLAP reverb effect...");
+    let reverb = runtime.add_element_with_config::<ClapEffectProcessor>(
+        ClapEffectConfig {
+            plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
+            plugin_name: None,
+        }
+    ).await?;
+    println!("   Loaded: Surge XT Effect (first in bundle)");
+    println!("   Plugin will activate on runtime start\n");
 
     // Step 5: Add speaker output
     println!("🔊 Adding speaker output...");
@@ -89,56 +86,49 @@ async fn main() -> Result<()> {
     // Step 6: Connect the audio pipeline using type-safe handles
     println!("🔗 Building audio pipeline...");
 
-    // Connect chord generator's 3 outputs to mixer inputs (like a mic array)
+    // Connect chord generator's 3 mono outputs to mixer inputs (like a mic array)
     runtime.connect(
-        chord_gen.output_port::<AudioFrame>("tone_c4"),
-        mixer.input_port::<AudioFrame>("input_0"),
+        chord_gen.output_port::<MonoSignal>("tone_c4"),
+        mixer.input_port::<MonoSignal>("input_0"),
     )?;
-    println!("   ✅ Chord Generator (C4) → Mixer Input 0");
-
-    runtime.connect(
-        chord_gen.output_port::<AudioFrame>("tone_e4"),
-        mixer.input_port::<AudioFrame>("input_1"),
-    )?;
-    println!("   ✅ Chord Generator (E4) → Mixer Input 1");
+    println!("   ✅ Chord Generator (C4 mono) → Mixer Input 0");
 
     runtime.connect(
-        chord_gen.output_port::<AudioFrame>("tone_g4"),
-        mixer.input_port::<AudioFrame>("input_2"),
+        chord_gen.output_port::<MonoSignal>("tone_e4"),
+        mixer.input_port::<MonoSignal>("input_1"),
     )?;
-    println!("   ✅ Chord Generator (G4) → Mixer Input 2");
+    println!("   ✅ Chord Generator (E4 mono) → Mixer Input 1");
 
-    // Connect mixer output to reverb input (COMMENTED OUT - reverb disabled)
-    // runtime.connect(
-    //     mixer.output_port::<AudioFrame>("audio"),
-    //     reverb.input_port::<AudioFrame>("audio"),
-    // )?;
-    // println!("   ✅ Mixer → Reverb");
-
-    // Connect reverb output to speaker (COMMENTED OUT - reverb disabled)
-    // runtime.connect(
-    //     reverb.output_port::<AudioFrame>("audio"),
-    //     speaker.input_port::<AudioFrame>("audio"),
-    // )?;
-    // println!("   ✅ Reverb → Speaker\n");
-
-    // Connect mixer directly to speaker (bypassing reverb)
     runtime.connect(
-        mixer.output_port::<AudioFrame>("audio"),
-        speaker.input_port::<AudioFrame>("audio"),
+        chord_gen.output_port::<MonoSignal>("tone_g4"),
+        mixer.input_port::<MonoSignal>("input_2"),
     )?;
-    println!("   ✅ Mixer → Speaker (direct, no reverb)\n");
+    println!("   ✅ Chord Generator (G4 mono) → Mixer Input 2");
+
+    // Connect mixer output to reverb input
+    runtime.connect(
+        mixer.output_port::<StereoSignal>("audio"),
+        reverb.input_port::<StereoSignal>("audio"),
+    )?;
+    println!("   ✅ Mixer (stereo) → Reverb");
+
+    // Connect reverb output to speaker
+    runtime.connect(
+        reverb.output_port::<StereoSignal>("audio"),
+        speaker.input_port::<StereoSignal>("audio"),
+    )?;
+    println!("   ✅ Reverb → Speaker\n");
 
     // Step 7: Start the runtime
     println!("▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
-    println!("🎵 You should hear a C major chord (C4 + E4 + G4)!\n");
+    println!("🎵 You should hear a C major chord (C4 + E4 + G4) with reverb!\n");
     println!("💡 Audio pipeline (Microphone Array Pattern):");
     println!("   • Chord Generator (single source, like mic array)");
     println!("     ├─ Output 'tone_c4' (262 Hz) → Mixer Input 0");
     println!("     ├─ Output 'tone_e4' (330 Hz) → Mixer Input 1");
     println!("     └─ Output 'tone_g4' (392 Hz) → Mixer Input 2");
-    println!("   • Mixer → Speaker\n");
+    println!("   • Mixer → CLAP Reverb → Speaker\n");
     println!("⏰ Clock Synchronization:");
     println!("   • Single hardware-like source @ {:.2} Hz", tick_rate);
     println!("   • All 3 tones generated simultaneously (one callback)");

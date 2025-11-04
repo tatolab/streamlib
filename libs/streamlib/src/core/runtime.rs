@@ -642,11 +642,8 @@ impl StreamRuntime {
         }
 
         {
-            let mut source = source_processor.lock();
-            let mut dest = dest_processor.lock();
-
-            let consumer = source
-                .take_output_consumer_dyn(source_port)
+            let source_guard = source_processor.lock();
+            let port_type = source_guard.get_output_port_type(source_port)
                 .ok_or_else(|| {
                     StreamError::Configuration(format!(
                         "Source processor '{}' does not have output port '{}'",
@@ -654,7 +651,21 @@ impl StreamRuntime {
                     ))
                 })?;
 
-            let connected = dest.connect_input_consumer_dyn(dest_port, consumer);
+            let bus = source_guard.create_bus_for_output(source_port)
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Failed to create bus for output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    ))
+                })?;
+            drop(source_guard);
+
+            let mut source = source_processor.lock();
+            source.connect_bus_to_output(source_port, bus.clone());
+            drop(source);
+
+            let mut dest = dest_processor.lock();
+            let connected = dest.connect_bus_to_input(dest_port, bus);
 
             if !connected {
                 return Err(StreamError::Configuration(format!(
@@ -664,11 +675,12 @@ impl StreamRuntime {
             }
 
             tracing::info!(
-                "Connected {} ({}) → {} ({}) via rtrb ring buffer",
+                "Connected {} ({}) → {} ({}) via bus (port type: {:?})",
                 source_proc_id,
                 source_port,
                 dest_proc_id,
-                dest_port
+                dest_port,
+                port_type
             );
         }
 
@@ -768,11 +780,8 @@ impl StreamRuntime {
             }
 
             {
-                let mut source = source_processor.lock();
-                let mut dest = dest_processor.lock();
-
-                let consumer = source
-                    .take_output_consumer_dyn(&pending.source_port_name)
+                let source_guard = source_processor.lock();
+                let port_type = source_guard.get_output_port_type(&pending.source_port_name)
                     .ok_or_else(|| {
                         StreamError::Configuration(format!(
                             "Source processor '{}' does not have output port '{}'",
@@ -780,7 +789,21 @@ impl StreamRuntime {
                         ))
                     })?;
 
-                let connected = dest.connect_input_consumer_dyn(&pending.dest_port_name, consumer);
+                let bus = source_guard.create_bus_for_output(&pending.source_port_name)
+                    .ok_or_else(|| {
+                        StreamError::Configuration(format!(
+                            "Failed to create bus for output port '{}' on processor '{}'",
+                            pending.source_port_name, pending.source_processor_id
+                        ))
+                    })?;
+                drop(source_guard);
+
+                let mut source = source_processor.lock();
+                source.connect_bus_to_output(&pending.source_port_name, bus.clone());
+                drop(source);
+
+                let mut dest = dest_processor.lock();
+                let connected = dest.connect_bus_to_input(&pending.dest_port_name, bus);
 
                 if !connected {
                     return Err(StreamError::Configuration(format!(
@@ -790,11 +813,12 @@ impl StreamRuntime {
                 }
 
                 tracing::info!(
-                    "Wired connection: {} ({}) → {} ({}) via rtrb ring buffer",
+                    "Wired connection: {} ({}) → {} ({}) via bus (port type: {:?})",
                     pending.source_processor_id,
                     pending.source_port_name,
                     pending.dest_processor_id,
-                    pending.dest_port_name
+                    pending.dest_port_name,
+                    port_type
                 );
             }
 

@@ -4,6 +4,7 @@
 //! real-time video processing system. Platform-specific implementations
 //! (Metal, Vulkan) are provided by separate crates.
 
+pub mod bus;
 pub mod clap;
 pub mod clocks;
 pub mod context;
@@ -35,7 +36,10 @@ pub use context::{GpuContext, AudioContext, RuntimeContext};
 pub use error::{StreamError, Result};
 pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
-pub use frames::{VideoFrame, AudioFrame, DataFrame, MetadataValue};
+pub use frames::{
+    VideoFrame, AudioFrame, DataFrame, MetadataValue,
+    MonoSignal, StereoSignal, QuadSignal, FiveOneSignal,
+};
 // v2.0 traits - GStreamer-inspired hierarchy
 pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
 pub use ports::{
@@ -55,8 +59,8 @@ pub use sinks::{
 pub use transformers::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     ClapEffectInputPorts, ClapEffectOutputPorts,
-    AudioMixerProcessor, MixingStrategy, ChannelMode,
-    AudioMixerInputPorts, AudioMixerOutputPorts, AudioMixerConfig,
+    AudioMixerProcessor, MixingStrategy,
+    AudioMixerOutputPorts, AudioMixerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]

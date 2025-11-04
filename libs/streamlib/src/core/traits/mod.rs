@@ -46,7 +46,6 @@ pub mod element;
 pub mod processor;
 pub mod dyn_element;
 mod dyn_element_impl;
-pub mod port_consumer;
 
 mod sealed {
     pub trait Sealed {}
@@ -62,5 +61,3 @@ pub use element::{
 pub use processor::StreamProcessor;
 
 pub use dyn_element::DynStreamElement;
-
-pub use port_consumer::PortConsumer;

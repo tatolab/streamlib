@@ -20,10 +20,16 @@
 
 pub mod video_frame;
 pub mod audio_frame;
+pub mod audio_signal;
 pub mod data_frame;
 pub mod metadata;
 
 pub use video_frame::VideoFrame;
 pub use audio_frame::AudioFrame;
+pub use audio_signal::{
+    AudioSignal,
+    MonoSignal, StereoSignal, QuadSignal, FiveOneSignal,
+    SineGenerator, BufferGenerator, EquilibriumGenerator,
+};
 pub use data_frame::DataFrame;
 pub use metadata::MetadataValue;

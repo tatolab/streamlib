@@ -1,4 +1,4 @@
-use super::{DynStreamElement, StreamProcessor, StreamElement, PortConsumer};
+use super::{DynStreamElement, StreamProcessor, StreamElement};
 use crate::core::{RuntimeContext, Result};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::runtime::WakeupEvent;
@@ -64,15 +64,31 @@ where
         StreamElement::provides_clock(self)
     }
 
-    fn take_output_consumer_dyn(&mut self, port_name: &str) -> Option<PortConsumer> {
-        self.take_output_consumer(port_name)
-    }
-
-    fn connect_input_consumer_dyn(&mut self, port_name: &str, consumer: PortConsumer) -> bool {
-        self.connect_input_consumer(port_name, consumer)
-    }
-
     fn scheduling_config_dyn(&self) -> crate::core::scheduling::SchedulingConfig {
         self.scheduling_config()
+    }
+
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+        StreamProcessor::get_output_port_type(self, port_name)
+    }
+
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+        StreamProcessor::get_input_port_type(self, port_name)
+    }
+
+    fn create_bus_for_output(&self, port_name: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        StreamProcessor::create_bus_for_output(self, port_name)
+    }
+
+    fn connect_bus_to_output(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        StreamProcessor::connect_bus_to_output(self, port_name, bus)
+    }
+
+    fn connect_bus_to_input(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        StreamProcessor::connect_bus_to_input(self, port_name, bus)
+    }
+
+    fn connect_reader_to_input(&mut self, port_name: &str, reader: Box<dyn std::any::Any + Send>) -> bool {
+        StreamProcessor::connect_reader_to_input(self, port_name, reader)
     }
 }

@@ -1,9 +1,11 @@
 use crate::core::{
     AudioDevice,
-    AudioFrame, Result, StreamError,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
+    Result, StreamError,
+    ProcessorDescriptor, PortDescriptor,
     StreamInput,
 };
+use crate::core::frames::StereoSignal;
+use crate::core::ports::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use crate::core::clocks::AudioClock;
@@ -13,7 +15,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 pub struct AudioOutputInputPorts {
-    pub audio: StreamInput<AudioFrame>,
+    pub audio: StreamInput<StereoSignal>,
 }
 
 pub struct AppleAudioOutputProcessor {
@@ -78,9 +80,9 @@ impl StreamElement for AppleAudioOutputProcessor {
     fn input_ports(&self) -> Vec<PortDescriptor> {
         vec![PortDescriptor {
             name: "audio".to_string(),
-            schema: SCHEMA_AUDIO_FRAME.clone(),
+            schema: StereoSignal::schema(),
             required: true,
-            description: "Audio frames to play through speakers".to_string(),
+            description: "Stereo audio signal to play through speakers".to_string(),
         }]
     }
 
@@ -133,15 +135,13 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
         tracing::info!("AudioOutput: process() called - setting up stream now that connections are wired");
 
-        // Take ownership of the consumer from the input port and wrap in Arc<Mutex>
-        // for sharing with the callback
-        let consumer = self.input_ports.audio.take_consumer()
+        let reader = self.input_ports.audio.take_reader()
             .ok_or_else(|| StreamError::Configuration("Input port not connected".into()))?;
 
-        tracing::info!("AudioOutput: Successfully took consumer from input port");
+        tracing::info!("AudioOutput: Successfully took reader from input port");
 
-        let consumer_arc = Arc::new(Mutex::new(consumer));
-        let consumer_for_callback = Arc::clone(&consumer_arc);
+        let reader_arc = Arc::new(Mutex::new(reader));
+        let reader_for_callback = Arc::clone(&reader_arc);
 
         let audio_clock = Arc::clone(&self.audio_clock);
 
@@ -152,34 +152,25 @@ impl StreamProcessor for AppleAudioOutputProcessor {
             self.buffer_size,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
 
-                // Update audio clock
                 audio_clock.increment_samples(data.len() as u64);
 
-                // Read latest frame from input port's consumer and fill hardware buffer
-                let mut consumer = consumer_for_callback.lock();
+                let mut reader = reader_for_callback.lock();
 
-                // Pop all available frames, keeping only the latest
-                let mut latest_frame = None;
-                let mut frames_popped = 0;
-                while let Ok(frame) = consumer.pop() {
-                    latest_frame = Some(frame);
-                    frames_popped += 1;
-                }
+                if let Some(signal) = reader.read_latest() {
+                    let num_frames = data.len() / 2;
 
-                if let Some(frame) = latest_frame {
-                    tracing::debug!("AudioOutput: Got frame with {} samples (popped {} frames)", frame.samples.len(), frames_popped);
-                    // Copy samples to hardware buffer
-                    let frame_samples = frame.samples.len();
-                    let copy_len = data.len().min(frame_samples);
-                    data[..copy_len].copy_from_slice(&frame.samples[..copy_len]);
+                    let samples = signal.take_interleaved(num_frames);
 
-                    // Fill remainder with silence if needed
+                    tracing::debug!("AudioOutput: Got signal with {} samples", samples.len());
+
+                    let copy_len = data.len().min(samples.len());
+                    data[..copy_len].copy_from_slice(&samples[..copy_len]);
+
                     if copy_len < data.len() {
                         data[copy_len..].fill(0.0);
                     }
                 } else {
                     tracing::debug!("AudioOutput: No data available, outputting silence");
-                    // No data available, output silence
                     data.fill(0.0);
                 }
             }
@@ -241,17 +232,29 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         )
     }
 
-    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::traits::PortConsumer) -> bool {
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+        match port_name {
+            "audio" => Some(self.input_ports.audio.port_type()),
+            _ => None,
+        }
+    }
+
+    fn connect_bus_to_input(&mut self, port_name: &str, bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
         if port_name == "audio" {
-            match consumer {
-                crate::core::traits::PortConsumer::Audio(c) => {
-                    self.input_ports.audio.connect_consumer(c);
-                    true
-                }
-                _ => false,
-            }
+            self.input_ports.audio.connect_bus(bus)
         } else {
             false
         }
+    }
+
+    fn connect_reader_to_input(&mut self, port_name: &str, reader: Box<dyn std::any::Any + Send>) -> bool {
+        use crate::core::frames::StereoSignal;
+        if let Ok(typed_reader) = reader.downcast::<Box<dyn crate::core::bus::BusReader<StereoSignal>>>() {
+            if port_name == "audio" {
+                self.input_ports.audio.connect_reader(*typed_reader);
+                return true;
+            }
+        }
+        false
     }
 }

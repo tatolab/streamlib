@@ -1,12 +1,13 @@
-use super::{StreamElement, PortConsumer};
+use super::StreamElement;
 use crate::core::error::Result;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::context::RuntimeContext;
-use crate::core::clocks::Clock;
 use crate::core::scheduling::{SchedulingConfig, ClockConfig, SyncMode};
 use crate::core::runtime::WakeupEvent;
+use crate::core::ports::PortType;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use std::sync::Arc;
 
 pub trait StreamProcessor: StreamElement {
     type Config: Serialize + for<'de> Deserialize<'de> + Default;
@@ -53,16 +54,30 @@ pub trait StreamProcessor: StreamElement {
     where
         Self: Sized;
 
-    // Port connection methods for runtime wiring
-    fn take_output_consumer(&mut self, _port_name: &str) -> Option<PortConsumer> {
-        None  // Default: no output ports
-    }
-
-    fn connect_input_consumer(&mut self, _port_name: &str, _consumer: PortConsumer) -> bool {
-        false  // Default: no input ports
-    }
-
     fn set_output_wakeup(&mut self, _port_name: &str, _wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
-        // Default: no output ports, do nothing
+    }
+
+    fn get_output_port_type(&self, _port_name: &str) -> Option<PortType> {
+        None
+    }
+
+    fn get_input_port_type(&self, _port_name: &str) -> Option<PortType> {
+        None
+    }
+
+    fn create_bus_for_output(&self, _port_name: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
+    fn connect_bus_to_output(&mut self, _port_name: &str, _bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        false
+    }
+
+    fn connect_bus_to_input(&mut self, _port_name: &str, _bus: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        false
+    }
+
+    fn connect_reader_to_input(&mut self, _port_name: &str, _reader: Box<dyn std::any::Any + Send>) -> bool {
+        false
     }
 }

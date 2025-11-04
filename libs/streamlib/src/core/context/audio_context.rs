@@ -46,7 +46,7 @@ impl Default for AudioContext {
     fn default() -> Self {
         Self {
             sample_rate: 48000,
-            buffer_size: 256,
+            buffer_size: 128,
         }
     }
 }
