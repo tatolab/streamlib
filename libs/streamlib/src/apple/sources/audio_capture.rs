@@ -377,7 +377,7 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
     fn scheduling_config(&self) -> SchedulingConfig {
         // Audio capture is callback-driven - CoreAudio/cpal callback triggers processing
         SchedulingConfig {
-            mode: SchedulingMode::Callback,
+            mode: SchedulingMode::Pull,
             priority: ThreadPriority::RealTime,
             clock: ClockSource::Audio,
             provide_clock: false,

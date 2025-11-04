@@ -82,9 +82,6 @@ pub struct StreamRuntime {
     next_connection_id: usize,
     audio_context: AudioContext,
     pending_connections: Vec<PendingConnection>,
-    master_clock: Option<Arc<dyn Clock>>,
-    audio_clock: Option<Arc<dyn Clock>>,
-    video_clock: Option<Arc<dyn Clock>>,
     bus: crate::core::Bus,
 }
 
@@ -103,86 +100,7 @@ impl StreamRuntime {
             audio_context: AudioContext::default(),
             bus: crate::core::Bus::new(),
             pending_connections: Vec::new(),
-            master_clock: None,
-            audio_clock: None,
-            video_clock: None,
         }
-    }
-
-    /// Register an audio clock (internal helper, called automatically by add_processor)
-    fn register_audio_clock_internal(&mut self, clock: Arc<dyn Clock>) -> Result<()> {
-        // Validate sample rate matching if an audio clock already exists
-        if let Some(existing) = &self.audio_clock {
-            let existing_rate = existing.rate_hz().unwrap_or(48000.0);
-            let new_rate = clock.rate_hz().unwrap_or(48000.0);
-
-            if (existing_rate - new_rate).abs() > 1.0 {
-                return Err(StreamError::Configuration(
-                    format!(
-                        "Audio sample rate mismatch: existing={:.0} Hz, new={:.0} Hz. All audio devices must have matching sample rates.",
-                        existing_rate, new_rate
-                    )
-                ));
-            }
-        }
-
-        // Promote to master if no master exists (audio has highest priority)
-        if self.master_clock.is_none() {
-            tracing::info!("Audio clock '{}' promoted to master clock", clock.description());
-            self.master_clock = Some(clock.clone());
-        }
-
-        self.audio_clock = Some(clock);
-        Ok(())
-    }
-
-    /// Register a video clock (internal helper, called automatically by add_processor)
-    fn register_video_clock_internal(&mut self, clock: Arc<dyn Clock>) -> Result<()> {
-        // Validate refresh rate matching if a video clock already exists
-        if let Some(existing) = &self.video_clock {
-            let existing_rate = existing.rate_hz().unwrap_or(60.0);
-            let new_rate = clock.rate_hz().unwrap_or(60.0);
-
-            if (existing_rate - new_rate).abs() > 0.1 {
-                return Err(StreamError::Configuration(
-                    format!(
-                        "Display refresh rate mismatch: existing={:.2} Hz, new={:.2} Hz. All displays must have matching refresh rates.",
-                        existing_rate, new_rate
-                    )
-                ));
-            }
-        }
-
-        // Promote to master if no master exists (video has lower priority than audio)
-        if self.master_clock.is_none() {
-            tracing::info!("Video clock '{}' promoted to master clock", clock.description());
-            self.master_clock = Some(clock.clone());
-        }
-
-        self.video_clock = Some(clock);
-        Ok(())
-    }
-
-    pub fn get_clock(&self, preference: ClockSource) -> Arc<dyn Clock> {
-        match preference {
-            ClockSource::Audio => {
-                if let Some(ref clock) = self.audio_clock {
-                    return clock.clone();
-                }
-            }
-            ClockSource::Vsync => {
-                if let Some(ref clock) = self.video_clock {
-                    return clock.clone();
-                }
-            }
-            _ => {}
-        }
-
-        if let Some(ref clock) = self.master_clock {
-            return clock.clone();
-        }
-
-        Arc::new(SoftwareClock::new())
     }
 
     pub fn is_running(&self) -> bool {
@@ -228,39 +146,6 @@ impl StreamRuntime {
 
         let processor = P::from_config(config)?;
 
-        // Auto-discover and register clocks
-        if let Some(clock) = processor.provides_clock() {
-            use crate::core::scheduling::ClockType;
-            match clock.clock_type() {
-                ClockType::Audio => {
-                    tracing::info!("Auto-discovered audio clock: {}", clock.description());
-                    self.register_audio_clock_internal(clock)?;
-                }
-                ClockType::Video => {
-                    tracing::info!("Auto-discovered video clock: {}", clock.description());
-                    self.register_video_clock_internal(clock)?;
-                }
-                ClockType::Software => {
-                    // Only use software clock as fallback if no master exists
-                    if self.master_clock.is_none() {
-                        tracing::info!("Auto-discovered software clock: {}", clock.description());
-                        self.master_clock = Some(clock);
-                    }
-                }
-                ClockType::PTP | ClockType::Genlock => {
-                    // Future: Handle specialized clocks
-                    tracing::info!("Discovered {} clock: {}",
-                        match clock.clock_type() {
-                            ClockType::PTP => "PTP",
-                            ClockType::Genlock => "Genlock",
-                            _ => "unknown"
-                        },
-                        clock.description()
-                    );
-                }
-            }
-        }
-
         let id = format!("processor_{}", self.next_processor_id);
         self.next_processor_id += 1;
 
@@ -298,37 +183,6 @@ impl StreamRuntime {
             return Err(StreamError::Runtime(
                 "Cannot add processor at runtime - runtime is not running. Use add_processor() instead.".into()
             ));
-        }
-
-        // Auto-discover and register clocks
-        if let Some(clock) = processor.provides_clock() {
-            use crate::core::scheduling::ClockType;
-            match clock.clock_type() {
-                ClockType::Audio => {
-                    tracing::info!("Auto-discovered audio clock: {}", clock.description());
-                    self.register_audio_clock_internal(clock)?;
-                }
-                ClockType::Video => {
-                    tracing::info!("Auto-discovered video clock: {}", clock.description());
-                    self.register_video_clock_internal(clock)?;
-                }
-                ClockType::Software => {
-                    if self.master_clock.is_none() {
-                        tracing::info!("Auto-discovered software clock: {}", clock.description());
-                        self.master_clock = Some(clock);
-                    }
-                }
-                ClockType::PTP | ClockType::Genlock => {
-                    tracing::info!("Discovered {} clock: {}",
-                        match clock.clock_type() {
-                            ClockType::PTP => "PTP",
-                            ClockType::Genlock => "Genlock",
-                            _ => "unknown"
-                        },
-                        clock.description()
-                    );
-                }
-            }
         }
 
         let processor_id = format!("processor_{}", self.next_processor_id);
@@ -418,9 +272,7 @@ impl StreamRuntime {
                     }
                 }
 
-                crate::core::scheduling::SchedulingMode::Reactive |
-                crate::core::scheduling::SchedulingMode::Callback |
-                crate::core::scheduling::SchedulingMode::Timer => {
+                crate::core::scheduling::SchedulingMode::Push => {
                     // Event-driven mode - wait for wakeup events
                     loop {
                         crossbeam_channel::select! {
@@ -1155,9 +1007,7 @@ impl StreamRuntime {
                         }
                     }
 
-                    crate::core::scheduling::SchedulingMode::Reactive |
-                    crate::core::scheduling::SchedulingMode::Callback |
-                    crate::core::scheduling::SchedulingMode::Timer => {
+                    crate::core::scheduling::SchedulingMode::Push => {
                         // Event-driven mode - wait for wakeup events
                         loop {
                             crossbeam_channel::select! {

@@ -617,7 +617,7 @@ impl StreamProcessor for AppleCameraProcessor {
     fn scheduling_config(&self) -> SchedulingConfig {
         // Camera is callback-driven - AVFoundation callback triggers processing
         SchedulingConfig {
-            mode: SchedulingMode::Callback,
+            mode: SchedulingMode::Pull,
             priority: ThreadPriority::High,
             clock: ClockSource::Software,
             provide_clock: false,

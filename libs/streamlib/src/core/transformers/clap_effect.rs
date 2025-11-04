@@ -341,7 +341,7 @@ impl StreamProcessor for ClapEffectProcessor {
         use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority, ClockSource};
 
         SchedulingConfig {
-            mode: SchedulingMode::Reactive,
+            mode: SchedulingMode::Push,
             priority: ThreadPriority::RealTime,
             clock: ClockSource::Audio,
             provide_clock: false,

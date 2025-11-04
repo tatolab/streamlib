@@ -88,7 +88,7 @@ pub struct SchedulingConfig {
 impl Default for SchedulingConfig {
     fn default() -> Self {
         Self {
-            mode: SchedulingMode::Reactive,
+            mode: SchedulingMode::Push,
             priority: ThreadPriority::Normal,
             clock: ClockSource::Software,
             provide_clock: false,
@@ -118,7 +118,7 @@ impl SchedulingConfig {
     /// **Use for**: Video effects, real-time transformers
     pub fn video_realtime() -> Self {
         Self {
-            mode: SchedulingMode::Reactive,
+            mode: SchedulingMode::Push,
             priority: ThreadPriority::High,
             clock: ClockSource::Vsync,
             provide_clock: false,
@@ -134,24 +134,10 @@ impl SchedulingConfig {
         Self::default()
     }
 
-    /// Create config for hardware callback sources
-    ///
-    /// **Preset**: Callback mode, high priority, specified clock
-    ///
-    /// **Use for**: Camera, microphone, hardware I/O
-    pub fn hardware_callback(clock: ClockSource) -> Self {
-        Self {
-            mode: SchedulingMode::Callback,
-            priority: ThreadPriority::High,
-            clock,
-            provide_clock: false,
-        }
-    }
-
     pub fn validate(&self) -> Result<(), String> {
         if self.priority == ThreadPriority::RealTime {
             match self.mode {
-                SchedulingMode::Loop | SchedulingMode::Callback => {}
+                SchedulingMode::Loop => {}
                 _ => {
                     tracing::warn!(
                         "Real-time priority with {:?} mode is unusual - ensure RT safety",
@@ -179,7 +165,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = SchedulingConfig::default();
-        assert_eq!(config.mode, SchedulingMode::Reactive);
+        assert_eq!(config.mode, SchedulingMode::Push);
         assert_eq!(config.priority, ThreadPriority::Normal);
         assert_eq!(config.clock, ClockSource::Software);
         assert!(!config.provide_clock);
@@ -196,7 +182,7 @@ mod tests {
     #[test]
     fn test_video_realtime_preset() {
         let config = SchedulingConfig::video_realtime();
-        assert_eq!(config.mode, SchedulingMode::Reactive);
+        assert_eq!(config.mode, SchedulingMode::Push);
         assert_eq!(config.priority, ThreadPriority::High);
         assert_eq!(config.clock, ClockSource::Vsync);
     }
@@ -204,7 +190,7 @@ mod tests {
     #[test]
     fn test_background_preset() {
         let config = SchedulingConfig::background();
-        assert_eq!(config.mode, SchedulingMode::Reactive);
+        assert_eq!(config.mode, SchedulingMode::Push);
         assert_eq!(config.priority, ThreadPriority::Normal);
     }
 

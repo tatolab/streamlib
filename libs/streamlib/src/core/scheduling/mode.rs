@@ -56,19 +56,7 @@ pub enum SchedulingMode {
     /// **Thread**: Shared worker pool or dedicated thread based on priority
     ///
     /// **Example**: Color grading effect processes when camera sends frame
-    Reactive,
-
-    /// Hardware callback-driven
-    ///
-    /// Hardware (CoreAudio, AVFoundation) calls processor when data ready.
-    /// Used by: Camera, microphone, audio output (hardware controls timing)
-    ///
-    /// **Trigger**: Hardware callback
-    ///
-    /// **Thread**: Hardware-managed (CoreAudio RT thread, AVFoundation queue)
-    ///
-    /// **Example**: Camera sends frame via AVFoundation capture callback
-    Callback,
+    Push,
 
     /// Hardware callback pulls from input ports
     ///
@@ -84,21 +72,11 @@ pub enum SchedulingMode {
     ///
     /// **Example**: AudioOutput pulls from ring buffer in CoreAudio callback
     Pull,
-
-    /// Periodic timer-based execution
-    ///
-    /// Runtime executes processor at fixed intervals.
-    /// Used by: Metrics collectors, cleanup jobs, periodic tasks
-    ///
-    /// **Thread**: Timer thread pool
-    ///
-    /// **Example**: Performance metrics collected every second
-    Timer,
 }
 
 impl Default for SchedulingMode {
     fn default() -> Self {
-        SchedulingMode::Reactive
+        SchedulingMode::Push
     }
 }
 
@@ -109,13 +87,13 @@ mod tests {
     #[test]
     fn test_scheduling_mode_equality() {
         assert_eq!(SchedulingMode::Loop, SchedulingMode::Loop);
-        assert_ne!(SchedulingMode::Loop, SchedulingMode::Reactive);
+        assert_ne!(SchedulingMode::Loop, SchedulingMode::Push);
         assert_ne!(SchedulingMode::Callback, SchedulingMode::Timer);
     }
 
     #[test]
     fn test_scheduling_mode_default() {
-        assert_eq!(SchedulingMode::default(), SchedulingMode::Reactive);
+        assert_eq!(SchedulingMode::default(), SchedulingMode::Push);
     }
 
     #[test]

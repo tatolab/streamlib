@@ -64,5 +64,4 @@ impl StreamRuntime {
         self.inner.set_audio_config(config)
     }
 
-    // NOTE: validate_audio_frame() removed - channel count validation now done at compile time via AudioFrame<CHANNELS>
 }
