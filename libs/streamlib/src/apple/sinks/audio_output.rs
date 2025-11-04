@@ -151,8 +151,6 @@ impl StreamProcessor for AppleAudioOutputProcessor {
             self.device_id,
             self.buffer_size,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                // Hardware callback on CoreAudio RT thread
-                tracing::debug!("AudioOutput: Callback invoked, buffer size: {}", data.len());
 
                 // Update audio clock
                 audio_clock.increment_samples(data.len() as u64);

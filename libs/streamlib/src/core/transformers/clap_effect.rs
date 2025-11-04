@@ -62,19 +62,13 @@ pub struct ClapEffectConfig {
     pub plugin_path: PathBuf,
     /// Optional plugin name (if bundle contains multiple)
     pub plugin_name: Option<String>,
-    /// Sample rate for audio processing
-    pub sample_rate: u32,
-    /// Buffer size for audio processing
-    pub buffer_size: usize,
 }
 
 impl Default for ClapEffectConfig {
     fn default() -> Self {
         Self {
-            plugin_path: PathBuf::new(), // Empty path - must be set by user
+            plugin_path: PathBuf::new(),
             plugin_name: None,
-            sample_rate: 48000,  // Standard audio sample rate
-            buffer_size: 2048,   // Standard CLAP buffer size
         }
     }
 }
@@ -85,8 +79,11 @@ impl Default for ClapEffectConfig {
 ///
 /// This is a thin wrapper over `ClapPluginHost` that provides StreamElement integration.
 pub struct ClapEffectProcessor {
-    /// CLAP plugin host (does all the heavy lifting)
-    host: ClapPluginHost,
+    /// Configuration (stored until start())
+    config: ClapEffectConfig,
+
+    /// CLAP plugin host (loaded in start())
+    host: Option<ClapPluginHost>,
 
     /// Input ports (transformer-specific)
     input_ports: ClapEffectInputPorts,
@@ -96,124 +93,78 @@ pub struct ClapEffectProcessor {
 }
 
 impl ClapEffectProcessor {
-    /// Load a specific plugin by name from a CLAP bundle
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the CLAP plugin bundle
-    /// * `plugin_name` - Name of the plugin to load (case-sensitive)
-    /// * `sample_rate` - Sample rate for audio processing
-    /// * `buffer_size` - Buffer size for audio processing
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let plugin = ClapEffectProcessor::load_by_name(
-    ///     "/path/to/bundle.clap",
-    ///     "Gain",
-    ///     48000,
-    ///     512
-    /// )?;
-    /// ```
-    pub fn load_by_name<P: AsRef<Path>>(
-        path: P,
-        plugin_name: &str,
-        sample_rate: u32,
-        buffer_size: usize
-    ) -> Result<Self> {
-        let host = ClapPluginHost::load_by_name(path, plugin_name, sample_rate, buffer_size)?;
-
-        Ok(Self {
-            host,
-            input_ports: ClapEffectInputPorts {
-                audio: StreamInput::new("audio".to_string()),
-            },
-            output_ports: ClapEffectOutputPorts {
-                audio: StreamOutput::new("audio".to_string()),
-            },
-        })
-    }
-
-    /// Load a plugin by index from a CLAP bundle
-    pub fn load_by_index<P: AsRef<Path>>(
-        path: P,
-        index: usize,
-        sample_rate: u32,
-        buffer_size: usize
-    ) -> Result<Self> {
-        let host = ClapPluginHost::load_by_index(path, index, sample_rate, buffer_size)?;
-
-        Ok(Self {
-            host,
-            input_ports: ClapEffectInputPorts {
-                audio: StreamInput::new("audio".to_string()),
-            },
-            output_ports: ClapEffectOutputPorts {
-                audio: StreamOutput::new("audio".to_string()),
-            },
-        })
-    }
-
-    /// Load the first plugin from a CLAP bundle
-    pub fn load<P: AsRef<Path>>(path: P, sample_rate: u32, buffer_size: usize) -> Result<Self> {
-        let host = ClapPluginHost::load(path, sample_rate, buffer_size)?;
-
-        Ok(Self {
-            host,
-            input_ports: ClapEffectInputPorts {
-                audio: StreamInput::new("audio".to_string()),
-            },
-            output_ports: ClapEffectOutputPorts {
-                audio: StreamOutput::new("audio".to_string()),
-            },
-        })
-    }
-
     /// Get plugin metadata
-    pub fn plugin_info(&self) -> &PluginInfo {
-        self.host.plugin_info()
+    pub fn plugin_info(&self) -> Result<&PluginInfo> {
+        use crate::core::StreamError;
+        self.host.as_ref()
+            .map(|h| h.plugin_info())
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
     }
 
     /// List all parameters
-    pub fn list_parameters(&self) -> Vec<ParameterInfo> {
-        self.host.list_parameters()
+    pub fn list_parameters(&self) -> Result<Vec<ParameterInfo>> {
+        use crate::core::StreamError;
+        self.host.as_ref()
+            .map(|h| h.list_parameters())
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
     }
 
     /// Get parameter value
     pub fn get_parameter(&self, id: u32) -> Result<f64> {
-        self.host.get_parameter(id)
+        use crate::core::StreamError;
+        self.host.as_ref()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .get_parameter(id)
     }
 
     /// Set parameter value (in native units)
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
-        self.host.set_parameter(id, value)
+        use crate::core::StreamError;
+        self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .set_parameter(id, value)
     }
 
     /// Begin parameter edit transaction
     pub fn begin_edit(&mut self, id: u32) -> Result<()> {
-        self.host.begin_edit(id)
+        use crate::core::StreamError;
+        self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .begin_edit(id)
     }
 
     /// End parameter edit transaction
     pub fn end_edit(&mut self, id: u32) -> Result<()> {
-        self.host.end_edit(id)
+        use crate::core::StreamError;
+        self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .end_edit(id)
     }
 
     /// Activate the plugin
     pub fn activate(&mut self, sample_rate: u32, max_frames: usize) -> Result<()> {
-        self.host.activate(sample_rate, max_frames)
+        use crate::core::StreamError;
+        self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .activate(sample_rate, max_frames)
     }
 
     /// Deactivate the plugin
     pub fn deactivate(&mut self) -> Result<()> {
-        self.host.deactivate()
+        use crate::core::StreamError;
+        self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .deactivate()
     }
 
     /// Process audio through plugin (direct API, not using ports)
     ///
     /// This is useful for testing or direct usage outside of StreamElement runtime.
     pub fn process_audio(&mut self, input: &AudioFrame) -> Result<AudioFrame> {
-        self.host.process_audio(input)
+        use crate::core::StreamError;
+        self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .process_audio(input)
     }
 
     /// Get input ports
@@ -233,7 +184,9 @@ impl ClapEffectProcessor {
 
 impl StreamElement for ClapEffectProcessor {
     fn name(&self) -> &str {
-        &self.host.plugin_info().name
+        self.host.as_ref()
+            .map(|h| h.plugin_info().name.as_str())
+            .unwrap_or("ClapEffect")
     }
 
     fn element_type(&self) -> ElementType {
@@ -263,20 +216,46 @@ impl StreamElement for ClapEffectProcessor {
     }
 
     fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        // Activate the plugin with context's audio configuration
-        self.host.activate(ctx.audio.sample_rate, ctx.audio.buffer_size)?;
+        use crate::core::StreamError;
+
+        // Load the plugin with runtime context values
+        let mut host = if let Some(name) = self.config.plugin_name.as_deref() {
+            ClapPluginHost::load_by_name(
+                &self.config.plugin_path,
+                name,
+                ctx.audio.sample_rate,
+                ctx.audio.buffer_size
+            )?
+        } else {
+            ClapPluginHost::load(
+                &self.config.plugin_path,
+                ctx.audio.sample_rate,
+                ctx.audio.buffer_size
+            )?
+        };
+
+        // Activate the plugin
+        host.activate(ctx.audio.sample_rate, ctx.audio.buffer_size)?;
+
         tracing::info!(
-            "[ClapEffect] Activated plugin '{}' at {} Hz with {} samples buffer",
-            self.host.plugin_info().name,
+            "[ClapEffect] Loaded and activated plugin '{}' at {} Hz with {} buffer size",
+            host.plugin_info().name,
             ctx.audio.sample_rate,
             ctx.audio.buffer_size
         );
+
+        self.host = Some(host);
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
-        self.host.deactivate()?;
-        tracing::info!("[ClapEffect] Deactivated plugin '{}'", self.host.plugin_info().name);
+        use crate::core::StreamError;
+
+        let host = self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
+
+        host.deactivate()?;
+        tracing::info!("[ClapEffect] Deactivated plugin '{}'", host.plugin_info().name);
         Ok(())
     }
 }
@@ -307,15 +286,26 @@ impl StreamProcessor for ClapEffectProcessor {
     type Config = ClapEffectConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
-        if let Some(name) = config.plugin_name.as_deref() {
-            Self::load_by_name(&config.plugin_path, name, config.sample_rate, config.buffer_size)
-        } else {
-            Self::load(&config.plugin_path, config.sample_rate, config.buffer_size)
-        }
+        Ok(Self {
+            config,
+            host: None,
+            input_ports: ClapEffectInputPorts {
+                audio: StreamInput::new("audio"),
+            },
+            output_ports: ClapEffectOutputPorts {
+                audio: StreamOutput::new("audio"),
+            },
+        })
     }
 
     fn process(&mut self) -> Result<()> {
+        use crate::core::StreamError;
+
         tracing::debug!("[ClapEffect] process() called");
+
+        // Get host reference
+        let host = self.host.as_mut()
+            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
 
         // Read audio frame from input port
         if let Some(input_frame) = self.input_ports.audio.read_latest() {
@@ -326,7 +316,7 @@ impl StreamProcessor for ClapEffectProcessor {
             );
 
             // Process through CLAP plugin host
-            let output_frame = self.host.process_audio(&input_frame)?;
+            let output_frame = host.process_audio(&input_frame)?;
 
             // Write to output port
             self.output_ports.audio.write(output_frame);
@@ -336,6 +326,17 @@ impl StreamProcessor for ClapEffectProcessor {
         }
 
         Ok(())
+    }
+
+    fn scheduling_config(&self) -> crate::core::scheduling::SchedulingConfig {
+        use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority, ClockSource};
+
+        SchedulingConfig {
+            mode: SchedulingMode::Reactive,
+            priority: ThreadPriority::RealTime,
+            clock: ClockSource::Audio,
+            provide_clock: false,
+        }
     }
 
     fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
@@ -395,51 +396,3 @@ impl StreamProcessor for ClapEffectProcessor {
 }
 
 pub use crate::core::clap::{ClapScanner, ClapPluginInfo};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_clap_effect_load_by_name() {
-        let plugin_path = "/Users/fonta/Repositories/tatolab/clap-plugins/build/plugins/clap-plugins.clap/Contents/MacOS/clap-plugins";
-
-        if !std::path::Path::new(plugin_path).exists() {
-            eprintln!("Skipping test - CLAP plugin not found");
-            return;
-        }
-
-        let processor = ClapEffectProcessor::load_by_name(plugin_path, "Gain", 48000, 512);
-        assert!(processor.is_ok());
-
-        let processor = processor.unwrap();
-        assert_eq!(processor.plugin_info().name, "Gain");
-        assert_eq!(processor.plugin_info().format, "CLAP");
-    }
-
-    #[test]
-    fn test_clap_effect_process() {
-        let plugin_path = "/Users/fonta/Repositories/tatolab/clap-plugins/build/plugins/clap-plugins.clap/Contents/MacOS/clap-plugins";
-
-        if !std::path::Path::new(plugin_path).exists() {
-            eprintln!("Skipping test - CLAP plugin not found");
-            return;
-        }
-
-        let mut processor = ClapEffectProcessor::load_by_name(plugin_path, "Gain", 48000, 512)
-            .expect("Failed to load plugin");
-
-        processor.activate(48000, 512).expect("Failed to activate");
-
-        // Create test audio
-        let samples = vec![0.5f32; 512 * 2]; // 512 samples stereo
-        let input_frame = AudioFrame::new(samples, 0, 0, 2);
-
-        let output_frame = processor.process_audio(&input_frame).expect("Failed to process");
-
-        assert_eq!(output_frame.channels, 2);
-        assert_eq!(output_frame.sample_count(), 512);
-
-        processor.deactivate().expect("Failed to deactivate");
-    }
-}

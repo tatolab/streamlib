@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
     let mixer = runtime.add_element_with_config::<AudioMixerProcessor>(
         AudioMixerConfig {
             num_inputs: 3,                        // 3 inputs
-            strategy: MixingStrategy::Sum, // Prevents clipping
+            strategy: MixingStrategy::SumClipped, // Prevents clipping
             channel_mode: ChannelMode::MixUp,     // Mix up to stereo
         }
     ).await?;
@@ -88,9 +88,7 @@ async fn main() -> Result<()> {
     let reverb = runtime.add_element_with_config::<ClapEffectProcessor>(
         ClapEffectConfig {
             plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
-            plugin_name: None,  // Use first plugin in bundle
-            sample_rate: audio_config.sample_rate,
-            buffer_size: audio_config.buffer_size,
+            plugin_name: None,
         }
     ).await?;
     println!("   Loaded: Surge XT Effect (first in bundle)");
@@ -144,12 +142,12 @@ async fn main() -> Result<()> {
     // Step 7: Start the runtime
     println!("▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
-    println!("🎵 You should hear an A major chord (A4 + C#5 + E5) with reverb!\n");
+    println!("🎵 You should hear an A major chord (A4 + C#5 + E5)!\n");
     println!("💡 Audio pipeline:");
     println!("   • 440 Hz (A4)  → Mixer Input 0");
     println!("   • 554 Hz (C#5) → Mixer Input 1");
     println!("   • 659 Hz (E5)  → Mixer Input 2");
-    println!("   • Mixed → CLAP Reverb → Speaker\n");
+    println!("   • Mixed → Speaker\n");
     println!("⏰ Timer Groups (Clock Domains):");
     println!("   • Group: 'audio_master' @ {:.2} Hz", tick_rate);
     println!("   • Members: Tone 1, Tone 2, Tone 3, Mixer");

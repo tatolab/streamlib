@@ -1,9 +1,16 @@
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
-use crate::core::{AudioFrame, Result, StreamOutput};
+use crate::core::{AudioFrame, Result, StreamOutput, StreamError};
 use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements, SCHEMA_AUDIO_FRAME};
 use std::f64::consts::PI;
+use std::sync::Arc;
+use parking_lot::Mutex;
 use serde::{Serialize, Deserialize};
+
+#[cfg(target_os = "macos")]
+use cpal::Stream;
+#[cfg(target_os = "macos")]
+use cpal::traits::StreamTrait;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestToneConfig {
@@ -21,7 +28,7 @@ impl Default for TestToneConfig {
 }
 
 pub struct TestToneGeneratorOutputPorts {
-    pub audio: StreamOutput<AudioFrame>,
+    pub audio: Arc<StreamOutput<AudioFrame>>,
 }
 
 pub struct TestToneGenerator {
@@ -29,12 +36,19 @@ pub struct TestToneGenerator {
     frequency: f64,
     sample_rate: u32,
     channels: u32,
-    phase: f64,
+    phase: Arc<Mutex<f64>>,
     amplitude: f64,
-    frame_number: u64,
+    frame_number: Arc<Mutex<u64>>,
     buffer_size: usize,
     output_ports: TestToneGeneratorOutputPorts,
+
+    #[cfg(target_os = "macos")]
+    stream: Option<Stream>,
+    #[cfg(target_os = "macos")]
+    stream_setup_done: bool,
 }
+
+unsafe impl Send for TestToneGenerator {}
 
 impl TestToneGenerator {
     pub fn new(frequency: f64, amplitude: f64) -> Self {
@@ -43,13 +57,18 @@ impl TestToneGenerator {
             frequency,
             sample_rate: 48000,
             channels: 2,
-            phase: 0.0,
+            phase: Arc::new(Mutex::new(0.0)),
             amplitude: amplitude.clamp(0.0, 1.0),
-            frame_number: 0,
+            frame_number: Arc::new(Mutex::new(0)),
             buffer_size: 512,
             output_ports: TestToneGeneratorOutputPorts {
-                audio: StreamOutput::new("audio"),
+                audio: Arc::new(StreamOutput::new("audio")),
             },
+
+            #[cfg(target_os = "macos")]
+            stream: None,
+            #[cfg(target_os = "macos")]
+            stream_setup_done: false,
         }
     }
 
@@ -65,35 +84,32 @@ impl TestToneGenerator {
         self.amplitude = amplitude.clamp(0.0, 1.0);
     }
 
-    fn generate_frame(&mut self, timestamp_ns: i64) -> AudioFrame {
-        let mut samples = Vec::with_capacity(self.buffer_size * self.channels as usize);
+    fn generate_samples(
+        phase: &mut f64,
+        frequency: f64,
+        amplitude: f64,
+        sample_rate: u32,
+        buffer_size: usize,
+        channels: u32,
+    ) -> Vec<f32> {
+        let mut samples = Vec::with_capacity(buffer_size * channels as usize);
+        let phase_increment = 2.0 * PI * frequency / sample_rate as f64;
 
-        let phase_increment = 2.0 * PI * self.frequency / self.sample_rate as f64;
+        for _ in 0..buffer_size {
+            let sample = (phase.sin() * amplitude) as f32;
 
-        for _ in 0..self.buffer_size {
-            let sample = (self.phase.sin() * self.amplitude) as f32;
-
-            for _ in 0..self.channels {
+            for _ in 0..channels {
                 samples.push(sample);
             }
 
-            self.phase += phase_increment;
+            *phase += phase_increment;
 
-            if self.phase >= 2.0 * PI {
-                self.phase -= 2.0 * PI;
+            if *phase >= 2.0 * PI {
+                *phase -= 2.0 * PI;
             }
         }
 
-        let frame = AudioFrame::new(
-            samples,
-            timestamp_ns,
-            self.frame_number,
-            self.channels,
-        );
-
-        self.frame_number += 1;
-
-        frame
+        samples
     }
 }
 
@@ -124,12 +140,21 @@ impl StreamElement for TestToneGenerator {
         self.buffer_size = ctx.audio.buffer_size;
 
         tracing::info!(
-            "[TestToneGenerator] Started: {}Hz tone at {}Hz sample rate, {} samples/buffer",
+            "[TestToneGenerator] start() called: {}Hz tone at {}Hz sample rate, {} samples/buffer",
             self.frequency,
             self.sample_rate,
             self.buffer_size
         );
 
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            self.stream = None;
+        }
+        tracing::info!("[TestToneGenerator] Stopped");
         Ok(())
     }
 
@@ -153,23 +178,102 @@ impl StreamProcessor for TestToneGenerator {
     }
 
     fn process(&mut self) -> Result<()> {
-        tracing::debug!("TestToneGenerator: process() called, frame {}", self.frame_number);
+        #[cfg(target_os = "macos")]
+        {
+            if self.stream_setup_done {
+                return Ok(());
+            }
 
-        let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
+            tracing::info!("[TestToneGenerator] process() called - setting up CoreAudio stream");
 
-        let frame = self.generate_frame(timestamp_ns);
+            let frequency = self.frequency;
+            let amplitude = self.amplitude;
+            let sample_rate = self.sample_rate;
+            let buffer_size = self.buffer_size;
+            let channels = self.channels;
 
-        // Write directly to output port
-        self.output_ports.audio.write(frame);
-        Ok(())
+            let phase = Arc::clone(&self.phase);
+            let frame_number = Arc::clone(&self.frame_number);
+            let output_port = Arc::clone(&self.output_ports.audio);
+
+            let setup = crate::apple::audio_utils::setup_audio_output(
+                None,
+                buffer_size,
+                move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                    let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
+
+                    let samples = {
+                        let mut phase = phase.lock();
+                        Self::generate_samples(&mut phase, frequency, amplitude, sample_rate, buffer_size, channels)
+                    };
+
+                    let frame_num = {
+                        let mut frame_num = frame_number.lock();
+                        let num = *frame_num;
+                        *frame_num += 1;
+                        num
+                    };
+
+                    let frame = AudioFrame::new(samples, timestamp_ns, frame_num, channels);
+                    output_port.write(frame);
+
+                    data.fill(0.0);
+                },
+            )?;
+
+            setup.stream.play()
+                .map_err(|e| StreamError::Configuration(format!("Failed to start stream: {}", e)))?;
+
+            self.stream = Some(setup.stream);
+            self.stream_setup_done = true;
+
+            tracing::info!("[TestToneGenerator] CoreAudio stream started - hardware callback active");
+            Ok(())
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            tracing::debug!("TestToneGenerator: process() called, frame {}", *self.frame_number.lock());
+
+            let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
+
+            let samples = {
+                let mut phase = self.phase.lock();
+                Self::generate_samples(&mut phase, self.frequency, self.amplitude, self.sample_rate, self.buffer_size, self.channels)
+            };
+
+            let frame_num = {
+                let mut frame_num = self.frame_number.lock();
+                let num = *frame_num;
+                *frame_num += 1;
+                num
+            };
+
+            let frame = AudioFrame::new(samples, timestamp_ns, frame_num, self.channels);
+            self.output_ports.audio.write(frame);
+            Ok(())
+        }
     }
 
     fn scheduling_config(&self) -> SchedulingConfig {
-        SchedulingConfig {
-            mode: SchedulingMode::Loop,
-            priority: ThreadPriority::RealTime,
-            clock: ClockSource::Audio,
-            provide_clock: false,
+        #[cfg(target_os = "macos")]
+        {
+            SchedulingConfig {
+                mode: SchedulingMode::Pull,
+                priority: ThreadPriority::RealTime,
+                clock: ClockSource::Audio,
+                provide_clock: true,
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            SchedulingConfig {
+                mode: SchedulingMode::Loop,
+                priority: ThreadPriority::RealTime,
+                clock: ClockSource::Audio,
+                provide_clock: false,
+            }
         }
     }
 
