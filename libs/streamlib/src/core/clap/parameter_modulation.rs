@@ -1,58 +1,17 @@
-//! Parameter Modulation Helpers
-//!
-//! Utilities for applying time-varying modulation to audio plugin parameters.
-//! Designed for AI agents that need to dynamically control audio processing.
-//!
-//! # Use Cases
-//!
-//! - **Frequency scanning** - LFO sweep to search for specific frequencies
-//! - **Adaptive filtering** - Dynamic cutoff modulation based on audio content
-//! - **Gain envelopes** - Smooth fade in/out effects
-//! - **Agent-driven effects** - Automated parameter animations
-//!
-//! # Example
-//!
-//! ```ignore
-//! use streamlib::{ParameterModulator, LfoWaveform};
-//!
-//! // Create LFO modulator for filter cutoff (1 Hz sine wave)
-//! let mut lfo = ParameterModulator::lfo(1.0, LfoWaveform::Sine);
-//!
-//! // In audio loop
-//! loop {
-//!     let time = get_current_time();
-//!
-//!     // Get LFO value (0.0 to 1.0)
-//!     let lfo_value = lfo.sample(time);
-//!
-//!     // Map to frequency range (200 Hz to 2000 Hz)
-//!     let cutoff = 200.0 + (lfo_value * 1800.0);
-//!
-//!     // Apply to plugin parameter
-//!     filter.set_parameter(CUTOFF_PARAM, cutoff)?;
-//!     filter.process_audio(&input)?;
-//! }
-//! ```
 
 use std::f64::consts::PI;
 
-/// LFO (Low Frequency Oscillator) waveform shapes
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LfoWaveform {
-    /// Smooth sine wave (0.0 to 1.0)
     Sine,
 
-    /// Triangle wave (linear rise and fall)
     Triangle,
 
-    /// Square wave (instant switching between 0 and 1)
     Square,
 
-    /// Sawtooth wave (linear rise, instant drop)
     Sawtooth,
 }
 
-/// ADSR envelope stage
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum EnvelopeStage {
     Attack,
@@ -62,9 +21,6 @@ enum EnvelopeStage {
     Idle,
 }
 
-/// Parameter modulator for time-based parameter changes
-///
-/// Provides LFO, envelope, and ramp modulation for audio plugin parameters.
 #[derive(Debug, Clone)]
 pub struct ParameterModulator {
     kind: ModulatorKind,
@@ -72,14 +28,12 @@ pub struct ParameterModulator {
 
 #[derive(Debug, Clone)]
 enum ModulatorKind {
-    /// Low Frequency Oscillator
     Lfo {
         frequency: f64,
         waveform: LfoWaveform,
         phase_offset: f64,
     },
 
-    /// Linear ramp from start to end value
     Ramp {
         start_value: f64,
         end_value: f64,
@@ -87,7 +41,6 @@ enum ModulatorKind {
         duration: f64,
     },
 
-    /// ADSR envelope generator
     Envelope {
         attack_time: f64,
         decay_time: f64,
@@ -101,23 +54,6 @@ enum ModulatorKind {
 }
 
 impl ParameterModulator {
-    /// Create an LFO (Low Frequency Oscillator) modulator
-    ///
-    /// # Arguments
-    ///
-    /// * `frequency` - Oscillation frequency in Hz (e.g., 1.0 = one cycle per second)
-    /// * `waveform` - LFO waveform shape (Sine, Triangle, Square, Sawtooth)
-    ///
-    /// # Returns
-    ///
-    /// Values from 0.0 to 1.0 when sampled
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // 0.5 Hz sine wave for slow filter sweep
-    /// let lfo = ParameterModulator::lfo(0.5, LfoWaveform::Sine);
-    /// ```
     pub fn lfo(frequency: f64, waveform: LfoWaveform) -> Self {
         Self {
             kind: ModulatorKind::Lfo {
@@ -128,23 +64,6 @@ impl ParameterModulator {
         }
     }
 
-    /// Create a linear ramp modulator
-    ///
-    /// Smoothly interpolates from start_value to end_value over duration.
-    ///
-    /// # Arguments
-    ///
-    /// * `start_value` - Starting value (0.0 to 1.0)
-    /// * `end_value` - Ending value (0.0 to 1.0)
-    /// * `start_time` - Time when ramp begins (seconds)
-    /// * `duration` - Ramp duration (seconds)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Fade from 0 to 1 over 2 seconds, starting at t=0
-    /// let ramp = ParameterModulator::ramp(0.0, 1.0, 0.0, 2.0);
-    /// ```
     pub fn ramp(start_value: f64, end_value: f64, start_time: f64, duration: f64) -> Self {
         Self {
             kind: ModulatorKind::Ramp {
@@ -156,31 +75,6 @@ impl ParameterModulator {
         }
     }
 
-    /// Create an ADSR envelope modulator
-    ///
-    /// # Arguments
-    ///
-    /// * `attack_time` - Time to reach peak (seconds)
-    /// * `decay_time` - Time to reach sustain level (seconds)
-    /// * `sustain_level` - Sustain level (0.0 to 1.0)
-    /// * `release_time` - Time to fade to zero after release (seconds)
-    ///
-    /// # Usage
-    ///
-    /// Call `trigger()` to start the envelope, `release()` to begin release phase.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Fast attack, medium decay, 70% sustain, slow release
-    /// let mut env = ParameterModulator::envelope(0.01, 0.1, 0.7, 0.5);
-    ///
-    /// // Start envelope
-    /// env.trigger(current_time);
-    ///
-    /// // Later... begin release
-    /// env.release(current_time);
-    /// ```
     pub fn envelope(
         attack_time: f64,
         decay_time: f64,
@@ -201,15 +95,6 @@ impl ParameterModulator {
         }
     }
 
-    /// Sample the modulator at a specific time
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Current time in seconds
-    ///
-    /// # Returns
-    ///
-    /// Modulation value (typically 0.0 to 1.0, depending on modulator type)
     pub fn sample(&mut self, time: f64) -> f64 {
         match &mut self.kind {
             ModulatorKind::Lfo {
@@ -321,13 +206,6 @@ impl ParameterModulator {
         }
     }
 
-    /// Trigger envelope (only for Envelope modulators)
-    ///
-    /// Starts the ADSR envelope from the beginning.
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Current time in seconds
     pub fn trigger(&mut self, time: f64) {
         if let ModulatorKind::Envelope {
             stage,
@@ -344,13 +222,6 @@ impl ParameterModulator {
         }
     }
 
-    /// Release envelope (only for Envelope modulators)
-    ///
-    /// Begins the release phase of the ADSR envelope.
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Current time in seconds
     pub fn release(&mut self, time: f64) {
         if let ModulatorKind::Envelope {
             stage,
@@ -365,13 +236,6 @@ impl ParameterModulator {
         }
     }
 
-    /// Set LFO phase offset (only for LFO modulators)
-    ///
-    /// Allows starting the LFO at a specific phase.
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - Phase offset (0.0 to 1.0, where 1.0 = full cycle)
     pub fn set_phase_offset(&mut self, offset: f64) {
         if let ModulatorKind::Lfo { phase_offset, .. } = &mut self.kind {
             *phase_offset = offset % 1.0;

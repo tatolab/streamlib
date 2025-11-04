@@ -1,106 +1,47 @@
-//! Parameter Automation Scheduler
-//!
-//! Schedule parameter changes over time and apply modulators automatically.
-//! Designed for AI agents that need to orchestrate complex audio processing.
-//!
-//! # Use Cases
-//!
-//! - **Timed parameter changes** - Schedule specific values at specific times
-//! - **Modulation automation** - Apply LFOs/envelopes to parameters
-//! - **Effect sequences** - Orchestrate multi-parameter animations
-//! - **Agent-driven audio** - Automate parameter control based on sensor data
-//!
-//! # Example
-//!
-//! ```ignore
-//! use streamlib::{ParameterAutomation, ParameterModulator, LfoWaveform};
-//!
-//! let mut automation = ParameterAutomation::new();
-//!
-//! // Schedule a filter sweep starting at t=1.0
-//! let cutoff_lfo = ParameterModulator::lfo(0.5, LfoWaveform::Sine);
-//! automation.add_modulator(CUTOFF_PARAM, cutoff_lfo, 1.0, Some(5.0));
-//!
-//! // Schedule bypass disable at t=0.5
-//! automation.schedule(0.5, BYPASS_PARAM, 0.0);
-//!
-//! // In audio loop
-//! loop {
-//!     let time = get_current_time();
-//!     automation.update(time, &mut filter)?;
-//!     let output = filter.process_audio(&input)?;
-//! }
-//! ```
 
 use crate::core::Result;
 use super::parameter_modulation::ParameterModulator;
 use std::collections::HashMap;
 
-/// Trait for CLAP processors that support parameter control
-///
-/// This is automatically implemented by ClapEffectProcessor and allows
-/// ParameterAutomation to work with it.
 pub trait ClapParameterControl {
-    /// Set a parameter value
     fn set_parameter(&mut self, id: u32, value: f64) -> Result<()>;
 
-    /// Begin parameter edit transaction
     fn begin_edit(&mut self, id: u32) -> Result<()>;
 
-    /// End parameter edit transaction
     fn end_edit(&mut self, id: u32) -> Result<()>;
 }
 
-/// Scheduled parameter change at a specific time
 #[derive(Debug, Clone)]
 struct ScheduledChange {
-    /// Time when change should occur (seconds)
     time: f64,
 
-    /// Parameter ID
     param_id: u32,
 
-    /// Target value
     value: f64,
 }
 
-/// Active parameter modulator
 #[derive(Debug, Clone)]
 struct ActiveModulator {
-    /// Parameter ID being modulated
     param_id: u32,
 
-    /// Modulator instance
     modulator: ParameterModulator,
 
-    /// Start time (seconds)
     start_time: f64,
 
-    /// Optional end time (seconds) - None means run forever
     end_time: Option<f64>,
 
-    /// Value range for modulation (min, max)
-    /// Modulator output (0.0-1.0) is mapped to this range
     range: (f64, f64),
 }
 
-/// Parameter automation scheduler
-///
-/// Orchestrates scheduled parameter changes and modulation over time.
-/// Works with any AudioEffectProcessor implementation.
 pub struct ParameterAutomation {
-    /// Scheduled parameter changes (sorted by time)
     scheduled_changes: Vec<ScheduledChange>,
 
-    /// Active modulators
     active_modulators: Vec<ActiveModulator>,
 
-    /// Last processed time (to avoid reprocessing)
     last_time: f64,
 }
 
 impl ParameterAutomation {
-    /// Create a new parameter automation scheduler
     pub fn new() -> Self {
         Self {
             scheduled_changes: Vec::new(),
@@ -109,20 +50,6 @@ impl ParameterAutomation {
         }
     }
 
-    /// Schedule a parameter change at a specific time
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - When to apply the change (seconds)
-    /// * `param_id` - Parameter ID to change
-    /// * `value` - Target value
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // At 2.5 seconds, set bypass parameter to 0 (disable bypass)
-    /// automation.schedule(2.5, BYPASS_PARAM, 0.0);
-    /// ```
     pub fn schedule(&mut self, time: f64, param_id: u32, value: f64) {
         self.scheduled_changes.push(ScheduledChange {
             time,
@@ -136,27 +63,6 @@ impl ParameterAutomation {
         });
     }
 
-    /// Add a modulator to a parameter
-    ///
-    /// The modulator will run from `start_time` to optional `end_time`.
-    /// Modulator output (0.0-1.0) is mapped to the specified value range.
-    ///
-    /// # Arguments
-    ///
-    /// * `param_id` - Parameter ID to modulate
-    /// * `modulator` - Modulator instance (LFO, envelope, etc.)
-    /// * `start_time` - When to start modulation (seconds)
-    /// * `end_time` - When to stop modulation (None = run forever)
-    /// * `min_value` - Minimum parameter value
-    /// * `max_value` - Maximum parameter value
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Apply 1 Hz sine wave to filter cutoff (200-2000 Hz) starting at t=1.0
-    /// let lfo = ParameterModulator::lfo(1.0, LfoWaveform::Sine);
-    /// automation.add_modulator(CUTOFF_PARAM, lfo, 1.0, None, 200.0, 2000.0);
-    /// ```
     pub fn add_modulator(
         &mut self,
         param_id: u32,
@@ -175,36 +81,6 @@ impl ParameterAutomation {
         });
     }
 
-    /// Update parameters based on current time
-    ///
-    /// Processes all scheduled changes and applies active modulators.
-    /// Call this in your audio loop with the current time.
-    ///
-    /// Works with any CLAP plugin processor that has:
-    /// - `set_parameter(id, value)` method
-    /// - `begin_edit(id)` method
-    /// - `end_edit(id)` method
-    ///
-    /// # Arguments
-    ///
-    /// * `time` - Current time (seconds)
-    /// * `processor` - CLAP effect processor to update
-    ///
-    /// # Returns
-    ///
-    /// Number of parameters updated
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use streamlib::ClapEffectProcessor;
-    ///
-    /// let mut plugin = ClapEffectProcessor::load("plugin.clap")?;
-    /// let updates = automation.update(current_time, &mut plugin)?;
-    /// if updates > 0 {
-    ///     tracing::debug!("Updated {} parameters", updates);
-    /// }
-    /// ```
     pub fn update<P>(
         &mut self,
         time: f64,
@@ -275,23 +151,19 @@ impl ParameterAutomation {
         Ok(updates)
     }
 
-    /// Clear all scheduled changes and modulators
     pub fn clear(&mut self) {
         self.scheduled_changes.clear();
         self.active_modulators.clear();
     }
 
-    /// Get number of pending scheduled changes
     pub fn pending_changes(&self) -> usize {
         self.scheduled_changes.len()
     }
 
-    /// Get number of active modulators
     pub fn active_modulators(&self) -> usize {
         self.active_modulators.len()
     }
 
-    /// Remove all scheduled changes for a specific parameter
     pub fn clear_parameter(&mut self, param_id: u32) {
         self.scheduled_changes.retain(|c| c.param_id != param_id);
         self.active_modulators.retain(|m| m.param_id != param_id);

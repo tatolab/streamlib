@@ -1,24 +1,6 @@
-//! Audio buffer conversion utilities for CLAP plugin integration
-//!
-//! CLAP plugins expect non-interleaved audio (separate channel buffers),
-//! while streamlib AudioFrame uses interleaved samples. These utilities
-//! handle the conversion.
-//!
-//! **INTERNAL USE ONLY** - Not exposed in public API
 
 use crate::core::AudioFrame;
 
-/// Convert interleaved AudioFrame to separate channel buffers for CLAP
-///
-/// AudioFrame stores samples interleaved, but CLAP expects separate channel buffers.
-///
-/// # Arguments
-///
-/// * `frame` - Input audio frame with interleaved samples
-///
-/// # Returns
-///
-/// Vec of channel buffers, where each Vec<f32> is one channel
 pub(crate) fn deinterleave_audio_frame(frame: &AudioFrame) -> Vec<Vec<f32>> {
     let num_channels = frame.channels as usize;
     let num_samples = frame.sample_count();
@@ -36,23 +18,6 @@ pub(crate) fn deinterleave_audio_frame(frame: &AudioFrame) -> Vec<Vec<f32>> {
     channels
 }
 
-/// Convert separate channel buffers from CLAP to interleaved AudioFrame
-///
-/// CLAP returns separate channel buffers, but AudioFrame stores samples interleaved.
-///
-/// # Arguments
-///
-/// * `channel_buffers` - Vec of channel buffers (each Vec<f32> is one channel)
-/// * `timestamp_ns` - Timestamp in nanoseconds
-/// * `frame_number` - Frame number
-///
-/// # Returns
-///
-/// AudioFrame with interleaved data
-///
-/// # Panics
-///
-/// Panics if channel buffers have different lengths or if there are no channels
 pub(crate) fn interleave_to_audio_frame(
     channel_buffers: &[Vec<f32>],
     timestamp_ns: i64,

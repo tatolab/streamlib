@@ -72,7 +72,7 @@ pub use core::{
     ParameterInfo, PluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    TestToneGenerator, TestToneGeneratorOutputPorts, TestToneConfig,
+    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
     AudioMixerProcessor, MixingStrategy, ChannelMode,
     AudioMixerInputPorts, AudioMixerOutputPorts, AudioMixerConfig,
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,

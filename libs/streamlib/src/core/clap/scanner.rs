@@ -1,7 +1,3 @@
-//! CLAP plugin scanner for system-wide plugin discovery
-//!
-//! Provides utilities to scan standard CLAP plugin installation directories
-//! and extract plugin metadata without loading the full plugin.
 
 use clack_host::{
     bundle::PluginBundle,
@@ -11,49 +7,26 @@ use clack_host::{
 use crate::core::{Result, StreamError};
 use std::path::{Path, PathBuf};
 
-/// Information about a discovered CLAP plugin
 #[derive(Debug, Clone)]
 pub struct ClapPluginInfo {
-    /// Full path to the plugin bundle
     pub path: PathBuf,
 
-    /// Plugin ID (e.g., "com.u-he.diva")
     pub id: String,
 
-    /// Plugin name (e.g., "Diva")
     pub name: String,
 
-    /// Vendor name
     pub vendor: String,
 
-    /// Version string
     pub version: String,
 
-    /// Plugin description
     pub description: String,
 
-    /// Plugin features/categories (e.g., ["audio-effect", "reverb"])
     pub features: Vec<String>,
 }
 
-/// CLAP plugin scanner for discovering installed plugins
 pub struct ClapScanner;
 
 impl ClapScanner {
-    /// Scan system directories for installed CLAP plugins
-    ///
-    /// Returns a list of all discovered plugins with their metadata.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use streamlib::ClapScanner;
-    ///
-    /// let plugins = ClapScanner::scan_system_plugins()?;
-    /// for plugin in plugins {
-    ///     println!("{} by {} ({})", plugin.name, plugin.vendor, plugin.path.display());
-    /// }
-    /// ```
     pub fn scan_system_plugins() -> Result<Vec<ClapPluginInfo>> {
         let paths = Self::get_system_paths();
         let mut all_plugins = Vec::new();
@@ -71,7 +44,6 @@ impl ClapScanner {
         Ok(all_plugins)
     }
 
-    /// Get standard CLAP plugin installation directories for the current platform
     fn get_system_paths() -> Vec<PathBuf> {
         let mut paths = Vec::new();
 
@@ -108,15 +80,6 @@ impl ClapScanner {
         paths
     }
 
-    /// Scan a specific directory for CLAP plugins
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Directory to scan
-    ///
-    /// # Returns
-    ///
-    /// List of plugins found in the directory
     pub fn scan_directory<P: AsRef<Path>>(path: P) -> Result<Vec<ClapPluginInfo>> {
         let path = path.as_ref();
 
@@ -148,13 +111,11 @@ impl ClapScanner {
         Ok(plugins)
     }
 
-    /// Check if a path is a CLAP plugin bundle
     fn is_clap_bundle(path: &Path) -> bool {
         // CLAP bundles end with .clap extension
         path.extension().and_then(|s| s.to_str()) == Some("clap")
     }
 
-    /// Scan a single plugin bundle and extract metadata
     fn scan_plugin_bundle(path: &Path) -> Result<Vec<ClapPluginInfo>> {
         // Get the actual binary path within the bundle
         let binary_path = Self::get_bundle_binary_path(path)?;
@@ -205,14 +166,6 @@ impl ClapScanner {
         Ok(plugins)
     }
 
-    /// Get the actual binary path within a CLAP bundle
-    ///
-    /// On macOS, CLAP bundles are app bundles with structure:
-    /// MyPlugin.clap/Contents/MacOS/MyPlugin
-    ///
-    /// This function handles both:
-    /// - Bundle paths: "/path/to/Plugin.clap" → "/path/to/Plugin.clap/Contents/MacOS/Plugin"
-    /// - Direct binary paths: "/path/to/Plugin.clap/Contents/MacOS/Plugin" → returns as-is
     pub fn get_bundle_binary_path(bundle_path: &Path) -> Result<PathBuf> {
         #[cfg(target_os = "macos")]
         {

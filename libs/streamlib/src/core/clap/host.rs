@@ -1,44 +1,3 @@
-//! CLAP plugin host infrastructure
-//!
-//! Provides reusable CLAP plugin hosting functionality that can be used by any transformer.
-//! Handles plugin loading, lifecycle management, parameter control, and audio processing.
-//!
-//! # Architecture
-//!
-//! ```text
-//! ClapPluginHost
-//!   ├─ Plugin Bundle (loaded .clap file)
-//!   ├─ Plugin Instance (activated processor)
-//!   ├─ Shared State (parameters, configuration)
-//!   └─ Audio Processor (real-time processing)
-//! ```
-//!
-//! # Thread Safety
-//!
-//! The host supports both `Arc<Mutex<T>>` and `RefCell<T>` synchronization via generic parameter:
-//! - `ClapPluginHost<Arc<Mutex<_>>>` - Thread-safe, can be sent across threads
-//! - `ClapPluginHost<RefCell<_>>` - Single-threaded, faster but not Send
-//!
-//! # Example
-//!
-//! ```ignore
-//! use streamlib::clap::ClapPluginHost;
-//! use std::sync::{Arc, Mutex};
-//!
-//! // Load plugin (thread-safe version)
-//! let host = ClapPluginHost::<Arc<Mutex<_>>>::load_by_name(
-//!     "/path/to/reverb.clap",
-//!     "Reverb",
-//!     48000,
-//!     2048
-//! )?;
-//!
-//! // Activate
-//! host.activate(48000, 2048)?;
-//!
-//! // Process audio
-//! let output = host.process_audio(&input_frame)?;
-//! ```
 
 use clack_host::{
     prelude::*,
@@ -57,30 +16,23 @@ use clack_extensions::params::{PluginParams, ParamInfoBuffer};
 
 use crate::core::{Result, StreamError, AudioFrame};
 use crate::core::clap::{ParameterInfo, PluginInfo};
-use super::buffer_conversion::{deinterleave_audio_frame, interleave_to_audio_frame};
 use super::scanner::ClapScanner;
 
 use parking_lot::Mutex as ParkingLotMutex;
 use std::sync::Arc;
 use std::path::Path;
-use std::marker::PhantomData;
 
-/// Shared state accessible from all threads
 struct SharedState {
-    /// Current parameter values (id -> native value, NOT normalized)
     parameters: std::collections::HashMap<u32, f64>,
+    parameter_generation: usize,  // Incremented whenever parameters change
 
-    /// Parameter info cache
     parameter_info: Vec<ParameterInfo>,
 
-    /// Sample rate
     sample_rate: u32,
 
-    /// Maximum frames per process call
     max_frames: usize,
 }
 
-/// Host data passed to plugin (main thread context)
 struct HostData {
     shared: Arc<ParkingLotMutex<SharedState>>,
 }
@@ -91,7 +43,6 @@ impl HostData {
     }
 }
 
-/// Shared host data accessible from all contexts
 struct HostShared {
     state: Arc<ParkingLotMutex<SharedState>>,
 }
@@ -120,41 +71,29 @@ impl<'a> SharedHandler<'a> for HostShared {
     }
 }
 
-/// CLAP plugin host
-///
-/// Provides reusable CLAP plugin hosting infrastructure. Can be used by any transformer
-/// that needs CLAP plugin integration.
-///
-/// # Type Parameters
-///
-/// Generic over synchronization primitive (not exposed in type signature):
-/// - Uses `Arc<Mutex<_>>` internally for thread safety
-/// - Future: Could support `RefCell<_>` for single-threaded optimization
 pub struct ClapPluginHost {
-    /// Loaded plugin bundle
     bundle: PluginBundle,
 
-    /// Plugin ID (stored as CString for PluginInstance::new)
     plugin_id: std::ffi::CString,
 
-    /// Plugin metadata
     plugin_info: PluginInfo,
 
-    /// Plugin instance (created on activate)
     instance: Arc<ParkingLotMutex<Option<PluginInstance<HostData>>>>,
 
-    /// Audio processor (created after activation)
     audio_processor: Arc<ParkingLotMutex<Option<StartedPluginAudioProcessor<HostData>>>>,
 
-    /// Shared state
     shared_state: Arc<ParkingLotMutex<SharedState>>,
 
-    /// Activation state
     is_activated: bool,
 
-    /// Audio configuration
     sample_rate: u32,
     buffer_size: usize,
+
+    deinterleave_buffers: Vec<Vec<f32>>,
+    output_buffers: Vec<Vec<f32>>,
+
+    // Cache parameter state to detect changes
+    last_parameter_generation: usize,
 }
 
 // SAFETY: ClapPluginHost is Send despite PluginBundle containing raw pointers
@@ -162,25 +101,6 @@ pub struct ClapPluginHost {
 unsafe impl Send for ClapPluginHost {}
 
 impl ClapPluginHost {
-    /// Load a specific plugin by name from a CLAP bundle
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the CLAP plugin bundle
-    /// * `plugin_name` - Name of the plugin to load (case-sensitive)
-    /// * `sample_rate` - Sample rate for audio processing
-    /// * `buffer_size` - Buffer size for audio processing
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let host = ClapPluginHost::load_by_name(
-    ///     "/path/to/bundle.clap",
-    ///     "Gain",
-    ///     48000,
-    ///     512
-    /// )?;
-    /// ```
     pub fn load_by_name<P: AsRef<Path>>(
         path: P,
         plugin_name: &str,
@@ -190,14 +110,6 @@ impl ClapPluginHost {
         Self::load_internal(path, Some(plugin_name), sample_rate, buffer_size)
     }
 
-    /// Load a plugin by index from a CLAP bundle
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Path to the CLAP plugin bundle
-    /// * `index` - Zero-based index of the plugin to load
-    /// * `sample_rate` - Sample rate for audio processing
-    /// * `buffer_size` - Buffer size for audio processing
     pub fn load_by_index<P: AsRef<Path>>(
         path: P,
         index: usize,
@@ -211,9 +123,6 @@ impl ClapPluginHost {
         })
     }
 
-    /// Load the first plugin from a CLAP bundle
-    ///
-    /// For bundles with multiple plugins, use `load_by_name()` or `load_by_index()`.
     pub fn load<P: AsRef<Path>>(
         path: P,
         sample_rate: u32,
@@ -222,7 +131,6 @@ impl ClapPluginHost {
         Self::load_internal(path, None, sample_rate, buffer_size)
     }
 
-    /// Internal method to load a plugin with optional name filter
     fn load_internal<P: AsRef<Path>>(
         path: P,
         plugin_name: Option<&str>,
@@ -252,7 +160,6 @@ impl ClapPluginHost {
         }
     }
 
-    /// Internal method to load a plugin using a filter function
     fn load_internal_with_filter<P, F>(
         path: P,
         sample_rate: u32,
@@ -328,6 +235,7 @@ impl ClapPluginHost {
         // Create shared state
         let shared_state = Arc::new(ParkingLotMutex::new(SharedState {
             parameters: std::collections::HashMap::new(),
+            parameter_generation: 0,
             parameter_info: Vec::new(),
             sample_rate,
             max_frames: buffer_size,
@@ -343,21 +251,21 @@ impl ClapPluginHost {
             is_activated: false,
             sample_rate,
             buffer_size,
+            deinterleave_buffers: Vec::new(),
+            output_buffers: Vec::new(),
+            last_parameter_generation: 0,
         })
     }
 
-    /// Get plugin metadata
     pub fn plugin_info(&self) -> &PluginInfo {
         &self.plugin_info
     }
 
-    /// List all parameters
     pub fn list_parameters(&self) -> Vec<ParameterInfo> {
         let state = self.shared_state.lock();
         state.parameter_info.clone()
     }
 
-    /// Get parameter value (in native units, not normalized)
     pub fn get_parameter(&self, id: u32) -> Result<f64> {
         let state = self.shared_state.lock();
         state.parameters.get(&id)
@@ -367,39 +275,26 @@ impl ClapPluginHost {
             ))
     }
 
-    /// Set parameter value (in native units, not normalized)
-    ///
-    /// The value will be sent to the plugin during the next `process_audio()` call.
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
         let mut state = self.shared_state.lock();
         state.parameters.insert(id, value);
+        state.parameter_generation = state.parameter_generation.wrapping_add(1);
 
         tracing::info!("Parameter {} set to {} (will be sent during next process)", id, value);
 
         Ok(())
     }
 
-    /// Begin parameter edit transaction
-    ///
-    /// Note: Current version of clack-host doesn't expose these CLAP extension methods.
-    /// This is a placeholder for future implementation.
     pub fn begin_edit(&mut self, id: u32) -> Result<()> {
         tracing::debug!("begin_edit({}) - placeholder (not yet implemented)", id);
         Ok(())
     }
 
-    /// End parameter edit transaction
-    ///
-    /// Note: Current version of clack-host doesn't expose these CLAP extension methods.
-    /// This is a placeholder for future implementation.
     pub fn end_edit(&mut self, id: u32) -> Result<()> {
         tracing::debug!("end_edit({}) - placeholder (not yet implemented)", id);
         Ok(())
     }
 
-    /// Activate the plugin (idempotent)
-    ///
-    /// If already activated, this is a no-op.
     pub fn activate(&mut self, sample_rate: u32, max_frames: usize) -> Result<()> {
         if self.is_activated {
             tracing::debug!("Plugin already activated, skipping");
@@ -553,6 +448,14 @@ impl ClapPluginHost {
         self.sample_rate = sample_rate;
         self.buffer_size = max_frames;
 
+        // Pre-allocate all buffers
+        self.deinterleave_buffers.clear();
+        self.output_buffers.clear();
+        for _ in 0..2 {
+            self.deinterleave_buffers.push(vec![0.0; max_frames]);
+            self.output_buffers.push(vec![0.0; max_frames]);
+        }
+
         tracing::info!(
             "✅ Activated CLAP plugin '{}' at {}Hz, {} max frames",
             self.plugin_info.name,
@@ -563,7 +466,6 @@ impl ClapPluginHost {
         Ok(())
     }
 
-    /// Deactivate the plugin
     pub fn deactivate(&mut self) -> Result<()> {
         if !self.is_activated {
             return Ok(());
@@ -582,49 +484,44 @@ impl ClapPluginHost {
         Ok(())
     }
 
-    /// Process audio through the plugin (convenience API)
-    ///
-    /// Handles buffer conversion internally. For more control, use `process_audio_channels()`.
     pub fn process_audio(&mut self, input: &AudioFrame) -> Result<AudioFrame> {
-        let channel_buffers = deinterleave_audio_frame(input);
+        let num_channels = input.channels as usize;
+        let num_samples = input.sample_count();
 
-        assert!(channel_buffers.len() >= 2, "CLAP plugins require at least stereo input");
-
-        let (left_out, right_out) = self.process_audio_channels(&channel_buffers[0], &channel_buffers[1])?;
-        Ok(interleave_to_audio_frame(&[left_out, right_out], input.timestamp_ns, input.frame_number))
-    }
-
-    /// Process audio through the plugin (low-level API)
-    ///
-    /// Processes separate channel buffers directly without AudioFrame conversion.
-    pub fn process_audio_channels(
-        &mut self,
-        left_in: &[f32],
-        right_in: &[f32],
-    ) -> Result<(Vec<f32>, Vec<f32>)> {
-        if !self.is_activated {
-            return Err(StreamError::Configuration(
-                "Plugin not activated - call activate() first".into()
-            ));
+        // Deinterleave directly into pre-allocated buffers (only stereo for now)
+        for i in 0..num_samples {
+            let base_idx = i * num_channels;
+            self.deinterleave_buffers[0][i] = input.samples[base_idx];
+            self.deinterleave_buffers[1][i] = input.samples[base_idx + 1];
         }
 
-        let num_samples = left_in.len();
+        // Process audio (writes to self.output_buffers)
+        self.process_audio_channels_inplace(num_samples)?;
 
-        // Create output buffers (same size as input)
-        let left_out = vec![0.0f32; num_samples];
-        let right_out = vec![0.0f32; num_samples];
+        // Interleave output buffers directly into a new Vec (unavoidable allocation for Arc)
+        let output_len = num_samples * 2;
+        let mut output_samples = Vec::with_capacity(output_len);
+        for i in 0..num_samples {
+            output_samples.push(self.output_buffers[0][i]);
+            output_samples.push(self.output_buffers[1][i]);
+        }
 
-        // Get audio processor
+        Ok(AudioFrame {
+            samples: Arc::new(output_samples),
+            timestamp_ns: input.timestamp_ns,
+            channels: input.channels,
+            frame_number: input.frame_number,
+            metadata: None,
+        })
+    }
+
+    fn process_audio_channels_inplace(&mut self, num_samples: usize) -> Result<()> {
+        // Get audio processor (single lock, held for entire operation)
         let mut processor_guard = self.audio_processor.lock();
         let processor = processor_guard.as_mut()
-            .ok_or_else(|| StreamError::Configuration(
-                "Audio processor not started".into()
-            ))?;
+            .ok_or_else(|| StreamError::Configuration("Audio processor not started".into()))?;
 
-        // Create CLAP audio port buffers
-        let mut all_input_channels = vec![left_in.to_vec(), right_in.to_vec()];
-        let mut all_output_channels = vec![left_out, right_out];
-
+        // Create CLAP audio port buffers using pre-allocated buffers
         let mut input_ports_base = AudioPorts::with_capacity(2, 1);
         let mut output_ports_base = AudioPorts::with_capacity(2, 1);
 
@@ -632,8 +529,8 @@ impl ClapPluginHost {
             std::iter::once(AudioPortBuffer {
                 latency: 0,
                 channels: AudioPortBufferType::f32_input_only(
-                    all_input_channels.iter_mut().map(|buf| InputChannel {
-                        buffer: &mut buf[..],
+                    self.deinterleave_buffers.iter_mut().map(|buf| InputChannel {
+                        buffer: &mut buf[0..num_samples],
                         is_constant: false,
                     })
                 ),
@@ -644,42 +541,49 @@ impl ClapPluginHost {
             std::iter::once(AudioPortBuffer {
                 latency: 0,
                 channels: AudioPortBufferType::f32_output_only(
-                    all_output_channels.iter_mut().map(|buf| &mut buf[..])
+                    self.output_buffers.iter_mut().map(|buf| &mut buf[0..num_samples])
                 ),
             })
         );
 
-        // Create parameter change events
-        let parameters = self.shared_state.lock().parameters.clone();
+        // Check if parameters changed - only build events if they did
+        let state = self.shared_state.lock();
+        let current_gen = state.parameter_generation;
+        let has_param_changes = current_gen != self.last_parameter_generation;
 
-        let mut event_buffer = EventBuffer::with_capacity(parameters.len());
+        let mut input_events = if has_param_changes {
+            let mut event_buffer = EventBuffer::with_capacity(state.parameters.len());
+            for (param_id, value) in state.parameters.iter() {
+                let event = ParamValueEvent::new(
+                    0,
+                    ClapId::new(*param_id),
+                    Pckn::match_all(),
+                    *value,
+                    Cookie::empty(),
+                );
+                event_buffer.push(&event);
+            }
+            drop(state);  // Release lock ASAP
+            self.last_parameter_generation = current_gen;
+            event_buffer
+        } else {
+            drop(state);  // Release lock ASAP
+            EventBuffer::with_capacity(0)
+        };
 
-        for (param_id, value) in parameters.iter() {
-            tracing::debug!("Adding param event: id={}, value={:.4}", param_id, value);
-            let event = ParamValueEvent::new(
-                0,  // time: apply at start of buffer
-                ClapId::new(*param_id),
-                Pckn::match_all(),
-                *value,
-                Cookie::empty(),
-            );
-            event_buffer.push(&event);
-        }
+        let input_events_ref = input_events.as_input();
 
-        let input_events = event_buffer.as_input();
-
-        // Process audio through plugin
+        // Process audio through plugin - THE ONLY CRITICAL OPERATION
+        // NOTE: input_events must stay alive until after this call
         processor.process(
             &input_ports,
             &mut output_ports,
-            &input_events,
+            &input_events_ref,
             &mut OutputEvents::void(),
-            None,  // steady_counter
-            None,  // transport
-        ).map_err(|e| StreamError::Runtime(
-            format!("Plugin processing failed: {:?}", e)
-        ))?;
+            None,
+            None,
+        ).map_err(|e| StreamError::Runtime(format!("Plugin processing failed: {:?}", e)))?;
 
-        Ok((all_output_channels[0].clone(), all_output_channels[1].clone()))
+        Ok(())
     }
 }

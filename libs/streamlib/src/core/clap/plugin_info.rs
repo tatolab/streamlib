@@ -1,79 +1,47 @@
-//! CLAP Plugin Information Types
-//!
-//! Data structures for CLAP plugin metadata and parameter information.
-//! These are generic across CLAP plugins and used by ClapEffectProcessor.
 
-/// Information about a plugin parameter
-///
-/// Represents a single parameter exposed by a CLAP plugin, including
-/// its current value, range, and metadata.
 #[derive(Debug, Clone)]
 pub struct ParameterInfo {
-    /// Parameter ID (stable across sessions)
     pub id: u32,
 
-    /// Human-readable name
     pub name: String,
 
-    /// Current value in parameter's native units (e.g., dB, Hz, %, etc.)
-    /// NOT normalized! Use min/max to understand the range.
     pub value: f64,
 
-    /// Minimum value in parameter's native units
     pub min: f64,
 
-    /// Maximum value in parameter's native units
     pub max: f64,
 
-    /// Default value in parameter's native units
     pub default: f64,
 
-    /// Is this parameter automatable?
     pub is_automatable: bool,
 
-    /// Is this parameter stepped (discrete values like enums)?
     pub is_stepped: bool,
 
-    /// Is this parameter periodic (wraps around, like phase)?
     pub is_periodic: bool,
 
-    /// Is this parameter hidden from UI?
     pub is_hidden: bool,
 
-    /// Is this parameter read-only?
     pub is_readonly: bool,
 
-    /// Is this parameter a bypass parameter?
     pub is_bypass: bool,
 
-    /// Display string for current value (e.g., "12.5 dB", "440 Hz")
     pub display: String,
 }
 
-/// Information about a CLAP audio plugin
-///
-/// Provides metadata about a loaded CLAP plugin instance.
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
-    /// Plugin name
     pub name: String,
 
-    /// Vendor/manufacturer
     pub vendor: String,
 
-    /// Version string
     pub version: String,
 
-    /// Plugin format (always "CLAP" for this module)
     pub format: String,
 
-    /// Unique identifier
     pub id: String,
 
-    /// Number of audio inputs
     pub num_inputs: u32,
 
-    /// Number of audio outputs
     pub num_outputs: u32,
 }
 

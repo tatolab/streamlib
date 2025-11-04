@@ -10,14 +10,14 @@
 //!
 //! ## Available Sources
 //!
-//! - **TestToneGenerator**: Generates sine wave test tones
+//! - **ChordGeneratorProcessor**: Generates C major chord (C4, E4, G4) on separate outputs (emulates mic array)
 //! - **CameraProcessor**: Platform trait for camera video capture
 //! - **AudioCaptureProcessor**: Platform trait for microphone audio capture
 
-pub mod test_tone_source;
+pub mod chord_generator;
 pub mod camera;
 pub mod audio_capture;
 
-pub use test_tone_source::{TestToneGenerator, TestToneGeneratorOutputPorts, TestToneConfig};
+pub use chord_generator::{ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig};
 pub use camera::{CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig};
 pub use audio_capture::{AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig};

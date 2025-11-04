@@ -46,7 +46,7 @@ pub use ports::{
 pub use sources::{
     CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig,
     AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
-    TestToneGenerator, TestToneGeneratorOutputPorts, TestToneConfig,
+    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
 };
 pub use sinks::{
     DisplayProcessor, WindowId, DisplayInputPorts, DisplayConfig,

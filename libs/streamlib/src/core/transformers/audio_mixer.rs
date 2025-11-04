@@ -68,17 +68,11 @@ pub struct AudioMixerProcessor {
     input_ports: AudioMixerInputPorts,
     output_ports: AudioMixerOutputPorts,
     target_sample_rate: u32,
-    target_channels: u32,
+    buffer_size: usize,
     frame_counter: u64,
     current_timestamp_ns: i64,
-    mix_buffer: Vec<f32>,
-    max_buffer_size: usize,
-    buffer_size: usize,
     last_mixed_timestamps: HashMap<String, i64>,
     input_cache: HashMap<String, Option<AudioFrame>>,
-    cached_output_channels: Option<u32>,
-    cache_last_updated: u64,
-    cache_ttl_frames: u64,
 }
 
 impl AudioMixerProcessor {
@@ -104,10 +98,6 @@ impl AudioMixerProcessor {
             );
         }
 
-        let max_buffer_size = 4096;
-        let target_channels = 2;
-        let mix_buffer = vec![0.0; max_buffer_size * target_channels as usize];
-
         let mut input_cache = HashMap::new();
         for i in 0..num_inputs {
             input_cache.insert(format!("input_{}", i), None);
@@ -124,17 +114,11 @@ impl AudioMixerProcessor {
                 audio: StreamOutput::new("audio"),
             },
             target_sample_rate: sample_rate,
-            target_channels,
             frame_counter: 0,
             current_timestamp_ns: 0,
-            mix_buffer,
-            max_buffer_size,
             buffer_size,
             last_mixed_timestamps: HashMap::new(),
             input_cache,
-            cached_output_channels: None,
-            cache_last_updated: 0,
-            cache_ttl_frames: 60,
         })
     }
 
@@ -144,46 +128,6 @@ impl AudioMixerProcessor {
 
     pub fn output_ports(&mut self) -> &mut AudioMixerOutputPorts {
         &mut self.output_ports
-    }
-
-    fn determine_output_channels(&mut self, inputs: &[&AudioFrame]) -> u32 {
-        let cache_expired = self.frame_counter - self.cache_last_updated >= self.cache_ttl_frames;
-
-        if let Some(cached) = self.cached_output_channels {
-            if !cache_expired {
-                return cached;
-            }
-        }
-
-        if inputs.is_empty() {
-            return self.target_channels;
-        }
-
-        let mut channel_counts: Vec<u32> = Vec::new();
-        for input in inputs {
-            if input.channels > 0 {
-                channel_counts.push(input.channels);
-            }
-        }
-
-        if channel_counts.is_empty() {
-            return self.target_channels;
-        }
-
-        let output_channels = match self.channel_mode {
-            ChannelMode::MixUp => *channel_counts.iter().max().unwrap(),
-            ChannelMode::MixDown => *channel_counts.iter().min().unwrap(),
-        };
-
-        self.cached_output_channels = Some(output_channels);
-        self.cache_last_updated = self.frame_counter;
-
-        tracing::debug!(
-            "[AudioMixer] Channel detection: mode={:?}, detected={} channels (cache TTL={})",
-            self.channel_mode, output_channels, self.cache_ttl_frames
-        );
-
-        output_channels
     }
 
     fn mix_samples(&mut self, inputs: Vec<&AudioFrame>) -> Result<AudioFrame> {
@@ -199,38 +143,40 @@ impl AudioMixerProcessor {
             ChannelMode::MixDown => inputs.iter().map(|f| f.channels as usize).min().unwrap(),
         };
 
-        let loop_count = inputs.iter().map(|f| f.samples.len() / f.channels as usize).max().unwrap();
+        let max_frames = inputs.iter()
+            .map(|f| f.samples.len() / f.channels as usize)
+            .max()
+            .unwrap();
 
         let num_inputs = inputs.len() as f32;
-        let output_frames: Vec<Vec<f32>> = (0..loop_count)
-            .map(|frame_idx| {
-                (0..output_channels)
-                    .map(|ch_idx| {
-                        let sum = inputs.iter()
-                            .filter_map(|input| {
-                                let input_channels = input.channels as usize;
-                                let input_frame_count = input.samples.len() / input_channels;
-                                if frame_idx < input_frame_count {
-                                    let in_ch = ch_idx % input_channels;
-                                    let sample_idx = frame_idx * input_channels + in_ch;
-                                    Some(input.samples[sample_idx])
-                                } else {
-                                    None
-                                }
-                            })
-                            .sum::<f32>();
+        let mut output_samples = Vec::with_capacity(max_frames * output_channels);
 
-                        match self.strategy {
-                            MixingStrategy::Sum => sum,
-                            MixingStrategy::SumNormalized => sum / num_inputs,
-                            MixingStrategy::SumClipped => sum.clamp(-1.0, 1.0),
+        for frame_idx in 0..max_frames {
+            for ch_idx in 0..output_channels {
+                let sum: f32 = inputs.iter()
+                    .filter_map(|input| {
+                        let input_channels = input.channels as usize;
+                        let input_frame_count = input.samples.len() / input_channels;
+                        if frame_idx < input_frame_count {
+                            let in_ch = ch_idx % input_channels;
+                            let sample_idx = frame_idx * input_channels + in_ch;
+                            Some(input.samples[sample_idx])
+                        } else {
+                            None
                         }
                     })
-                    .collect()
-            })
-            .collect();
+                    .sum();
 
-        let output_samples: Vec<f32> = output_frames.into_iter().flatten().collect();
+                let mixed_sample = match self.strategy {
+                    MixingStrategy::Sum => sum,
+                    MixingStrategy::SumNormalized => sum / num_inputs,
+                    MixingStrategy::SumClipped => sum.clamp(-1.0, 1.0),
+                };
+
+                output_samples.push(mixed_sample);
+            }
+        }
+
         Ok(AudioFrame::new(output_samples, timestamp_ns, frame_number, output_channels as u32))
     }
 }
@@ -424,7 +370,6 @@ impl StreamProcessor for AudioMixerProcessor {
     }
 
     fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::traits::PortConsumer) -> bool {
-        // Check if port_name matches any of our dynamic input ports
         if let Some(input_arc) = self.input_ports.inputs.get(port_name) {
             match consumer {
                 crate::core::traits::PortConsumer::Audio(c) => {
