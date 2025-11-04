@@ -4,14 +4,15 @@
 //! Creates three test tones at different frequencies and mixes them into a chord.
 
 use streamlib::{
-    StreamRuntime, AudioMixerProcessor, MixingStrategy,
+    StreamRuntime, AudioMixerProcessor, MixingStrategy, ChannelMode,
     TestToneGenerator, AudioOutputProcessor,
     ClapEffectProcessor, AudioFrame,
     Result,
 };
-use streamlib::core::config::{
-    TestToneConfig, AudioMixerConfig, ClapEffectConfig, AudioOutputConfig,
-};
+use streamlib::core::sources::test_tone_source::TestToneConfig;
+use streamlib::core::transformers::audio_mixer::AudioMixerConfig;
+use streamlib::core::transformers::clap_effect::ClapEffectConfig;
+use streamlib::core::sinks::audio_output::AudioOutputConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -42,49 +43,41 @@ async fn main() -> Result<()> {
     println!("   Using timer group 'audio_master' for zero-drift synchronization");
 
     // A4 (440 Hz)
-    let tone1 = runtime.add_processor_with_config::<TestToneGenerator>(
+    let tone1 = runtime.add_element_with_config::<TestToneGenerator>(
         TestToneConfig {
             frequency: 440.0,             // A4
             amplitude: 0.15,              // 15% volume (quiet to avoid clipping)
-            sample_rate: audio_config.sample_rate,
-            timer_group_id: Some("audio_master".to_string()), // Synchronized timing
         }
-    )?;
+    ).await?;
     println!("   ✅ Tone 1: 440.00 Hz (A4)");
 
     // C#5 (554.37 Hz)
-    let tone2 = runtime.add_processor_with_config::<TestToneGenerator>(
+    let tone2 = runtime.add_element_with_config::<TestToneGenerator>(
         TestToneConfig {
             frequency: 554.37,            // C#5
             amplitude: 0.15,
-            sample_rate: audio_config.sample_rate,
-            timer_group_id: Some("audio_master".to_string()), // Same group = no drift
         }
-    )?;
+    ).await?;
     println!("   ✅ Tone 2: 554.37 Hz (C#5)");
 
     // E5 (659.25 Hz)
-    let tone3 = runtime.add_processor_with_config::<TestToneGenerator>(
+    let tone3 = runtime.add_element_with_config::<TestToneGenerator>(
         TestToneConfig {
             frequency: 659.25,            // E5
             amplitude: 0.15,
-            sample_rate: audio_config.sample_rate,
-            timer_group_id: Some("audio_master".to_string()), // Shared master clock
         }
-    )?;
+    ).await?;
     println!("   ✅ Tone 3: 659.25 Hz (E5)\n");
 
     // Step 3: Add audio mixer
     println!("🔀 Adding audio mixer...");
-    let mixer = runtime.add_processor_with_config::<AudioMixerProcessor>(
+    let mixer = runtime.add_element_with_config::<AudioMixerProcessor>(
         AudioMixerConfig {
             num_inputs: 3,                        // 3 inputs
-            strategy: MixingStrategy::SumNormalized, // Prevents clipping
-            sample_rate: audio_config.sample_rate,
-            buffer_size: audio_config.buffer_size,  // Match runtime buffer size
-            timer_group_id: Some("audio_master".to_string()), // Wake with generators
+            strategy: MixingStrategy::Sum, // Prevents clipping
+            channel_mode: ChannelMode::MixUp,     // Mix up to stereo
         }
-    )?;
+    ).await?;
     println!("   Strategy: Sum Normalized (no clipping)");
     println!("   Inputs: 3");
     println!("   Timer Group: 'audio_master' (synchronized with generators)");
@@ -92,24 +85,24 @@ async fn main() -> Result<()> {
 
     // Step 4: Add CLAP reverb effect
     println!("🎚️  Adding CLAP reverb effect...");
-    let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(
+    let reverb = runtime.add_element_with_config::<ClapEffectProcessor>(
         ClapEffectConfig {
             plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
             plugin_name: None,  // Use first plugin in bundle
             sample_rate: audio_config.sample_rate,
             buffer_size: audio_config.buffer_size,
         }
-    )?;
+    ).await?;
     println!("   Loaded: Surge XT Effect (first in bundle)");
     println!("   Plugin will activate on runtime start\n");
 
     // Step 5: Add speaker output
     println!("🔊 Adding speaker output...");
-    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
+    let speaker = runtime.add_element_with_config::<AudioOutputProcessor>(
         AudioOutputConfig {
             device_id: None, // Use default speaker
         }
-    )?;
+    ).await?;
     println!("   Using default audio device\n");
 
     // Step 6: Connect the audio pipeline using type-safe handles

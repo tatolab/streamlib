@@ -1,270 +1,70 @@
-//! Apple AudioOutputProcessor implementation using CoreAudio (v2.0.0 StreamSink)
-//!
-//! Uses the `cpal` crate which provides a safe Rust wrapper around CoreAudio on macOS.
-//! This gives us low-latency audio playback with minimal overhead.
-
 use crate::core::{
     AudioDevice,
     AudioFrame, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, SCHEMA_AUDIO_FRAME,
+    StreamInput,
 };
-use crate::core::traits::{StreamElement, StreamSink, ElementType};
-use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
+use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use crate::core::clocks::AudioClock;
-use crate::apple::time::mach_ticks_to_ns;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig};
-use std::sync::atomic::{AtomicBool, Ordering};
+use cpal::Stream;
+use cpal::traits::StreamTrait;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
-/// Apple CoreAudio implementation of AudioOutputProcessor (v2.0.0 StreamSink)
-///
-/// # Architecture
-///
-/// - Uses `cpal` library which wraps CoreAudio on macOS
-/// - Maintains an internal ring buffer for audio frames
-/// - Runs audio playback on a dedicated thread (managed by cpal/CoreAudio)
-/// - Low-latency: typical latency < 20ms on macOS
-/// - Implements StreamElement + StreamSink traits (v2.0.0 architecture)
-///
-/// # Clock Provider
-///
-/// This sink provides the Audio clock for the pipeline. The CoreAudio callback
-/// provides a sample-accurate clock that other processors can sync to.
-///
-/// # Example
-///
-/// ```ignore
-/// use streamlib::AppleAudioOutputProcessor;
-/// use streamlib::traits::StreamSink;
-///
-/// // Create from config
-/// let config = AudioOutputConfig { device_id: None };
-/// let speaker = AppleAudioOutputProcessor::from_config(config)?;
-///
-/// // Runtime calls render() with each AudioFrame
-/// speaker.render(audio_frame)?;
-/// ```
+pub struct AudioOutputInputPorts {
+    pub audio: StreamInput<AudioFrame>,
+}
+
 pub struct AppleAudioOutputProcessor {
+    device_id: Option<usize>,
     device_name: String,
+    device_info: Option<AudioDevice>,
 
-    device_info: AudioDevice,
+    input_ports: AudioOutputInputPorts,
 
-    _device: Device,
-
-    _stream: Stream,
-
-    sample_buffer: Arc<Mutex<Vec<f32>>>,
-
-    is_playing: Arc<AtomicBool>,
-
-    prebuffer_samples: usize,
+    stream: Option<Stream>,
+    stream_setup_done: bool,
 
     sample_rate: u32,
-
     channels: u32,
+    buffer_size: usize,
 
     audio_clock: Arc<AudioClock>,
 }
 
-// SAFETY: AppleAudioOutputProcessor is Send despite cpal::Stream not being Send
-// because all shared state (sample_buffer, is_playing) is protected by Arc/Mutex
-// and the Stream's internal audio callback only accesses thread-safe types.
 unsafe impl Send for AppleAudioOutputProcessor {}
 
 impl AppleAudioOutputProcessor {
-    /// Create new audio output processor using default or specified device
     fn new_internal(device_id: Option<usize>) -> Result<Self> {
-        // Get cpal host (CoreAudio on macOS)
-        let host = cpal::default_host();
-
-        // Get device
-        let device = if let Some(id) = device_id {
-            let devices: Vec<_> = host
-                .output_devices()
-                .map_err(|e| StreamError::Configuration(format!("Failed to enumerate audio devices: {}", e)))?
-                .collect();
-            devices
-                .get(id)
-                .ok_or_else(|| StreamError::Configuration(format!("Audio device {} not found", id)))?
-                .clone()
-        } else {
-            host.default_output_device()
-                .ok_or_else(|| StreamError::Configuration("No default audio output device".into()))?
-        };
-
-        // Get device name
-        let device_name = device
-            .name()
-            .unwrap_or_else(|_| "Unknown Device".to_string());
-
-        // Get default config
-        let config = device
-            .default_output_config()
-            .map_err(|e| StreamError::Configuration(format!("Failed to get audio config: {}", e)))?;
-
-        let sample_rate = config.sample_rate().0;
-        let channels = config.channels() as u32;
-
-        tracing::info!(
-            "Audio output device: {} ({}Hz, {} channels)",
-            device_name,
-            sample_rate,
-            channels
-        );
-
-        // Create device info
-        let device_info = AudioDevice {
-            id: device_id.unwrap_or(0),
-            name: device_name,
-            sample_rate,
-            channels,
-            is_default: device_id.is_none(),
-        };
-
-        // Industry standard: Pre-buffer = 1x callback size (512 frames = 1024 samples stereo)
-        // Prevents startup underruns while staying below steady-state minimum
-        const CALLBACK_FRAMES: usize = 512;
-        let prebuffer_samples = CALLBACK_FRAMES * channels as usize; // 1024 samples for stereo
-
-        tracing::info!(
-            "Audio output prebuffer: {} samples (1x callback = {:.1}ms)",
-            prebuffer_samples,
-            (prebuffer_samples as f32 / sample_rate as f32 / channels as f32) * 1000.0
-        );
-
-        // Create shared ring buffer for audio samples
-        let sample_buffer = Arc::new(Mutex::new(Vec::new()));
-        let sample_buffer_clone = sample_buffer.clone();
-
-        // Create flag for playback status
-        let is_playing = Arc::new(AtomicBool::new(false));
-        let is_playing_clone = is_playing.clone();
-
-        let audio_clock = Arc::new(AudioClock::new(sample_rate, format!("CoreAudio ({})", device_name)));
-        let audio_clock_clone = audio_clock.clone();
-
-        let stream_config = StreamConfig {
-            channels: channels as u16,
-            sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Fixed(CALLBACK_FRAMES as u32),
-        };
-
-        // Build output stream with callback
-        let stream = device
-            .build_output_stream(
-                &stream_config,
-                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                    if let Some(callback_timestamp) = info.timestamp().callback.duration_since(&cpal::StreamInstant::ZERO) {
-                        let callback_ns = mach_ticks_to_ns(callback_timestamp.as_nanos() as u64);
-                        audio_clock_clone.update_hardware_timestamp(callback_ns);
-                    }
-
-                    audio_clock_clone.increment_samples(data.len() as u64);
-
-                    // Audio thread callback - fill output buffer
-                    let mut buffer = sample_buffer_clone.lock();
-                    let buffer_size_before = buffer.len();
-                    let requested = data.len();
-
-                    // Pre-buffer strategy: Don't start playback until buffer has enough samples
-                    // This prevents initial underruns and provides smooth playback
-                    if buffer.len() < prebuffer_samples {
-                        // Not enough samples for smooth playback - output silence and wait
-                        data.fill(0.0);
-                        is_playing_clone.store(false, Ordering::Relaxed);
-
-                        tracing::debug!(
-                            "[AudioOutput::Callback] Pre-buffering - have {} samples, need {} ({}%)",
-                            buffer.len(), prebuffer_samples, (buffer.len() * 100 / prebuffer_samples)
-                        );
-                        return;
-                    }
-
-                    // Buffer has enough samples - proceed with playback
-                    if buffer.len() >= data.len() {
-                        // Copy samples from ring buffer to output
-                        data.copy_from_slice(&buffer[..data.len()]);
-                        buffer.drain(..data.len());
-                        is_playing_clone.store(true, Ordering::Relaxed);
-
-                        tracing::debug!(
-                            "[AudioOutput::Callback] Normal playback - buffer: {} → {} samples (-{})",
-                            buffer_size_before, buffer.len(), requested
-                        );
-                    } else {
-                        // Partial buffer available - use what we have and repeat last sample
-                        let available = buffer.len();
-                        data[..available].copy_from_slice(&buffer[..]);
-                        buffer.clear();
-
-                        // Fill remainder with last sample (sample-and-hold) to avoid clicks
-                        let last_sample = data[available - 1];
-                        data[available..].fill(last_sample);
-
-                        is_playing_clone.store(true, Ordering::Relaxed);
-
-                        tracing::warn!(
-                            "[AudioOutput::Callback] ⚠️  UNDERRUN - requested {} samples, only {} available ({}% short)",
-                            requested, available, ((requested - available) * 100 / requested)
-                        );
-                    }
-                },
-                |err| {
-                    tracing::error!("Audio output stream error: {}", err);
-                },
-                None, // No timeout
-            )
-            .map_err(|e| StreamError::Configuration(format!("Failed to build audio stream: {}", e)))?;
-
-        // Start the stream
-        stream
-            .play()
-            .map_err(|e| StreamError::Configuration(format!("Failed to start audio stream: {}", e)))?;
-
         Ok(Self {
-            device_name: device_info.name.clone(),
-            device_info,
-            _device: device,
-            _stream: stream,
-            sample_buffer,
-            is_playing,
-            prebuffer_samples,
-            sample_rate,
-            channels,
-            audio_clock,
+            device_id,
+            device_name: "Unknown".to_string(),
+            device_info: None,
+            input_ports: AudioOutputInputPorts {
+                audio: StreamInput::new("audio"),
+            },
+            stream: None,
+            stream_setup_done: false,
+            sample_rate: 48000,
+            channels: 2,
+            buffer_size: 512,
+            audio_clock: Arc::new(AudioClock::new(48000, "AudioOutput".to_string())),
         })
     }
 
-    /// Get current buffer fill level (0.0 to 1.0)
-    ///
-    /// Useful for monitoring latency and detecting underruns
-    pub fn buffer_level(&self) -> f32 {
-        const CALLBACK_FRAMES: usize = 512;
-        let buffer = self.sample_buffer.lock();
-        // Industry standard: Ring buffer = 8x callback size
-        let target_size = CALLBACK_FRAMES * self.channels as usize * 8;
-        (buffer.len() as f32 / target_size as f32).min(1.0)
-    }
-
-    /// Check if audio is currently playing
-    pub fn is_playing(&self) -> bool {
-        self.is_playing.load(Ordering::Relaxed)
-    }
-
-    pub fn audio_clock(&self) -> Arc<AudioClock> {
-        self.audio_clock.clone()
+    pub fn input_ports(&mut self) -> &mut AudioOutputInputPorts {
+        &mut self.input_ports
     }
 }
 
 // ============================================================
-// StreamElement Implementation (Base Trait)
+// StreamElement Implementation
 // ============================================================
 
 impl StreamElement for AppleAudioOutputProcessor {
     fn name(&self) -> &str {
-        &self.device_name
+        "audio_output"
     }
 
     fn element_type(&self) -> ElementType {
@@ -272,7 +72,7 @@ impl StreamElement for AppleAudioOutputProcessor {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <AppleAudioOutputProcessor as StreamSink>::descriptor()
+        <AppleAudioOutputProcessor as StreamProcessor>::descriptor()
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
@@ -284,21 +84,15 @@ impl StreamElement for AppleAudioOutputProcessor {
         }]
     }
 
-    fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
-        tracing::info!(
-            "AudioOutput {}: Starting ({} Hz, {} channels)",
-            self.device_name,
-            self.sample_rate,
-            self.channels
-        );
+    fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+        self.buffer_size = ctx.audio.buffer_size;
+        tracing::info!("AudioOutput: start() called (Pull mode - buffer_size: {})", self.buffer_size);
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
-        // Clear the buffer to stop playback
-        let mut buffer = self.sample_buffer.lock();
-        buffer.clear();
-        self.is_playing.store(false, Ordering::Relaxed);
+        // Drop stream to stop playback
+        self.stream = None;
         tracing::info!("AudioOutput {}: Stopped", self.device_name);
         Ok(())
     }
@@ -306,150 +100,160 @@ impl StreamElement for AppleAudioOutputProcessor {
     fn provides_clock(&self) -> Option<Arc<dyn crate::core::clocks::Clock>> {
         Some(self.audio_clock.clone())
     }
+
+    fn as_sink(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn as_sink_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
 }
 
 // ============================================================
-// StreamSink Implementation (v2.0.0 Architecture)
+// StreamProcessor Implementation
 // ============================================================
 
-impl StreamSink for AppleAudioOutputProcessor {
+impl StreamProcessor for AppleAudioOutputProcessor {
     type Config = crate::core::AudioOutputConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
-        // Parse device_id string to usize if provided
         let device_id = config.device_id.as_ref().and_then(|s| s.parse::<usize>().ok());
         Self::new_internal(device_id)
     }
 
     fn process(&mut self) -> Result<()> {
-        // TODO: Add input_ports field to struct and read from it here
-        // For now, this sink doesn't have input_ports implemented yet
-        // The runtime will need to be updated to handle the new pattern
-        // where sinks read from their input ports instead of receiving frames
-        // as parameters.
-        //
-        // Expected pattern:
-        // if let Some(frame) = self.input_ports.audio.read_latest() {
-        //     self.push_frame(&frame)?;
-        // }
+        // In Pull mode, process() is called once by runtime after connections are wired
+        // This is where we set up the stream and callback
 
-        // Temporary no-op implementation until input_ports are added
+        if self.stream_setup_done {
+            // Already set up, nothing to do
+            return Ok(());
+        }
+
+        tracing::info!("AudioOutput: process() called - setting up stream now that connections are wired");
+
+        // Take ownership of the consumer from the input port and wrap in Arc<Mutex>
+        // for sharing with the callback
+        let consumer = self.input_ports.audio.take_consumer()
+            .ok_or_else(|| StreamError::Configuration("Input port not connected".into()))?;
+
+        tracing::info!("AudioOutput: Successfully took consumer from input port");
+
+        let consumer_arc = Arc::new(Mutex::new(consumer));
+        let consumer_for_callback = Arc::clone(&consumer_arc);
+
+        let audio_clock = Arc::clone(&self.audio_clock);
+
+        tracing::info!("AudioOutput: Setting up audio output with cpal");
+
+        let setup = crate::apple::audio_utils::setup_audio_output(
+            self.device_id,
+            self.buffer_size,
+            move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                // Hardware callback on CoreAudio RT thread
+                tracing::debug!("AudioOutput: Callback invoked, buffer size: {}", data.len());
+
+                // Update audio clock
+                audio_clock.increment_samples(data.len() as u64);
+
+                // Read latest frame from input port's consumer and fill hardware buffer
+                let mut consumer = consumer_for_callback.lock();
+
+                // Pop all available frames, keeping only the latest
+                let mut latest_frame = None;
+                let mut frames_popped = 0;
+                while let Ok(frame) = consumer.pop() {
+                    latest_frame = Some(frame);
+                    frames_popped += 1;
+                }
+
+                if let Some(frame) = latest_frame {
+                    tracing::debug!("AudioOutput: Got frame with {} samples (popped {} frames)", frame.samples.len(), frames_popped);
+                    // Copy samples to hardware buffer
+                    let frame_samples = frame.samples.len();
+                    let copy_len = data.len().min(frame_samples);
+                    data[..copy_len].copy_from_slice(&frame.samples[..copy_len]);
+
+                    // Fill remainder with silence if needed
+                    if copy_len < data.len() {
+                        data[copy_len..].fill(0.0);
+                    }
+                } else {
+                    tracing::debug!("AudioOutput: No data available, outputting silence");
+                    // No data available, output silence
+                    data.fill(0.0);
+                }
+            }
+        )?;
+
+        // Start playback
+        tracing::info!("AudioOutput: Starting cpal stream playback");
+        setup.stream.play()
+            .map_err(|e| StreamError::Configuration(format!("Failed to start stream: {}", e)))?;
+
+        tracing::info!("AudioOutput: cpal stream.play() succeeded");
+
+        // Store stream and device info
+        self.stream = Some(setup.stream);
+        self.device_name = setup.device_info.name.clone();
+        self.device_info = Some(setup.device_info);
+        self.sample_rate = setup.sample_rate;
+        self.channels = setup.channels;
+
+        // Update audio clock with actual sample rate
+        self.audio_clock = Arc::new(AudioClock::new(
+            self.sample_rate,
+            format!("CoreAudio ({})", self.device_name)
+        ));
+
+        self.stream_setup_done = true;
+
+        tracing::info!(
+            "AudioOutput {}: Stream setup complete ({}Hz, {} channels, Pull mode)",
+            self.device_name,
+            self.sample_rate,
+            self.channels
+        );
+
         Ok(())
     }
 
-    fn clock_config(&self) -> ClockConfig {
-        ClockConfig {
-            provides_clock: true,
-            clock_type: Some(ClockType::Audio),
-            clock_name: Some(format!("audio_output_{}", self.device_name)),
+    fn scheduling_config(&self) -> SchedulingConfig {
+        SchedulingConfig {
+            mode: SchedulingMode::Pull,  // Hardware callback drives execution
+            priority: ThreadPriority::RealTime,
+            clock: ClockSource::Audio,
+            provide_clock: true,
         }
-    }
-
-    fn sync_mode(&self) -> SyncMode {
-        SyncMode::Timestamp
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> {
         Some(
             ProcessorDescriptor::new(
                 "AppleAudioOutputProcessor",
-                "Plays audio through speakers/headphones using CoreAudio. Receives AudioFrames and outputs to the configured audio device.",
+                "Plays audio through speakers/headphones using CoreAudio. Uses Pull mode where hardware callback drives execution.",
             )
             .with_usage_context(
-                "Use when you need to play audio to speakers or headphones. This is typically a sink processor \
-                 (end of pipeline). AudioFrames are buffered internally and played at the device's sample rate. \
-                 The processor handles sample rate and channel conversion automatically.",
+                "Connect audio input port to upstream processor (TestToneGenerator, AudioMixer, etc.). \
+                 The CoreAudio callback will pull samples at hardware rate. \
+                 Automatically handles sample rate conversion and buffering."
             )
-            .with_input(PortDescriptor::new(
-                "audio",
-                SCHEMA_AUDIO_FRAME.clone(),
-                true,
-                "Audio frames to play. Frames are buffered and played continuously. The processor handles \
-                 sample rate conversion and channel conversion (mono↔stereo) automatically.",
-            ))
-            .with_tags(vec!["sink", "audio", "speaker", "output", "playback"])
+            .with_tags(vec!["audio", "sink", "output", "coreaudio", "pull-mode", "real-time"])
         )
     }
-}
 
-impl AppleAudioOutputProcessor {
-    /// Push an AudioFrame to the output buffer
-    ///
-    /// This is called by the runtime when audio data is available on the input port.
-    /// The audio thread will pull samples from this buffer.
-    ///
-    /// # Arguments
-    ///
-    /// * `frame` - AudioFrame containing samples to play
-    ///
-    /// # Returns
-    ///
-    /// Ok if frame was queued successfully
-    pub fn push_frame(&mut self, frame: &AudioFrame) -> Result<()> {
-        tracing::debug!(
-            "[AudioOutput] push_frame: frame #{}, {} samples ({} channels)",
-            frame.frame_number, frame.sample_count(), frame.channels
-        );
-
-        // Convert AudioFrame to output format if needed
-        let mut samples = Vec::new();
-
-        // NOTE: Sample rate is enforced by RuntimeContext, so no conversion needed
-        // All audio frames should already match the system-wide sample rate
-
-        // Handle channel conversion if needed
-        if frame.channels != self.channels {
-            if frame.channels == 1 && self.channels == 2 {
-                // Mono to stereo: duplicate samples
-                for sample in frame.samples.iter() {
-                    samples.push(*sample); // Left
-                    samples.push(*sample); // Right
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::traits::PortConsumer) -> bool {
+        if port_name == "audio" {
+            match consumer {
+                crate::core::traits::PortConsumer::Audio(c) => {
+                    self.input_ports.audio.connect_consumer(c);
+                    true
                 }
-            } else if frame.channels == 2 && self.channels == 1 {
-                // Stereo to mono: average channels
-                for chunk in frame.samples.chunks(2) {
-                    samples.push((chunk[0] + chunk.get(1).unwrap_or(&0.0)) / 2.0);
-                }
-            } else {
-                return Err(StreamError::Configuration(format!(
-                    "Unsupported channel conversion: {} -> {}",
-                    frame.channels, self.channels
-                )));
+                _ => false,
             }
         } else {
-            // No conversion needed
-            samples.extend_from_slice(&frame.samples);
+            false
         }
-
-        // Push samples to ring buffer
-        let mut buffer = self.sample_buffer.lock();
-        let buffer_size_before = buffer.len();
-
-        // Extend buffer with new samples
-        // Trust upstream to produce at correct rate (event-driven, no drops needed)
-        buffer.extend_from_slice(&samples);
-
-        let buffer_size_after = buffer.len();
-
-        // Industry standard: Ring buffer = 8x callback size (512 frames × 2 channels × 8 = 8192 samples)
-        const CALLBACK_FRAMES: usize = 512;
-        let target_buffer_samples = CALLBACK_FRAMES * self.channels as usize * 8;
-        let buffer_percent = (buffer_size_after as f32 / target_buffer_samples as f32) * 100.0;
-
-        tracing::debug!(
-            "[AudioOutput] Ring buffer: {} → {} samples (+{}) [{:.1}% of 8x target]",
-            buffer_size_before, buffer_size_after, samples.len(), buffer_percent
-        );
-
-        // Warn if buffer is getting too full (>2x target)
-        if buffer_size_after > target_buffer_samples * 2 {
-            tracing::warn!(
-                "[AudioOutput] ⚠️  BUFFER OVERRUN - buffer at {:.1}% capacity ({} samples). Audio output may be lagging!",
-                buffer_percent, buffer_size_after
-            );
-        }
-
-        Ok(())
     }
 }
-

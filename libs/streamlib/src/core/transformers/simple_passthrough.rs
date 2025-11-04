@@ -4,7 +4,7 @@
 //! the StreamElement + StreamTransform trait hierarchy for simple effect processors.
 
 use crate::core::{Result, StreamInput, StreamOutput, VideoFrame};
-use crate::core::traits::{StreamElement, StreamTransform, ElementType};
+use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::schema::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
 use crate::core::RuntimeContext;
 use serde::{Serialize, Deserialize};
@@ -67,7 +67,7 @@ impl StreamElement for SimplePassthroughProcessor {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <Self as StreamTransform>::descriptor()
+        <Self as StreamProcessor>::descriptor()
     }
 
     fn start(&mut self, _ctx: &RuntimeContext) -> Result<()> {
@@ -107,8 +107,7 @@ impl StreamElement for SimplePassthroughProcessor {
     }
 }
 
-// Implement specialized StreamTransform trait
-impl StreamTransform for SimplePassthroughProcessor {
+impl StreamProcessor for SimplePassthroughProcessor {
     type Config = SimplePassthroughConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -122,8 +121,6 @@ impl StreamTransform for SimplePassthroughProcessor {
 
     fn process(&mut self) -> Result<()> {
         if let Some(frame) = self.input.read_latest() {
-            // In a real processor, you might scale/transform the frame here
-            // For now, just pass it through
             self.output.write(frame);
         }
         Ok(())

@@ -1,26 +1,21 @@
 //! Core traits for stream processors
 //!
-//! This module defines the trait hierarchy for all stream processors,
-//! inspired by GStreamer's GstElement architecture.
+//! This module defines the unified trait architecture for all stream processors.
 //!
-//! ## Trait Hierarchy
+//! ## Trait Architecture
 //!
 //! ```text
-//! StreamElement (base trait)
-//!     ├─ StreamSource (no inputs, only outputs)
-//!     ├─ StreamSink (only inputs, no outputs)
-//!     └─ StreamTransform (any I/O configuration)
+//! StreamElement (base trait - lifecycle, introspection)
+//!     └─ StreamProcessor (unified trait with optional methods)
 //! ```
 //!
 //! ## Design Philosophy
 //!
-//! Following GStreamer's architecture, streamlib separates processor types
-//! based on their I/O configuration:
+//! streamlib uses a unified `StreamProcessor` trait with optional methods,
+//! allowing processors to implement only the functionality they need:
 //!
 //! - **StreamElement**: Base trait providing lifecycle, introspection, downcasting
-//! - **StreamSource**: Data generators (cameras, microphones, test signals)
-//! - **StreamSink**: Data consumers (displays, speakers, file writers)
-//! - **StreamTransform**: Data processors (effects, mixers, analyzers)
+//! - **StreamProcessor**: Unified trait with `process()` method and optional scheduling config
 //!
 //! ## Usage
 //!
@@ -42,26 +37,30 @@
 //! When creating new processors:
 //!
 //! 1. Implement `StreamElement` for base functionality
-//! 2. Implement specialized trait (`StreamSource`, `StreamSink`, or `StreamTransform`)
+//! 2. Implement `StreamProcessor` with your processing logic
 //! 3. Use `#[derive(StreamProcessor)]` macro to reduce boilerplate
 //!
 //! See `libs/streamlib-macros/CLAUDE.md` for macro documentation.
 
 pub mod element;
-pub mod source;
-pub mod sink;
-pub mod transform;
+pub mod processor;
 pub mod dyn_element;
+mod dyn_element_impl;
+pub mod port_consumer;
 
-// Re-export core traits and types
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub use sealed::Sealed;
+
 pub use element::{
     StreamElement,
     ElementType,
 };
 
-pub use source::StreamSource;
-pub use sink::StreamSink;
-
-pub use transform::StreamTransform;
+pub use processor::StreamProcessor;
 
 pub use dyn_element::DynStreamElement;
+
+pub use port_consumer::PortConsumer;

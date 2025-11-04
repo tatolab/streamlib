@@ -26,7 +26,7 @@ pub mod simple_passthrough;
 pub mod performance_overlay;
 
 pub use audio_mixer::{
-    AudioMixerProcessor, MixingStrategy,
+    AudioMixerProcessor, MixingStrategy, ChannelMode,
     AudioMixerInputPorts, AudioMixerOutputPorts,
     AudioMixerConfig,
 };

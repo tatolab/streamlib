@@ -25,7 +25,7 @@
 //! )?;
 //! ```
 
-use crate::core::{StreamProcessor, StreamInput, AudioFrame, Result};
+use crate::core::{StreamInput, AudioFrame, Result};
 
 /// Configuration for audio output processors
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

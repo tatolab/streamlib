@@ -38,7 +38,7 @@ use crate::core::{
     Result, AudioFrame,
     StreamInput, StreamOutput,
 };
-use crate::core::traits::{StreamElement, StreamTransform, ElementType};
+use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::schema::{PortDescriptor, SCHEMA_AUDIO_FRAME};
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 
@@ -241,7 +241,7 @@ impl StreamElement for ClapEffectProcessor {
     }
 
     fn descriptor(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
-        <ClapEffectProcessor as StreamTransform>::descriptor()
+        <ClapEffectProcessor as StreamProcessor>::descriptor()
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
@@ -303,7 +303,7 @@ impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
 // StreamTransform Implementation (v2.0.0 Architecture)
 // ============================================================
 
-impl StreamTransform for ClapEffectProcessor {
+impl StreamProcessor for ClapEffectProcessor {
     type Config = ClapEffectConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -359,6 +359,38 @@ impl StreamTransform for ClapEffectProcessor {
             })
             .with_tags(vec!["audio", "effect", "clap", "plugin", "transform"])
         )
+    }
+
+    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::traits::PortConsumer> {
+        if port_name == "audio" {
+            self.output_ports.audio
+                .consumer_holder()
+                .lock()
+                .take()
+                .map(|consumer| crate::core::traits::PortConsumer::Audio(consumer))
+        } else {
+            None
+        }
+    }
+
+    fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::traits::PortConsumer) -> bool {
+        if port_name == "audio" {
+            match consumer {
+                crate::core::traits::PortConsumer::Audio(c) => {
+                    self.input_ports.audio.connect_consumer(c);
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        if port_name == "audio" {
+            self.output_ports.audio.set_downstream_wakeup(wakeup_tx);
+        }
     }
 }
 

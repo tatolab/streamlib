@@ -1,5 +1,5 @@
 use super::clocks::{Clock, SoftwareClock};
-use super::traits::{StreamProcessor, DynStreamProcessor};
+use super::traits::{StreamProcessor, DynStreamElement};
 use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
 use super::scheduling::ClockSource;
@@ -47,7 +47,7 @@ pub enum ProcessorStatus {
     Stopped,
 }
 
-type DynProcessor = Box<dyn DynStreamProcessor>;
+type DynProcessor = Box<dyn DynStreamElement>;
 
 pub(crate) struct RuntimeProcessorHandle {
     pub id: ProcessorId,
@@ -193,7 +193,11 @@ impl StreamRuntime {
             return clock.clone();
         }
 
-        Arc::new(SoftwareClock::new("Fallback Software Clock".to_string()))
+        Arc::new(SoftwareClock::new())
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running
     }
 
     pub fn audio_config(&self) -> AudioConfig {
@@ -247,7 +251,7 @@ impl StreamRuntime {
             ));
         }
 
-        let mut processor = P::from_config(config)?;
+        let processor = P::from_config(config)?;
 
         // Auto-discover and register clocks
         if let Some(clock) = processor.provides_clock() {
@@ -313,7 +317,7 @@ impl StreamRuntime {
 
     pub async fn add_processor_runtime(
         &mut self,
-        mut processor: Box<dyn DynStreamProcessor>,
+        processor: Box<dyn DynStreamElement>,
     ) -> Result<ProcessorId> {
         if !self.running {
             return Err(StreamError::Runtime(
@@ -378,8 +382,14 @@ impl StreamRuntime {
         let runtime_context = crate::core::RuntimeContext::new(gpu_context.clone());
         let processor_for_thread = Arc::clone(&processor_arc);
 
+        // Get scheduling configuration
+        let sched_config = {
+            let processor = processor_arc.lock();
+            processor.scheduling_config_dyn()
+        };
+
         let handle = std::thread::spawn(move || {
-            tracing::info!("[{}] Thread started", id_for_thread);
+            tracing::info!("[{}] Thread started (mode: {:?})", id_for_thread, sched_config.mode);
 
             {
                 let mut processor = processor_for_thread.lock();
@@ -389,39 +399,89 @@ impl StreamRuntime {
                 }
             }
 
-            loop {
-                crossbeam_channel::select! {
-                    recv(wakeup_rx) -> result => {
-                        match result {
-                            Ok(WakeupEvent::DataAvailable) => {
-                                tracing::debug!("[{}] Received DataAvailable wakeup", id_for_thread);
-                                let mut processor = processor_for_thread.lock();
-                                if let Err(e) = processor.process_dyn() {
-                                    tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
-                                }
-                            }
-                            Ok(WakeupEvent::TimerTick) => {
-                                tracing::debug!("[{}] Received TimerTick wakeup", id_for_thread);
-                                let mut processor = processor_for_thread.lock();
-                                if let Err(e) = processor.process_dyn() {
-                                    tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
-                                }
-                            }
-                            Ok(WakeupEvent::Shutdown) => {
-                                tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
-                                break;
-                            }
-                            Err(_) => {
-                                tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
-                                break;
-                            }
-                        }
-                    }
-                    recv(shutdown_rx) -> result => {
-                        match result {
-                            Ok(_) | Err(_) => {
+            // Execute according to scheduling mode
+            match sched_config.mode {
+                crate::core::scheduling::SchedulingMode::Pull => {
+                    // Pull mode - processor manages its own callback thread
+                    // Runtime does NOT spawn a thread or drive execution
+                    // The processor's hardware callback calls process() directly
+                    tracing::info!("[{}] Pull mode - processor manages own callback, waiting for shutdown", id_for_thread);
+
+                    // Just wait for shutdown signal
+                    let _ = shutdown_rx.recv();
+                    tracing::info!("[{}] Shutdown signal received (pull mode)", id_for_thread);
+                }
+
+                crate::core::scheduling::SchedulingMode::Loop => {
+                    // Continuous loop mode - run process() repeatedly
+                    loop {
+                        // Check for shutdown
+                        match shutdown_rx.try_recv() {
+                            Ok(_) => {
                                 tracing::info!("[{}] Shutdown signal received", id_for_thread);
                                 break;
+                            }
+                            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                                tracing::warn!("[{}] Shutdown channel closed", id_for_thread);
+                                break;
+                            }
+                            Err(crossbeam_channel::TryRecvError::Empty) => {
+                                // Continue processing
+                            }
+                        }
+
+                        // Process
+                        {
+                            let mut processor = processor_for_thread.lock();
+                            if let Err(e) = processor.process_dyn() {
+                                tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
+                            }
+                        }
+
+                        // Small sleep to avoid busy-waiting and give other threads a chance
+                        std::thread::sleep(std::time::Duration::from_micros(10));
+                    }
+                }
+
+                crate::core::scheduling::SchedulingMode::Reactive |
+                crate::core::scheduling::SchedulingMode::Callback |
+                crate::core::scheduling::SchedulingMode::Timer => {
+                    // Event-driven mode - wait for wakeup events
+                    loop {
+                        crossbeam_channel::select! {
+                            recv(wakeup_rx) -> result => {
+                                match result {
+                                    Ok(WakeupEvent::DataAvailable) => {
+                                        tracing::debug!("[{}] Received DataAvailable wakeup", id_for_thread);
+                                        let mut processor = processor_for_thread.lock();
+                                        if let Err(e) = processor.process_dyn() {
+                                            tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
+                                        }
+                                    }
+                                    Ok(WakeupEvent::TimerTick) => {
+                                        tracing::debug!("[{}] Received TimerTick wakeup", id_for_thread);
+                                        let mut processor = processor_for_thread.lock();
+                                        if let Err(e) = processor.process_dyn() {
+                                            tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
+                                        }
+                                    }
+                                    Ok(WakeupEvent::Shutdown) => {
+                                        tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
+                                        break;
+                                    }
+                                }
+                            }
+                            recv(shutdown_rx) -> result => {
+                                match result {
+                                    Ok(_) | Err(_) => {
+                                        tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -759,6 +819,25 @@ impl StreamRuntime {
         }
 
         tracing::info!("All pending connections wired successfully");
+
+        // Send wakeup event to Pull mode processors so they can initialize
+        tracing::debug!("Sending initialization wakeup to Pull mode processors");
+        {
+            let processors = self.processors.lock();
+            for (proc_id, handle) in processors.iter() {
+                if let Some(proc_ref) = &handle.processor {
+                    let sched_config = proc_ref.lock().scheduling_config_dyn();
+                    if matches!(sched_config.mode, crate::core::scheduling::SchedulingMode::Pull) {
+                        if let Err(e) = handle.wakeup_tx.send(WakeupEvent::DataAvailable) {
+                            tracing::warn!("[{}] Failed to send Pull mode initialization wakeup: {}", proc_id, e);
+                        } else {
+                            tracing::debug!("[{}] Sent Pull mode initialization wakeup", proc_id);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -997,8 +1076,14 @@ impl StreamRuntime {
 
             let processor_for_thread = Arc::clone(&processor_arc);
 
+            // Get scheduling configuration
+            let sched_config = {
+                let processor = processor_arc.lock();
+                processor.scheduling_config_dyn()
+            };
+
             let handle = std::thread::spawn(move || {
-                tracing::info!("[{}] Thread started", id_for_thread);
+                tracing::info!("[{}] Thread started (mode: {:?})", id_for_thread, sched_config.mode);
 
                 {
                     let mut processor = processor_for_thread.lock();
@@ -1008,37 +1093,114 @@ impl StreamRuntime {
                     }
                 }
 
-                loop {
-                    crossbeam_channel::select! {
-                        recv(wakeup_rx) -> result => {
-                            match result {
-                                Ok(WakeupEvent::DataAvailable) => {
-                                    let mut processor = processor_for_thread.lock();
-                                    if let Err(e) = processor.process_dyn() {
-                                        tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
+                // Execute according to scheduling mode
+                match sched_config.mode {
+                    crate::core::scheduling::SchedulingMode::Pull => {
+                        // Pull mode - processor manages its own callback thread
+                        // Wait for connections to be wired, then call process() once for initialization
+                        tracing::info!("[{}] Pull mode - waiting for connections to be wired", id_for_thread);
+
+                        // Wait for first wakeup event (sent after connections wired)
+                        let init_result = crossbeam_channel::select! {
+                            recv(wakeup_rx) -> result => {
+                                match result {
+                                    Ok(_) => {
+                                        tracing::info!("[{}] Pull mode - connections ready, calling process() for initialization", id_for_thread);
+                                        let mut processor = processor_for_thread.lock();
+                                        processor.process_dyn()
                                     }
-                                }
-                                Ok(WakeupEvent::TimerTick) => {
-                                    let mut processor = processor_for_thread.lock();
-                                    if let Err(e) = processor.process_dyn() {
-                                        tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
+                                    Err(e) => {
+                                        tracing::error!("[{}] Wakeup channel closed before initialization: {}", id_for_thread, e);
+                                        return;
                                     }
-                                }
-                                Ok(WakeupEvent::Shutdown) => {
-                                    tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
-                                    break;
-                                }
-                                Err(_) => {
-                                    tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
-                                    break;
                                 }
                             }
+                            recv(shutdown_rx) -> _ => {
+                                tracing::info!("[{}] Shutdown before initialization", id_for_thread);
+                                return;
+                            }
+                        };
+
+                        if let Err(e) = init_result {
+                            tracing::error!("[{}] Pull mode process() initialization failed: {}", id_for_thread, e);
+                            return;
                         }
-                        recv(shutdown_rx) -> result => {
-                            match result {
-                                Ok(_) | Err(_) => {
+
+                        tracing::info!("[{}] Pull mode initialized - processor manages own callback, waiting for shutdown", id_for_thread);
+
+                        // Wait for shutdown signal
+                        let _ = shutdown_rx.recv();
+                        tracing::info!("[{}] Shutdown signal received (pull mode)", id_for_thread);
+                    }
+
+                    crate::core::scheduling::SchedulingMode::Loop => {
+                        // Continuous loop mode - run process() repeatedly
+                        loop {
+                            // Check for shutdown
+                            match shutdown_rx.try_recv() {
+                                Ok(_) => {
                                     tracing::info!("[{}] Shutdown signal received", id_for_thread);
                                     break;
+                                }
+                                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                                    tracing::warn!("[{}] Shutdown channel closed", id_for_thread);
+                                    break;
+                                }
+                                Err(crossbeam_channel::TryRecvError::Empty) => {
+                                    // Continue processing
+                                }
+                            }
+
+                            // Process
+                            {
+                                let mut processor = processor_for_thread.lock();
+                                if let Err(e) = processor.process_dyn() {
+                                    tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
+                                }
+                            }
+
+                            // Small sleep to avoid busy-waiting
+                            std::thread::sleep(std::time::Duration::from_micros(10));
+                        }
+                    }
+
+                    crate::core::scheduling::SchedulingMode::Reactive |
+                    crate::core::scheduling::SchedulingMode::Callback |
+                    crate::core::scheduling::SchedulingMode::Timer => {
+                        // Event-driven mode - wait for wakeup events
+                        loop {
+                            crossbeam_channel::select! {
+                                recv(wakeup_rx) -> result => {
+                                    match result {
+                                        Ok(WakeupEvent::DataAvailable) => {
+                                            let mut processor = processor_for_thread.lock();
+                                            if let Err(e) = processor.process_dyn() {
+                                                tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
+                                            }
+                                        }
+                                        Ok(WakeupEvent::TimerTick) => {
+                                            let mut processor = processor_for_thread.lock();
+                                            if let Err(e) = processor.process_dyn() {
+                                                tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
+                                            }
+                                        }
+                                        Ok(WakeupEvent::Shutdown) => {
+                                            tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
+                                            break;
+                                        }
+                                        Err(_) => {
+                                            tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
+                                            break;
+                                        }
+                                    }
+                                }
+                                recv(shutdown_rx) -> result => {
+                                    match result {
+                                        Ok(_) | Err(_) => {
+                                            tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }

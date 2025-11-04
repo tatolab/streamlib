@@ -65,9 +65,7 @@ macro_rules! register_processor_type {
 
             impl $crate::DescriptorProvider for __DescriptorProvider {
                 fn descriptor(&self) -> $crate::ProcessorDescriptor {
-                    // Call the static descriptor() method from StreamSource/StreamSink/StreamTransform
-                    // (not the instance method from StreamElement)
-                    <$processor_type as $crate::core::traits::StreamSource>::descriptor().expect(concat!(
+                    <$processor_type as $crate::core::traits::StreamProcessor>::descriptor().expect(concat!(
                         stringify!($processor_type),
                         " must provide a descriptor"
                     ))

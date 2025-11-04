@@ -7,7 +7,7 @@ use crate::core::{
     VideoFrame, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSource, ElementType};
+use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -421,26 +421,6 @@ impl CameraProcessor for AppleCameraProcessor {
 }
 
 
-// Implement PortProvider for dynamic port access (used by runtime for connection wiring)
-impl crate::core::PortProvider for AppleCameraProcessor {
-    fn with_video_output_mut<F, R>(&mut self, name: &str, f: F) -> Option<R>
-    where
-        F: FnOnce(&mut crate::core::StreamOutput<crate::core::VideoFrame>) -> R,
-    {
-        match name {
-            "video" => Some(f(&mut self.ports.video)),
-            _ => None,
-        }
-    }
-
-    fn with_video_input_mut<F, R>(&mut self, _name: &str, _f: F) -> Option<R>
-    where
-        F: FnOnce(&mut crate::core::StreamInput<crate::core::VideoFrame>) -> R,
-    {
-        None  // Camera has no video inputs - it's a source processor
-    }
-}
-
 // StreamElement implementation - GStreamer-inspired base trait
 impl StreamElement for AppleCameraProcessor {
     fn name(&self) -> &str {
@@ -452,7 +432,7 @@ impl StreamElement for AppleCameraProcessor {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <AppleCameraProcessor as StreamSource>::descriptor()
+        <AppleCameraProcessor as StreamProcessor>::descriptor()
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
@@ -480,7 +460,7 @@ impl StreamElement for AppleCameraProcessor {
 }
 
 // StreamSource implementation - GStreamer-inspired source trait
-impl StreamSource for AppleCameraProcessor {
+impl StreamProcessor for AppleCameraProcessor {
     type Config = crate::core::CameraConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -645,7 +625,7 @@ impl StreamSource for AppleCameraProcessor {
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
-        <AppleCameraProcessor as StreamSource>::descriptor()
+        <AppleCameraProcessor as StreamProcessor>::descriptor()
     }
 }
 

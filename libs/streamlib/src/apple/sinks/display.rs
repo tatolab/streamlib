@@ -39,7 +39,7 @@ use crate::core::{
     Result, StreamError, VideoFrame, GpuContext,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSink, ElementType};
+use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
 use crate::core::clocks::VideoClock;
 use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread, display_link::{DisplayLink, get_main_display_refresh_rate}};
@@ -177,7 +177,7 @@ impl StreamElement for AppleDisplayProcessor {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <AppleDisplayProcessor as StreamSink>::descriptor()
+        <AppleDisplayProcessor as StreamProcessor>::descriptor()
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
@@ -247,7 +247,7 @@ impl StreamElement for AppleDisplayProcessor {
 // StreamSink Implementation (Specialized Trait)
 // ============================================================
 
-impl StreamSink for AppleDisplayProcessor {
+impl StreamProcessor for AppleDisplayProcessor {
     type Config = crate::core::DisplayConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -259,25 +259,10 @@ impl StreamSink for AppleDisplayProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // TODO: Add input_ports field to struct and read from it here
-        // For now, this sink doesn't have input_ports implemented yet
-        // The runtime will need to be updated to handle the new pattern
-        // where sinks read from their input ports instead of receiving frames
-        // as parameters.
-        //
-        // Expected pattern:
-        // if let Some(frame) = self.input_ports.video.read_latest() {
-        //     // [existing render logic with `frame`]
-        // }
-
-        // Temporary no-op implementation until input_ports are added
-        // The existing render logic below should be moved inside the if-let above
-        return Ok(());
-
-        /* ORIGINAL LOGIC - TO BE RESTORED WITH INPUT_PORTS:
-        fn _render_impl(&mut self, frame: VideoFrame) -> Result<()> {
-        // Get the WebGPU texture from the frame
-        let wgpu_texture = &frame.texture;
+        // Read latest frame from input port
+        if let Some(frame) = self.ports.video.read_latest() {
+            // Get the WebGPU texture from the frame
+            let wgpu_texture = &frame.texture;
 
         // Unwrap WebGPU texture to Metal texture (zero-copy!)
         let wgpu_bridge = self.wgpu_bridge.as_ref()
@@ -363,18 +348,17 @@ impl StreamSink for AppleDisplayProcessor {
                         frame.height
                     );
                 }
-                }
             }
+        }
+        }  // Close if let Some(frame)
 
         Ok(())
-        }
-        */
     }
 
     fn clock_config(&self) -> ClockConfig {
         ClockConfig {
             provides_clock: true,
-            clock_type: Some(ClockType::Vsync),
+            clock_type: Some(ClockType::Video),
             clock_name: Some(format!("display_{}_vsync", self.window_id.0)),
         }
     }

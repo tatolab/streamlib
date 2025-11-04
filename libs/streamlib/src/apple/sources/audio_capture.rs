@@ -8,7 +8,7 @@ use crate::core::{
     AudioFrame, Result, StreamError, StreamOutput, ProcessorDescriptor,
     PortDescriptor, SCHEMA_AUDIO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSource, ElementType};
+use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -284,7 +284,7 @@ impl StreamElement for AppleAudioCaptureProcessor {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <AppleAudioCaptureProcessor as StreamSource>::descriptor()
+        <AppleAudioCaptureProcessor as StreamProcessor>::descriptor()
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
@@ -314,7 +314,7 @@ impl StreamElement for AppleAudioCaptureProcessor {
 }
 
 // StreamSource implementation - GStreamer-inspired source trait
-impl StreamSource for AppleAudioCaptureProcessor {
+impl StreamProcessor for AppleAudioCaptureProcessor {
     type Config = crate::core::AudioCaptureConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -374,7 +374,7 @@ impl StreamSource for AppleAudioCaptureProcessor {
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> where Self: Sized {
-        <AppleAudioCaptureProcessor as StreamSource>::descriptor()
+        <AppleAudioCaptureProcessor as StreamProcessor>::descriptor()
     }
 }
 

@@ -26,7 +26,7 @@
 //! ```
 
 use crate::core::{StreamOutput, AudioFrame, Result};
-use crate::core::traits::{StreamElement, StreamSource};
+use crate::core::traits::{StreamElement, StreamProcessor};
 
 /// Configuration for audio capture processors
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -98,7 +98,7 @@ pub struct AudioInputDevice {
 /// **Windows (WASAPI)**:
 /// - Uses `cpal` crate
 /// - Exclusive mode for lowest latency
-pub trait AudioCaptureProcessor: StreamElement + StreamSource<Output = AudioFrame, Config = AudioCaptureConfig> {
+pub trait AudioCaptureProcessor: StreamElement + StreamProcessor<Config = AudioCaptureConfig> {
     /// Create new audio capture processor
     ///
     /// # Arguments

@@ -46,7 +46,9 @@
 
 // Core wrapper modules
 pub mod arkit;
+pub mod audio_utils;
 pub mod iosurface;
+pub mod media_clock;
 pub mod metal;
 pub mod texture;
 pub mod wgpu_bridge;

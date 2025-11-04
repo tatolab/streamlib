@@ -230,8 +230,7 @@ impl<T: PortMessage> StreamOutput<T> {
     ///
     /// This is used by the runtime to connect ports.
     /// The consumer is transferred to StreamInput during connection.
-    #[allow(dead_code)]
-    pub(crate) fn consumer_holder(&self) -> &Arc<Mutex<Option<rtrb::Consumer<T>>>> {
+    pub fn consumer_holder(&self) -> &Arc<Mutex<Option<rtrb::Consumer<T>>>> {
         &self.consumer_holder
     }
 
@@ -244,8 +243,7 @@ impl<T: PortMessage> StreamOutput<T> {
     /// # Arguments
     ///
     /// * `wakeup_tx` - Channel sender to wake up downstream processor
-    #[allow(dead_code)]
-    pub(crate) fn set_downstream_wakeup(&self, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
+    pub fn set_downstream_wakeup(&self, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
         *self.downstream_wakeup.lock() = Some(wakeup_tx);
     }
 }
@@ -313,8 +311,7 @@ impl<T: PortMessage> StreamInput<T> {
     ///
     /// Note: This is called by StreamRuntime.connect()
     /// SPSC constraint: Only one consumer can exist per producer
-    #[allow(dead_code)]
-    pub(crate) fn connect_consumer(&mut self, consumer: rtrb::Consumer<T>) {
+    pub fn connect_consumer(&mut self, consumer: rtrb::Consumer<T>) {
         self.consumer = Some(consumer);
     }
 
@@ -379,6 +376,29 @@ impl<T: PortMessage> StreamInput<T> {
     /// Get the port type
     pub fn port_type(&self) -> PortType {
         self.port_type
+    }
+
+    /// Take ownership of the consumer (used by Pull mode processors)
+    ///
+    /// This is used by processors that need to access the consumer from
+    /// callbacks (e.g., AudioOutput in Pull mode). After taking the consumer,
+    /// the normal read_latest() and read_all() methods will no longer work.
+    ///
+    /// # Returns
+    ///
+    /// The consumer if connected, None if not connected or already taken
+    pub fn take_consumer(&mut self) -> Option<rtrb::Consumer<T>> {
+        self.consumer.take()
+    }
+
+    /// Get a reference to the consumer (used by Pull mode processors during start)
+    ///
+    /// This allows processors to check if a consumer is available during start(),
+    /// which happens before connections are wired. Returns None if not connected yet.
+    ///
+    /// For actual callback access, wrap this in Arc<Mutex> after verifying it exists.
+    pub fn get_consumer_ref(&mut self) -> Option<&mut rtrb::Consumer<T>> {
+        self.consumer.as_mut()
     }
 }
 

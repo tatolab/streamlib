@@ -55,6 +55,7 @@ use std::sync::Arc;
 use crate::core::Result;
 use crate::core::error::StreamError;
 use crate::core::clocks::VideoClock;
+use crate::core::clocks::Clock;
 
 #[repr(C)]
 pub struct CVDisplayLink {

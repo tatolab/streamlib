@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 /// - **Loop**: Continuous execution at fixed rate (e.g., test tone generator)
 /// - **Reactive**: Execute when input data arrives (e.g., video effects)
 /// - **Callback**: Hardware-driven execution (e.g., camera, audio I/O)
+/// - **Pull**: Hardware callback pulls from input ports (e.g., audio output)
 /// - **Timer**: Periodic execution at specified intervals (e.g., metrics collector)
 ///
 /// ## Examples
@@ -68,6 +69,21 @@ pub enum SchedulingMode {
     ///
     /// **Example**: Camera sends frame via AVFoundation capture callback
     Callback,
+
+    /// Hardware callback pulls from input ports
+    ///
+    /// Processor's process() is called directly from hardware callback thread.
+    /// The processor pulls data from input ports at hardware rate.
+    /// Runtime does NOT spawn a thread - processor manages its own callback.
+    ///
+    /// Used by: Audio output (CoreAudio callback), video display (vsync callback)
+    ///
+    /// **Trigger**: Hardware callback (e.g., CoreAudio render callback)
+    ///
+    /// **Thread**: Hardware-managed real-time thread
+    ///
+    /// **Example**: AudioOutput pulls from ring buffer in CoreAudio callback
+    Pull,
 
     /// Periodic timer-based execution
     ///

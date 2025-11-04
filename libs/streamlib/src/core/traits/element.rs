@@ -51,6 +51,12 @@
 use crate::core::schema::{ProcessorDescriptor, PortDescriptor};
 use crate::core::error::Result;
 use crate::core::RuntimeContext;
+use serde::{Deserialize, Serialize};
+
+pub trait ProcessorConfig: Serialize + for<'de> Deserialize<'de> {
+    type Processor: StreamElement;
+    fn build(self) -> Result<Self::Processor>;
+}
 
 /// Type of stream element
 ///

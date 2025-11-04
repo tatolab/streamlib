@@ -10,6 +10,7 @@ pub mod context;
 pub mod error;
 pub mod frames;
 pub mod handles;
+pub mod media_clock;
 pub mod registry;
 pub mod runtime;
 pub mod schema;
@@ -36,7 +37,7 @@ pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use frames::{VideoFrame, AudioFrame, DataFrame, MetadataValue};
 // v2.0 traits - GStreamer-inspired hierarchy
-pub use traits::{StreamElement, ElementType, StreamSource, StreamSink, StreamTransform, DynStreamElement};
+pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
 };
@@ -54,7 +55,7 @@ pub use sinks::{
 pub use transformers::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     ClapEffectInputPorts, ClapEffectOutputPorts,
-    AudioMixerProcessor, MixingStrategy,
+    AudioMixerProcessor, MixingStrategy, ChannelMode,
     AudioMixerInputPorts, AudioMixerOutputPorts, AudioMixerConfig,
 };
 

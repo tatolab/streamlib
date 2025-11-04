@@ -34,6 +34,9 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     // Generate as_any_mut() implementation
     let as_any_mut_impl = generate_as_any_mut(struct_name);
 
+    // Generate port connection methods
+    let port_methods = generate_port_methods(analysis);
+
     quote! {
         #config_struct
 
@@ -47,6 +50,8 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #descriptor_impl
 
             #as_any_mut_impl
+
+            #port_methods
 
             fn process(&mut self) -> crate::core::Result<()> {
                 // Default implementation - users must provide their own process() method
@@ -426,5 +431,127 @@ mod tests {
 
         let ty: Type = syn::parse_quote! { streamlib::AudioFrame };
         assert_eq!(type_name(&ty), "AudioFrame");
+    }
+}
+
+/// Generate port connection methods (take_output_consumer, connect_input_consumer, set_output_wakeup)
+fn generate_port_methods(analysis: &AnalysisResult) -> TokenStream {
+    let output_ports: Vec<_> = analysis.output_ports().collect();
+    let input_ports: Vec<_> = analysis.input_ports().collect();
+
+    // Generate take_output_consumer method
+    let take_output_impl = if !output_ports.is_empty() {
+        let port_matches: Vec<TokenStream> = output_ports
+            .iter()
+            .map(|port| {
+                let port_name = &port.port_name;
+                let field_name = &port.field_name;
+                let message_type_name = type_name(&port.message_type);
+
+                // Determine the PortConsumer variant based on message type
+                let port_consumer_variant = match message_type_name.as_str() {
+                    "AudioFrame" => quote! { crate::core::traits::PortConsumer::Audio },
+                    "VideoFrame" => quote! { crate::core::traits::PortConsumer::Video },
+                    _ => quote! { crate::core::traits::PortConsumer::Audio }, // Default to Audio
+                };
+
+                quote! {
+                    #port_name => {
+                        self.#field_name
+                            .consumer_holder()
+                            .lock()
+                            .take()
+                            .map(|consumer| #port_consumer_variant(consumer))
+                    }
+                }
+            })
+            .collect();
+
+        quote! {
+            fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::traits::PortConsumer> {
+                match port_name {
+                    #(#port_matches,)*
+                    _ => None,
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // Generate connect_input_consumer method
+    let connect_input_impl = if !input_ports.is_empty() {
+        let port_matches: Vec<TokenStream> = input_ports
+            .iter()
+            .map(|port| {
+                let port_name = &port.port_name;
+                let field_name = &port.field_name;
+                let message_type_name = type_name(&port.message_type);
+
+                // Determine the PortConsumer variant to match against
+                let port_consumer_variant = match message_type_name.as_str() {
+                    "AudioFrame" => quote! { crate::core::traits::PortConsumer::Audio },
+                    "VideoFrame" => quote! { crate::core::traits::PortConsumer::Video },
+                    _ => quote! { crate::core::traits::PortConsumer::Audio },
+                };
+
+                quote! {
+                    #port_name => {
+                        match consumer {
+                            #port_consumer_variant(c) => {
+                                self.#field_name.connect_consumer(c);
+                                true
+                            }
+                            _ => false,
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        quote! {
+            fn connect_input_consumer(&mut self, port_name: &str, consumer: crate::core::traits::PortConsumer) -> bool {
+                match port_name {
+                    #(#port_matches,)*
+                    _ => false,
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // Generate set_output_wakeup method
+    let set_wakeup_impl = if !output_ports.is_empty() {
+        let port_matches: Vec<TokenStream> = output_ports
+            .iter()
+            .map(|port| {
+                let port_name = &port.port_name;
+                let field_name = &port.field_name;
+
+                quote! {
+                    #port_name => {
+                        self.#field_name.set_downstream_wakeup(wakeup_tx);
+                    }
+                }
+            })
+            .collect();
+
+        quote! {
+            fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+                match port_name {
+                    #(#port_matches,)*
+                    _ => {},
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        #take_output_impl
+        #connect_input_impl
+        #set_wakeup_impl
     }
 }

@@ -6,7 +6,7 @@ use crate::core::{
     StreamOutput, VideoFrame,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
-use crate::core::traits::{StreamElement, StreamSource};
+use crate::core::traits::{StreamElement, StreamProcessor};
 use std::sync::Arc;
 use serde_json::json;
 
@@ -108,7 +108,7 @@ pub fn descriptor() -> ProcessorDescriptor {
 ///
 /// This trait extends StreamElement (base trait) and StreamSource (specialized source trait)
 /// to ensure all implementations follow the v2.0 architecture.
-pub trait CameraProcessor: StreamElement + StreamSource<Output = VideoFrame, Config = CameraConfig> {
+pub trait CameraProcessor: StreamElement + StreamProcessor<Config = CameraConfig> {
     /// Set the camera device to use
     ///
     /// # Arguments

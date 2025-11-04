@@ -1,4 +1,4 @@
-use crate::core::traits::{StreamElement, StreamSource, ElementType};
+use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
 use crate::core::{AudioFrame, Result, StreamOutput};
 use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements, SCHEMA_AUDIO_FRAME};
@@ -107,7 +107,7 @@ impl StreamElement for TestToneGenerator {
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <TestToneGenerator as StreamSource>::descriptor()
+        <TestToneGenerator as StreamProcessor>::descriptor()
     }
 
     fn output_ports(&self) -> Vec<PortDescriptor> {
@@ -142,7 +142,7 @@ impl StreamElement for TestToneGenerator {
     }
 }
 
-impl StreamSource for TestToneGenerator {
+impl StreamProcessor for TestToneGenerator {
     type Config = TestToneConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
@@ -155,10 +155,7 @@ impl StreamSource for TestToneGenerator {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("TestToneGenerator: process() called, frame {}", self.frame_number);
 
-        let timestamp_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
+        let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
         let frame = self.generate_frame(timestamp_ns);
 
@@ -172,7 +169,6 @@ impl StreamSource for TestToneGenerator {
             mode: SchedulingMode::Loop,
             priority: ThreadPriority::RealTime,
             clock: ClockSource::Audio,
-            rate_hz: Some(self.timer_rate_hz()),
             provide_clock: false,
         }
     }
@@ -196,6 +192,25 @@ impl StreamSource for TestToneGenerator {
             })
             .with_tags(vec!["audio", "source", "generator", "test", "real-time"])
         )
+    }
+
+    fn take_output_consumer(&mut self, port_name: &str) -> Option<crate::core::traits::PortConsumer> {
+        if port_name == "audio" {
+            // Extract the consumer from the output port
+            self.output_ports.audio
+                .consumer_holder()
+                .lock()
+                .take()
+                .map(|consumer| crate::core::traits::PortConsumer::Audio(consumer))
+        } else {
+            None
+        }
+    }
+
+    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        if port_name == "audio" {
+            self.output_ports.audio.set_downstream_wakeup(wakeup_tx);
+        }
     }
 }
 

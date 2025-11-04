@@ -3,7 +3,7 @@
 //! Defines the interface for display/window processors across platforms.
 
 use crate::core::{
-    StreamProcessor, StreamInput, VideoFrame,
+    StreamInput, VideoFrame,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::Arc;
