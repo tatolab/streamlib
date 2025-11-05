@@ -364,57 +364,7 @@ pub trait StreamElement: Send + 'static {
         None
     }
 
-    // ============================================================
-    // Clock Support
-    // ============================================================
-
-    /// Optionally provide a clock for synchronization
-    ///
-    /// Some processors (typically sources and sinks) provide hardware-driven clocks:
-    /// - **AudioOutputProcessor**: Provides AudioClock (sample-accurate)
-    /// - **DisplayProcessor**: Provides VideoClock (vsync-accurate)
-    /// - **AudioCaptureProcessor**: Provides AudioClock (sample-accurate)
-    /// - **CameraProcessor**: May provide VideoClock (frame-accurate)
-    ///
-    /// The runtime automatically discovers and registers clocks when processors
-    /// are added via `add_processor()`. Clock type is determined by `clock_type()`.
-    ///
-    /// ## Master Clock Selection
-    ///
-    /// The runtime automatically selects the master clock based on priority:
-    /// 1. **Audio** - Most accurate (sample-level precision)
-    /// 2. **Video** - Frame-accurate (vsync precision)
-    /// 3. **Software** - Fallback (CPU timestamps)
-    ///
-    /// ## Default Implementation
-    ///
-    /// Returns `None` (most processors don't provide clocks).
-    /// Override this for processors that drive timing from hardware.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // DisplayProcessor provides video clock
-    /// fn provides_clock(&self) -> Option<Arc<dyn Clock>> {
-    ///     Some(self.video_clock.clone())
-    /// }
-    ///
-    /// // Effect processor doesn't provide clock
-    /// fn provides_clock(&self) -> Option<Arc<dyn Clock>> {
-    ///     None  // Default implementation
-    /// }
-    /// ```
-    fn provides_clock(&self) -> Option<std::sync::Arc<dyn crate::core::clocks::Clock>> {
-        None
-    }
 }
-
-// Forward declarations for downcasting (actual traits defined in separate files)
-
-/// Transform trait (forward declaration)
-///
-/// Actual implementation in `transform.rs` (Phase 4).
-pub trait StreamTransform: StreamElement {}
 
 #[cfg(test)]
 mod tests {

@@ -8,7 +8,7 @@ use crate::core::{
     ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::ffi::c_void;
@@ -619,8 +619,6 @@ impl StreamProcessor for AppleCameraProcessor {
         SchedulingConfig {
             mode: SchedulingMode::Pull,
             priority: ThreadPriority::High,
-            clock: ClockSource::Software,
-            provide_clock: false,
         }
     }
 

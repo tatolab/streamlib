@@ -3,7 +3,6 @@
 //! Driven by CVDisplayLink (macOS) or DRM vsync (Linux).
 
 use super::Clock;
-use crate::core::scheduling::ClockType;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -100,10 +99,6 @@ impl Clock for VideoClock {
 
     fn rate_hz(&self) -> Option<f64> {
         Some(self.refresh_rate)
-    }
-
-    fn clock_type(&self) -> ClockType {
-        ClockType::Video
     }
 
     fn description(&self) -> &str {

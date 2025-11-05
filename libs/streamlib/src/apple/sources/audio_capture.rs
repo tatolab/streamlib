@@ -9,7 +9,7 @@ use crate::core::{
     PortDescriptor,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use crate::core::ports::PortMessage;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -379,8 +379,6 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
         SchedulingConfig {
             mode: SchedulingMode::Pull,
             priority: ThreadPriority::RealTime,
-            clock: ClockSource::Audio,
-            provide_clock: false,
         }
     }
 

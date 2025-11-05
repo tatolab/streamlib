@@ -4,7 +4,6 @@
 //! that processors query, but do NOT actively schedule or wake processors.
 
 use std::time::Duration;
-use crate::core::scheduling::ClockType;
 
 /// Passive clock interface for processor synchronization
 ///
@@ -83,18 +82,6 @@ pub trait Clock: Send + Sync {
     fn rate_hz(&self) -> Option<f64> {
         None
     }
-
-    /// Clock type for automatic discovery and master clock selection
-    ///
-    /// Used by the runtime to:
-    /// - Automatically register clocks when processors are added
-    /// - Select master clock based on priority (Audio > Video > Software)
-    /// - Validate clock compatibility (matching sample rates, refresh rates)
-    ///
-    /// # Returns
-    ///
-    /// The type of this clock (Audio, Video, Software, PTP, Genlock)
-    fn clock_type(&self) -> ClockType;
 
     /// Human-readable clock description
     ///

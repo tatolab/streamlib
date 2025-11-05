@@ -19,7 +19,6 @@ pub trait DynStreamElement: Send + 'static {
     fn descriptor_instance_dyn(&self) -> Option<ProcessorDescriptor>;
     fn name_dyn(&self) -> &str;
     fn as_any_mut_dyn(&mut self) -> &mut dyn std::any::Any;
-    fn provides_clock(&self) -> Option<Arc<dyn crate::core::clocks::Clock>>;
     fn scheduling_config_dyn(&self) -> crate::core::scheduling::SchedulingConfig;
 
     fn get_output_port_type(&self, port_name: &str) -> Option<PortType>;

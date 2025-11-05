@@ -350,13 +350,11 @@ impl StreamProcessor for ClapEffectProcessor {
     }
 
     fn scheduling_config(&self) -> crate::core::scheduling::SchedulingConfig {
-        use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority, ClockSource};
+        use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 
         SchedulingConfig {
             mode: SchedulingMode::Push,
             priority: ThreadPriority::RealTime,
-            clock: ClockSource::Audio,
-            provide_clock: false,
         }
     }
 

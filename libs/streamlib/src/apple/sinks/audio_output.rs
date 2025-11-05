@@ -7,7 +7,7 @@ use crate::core::{
 use crate::core::frames::AudioFrame;
 use crate::core::ports::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use crate::core::clocks::AudioClock;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
@@ -96,10 +96,6 @@ impl StreamElement for AppleAudioOutputProcessor {
         self.stream = None;
         tracing::info!("AudioOutput {}: Stopped", self.device_name);
         Ok(())
-    }
-
-    fn provides_clock(&self) -> Option<Arc<dyn crate::core::clocks::Clock>> {
-        Some(self.audio_clock.clone())
     }
 
     fn as_sink(&self) -> Option<&dyn std::any::Any> {
@@ -209,8 +205,6 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         SchedulingConfig {
             mode: SchedulingMode::Pull,  // Hardware callback drives execution
             priority: ThreadPriority::RealTime,
-            clock: ClockSource::Audio,
-            provide_clock: true,
         }
     }
 

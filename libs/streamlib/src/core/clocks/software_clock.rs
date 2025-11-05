@@ -3,7 +3,6 @@
 //! Fallback clock when no hardware clock is available.
 
 use super::Clock;
-use crate::core::scheduling::ClockType;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Software clock using CPU timestamps
@@ -73,10 +72,6 @@ impl Clock for SoftwareClock {
     fn now_ns(&self) -> i64 {
         let elapsed = self.start_time.elapsed().as_nanos() as i64;
         self.start_timestamp + elapsed
-    }
-
-    fn clock_type(&self) -> ClockType {
-        ClockType::Software
     }
 
     fn description(&self) -> &str {

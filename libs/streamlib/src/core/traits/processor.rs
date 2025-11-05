@@ -1,12 +1,10 @@
 use super::StreamElement;
 use crate::core::error::Result;
 use crate::core::schema::ProcessorDescriptor;
-use crate::core::context::RuntimeContext;
-use crate::core::scheduling::{SchedulingConfig, ClockConfig, SyncMode};
+use crate::core::scheduling::SchedulingConfig;
 use crate::core::runtime::WakeupEvent;
 use crate::core::ports::PortType;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use std::sync::Arc;
 
 pub trait StreamProcessor: StreamElement {
@@ -20,34 +18,6 @@ pub trait StreamProcessor: StreamElement {
 
     fn scheduling_config(&self) -> SchedulingConfig {
         SchedulingConfig::default()
-    }
-
-    fn clock_sync_point(&self) -> Duration {
-        Duration::ZERO
-    }
-
-    fn clock_config(&self) -> ClockConfig {
-        ClockConfig::default()
-    }
-
-    fn sync_mode(&self) -> SyncMode {
-        SyncMode::Timestamp
-    }
-
-    fn handle_late_frame(&mut self, _lateness_ns: i64) -> bool {
-        true
-    }
-
-    fn frame_duration_ns(&self) -> Option<i64> {
-        None
-    }
-
-    fn run_source_loop(
-        &mut self,
-        _ctx: &RuntimeContext,
-        _stop_rx: crossbeam_channel::Receiver<()>,
-    ) -> Result<()> {
-        Ok(())
     }
 
     fn descriptor() -> Option<ProcessorDescriptor>

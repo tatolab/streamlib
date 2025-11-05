@@ -1,8 +1,6 @@
-use super::clocks::{Clock, SoftwareClock};
 use super::traits::{StreamProcessor, DynStreamElement};
 use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
-use super::scheduling::ClockSource;
 use super::ports::PortType;
 use std::collections::HashMap;
 use std::future::Future;

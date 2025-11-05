@@ -25,7 +25,6 @@ pub enum PortType {
 
 /// Trait for types that can be sent through processor ports.
 ///
-/// This replaces the old BusMessage trait with a simpler interface.
 /// Types must be Clone + Send to work with rtrb ring buffers.
 pub trait PortMessage: Clone + Send + 'static {
     fn port_type() -> PortType;

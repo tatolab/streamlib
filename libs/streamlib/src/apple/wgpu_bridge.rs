@@ -55,56 +55,6 @@ impl WgpuBridge {
         }
     }
 
-    /// Create a new WebGPU bridge from a Metal device (legacy - creates its own device)
-    ///
-    /// **⚠️ DEPRECATED**: This method creates a new WebGPU device, which prevents
-    /// texture sharing between processors. Use `from_shared_device()` instead with
-    /// a device from streamlib-core's runtime.
-    ///
-    /// # Arguments
-    ///
-    /// * `metal_device` - Native Metal device to wrap
-    ///
-    /// # Returns
-    ///
-    /// A bridge that can convert Metal resources to WebGPU
-    #[deprecated(note = "Use from_shared_device() instead to share GPU context with runtime")]
-    pub async fn new(metal_device: Retained<ProtocolObject<dyn MTLDevice>>) -> Result<Self> {
-        // Create wgpu instance
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::METAL,
-            ..Default::default()
-        });
-
-        // Request adapter (Metal backend)
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| StreamError::GpuError(format!("Failed to find Metal adapter: {}", e)))?;
-
-        // Request device and queue
-        let (wgpu_device, wgpu_queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("StreamLib Metal Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: Default::default(),  // wgpu 25 uses path-based tracing
-            })
-            .await
-            .map_err(|e| StreamError::GpuError(format!("Failed to create device: {}", e)))?;
-
-        Ok(Self {
-            metal_device,
-            wgpu_device,
-            wgpu_queue,
-        })
-    }
-
     /// Wrap a Metal texture as a WebGPU texture (zero-copy)
     ///
     /// This is the core bridging function that allows Metal textures to be
