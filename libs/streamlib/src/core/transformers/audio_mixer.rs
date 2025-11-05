@@ -178,7 +178,7 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
     }
 
     fn process(&mut self) -> Result<()> {
-        tracing::debug!("[AudioMixer<{}>] process() called", N);
+        tracing::info!("[AudioMixer<{}>] process() called", N);
 
         // Read all input frames
         let mut input_frames: Vec<Option<AudioFrame<1>>> = Vec::with_capacity(N);
