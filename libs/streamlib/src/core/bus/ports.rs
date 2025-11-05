@@ -199,6 +199,13 @@ impl<T: PortMessage> StreamInput<T> {
             .unwrap_or(false)
     }
 
+    /// Peek at the next frame without consuming it
+    pub fn peek(&self) -> Option<T> {
+        self.connection.lock()
+            .as_ref()
+            .and_then(|conn| conn.peek())
+    }
+
     pub fn is_connected(&self) -> bool {
         self.connection.lock().is_some()
     }

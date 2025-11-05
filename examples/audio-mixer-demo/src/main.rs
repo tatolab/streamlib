@@ -56,7 +56,8 @@ async fn main() -> Result<()> {
     println!("🔀 Adding audio mixer...");
     let mixer = runtime.add_element_with_config::<AudioMixerProcessor<3>>(
         AudioMixerConfig {
-            strategy: MixingStrategy::SumNormalized, // Prevents clipping
+            strategy: MixingStrategy::Sum, 
+            timestamp_tolerance_ms: Some(1u32), // 10 ms tolerance for sync
         }
     ).await?;
     println!("   Strategy: Sum Clipped (prevents distortion)");

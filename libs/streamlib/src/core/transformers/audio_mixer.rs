@@ -11,12 +11,17 @@ use dasp::Signal;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioMixerConfig {
     pub strategy: MixingStrategy,
+    /// Timestamp alignment tolerance in milliseconds
+    /// If Some(ms), mixer will wait until all input timestamps are within ±ms
+    /// If None, no timestamp checking (legacy behavior)
+    pub timestamp_tolerance_ms: Option<u32>,
 }
 
 impl Default for AudioMixerConfig {
     fn default() -> Self {
         Self {
             strategy: MixingStrategy::SumNormalized,
+            timestamp_tolerance_ms: Some(10), // Default: 10ms tolerance
         }
     }
 }
@@ -36,6 +41,7 @@ impl Default for MixingStrategy {
 
 pub struct AudioMixerProcessor<const N: usize> {
     strategy: MixingStrategy,
+    timestamp_tolerance_ms: Option<u32>,
     sample_rate: u32,
     buffer_size: usize,
     frame_counter: u64,
@@ -51,6 +57,10 @@ pub struct AudioMixerOutputPorts {
 
 impl<const N: usize> AudioMixerProcessor<N> {
     pub fn new(strategy: MixingStrategy) -> Result<Self> {
+        Self::new_with_tolerance(strategy, Some(10))
+    }
+
+    pub fn new_with_tolerance(strategy: MixingStrategy, timestamp_tolerance_ms: Option<u32>) -> Result<Self> {
         if N == 0 {
             return Err(StreamError::Configuration(
                 "AudioMixerProcessor requires at least 1 input".into()
@@ -63,8 +73,9 @@ impl<const N: usize> AudioMixerProcessor<N> {
 
         Ok(Self {
             strategy,
+            timestamp_tolerance_ms,
             sample_rate: 48000,
-            buffer_size: 2048,
+            buffer_size: 128,
             frame_counter: 0,
             input_ports,
             output_ports: AudioMixerOutputPorts {
@@ -132,7 +143,7 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
     type Config = AudioMixerConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
-        Self::new(config.strategy)
+        Self::new_with_tolerance(config.strategy, config.timestamp_tolerance_ms)
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> {
@@ -159,50 +170,105 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
     fn process(&mut self) -> Result<()> {
         tracing::info!("[AudioMixer<{}>] process() called", N);
 
-        let mut input_frames: Vec<Option<AudioFrame<1>>> = Vec::with_capacity(N);
-        for input in &self.input_ports {
-            input_frames.push(input.read_latest());
-        }
+        // Check if timestamp alignment is enabled
+        if let Some(tolerance_ms) = self.timestamp_tolerance_ms {
+            // Timestamp-based synchronization
+            let tolerance_ns = tolerance_ms as i64 * 1_000_000;
 
-        let all_ready = input_frames.iter().all(|frame| frame.is_some());
-        if !all_ready {
-            tracing::debug!("[AudioMixer<{}>] Not all inputs have data yet, skipping", N);
-            return Ok(());
-        }
+            // Peek at all timestamps WITHOUT consuming
+            let peeked_frames: [Option<AudioFrame<1>>; N] = std::array::from_fn(|i| {
+                self.input_ports[i].peek()
+            });
 
-        let timestamp_ns = input_frames[0].as_ref().unwrap().timestamp_ns;
-
-        let mut signals: Vec<_> = input_frames.iter()
-            .filter_map(|opt| opt.as_ref())
-            .map(|frame| frame.read())
-            .collect();
-
-        let mut mixed_samples = Vec::with_capacity(self.buffer_size * 2); // *2 for stereo
-
-        for _ in 0..self.buffer_size {
-            let mut mixed_mono = 0.0f32;
-            for signal in &mut signals {
-                mixed_mono += signal.next()[0];
+            // Check if all inputs have data
+            if peeked_frames.iter().any(|f| f.is_none()) {
+                tracing::debug!("[AudioMixer<{}>] Waiting for all inputs to have data", N);
+                return Ok(());
             }
 
-            let final_sample = match self.strategy {
-                MixingStrategy::Sum => mixed_mono,
-                MixingStrategy::SumNormalized => mixed_mono / N as f32,
-                MixingStrategy::SumClipped => mixed_mono.clamp(-1.0, 1.0),
-            };
+            // Extract timestamps
+            let timestamps: [i64; N] = std::array::from_fn(|i| {
+                peeked_frames[i].as_ref().unwrap().timestamp_ns
+            });
 
-            mixed_samples.push(final_sample);  // Left
-            mixed_samples.push(final_sample);  // Right
+            // Check timestamp alignment
+            let min_ts = *timestamps.iter().min().unwrap();
+            let max_ts = *timestamps.iter().max().unwrap();
+            let spread_ns = max_ts - min_ts;
+
+            if spread_ns > tolerance_ns {
+                tracing::debug!(
+                    "[AudioMixer<{}>] Timestamps not aligned: spread={}ms (tolerance={}ms), min={}, max={}",
+                    N,
+                    spread_ns / 1_000_000,
+                    tolerance_ms,
+                    min_ts,
+                    max_ts
+                );
+
+                // If spread is excessive (>100ms), drop old frames to catch up
+                let max_drift_ns = 100_000_000; // 100ms maximum drift before dropping
+                if spread_ns > max_drift_ns {
+                    tracing::warn!(
+                        "[AudioMixer<{}>] Excessive timestamp drift ({}ms), dropping old frames",
+                        N,
+                        spread_ns / 1_000_000
+                    );
+
+                    // Drop frames from inputs that are behind
+                    for (i, &ts) in timestamps.iter().enumerate() {
+                        if ts < max_ts - tolerance_ns {
+                            // This input is lagging - drop its frame
+                            let dropped = self.input_ports[i].read_latest();
+                            tracing::debug!(
+                                "[AudioMixer<{}>] Dropped frame from input {}: ts={} ({}ms behind)",
+                                N,
+                                i,
+                                ts,
+                                (max_ts - ts) / 1_000_000
+                            );
+                            // Verify we actually dropped something
+                            if dropped.is_none() {
+                                tracing::error!(
+                                    "[AudioMixer<{}>] Failed to drop frame from input {} (peek showed data but read returned None)",
+                                    N,
+                                    i
+                                );
+                            }
+                        }
+                    }
+                }
+
+                return Ok(());
+            }
+
+            // All aligned - consume frames
+            let input_frames: [AudioFrame<1>; N] = std::array::from_fn(|i| {
+                self.input_ports[i].read_latest().expect("checked via peek")
+            });
+
+            tracing::debug!(
+                "[AudioMixer<{}>] Timestamps aligned (spread={}ms), mixing",
+                N,
+                spread_ns / 1_000_000
+            );
+
+            // Mix and output
+            self.mix_frames(&input_frames)
+        } else {
+            // Legacy mode: no timestamp checking
+            let all_ready = self.input_ports.iter().all(|input| input.has_data());
+            if !all_ready {
+                tracing::debug!("[AudioMixer<{}>] Not all inputs have data yet, skipping", N);
+                return Ok(());
+            }
+
+            let input_frames: [AudioFrame<1>; N] = std::array::from_fn(|i| {
+                self.input_ports[i].read_latest().expect("checked has_data")
+            });
+
+            self.mix_frames(&input_frames)
         }
-
-        let output_frame = AudioFrame::<2>::new(mixed_samples, timestamp_ns, self.frame_counter);
-
-        self.output_ports.audio.write(output_frame);
-        tracing::debug!("[AudioMixer<{}>] Wrote mixed stereo frame", N);
-
-        self.frame_counter += 1;
-
-        Ok(())
     }
 
     fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
@@ -257,5 +323,43 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
             }
         }
         false
+    }
+}
+
+// Helper methods outside trait impl
+impl<const N: usize> AudioMixerProcessor<N> {
+    fn mix_frames(&mut self, input_frames: &[AudioFrame<1>; N]) -> Result<()> {
+        let timestamp_ns = input_frames[0].timestamp_ns;
+
+        let mut signals: Vec<_> = input_frames.iter()
+            .map(|frame| frame.read())
+            .collect();
+
+        let mut mixed_samples = Vec::with_capacity(self.buffer_size * 2); // *2 for stereo
+
+        for _ in 0..self.buffer_size {
+            let mut mixed_mono = 0.0f32;
+            for signal in &mut signals {
+                mixed_mono += signal.next()[0];
+            }
+
+            let final_sample = match self.strategy {
+                MixingStrategy::Sum => mixed_mono,
+                MixingStrategy::SumNormalized => mixed_mono / N as f32,
+                MixingStrategy::SumClipped => mixed_mono.clamp(-1.0, 1.0),
+            };
+
+            mixed_samples.push(final_sample);  // Left
+            mixed_samples.push(final_sample);  // Right
+        }
+
+        let output_frame = AudioFrame::<2>::new(mixed_samples, timestamp_ns, self.frame_counter);
+
+        self.output_ports.audio.write(output_frame);
+        tracing::debug!("[AudioMixer<{}>] Wrote mixed stereo frame", N);
+
+        self.frame_counter += 1;
+
+        Ok(())
     }
 }

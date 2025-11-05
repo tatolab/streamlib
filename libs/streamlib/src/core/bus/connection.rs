@@ -96,6 +96,13 @@ impl<T: Clone + Send + 'static> ProcessorConnection<T> {
     pub fn has_data(&self) -> bool {
         !self.consumer.lock().is_empty()
     }
+
+    /// Peek at the next item without consuming it
+    /// Returns None if buffer is empty
+    pub fn peek(&self) -> Option<T> {
+        let consumer = self.consumer.lock();
+        consumer.peek().ok().cloned()
+    }
 }
 
 #[cfg(test)]
