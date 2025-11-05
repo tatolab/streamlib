@@ -1,7 +1,7 @@
 use super::traits::{StreamProcessor, DynStreamElement};
 use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
-use super::ports::PortType;
+use super::bus::PortType;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -327,7 +327,7 @@ impl StreamRuntime {
         Ok(processor_id)
     }
 
-    pub fn connect<T: crate::core::ports::PortMessage>(
+    pub fn connect<T: crate::core::bus::PortMessage>(
         &mut self,
         output: crate::core::handles::OutputPortRef<T>,
         input: crate::core::handles::InputPortRef<T>,
@@ -481,75 +481,75 @@ impl StreamRuntime {
             (src_type, dst_type)
         };
 
+        // Create PortAddresses for the new generic API
+        use crate::core::bus::PortAddress;
+        let source_addr = PortAddress::new(source_proc_id.to_string(), source_port.to_string());
+        let dest_addr = PortAddress::new(dest_proc_id.to_string(), dest_port.to_string());
+        let capacity = source_port_type.default_capacity();
+
+        // Use the new generic API - map PortType to concrete frame type
         let connection: Arc<dyn std::any::Any + Send + Sync> = match source_port_type {
             PortType::Audio1 => {
-                let conn = self.bus.create_audio_connection::<1>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<1>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio2 => {
-                let conn = self.bus.create_audio_connection::<2>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<2>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio4 => {
-                let conn = self.bus.create_audio_connection::<4>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<4>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio6 => {
-                let conn = self.bus.create_audio_connection::<6>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<6>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio8 => {
-                let conn = self.bus.create_audio_connection::<8>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<8>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Video => {
-                let conn = self.bus.create_video_connection(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::VideoFrame;
+                let conn = self.bus.create_connection::<VideoFrame>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Data => {
-                let conn = self.bus.create_data_connection(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::DataFrame;
+                let conn = self.bus.create_connection::<DataFrame>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
         };

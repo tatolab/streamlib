@@ -2,7 +2,7 @@ use crate::core::{RuntimeContext, Result};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::runtime::WakeupEvent;
 use crate::core::traits::ElementType;
-use crate::core::ports::PortType;
+use crate::core::bus::PortType;
 use std::sync::Arc;
 
 pub trait DynStreamElement: Send + 'static {

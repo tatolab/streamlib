@@ -1,8 +1,39 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::borrow::Cow;
 
-use super::runtime::WakeupEvent;
+use crate::core::runtime::{WakeupEvent, ProcessorId};
 use super::connection::ProcessorConnection;
+
+/// Strongly-typed port address combining processor ID and port name
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PortAddress {
+    pub processor_id: ProcessorId,
+    pub port_name: Cow<'static, str>,
+}
+
+impl PortAddress {
+    /// Create a new port address
+    pub fn new(processor: impl Into<ProcessorId>, port: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            processor_id: processor.into(),
+            port_name: port.into(),
+        }
+    }
+
+    /// Create a port address with a static string port name (zero allocation)
+    pub fn with_static(processor: impl Into<ProcessorId>, port: &'static str) -> Self {
+        Self {
+            processor_id: processor.into(),
+            port_name: Cow::Borrowed(port),
+        }
+    }
+
+    /// Get the full address as "processor_id.port_name"
+    pub fn full_address(&self) -> String {
+        format!("{}.{}", self.processor_id, self.port_name)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortType {
@@ -15,7 +46,14 @@ pub enum PortType {
     Data,
 }
 
-pub trait PortMessage: Clone + Send + 'static {
+/// Sealed trait pattern - only known frame types can implement PortMessage
+pub mod sealed {
+    pub trait Sealed {}
+}
+
+/// Trait for types that can be sent through ports
+/// This is a sealed trait - only types in this crate can implement it
+pub trait PortMessage: sealed::Sealed + Clone + Send + 'static {
     fn port_type() -> PortType;
     fn schema() -> std::sync::Arc<crate::core::Schema>;
     fn examples() -> Vec<(&'static str, serde_json::Value)> {
@@ -54,12 +92,23 @@ impl<T: PortMessage> StreamOutput<T> {
         }
     }
 
+    /// Write data to all connected outputs
+    ///
+    /// This always succeeds - each connection uses roll-off semantics where
+    /// the oldest data is dropped if the buffer is full. This ensures writes
+    /// never block, making the system realtime-safe.
+    ///
+    /// Fan-out behavior: If multiple connections exist (1 source → N destinations),
+    /// each destination gets an independent copy with its own RTRB buffer.
     pub fn write(&self, data: T) {
         let connections = self.connections.lock();
+
+        // Write to all connections - always succeeds due to roll-off semantics
         for conn in connections.iter() {
-            let _ = conn.write(data.clone());
+            conn.write(data.clone());
         }
 
+        // Notify downstream processors that data is available
         if !connections.is_empty() {
             if let Some(wakeup_tx) = self.downstream_wakeup.lock().as_ref() {
                 let _ = wakeup_tx.send(WakeupEvent::DataAvailable);
@@ -322,5 +371,46 @@ mod tests {
         let input = StreamInput::<i32>::new("test");
         assert_eq!(input.read_latest(), None);
         assert_eq!(input.read_all().len(), 0);
+    }
+
+    #[test]
+    fn test_port_address_creation() {
+        let addr = PortAddress::new("processor_1", "audio_out");
+        assert_eq!(addr.processor_id, "processor_1");
+        assert_eq!(addr.port_name, "audio_out");
+    }
+
+    #[test]
+    fn test_port_address_static() {
+        let addr = PortAddress::with_static("processor_1", "audio_out");
+        assert_eq!(addr.processor_id, "processor_1");
+        assert_eq!(addr.port_name, "audio_out");
+        // Verify it's borrowed (zero allocation)
+        assert!(matches!(addr.port_name, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn test_port_address_full_address() {
+        let addr = PortAddress::new("proc_123", "video");
+        assert_eq!(addr.full_address(), "proc_123.video");
+    }
+
+    #[test]
+    fn test_port_address_equality() {
+        let addr1 = PortAddress::new("proc", "port");
+        let addr2 = PortAddress::with_static("proc", "port");
+        assert_eq!(addr1, addr2);
+    }
+
+    #[test]
+    fn test_port_address_hash() {
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        let addr1 = PortAddress::new("proc", "port");
+        let addr2 = PortAddress::with_static("proc", "port");
+
+        map.insert(addr1.clone(), 42);
+        assert_eq!(map.get(&addr2), Some(&42));
     }
 }

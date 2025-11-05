@@ -2,13 +2,14 @@
 pub mod core;
 
 pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+pub use streamlib_macros::PortRegistry;
 
 pub use core::{
     media_clock::MediaClock,
     StreamError, Result, GpuContext, AudioContext, RuntimeContext,
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
     StreamElement, ElementType, DynStreamElement,
-    StreamOutput, StreamInput, PortType, PortMessage,
+    StreamOutput, StreamInput, PortType, PortMessage, ProcessorConnection,
     CameraDevice, CameraOutputPorts, CameraConfig,
     WindowId, DisplayInputPorts, DisplayConfig,
     AudioDevice, AudioOutputInputPorts, AudioOutputConfig,

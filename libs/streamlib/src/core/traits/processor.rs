@@ -3,7 +3,7 @@ use crate::core::error::Result;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::scheduling::SchedulingConfig;
 use crate::core::runtime::WakeupEvent;
-use crate::core::ports::PortType;
+use crate::core::bus::PortType;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

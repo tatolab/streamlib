@@ -3,7 +3,7 @@ use crate::core::{
     ProcessorDescriptor, PortDescriptor, AudioRequirements,
 };
 use crate::core::frames::AudioFrame;
-use crate::core::ports::PortMessage;
+use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use serde::{Serialize, Deserialize};
 use dasp::Signal;
@@ -211,18 +211,18 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
         }
     }
 
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         match port_name {
-            "audio" => Some(crate::core::ports::PortType::Audio2),
+            "audio" => Some(crate::core::bus::PortType::Audio2),
             _ => None,
         }
     }
 
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         if let Some(index_str) = port_name.strip_prefix("input_") {
             if let Ok(index) = index_str.parse::<usize>() {
                 if index < N {
-                    return Some(crate::core::ports::PortType::Audio1);
+                    return Some(crate::core::bus::PortType::Audio1);
                 }
             }
         }
@@ -230,7 +230,7 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
+        use crate::core::bus::ProcessorConnection;
         use crate::core::AudioFrame;
 
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
@@ -243,7 +243,7 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
     }
 
     fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
+        use crate::core::bus::ProcessorConnection;
         use crate::core::AudioFrame;
 
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {

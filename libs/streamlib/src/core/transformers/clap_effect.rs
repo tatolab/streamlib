@@ -4,7 +4,7 @@ use crate::core::{
     StreamInput, StreamOutput,
 };
 use crate::core::frames::AudioFrame;
-use crate::core::ports::PortMessage;
+use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::schema::PortDescriptor;
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
@@ -304,14 +304,14 @@ impl StreamProcessor for ClapEffectProcessor {
         }
     }
 
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         match port_name {
             "audio" => Some(self.output_ports.audio.port_type()),
             _ => None,
         }
     }
 
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         match port_name {
             "audio" => Some(self.input_ports.audio.port_type()),
             _ => None,
@@ -319,7 +319,7 @@ impl StreamProcessor for ClapEffectProcessor {
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
+        use crate::core::bus::ProcessorConnection;
         use crate::core::AudioFrame;
 
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
@@ -332,7 +332,7 @@ impl StreamProcessor for ClapEffectProcessor {
     }
 
     fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
+        use crate::core::bus::ProcessorConnection;
         use crate::core::AudioFrame;
 
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {

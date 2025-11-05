@@ -1,4 +1,4 @@
-use crate::core::{Result, ports::PortMessage};
+use crate::core::{Result, bus::PortMessage};
 
 pub use crate::core::runtime::AudioContext;
 pub use crate::core::handles::ProcessorHandle;

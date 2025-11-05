@@ -77,6 +77,7 @@
 mod attributes;
 mod analysis;
 mod codegen;
+mod port_registry;
 
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
@@ -188,4 +189,62 @@ pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
     let generated = codegen::generate_processor_impl(&analysis);
 
     TokenStream::from(generated)
+}
+
+/// Derive macro for PortRegistry
+///
+/// Automatically generates port accessors and introspection methods.
+///
+/// # Example
+///
+/// ```rust
+/// use streamlib::{StreamInput, StreamOutput, VideoFrame, AudioFrame};
+///
+/// #[derive(PortRegistry)]
+/// struct MyProcessorPorts {
+///     #[input]
+///     video_in: StreamInput<VideoFrame>,
+///
+///     #[input]
+///     audio_in: StreamInput<AudioFrame<2>>,
+///
+///     #[output]
+///     video_out: StreamOutput<VideoFrame>,
+/// }
+/// ```
+///
+/// This generates:
+/// - `MyProcessorPortsInputPorts` struct with `video_in` and `audio_in` fields
+/// - `MyProcessorPortsOutputPorts` struct with `video_out` field
+/// - `.inputs()`, `.inputs_mut()`, `.outputs()`, `.outputs_mut()` accessors
+/// - Auto-implemented port introspection methods:
+///   - `get_input_port_type(name: &str) -> Option<PortType>`
+///   - `get_output_port_type(name: &str) -> Option<PortType>`
+///   - `wire_input_connection(name: &str, connection: Arc<dyn Any>) -> bool`
+///   - `wire_output_connection(name: &str, connection: Arc<dyn Any>) -> bool`
+///
+/// # Usage in Processor
+///
+/// ```rust
+/// struct MyProcessor {
+///     ports: MyProcessorPorts,
+/// }
+///
+/// impl MyProcessor {
+///     fn process(&mut self) {
+///         // Ergonomic port access
+///         if let Some(frame) = self.ports.inputs().video_in.read_latest() {
+///             self.ports.outputs().video_out.write(frame);
+///         }
+///     }
+/// }
+/// ```
+#[proc_macro_derive(PortRegistry, attributes(input, output))]
+pub fn derive_port_registry(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    match port_registry::generate_port_registry(&input) {
+        Ok(tokens) => TokenStream::from(tokens),
+        Err(err) => TokenStream::from(err.to_compile_error()),
+    }
 }

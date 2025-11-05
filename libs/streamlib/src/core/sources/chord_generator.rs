@@ -121,7 +121,7 @@ impl StreamElement for ChordGeneratorProcessor {
     }
 
     fn output_ports(&self) -> Vec<PortDescriptor> {
-        use crate::core::ports::PortMessage;
+        use crate::core::bus::PortMessage;
 
         vec![
             PortDescriptor {
@@ -331,15 +331,15 @@ impl StreamProcessor for ChordGeneratorProcessor {
         }
     }
 
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         match port_name {
-            "tone_c4" | "tone_e4" | "tone_g4" => Some(crate::core::ports::PortType::Audio1),
+            "tone_c4" | "tone_e4" | "tone_g4" => Some(crate::core::bus::PortType::Audio1),
             _ => None,
         }
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
+        use crate::core::bus::ProcessorConnection;
         use crate::core::AudioFrame;
 
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {

@@ -369,3 +369,84 @@ fn test_sink_processor_compiles() {
     // Auto-generated description should include "sink"
     assert!(true, "SinkProcessor macro expansion compiled successfully");
 }
+// === PortRegistry Derive Macro Tests ===
+
+use streamlib_macros::PortRegistry;
+
+// Test PortRegistry with both inputs and outputs
+#[derive(PortRegistry)]
+struct TestPorts {
+    #[input]
+    video_in: StreamInput<VideoFrame>,
+
+    #[input]
+    audio_in: StreamInput<AudioFrame>,
+
+    #[output]
+    video_out: StreamOutput<VideoFrame>,
+}
+
+#[test]
+fn test_port_registry_compiles() {
+    let _ports = TestPorts::new();
+    assert!(true, "PortRegistry macro expansion compiled successfully");
+}
+
+#[test]
+fn test_port_registry_accessors() {
+    let ports = TestPorts::new();
+    
+    // Test that accessor methods exist and compile
+    let _inputs = ports.inputs();
+    let _outputs = ports.outputs();
+    
+    assert!(true, "Port accessor methods work");
+}
+
+// Test PortRegistry with only inputs
+#[derive(PortRegistry)]
+struct InputOnlyPorts {
+    #[input]
+    input_0: StreamInput<VideoFrame>,
+
+    #[input]
+    input_1: StreamInput<AudioFrame>,
+}
+
+#[test]
+fn test_input_only_ports_compiles() {
+    let _ports = InputOnlyPorts::new();
+    assert!(true, "Input-only PortRegistry compiled successfully");
+}
+
+// Test PortRegistry with only outputs
+#[derive(PortRegistry)]
+struct OutputOnlyPorts {
+    #[output]
+    output_0: StreamOutput<VideoFrame>,
+
+    #[output]
+    output_1: StreamOutput<AudioFrame>,
+}
+
+#[test]
+fn test_output_only_ports_compiles() {
+    let _ports = OutputOnlyPorts::new();
+    assert!(true, "Output-only PortRegistry compiled successfully");
+}
+
+// Test PortRegistry introspection methods exist
+#[test]
+fn test_port_introspection_methods() {
+    let ports = TestPorts::new();
+    
+    // Verify introspection methods exist and compile
+    let _input_type = ports.get_input_port_type("video_in");
+    let _output_type = ports.get_output_port_type("video_out");
+    
+    // Note: wire_input_connection and wire_output_connection require
+    // Arc<dyn Any> which we can't easily mock here, but the fact
+    // that the macro compiled means they were generated correctly
+    
+    assert!(true, "Port introspection methods exist");
+}

@@ -5,7 +5,7 @@ use crate::core::{
     StreamInput,
 };
 use crate::core::frames::AudioFrame;
-use crate::core::ports::PortMessage;
+use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use cpal::Stream;
@@ -191,7 +191,7 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         )
     }
 
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         match port_name {
             "audio" => Some(self.input_ports.audio.port_type()),
             _ => None,
@@ -199,7 +199,7 @@ impl StreamProcessor for AppleAudioOutputProcessor {
     }
 
     fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
+        use crate::core::bus::ProcessorConnection;
         use crate::core::AudioFrame;
 
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {

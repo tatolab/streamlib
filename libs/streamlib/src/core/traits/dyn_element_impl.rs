@@ -64,11 +64,11 @@ where
         self.scheduling_config()
     }
 
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         StreamProcessor::get_output_port_type(self, port_name)
     }
 
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
         StreamProcessor::get_input_port_type(self, port_name)
     }
 
