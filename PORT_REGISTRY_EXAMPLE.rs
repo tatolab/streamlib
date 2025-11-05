@@ -1,10 +1,10 @@
 // Example demonstrating the new PortRegistry macro
 // This file is for documentation/testing purposes
 
-use streamlib::{PortRegistry, StreamInput, StreamOutput, VideoFrame, AudioFrame};
+use streamlib::{port_registry, StreamInput, StreamOutput, VideoFrame, AudioFrame, PortMessage};
 
 // Define ports using the new macro
-#[derive(PortRegistry)]
+#[port_registry]
 struct VideoProcessorPorts {
     #[input]
     video_in: StreamInput<VideoFrame>,

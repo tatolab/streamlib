@@ -191,16 +191,17 @@ pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
     TokenStream::from(generated)
 }
 
-/// Derive macro for PortRegistry
+/// Attribute macro for PortRegistry
 ///
 /// Automatically generates port accessors and introspection methods.
+/// Replaces the original struct with a complete port registry implementation.
 ///
 /// # Example
 ///
 /// ```rust
 /// use streamlib::{StreamInput, StreamOutput, VideoFrame, AudioFrame};
 ///
-/// #[derive(PortRegistry)]
+/// #[port_registry]
 /// struct MyProcessorPorts {
 ///     #[input]
 ///     video_in: StreamInput<VideoFrame>,
@@ -216,6 +217,7 @@ pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
 /// This generates:
 /// - `MyProcessorPortsInputPorts` struct with `video_in` and `audio_in` fields
 /// - `MyProcessorPortsOutputPorts` struct with `video_out` field
+/// - `MyProcessorPorts` struct with `inputs` and `outputs` fields
 /// - `.inputs()`, `.inputs_mut()`, `.outputs()`, `.outputs_mut()` accessors
 /// - Auto-implemented port introspection methods:
 ///   - `get_input_port_type(name: &str) -> Option<PortType>`
@@ -239,8 +241,8 @@ pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
 ///     }
 /// }
 /// ```
-#[proc_macro_derive(PortRegistry, attributes(input, output))]
-pub fn derive_port_registry(input: TokenStream) -> TokenStream {
+#[proc_macro_attribute]
+pub fn port_registry(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match port_registry::generate_port_registry(&input) {
