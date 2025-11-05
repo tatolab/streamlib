@@ -24,11 +24,7 @@ pub trait DynStreamElement: Send + 'static {
     fn get_output_port_type(&self, port_name: &str) -> Option<PortType>;
     fn get_input_port_type(&self, port_name: &str) -> Option<PortType>;
 
-    /// Wire a type-erased connection to an output port.
-    /// The connection Arc must match the port's expected type.
     fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool;
 
-    /// Wire a type-erased connection to an input port.
-    /// The connection Arc must match the port's expected type.
     fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool;
 }

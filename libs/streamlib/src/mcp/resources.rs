@@ -1,47 +1,31 @@
-//! MCP Resources - Processor Discovery
-//!
-//! Resources expose processor descriptors as read-only data.
-//! AI agents can query available processors and their capabilities.
 
 use super::{McpError, Result};
 use crate::core::ProcessorRegistry;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
-/// MCP Resource representation
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Resource {
-    /// Resource URI (e.g., "processor://CameraProcessor")
     pub uri: String,
 
-    /// Human-readable name
     pub name: String,
 
-    /// Resource description
     pub description: String,
 
-    /// MIME type (always "application/json" for processors)
     #[serde(rename = "mimeType")]
     pub mime_type: String,
 }
 
-/// MCP Resource content
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ResourceContent {
-    /// Resource URI
     pub uri: String,
 
-    /// MIME type
     #[serde(rename = "mimeType")]
     pub mime_type: String,
 
-    /// Content (JSON string of processor descriptor)
     pub text: String,
 }
 
-/// List all available processor resources
-///
-/// This is called when an AI agent queries "resources/list"
 pub fn list_resources(registry: Arc<Mutex<ProcessorRegistry>>) -> Result<Vec<Resource>> {
     let registry = registry.lock();
     let descriptors = registry.list();
@@ -57,26 +41,19 @@ pub fn list_resources(registry: Arc<Mutex<ProcessorRegistry>>) -> Result<Vec<Res
         .collect())
 }
 
-/// Read a specific processor resource
-///
-/// This is called when an AI agent queries "resources/read"
-/// with a URI like "processor://CameraProcessor"
 pub fn read_resource(
     registry: Arc<Mutex<ProcessorRegistry>>,
     uri: &str,
 ) -> Result<ResourceContent> {
-    // Parse URI: "processor://ProcessorName"
     let processor_name = uri
         .strip_prefix("processor://")
         .ok_or_else(|| McpError::ResourceNotFound(format!("Invalid URI: {}", uri)))?;
 
-    // Get descriptor from registry
     let registry = registry.lock();
     let registration = registry
         .get(processor_name)
         .ok_or_else(|| McpError::ResourceNotFound(processor_name.to_string()))?;
 
-    // Serialize descriptor to JSON
     let json = registration
         .descriptor
         .to_json()
@@ -165,17 +142,14 @@ mod tests {
 
         let registry = create_test_registry();
 
-        // Register a processor with audio requirements
         let descriptor = ProcessorDescriptor::new("AudioProcessor", "Test audio processor")
             .with_audio_requirements(AudioRequirements::required(2048, 48000, 2));
 
         let factory = StdArc::new(|| Err(crate::core::StreamError::Configuration("Test".into())));
         registry.lock().unwrap().register(descriptor, factory).unwrap();
 
-        // Read the resource and check JSON contains audio_requirements
         let content = read_resource(registry, "processor://AudioProcessor").unwrap();
 
-        // Parse JSON to verify audio_requirements is present
         let json: serde_json::Value = serde_json::from_str(&content.text).unwrap();
 
         assert!(json.get("audio_requirements").is_some(),

@@ -7,13 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Serialize, Deserialize};
 
-/// Configuration for ChordGeneratorProcessor
-///
-/// Generates a C major chord (C4, E4, G4) from a single hardware-like source,
-/// emulating a 3-channel microphone array where each "mic" produces a different tone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChordGeneratorConfig {
-    /// Amplitude for all tones (0.0 to 1.0)
     pub amplitude: f64,
 }
 
@@ -26,15 +21,11 @@ impl Default for ChordGeneratorConfig {
 }
 
 pub struct ChordGeneratorOutputPorts {
-    /// C4 (261.63 Hz) - Like mic channel 0
     pub tone_c4: Arc<StreamOutput<AudioFrame<1>>>,
-    /// E4 (329.63 Hz) - Like mic channel 1
     pub tone_e4: Arc<StreamOutput<AudioFrame<1>>>,
-    /// G4 (392.00 Hz) - Like mic channel 2
     pub tone_g4: Arc<StreamOutput<AudioFrame<1>>>,
 }
 
-/// Sine wave oscillator state
 struct SineOscillator {
     phase: f64,
     phase_inc: f64,
@@ -63,23 +54,12 @@ impl SineOscillator {
     }
 }
 
-/// ChordGeneratorProcessor - Emulates a 3-channel microphone array
-///
-/// Generates tones in its own loop at audio hardware rate.
-/// Uses stateful oscillators to maintain phase continuity.
-///
-/// This demonstrates the microphone array pattern:
-/// - Single source generates 3 synchronized tones
-/// - Runs at audio hardware rate (e.g., every 2.67ms for 128 samples at 48kHz)
-/// - Multiple synchronized outputs (3 tones generated together)
-/// - Each output can be routed independently downstream
 pub struct ChordGeneratorProcessor {
     name: String,
     amplitude: f64,
 
     output_ports: ChordGeneratorOutputPorts,
 
-    // Stateful oscillators (wrapped for thread-safe access)
     osc_c4: Arc<Mutex<SineOscillator>>,
     osc_e4: Arc<Mutex<SineOscillator>>,
     osc_g4: Arc<Mutex<SineOscillator>>,
@@ -170,7 +150,6 @@ impl StreamElement for ChordGeneratorProcessor {
         self.sample_rate = ctx.audio.sample_rate;
         *self.frame_counter.lock().unwrap() = 0;
 
-        // Recreate oscillators with correct sample rate
         let amp = self.amplitude as f32;
         self.osc_c4 = Arc::new(Mutex::new(SineOscillator::new(Self::FREQ_C4, amp, self.sample_rate)));
         self.osc_e4 = Arc::new(Mutex::new(SineOscillator::new(Self::FREQ_E4, amp, self.sample_rate)));
@@ -210,8 +189,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // In Pull mode, process() is called once by runtime after connections are wired
-        // Spawn a thread that runs our own timed loop at audio hardware rate
 
         if self.running.load(Ordering::Relaxed) {
             return Ok(());
@@ -221,7 +198,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
 
         self.running.store(true, Ordering::Relaxed);
 
-        // Clone everything needed for the thread
         let osc_c4 = Arc::clone(&self.osc_c4);
         let osc_e4 = Arc::clone(&self.osc_e4);
         let osc_g4 = Arc::clone(&self.osc_g4);
@@ -233,7 +209,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
         let buffer_size = self.buffer_size;
         let sample_rate = self.sample_rate;
 
-        // Calculate sleep duration to match audio hardware rate
         let buffer_duration_us = (buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64;
 
         tracing::info!(
@@ -255,7 +230,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
                 iteration_count += 1;
                 tracing::debug!("ChordGenerator: Generation loop iteration {}", iteration_count);
 
-                // Generate samples for each tone
                 let mut osc_c4 = osc_c4.lock().unwrap();
                 let mut osc_e4 = osc_e4.lock().unwrap();
                 let mut osc_g4 = osc_g4.lock().unwrap();
@@ -275,7 +249,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
                 drop(osc_e4);
                 drop(osc_g4);
 
-                // Create AudioFrames
                 let timestamp_ns = crate::MediaClock::now().as_nanos() as i64;
                 let counter = {
                     let mut c = frame_counter.lock().unwrap();
@@ -288,7 +261,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
                 let frame_e4 = AudioFrame::<1>::new(samples_e4, timestamp_ns, counter);
                 let frame_g4 = AudioFrame::<1>::new(samples_g4, timestamp_ns, counter);
 
-                // Write to all connections using StreamOutput::write() which handles wakeup notifications
                 if iteration_count == 1 {
                     tracing::info!(
                         "ChordGenerator FIRST iteration: writing frames"
@@ -302,13 +274,10 @@ impl StreamProcessor for ChordGeneratorProcessor {
                     );
                 }
 
-                // Use StreamOutput::write() instead of direct connection writes
-                // This ensures wakeup notifications are sent to downstream processors
                 tone_c4_output.write(frame_c4);
                 tone_e4_output.write(frame_e4);
                 tone_g4_output.write(frame_g4);
 
-                // Sleep until next tick
                 let now = Instant::now();
                 if now < next_tick {
                     std::thread::sleep(next_tick - now);
@@ -373,7 +342,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
         use crate::core::connection::ProcessorConnection;
         use crate::core::AudioFrame;
 
-        // Downcast to the correct connection type (AudioFrame<1> for mono)
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {
             match port_name {
                 "tone_c4" => {

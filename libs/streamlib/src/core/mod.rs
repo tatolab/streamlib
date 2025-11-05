@@ -1,8 +1,3 @@
-//! streamlib-core: Platform-agnostic GPU streaming primitives
-//!
-//! This crate defines the core traits and types for streamlib's GPU-based
-//! real-time video processing system. Platform-specific implementations
-//! (Metal, Vulkan) are provided by separate crates.
 
 pub mod bus;
 pub mod clap;
@@ -27,7 +22,6 @@ pub mod texture;
 pub mod topology;
 pub mod traits;
 
-// Re-export core types
 pub use clap::{
     ParameterInfo, PluginInfo,
     ParameterModulator, LfoWaveform,
@@ -44,13 +38,11 @@ pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use frames::{
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
 };
-// v2.0 traits - GStreamer-inspired hierarchy
 pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
 };
 
-// Re-export processor types and their configs from sources/sinks/transformers
 pub use sources::{
     CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig,
     AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,

@@ -1,6 +1,3 @@
-//! Display processor trait
-//!
-//! Defines the interface for display/window processors across platforms.
 
 use crate::core::{
     StreamInput, VideoFrame,
@@ -9,14 +6,10 @@ use crate::core::{
 use std::sync::Arc;
 use serde_json::json;
 
-/// Configuration for display processors
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DisplayConfig {
-    /// Window width in pixels
     pub width: u32,
-    /// Window height in pixels
     pub height: u32,
-    /// Optional window title
     pub title: Option<String>,
 }
 
@@ -30,21 +23,13 @@ impl Default for DisplayConfig {
     }
 }
 
-/// Unique identifier for a display window
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64);
 
-/// Input ports for display processors
 pub struct DisplayInputPorts {
-    /// Video frame input (WebGPU textures)
     pub video: StreamInput<VideoFrame>,
 }
 
-/// Get the standard descriptor for display processors
-///
-/// Platform implementations should use this descriptor in their
-/// `StreamProcessor::descriptor()` implementation unless they need
-/// to add platform-specific information.
 pub fn descriptor() -> ProcessorDescriptor {
     ProcessorDescriptor::new(
         "DisplayProcessor",
@@ -96,30 +81,15 @@ pub fn descriptor() -> ProcessorDescriptor {
     .with_tags(vec!["sink", "display", "window", "output", "render"])
 }
 
-/// Display processor trait
-///
-/// Platform implementations (AppleDisplayProcessor, etc.) implement this trait
-/// to provide window/display functionality with WebGPU texture rendering.
-///
-/// Each DisplayProcessor instance manages one window.
 pub trait DisplayProcessor {
-    /// Set the window title
     fn set_window_title(&mut self, title: &str);
 
-    /// Get the window ID (if window has been created)
     fn window_id(&self) -> Option<WindowId>;
 
-    /// Get the input ports for this display
     fn input_ports(&mut self) -> &mut DisplayInputPorts;
 }
 
-// NOTE: Port access methods are now part of StreamProcessor trait.
-// Concrete display processor types (AppleDisplayProcessor, etc.) should override
-// the with_video_input_mut() method from StreamProcessor to provide access to their "video" input port.
 
-// NOTE: Descriptor-only registration removed - platform implementations (AppleDisplayProcessor, etc.)
-// register themselves with full factory support via register_processor_type! macro.
-// The facade in lib.rs re-exports them as CameraProcessor/DisplayProcessor.
 
 #[cfg(test)]
 mod tests {
@@ -127,7 +97,6 @@ mod tests {
     use crate::core::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
     use std::sync::Arc;
 
-    // Mock implementation for testing
     struct MockDisplayProcessor;
 
     impl StreamProcessor for MockDisplayProcessor {
@@ -184,21 +153,17 @@ mod tests {
     fn test_display_descriptor() {
         let descriptor = MockDisplayProcessor::descriptor().expect("Should have descriptor");
 
-        // Verify basic metadata
         assert_eq!(descriptor.name, "DisplayProcessor");
         assert!(descriptor.description.contains("window"));
         assert!(descriptor.usage_context.is_some());
 
-        // Verify it has video input
         assert_eq!(descriptor.inputs.len(), 1);
         assert_eq!(descriptor.inputs[0].name, "video");
         assert_eq!(descriptor.inputs[0].schema.name, "VideoFrame");
         assert!(descriptor.inputs[0].required);
 
-        // Verify it has no outputs (it's a sink)
         assert_eq!(descriptor.outputs.len(), 0);
 
-        // Verify tags
         assert!(descriptor.tags.contains(&"sink".to_string()));
         assert!(descriptor.tags.contains(&"display".to_string()));
     }
@@ -207,14 +172,11 @@ mod tests {
     fn test_display_descriptor_serialization() {
         let descriptor = MockDisplayProcessor::descriptor().expect("Should have descriptor");
 
-        // Test JSON serialization
         let json = descriptor.to_json().expect("Failed to serialize to JSON");
         assert!(json.contains("DisplayProcessor"));
         assert!(json.contains("video"));
         assert!(json.contains("VideoFrame"));
 
-        // Note: YAML serialization not tested due to serde_yaml limitation with nested enums
-        // JSON serialization is sufficient for AI agent consumption
     }
 
     #[test]

@@ -1,11 +1,3 @@
-//! IOSurface zero-copy texture sharing
-//!
-//! Provides zero-copy GPU texture sharing between processes and frameworks.
-//! Works on both macOS and iOS.
-//!
-//! IOSurface allows us to share GPU memory between different frameworks
-//! (AVFoundation, Metal, Core Image) and even across processes - all with
-//! ZERO copies. This is the foundation of streamlib's performance.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -14,44 +6,23 @@ use objc2_io_surface::IOSurface;
 use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureUsage};
 use crate::core::{Result, StreamError};
 
-/// Pixel format for IOSurface textures
-///
-/// Simplified enum for the formats we support on Apple platforms.
-/// Maps to both Metal pixel formats and IOSurface FourCC codes.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PixelFormat {
-    /// BGRA 8-bit per channel (most common on macOS)
     Bgra8Unorm,
-    /// RGBA 8-bit per channel
     Rgba8Unorm,
 }
 
-/// Creates a Metal texture from an IOSurface (zero-copy)
-///
-/// This is the critical function that enables zero-copy GPU operations.
-/// The Metal texture directly references the IOSurface's GPU memory.
-///
-/// # Arguments
-/// * `device` - The Metal device to create the texture on
-/// * `iosurface` - The IOSurface containing the pixel data
-/// * `plane` - The plane index (0 for most formats, 1+ for planar formats like NV12)
-///
-/// # Returns
-/// A Metal texture that shares memory with the IOSurface
 pub fn create_metal_texture_from_iosurface(
     device: &ProtocolObject<dyn MTLDevice>,
     iosurface: &IOSurface,
     plane: usize,
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>> {
-    // Get IOSurface properties
     let width = iosurface.width();
     let height = iosurface.height();
     let pixel_format = iosurface.pixelFormat();
 
-    // Convert IOSurface pixel format to Metal pixel format
     let metal_format = iosurface_format_to_metal(pixel_format)?;
 
-    // Create texture descriptor
     let descriptor = MTLTextureDescriptor::new();
     unsafe {
         descriptor.setWidth(width as usize);
@@ -60,14 +31,6 @@ pub fn create_metal_texture_from_iosurface(
         descriptor.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
     }
 
-    // Create Metal texture from IOSurface (ZERO-COPY!)
-    // This is the magic call that shares GPU memory
-    //
-    // Unfortunately, objc2-metal doesn't expose newTextureWithDescriptor:iosurface:plane: yet,
-    // so we need to call it directly using msg_send
-    //
-    // Metal expects IOSurfaceRef (Core Foundation type), not an Objective-C object
-    // IOSurface (NSObject) is toll-free bridged to IOSurfaceRef (CFType)
     use objc2_io_surface::IOSurfaceRef;
     let iosurface_ptr: *const IOSurfaceRef = iosurface as *const IOSurface as *const IOSurfaceRef;
 
@@ -88,10 +51,6 @@ pub fn create_metal_texture_from_iosurface(
     })
 }
 
-/// Creates an IOSurface with the specified dimensions and pixel format
-///
-/// This creates a new IOSurface that can be shared across frameworks.
-/// Useful when you need to create a destination surface for rendering.
 pub fn create_iosurface(
     width: usize,
     height: usize,
@@ -100,24 +59,19 @@ pub fn create_iosurface(
     use objc2_foundation::{ns_string, NSNumber, NSString};
     use objc2::runtime::AnyObject;
 
-    // Convert streamlib pixel format to IOSurface format
     let ios_format = pixel_format_to_iosurface(pixel_format)?;
 
-    // Calculate bytes per row (width * bytes per pixel, aligned to 64 bytes)
     let bytes_per_element = match pixel_format {
         PixelFormat::Rgba8Unorm | PixelFormat::Bgra8Unorm => 4,
     };
     let bytes_per_row = (width * bytes_per_element).div_ceil(64) * 64; // Align to 64 bytes
 
-    // Create values as NSNumber
     let val_width = NSNumber::new_usize(width);
     let val_height = NSNumber::new_usize(height);
     let val_pixel_format = NSNumber::new_u32(ios_format);
     let val_bytes_per_element = NSNumber::new_usize(bytes_per_element);
     let val_bytes_per_row = NSNumber::new_usize(bytes_per_row);
 
-    // Create properties dictionary
-    // IOSurface expects specific keys with NSNumber values
     use objc2_foundation::NSDictionary;
 
     let keys: Vec<&NSString> = vec![
@@ -138,8 +92,6 @@ pub fn create_iosurface(
 
     let properties = NSDictionary::from_slices(&keys, &values);
 
-    // Create IOSurface with properties
-    // Use msg_send directly with raw pointers since IOSurface::alloc isn't exposed
     use objc2::ClassType;
     use objc2::runtime::AnyClass;
 
@@ -152,7 +104,6 @@ pub fn create_iosurface(
         msg_send![allocated_ptr, initWithProperties: &*properties]
     };
 
-    // Convert to Retained (from_raw returns Option<Retained<T>>)
     let surface = unsafe {
         Retained::from_raw(surface_ptr)
     }.ok_or_else(|| {
@@ -162,7 +113,6 @@ pub fn create_iosurface(
         ))
     })?;
 
-    // Verify dimensions match what we requested
     let actual_width = surface.width() as usize;
     let actual_height = surface.height() as usize;
 
@@ -176,10 +126,7 @@ pub fn create_iosurface(
     Ok(surface)
 }
 
-/// Convert IOSurface pixel format (FourCC) to Metal pixel format
 fn iosurface_format_to_metal(ios_format: u32) -> Result<MTLPixelFormat> {
-    // IOSurface uses FourCC codes
-    // See: https://developer.apple.com/documentation/corevideo/1563591-pixel_format_identifiers
     match ios_format {
         0x42475241 => Ok(MTLPixelFormat::BGRA8Unorm), // 'BGRA' - most common on macOS
         0x52474241 => Ok(MTLPixelFormat::RGBA8Unorm), // 'RGBA'
@@ -190,7 +137,6 @@ fn iosurface_format_to_metal(ios_format: u32) -> Result<MTLPixelFormat> {
     }
 }
 
-/// Convert streamlib pixel format to IOSurface FourCC format
 fn pixel_format_to_iosurface(format: PixelFormat) -> Result<u32> {
     match format {
         PixelFormat::Bgra8Unorm => Ok(0x42475241), // 'BGRA'
@@ -204,7 +150,6 @@ mod tests {
 
     #[test]
     fn test_iosurface_creation() {
-        // Create an IOSurface
         let surface = create_iosurface(1920, 1080, PixelFormat::Bgra8Unorm);
         assert!(surface.is_ok());
 
@@ -217,14 +162,11 @@ mod tests {
     fn test_metal_texture_from_iosurface() {
         use objc2_metal::MTLCreateSystemDefaultDevice;
 
-        // Create Metal device
         let device = MTLCreateSystemDefaultDevice().expect("No Metal device available");
 
-        // Create IOSurface
         let surface = create_iosurface(1920, 1080, PixelFormat::Bgra8Unorm)
             .expect("Failed to create IOSurface");
 
-        // Create Metal texture from IOSurface (zero-copy!)
         let texture = create_metal_texture_from_iosurface(&device, &surface, 0);
         assert!(texture.is_ok());
 
@@ -236,7 +178,6 @@ mod tests {
 
     #[test]
     fn test_format_conversions() {
-        // IOSurface to Metal
         assert_eq!(
             iosurface_format_to_metal(0x42475241).unwrap(),
             MTLPixelFormat::BGRA8Unorm
@@ -246,7 +187,6 @@ mod tests {
             MTLPixelFormat::RGBA8Unorm
         );
 
-        // StreamLib to IOSurface
         assert_eq!(
             pixel_format_to_iosurface(PixelFormat::Bgra8Unorm).unwrap(),
             0x42475241

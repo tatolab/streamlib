@@ -1,7 +1,3 @@
-//! Apple AudioCaptureProcessor implementation using CoreAudio
-//!
-//! Uses the `cpal` crate which provides a safe Rust wrapper around CoreAudio on macOS.
-//! This gives us low-latency audio capture from microphones with minimal overhead.
 
 use crate::core::{
     AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioCaptureOutputPorts,
@@ -17,79 +13,38 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use parking_lot::Mutex;
 
-/// Apple CoreAudio implementation of AudioCaptureProcessor
-///
-/// # Architecture
-///
-/// - Uses `cpal` library which wraps CoreAudio on macOS
-/// - Maintains an internal ring buffer for captured audio samples
-/// - Runs audio capture on a dedicated thread (managed by cpal/CoreAudio)
-/// - Low-latency: typical latency < 20ms on macOS
-///
-/// # Example
-///
-/// ```ignore
-/// use streamlib::AppleAudioCaptureProcessor;
-///
-/// // Create microphone input using default device at 48kHz stereo
-/// let mic = AppleAudioCaptureProcessor::new(None, 48000, 2)?;
-///
-/// // Connect to audio pipeline
-/// runtime.add_processor(Box::new(mic));
-/// runtime.connect("mic.audio", "plugin.audio")?;
-/// ```
 pub struct AppleAudioCaptureProcessor {
-    /// Current audio device information
     device_info: AudioInputDevice,
 
-    /// cpal device handle
     _device: Device,
 
-    /// cpal audio stream (keeps audio thread alive)
     _stream: Stream,
 
-    /// Ring buffer for captured audio samples (shared with audio thread)
-    ///
-    /// Audio thread writes captured samples here, process() reads them
     sample_buffer: Arc<Mutex<Vec<f32>>>,
 
-    /// Whether the processor is actively capturing
     #[allow(dead_code)]
     is_capturing: Arc<AtomicBool>,
 
-    /// Current audio level (peak)
     current_level: Arc<Mutex<f32>>,
 
-    /// Frame counter for generating AudioFrame metadata
     frame_counter: Arc<AtomicU64>,
 
-    /// Sample rate for this input
     sample_rate: u32,
 
-    /// Number of channels (1 = mono, 2 = stereo)
     channels: u32,
 
-    /// Output ports
     pub ports: AudioCaptureOutputPorts,
 
-    /// Wakeup channel for push-based operation (Phase 3)
-    /// When audio data arrives, we trigger processing immediately
-    /// Wrapped in Arc<Mutex> so audio callback can access it
     wakeup_tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>,
 }
 
 // SAFETY: AppleAudioCaptureProcessor is Send despite cpal::Stream not being Send
-// because all shared state (sample_buffer, is_capturing, etc.) is protected by Arc/Mutex
-// and the Stream's internal audio callback only accesses thread-safe types.
 unsafe impl Send for AppleAudioCaptureProcessor {}
 
 impl AppleAudioCaptureProcessor {
-    /// Create new audio capture processor using default or specified device
     fn new_internal(device_id: Option<usize>, sample_rate: u32, channels: u32) -> Result<Self> {
-        // Get cpal host (CoreAudio on macOS)
         let host = cpal::default_host();
 
-        // Get device
         let device = if let Some(id) = device_id {
             let devices: Vec<_> = host
                 .input_devices()
@@ -104,12 +59,10 @@ impl AppleAudioCaptureProcessor {
                 .ok_or_else(|| StreamError::Configuration("No default audio input device".into()))?
         };
 
-        // Get device name
         let device_name = device
             .name()
             .unwrap_or_else(|_| "Unknown Device".to_string());
 
-        // Get default config from device
         let default_config = device
             .default_input_config()
             .map_err(|e| StreamError::Configuration(format!("Failed to get audio config: {}", e)))?;
@@ -126,7 +79,6 @@ impl AppleAudioCaptureProcessor {
             channels
         );
 
-        // Create device info
         let device_info = AudioInputDevice {
             id: device_id.unwrap_or(0),
             name: device_name,
@@ -135,54 +87,41 @@ impl AppleAudioCaptureProcessor {
             is_default: device_id.is_none(),
         };
 
-        // Create shared ring buffer for captured audio samples
         let sample_buffer = Arc::new(Mutex::new(Vec::new()));
         let sample_buffer_clone = sample_buffer.clone();
 
-        // Create flag for capture status
         let is_capturing = Arc::new(AtomicBool::new(false));
         let is_capturing_clone = is_capturing.clone();
 
-        // Create current level tracking
         let current_level = Arc::new(Mutex::new(0.0f32));
         let current_level_clone = current_level.clone();
 
-        // Create frame counter
         let frame_counter = Arc::new(AtomicU64::new(0));
 
-        // Create wakeup channel holder (Phase 3: Push-based operation)
         let wakeup_tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>> =
             Arc::new(Mutex::new(None));
         let wakeup_tx_clone = wakeup_tx.clone();
 
-        // Build audio stream configuration
-        // Note: We request the desired sample_rate and channels, but cpal may use device defaults
         let stream_config = StreamConfig {
             channels: channels as u16,
             sample_rate: cpal::SampleRate(sample_rate),
             buffer_size: cpal::BufferSize::Default,
         };
 
-        // Build input stream with callback
         let stream = device
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    // Audio thread callback - capture input buffer
                     let mut buffer = sample_buffer_clone.lock();
 
-                    // Append captured samples to ring buffer
                     buffer.extend_from_slice(data);
 
-                    // Calculate peak level for this chunk
                     let peak = data.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     *current_level_clone.lock() = peak;
 
                     is_capturing_clone.store(true, Ordering::Relaxed);
 
-                    // Phase 3: Trigger push-based wakeup when data arrives
                     if let Some(tx) = wakeup_tx_clone.lock().as_ref() {
-                        // Send non-blocking wakeup event
                         let _ = tx.send(crate::core::runtime::WakeupEvent::DataAvailable);
                     }
                 },
@@ -193,12 +132,10 @@ impl AppleAudioCaptureProcessor {
             )
             .map_err(|e| StreamError::Configuration(format!("Failed to build audio stream: {}", e)))?;
 
-        // Start the stream immediately
         stream
             .play()
             .map_err(|e| StreamError::Configuration(format!("Failed to start audio stream: {}", e)))?;
 
-        // Create output ports
         let ports = AudioCaptureOutputPorts {
             audio: StreamOutput::new("audio".to_string()),
         };
@@ -233,7 +170,6 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
             .map(|(id, device)| {
                 let name = device.name().unwrap_or_else(|_| "Unknown Device".to_string());
 
-                // Get default config to determine capabilities
                 let config = device
                     .default_input_config()
                     .map_err(|e| StreamError::Configuration(format!("Failed to get device config: {}", e)))?;
@@ -241,7 +177,6 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
                 let sample_rate = config.sample_rate().0;
                 let channels = config.channels() as u32;
 
-                // Check if this is the default device
                 let is_default = if let Some(default_device) = host.default_input_device() {
                     device.name().ok() == default_device.name().ok()
                 } else {
@@ -274,7 +209,6 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
     }
 }
 
-// StreamElement implementation - GStreamer-inspired base trait
 impl StreamElement for AppleAudioCaptureProcessor {
     fn name(&self) -> &str {
         &self.device_info.name
@@ -314,52 +248,41 @@ impl StreamElement for AppleAudioCaptureProcessor {
     }
 }
 
-// StreamSource implementation - GStreamer-inspired source trait
 impl StreamProcessor for AppleAudioCaptureProcessor {
     type Config = crate::core::AudioCaptureConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
-        // Parse device_id string to usize if provided
         let device_id = config.device_id.as_ref().and_then(|s| s.parse::<usize>().ok());
         Self::new_internal(device_id, config.sample_rate, config.channels)
     }
 
     fn process(&mut self) -> Result<()> {
-        // Read captured samples from ring buffer
         let samples = {
             let mut buffer = self.sample_buffer.lock();
 
-            // Check if we have enough samples for a reasonable chunk
-            // Use 512 samples per channel as minimum (good balance for audio processing)
             let min_chunk_size = 512 * self.channels as usize;
 
             if buffer.len() >= min_chunk_size {
-                // Extract all available samples
                 let samples: Vec<f32> = buffer.drain(..).collect();
                 samples
             } else {
-                // Not enough samples yet - return error so runtime can retry
                 return Err(StreamError::Runtime(
                     format!("Not enough samples available ({} < {})", buffer.len(), min_chunk_size)
                 ));
             }
         };
 
-        // Create AudioFrame from captured samples
         let frame_number = self.frame_counter.fetch_add(1, Ordering::Relaxed);
         let timestamp_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos() as i64;
 
-        // Microphones are always mono - convert interleaved stereo input to mono by averaging channels
         let mono_samples: Vec<f32> = if self.channels == 2 {
-            // Stereo input: average L and R channels to create mono
             samples.chunks_exact(2)
                 .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
                 .collect()
         } else {
-            // Already mono
             samples
         };
 
@@ -369,13 +292,11 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
             frame_number,
         );
 
-        // Write directly to output port
         self.ports.audio.write(frame);
         Ok(())
     }
 
     fn scheduling_config(&self) -> SchedulingConfig {
-        // Audio capture is callback-driven - CoreAudio/cpal callback triggers processing
         SchedulingConfig {
             mode: SchedulingMode::Pull,
             priority: ThreadPriority::RealTime,
@@ -415,7 +336,6 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
         use crate::core::connection::ProcessorConnection;
         use crate::core::AudioFrame;
 
-        // Downcast to mono connection type (AudioFrame<1>)
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {
             if port_name == "audio" {
                 self.ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
@@ -434,7 +354,6 @@ mod tests {
     fn test_list_devices() {
         let devices = AppleAudioCaptureProcessor::list_devices();
 
-        // Should succeed even if no devices (though macOS usually has built-in mic)
         assert!(devices.is_ok());
 
         if let Ok(devices) = devices {
@@ -450,7 +369,6 @@ mod tests {
                 );
             }
 
-            // macOS should have at least one input device (built-in mic)
             assert!(devices.len() > 0, "Expected at least one audio input device");
         }
     }
@@ -475,19 +393,15 @@ mod tests {
 
     #[test]
     fn test_capture_audio() {
-        // Try to create processor and capture some audio
         let result = AppleAudioCaptureProcessor::new(None, 48000, 2);
 
         if let Ok(mut processor) = result {
-            // Let it capture for a bit
             std::thread::sleep(std::time::Duration::from_millis(100));
 
-            // Try to process captured audio
             let result = processor.process();
             if result.is_ok() {
                 println!("Successfully processed captured audio");
 
-                // Check audio level
                 let level = processor.current_level();
                 println!("Current audio level: {:.3}", level);
                 assert!(level >= 0.0 && level <= 1.0);

@@ -1,30 +1,12 @@
-//! SDI hardware sync clock (genlock) - stub
-//!
-//! Genlock provides hardware sync for SDI devices (professional video equipment).
 
 use super::Clock;
 use super::software_clock::SoftwareClock;
 
-/// SDI hardware sync clock (genlock) - stub
-///
-/// Genlock provides hardware sync for SDI devices (professional video equipment).
-/// The genlock signal is a reference pulse (typically black burst or tri-level sync)
-/// that all devices sync to.
-///
-/// ## Status: Stub Implementation
-///
-/// This is a placeholder. Real implementation will:
-/// - Interface with SDI hardware (e.g., Blackmagic DeckLink)
-/// - Wait for hardware pulse
-/// - Generate timing aligned to pulse
-///
-/// Currently falls back to SoftwareClock.
 pub struct GenlockClock {
     fallback: SoftwareClock,
 }
 
 impl GenlockClock {
-    /// Create a new genlock clock (currently stub)
     pub fn new() -> Self {
         tracing::warn!("GenlockClock not implemented, using software fallback");
         Self {

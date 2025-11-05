@@ -35,14 +35,10 @@ pub trait StreamProcessor: StreamElement {
         None
     }
 
-    /// Wire a type-erased connection to an output port.
-    /// Override this in processors that have output ports.
     fn wire_output_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
         false
     }
 
-    /// Wire a type-erased connection to an input port.
-    /// Override this in processors that have input ports.
     fn wire_input_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
         false
     }

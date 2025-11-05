@@ -1,54 +1,3 @@
-//! CVDisplayLink integration for hardware-driven VSync timing
-//!
-//! This module provides a safe Rust wrapper around CoreVideo's CVDisplayLink API,
-//! enabling hardware-synchronized video frame callbacks from the display.
-//!
-//! ## Purpose
-//!
-//! CVDisplayLink provides accurate, hardware-driven timing callbacks synchronized
-//! to the display's vertical refresh (VSync). This is essential for:
-//! - Smooth video playback without tearing
-//! - Accurate frame rate measurement
-//! - Synchronizing rendering to display refresh
-//!
-//! ## Architecture
-//!
-//! The DisplayLink wraps a VideoClock and increments it on every vsync callback:
-//!
-//! ```text
-//! Display Hardware → CVDisplayLink → display_link_callback() → VideoClock::increment_frames()
-//! ```
-//!
-//! The callback runs on a real-time priority thread managed by CoreVideo.
-//!
-//! ## Example
-//!
-//! ```rust,ignore
-//! use streamlib::apple::display_link::{DisplayLink, get_main_display_refresh_rate};
-//! use streamlib::core::clocks::VideoClock;
-//! use std::sync::Arc;
-//!
-//! // Detect display refresh rate
-//! let refresh_rate = get_main_display_refresh_rate()?;
-//! println!("Display refresh rate: {:.2} Hz", refresh_rate);
-//!
-//! // Create video clock
-//! let clock = Arc::new(VideoClock::new(refresh_rate, "Display VSync".to_string()));
-//!
-//! // Create and start DisplayLink
-//! let display_link = DisplayLink::new(clock.clone())?;
-//! display_link.start()?;
-//!
-//! // Clock is now being incremented by hardware vsync
-//! // ...
-//!
-//! display_link.stop()?;
-//! ```
-//!
-//! ## Thread Safety
-//!
-//! The callback runs on a separate real-time thread. The VideoClock uses atomic
-//! operations for thread-safe frame counter updates.
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -140,16 +89,6 @@ extern "C" fn display_link_callback(
     K_CVRETURN_SUCCESS
 }
 
-/// Safe wrapper around CVDisplayLink for hardware-driven vsync timing
-///
-/// DisplayLink connects a VideoClock to the display's vsync signal.
-/// On each vertical refresh, the callback increments the clock's frame counter.
-///
-/// ## Memory Management
-///
-/// The clock is stored in `_clock_box` to ensure it stays alive as long as
-/// the DisplayLink exists. The raw pointer passed to CVDisplayLink points
-/// to this box's allocation.
 pub struct DisplayLink {
     display_link: CVDisplayLinkRef,
     clock: Arc<VideoClock>,
@@ -159,19 +98,6 @@ pub struct DisplayLink {
 unsafe impl Send for DisplayLink {}
 
 impl DisplayLink {
-    /// Create a new DisplayLink for the active displays
-    ///
-    /// This creates a CVDisplayLink that fires callbacks synchronized to
-    /// the vertical refresh of the active displays.
-    ///
-    /// # Arguments
-    ///
-    /// * `clock` - The VideoClock to increment on each vsync
-    ///
-    /// # Returns
-    ///
-    /// Returns a DisplayLink that is ready to start, or an error if
-    /// CVDisplayLink creation fails.
     pub fn new(clock: Arc<VideoClock>) -> Result<Self> {
         let mut display_link: CVDisplayLinkRef = std::ptr::null_mut();
 
@@ -215,16 +141,6 @@ impl DisplayLink {
         })
     }
 
-    /// Start receiving vsync callbacks
-    ///
-    /// This activates the DisplayLink, causing the callback to be invoked
-    /// on every vertical refresh. The callback runs on a high-priority
-    /// real-time thread managed by CoreVideo.
-    ///
-    /// # Returns
-    ///
-    /// Returns Ok(()) if started successfully, or an error if CVDisplayLink
-    /// fails to start.
     pub fn start(&self) -> Result<()> {
         let status = unsafe { CVDisplayLinkStart(self.display_link) };
 
@@ -238,15 +154,6 @@ impl DisplayLink {
         Ok(())
     }
 
-    /// Stop receiving vsync callbacks
-    ///
-    /// This deactivates the DisplayLink. The callback will no longer be invoked.
-    /// The clock's frame counter will stop incrementing.
-    ///
-    /// # Returns
-    ///
-    /// Returns Ok(()) if stopped successfully, or an error if CVDisplayLink
-    /// fails to stop.
     pub fn stop(&self) -> Result<()> {
         let status = unsafe { CVDisplayLinkStop(self.display_link) };
 
@@ -260,14 +167,6 @@ impl DisplayLink {
         Ok(())
     }
 
-    /// Get the nominal refresh rate of the display
-    ///
-    /// Returns the refresh rate in Hz (e.g., 60.0, 120.0).
-    /// Falls back to 60.0 if the refresh rate cannot be determined.
-    ///
-    /// # Returns
-    ///
-    /// The refresh rate in Hz.
     pub fn get_refresh_rate(&self) -> f64 {
         let refresh_period = unsafe {
             CVDisplayLinkGetNominalOutputVideoRefreshPeriod(self.display_link)
@@ -290,24 +189,6 @@ impl Drop for DisplayLink {
     }
 }
 
-/// Get the refresh rate of the main display
-///
-/// This queries the CoreGraphics display system to determine the actual
-/// refresh rate of the main display.
-///
-/// # Returns
-///
-/// Returns the refresh rate in Hz (60.0, 120.0, etc.), or 60.0 as a fallback
-/// if the rate cannot be determined.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use streamlib::apple::display_link::get_main_display_refresh_rate;
-///
-/// let rate = get_main_display_refresh_rate()?;
-/// println!("Main display refresh rate: {:.2} Hz", rate);
-/// ```
 pub fn get_main_display_refresh_rate() -> Result<f64> {
     use core_graphics::display::CGDisplay;
 

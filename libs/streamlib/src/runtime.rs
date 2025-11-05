@@ -19,19 +19,15 @@ impl StreamRuntime {
         Self { inner }
     }
 
-    /// Add a processor with config (works both before and after start())
     pub async fn add_element_with_config<P>(&mut self, config: P::Config) -> Result<ProcessorHandle>
     where
         P: crate::core::traits::StreamProcessor + 'static,
     {
-        // Check if runtime is started
         if self.inner.is_running() {
-            // Runtime is running - add dynamically
             let element = P::from_config(config)?;
             let id = self.inner.add_processor_runtime(Box::new(element)).await?;
             Ok(ProcessorHandle::new(id))
         } else {
-            // Runtime not started yet - add to pending list (no await needed)
             self.inner.add_processor_with_config::<P>(config)
         }
     }

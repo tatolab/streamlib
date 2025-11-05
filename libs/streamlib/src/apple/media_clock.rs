@@ -1,15 +1,8 @@
 use std::time::Duration;
 
-/// Platform-specific media clock that provides system-level monotonic time
-///
-/// This is a zero-cost abstraction over the platform's native high-resolution timer.
-/// On macOS, this uses mach_absolute_time() which is the same timebase used by CoreAudio.
 pub struct MediaClock;
 
 impl MediaClock {
-    /// Get current monotonic time since system boot
-    ///
-    /// This is the same timebase used by audio callbacks, ensuring perfect A/V sync.
     #[inline]
     pub fn now() -> Duration {
         unsafe {
@@ -19,7 +12,6 @@ impl MediaClock {
         }
     }
 
-    /// Get the raw platform timestamp (mach_absolute_time)
     #[inline]
     pub fn raw_timestamp() -> u64 {
         unsafe { mach_absolute_time() }

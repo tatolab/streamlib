@@ -1,68 +1,40 @@
-//! Package Manager
-//!
-//! Manages package installations for dynamic processors across multiple languages.
-//! Implements security policies for package approval.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Package installation status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageStatus {
-    /// Package is installed and ready to use
     Installed,
-    /// Package installation is pending approval
     PendingApproval,
-    /// Package installation was denied by policy
     Denied,
-    /// Package is not installed
     NotInstalled,
 }
 
-/// Information about a package
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageInfo {
-    /// Package name (e.g., "scikit-learn", "pillow")
     pub name: String,
-    /// Installed version (if installed)
     pub version: Option<String>,
-    /// Installation status
     pub status: PackageStatus,
-    /// Reason for request (if applicable)
     pub reason: Option<String>,
 }
 
-/// Package approval policy
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ApprovalPolicy {
-    /// Only packages in the allowlist can be installed
     AllowList,
-    /// Automatically approve all package requests
     AutoApprove,
-    /// Require manual approval for all packages
     RequireApproval,
-    /// Deny all package installation requests
     DenyAll,
 }
 
-/// Package manager
-///
-/// Tracks installed packages and manages installation requests.
-/// Language-agnostic - can be used for Python, TypeScript, or other languages.
 pub struct PackageManager {
-    /// Current approval policy
     policy: ApprovalPolicy,
-    /// Allowlist of approved packages (used with AllowList policy)
     allowlist: Vec<String>,
-    /// Installed packages
     installed: HashMap<String, String>, // name -> version
-    /// Pending approval requests
     pending: HashMap<String, String>, // name -> reason
 }
 
 impl PackageManager {
-    /// Create a new package manager with a policy
     pub fn new(policy: ApprovalPolicy) -> Self {
         Self {
             policy,
@@ -72,29 +44,24 @@ impl PackageManager {
         }
     }
 
-    /// Create with default policy (RequireApproval)
     pub fn default() -> Self {
         Self::new(ApprovalPolicy::RequireApproval)
     }
 
-    /// Add a package to the allowlist
     pub fn add_to_allowlist(&mut self, package: String) {
         if !self.allowlist.contains(&package) {
             self.allowlist.push(package);
         }
     }
 
-    /// Set the approval policy
     pub fn set_policy(&mut self, policy: ApprovalPolicy) {
         self.policy = policy;
     }
 
-    /// Get current policy
     pub fn policy(&self) -> ApprovalPolicy {
         self.policy
     }
 
-    /// List all installed packages
     pub fn list_installed(&self) -> Vec<PackageInfo> {
         self.installed
             .iter()
@@ -107,29 +74,21 @@ impl PackageManager {
             .collect()
     }
 
-    /// Request a package installation
-    ///
-    /// Returns the status after evaluating the request against the policy.
     pub fn request_package(&mut self, package: String, reason: Option<String>) -> PackageStatus {
-        // Check if already installed
         if self.installed.contains_key(&package) {
             return PackageStatus::Installed;
         }
 
-        // Evaluate against policy
         match self.policy {
             ApprovalPolicy::DenyAll => PackageStatus::Denied,
 
             ApprovalPolicy::AutoApprove => {
-                // Auto-approve (actual installation would happen here)
-                // For now, just mark as pending since we don't have PyO3 yet
                 self.pending.insert(package.clone(), reason.unwrap_or_default());
                 PackageStatus::PendingApproval
             }
 
             ApprovalPolicy::AllowList => {
                 if self.allowlist.contains(&package) {
-                    // Approved via allowlist
                     self.pending.insert(package.clone(), reason.unwrap_or_default());
                     PackageStatus::PendingApproval
                 } else {
@@ -138,14 +97,12 @@ impl PackageManager {
             }
 
             ApprovalPolicy::RequireApproval => {
-                // Require manual approval
                 self.pending.insert(package.clone(), reason.unwrap_or_default());
                 PackageStatus::PendingApproval
             }
         }
     }
 
-    /// Get the status of a package
     pub fn get_status(&self, package: &str) -> PackageStatus {
         if self.installed.contains_key(package) {
             PackageStatus::Installed
@@ -156,7 +113,6 @@ impl PackageManager {
         }
     }
 
-    /// Get information about a package
     pub fn get_package_info(&self, package: &str) -> PackageInfo {
         let status = self.get_status(package);
         let version = self.installed.get(package).cloned();
@@ -170,13 +126,9 @@ impl PackageManager {
         }
     }
 
-    /// Approve a pending package (for manual approval)
-    ///
-    /// This would trigger actual installation via PyO3.
     pub fn approve_package(&mut self, package: &str) -> bool {
         if self.pending.remove(package).is_some() {
             // TODO: Actual installation via PyO3
-            // For now, just mark as installed with placeholder version
             self.installed.insert(package.to_string(), "pending".to_string());
             true
         } else {
@@ -184,12 +136,10 @@ impl PackageManager {
         }
     }
 
-    /// Deny a pending package
     pub fn deny_package(&mut self, package: &str) -> bool {
         self.pending.remove(package).is_some()
     }
 
-    /// List packages pending approval
     pub fn list_pending(&self) -> Vec<PackageInfo> {
         self.pending
             .iter()
@@ -239,7 +189,6 @@ mod tests {
         let status = manager.request_package("numpy".to_string(), None);
         assert_eq!(status, PackageStatus::PendingApproval);
 
-        // Approve it
         assert!(manager.approve_package("numpy"));
         assert_eq!(manager.get_status("numpy"), PackageStatus::Installed);
     }
@@ -250,7 +199,6 @@ mod tests {
         manager.request_package("numpy".to_string(), None);
         assert_eq!(manager.get_status("numpy"), PackageStatus::PendingApproval);
 
-        // Deny it
         assert!(manager.deny_package("numpy"));
         assert_eq!(manager.get_status("numpy"), PackageStatus::NotInstalled);
     }

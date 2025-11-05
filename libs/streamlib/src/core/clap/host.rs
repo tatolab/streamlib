@@ -56,18 +56,14 @@ impl HostHandlers for HostData {
 impl<'a> SharedHandler<'a> for HostShared {
     fn request_restart(&self) {
         tracing::debug!("Plugin requested restart");
-        // For now, we just log. In a full implementation, we'd set a flag
-        // and handle restart on next process cycle
     }
 
     fn request_process(&self) {
         tracing::debug!("Plugin requested process");
-        // This is called when plugin wants to be processed (e.g., tail processing)
     }
 
     fn request_callback(&self) {
         tracing::debug!("Plugin requested callback");
-        // Queue callback for main thread
     }
 }
 
@@ -92,12 +88,10 @@ pub struct ClapPluginHost {
     deinterleave_buffers: Vec<Vec<f32>>,
     output_buffers: Vec<Vec<f32>>,
 
-    // Cache parameter state to detect changes
     last_parameter_generation: usize,
 }
 
 // SAFETY: ClapPluginHost is Send despite PluginBundle containing raw pointers
-// because all shared state is protected by Arc<Mutex<...>> which ensures thread safety.
 unsafe impl Send for ClapPluginHost {}
 
 impl ClapPluginHost {
@@ -142,20 +136,16 @@ impl ClapPluginHost {
             let path_str = path.as_ref().display().to_string();
 
             Self::load_internal_with_filter(path, sample_rate, buffer_size, |descriptors| {
-                // Collect all descriptors first (can't iterate twice over the same iterator)
                 let all_descs: Vec<_> = descriptors.collect();
 
-                // Collect names for error message
                 let all_names: Vec<String> = all_descs.iter()
                     .filter_map(|desc| desc.name().and_then(|n| n.to_str().ok()).map(|s| s.to_string()))
                     .collect();
 
-                // Log all found plugins
                 for plugin_name in &all_names {
                     tracing::debug!("Found plugin in bundle: '{}'", plugin_name);
                 }
 
-                // Find matching descriptor
                 all_descs.into_iter()
                     .find(|desc| {
                         desc.name()
@@ -200,12 +190,9 @@ impl ClapPluginHost {
     {
         let path = path.as_ref();
 
-        // Get the actual binary path within the bundle (on macOS, bundles are folders)
         let binary_path = ClapScanner::get_bundle_binary_path(path)?;
 
-        // Load plugin bundle
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
-        // We trust that the plugin path points to a valid CLAP plugin
         let bundle = unsafe {
             PluginBundle::load(&binary_path)
                 .map_err(|e| StreamError::Configuration(
@@ -213,34 +200,28 @@ impl ClapPluginHost {
                 ))?
         };
 
-        // Get plugin factory
         let factory = bundle.get_plugin_factory()
             .ok_or_else(|| StreamError::Configuration(
                 "CLAP plugin has no plugin factory".into()
             ))?;
 
-        // Find the plugin descriptor using the filter
         let descriptor = filter(factory.plugin_descriptors())?;
 
-        // Get plugin ID for both metadata and instance creation
         let plugin_id = descriptor.id()
             .ok_or_else(|| StreamError::Configuration(
                 "Plugin descriptor has no ID".into()
             ))?;
 
-        // Convert to string for metadata
         let plugin_id_str = plugin_id.to_str()
             .ok()
             .ok_or_else(|| StreamError::Configuration("Invalid plugin ID".into()))?
             .to_string();
 
-        // Convert to CString for PluginInstance::new()
         let plugin_id_cstring = std::ffi::CString::new(plugin_id_str.clone())
             .map_err(|e| StreamError::Configuration(
                 format!("Failed to create CString from plugin ID: {}", e)
             ))?;
 
-        // Create plugin info
         let plugin_info = PluginInfo {
             name: descriptor.name()
                 .and_then(|s| s.to_str().ok())
@@ -260,7 +241,6 @@ impl ClapPluginHost {
             num_outputs: 2, // Will be updated after activation
         };
 
-        // Create shared state
         let shared_state = Arc::new(ParkingLotMutex::new(SharedState {
             parameters: std::collections::HashMap::new(),
             parameter_generation: 0,
@@ -329,14 +309,12 @@ impl ClapPluginHost {
             return Ok(());
         }
 
-        // Update shared state
         {
             let mut state = self.shared_state.lock();
             state.sample_rate = sample_rate;
             state.max_frames = max_frames;
         }
 
-        // Create host info
         let host_info = HostInfo::new(
             "streamlib",
             "Tato Lab",
@@ -346,13 +324,10 @@ impl ClapPluginHost {
             format!("Failed to create host info: {:?}", e)
         ))?;
 
-        // Clone shared state for closures
         let shared_state_clone = Arc::clone(&self.shared_state);
 
-        // Create plugin instance
         let mut instance = PluginInstance::<HostData>::new(
             |_| {
-                // Create host shared data inside closure
                 HostShared {
                     state: Arc::clone(&shared_state_clone),
                 }
@@ -365,7 +340,6 @@ impl ClapPluginHost {
             format!("Failed to create plugin instance: {:?}", e)
         ))?;
 
-        // Enumerate parameters from the plugin (before activation)
         {
             let mut main_thread_handle = instance.plugin_handle();
             let shared_handle = main_thread_handle.shared();
@@ -449,26 +423,22 @@ impl ClapPluginHost {
             }
         }
 
-        // Create audio configuration
         let audio_config = PluginAudioConfiguration {
             sample_rate: sample_rate as f64,
             min_frames_count: 1,
             max_frames_count: max_frames as u32,
         };
 
-        // Activate plugin audio processor
         let activated = instance.activate(|_, _| (), audio_config)
             .map_err(|e| StreamError::Configuration(
                 format!("Failed to activate plugin: {:?}", e)
             ))?;
 
-        // Start processing
         let audio_processor = activated.start_processing()
             .map_err(|e| StreamError::Configuration(
                 format!("Failed to start audio processing: {:?}", e)
             ))?;
 
-        // Store instance and processor
         *self.instance.lock() = Some(instance);
         *self.audio_processor.lock() = Some(audio_processor);
 
@@ -476,7 +446,6 @@ impl ClapPluginHost {
         self.sample_rate = sample_rate;
         self.buffer_size = max_frames;
 
-        // Pre-allocate all buffers
         self.deinterleave_buffers.clear();
         self.output_buffers.clear();
         for _ in 0..2 {
@@ -499,10 +468,8 @@ impl ClapPluginHost {
             return Ok(());
         }
 
-        // Drop audio processor (stops processing)
         *self.audio_processor.lock() = None;
 
-        // Drop plugin instance (deactivates)
         *self.instance.lock() = None;
 
         self.is_activated = false;
@@ -515,17 +482,14 @@ impl ClapPluginHost {
     pub fn process_audio(&mut self, input: &AudioFrame<2>) -> Result<AudioFrame<2>> {
         let num_samples = input.sample_count();
 
-        // Deinterleave directly into pre-allocated buffers (stereo)
         for i in 0..num_samples {
             let base_idx = i * 2;  // 2 channels (stereo)
             self.deinterleave_buffers[0][i] = input.samples[base_idx];
             self.deinterleave_buffers[1][i] = input.samples[base_idx + 1];
         }
 
-        // Process audio (writes to self.output_buffers)
         self.process_audio_channels_inplace(num_samples)?;
 
-        // Interleave output buffers directly into a new Vec (unavoidable allocation for Arc)
         let output_len = num_samples * 2;
         let mut output_samples = Vec::with_capacity(output_len);
         for i in 0..num_samples {
@@ -541,12 +505,10 @@ impl ClapPluginHost {
     }
 
     fn process_audio_channels_inplace(&mut self, num_samples: usize) -> Result<()> {
-        // Get audio processor (single lock, held for entire operation)
         let mut processor_guard = self.audio_processor.lock();
         let processor = processor_guard.as_mut()
             .ok_or_else(|| StreamError::Configuration("Audio processor not started".into()))?;
 
-        // Create CLAP audio port buffers using pre-allocated buffers
         let mut input_ports_base = AudioPorts::with_capacity(2, 1);
         let mut output_ports_base = AudioPorts::with_capacity(2, 1);
 
@@ -571,7 +533,6 @@ impl ClapPluginHost {
             })
         );
 
-        // Check if parameters changed - only build events if they did
         let state = self.shared_state.lock();
         let current_gen = state.parameter_generation;
         let has_param_changes = current_gen != self.last_parameter_generation;
@@ -598,8 +559,6 @@ impl ClapPluginHost {
 
         let input_events_ref = input_events.as_input();
 
-        // Process audio through plugin - THE ONLY CRITICAL OPERATION
-        // NOTE: input_events must stay alive until after this call
         processor.process(
             &input_ports,
             &mut output_ports,

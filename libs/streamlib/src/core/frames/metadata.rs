@@ -1,26 +1,13 @@
-//! Metadata value types for frame annotations
-//!
-//! Supports common metadata value types for flexibility across
-//! video, audio, and data messages.
 
 use std::collections::HashMap;
 
-/// Metadata value types
-///
-/// Supports common metadata value types for flexibility.
 #[derive(Debug, Clone)]
 pub enum MetadataValue {
-    /// String value
     String(String),
-    /// Integer value
     Int(i64),
-    /// Float value
     Float(f64),
-    /// Boolean value
     Bool(bool),
-    /// Nested metadata
     Map(HashMap<String, MetadataValue>),
-    /// Array of values
     Array(Vec<MetadataValue>),
 }
 

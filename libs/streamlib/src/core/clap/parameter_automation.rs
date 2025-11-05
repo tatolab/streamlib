@@ -57,7 +57,6 @@ impl ParameterAutomation {
             value,
         });
 
-        // Keep sorted by time for efficient processing
         self.scheduled_changes.sort_by(|a, b| {
             a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal)
         });
@@ -91,7 +90,6 @@ impl ParameterAutomation {
     {
         let mut updates = 0;
 
-        // Process scheduled changes that are due
         while !self.scheduled_changes.is_empty() {
             if self.scheduled_changes[0].time <= time {
                 let change = self.scheduled_changes.remove(0);
@@ -102,12 +100,9 @@ impl ParameterAutomation {
             }
         }
 
-        // Apply active modulators
-        // Group updates by parameter ID to support transactions
         let mut param_updates: HashMap<u32, f64> = HashMap::new();
 
         for modulator_state in &mut self.active_modulators {
-            // Check if modulator is active at this time
             if time < modulator_state.start_time {
                 continue;
             }
@@ -118,18 +113,14 @@ impl ParameterAutomation {
                 }
             }
 
-            // Sample modulator
             let mod_value = modulator_state.modulator.sample(time);
 
-            // Map to parameter range
             let (min, max) = modulator_state.range;
             let param_value = min + (mod_value * (max - min));
 
-            // Store update (will be applied with transactions)
             param_updates.insert(modulator_state.param_id, param_value);
         }
 
-        // Apply modulator updates with transactions
         for (param_id, value) in param_updates {
             processor.begin_edit(param_id)?;
             processor.set_parameter(param_id, value)?;
@@ -137,7 +128,6 @@ impl ParameterAutomation {
             updates += 1;
         }
 
-        // Remove expired modulators
         self.active_modulators.retain(|m| {
             if let Some(end_time) = m.end_time {
                 time < end_time
@@ -181,7 +171,6 @@ mod tests {
     use super::*;
     use super::super::parameter_modulation::LfoWaveform;
 
-    // Mock processor for testing
     struct MockProcessor {
         parameters: HashMap<u32, f64>,
     }
@@ -198,19 +187,15 @@ mod tests {
         }
     }
 
-    // Note: This is a minimal mock - real tests would use an actual processor
-    // For now, we'll test the scheduling logic
 
     #[test]
     fn test_schedule_ordering() {
         let mut automation = ParameterAutomation::new();
 
-        // Add changes out of order
         automation.schedule(2.0, 1, 0.5);
         automation.schedule(0.5, 1, 0.1);
         automation.schedule(1.0, 1, 0.3);
 
-        // Check they're sorted
         assert_eq!(automation.scheduled_changes[0].time, 0.5);
         assert_eq!(automation.scheduled_changes[1].time, 1.0);
         assert_eq!(automation.scheduled_changes[2].time, 2.0);
@@ -250,10 +235,8 @@ mod tests {
         let lfo = ParameterModulator::lfo(1.0, LfoWaveform::Sine);
         automation.add_modulator(1, lfo, 0.0, None, 0.0, 1.0);
 
-        // Clear parameter 1
         automation.clear_parameter(1);
 
-        // Parameter 2 should still be there
         assert_eq!(automation.pending_changes(), 1);
         assert_eq!(automation.scheduled_changes[0].param_id, 2);
     }

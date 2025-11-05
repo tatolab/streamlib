@@ -1,6 +1,3 @@
-//! Audio hardware clock (sample-accurate)
-//!
-//! Driven by CoreAudio (macOS), ALSA (Linux), or WASAPI (Windows) callbacks.
 
 use super::Clock;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -95,13 +92,11 @@ mod tests {
         let clock = AudioClock::new(48000, "Test Audio Clock".to_string());
         let base_time = clock.now_ns();
 
-        // Render 48000 samples (1 second worth)
         clock.increment_samples(48000);
 
         let elapsed_ns = clock.now_ns() - base_time;
         let expected_ns = 1_000_000_000; // 1 second in nanoseconds
 
-        // Allow 1ms tolerance for calculation precision
         assert!((elapsed_ns - expected_ns).abs() < 1_000_000);
     }
 
