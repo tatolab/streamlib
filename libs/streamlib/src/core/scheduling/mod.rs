@@ -14,9 +14,8 @@
 //!
 //! Following the threading model documented in `threading.md`:
 //!
-//! 1. **Scheduling Mode** = WHEN to run (loop, reactive, callback)
+//! 1. **Scheduling Mode** = WHEN to run (loop, pull, push)
 //! 2. **Thread Priority** = HOW IMPORTANT (real-time, high, normal)
-//! 3. **Clock Source** = WHAT TIMING (audio, vsync, software)
 //!
 //! These are **orthogonal concerns** that compose cleanly:
 //!
@@ -24,7 +23,6 @@
 //! SchedulingConfig {
 //!     mode: SchedulingMode::Loop,
 //!     priority: ThreadPriority::High,
-//!     clock: ClockSource::Audio,
 //! }
 //! ```
 //!
@@ -39,20 +37,18 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use streamlib::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority, ClockSource};
+//! use streamlib::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 //!
 //! // Audio effect processor - high priority loop
 //! let audio_config = SchedulingConfig {
 //!     mode: SchedulingMode::Loop,
 //!     priority: ThreadPriority::High,
-//!     clock: ClockSource::Audio,
 //! };
 //!
-//! // ML inference - normal priority reactive
+//! // ML inference - normal priority push (event-driven)
 //! let ml_config = SchedulingConfig {
-//!     mode: SchedulingMode::Reactive,
+//!     mode: SchedulingMode::Push,
 //!     priority: ThreadPriority::Normal,
-//!     clock: ClockSource::Software,
 //! };
 //! ```
 
@@ -64,5 +60,4 @@ pub mod config;
 // Re-export core types
 pub use mode::SchedulingMode;
 pub use priority::ThreadPriority;
-pub use clock::{ClockSource, ClockConfig, ClockType, SyncMode};
 pub use config::SchedulingConfig;

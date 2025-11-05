@@ -40,7 +40,6 @@ use crate::core::{
     ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::scheduling::{ClockConfig, ClockType, SyncMode};
 use crate::core::clocks::VideoClock;
 use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread, display_link::{DisplayLink, get_main_display_refresh_rate}};
 use objc2::{rc::Retained, MainThreadMarker};
@@ -236,10 +235,6 @@ impl StreamElement for AppleDisplayProcessor {
     fn as_sink_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
-
-    fn provides_clock(&self) -> Option<Arc<dyn crate::core::clocks::Clock>> {
-        Some(self.video_clock.clone())
-    }
 }
 
 // ============================================================
@@ -352,18 +347,6 @@ impl StreamProcessor for AppleDisplayProcessor {
         }  // Close if let Some(frame)
 
         Ok(())
-    }
-
-    fn clock_config(&self) -> ClockConfig {
-        ClockConfig {
-            provides_clock: true,
-            clock_type: Some(ClockType::Video),
-            clock_name: Some(format!("display_{}_vsync", self.window_id.0)),
-        }
-    }
-
-    fn sync_mode(&self) -> SyncMode {
-        SyncMode::Timestamp
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> {

@@ -1,4 +1,4 @@
-use super::{DynStreamElement, StreamProcessor, StreamElement};
+use super::{DynStreamElement, StreamProcessor};
 use crate::core::{RuntimeContext, Result};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::runtime::WakeupEvent;
@@ -58,10 +58,6 @@ where
 
     fn as_any_mut_dyn(&mut self) -> &mut dyn std::any::Any {
         self
-    }
-
-    fn provides_clock(&self) -> Option<Arc<dyn crate::core::clocks::Clock>> {
-        StreamElement::provides_clock(self)
     }
 
     fn scheduling_config_dyn(&self) -> crate::core::scheduling::SchedulingConfig {

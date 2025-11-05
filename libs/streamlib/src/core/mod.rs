@@ -96,5 +96,4 @@ pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, Text
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
 pub use scheduling::{
     SchedulingConfig, SchedulingMode, ThreadPriority,
-    ClockSource, ClockConfig, ClockType, SyncMode,
 };

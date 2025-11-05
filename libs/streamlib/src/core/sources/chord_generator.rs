@@ -1,5 +1,5 @@
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ClockSource, ThreadPriority};
+use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use crate::core::{Result, StreamOutput};
 use crate::core::frames::AudioFrame;
 use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements};
@@ -328,8 +328,6 @@ impl StreamProcessor for ChordGeneratorProcessor {
         SchedulingConfig {
             mode: SchedulingMode::Pull,  // Manages own loop
             priority: ThreadPriority::RealTime,
-            clock: ClockSource::Audio,
-            provide_clock: false,
         }
     }
 
