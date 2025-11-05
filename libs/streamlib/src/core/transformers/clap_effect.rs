@@ -64,6 +64,9 @@ pub struct ClapEffectConfig {
     pub plugin_path: PathBuf,
     /// Optional plugin name (if bundle contains multiple)
     pub plugin_name: Option<String>,
+    /// Optional plugin index (if bundle contains multiple)
+    /// If both plugin_name and plugin_index are provided, plugin_name takes precedence
+    pub plugin_index: Option<usize>,
 }
 
 impl Default for ClapEffectConfig {
@@ -71,6 +74,7 @@ impl Default for ClapEffectConfig {
         Self {
             plugin_path: PathBuf::new(),
             plugin_name: None,
+            plugin_index: None,
         }
     }
 }
@@ -236,10 +240,18 @@ impl StreamElement for ClapEffectProcessor {
         self.buffer_size = ctx.audio.buffer_size;
 
         // Load the plugin with runtime context values
+        // Priority: plugin_name > plugin_index > first plugin
         let mut host = if let Some(name) = self.config.plugin_name.as_deref() {
             ClapPluginHost::load_by_name(
                 &self.config.plugin_path,
                 name,
+                ctx.audio.sample_rate,
+                ctx.audio.buffer_size
+            )?
+        } else if let Some(index) = self.config.plugin_index {
+            ClapPluginHost::load_by_index(
+                &self.config.plugin_path,
+                index,
                 ctx.audio.sample_rate,
                 ctx.audio.buffer_size
             )?

@@ -13,6 +13,7 @@ use streamlib::core::sources::chord_generator::ChordGeneratorConfig;
 use streamlib::core::transformers::audio_mixer::AudioMixerConfig;
 use streamlib::core::transformers::clap_effect::ClapEffectConfig;
 use streamlib::core::sinks::audio_output::AudioOutputConfig;
+use streamlib::core::traits::StreamProcessor; // Needed for from_config()
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -43,7 +44,7 @@ async fn main() -> Result<()> {
 
     let chord_gen = runtime.add_element_with_config::<ChordGeneratorProcessor>(
         ChordGeneratorConfig {
-            amplitude: 0.15,              // 15% volume (quiet to avoid clipping)
+            amplitude: 0.5,              // 50% volume (louder for more noticeable reverb!)
         }
     ).await?;
     println!("   ✅ C4 (261.63 Hz) on output 'tone_c4'");
@@ -62,16 +63,52 @@ async fn main() -> Result<()> {
     println!("   Inputs: 3 mono signals");
     println!("   Output: Stereo signal at {} Hz\n", audio_config.sample_rate);
 
-    // Step 4: Add CLAP reverb effect
-    println!("🎚️  Adding CLAP reverb effect...");
-    let reverb = runtime.add_element_with_config::<ClapEffectProcessor>(
+    // Step 4: Add CLAP effect chain (4x stacked for extreme processing!)
+    // TODO: Set different parameters on each instance to select different effect types
+    // The plugin logs will show all 13 available parameters with their IDs
+    println!("🎚️  Adding CLAP effect chain (4x Surge XT Effects stacked)...");
+
+    // Effect 1 - Plugin index 0
+    let effect1 = runtime.add_element_with_config::<ClapEffectProcessor>(
         ClapEffectConfig {
             plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
             plugin_name: None,
+            plugin_index: Some(0),
         }
     ).await?;
-    println!("   Loaded: Surge XT Effect (first in bundle)");
-    println!("   Plugin will activate on runtime start\n");
+    println!("   ✅ Effect 1: Surge XT Effects (default settings)");
+
+    // Effect 2 - Same plugin (index 0)
+    let effect2 = runtime.add_element_with_config::<ClapEffectProcessor>(
+        ClapEffectConfig {
+            plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
+            plugin_name: None,
+            plugin_index: Some(0),
+        }
+    ).await?;
+    println!("   ✅ Effect 2: Surge XT Effects");
+
+    // Effect 3 - Same plugin (index 0)
+    let effect3 = runtime.add_element_with_config::<ClapEffectProcessor>(
+        ClapEffectConfig {
+            plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
+            plugin_name: None,
+            plugin_index: Some(0),
+        }
+    ).await?;
+    println!("   ✅ Effect 3: Surge XT Effects");
+
+    // Effect 4 - Same plugin (index 0)
+    let effect4 = runtime.add_element_with_config::<ClapEffectProcessor>(
+        ClapEffectConfig {
+            plugin_path: "/Library/Audio/Plug-Ins/CLAP/Surge XT Effects.clap".into(),
+            plugin_name: None,
+            plugin_index: Some(0),
+        }
+    ).await?;
+    println!("   ✅ Effect 4: Surge XT Effects");
+    println!("   🔗 Chain: Mixer → Effect1 → Effect2 → Effect3 → Effect4 → Speaker");
+    println!("   💥 4x STACKED EFFECTS = Maximum Obnoxiousness!\n");
 
     // Step 5: Add speaker output
     println!("🔊 Adding speaker output...");
@@ -104,30 +141,48 @@ async fn main() -> Result<()> {
     )?;
     println!("   ✅ Chord Generator (G4 mono) → Mixer Input 2");
 
-    // Connect mixer output to reverb input
+    // Connect effect chain: Mixer → Effect1 → Effect2 → Effect3 → Effect4 → Speaker
     runtime.connect(
         mixer.output_port::<AudioFrame<2>>("audio"),
-        reverb.input_port::<AudioFrame<2>>("audio"),
+        effect1.input_port::<AudioFrame<2>>("audio"),
     )?;
-    println!("   ✅ Mixer (stereo) → Reverb");
+    println!("   ✅ Mixer (stereo) → Effect1");
 
-    // Connect reverb output to speaker
     runtime.connect(
-        reverb.output_port::<AudioFrame<2>>("audio"),
+        effect1.output_port::<AudioFrame<2>>("audio"),
+        effect2.input_port::<AudioFrame<2>>("audio"),
+    )?;
+    println!("   ✅ Effect1 → Effect2");
+
+    runtime.connect(
+        effect2.output_port::<AudioFrame<2>>("audio"),
+        effect3.input_port::<AudioFrame<2>>("audio"),
+    )?;
+    println!("   ✅ Effect2 → Effect3");
+
+    runtime.connect(
+        effect3.output_port::<AudioFrame<2>>("audio"),
+        effect4.input_port::<AudioFrame<2>>("audio"),
+    )?;
+    println!("   ✅ Effect3 → Effect4");
+
+    runtime.connect(
+        effect4.output_port::<AudioFrame<2>>("audio"),
         speaker.input_port::<AudioFrame<2>>("audio"),
     )?;
-    println!("   ✅ Reverb → Speaker\n");
+    println!("   ✅ Effect4 → Speaker\n");
 
     // Step 7: Start the runtime
     println!("▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
-    println!("🎵 You should hear a C major chord (C4 + E4 + G4) with reverb!\n");
-    println!("💡 Audio pipeline (Microphone Array Pattern):");
-    println!("   • Chord Generator (single source, like mic array)");
+    println!("🎵 You should hear a C major chord with INSANE effects!\n");
+    println!("💡 Audio pipeline:");
+    println!("   • Chord Generator (3 tones: C4 + E4 + G4)");
     println!("     ├─ Output 'tone_c4' (262 Hz) → Mixer Input 0");
     println!("     ├─ Output 'tone_e4' (330 Hz) → Mixer Input 1");
     println!("     └─ Output 'tone_g4' (392 Hz) → Mixer Input 2");
-    println!("   • Mixer → CLAP Reverb → Speaker\n");
+    println!("   • Mixer → Effect[0] → Effect[1] → Effect[2] → Effect[3] → Speaker");
+    println!("   🌊 4 DIFFERENT SURGE XT EFFECTS IN SERIES = Maximum Obnoxiousness!\n");
     println!("⏰ Clock Synchronization:");
     println!("   • Single hardware-like source @ {:.2} Hz", tick_rate);
     println!("   • All 3 tones generated simultaneously (one callback)");

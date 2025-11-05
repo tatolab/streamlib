@@ -139,16 +139,44 @@ impl ClapPluginHost {
     ) -> Result<Self> {
         if let Some(name) = plugin_name {
             let name = name.to_string();
-            Self::load_internal_with_filter(path, sample_rate, buffer_size, |mut descriptors| {
-                descriptors.find(|desc| {
-                    desc.name()
-                        .and_then(|n| n.to_str().ok())
-                        .map(|n| n == name)
-                        .unwrap_or(false)
-                })
-                .ok_or_else(|| StreamError::Configuration(
-                    format!("Plugin '{}' not found in bundle", name)
-                ))
+            let path_str = path.as_ref().display().to_string();
+
+            Self::load_internal_with_filter(path, sample_rate, buffer_size, |descriptors| {
+                // Collect all descriptors first (can't iterate twice over the same iterator)
+                let all_descs: Vec<_> = descriptors.collect();
+
+                // Collect names for error message
+                let all_names: Vec<String> = all_descs.iter()
+                    .filter_map(|desc| desc.name().and_then(|n| n.to_str().ok()).map(|s| s.to_string()))
+                    .collect();
+
+                // Log all found plugins
+                for plugin_name in &all_names {
+                    tracing::debug!("Found plugin in bundle: '{}'", plugin_name);
+                }
+
+                // Find matching descriptor
+                all_descs.into_iter()
+                    .find(|desc| {
+                        desc.name()
+                            .and_then(|n| n.to_str().ok())
+                            .map(|n| n == name)
+                            .unwrap_or(false)
+                    })
+                    .ok_or_else(|| {
+                        let available = if all_names.is_empty() {
+                            "none found".to_string()
+                        } else {
+                            all_names.join(", ")
+                        };
+
+                        StreamError::Configuration(
+                            format!(
+                                "Plugin '{}' not found in bundle {}. Available plugins: [{}]",
+                                name, path_str, available
+                            )
+                        )
+                    })
             })
         } else {
             Self::load_internal_with_filter(path, sample_rate, buffer_size, |mut descriptors| {
