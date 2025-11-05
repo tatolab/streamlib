@@ -7,6 +7,7 @@ members = [
     "examples/camera-display",  # Example: Camera capture and display
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams
+    "examples/port-registry-demo", # Example: Demonstrating PortRegistry macro
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 
