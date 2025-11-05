@@ -22,8 +22,6 @@ mod runtime_helpers;
 
 pub mod time;
 
-pub mod display_link;
-
 
 pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;

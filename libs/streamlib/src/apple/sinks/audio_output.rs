@@ -8,10 +8,8 @@ use crate::core::frames::AudioFrame;
 use crate::core::ports::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
-use crate::core::clocks::AudioClock;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
-use std::sync::Arc;
 
 pub struct AudioOutputInputPorts {
     pub audio: StreamInput<AudioFrame<2>>,
@@ -30,8 +28,6 @@ pub struct AppleAudioOutputProcessor {
     sample_rate: u32,
     channels: u32,
     buffer_size: usize,
-
-    audio_clock: Arc<AudioClock>,
 }
 
 unsafe impl Send for AppleAudioOutputProcessor {}
@@ -50,7 +46,6 @@ impl AppleAudioOutputProcessor {
             sample_rate: 48000,
             channels: 2,
             buffer_size: 512,
-            audio_clock: Arc::new(AudioClock::new(48000, "AudioOutput".to_string())),
         })
     }
 
@@ -126,7 +121,6 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         tracing::info!("AudioOutput: Successfully cloned connection from input port");
 
         let connection_for_callback = input_connection;
-        let audio_clock = Arc::clone(&self.audio_clock);
 
         tracing::info!("AudioOutput: Setting up audio output with cpal");
 
@@ -134,9 +128,6 @@ impl StreamProcessor for AppleAudioOutputProcessor {
             self.device_id,
             self.buffer_size,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-
-                audio_clock.increment_samples(data.len() as u64);
-
                 if let Some(audio_frame) = connection_for_callback.read_latest() {
                     let samples = &audio_frame.samples;
 
@@ -166,12 +157,6 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         self.device_info = Some(setup.device_info);
         self.sample_rate = setup.sample_rate;
         self.channels = setup.channels;
-
-        self.audio_clock = Arc::new(AudioClock::new(
-            self.sample_rate,
-            format!("CoreAudio ({})", self.device_name)
-        ));
-
         self.stream_setup_done = true;
 
         tracing::info!(

@@ -5,8 +5,7 @@ use crate::core::{
     ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::clocks::VideoClock;
-use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread, display_link::{DisplayLink, get_main_display_refresh_rate}};
+use crate::apple::{metal::MetalDevice, WgpuBridge, main_thread::execute_on_main_thread};
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
 use objc2_app_kit::{NSWindow, NSBackingStoreType, NSWindowStyleMask, NSApplication, NSApplicationActivationPolicy};
@@ -29,9 +28,6 @@ pub struct AppleDisplayProcessor {
     gpu_context: Option<crate::core::GpuContext>,
 
     wgpu_bridge: Option<Arc<WgpuBridge>>,
-
-    video_clock: Arc<VideoClock>,
-    display_link: Option<DisplayLink>,
 
     ports: DisplayInputPorts,
     window_id: WindowId,
@@ -65,18 +61,6 @@ impl AppleDisplayProcessor {
 
         let window_title = "streamlib Display".to_string();
 
-        let refresh_rate = get_main_display_refresh_rate().unwrap_or(60.0);
-        tracing::info!(
-            "Display {}: Detected refresh rate: {:.2} Hz",
-            window_id.0,
-            refresh_rate
-        );
-
-        let video_clock = Arc::new(VideoClock::new(
-            refresh_rate,
-            format!("Display {} VSync", window_id.0)
-        ));
-
         Ok(Self {
             window: None,
             metal_layer: None,
@@ -85,8 +69,6 @@ impl AppleDisplayProcessor {
             metal_command_queue,
             gpu_context: None,
             wgpu_bridge: None,
-            video_clock,
-            display_link: None,
             ports: DisplayInputPorts {
                 video: crate::core::StreamInput::new("video"),
             },
@@ -97,10 +79,6 @@ impl AppleDisplayProcessor {
             frames_rendered: 0,
             window_creation_dispatched: false,
         })
-    }
-
-    pub fn video_clock(&self) -> Arc<VideoClock> {
-        self.video_clock.clone()
     }
 }
 
@@ -146,10 +124,6 @@ impl StreamElement for AppleDisplayProcessor {
             self.window_id.0,
             self.frames_rendered
         );
-
-        if let Some(display_link) = self.display_link.take() {
-            display_link.stop()?;
-        }
 
         if let Some(window) = self.window.take() {
             let window_addr = Retained::into_raw(window) as usize;
@@ -411,17 +385,6 @@ impl AppleDisplayProcessor {
         self.window_creation_dispatched = true;
 
         tracing::info!("Display {}: Window creation dispatched, processor ready", self.window_id.0);
-
-        let display_link = DisplayLink::new(self.video_clock.clone())?;
-        display_link.start()?;
-
-        tracing::info!(
-            "Display {}: CVDisplayLink started at {:.2} Hz",
-            self.window_id.0,
-            display_link.get_refresh_rate()
-        );
-
-        self.display_link = Some(display_link);
 
         Ok(())
     }

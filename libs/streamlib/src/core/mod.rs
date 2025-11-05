@@ -1,7 +1,6 @@
 
 pub mod bus;
 pub mod clap;
-pub mod clocks;
 pub mod connection;
 pub mod connection_manager;
 pub mod context;
@@ -27,7 +26,6 @@ pub use clap::{
     ParameterModulator, LfoWaveform,
     ParameterAutomation, ClapParameterControl,
 };
-pub use clocks::{Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock};
 pub use connection::{ProcessorConnection, ConnectionId};
 pub use connection_manager::ConnectionManager;
 pub use bus::Bus;
