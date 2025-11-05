@@ -6,34 +6,13 @@ use dasp::Frame;
 use dasp::slice::{FromSampleSlice, ToSampleSlice};
 use dasp::Signal;
 
-/// Signal adapter that yields frames from an AudioFrame's interleaved buffer.
-///
-/// This allows AudioFrame to be consumed as a dasp Signal for DSP operations.
 pub struct AudioFrameSignal<const CHANNELS: usize> {
     samples: Arc<Vec<f32>>,
     position: usize,
 }
 
-/// Generic audio frame with compile-time channel count.
-///
-/// Stores interleaved f32 samples: [L, R, L, R, ...] for stereo.
-/// CHANNELS parameter is checked at compile time for type safety.
-///
-/// # Examples
-///
-/// ```ignore
-/// // Mono: AudioFrame<1>
-/// let mono = AudioFrame::<1>::new(vec![0.0; 2048], 0, 0);
-///
-/// // Stereo: AudioFrame<2>
-/// let stereo = AudioFrame::<2>::new(vec![0.0; 2048 * 2], 0, 0);
-///
-/// // Quad: AudioFrame<4>
-/// let quad = AudioFrame::<4>::new(vec![0.0; 2048 * 4], 0, 0);
-/// ```
 #[derive(Clone)]
 pub struct AudioFrame<const CHANNELS: usize> {
-    /// Interleaved audio samples (e.g., [L, R, L, R, ...] for stereo)
     pub samples: Arc<Vec<f32>>,
     pub timestamp_ns: i64,
     pub frame_number: u64,
@@ -41,10 +20,6 @@ pub struct AudioFrame<const CHANNELS: usize> {
 }
 
 impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
-    /// Create a new audio frame with interleaved samples.
-    ///
-    /// # Panics
-    /// Panics if samples.len() is not divisible by CHANNELS.
     pub fn new(
         samples: Vec<f32>,
         timestamp_ns: i64,
@@ -66,39 +41,18 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
         }
     }
 
-    /// Number of sample frames (not individual samples).
-    /// For stereo with 2048 interleaved samples, returns 1024.
     pub fn sample_count(&self) -> usize {
         self.samples.len() / CHANNELS
     }
 
-    /// Check if buffer has expected number of sample frames.
     pub fn validate_buffer_size(&self, expected_size: usize) -> bool {
         self.sample_count() == expected_size
     }
 
-    /// Get number of channels (compile-time constant).
     pub fn channels(&self) -> usize {
         CHANNELS
     }
 
-    /// Convert AudioFrame to a dasp Signal for DSP operations.
-    ///
-    /// This enables the "double read" pattern:
-    /// 1. StreamInput.read() → pops AudioFrame from rtrb
-    /// 2. AudioFrame.read() → returns dasp Signal for processing
-    ///
-    /// # Returns
-    /// A Signal that yields frames of type `[f32; CHANNELS]`.
-    ///
-    /// # Example
-    /// ```ignore
-    /// if let Some(audio_frame) = self.input.read_latest() {
-    ///     let signal = audio_frame.read();
-    ///     // Now use dasp signal combinators:
-    ///     let processed = signal.map(|frame| frame * 0.5);
-    /// }
-    /// ```
     pub fn read(&self) -> AudioFrameSignal<CHANNELS> {
         AudioFrameSignal {
             samples: Arc::clone(&self.samples),
@@ -118,10 +72,6 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
         self.timestamp_ns as f64 / 1_000_000_000.0
     }
 
-    /// Convert interleaved samples to dasp frames.
-    ///
-    /// # Panics
-    /// Panics if F::CHANNELS doesn't match CHANNELS.
     pub fn as_frames<F>(&self) -> &[F]
     where
         F: Frame<Sample = f32>,
@@ -131,15 +81,10 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
             "Frame type has {} channels but AudioFrame has {} channels",
             F::CHANNELS, CHANNELS);
 
-        // Use FromSampleSlice to convert &[f32] to &[[f32; N]]
         FromSampleSlice::from_sample_slice(&self.samples)
             .expect("Sample count must be divisible by channel count")
     }
 
-    /// Create AudioFrame from dasp frames.
-    ///
-    /// # Panics
-    /// Panics if F::CHANNELS doesn't match CHANNELS.
     pub fn from_frames<F>(
         frames: &[F],
         timestamp_ns: i64,
@@ -153,7 +98,6 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
             "Frame type has {} channels but AudioFrame has {} channels",
             F::CHANNELS, CHANNELS);
 
-        // Use ToSampleSlice to convert &[[f32; N]] to &[f32]
         let sample_slice: &[f32] = frames.to_sample_slice();
         let samples = sample_slice.to_vec();
         Self::new(samples, timestamp_ns, frame_number)
@@ -190,10 +134,6 @@ impl<const CHANNELS: usize> PortMessage for AudioFrame<CHANNELS> {
     }
 }
 
-/// Implement dasp Signal trait for AudioFrameSignal.
-///
-/// This allows AudioFrame data to be processed using dasp's signal combinators
-/// (map, add_amp, zip, etc.) for audio DSP operations.
 impl<const CHANNELS: usize> Signal for AudioFrameSignal<CHANNELS>
 where
     [f32; CHANNELS]: Frame<Sample = f32>,
@@ -201,13 +141,10 @@ where
     type Frame = [f32; CHANNELS];
 
     fn next(&mut self) -> Self::Frame {
-        // Check if we've reached the end
         if self.position >= self.samples.len() {
-            // Return equilibrium (silence) after buffer exhausted
             return [0.0; CHANNELS];
         }
 
-        // Extract next frame (CHANNELS samples)
         let mut frame = [0.0; CHANNELS];
         for i in 0..CHANNELS {
             if self.position + i < self.samples.len() {
@@ -326,14 +263,12 @@ mod tests {
         ];
         let frame = AudioFrame::<2>::new(samples, 0, 0);
 
-        // Read as dasp signal
         let mut signal = frame.read();
 
         assert_eq!(signal.next(), [1.0, 2.0]);
         assert_eq!(signal.next(), [3.0, 4.0]);
         assert_eq!(signal.next(), [5.0, 6.0]);
 
-        // After exhausting buffer, returns silence
         assert_eq!(signal.next(), [0.0, 0.0]);
         assert_eq!(signal.next(), [0.0, 0.0]);
     }

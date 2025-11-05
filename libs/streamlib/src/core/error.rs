@@ -1,7 +1,3 @@
-//! Error types for streamlib
-//!
-//! Defines the core error types used throughout streamlib.
-//! Platform-specific crates can extend these with their own error types.
 
 use thiserror::Error;
 
@@ -47,5 +43,4 @@ pub enum StreamError {
     Other(#[from] anyhow::Error),
 }
 
-/// Result type that uses StreamError
 pub type Result<T> = std::result::Result<T, StreamError>;

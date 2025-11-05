@@ -1,25 +1,3 @@
-//! streamlib-mcp: MCP Server Integration for AI Agents
-//!
-//! Provides Model Context Protocol (MCP) server functionality for streamlib,
-//! enabling AI agents to discover and interact with streaming processors.
-//!
-//! ## Architecture
-//!
-//! - **Resources**: Processor descriptors (read-only capability discovery)
-//! - **Tools**: Actions like add_processor, connect_processors (runtime operations)
-//!
-//! ## Usage
-//!
-//! ```no_run
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! use streamlib_mcp::McpServer;
-//! use crate::core::global_registry;
-//!
-//! let server = McpServer::new(global_registry());
-//! server.run_stdio().await?;
-//! # Ok(())
-//! # }
-//! ```
 
 mod error;
 mod resources;
@@ -36,7 +14,6 @@ use std::future::Future;
 use std::collections::HashSet;
 use tokio::sync::Mutex as TokioMutex;
 
-// MCP protocol imports
 use rmcp::{
     model::*,
     ServerHandler, ServiceExt, RoleServer,
@@ -51,43 +28,19 @@ use rmcp::{
     ErrorData as RmcpError,
 };
 
-/// MCP Server for streamlib
-///
-/// Exposes processor registry and runtime control via MCP protocol for AI agent integration.
-/// Supports both stdio and HTTP transports.
-///
-/// # Modes
-///
-/// - **Discovery Mode** (registry only): `McpServer::new(registry)` - AI agents can discover processor types
-/// - **Application Mode** (registry + runtime): `McpServer::with_runtime(registry, runtime)` - AI agents can control running system
 pub struct McpServer {
-    /// Processor registry (shared with runtime)
     registry: Arc<Mutex<ProcessorRegistry>>,
 
-    /// Optional runtime for live system control
-    /// If None, MCP server is in "discovery mode" (can only list processor types)
-    /// If Some, MCP server is in "application mode" (can add/remove processors, list connections, etc.)
-    /// Uses tokio::sync::Mutex for async operations across await points
     runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
 
-    /// Granted permissions (e.g., "camera", "display")
-    /// Set via --allow-camera, --allow-display CLI flags
     permissions: Arc<HashSet<String>>,
 
-    /// Server name for MCP identification
     name: String,
 
-    /// Server version
     version: String,
 }
 
 impl McpServer {
-    /// Create a new MCP server in discovery mode (registry only)
-    ///
-    /// AI agents can discover available processor types but cannot control a running runtime.
-    ///
-    /// # Arguments
-    /// * `registry` - Shared processor registry
     pub fn new(registry: Arc<Mutex<ProcessorRegistry>>) -> Self {
         Self {
             registry,
@@ -98,14 +51,6 @@ impl McpServer {
         }
     }
 
-    /// Create a new MCP server in application mode (registry + runtime)
-    ///
-    /// AI agents can both discover processor types AND control the running runtime
-    /// (add/remove processors, list connections, etc.).
-    ///
-    /// # Arguments
-    /// * `registry` - Shared processor registry (for type discovery)
-    /// * `runtime` - Shared runtime (for live system control)
     pub fn with_runtime(
         registry: Arc<Mutex<ProcessorRegistry>>,
         runtime: Arc<TokioMutex<StreamRuntime>>,
@@ -119,13 +64,11 @@ impl McpServer {
         }
     }
 
-    /// Set permissions (typically called after with_runtime)
     pub fn with_permissions(mut self, permissions: HashSet<String>) -> Self {
         self.permissions = Arc::new(permissions);
         self
     }
 
-    /// Create with custom name and version (discovery mode)
     pub fn with_info(
         registry: Arc<Mutex<ProcessorRegistry>>,
         name: impl Into<String>,
@@ -140,14 +83,9 @@ impl McpServer {
         }
     }
 
-    /// Run MCP server over stdio (for Claude Desktop, etc.)
-    ///
-    /// This is the primary mode for local AI agents.
-    /// Communication happens via stdin/stdout.
     pub async fn run_stdio(&self) -> Result<()> {
         tracing::info!("Starting MCP server on stdio");
 
-        // Create handler with registry, optional runtime, and permissions
         let handler = StreamlibMcpHandler {
             registry: Arc::clone(&self.registry),
             runtime: self.runtime.as_ref().map(Arc::clone),
@@ -156,33 +94,20 @@ impl McpServer {
             version: self.version.clone(),
         };
 
-        // Start stdio server
         let service = handler.serve(stdio()).await
             .map_err(|e| McpError::Protocol(format!("Failed to start stdio server: {}", e)))?;
 
         tracing::info!("MCP server running on stdio, awaiting requests");
 
-        // Wait for completion
         service.waiting().await
             .map_err(|e| McpError::Protocol(format!("Server error: {}", e)))?;
 
         Ok(())
     }
 
-    /// Run MCP server over HTTP
-    ///
-    /// This mode is useful for remote AI agents or distributed systems.
-    /// Uses streamable HTTP transport.
-    ///
-    /// If the requested port is in use, automatically tries the next available port.
-    ///
-    /// # Arguments
-    /// * `bind_addr` - Address to bind to (e.g., "127.0.0.1:3050")
     pub async fn run_http(&self, bind_addr: &str) -> Result<()> {
-        // Parse the bind address to extract host and port
         let (host, requested_port) = Self::parse_bind_addr(bind_addr)?;
 
-        // Find an available port starting from the requested port
         let (actual_host, actual_port) = Self::find_available_port(&host, requested_port).await?;
         let actual_bind_addr = format!("{}:{}", actual_host, actual_port);
 
@@ -196,7 +121,6 @@ impl McpServer {
 
         tracing::info!("Starting MCP server on HTTP at {}", actual_bind_addr);
 
-        // Create factory for MCP services
         let registry = Arc::clone(&self.registry);
         let runtime = self.runtime.as_ref().map(Arc::clone);
         let permissions = Arc::clone(&self.permissions);
@@ -213,7 +137,6 @@ impl McpServer {
             })
         };
 
-        // Create StreamableHttpService with local session manager
         let session_manager = Arc::new(LocalSessionManager::default());
         let http_service = StreamableHttpService::new(
             service_factory,
@@ -221,13 +144,10 @@ impl McpServer {
             StreamableHttpServerConfig::default(),
         );
 
-        // Create Axum router with the MCP service
-        // Note: nest_service at root is not supported, use fallback_service
         let app = axum::Router::new()
             .nest_service("/mcp", http_service.clone())
             .fallback_service(http_service);
 
-        // Create TCP listener
         let listener = tokio::net::TcpListener::bind(&actual_bind_addr)
             .await
             .map_err(|e| McpError::Protocol(format!("Failed to bind to {}: {}", actual_bind_addr, e)))?;
@@ -235,7 +155,6 @@ impl McpServer {
         tracing::info!("MCP server running on HTTP at {}", actual_bind_addr);
         tracing::info!("Access the MCP server at http://{}/mcp", actual_bind_addr);
 
-        // Serve the application
         axum::serve(listener, app)
             .await
             .map_err(|e| McpError::Protocol(format!("Server error: {}", e)))?;
@@ -243,7 +162,6 @@ impl McpServer {
         Ok(())
     }
 
-    /// Parse bind address into host and port
     fn parse_bind_addr(bind_addr: &str) -> Result<(String, u16)> {
         let parts: Vec<&str> = bind_addr.rsplitn(2, ':').collect();
         if parts.len() != 2 {
@@ -260,9 +178,6 @@ impl McpServer {
         Ok((parts[1].to_string(), port))
     }
 
-    /// Find an available port starting from the requested port
-    ///
-    /// Tries up to 100 consecutive ports before giving up
     async fn find_available_port(host: &str, start_port: u16) -> Result<(String, u16)> {
         const MAX_ATTEMPTS: u16 = 100;
 
@@ -270,14 +185,11 @@ impl McpServer {
             let port = start_port.saturating_add(offset);
             let addr = format!("{}:{}", host, port);
 
-            // Try to bind to check if port is available
             match tokio::net::TcpListener::bind(&addr).await {
                 Ok(_) => {
-                    // Port is available
                     return Ok((host.to_string(), port));
                 }
                 Err(_) => {
-                    // Port in use, try next
                     continue;
                 }
             }
@@ -292,23 +204,19 @@ impl McpServer {
         ))
     }
 
-    /// Get server name
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Get server version
     pub fn version(&self) -> &str {
         &self.version
     }
 
-    /// Get processor registry
     pub fn registry(&self) -> Arc<Mutex<ProcessorRegistry>> {
         Arc::clone(&self.registry)
     }
 }
 
-/// Internal MCP handler that implements the protocol
 #[derive(Clone)]
 struct StreamlibMcpHandler {
     registry: Arc<Mutex<ProcessorRegistry>>,
@@ -318,7 +226,6 @@ struct StreamlibMcpHandler {
     version: String,
 }
 
-// Implement ServerHandler for MCP protocol
 impl ServerHandler for StreamlibMcpHandler {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -340,7 +247,6 @@ impl ServerHandler for StreamlibMcpHandler {
         }
     }
 
-    // Implement resource listing
     fn list_resources(
         &self,
         _params: Option<PaginatedRequestParam>,
@@ -357,7 +263,6 @@ impl ServerHandler for StreamlibMcpHandler {
                     Some(serde_json::json!({"error": e.to_string()}))
                 ))?;
 
-            // Convert our Resource type to rmcp's Resource type
             let resources: Vec<Resource> = resources
                 .into_iter()
                 .map(|r| {
@@ -381,7 +286,6 @@ impl ServerHandler for StreamlibMcpHandler {
         }
     }
 
-    // Implement resource reading
     fn read_resource(
         &self,
         params: ReadResourceRequestParam,
@@ -409,7 +313,6 @@ impl ServerHandler for StreamlibMcpHandler {
         }
     }
 
-    // Implement tool listing
     async fn list_tools(
         &self,
         _params: Option<PaginatedRequestParam>,
@@ -419,11 +322,9 @@ impl ServerHandler for StreamlibMcpHandler {
 
         let tools = tools::list_tools();
 
-        // Convert to rmcp Tool type
         let tools: Vec<Tool> = tools
             .into_iter()
             .map(|t| {
-                // Convert JSON Value to Arc<Map>
                 let input_schema = if let serde_json::Value::Object(map) = t.input_schema {
                     Arc::new(map)
                 } else {
@@ -444,7 +345,6 @@ impl ServerHandler for StreamlibMcpHandler {
         })
     }
 
-    // Implement tool calling
     async fn call_tool(
         &self,
         params: CallToolRequestParam,
@@ -452,10 +352,8 @@ impl ServerHandler for StreamlibMcpHandler {
     ) -> std::result::Result<CallToolResult, RmcpError> {
         tracing::info!("MCP: call_tool called: {} with args: {:?}", params.name, params.arguments);
 
-        // Convert arguments from Map to Value
         let arguments = serde_json::Value::Object(params.arguments.unwrap_or_default());
 
-        // Pass registry, runtime, and permissions to tool execution
         let result = tools::execute_tool(
             &params.name,
             arguments,

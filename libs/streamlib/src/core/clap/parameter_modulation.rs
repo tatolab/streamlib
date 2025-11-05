@@ -160,7 +160,6 @@ impl ParameterModulator {
                 match stage {
                     EnvelopeStage::Attack => {
                         if elapsed >= *attack_time {
-                            // Move to decay stage
                             *stage = EnvelopeStage::Decay;
                             *stage_start_time = time;
                             1.0
@@ -171,7 +170,6 @@ impl ParameterModulator {
 
                     EnvelopeStage::Decay => {
                         if elapsed >= *decay_time {
-                            // Move to sustain stage
                             *stage = EnvelopeStage::Sustain;
                             *stage_start_time = time;
                             *sustain_level
@@ -187,7 +185,6 @@ impl ParameterModulator {
                         if let Some(release_t) = release_time_actual {
                             let elapsed = time - *release_t;
                             if elapsed >= *release_time {
-                                // Envelope complete
                                 *stage = EnvelopeStage::Idle;
                                 *trigger_time = None;
                                 0.0
@@ -251,19 +248,15 @@ mod tests {
     fn test_lfo_sine() {
         let mut lfo = ParameterModulator::lfo(1.0, LfoWaveform::Sine);
 
-        // At t=0, sine should be at middle (0.5)
         let v0 = lfo.sample(0.0);
         assert!((v0 - 0.5).abs() < 0.01);
 
-        // At t=0.25, sine should be at peak (1.0)
         let v1 = lfo.sample(0.25);
         assert!((v1 - 1.0).abs() < 0.01);
 
-        // At t=0.5, sine should be at middle (0.5)
         let v2 = lfo.sample(0.5);
         assert!((v2 - 0.5).abs() < 0.01);
 
-        // At t=0.75, sine should be at trough (0.0)
         let v3 = lfo.sample(0.75);
         assert!((v3 - 0.0).abs() < 0.01);
     }
@@ -272,11 +265,9 @@ mod tests {
     fn test_lfo_square() {
         let mut lfo = ParameterModulator::lfo(1.0, LfoWaveform::Square);
 
-        // First half of cycle should be 0
         assert_eq!(lfo.sample(0.0), 0.0);
         assert_eq!(lfo.sample(0.25), 0.0);
 
-        // Second half should be 1
         assert_eq!(lfo.sample(0.5), 1.0);
         assert_eq!(lfo.sample(0.75), 1.0);
     }
@@ -285,19 +276,14 @@ mod tests {
     fn test_ramp() {
         let mut ramp = ParameterModulator::ramp(0.0, 1.0, 0.0, 2.0);
 
-        // Before start
         assert_eq!(ramp.sample(-1.0), 0.0);
 
-        // At start
         assert_eq!(ramp.sample(0.0), 0.0);
 
-        // Halfway
         assert!((ramp.sample(1.0) - 0.5).abs() < 0.01);
 
-        // At end
         assert_eq!(ramp.sample(2.0), 1.0);
 
-        // After end
         assert_eq!(ramp.sample(3.0), 1.0);
     }
 
@@ -310,36 +296,27 @@ mod tests {
             0.3,  // release
         );
 
-        // Before trigger
         assert_eq!(env.sample(0.0), 0.0);
 
-        // Trigger envelope
         env.trigger(0.0);
 
-        // During attack (should rise to 1.0)
         let v1 = env.sample(0.05);
         assert!(v1 > 0.0 && v1 < 1.0);
 
-        // At end of attack
         let v2 = env.sample(0.1);
         assert!((v2 - 1.0).abs() < 0.01);
 
-        // During decay (should fall to sustain)
         let v3 = env.sample(0.2);
         assert!(v3 > 0.7 && v3 < 1.0);
 
-        // At sustain
         let v4 = env.sample(0.5);
         assert!((v4 - 0.7).abs() < 0.01);
 
-        // Release envelope
         env.release(1.0);
 
-        // During release (should fall to 0)
         let v5 = env.sample(1.15);
         assert!(v5 > 0.0 && v5 < 0.7);
 
-        // After release complete
         let v6 = env.sample(2.0);
         assert_eq!(v6, 0.0);
     }

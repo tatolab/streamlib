@@ -1,7 +1,3 @@
-//! Runtime context passed to stream elements during initialization
-//!
-//! Provides access to shared runtime resources like GPU context, audio configuration,
-//! and future resources (clocks, allocators, buffer pools).
 
 use super::{GpuContext, AudioContext};
 use crate::core::clocks::Clock;

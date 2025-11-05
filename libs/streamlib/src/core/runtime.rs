@@ -21,7 +21,6 @@ pub enum WakeupEvent {
     Shutdown,
 }
 
-// Re-export AudioContext as the public audio configuration type
 pub use crate::core::context::AudioContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,8 +115,6 @@ impl StreamRuntime {
         self.audio_context = config;
     }
 
-    // NOTE: validate_audio_frame() removed - channel count validation now done at compile time via AudioFrame<CHANNELS>
-    // Sample rate enforcement is handled by RuntimeContext when processors are started
 
 
     pub fn set_event_loop(&mut self, event_loop: EventLoopFn) {
@@ -209,7 +206,6 @@ impl StreamRuntime {
         let runtime_context = crate::core::RuntimeContext::new(gpu_context.clone());
         let processor_for_thread = Arc::clone(&processor_arc);
 
-        // Get scheduling configuration
         let sched_config = {
             let processor = processor_arc.lock();
             processor.scheduling_config_dyn()
@@ -226,23 +222,16 @@ impl StreamRuntime {
                 }
             }
 
-            // Execute according to scheduling mode
             match sched_config.mode {
                 crate::core::scheduling::SchedulingMode::Pull => {
-                    // Pull mode - processor manages its own callback thread
-                    // Runtime does NOT spawn a thread or drive execution
-                    // The processor's hardware callback calls process() directly
                     tracing::info!("[{}] Pull mode - processor manages own callback, waiting for shutdown", id_for_thread);
 
-                    // Just wait for shutdown signal
                     let _ = shutdown_rx.recv();
                     tracing::info!("[{}] Shutdown signal received (pull mode)", id_for_thread);
                 }
 
                 crate::core::scheduling::SchedulingMode::Loop => {
-                    // Continuous loop mode - run process() repeatedly
                     loop {
-                        // Check for shutdown
                         match shutdown_rx.try_recv() {
                             Ok(_) => {
                                 tracing::info!("[{}] Shutdown signal received", id_for_thread);
@@ -253,11 +242,9 @@ impl StreamRuntime {
                                 break;
                             }
                             Err(crossbeam_channel::TryRecvError::Empty) => {
-                                // Continue processing
                             }
                         }
 
-                        // Process
                         {
                             let mut processor = processor_for_thread.lock();
                             if let Err(e) = processor.process_dyn() {
@@ -265,13 +252,11 @@ impl StreamRuntime {
                             }
                         }
 
-                        // Small sleep to avoid busy-waiting and give other threads a chance
                         std::thread::sleep(std::time::Duration::from_micros(10));
                     }
                 }
 
                 crate::core::scheduling::SchedulingMode::Push => {
-                    // Event-driven mode - wait for wakeup events
                     loop {
                         crossbeam_channel::select! {
                             recv(wakeup_rx) -> result => {
@@ -466,7 +451,6 @@ impl StreamRuntime {
             }
         }
 
-        // Get port types and verify compatibility
         let (source_port_type, dest_port_type) = {
             let source_guard = source_processor.lock();
             let dest_guard = dest_processor.lock();
@@ -497,7 +481,6 @@ impl StreamRuntime {
             (src_type, dst_type)
         };
 
-        // Create typed connection based on port type and wire to processors
         let connection: Arc<dyn std::any::Any + Send + Sync> = match source_port_type {
             PortType::Audio1 => {
                 let conn = self.bus.create_audio_connection::<1>(
@@ -571,7 +554,6 @@ impl StreamRuntime {
             },
         };
 
-        // Wire the connection to both processors
         {
             let mut source_guard = source_processor.lock();
             let success = source_guard.wire_output_connection(source_port, connection.clone());
@@ -626,17 +608,14 @@ impl StreamRuntime {
 
         let connections_to_wire = std::mem::take(&mut self.pending_connections);
 
-        // Use the already-fixed connect_processors_internal for each pending connection
         for pending in connections_to_wire {
             let source = format!("{}.{}", pending.source_processor_id, pending.source_port_name);
             let destination = format!("{}.{}", pending.dest_processor_id, pending.dest_port_name);
 
             tracing::info!("Wiring connection: {} → {}", source, destination);
 
-            // Call the connection method
             self.connect_at_runtime(&source, &destination)?;
 
-            // Wire wakeup notifications for reactive processors
             {
                 let processors = self.processors.lock();
                 let source_handle = processors.get(&pending.source_processor_id);
@@ -661,7 +640,6 @@ impl StreamRuntime {
 
         tracing::info!("All pending connections wired successfully");
 
-        // Send wakeup event to Pull mode processors so they can initialize
         tracing::debug!("Sending initialization wakeup to Pull mode processors");
         {
             let processors = self.processors.lock();
@@ -917,7 +895,6 @@ impl StreamRuntime {
 
             let processor_for_thread = Arc::clone(&processor_arc);
 
-            // Get scheduling configuration
             let sched_config = {
                 let processor = processor_arc.lock();
                 processor.scheduling_config_dyn()
@@ -934,14 +911,10 @@ impl StreamRuntime {
                     }
                 }
 
-                // Execute according to scheduling mode
                 match sched_config.mode {
                     crate::core::scheduling::SchedulingMode::Pull => {
-                        // Pull mode - processor manages its own callback thread
-                        // Wait for connections to be wired, then call process() once for initialization
                         tracing::info!("[{}] Pull mode - waiting for connections to be wired", id_for_thread);
 
-                        // Wait for first wakeup event (sent after connections wired)
                         let init_result = crossbeam_channel::select! {
                             recv(wakeup_rx) -> result => {
                                 match result {
@@ -969,15 +942,12 @@ impl StreamRuntime {
 
                         tracing::info!("[{}] Pull mode initialized - processor manages own callback, waiting for shutdown", id_for_thread);
 
-                        // Wait for shutdown signal
                         let _ = shutdown_rx.recv();
                         tracing::info!("[{}] Shutdown signal received (pull mode)", id_for_thread);
                     }
 
                     crate::core::scheduling::SchedulingMode::Loop => {
-                        // Continuous loop mode - run process() repeatedly
                         loop {
-                            // Check for shutdown
                             match shutdown_rx.try_recv() {
                                 Ok(_) => {
                                     tracing::info!("[{}] Shutdown signal received", id_for_thread);
@@ -988,11 +958,9 @@ impl StreamRuntime {
                                     break;
                                 }
                                 Err(crossbeam_channel::TryRecvError::Empty) => {
-                                    // Continue processing
                                 }
                             }
 
-                            // Process
                             {
                                 let mut processor = processor_for_thread.lock();
                                 if let Err(e) = processor.process_dyn() {
@@ -1000,13 +968,11 @@ impl StreamRuntime {
                                 }
                             }
 
-                            // Small sleep to avoid busy-waiting
                             std::thread::sleep(std::time::Duration::from_micros(10));
                         }
                     }
 
                     crate::core::scheduling::SchedulingMode::Push => {
-                        // Event-driven mode - wait for wakeup events
                         loop {
                             crossbeam_channel::select! {
                                 recv(wakeup_rx) -> result => {
@@ -1291,7 +1257,6 @@ mod tests {
         }
     }
 
-    // NOTE: test_audio_config_validation removed - channel validation now done at compile time via AudioFrame<CHANNELS>
 
     #[test]
     fn test_audio_config_getter_setter() {

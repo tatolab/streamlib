@@ -1,38 +1,3 @@
-//! CLAP Audio Effect Processor
-//!
-//! Transformer that hosts CLAP audio plugins using the reusable `ClapPluginHost` infrastructure.
-//!
-//! # Architecture
-//!
-//! ```text
-//! ClapEffectProcessor (Transformer)
-//!   ├─ ClapPluginHost (Reusable infrastructure)
-//!   │   ├─ Plugin loading & lifecycle
-//!   │   ├─ Parameter management
-//!   │   └─ Audio processing
-//!   └─ Port structure (StreamElement integration)
-//! ```
-//!
-//! # Example
-//!
-//! ```ignore
-//! use streamlib::ClapEffectProcessor;
-//!
-//! // Load plugin
-//! let mut reverb = ClapEffectProcessor::load_by_name(
-//!     "/path/to/reverb.clap",
-//!     "Reverb",
-//!     48000,
-//!     2048
-//! )?;
-//!
-//! // Configure
-//! reverb.activate(48000, 2048)?;
-//! reverb.set_parameter_by_id(0, 0.8)?;
-//!
-//! // Process (via StreamElement)
-//! reverb.process()?;
-//! ```
 
 use crate::core::{
     Result,
@@ -47,25 +12,18 @@ use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 
-/// Input ports for CLAP effect processors
 pub struct ClapEffectInputPorts {
     pub audio: StreamInput<AudioFrame<2>>,
 }
 
-/// Output ports for CLAP effect processors
 pub struct ClapEffectOutputPorts {
     pub audio: StreamOutput<AudioFrame<2>>,
 }
 
-/// Configuration for CLAP effect processors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClapEffectConfig {
-    /// Path to the CLAP plugin file
     pub plugin_path: PathBuf,
-    /// Optional plugin name (if bundle contains multiple)
     pub plugin_name: Option<String>,
-    /// Optional plugin index (if bundle contains multiple)
-    /// If both plugin_name and plugin_index are provided, plugin_name takes precedence
     pub plugin_index: Option<usize>,
 }
 
@@ -79,33 +37,21 @@ impl Default for ClapEffectConfig {
     }
 }
 
-/// CLAP plugin effect processor
-///
-/// Hosts CLAP audio plugins and integrates them into streamlib's processing pipeline.
-///
-/// This is a thin wrapper over `ClapPluginHost` that provides StreamElement integration.
 pub struct ClapEffectProcessor {
-    /// Configuration (stored until start())
     config: ClapEffectConfig,
 
-    /// CLAP plugin host (loaded in start())
     host: Option<ClapPluginHost>,
 
-    /// Input ports (transformer-specific)
     input_ports: ClapEffectInputPorts,
 
-    /// Output ports (transformer-specific)
     output_ports: ClapEffectOutputPorts,
 
-    /// Sample rate (from RuntimeContext)
     sample_rate: u32,
 
-    /// Buffer size (from RuntimeContext)
     buffer_size: usize,
 }
 
 impl ClapEffectProcessor {
-    /// Get plugin metadata
     pub fn plugin_info(&self) -> Result<&PluginInfo> {
         use crate::core::StreamError;
         self.host.as_ref()
@@ -113,7 +59,6 @@ impl ClapEffectProcessor {
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
     }
 
-    /// List all parameters
     pub fn list_parameters(&self) -> Result<Vec<ParameterInfo>> {
         use crate::core::StreamError;
         self.host.as_ref()
@@ -121,7 +66,6 @@ impl ClapEffectProcessor {
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
     }
 
-    /// Get parameter value
     pub fn get_parameter(&self, id: u32) -> Result<f64> {
         use crate::core::StreamError;
         self.host.as_ref()
@@ -129,7 +73,6 @@ impl ClapEffectProcessor {
             .get_parameter(id)
     }
 
-    /// Set parameter value (in native units)
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
         use crate::core::StreamError;
         self.host.as_mut()
@@ -137,7 +80,6 @@ impl ClapEffectProcessor {
             .set_parameter(id, value)
     }
 
-    /// Begin parameter edit transaction
     pub fn begin_edit(&mut self, id: u32) -> Result<()> {
         use crate::core::StreamError;
         self.host.as_mut()
@@ -145,7 +87,6 @@ impl ClapEffectProcessor {
             .begin_edit(id)
     }
 
-    /// End parameter edit transaction
     pub fn end_edit(&mut self, id: u32) -> Result<()> {
         use crate::core::StreamError;
         self.host.as_mut()
@@ -153,7 +94,6 @@ impl ClapEffectProcessor {
             .end_edit(id)
     }
 
-    /// Activate the plugin
     pub fn activate(&mut self, sample_rate: u32, max_frames: usize) -> Result<()> {
         use crate::core::StreamError;
         self.host.as_mut()
@@ -161,7 +101,6 @@ impl ClapEffectProcessor {
             .activate(sample_rate, max_frames)
     }
 
-    /// Deactivate the plugin
     pub fn deactivate(&mut self) -> Result<()> {
         use crate::core::StreamError;
         self.host.as_mut()
@@ -169,35 +108,26 @@ impl ClapEffectProcessor {
             .deactivate()
     }
 
-    /// Process stereo audio frame through the plugin
-    ///
-    /// Takes an AudioFrame, processes it through CLAP, and returns the processed frame.
     fn process_audio_through_clap(&mut self, input_frame: &AudioFrame<2>) -> Result<AudioFrame<2>> {
         use crate::core::StreamError;
 
         let host = self.host.as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
 
-        // Process through CLAP (samples are already interleaved)
         let output_frame = host.process_audio(input_frame)?;
 
         Ok(output_frame)
     }
 
-    /// Get input ports
     pub fn input_ports(&mut self) -> &mut ClapEffectInputPorts {
         &mut self.input_ports
     }
 
-    /// Get output ports
     pub fn output_ports(&mut self) -> &mut ClapEffectOutputPorts {
         &mut self.output_ports
     }
 }
 
-// ============================================================
-// StreamElement Implementation (v2.0.0 Architecture)
-// ============================================================
 
 impl StreamElement for ClapEffectProcessor {
     fn name(&self) -> &str {
@@ -235,12 +165,9 @@ impl StreamElement for ClapEffectProcessor {
     fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
         
 
-        // Store runtime context values
         self.sample_rate = ctx.audio.sample_rate;
         self.buffer_size = ctx.audio.buffer_size;
 
-        // Load the plugin with runtime context values
-        // Priority: plugin_name > plugin_index > first plugin
         let mut host = if let Some(name) = self.config.plugin_name.as_deref() {
             ClapPluginHost::load_by_name(
                 &self.config.plugin_path,
@@ -263,7 +190,6 @@ impl StreamElement for ClapEffectProcessor {
             )?
         };
 
-        // Activate the plugin
         host.activate(ctx.audio.sample_rate, ctx.audio.buffer_size)?;
 
         tracing::info!(
@@ -289,9 +215,6 @@ impl StreamElement for ClapEffectProcessor {
     }
 }
 
-// ============================================================
-// ClapParameterControl Implementation (for automation)
-// ============================================================
 
 impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
     fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
@@ -307,9 +230,6 @@ impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
     }
 }
 
-// ============================================================
-// StreamTransform Implementation (v2.0.0 Architecture)
-// ============================================================
 
 impl StreamProcessor for ClapEffectProcessor {
     type Config = ClapEffectConfig;
@@ -332,14 +252,11 @@ impl StreamProcessor for ClapEffectProcessor {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[ClapEffect] process() called");
 
-        // Read AudioFrame from input port
         if let Some(input_frame) = self.input_ports.audio.read_latest() {
             tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
 
-            // Process through CLAP plugin
             let output_frame = self.process_audio_through_clap(&input_frame)?;
 
-            // Write output AudioFrame to output port
             self.output_ports.audio.write(output_frame);
             tracing::debug!("[ClapEffect] Wrote output frame");
         } else {
@@ -405,7 +322,6 @@ impl StreamProcessor for ClapEffectProcessor {
         use crate::core::connection::ProcessorConnection;
         use crate::core::AudioFrame;
 
-        // Downcast to stereo connection type (AudioFrame<2>)
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
             if port_name == "audio" {
                 self.output_ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
@@ -419,7 +335,6 @@ impl StreamProcessor for ClapEffectProcessor {
         use crate::core::connection::ProcessorConnection;
         use crate::core::AudioFrame;
 
-        // Downcast to stereo connection type (AudioFrame<2>)
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
             if port_name == "audio" {
                 self.input_ports.audio.set_connection(std::sync::Arc::clone(&typed_conn));

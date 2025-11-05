@@ -1,49 +1,11 @@
-//! Python code executor - creates processors from Python code
-//!
-//! This module handles executing Python code and extracting processor instances.
-//! Used by MCP for dynamic processor creation, but kept separate for testing/reuse.
 
 use pyo3::prelude::*;
 use crate::core::{StreamProcessor, StreamError, Result};
 use super::PythonProcessor;
 
-/// Create a StreamProcessor from Python code
-///
-/// This function:
-/// 1. Executes the Python code in an isolated environment
-/// 2. Looks for a decorated function/class (ProcessorProxy)
-/// 3. Extracts metadata and creates appropriate processor
-/// 4. Returns a boxed StreamProcessor ready to add to runtime
-///
-/// # Arguments
-/// * `code` - Python source code containing a decorated processor
-///
-/// # Returns
-/// Box<dyn StreamProcessor> that can be added to runtime
-///
-/// # Example
-/// ```ignore
-/// let code = r#"
-/// @processor(description="Custom filter")
-/// class MyFilter:
-///     class InputPorts:
-///         video = StreamInput(VideoFrame)
-///     class OutputPorts:
-///         video = StreamOutput(VideoFrame)
-///     def process(self, tick):
-///         frame = self.input_ports().video.read_latest()
-///         if frame:
-///             self.output_ports().video.write(frame)
-/// "#;
-///
-/// let processor = create_processor_from_code(code)?;
-/// runtime.add_processor_runtime(processor).await?;
-/// ```
 #[cfg(feature = "python-embed")]
 pub fn create_processor_from_code(code: &str) -> Result<Box<dyn StreamProcessor>> {
     Python::with_gil(|py| -> Result<Box<dyn StreamProcessor>> {
-        // 1. Register streamlib module into sys.modules so imports work
-        // (only needed for python-embed mode, not extension-module mode)
         let streamlib_module = pyo3::types::PyModule::new_bound(py, "streamlib")
             .map_err(|e| StreamError::Configuration(
                 format!("Failed to create streamlib module: {}", e)
@@ -54,7 +16,6 @@ pub fn create_processor_from_code(code: &str) -> Result<Box<dyn StreamProcessor>
                 format!("Failed to register streamlib module: {}", e)
             ))?;
 
-        // Add streamlib to sys.modules
         py.import_bound("sys")
             .map_err(|e| StreamError::Configuration(
                 format!("Failed to import sys: {}", e)
@@ -68,8 +29,6 @@ pub fn create_processor_from_code(code: &str) -> Result<Box<dyn StreamProcessor>
                 format!("Failed to add streamlib to sys.modules: {}", e)
             ))?;
 
-        // 2. Execute the user's code with proper globals/locals context
-        // Use same dict for globals and locals so imports are visible to class bodies
         let namespace = pyo3::types::PyDict::new_bound(py);
         let builtins = py.import_bound("builtins")
             .map_err(|e| StreamError::Configuration(format!("Failed to import builtins: {}", e)))?;
@@ -81,18 +40,15 @@ pub fn create_processor_from_code(code: &str) -> Result<Box<dyn StreamProcessor>
                 format!("Failed to execute Python code: {}", e)
             ))?;
 
-        // 3. Extract the ProcessorProxy from namespace (find the decorated function/class)
         let proxy = namespace.values()
             .iter()
             .find(|v| {
-                // Check if this value has processor_name attribute (indicates ProcessorProxy)
                 v.hasattr("processor_name").unwrap_or(false)
             })
             .ok_or_else(|| StreamError::Configuration(
                 "Python code did not define a processor (no decorated function found)".to_string()
             ))?;
 
-        // 4. Extract ProcessorProxy metadata
         let processor_name: String = proxy.getattr("processor_name")
             .map_err(|e| StreamError::Configuration(
                 format!("Invalid processor: {}", e)
@@ -111,14 +67,11 @@ pub fn create_processor_from_code(code: &str) -> Result<Box<dyn StreamProcessor>
                 format!("Invalid processor_type: {}", e)
             ))?;
 
-        // 5. Create the appropriate processor based on type
-        // For Python processors, extract the python_class
         let python_class = proxy.getattr("python_class")
             .ok()
             .and_then(|c| if c.is_none() { None } else { Some(c.into()) });
 
         if let Some(python_class) = python_class {
-            // Custom Python processor
             let input_ports: Vec<String> = proxy.getattr("input_port_names")
                 .map_err(|e| StreamError::Configuration(format!("Missing input_port_names: {}", e)))?
                 .extract()
@@ -143,7 +96,6 @@ pub fn create_processor_from_code(code: &str) -> Result<Box<dyn StreamProcessor>
 
             Ok(Box::new(py_processor) as Box<dyn StreamProcessor>)
         } else {
-            // Pre-built processor (Camera, Display) - extract config and create Rust processor
             let config_dict = proxy.getattr("config")
                 .ok()
                 .and_then(|c| if c.is_none() { None } else { Some(c) });
@@ -187,7 +139,6 @@ pub fn create_processor_from_code(code: &str) -> Result<Box<dyn StreamProcessor>
     })
 }
 
-/// Placeholder for when python-embed feature is not enabled
 #[cfg(not(feature = "python-embed"))]
 pub fn create_processor_from_code(_code: &str) -> Result<Box<dyn StreamProcessor>> {
     Err(StreamError::Configuration(
@@ -306,12 +257,9 @@ class CameraProcessor:
 "#;
 
         let result = create_processor_from_code(code);
-        // This might fail if no camera is available, but should not panic
-        // and should return a proper error if it fails
         match result {
             Ok(_) => {}, // Success
             Err(e) => {
-                // Should be a configuration error, not a panic
                 assert!(matches!(e, StreamError::Configuration(_) | StreamError::Runtime(_)));
             }
         }
@@ -329,11 +277,9 @@ class DisplayProcessor:
 "#;
 
         let result = create_processor_from_code(code);
-        // Should succeed on macOS/iOS
         match result {
             Ok(_) => {}, // Success
             Err(e) => {
-                // Should be a configuration error, not a panic
                 assert!(matches!(e, StreamError::Configuration(_) | StreamError::Runtime(_)));
             }
         }
@@ -351,7 +297,6 @@ class BadProcessor:
 "#;
 
         let result = create_processor_from_code(code);
-        // Should fail but not panic
         assert!(result.is_err());
     }
 

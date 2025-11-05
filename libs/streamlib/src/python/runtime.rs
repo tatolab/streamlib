@@ -1,4 +1,3 @@
-//! Python bindings for StreamRuntime
 
 use pyo3::prelude::*;
 use super::error::PyStreamError;
@@ -11,7 +10,6 @@ use crate::StreamRuntime;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::apple::{AppleCameraProcessor, AppleDisplayProcessor};
 
-// Test struct to debug PyO3 issue
 #[pyclass(module = "streamlib")]
 pub struct TestPort {
     #[pyo3(get)]
@@ -30,67 +28,41 @@ impl TestPort {
     }
 }
 
-/// Python wrapper for a Stream (processor instance)
 #[pyclass(name = "Stream", module = "streamlib")]
 pub struct PyStream {
-    /// Processor name/identifier
     pub(crate) name: String,
-    /// Input ports
     #[pyo3(get)]
     pub inputs: PyObject,
-    /// Output ports
     #[pyo3(get)]
     pub outputs: PyObject,
-    /// Whether this is a pre-built processor
     pub(crate) is_prebuilt: bool,
-    /// Processor type (for pre-built)
     pub(crate) processor_type: Option<String>,
 }
 
 #[pymethods]
 impl PyStream {
-    /// String representation
     fn __repr__(&self) -> String {
         format!("Stream(name={})", self.name)
     }
 }
 
-// No longer need StreamMetadata - we use ProcessorProxy directly
 
-/// Python wrapper for StreamRuntime
-///
-/// The runtime manages the streaming pipeline, processor lifecycle, and execution.
 #[pyclass(name = "StreamRuntime", module = "streamlib")]
 pub struct PyStreamRuntime {
-    /// The actual Rust runtime (wrapped in Option so we can move it)
     runtime: Option<StreamRuntime>,
-    /// Frame rate
     fps: u32,
-    /// Frame width
     width: u32,
-    /// Frame height
     height: u32,
-    /// Enable GPU acceleration
     enable_gpu: bool,
-    /// Registered processor proxies (before instantiation)
     processors: Arc<Mutex<Vec<Py<ProcessorProxy>>>>,
-    /// Connections (source_port -> destination_port)
     connections: Arc<Mutex<Vec<(ProcessorPort, ProcessorPort)>>>,
 }
 
 #[pymethods]
 impl PyStreamRuntime {
-    /// Create a new StreamRuntime
-    ///
-    /// # Arguments
-    /// * `fps` - Target frame rate for display purposes (default: 30, not used by runtime)
-    /// * `width` - Frame width (default: 1920)
-    /// * `height` - Frame height (default: 1080)
-    /// * `enable_gpu` - Enable GPU acceleration (default: true)
     #[new]
     #[pyo3(signature = (fps=30, width=1920, height=1080, enable_gpu=true))]
     fn new(fps: u32, width: u32, height: u32, enable_gpu: bool) -> Self {
-        // Create the actual Rust runtime (event-driven, no fps parameter)
         let runtime = StreamRuntime::new();
 
         Self {
@@ -104,10 +76,6 @@ impl PyStreamRuntime {
         }
     }
 
-    /// Add a stream (processor) to the runtime
-    ///
-    /// # Arguments
-    /// * `processor` - ProcessorProxy returned by a decorator
     fn add_stream(&self, py: Python<'_>, processor: Py<ProcessorProxy>) -> PyResult<()> {
         let name = processor.borrow(py).processor_name.clone();
 
@@ -118,11 +86,6 @@ impl PyStreamRuntime {
         Ok(())
     }
 
-    /// Connect two ports
-    ///
-    /// # Arguments
-    /// * `source` - Source port (output)
-    /// * `destination` - Destination port (input)
     fn connect(&self, source: ProcessorPort, destination: ProcessorPort) -> PyResult<()> {
         if source.is_input {
             return Err(PyStreamError::Connection(
@@ -141,9 +104,6 @@ impl PyStreamRuntime {
         Ok(())
     }
 
-    /// Run the streaming pipeline
-    ///
-    /// This starts the pipeline and blocks until interrupted (Ctrl+C).
     fn run(&mut self, py: Python<'_>) -> PyResult<()> {
         println!("🎥 StreamRuntime starting...");
         println!("   FPS: {}", self.fps);
@@ -156,12 +116,10 @@ impl PyStreamRuntime {
         let connections = self.connections.lock();
         println!("   Connections: {}", connections.len());
 
-        // Instantiate the Rust runtime
         let mut runtime = self.runtime.take().ok_or_else(|| {
             PyStreamError::Runtime("Runtime already started".to_string())
         })?;
 
-        // Instantiate processors based on ProcessorProxy metadata
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             use std::collections::HashMap;
@@ -170,14 +128,12 @@ impl PyStreamRuntime {
                 DisplayProcessor as DisplayProcessorTrait,
             };
 
-            // Enum to hold different processor types temporarily
             enum ProcessorInstance {
                 Camera(AppleCameraProcessor),
                 Display(AppleDisplayProcessor),
                 Python(super::processor::PythonProcessor),
             }
 
-            // Step 1: Instantiate all processors (don't box yet)
             let mut processor_instances: HashMap<String, ProcessorInstance> = HashMap::new();
 
             for proxy in processors.iter() {
@@ -190,7 +146,6 @@ impl PyStreamRuntime {
                     "CameraProcessor" => {
                         println!("   Creating CameraProcessor: {}", processor_name);
 
-                        // Extract device_id from config if present
                         let device_id = config.as_ref()
                             .and_then(|c| c.bind(py).get_item("device_id").ok().flatten())
                             .and_then(|v| v.extract::<String>().ok());
@@ -209,7 +164,6 @@ impl PyStreamRuntime {
                         let mut processor = AppleDisplayProcessor::with_size(self.width, self.height)
                             .map_err(|e| PyStreamError::Runtime(format!("Failed to create display: {}", e)))?;
 
-                        // Extract title from config if present
                         if let Some(title) = config.as_ref()
                             .and_then(|c| c.bind(py).get_item("title").ok().flatten())
                             .and_then(|v| v.extract::<String>().ok()) {
@@ -221,12 +175,10 @@ impl PyStreamRuntime {
                     "PythonProcessor" => {
                         println!("   Creating PythonProcessor: {}", processor_name);
 
-                        // Extract Python class from ProcessorProxy
                         let python_class = proxy_ref.python_class.as_ref()
                             .ok_or_else(|| PyStreamError::Runtime("PythonProcessor missing python_class".to_string()))?
                             .clone_ref(py);
 
-                        // Create PythonProcessor with class, port metadata, and schema
                         let processor = super::processor::PythonProcessor::new(
                             python_class,
                             processor_name.clone(),
@@ -247,7 +199,6 @@ impl PyStreamRuntime {
                 }
             }
 
-            // Step 2: Wire connections between processors
             println!("   Wiring {} connections...", connections.len());
             for (source_port, dest_port) in connections.iter() {
                 println!("      {} → {}",
@@ -255,28 +206,23 @@ impl PyStreamRuntime {
                     format!("{}.{}", dest_port.processor_name, dest_port.port_name)
                 );
 
-                // To avoid double borrow, remove source processor temporarily
                 let mut source_proc = processor_instances.remove(&source_port.processor_name)
                     .ok_or_else(|| PyStreamError::Connection(
                         format!("Source processor '{}' not found", source_port.processor_name)
                     ))?;
 
-                // Get mutable reference to destination processor
                 let dest_proc = processor_instances.get_mut(&dest_port.processor_name)
                     .ok_or_else(|| PyStreamError::Connection(
                         format!("Destination processor '{}' not found", dest_port.processor_name)
                     ))?;
 
-                // Wire the connection based on processor types and port names
                 match (&mut source_proc, dest_proc, source_port.port_name.as_str(), dest_port.port_name.as_str()) {
-                    // Camera → Display
                     (ProcessorInstance::Camera(camera), ProcessorInstance::Display(display), "video", "video") => {
                         runtime.connect(
                             &mut camera.output_ports().video,
                             &mut display.input_ports().video,
                         ).map_err(|e| PyStreamError::Connection(format!("Failed to connect: {}", e)))?;
                     }
-                    // Camera → Python
                     (ProcessorInstance::Camera(camera), ProcessorInstance::Python(python), "video", port_name) => {
                         let python_input_arc = python.input_ports().ports.get(port_name)
                             .ok_or_else(|| PyStreamError::Connection(
@@ -288,7 +234,6 @@ impl PyStreamRuntime {
                             &mut *python_input_guard,
                         ).map_err(|e| PyStreamError::Connection(format!("Failed to connect: {}", e)))?;
                     }
-                    // Python → Display
                     (ProcessorInstance::Python(python), ProcessorInstance::Display(display), port_name, "video") => {
                         let python_output_arc = python.output_ports().ports.get(port_name)
                             .ok_or_else(|| PyStreamError::Connection(
@@ -300,7 +245,6 @@ impl PyStreamRuntime {
                             &mut display.input_ports().video,
                         ).map_err(|e| PyStreamError::Connection(format!("Failed to connect: {}", e)))?;
                     }
-                    // Python → Python
                     (ProcessorInstance::Python(source_py), ProcessorInstance::Python(dest_py), source_port_name, dest_port_name) => {
                         let source_output_arc = source_py.output_ports().ports.get(source_port_name)
                             .ok_or_else(|| PyStreamError::Connection(
@@ -326,14 +270,12 @@ impl PyStreamRuntime {
                     }
                 }
 
-                // Put source processor back
                 processor_instances.insert(source_port.processor_name.clone(), source_proc);
             }
 
             drop(processors);
             drop(connections);
 
-            // Step 3: Box processors and add to runtime
             println!("   Adding processors to runtime...");
             for (_name, processor) in processor_instances {
                 match processor {
@@ -353,9 +295,7 @@ impl PyStreamRuntime {
         println!("✅ Processors instantiated");
         println!("🚀 Starting runtime...\n");
 
-        // Run the runtime (blocks until Ctrl+C)
         py.allow_threads(|| {
-            // Create a tokio runtime for async execution
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| PyStreamError::Runtime(format!("Failed to create tokio runtime: {}", e)))?;
 
@@ -373,7 +313,6 @@ impl PyStreamRuntime {
         })
     }
 
-    /// String representation
     fn __repr__(&self) -> String {
         format!(
             "StreamRuntime(fps={}, resolution={}x{}, gpu={})",

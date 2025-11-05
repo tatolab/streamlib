@@ -59,9 +59,6 @@ impl AppleAudioOutputProcessor {
     }
 }
 
-// ============================================================
-// StreamElement Implementation
-// ============================================================
 
 impl StreamElement for AppleAudioOutputProcessor {
     fn name(&self) -> &str {
@@ -92,7 +89,6 @@ impl StreamElement for AppleAudioOutputProcessor {
     }
 
     fn stop(&mut self) -> Result<()> {
-        // Drop stream to stop playback
         self.stream = None;
         tracing::info!("AudioOutput {}: Stopped", self.device_name);
         Ok(())
@@ -107,9 +103,6 @@ impl StreamElement for AppleAudioOutputProcessor {
     }
 }
 
-// ============================================================
-// StreamProcessor Implementation
-// ============================================================
 
 impl StreamProcessor for AppleAudioOutputProcessor {
     type Config = crate::core::AudioOutputConfig;
@@ -120,18 +113,13 @@ impl StreamProcessor for AppleAudioOutputProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // In Pull mode, process() is called once by runtime after connections are wired
-        // This is where we set up the stream and callback
 
         if self.stream_setup_done {
-            // Already set up, nothing to do
             return Ok(());
         }
 
         tracing::info!("AudioOutput: process() called - setting up stream now that connections are wired");
 
-        // Clone the input port's connection for the callback to use
-        // The callback will read AudioFrame<2> directly from the rtrb ring buffer
         let input_connection = self.input_ports.audio.clone_connection()
             .ok_or_else(|| StreamError::Configuration("Input port not connected".into()))?;
 
@@ -149,9 +137,7 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
                 audio_clock.increment_samples(data.len() as u64);
 
-                // Read latest AudioFrame<2> from the ring buffer
                 if let Some(audio_frame) = connection_for_callback.read_latest() {
-                    // AudioFrame samples are already interleaved: [L, R, L, R, ...]
                     let samples = &audio_frame.samples;
 
                     tracing::debug!("AudioOutput: Got audio frame with {} samples", samples.len());
@@ -169,21 +155,18 @@ impl StreamProcessor for AppleAudioOutputProcessor {
             }
         )?;
 
-        // Start playback
         tracing::info!("AudioOutput: Starting cpal stream playback");
         setup.stream.play()
             .map_err(|e| StreamError::Configuration(format!("Failed to start stream: {}", e)))?;
 
         tracing::info!("AudioOutput: cpal stream.play() succeeded");
 
-        // Store stream and device info
         self.stream = Some(setup.stream);
         self.device_name = setup.device_info.name.clone();
         self.device_info = Some(setup.device_info);
         self.sample_rate = setup.sample_rate;
         self.channels = setup.channels;
 
-        // Update audio clock with actual sample rate
         self.audio_clock = Arc::new(AudioClock::new(
             self.sample_rate,
             format!("CoreAudio ({})", self.device_name)
@@ -234,7 +217,6 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         use crate::core::connection::ProcessorConnection;
         use crate::core::AudioFrame;
 
-        // Downcast to stereo connection type (AudioFrame<2>)
         if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
             if port_name == "audio" {
                 self.input_ports.audio.set_connection(std::sync::Arc::clone(&typed_conn));

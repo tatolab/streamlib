@@ -1,10 +1,8 @@
-//! Decorator functions for processor registration
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use super::port::ProcessorPort;
 
-/// Python wrapper for output/input ports collection
 #[pyclass(module = "streamlib")]
 #[derive(Clone)]
 pub struct PortsProxy {
@@ -31,7 +29,6 @@ impl PortsProxy {
     }
 }
 
-/// Python wrapper for a processor (returned by decorators)
 #[pyclass(module = "streamlib")]
 pub struct ProcessorProxy {
     #[pyo3(get)]
@@ -39,11 +36,9 @@ pub struct ProcessorProxy {
     #[pyo3(get)]
     pub processor_type: String,
 
-    // For pre-built processors (Camera, Display) - stores config dict
     #[pyo3(get)]
     pub config: Option<Py<PyDict>>,
 
-    // For Python processors - stores the Python class
     #[pyo3(get)]
     pub python_class: Option<Py<PyAny>>,
 
@@ -52,7 +47,6 @@ pub struct ProcessorProxy {
     #[pyo3(get)]
     pub output_port_names: Vec<String>,
 
-    // Schema metadata for AI discovery
     #[pyo3(get)]
     pub description: Option<String>,
     #[pyo3(get)]
@@ -128,23 +122,12 @@ impl ProcessorProxy {
     }
 }
 
-/// @camera_processor decorator
-///
-/// Binds to the Rust CameraProcessor implementation.
-///
-/// # Example
-/// ```python
-/// @camera_processor(device_id=0)
-/// def camera():
-///     pass  # Empty - uses Rust implementation
-/// ```
 #[pyfunction]
 #[pyo3(signature = (**kwargs))]
 pub fn camera_processor(
     py: Python<'_>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyAny>> {
-    // Create a Python decorator function that returns ProcessorProxy
     let decorator_code = r#"
 def _make_decorator(config, ProcessorProxy):
     def _camera_processor_decorator(func):
@@ -165,7 +148,6 @@ def _make_decorator(config, ProcessorProxy):
     let locals = PyDict::new_bound(py);
     locals.set_item("kwargs", kwargs.unwrap_or(&PyDict::new_bound(py)))?;
 
-    // Get ProcessorProxy class
     let proxy_class = py.get_type_bound::<ProcessorProxy>();
     locals.set_item("ProcessorProxy", &proxy_class)?;
 
@@ -178,23 +160,12 @@ def _make_decorator(config, ProcessorProxy):
     Ok(decorator.into())
 }
 
-/// @display_processor decorator
-///
-/// Binds to the Rust DisplayProcessor implementation.
-///
-/// # Example
-/// ```python
-/// @display_processor(title="Camera Feed")
-/// def display():
-///     pass  # Empty - uses Rust implementation
-/// ```
 #[pyfunction]
 #[pyo3(signature = (**kwargs))]
 pub fn display_processor(
     py: Python<'_>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyAny>> {
-    // Create a Python decorator function that returns ProcessorProxy
     let decorator_code = r#"
 def _make_decorator(config, ProcessorProxy):
     def _display_processor_decorator(func):
@@ -215,7 +186,6 @@ def _make_decorator(config, ProcessorProxy):
     let locals = PyDict::new_bound(py);
     locals.set_item("kwargs", kwargs.unwrap_or(&PyDict::new_bound(py)))?;
 
-    // Get ProcessorProxy class
     let proxy_class = py.get_type_bound::<ProcessorProxy>();
     locals.set_item("ProcessorProxy", &proxy_class)?;
 
@@ -228,35 +198,6 @@ def _make_decorator(config, ProcessorProxy):
     Ok(decorator.into())
 }
 
-/// @processor decorator
-///
-/// Wraps a Python class as a dynamic processor.
-/// The class should define InputPorts and/or OutputPorts nested classes
-/// (at least one is required), and implement a process(self, tick) method.
-///
-/// - Generators (sources): Only OutputPorts, no InputPorts
-/// - Sinks: Only InputPorts, no OutputPorts
-/// - Filters: Both InputPorts and OutputPorts
-///
-/// # Example
-/// ```python
-/// @processor(
-///     description="Applies a custom filter to video frames",
-///     usage_context="Use when you need custom frame processing",
-///     tags=["filter", "video", "custom"]
-/// )
-/// class MyFilter:
-///     class InputPorts:
-///         video = StreamInput(VideoFrame)
-///
-///     class OutputPorts:
-///         video = StreamOutput(VideoFrame)
-///
-///     def process(self, tick):
-///         frame = self.input_ports().video.read_latest()
-///         if frame:
-///             self.output_ports().video.write(frame)
-/// ```
 #[pyfunction]
 #[pyo3(signature = (description=None, usage_context=None, tags=None))]
 pub fn processor(
@@ -265,7 +206,6 @@ pub fn processor(
     usage_context: Option<String>,
     tags: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
-    // Create a Python decorator function that returns ProcessorProxy
     let decorator_code = r#"
 def _make_decorator(description, usage_context, tags, ProcessorProxy):
     # Define marker classes for syntax sugar (not actually used at runtime)
@@ -325,7 +265,6 @@ def _make_decorator(description, usage_context, tags, ProcessorProxy):
 
     let locals = PyDict::new_bound(py);
 
-    // Get ProcessorProxy class
     let proxy_class = py.get_type_bound::<ProcessorProxy>();
     locals.set_item("ProcessorProxy", &proxy_class)?;
 

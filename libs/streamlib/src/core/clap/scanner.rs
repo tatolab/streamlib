@@ -33,7 +33,6 @@ impl ClapScanner {
                 Ok(plugins) => all_plugins.extend(plugins),
                 Err(e) => {
                     tracing::debug!("Failed to scan directory {:?}: {}", path, e);
-                    // Continue scanning other directories
                 }
             }
         }
@@ -46,7 +45,6 @@ impl ClapScanner {
 
         #[cfg(target_os = "macos")]
         {
-            // macOS paths
             if let Some(home) = std::env::var_os("HOME") {
                 paths.push(PathBuf::from(home).join("Library/Audio/Plug-Ins/CLAP"));
             }
@@ -55,7 +53,6 @@ impl ClapScanner {
 
         #[cfg(target_os = "linux")]
         {
-            // Linux paths
             if let Some(home) = std::env::var_os("HOME") {
                 paths.push(PathBuf::from(home).join(".clap"));
             }
@@ -65,7 +62,6 @@ impl ClapScanner {
 
         #[cfg(target_os = "windows")]
         {
-            // Windows paths
             if let Some(common_files) = std::env::var_os("CommonProgramFiles") {
                 paths.push(PathBuf::from(common_files).join("CLAP"));
             }
@@ -93,13 +89,11 @@ impl ClapScanner {
                 .map_err(|e| StreamError::Configuration(format!("Failed to read entry: {}", e)))?;
             let entry_path = entry.path();
 
-            // Check if it's a CLAP bundle
             if Self::is_clap_bundle(&entry_path) {
                 match Self::scan_plugin_bundle(&entry_path) {
                     Ok(bundle_plugins) => plugins.extend(bundle_plugins),
                     Err(e) => {
                         tracing::debug!("Failed to scan bundle {:?}: {}", entry_path, e);
-                        // Continue with other plugins
                     }
                 }
             }
@@ -109,26 +103,21 @@ impl ClapScanner {
     }
 
     fn is_clap_bundle(path: &Path) -> bool {
-        // CLAP bundles end with .clap extension
         path.extension().and_then(|s| s.to_str()) == Some("clap")
     }
 
     fn scan_plugin_bundle(path: &Path) -> Result<Vec<ClapPluginInfo>> {
-        // Get the actual binary path within the bundle
         let binary_path = Self::get_bundle_binary_path(path)?;
 
-        // Load the plugin bundle
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         let bundle = unsafe {
             PluginBundle::load(&binary_path)
                 .map_err(|e| StreamError::Configuration(format!("Failed to load bundle {:?}: {:?}", path, e)))?
         };
 
-        // Get plugin factory
         let factory = bundle.get_plugin_factory()
             .ok_or_else(|| StreamError::Configuration("Plugin has no factory".into()))?;
 
-        // Iterate through all plugins in the bundle
         let mut plugins = Vec::new();
 
         for desc in factory.plugin_descriptors() {
@@ -154,7 +143,6 @@ impl ClapScanner {
                     .and_then(|d| d.to_str().ok())
                     .unwrap_or("")
                     .to_string(),
-                // Features are optional metadata - leave empty for now
                 // TODO: Parse features() properly when needed
                 features: Vec::new(),
             });
@@ -166,18 +154,14 @@ impl ClapScanner {
     pub fn get_bundle_binary_path(bundle_path: &Path) -> Result<PathBuf> {
         #[cfg(target_os = "macos")]
         {
-            // If the path is already a file (binary), return it as-is
             if bundle_path.is_file() {
                 return Ok(bundle_path.to_path_buf());
             }
 
-            // If the path doesn't end with .clap, assume it's already a binary path
-            // (even if it doesn't exist yet - let the plugin loader handle the error)
             if bundle_path.extension().and_then(|s| s.to_str()) != Some("clap") {
                 return Ok(bundle_path.to_path_buf());
             }
 
-            // It's a bundle directory - construct the binary path
             let binary_name = bundle_path
                 .file_stem()
                 .ok_or_else(|| StreamError::Configuration("Invalid bundle path".into()))?;
@@ -198,7 +182,6 @@ impl ClapScanner {
 
         #[cfg(not(target_os = "macos"))]
         {
-            // On Linux/Windows, the .clap file is the binary itself
             Ok(bundle_path.to_path_buf())
         }
     }

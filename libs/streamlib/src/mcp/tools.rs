@@ -1,7 +1,3 @@
-//! MCP Tools - Runtime Actions
-//!
-//! Tools expose actions that AI agents can invoke to modify the runtime.
-//! Examples: add_processor, remove_processor, connect_processors
 
 use super::{McpError, Result};
 use crate::core::{StreamRuntime, ProcessorRegistry};
@@ -12,35 +8,26 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 use tokio::sync::Mutex as TokioMutex;
 
-/// MCP Tool definition
 #[derive(Debug, Clone, Serialize)]
 pub struct Tool {
-    /// Tool name (e.g., "add_processor")
     pub name: String,
 
-    /// Tool description (for AI agent)
     pub description: String,
 
-    /// JSON Schema for input parameters
     #[serde(rename = "inputSchema")]
     pub input_schema: JsonValue,
 }
 
-/// Tool execution result
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolResult {
-    /// Whether the tool succeeded
     pub success: bool,
 
-    /// Result message
     pub message: String,
 
-    /// Optional result data
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<JsonValue>,
 }
 
-/// List all available tools
 pub fn list_tools() -> Vec<Tool> {
     vec![
         Tool {
@@ -182,13 +169,11 @@ pub fn list_tools() -> Vec<Tool> {
     ]
 }
 
-/// Arguments for list_packages tool
 #[derive(Debug, Deserialize)]
 pub struct ListPackagesArgs {
     pub language: String,
 }
 
-/// Arguments for request_package tool
 #[derive(Debug, Deserialize)]
 pub struct RequestPackageArgs {
     pub language: String,
@@ -197,14 +182,12 @@ pub struct RequestPackageArgs {
     pub reason: Option<String>,
 }
 
-/// Arguments for get_package_status tool
 #[derive(Debug, Deserialize)]
 pub struct GetPackageStatusArgs {
     pub language: String,
     pub package: String,
 }
 
-/// Arguments for add_processor tool
 #[derive(Debug, Deserialize)]
 pub struct AddProcessorArgs {
     pub name: String,
@@ -216,30 +199,17 @@ pub struct AddProcessorArgs {
     pub config: Option<JsonValue>,
 }
 
-/// Arguments for remove_processor tool
 #[derive(Debug, Deserialize)]
 pub struct RemoveProcessorArgs {
     pub name: String,
 }
 
-/// Arguments for connect_processors tool
 #[derive(Debug, Deserialize)]
 pub struct ConnectProcessorsArgs {
     pub source: String,
     pub destination: String,
 }
 
-/// Execute a tool
-///
-/// # Arguments
-/// * `tool_name` - Name of the tool to execute
-/// * `arguments` - JSON arguments for the tool
-/// * `registry` - Processor registry for creating processor instances
-/// * `runtime` - Optional runtime for application-level tools (add/remove processors, list connections, etc.)
-/// * `permissions` - Granted permissions (e.g., "camera", "display") from CLI flags
-///
-/// If runtime is None, only discovery-level tools are available (list available processor types).
-/// If runtime is Some, full application control is enabled (modify running system).
 pub async fn execute_tool(
     tool_name: &str,
     arguments: JsonValue,
@@ -249,8 +219,6 @@ pub async fn execute_tool(
 ) -> Result<ToolResult> {
     match tool_name {
         "list_supported_languages" => {
-            // Return list of languages the runtime supports for dynamic processors
-            // Python is fully supported via PyO3 embedded interpreter
             Ok(ToolResult {
                 success: true,
                 message: "Supported languages for dynamic processor creation".to_string(),
@@ -274,7 +242,6 @@ pub async fn execute_tool(
                     message: e.to_string(),
                 })?;
 
-            // Validate language
             if args.language != "python" {
                 return Err(McpError::InvalidArguments {
                     tool: tool_name.to_string(),
@@ -283,7 +250,6 @@ pub async fn execute_tool(
             }
 
             // TODO: Query actual Python environment via PyO3 to list installed packages
-            // For now, return empty list (package listing not yet implemented)
             Ok(ToolResult {
                 success: true,
                 message: format!("Packages available for {}", args.language),
@@ -302,7 +268,6 @@ pub async fn execute_tool(
                     message: e.to_string(),
                 })?;
 
-            // Validate language
             if args.language != "python" {
                 return Err(McpError::InvalidArguments {
                     tool: tool_name.to_string(),
@@ -337,7 +302,6 @@ pub async fn execute_tool(
                     message: e.to_string(),
                 })?;
 
-            // Validate language
             if args.language != "python" {
                 return Err(McpError::InvalidArguments {
                     tool: tool_name.to_string(),
@@ -368,7 +332,6 @@ pub async fn execute_tool(
 
             tracing::info!("add_processor args parsed: {:?}", args);
 
-            // Check if runtime is available
             let runtime = runtime.ok_or_else(|| {
                 tracing::error!("add_processor called without runtime");
                 McpError::Runtime(
@@ -379,7 +342,6 @@ pub async fn execute_tool(
 
             tracing::info!("Runtime available, checking permissions...");
 
-            // Handle dynamic Python processors
             if let (Some(language), Some(code)) = (&args.language, &args.code) {
                 if language != "python" {
                     return Err(McpError::InvalidArguments {
@@ -399,13 +361,11 @@ pub async fn execute_tool(
                 {
                     use crate::python::create_processor_from_code;
 
-                    // Create processor from Python code (logic moved to python/executor.rs)
                     let processor = create_processor_from_code(code).map_err(|e| {
                         tracing::error!("Failed to create Python processor: {}", e);
                         McpError::Runtime(format!("Failed to create Python processor: {}", e))
                     })?;
 
-                    // Add to runtime
                     let mut rt = runtime.lock().await;
                     match rt.add_processor_runtime(processor).await {
                         Ok(processor_id) => {
@@ -428,8 +388,6 @@ pub async fn execute_tool(
                 }
             }
 
-            // If we get here, no language/code was provided
-            // All processors must be added via Python code
             Err(McpError::InvalidArguments {
                 tool: tool_name.to_string(),
                 message: format!(
@@ -451,7 +409,6 @@ pub async fn execute_tool(
                     message: e.to_string(),
                 })?;
 
-            // Check if runtime is available
             let runtime = runtime.ok_or_else(|| {
                 McpError::Runtime(
                     "remove_processor requires runtime access. MCP server is in discovery mode (registry only). \
@@ -459,8 +416,6 @@ pub async fn execute_tool(
                 )
             })?;
 
-            // Call runtime's remove_processor method
-            // Use tokio::sync::Mutex which is Send and can be held across await
             let mut rt = runtime.lock().await;
             match rt.remove_processor(&args.name).await {
                 Ok(_) => {
@@ -489,7 +444,6 @@ pub async fn execute_tool(
                     message: e.to_string(),
                 })?;
 
-            // Check if runtime is available
             let runtime = runtime.ok_or_else(|| {
                 McpError::Runtime(
                     "connect_processors requires runtime access. MCP server is in discovery mode (registry only). \
@@ -497,7 +451,6 @@ pub async fn execute_tool(
                 )
             })?;
 
-            // Connect processors at runtime (Phase 5)
             let mut rt = runtime.lock().await;
             match rt.connect_at_runtime(&args.source, &args.destination).await {
                 Ok(connection_id) => {
@@ -528,7 +481,6 @@ pub async fn execute_tool(
         }
 
         "list_processors" => {
-            // Check if runtime is available
             let runtime = runtime.ok_or_else(|| {
                 McpError::Runtime(
                     "list_processors requires runtime access. MCP server is in discovery mode (registry only). \
@@ -536,12 +488,10 @@ pub async fn execute_tool(
                 )
             })?;
 
-            // Access processors registry and clone the data we need
             let processors = {
                 let rt = runtime.lock().await;
                 let processors_map = rt.processors.lock();
 
-                // Build processor list while holding the lock
                 processors_map
                     .iter()
                     .map(|(id, handle)| {
@@ -566,7 +516,6 @@ pub async fn execute_tool(
         }
 
         "list_connections" => {
-            // Check if runtime is available
             let runtime = runtime.ok_or_else(|| {
                 McpError::Runtime(
                     "list_connections requires runtime access. MCP server is in discovery mode (registry only). \
@@ -574,12 +523,10 @@ pub async fn execute_tool(
                 )
             })?;
 
-            // Access connections registry and clone the data we need
             let connections = {
                 let rt = runtime.lock().await;
                 let connections_map = rt.connections.lock();
 
-                // Build connections list while holding the lock
                 connections_map
                     .iter()
                     .map(|(id, conn)| {

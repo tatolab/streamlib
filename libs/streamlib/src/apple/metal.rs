@@ -1,7 +1,3 @@
-//! Metal GPU backend for texture operations
-//!
-//! Provides Metal-specific implementations for GPU texture management.
-//! Works on both macOS and iOS.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -10,16 +6,12 @@ use objc2_metal::{
 };
 use crate::core::{Result, StreamError};
 
-/// Metal GPU device wrapper
-///
-/// Wraps a Metal device and provides streamlib-specific GPU operations.
 pub struct MetalDevice {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
 }
 
 impl MetalDevice {
-    /// Creates a new MetalDevice using the system default Metal device
     pub fn new() -> Result<Self> {
         let device =
             MTLCreateSystemDefaultDevice().ok_or_else(|| StreamError::GpuError("No Metal device available on this system. Metal requires macOS 10.11+ or iOS 8+.".into()))?;
@@ -34,34 +26,28 @@ impl MetalDevice {
         })
     }
 
-    /// Get the underlying Metal device
     pub fn device(&self) -> &ProtocolObject<dyn MTLDevice> {
         &self.device
     }
 
-    /// Clone the Metal device (increments retain count)
     pub fn clone_device(&self) -> Retained<ProtocolObject<dyn MTLDevice>> {
         Retained::clone(&self.device)
     }
 
-    /// Get the Metal command queue
     pub fn command_queue(&self) -> &ProtocolObject<dyn MTLCommandQueue> {
         &self.command_queue
     }
 
-    /// Clone the Metal command queue (increments retain count)
     pub fn clone_command_queue(&self) -> Retained<ProtocolObject<dyn MTLCommandQueue>> {
         Retained::clone(&self.command_queue)
     }
 
-    /// Create a new command buffer for GPU commands
     pub fn create_command_buffer(&self) -> Result<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
         self.command_queue.commandBuffer().ok_or_else(|| {
             StreamError::GpuError("Failed to create Metal command buffer".into())
         })
     }
 
-    /// Get device name (useful for debugging/logging)
     pub fn name(&self) -> String {
         self.device.name().to_string()
     }

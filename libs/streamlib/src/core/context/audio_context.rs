@@ -1,40 +1,3 @@
-//! Audio context for configuring system-wide audio settings
-//!
-//! Provides configuration for sample rate and buffer size that is enforced
-//! across all audio processors in the runtime.
-//!
-//! ## Design Philosophy
-//!
-//! Following professional real-time systems (Unity, Unreal, Pro Tools), streamlib
-//! uses a **single system-wide sample rate and fixed buffer size**. This ensures:
-//!
-//! - Predictable latency (no variable buffering)
-//! - No runtime resampling overhead
-//! - Consistent behavior across all audio processors
-//! - CLAP plugin compatibility (requires fixed buffer size)
-//!
-//! ## Usage Pattern
-//!
-//! ```rust,ignore
-//! // Query OS for native sample rate (CoreAudio, WASAPI, ALSA)
-//! let native_rate = query_system_sample_rate()?;
-//!
-//! // Create audio context with system-native settings
-//! let audio_ctx = AudioContext::new(native_rate, 512);
-//!
-//! // Pass to runtime context
-//! let runtime_ctx = RuntimeContext::new(gpu_ctx)
-//!     .with_audio_context(audio_ctx);
-//!
-//! // Processors use context during initialization
-//! impl StreamElement for AudioProcessor {
-//!     fn start(&mut self, ctx: &RuntimeContext) -> Result<()> {
-//!         self.sample_rate = ctx.audio.sample_rate;
-//!         self.buffer_size = ctx.audio.buffer_size;
-//!         Ok(())
-//!     }
-//! }
-//! ```
 
 #[derive(Debug, Clone, Copy)]
 pub struct AudioContext {
@@ -59,25 +22,14 @@ impl AudioContext {
         }
     }
 
-    /// Returns the buffer duration in milliseconds
-    ///
-    /// This represents the theoretical minimum latency for the audio system.
-    /// Actual latency may be higher due to driver overhead and scheduling.
     pub fn buffer_duration_ms(&self) -> f64 {
         (self.buffer_size as f64 / self.sample_rate as f64) * 1000.0
     }
 
-    /// Returns the buffer duration in nanoseconds
-    ///
-    /// Useful for timestamp calculations and synchronization with video frames.
     pub fn buffer_duration_ns(&self) -> i64 {
         (self.buffer_size as i64 * 1_000_000_000) / self.sample_rate as i64
     }
 
-    /// Returns the number of samples per second for a given channel count
-    ///
-    /// For stereo (2 channels) at 48kHz: 96,000 samples/sec
-    /// For 5.1 (6 channels) at 48kHz: 288,000 samples/sec
     pub fn samples_per_second(&self, channels: u32) -> usize {
         self.sample_rate as usize * channels as usize
     }
@@ -110,13 +62,10 @@ mod tests {
     fn test_samples_per_second() {
         let ctx = AudioContext::new(48000, 512);
 
-        // Mono
         assert_eq!(ctx.samples_per_second(1), 48000);
 
-        // Stereo
         assert_eq!(ctx.samples_per_second(2), 96000);
 
-        // 5.1 surround
         assert_eq!(ctx.samples_per_second(6), 288000);
     }
 }

@@ -1,26 +1,7 @@
-//! Software clock using CPU timestamps
-//!
-//! Fallback clock when no hardware clock is available.
 
 use super::Clock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-/// Software clock using CPU timestamps
-///
-/// Fallback clock when no hardware clock is available.
-/// Uses `Instant::now()` for monotonic time.
-///
-/// ## Characteristics
-///
-/// - **Accuracy**: Millisecond-level (OS scheduler dependent)
-/// - **Drift**: Can drift vs. hardware clocks
-/// - **Use cases**: Development, testing, non-sync pipelines
-///
-/// ## Not Suitable For
-///
-/// - Multi-device sync (use AudioClock from hardware)
-/// - Sample-accurate audio (use AudioClock)
-/// - Vsync-accurate video (use VideoClock)
 pub struct SoftwareClock {
     start_time: Instant,
     start_timestamp: i64, // nanoseconds since epoch
@@ -28,14 +9,10 @@ pub struct SoftwareClock {
 }
 
 impl SoftwareClock {
-    /// Create a new software clock
-    ///
-    /// Clock starts at current time (Instant::now()).
     pub fn new() -> Self {
         Self::with_description("Software Clock".to_string())
     }
 
-    /// Create a new software clock with custom description
     pub fn with_description(description: String) -> Self {
         let start_time = Instant::now();
         let start_timestamp = SystemTime::now()
@@ -50,9 +27,6 @@ impl SoftwareClock {
         }
     }
 
-    /// Reset clock to current time
-    ///
-    /// Resets epoch to now, making `now_ns()` return 0.
     pub fn reset(&mut self) {
         self.start_time = Instant::now();
         self.start_timestamp = SystemTime::now()
@@ -120,14 +94,8 @@ mod tests {
         clock.reset();
         let t2 = clock.now_ns();
 
-        // After reset, the new base timestamp will be later than t1,
-        // but the elapsed time from the new base should be near zero
-        // So we verify that enough time had elapsed before reset
         assert!(elapsed_before_reset >= 10_000_000, "Should have at least 10ms elapsed before reset");
 
-        // And after reset, we're back to a fresh start (but with a new base timestamp)
-        // The new timestamp will be >= t1 since it's absolute time, but the elapsed
-        // from the new base should be minimal
         thread::sleep(Duration::from_millis(5));
         let t3 = clock.now_ns();
         let elapsed_after_reset = t3 - t2;
