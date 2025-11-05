@@ -39,46 +39,53 @@
 //! let bridge = WgpuBridge::new(metal_device.device().clone()).await?;
 //!
 //! // Create runtime with WebGPU
-//! let mut runtime = StreamRuntime::new(60.0);
+//! let mut runtime = StreamRuntime::new();
 //! let (device, queue) = bridge.into_wgpu();
 //! runtime.set_wgpu(device, queue);
 //! ```
 
 // Core wrapper modules
 pub mod arkit;
+pub mod audio_utils;
 pub mod iosurface;
+pub mod media_clock;
 pub mod metal;
 pub mod texture;
 pub mod wgpu_bridge;
 
-// StreamProcessor implementations
-pub mod processors;
+pub mod sources;
 
-// Platform permission handling
+pub mod sinks;
+
 pub mod permissions;
 
-// Main thread dispatcher (for AVFoundation/NSWindow operations)
 pub mod main_thread;
 
-// Runtime configuration (used by streamlib facade)
 pub mod runtime_ext;
+pub use runtime_ext::configure_macos_event_loop;
 
-// Internal helpers (not part of public API)
 mod runtime_helpers;
 
-// Re-export core types
-pub use crate::core::{Result, StreamError};
+pub mod time;
+
+pub mod display_link;
+
+// Re-export core types (Result and StreamError are internal, not re-exported)
 
 // Re-export wrapper types
 pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;
 
-// Re-export processor implementations
-pub use processors::{
+// Re-export source implementations
+pub use sources::{
     AppleCameraProcessor,
+    AppleAudioCaptureProcessor,
+};
+
+// Re-export sink implementations
+pub use sinks::{
     AppleDisplayProcessor,
     AppleAudioOutputProcessor,
-    AppleAudioCaptureProcessor,
 };
 
 #[cfg(test)]

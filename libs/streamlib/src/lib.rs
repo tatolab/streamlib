@@ -26,7 +26,7 @@
 //! ```ignore
 //! use streamlib::{StreamRuntime, CameraProcessor, DisplayProcessor};
 //!
-//! let mut runtime = StreamRuntime::new(60.0);
+//! let mut runtime = StreamRuntime::new();
 //! runtime.add_processor(Box::new(CameraProcessor::new(0)));
 //! runtime.start().await?;
 //! ```
@@ -51,31 +51,39 @@
 pub mod core;
 
 // Re-export procedural macros
-pub use streamlib_macros::{processor, StreamProcessor as DeriveStreamProcessor};
+pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
 
 // Re-export core types at crate root (but not the runtime module itself)
 pub use core::{
-    RingBuffer, Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock,
-    StreamError, Result, TickBroadcaster, GpuContext,
-    VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue,
-    StreamProcessor, StreamOutput, StreamInput, PortType, PortMessage,
+    Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock,
+    media_clock::MediaClock,
+    StreamError, Result, GpuContext, AudioContext, RuntimeContext,
+    VideoFrame, AudioFrame, DataFrame, MetadataValue,
+    // v2.0 traits - GStreamer-inspired hierarchy
+    StreamElement, ElementType, DynStreamElement,
+    StreamOutput, StreamInput, PortType, PortMessage,
     // Note: CameraProcessor, DisplayProcessor, and AudioProcessor traits are in core,
     // but we'll re-export platform implementations below
-    CameraDevice, CameraOutputPorts,
-    WindowId, DisplayInputPorts,
-    AudioDevice, AudioOutputInputPorts,
-    AudioInputDevice, AudioCaptureOutputPorts,
-    AudioEffectProcessor, ParameterInfo, PluginInfo,
-    AudioEffectInputPorts, AudioEffectOutputPorts,
-    ClapEffectProcessor, ClapScanner, ClapPluginInfo,
+    CameraDevice, CameraOutputPorts, CameraConfig,
+    WindowId, DisplayInputPorts, DisplayConfig,
+    AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
+    AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
+    ParameterInfo, PluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    TestToneGenerator,
-    ShaderId, // from runtime, but we'll override StreamRuntime below
+    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
+    AudioMixerProcessor, MixingStrategy,
+    AudioMixerOutputPorts, AudioMixerConfig,
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
+    AudioRequirements,
     SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
+    // Sync utilities
+    timestamp_delta_ms, video_audio_delta_ms,
+    are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
+    DEFAULT_SYNC_TOLERANCE_MS,
     ProcessorRegistry, ProcessorRegistration,
     DescriptorProvider, global_registry,
     register_processor,
@@ -158,7 +166,7 @@ pub mod python;
 
 // Platform-configured runtime wrapper
 mod runtime;
-pub use runtime::{StreamRuntime, AudioConfig};
+pub use runtime::StreamRuntime;
 
 // Platform information
 pub mod platform {

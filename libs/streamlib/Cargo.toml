@@ -57,6 +57,7 @@ tokio.workspace = true
 crossbeam-channel = "0.5"
 inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
+rtrb = "0.3.2"  # Lock-free SPSC ring buffer for real-time audio/video
 
 # Serialization
 serde.workspace = true
@@ -69,6 +70,12 @@ wgpu.workspace = true
 # CLAP audio plugin hosting (core dependency, like wgpu)
 clack-host = { git = "https://github.com/prokopyl/clack" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "params"] }
+
+# Audio resampling for real-time safe sample rate conversion
+rubato = "0.16"
+
+dasp = { version = "0.11", features = ["signal", "slice"] }
+dasp_signal = { version = "0.11", features = ["bus"] }
 
 # Optional: Debug overlay dependencies
 vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }
@@ -110,6 +117,7 @@ cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
+core-graphics = "0.24"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

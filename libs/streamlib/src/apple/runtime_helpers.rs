@@ -20,7 +20,7 @@ use std::time::Duration;
 /// # Example
 ///
 /// ```ignore
-/// let mut runtime = StreamRuntime::new(60.0);
+/// let mut runtime = StreamRuntime::new();
 /// runtime.add_processor(Box::new(ball_renderer));
 /// runtime.add_processor(Box::new(display));
 /// runtime.connect(ball_renderer.output_mut(), display.input_mut())?;

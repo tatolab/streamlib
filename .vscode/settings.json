@@ -11,7 +11,7 @@
     "tokio"
   ],
   "rust-analyzer.cargo.features": "all",
-  "rust-analyzer.checkOnSave.allTargets": true,
+  "rust-analyzer.check.allTargets": true,
   "rust-analyzer.linkedProjects": [
     "./Cargo.toml"
   ]

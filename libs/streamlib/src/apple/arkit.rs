@@ -20,8 +20,6 @@ pub mod macos {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_arkit_availability() {
         // Test will be implemented

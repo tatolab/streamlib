@@ -4,57 +4,85 @@
 //! real-time video processing system. Platform-specific implementations
 //! (Metal, Vulkan) are provided by separate crates.
 
-pub mod buffers;
-pub mod clock;
+pub mod bus;
+pub mod clap;
+pub mod clocks;
+pub mod connection;
+pub mod connection_manager;
+pub mod context;
 pub mod error;
-pub mod events;
-pub mod gpu_context;
-pub mod messages;
+pub mod frames;
+pub mod handles;
+pub mod media_clock;
 pub mod registry;
-pub mod schema;
-pub mod stream_processor;
-pub mod ports;
-pub mod processors;
 pub mod runtime;
+pub mod schema;
+pub mod scheduling;
+pub mod ports;
+pub mod sources;
+pub mod sinks;
+pub mod transformers;
+pub mod sync;
 pub mod texture;
 pub mod topology;
+pub mod traits;
 
 // Re-export core types
-pub use buffers::RingBuffer;
-pub use clock::{Clock, TimedTick, SoftwareClock, PTPClock, GenlockClock};
+pub use clap::{
+    ParameterInfo, PluginInfo,
+    ParameterModulator, LfoWaveform,
+    ParameterAutomation, ClapParameterControl,
+};
+pub use clocks::{Clock, SoftwareClock, AudioClock, VideoClock, PTPClock, GenlockClock};
+pub use connection::{ProcessorConnection, ConnectionId};
+pub use connection_manager::ConnectionManager;
+pub use bus::Bus;
+pub use context::{GpuContext, AudioContext, RuntimeContext};
 pub use error::{StreamError, Result};
-pub use events::TickBroadcaster;
-pub use gpu_context::GpuContext;
-pub use messages::{VideoFrame, AudioFrame, AudioFormat, DataMessage, MetadataValue};
-pub use stream_processor::StreamProcessor;
+pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
+pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
+pub use frames::{
+    VideoFrame, AudioFrame, DataFrame, MetadataValue,
+};
+// v2.0 traits - GStreamer-inspired hierarchy
+pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
 pub use ports::{
     StreamOutput, StreamInput, PortType, PortMessage,
 };
-pub use processors::{
-    CameraProcessor, CameraDevice, CameraOutputPorts,
-    DisplayProcessor, WindowId, DisplayInputPorts,
-    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts,
-    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts,
-    AudioEffectProcessor, ParameterInfo, PluginInfo,
-    AudioEffectInputPorts, AudioEffectOutputPorts,
-    ClapEffectProcessor, ClapScanner, ClapPluginInfo,
-    ParameterModulator, LfoWaveform,
-    ParameterAutomation,
-    TestToneGenerator,
+
+// Re-export processor types and their configs from sources/sinks/transformers
+pub use sources::{
+    CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig,
+    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
+    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
+};
+pub use sinks::{
+    DisplayProcessor, WindowId, DisplayInputPorts, DisplayConfig,
+    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
+};
+pub use transformers::{
+    ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
+    ClapEffectInputPorts, ClapEffectOutputPorts,
+    AudioMixerProcessor, MixingStrategy,
+    AudioMixerOutputPorts, AudioMixerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]
-pub use processors::{
+pub use transformers::{
     PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+    PerformanceOverlayConfig,
 };
-pub use runtime::{StreamRuntime, ShaderId};
 pub use schema::{
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
-    AudioRequirements,  // Audio configuration requirements
-    // Standard schemas
+    AudioRequirements,
     SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
     SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
+};
+pub use sync::{
+    timestamp_delta_ms, video_audio_delta_ms,
+    are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
+    DEFAULT_SYNC_TOLERANCE_MS,
 };
 pub use registry::{
     ProcessorRegistry, ProcessorRegistration,
@@ -66,3 +94,7 @@ pub use registry::{
 };
 pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
+pub use scheduling::{
+    SchedulingConfig, SchedulingMode, ThreadPriority,
+    ClockSource, ClockConfig, ClockType, SyncMode,
+};

@@ -83,15 +83,15 @@ impl PyStreamRuntime {
     /// Create a new StreamRuntime
     ///
     /// # Arguments
-    /// * `fps` - Target frame rate (default: 30)
+    /// * `fps` - Target frame rate for display purposes (default: 30, not used by runtime)
     /// * `width` - Frame width (default: 1920)
     /// * `height` - Frame height (default: 1080)
     /// * `enable_gpu` - Enable GPU acceleration (default: true)
     #[new]
     #[pyo3(signature = (fps=30, width=1920, height=1080, enable_gpu=true))]
     fn new(fps: u32, width: u32, height: u32, enable_gpu: bool) -> Self {
-        // Create the actual Rust runtime
-        let runtime = StreamRuntime::new(fps as f64);
+        // Create the actual Rust runtime (event-driven, no fps parameter)
+        let runtime = StreamRuntime::new();
 
         Self {
             runtime: Some(runtime),

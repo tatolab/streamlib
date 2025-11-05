@@ -579,6 +579,7 @@ impl AudioRequirements {
     }
 }
 
+
 /// Processor descriptor for AI discovery
 ///
 /// This contains all metadata needed for AI agents to understand
@@ -882,52 +883,36 @@ pub static SCHEMA_AUDIO_FRAME: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     Arc::new(
         Schema::new(
             "AudioFrame",
-            SemanticVersion::new(1, 0, 0),
+            SemanticVersion::new(2, 0, 0),
             vec![
                 Field::new("samples", FieldType::Array(Box::new(FieldType::Float32)))
-                    .with_description("CPU buffer containing interleaved audio samples (f32 in range [-1.0, 1.0])"),
-                Field::new("gpu_buffer", FieldType::Optional(Box::new(FieldType::Buffer {
-                    element_type: Box::new(FieldType::Float32),
-                })))
-                    .optional()
-                    .with_description("Optional GPU buffer for specialized processing"),
-                Field::new("timestamp_ns", FieldType::Int64)
-                    .with_description("Timestamp in nanoseconds since stream start (for precise A/V sync)"),
-                Field::new("frame_number", FieldType::UInt64)
-                    .with_description("Sequential frame number"),
-                Field::new("sample_count", FieldType::UInt64)
-                    .with_description("Number of audio samples per channel"),
-                Field::new("sample_rate", FieldType::UInt32)
-                    .with_description("Sample rate in Hz (e.g., 48000)"),
+                    .with_description("Interleaved audio samples (f32 in range [-1.0, 1.0])"),
                 Field::new("channels", FieldType::UInt32)
-                    .with_description("Number of channels (1 = mono, 2 = stereo)"),
-                Field::new("format", FieldType::Enum(vec![
-                    "F32".to_string(),
-                    "I16".to_string(),
-                    "I24".to_string(),
-                    "I32".to_string(),
-                ]))
-                    .with_description("Original sample format before conversion to f32"),
+                    .with_description("Number of channels (1=mono, 2=stereo, 6=5.1, 8=7.1)"),
+                Field::new("timestamp_ns", FieldType::Int64)
+                    .with_description("Timestamp in nanoseconds since stream start"),
+                Field::new("frame_number", FieldType::UInt64)
+                    .with_description("Sequential frame number for drop detection"),
                 Field::new("metadata", FieldType::Optional(Box::new(FieldType::Struct(vec![]))))
                     .optional()
-                    .with_description("Optional metadata (ML results, speaker labels, etc.)"),
+                    .with_description("Optional metadata (ML results, labels, etc.)"),
             ],
             SerializationFormat::Bincode,
         )
         .with_description(
-            "A chunk of audio data with CPU-first architecture. Standard format for audio processing in streamlib. \
-             Samples are stored on CPU with optional GPU buffer for GPU-accelerated effects."
+            "Fixed-size audio buffer with streaming metadata. Sample rate is enforced by RuntimeContext. \
+             Use dasp for zero-copy frame access (stereo, mono, surround)."
         ),
     )
 });
 
-/// Standard schema for generic data messages
+/// Standard schema for generic data frames
 ///
 /// For custom data types that don't fit VideoFrame or AudioBuffer.
 pub static SCHEMA_DATA_MESSAGE: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     Arc::new(
         Schema::new(
-            "DataMessage",
+            "DataFrame",
             SemanticVersion::new(1, 0, 0),
             vec![
                 Field::new("buffer", FieldType::Buffer {

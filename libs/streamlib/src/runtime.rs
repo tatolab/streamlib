@@ -1,82 +1,67 @@
-//! Platform-configured StreamRuntime
-//!
-//! This module provides a StreamRuntime that automatically configures itself
-//! for the current platform. Users just call `StreamRuntime::new(60.0)` and
-//! the runtime handles platform-specific setup (like NSApplication on macOS).
+use crate::core::{Result, ports::PortMessage};
 
-use crate::core::{Result, StreamProcessor, StreamInput, StreamOutput, ports::PortMessage};
+pub use crate::core::runtime::AudioContext;
+pub use crate::core::handles::ProcessorHandle;
 
-// Re-export AudioConfig from core
-pub use crate::core::runtime::AudioConfig;
-
-/// Platform-configured StreamRuntime
-///
-/// This wraps `crate::core::StreamRuntime` and automatically configures
-/// platform-specific features on construction.
 pub struct StreamRuntime {
     inner: crate::core::StreamRuntime,
 }
 
 impl StreamRuntime {
-    /// Create a new runtime configured for the current platform
-    pub fn new(fps: f64) -> Self {
-        let mut inner = crate::core::StreamRuntime::new(fps);
+    pub fn new() -> Self {
+        let mut inner = crate::core::StreamRuntime::new();
 
-        // Configure platform-specific event loop
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            crate::apple::runtime_ext::configure_macos_event_loop(&mut inner);
+            crate::apple::configure_macos_event_loop(&mut inner);
         }
 
         Self { inner }
     }
 
-    /// Add a processor to the runtime
-    pub fn add_processor(&mut self, processor: Box<dyn StreamProcessor>) {
-        self.inner.add_processor(processor);
+    /// Add a processor with config (works both before and after start())
+    pub async fn add_element_with_config<P>(&mut self, config: P::Config) -> Result<ProcessorHandle>
+    where
+        P: crate::core::traits::StreamProcessor + 'static,
+    {
+        // Check if runtime is started
+        if self.inner.is_running() {
+            // Runtime is running - add dynamically
+            let element = P::from_config(config)?;
+            let id = self.inner.add_processor_runtime(Box::new(element)).await?;
+            Ok(ProcessorHandle::new(id))
+        } else {
+            // Runtime not started yet - add to pending list (no await needed)
+            self.inner.add_processor_with_config::<P>(config)
+        }
     }
 
-    /// Connect two ports
-    pub fn connect<T: PortMessage>(&mut self, output: &mut StreamOutput<T>, input: &mut StreamInput<T>) -> Result<()> {
+    pub fn connect<T: PortMessage>(
+        &mut self,
+        output: crate::core::handles::OutputPortRef<T>,
+        input: crate::core::handles::InputPortRef<T>,
+    ) -> Result<()> {
         self.inner.connect(output, input)
     }
 
-    /// Start the runtime
     pub async fn start(&mut self) -> Result<()> {
         self.inner.start().await
     }
 
-    /// Run the runtime until stopped
     pub async fn run(&mut self) -> Result<()> {
         self.inner.run().await
     }
 
-    /// Stop the runtime
     pub async fn stop(&mut self) -> Result<()> {
         self.inner.stop().await
     }
 
-    /// Get the global audio configuration
-    ///
-    /// All audio processors should use these settings to ensure
-    /// sample rate compatibility across the pipeline.
-    pub fn audio_config(&self) -> AudioConfig {
+    pub fn audio_config(&self) -> AudioContext {
         self.inner.audio_config()
     }
 
-    /// Set the global audio configuration
-    ///
-    /// **Must be called before starting the runtime**. Changing audio config
-    /// after processors are running may cause sample rate mismatches.
-    pub fn set_audio_config(&mut self, config: AudioConfig) {
+    pub fn set_audio_config(&mut self, config: AudioContext) {
         self.inner.set_audio_config(config)
     }
 
-    /// Validate that an AudioFrame matches the runtime's audio configuration
-    ///
-    /// This checks that the frame's sample rate and channel count match the
-    /// runtime's global audio config.
-    pub fn validate_audio_frame(&self, frame: &crate::core::AudioFrame) -> Result<()> {
-        self.inner.validate_audio_frame(frame)
-    }
 }

@@ -148,7 +148,7 @@ impl TopologyAnalyzer {
     /// ```ignore
     /// use streamlib_core::TopologyAnalyzer;
     ///
-    /// let mut runtime = StreamRuntime::new(60.0);
+    /// let mut runtime = StreamRuntime::new();
     /// // ... add handlers, connect ports ...
     ///
     /// let topology = TopologyAnalyzer::analyze(&runtime);

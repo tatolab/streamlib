@@ -1,141 +1,87 @@
 //! Simple Pipeline Example
 //!
-//! Demonstrates the platform-agnostic API - same code works on macOS, Linux, Windows.
-//! No platform-specific imports or code visible to the user.
+//! Demonstrates the simplest possible pipeline using streamlib:
+//! A test tone generator → audio output.
+//!
+//! This example shows:
+//! - Event-driven processing (no explicit tick/FPS parameters)
+//! - Config-based processor creation
+//! - Handle-based type-safe connections
+//! - Runtime management
+//!
+//! You should hear a 440 Hz tone (musical note A4) for 2 seconds.
 
 use streamlib::{
-    StreamProcessor, StreamRuntime,
-    StreamOutput, StreamInput, PortMessage, PortType,
-    TimedTick, Result,
+    StreamRuntime, Result,
+    TestToneGenerator, AudioOutputProcessor, AudioFrame,
 };
-use std::sync::{Arc, Mutex};
-
-// Define a simple frame message
-#[derive(Clone, Debug)]
-struct Frame {
-    data: String,
-}
-
-impl PortMessage for Frame {
-    fn port_type() -> PortType {
-        PortType::Video
-    }
-}
-
-// Simple source processor (generates frames)
-struct SourceOutputPorts {
-    pub video: StreamOutput<Frame>,
-}
-
-struct SourcePorts {
-    pub output: SourceOutputPorts,
-}
-
-struct Source {
-    count: u64,
-    pub ports: SourcePorts,
-}
-
-impl Source {
-    fn new() -> Self {
-        Self {
-            count: 0,
-            ports: SourcePorts {
-                output: SourceOutputPorts {
-                    video: StreamOutput::new("video"),
-                }
-            }
-        }
-    }
-}
-
-impl StreamProcessor for Source {
-    fn process(&mut self, _tick: TimedTick) -> Result<()> {
-        let frame = Frame {
-            data: format!("Frame {}", self.count),
-        };
-        self.ports.output.video.write(frame);
-        self.count += 1;
-        Ok(())
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-
-// Simple sink processor (consumes frames)
-struct SinkInputPorts {
-    pub video: StreamInput<Frame>,
-}
-
-struct SinkPorts {
-    pub input: SinkInputPorts,
-}
-
-struct Sink {
-    pub ports: SinkPorts,
-    count: Arc<Mutex<u64>>,
-}
-
-impl Sink {
-    fn new(count: Arc<Mutex<u64>>) -> Self {
-        Self {
-            ports: SinkPorts {
-                input: SinkInputPorts {
-                    video: StreamInput::new("video"),
-                }
-            },
-            count,
-        }
-    }
-}
-
-impl StreamProcessor for Sink {
-    fn process(&mut self, _tick: TimedTick) -> Result<()> {
-        if let Some(frame) = self.ports.input.video.read_latest() {
-            println!("Received: {}", frame.data);
-            *self.count.lock().unwrap() += 1;
-        }
-        Ok(())
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
+use streamlib::core::config::{TestToneConfig, AudioOutputConfig};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("=== Platform-Agnostic Pipeline Example ===");
-    println!("Platform: {}", streamlib::platform::name());
-    println!("GPU Backend: {}\n", streamlib::platform::gpu_backend());
+    println!("=== Simple Pipeline Example ===\n");
+    println!("This example demonstrates:");
+    println!("  • Event-driven processing");
+    println!("  • Config-based processor creation");
+    println!("  • Handle-based type-safe connections\n");
 
-    // Create runtime (works on all platforms)
-    let mut runtime = StreamRuntime::new(10.0);
+    // Create runtime (no FPS parameter - event-driven!)
+    let mut runtime = StreamRuntime::new();
 
-    let count = Arc::new(Mutex::new(0));
+    // Get global audio config from runtime
+    let audio_config = runtime.audio_config();
+    println!("Audio Config:");
+    println!("  Sample Rate: {} Hz", audio_config.sample_rate);
+    println!("  Channels: {}", audio_config.channels);
+    println!("  Buffer Size: {} samples\n", audio_config.buffer_size);
 
-    // Create processors (platform-agnostic)
-    let mut source = Source::new();
-    let mut sink = Sink::new(Arc::clone(&count));
+    // Create a test tone generator (440 Hz = musical note A4)
+    println!("🎵 Adding test tone generator (440 Hz)...");
+    let tone = runtime.add_processor_with_config::<TestToneGenerator>(
+        TestToneConfig {
+            frequency: 440.0,
+            amplitude: 0.3,  // 30% volume to avoid clipping
+            sample_rate: audio_config.sample_rate,
+            timer_group_id: None,
+        }
+    )?;
+    println!("✓ Test tone added\n");
 
-    // Connect processors (platform-agnostic)
-    runtime.connect(&mut source.ports.output.video, &mut sink.ports.input.video)?;
+    // Create audio output processor
+    println!("🔊 Adding audio output processor...");
+    let output = runtime.add_processor_with_config::<AudioOutputProcessor>(
+        AudioOutputConfig {
+            device_id: None,  // Use default audio device
+        }
+    )?;
+    println!("✓ Audio output added\n");
 
-    runtime.add_processor(Box::new(source));
-    runtime.add_processor(Box::new(sink));
+    // Connect processors using type-safe handles
+    // The compiler verifies that AudioFrame → AudioFrame types match!
+    println!("🔗 Connecting test tone → audio output...");
+    runtime.connect(
+        tone.output_port::<AudioFrame>("audio"),    // OutputPortRef<AudioFrame>
+        output.input_port::<AudioFrame>("audio"),   // InputPortRef<AudioFrame>
+    )?;
+    println!("✓ Pipeline connected\n");
 
     // Run pipeline
-    println!("Starting pipeline...");
+    println!("▶️  Starting pipeline (you should hear a 440 Hz tone)...");
     runtime.start().await?;
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Play for 2 seconds
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Stop the pipeline
+    println!("\n⏹️  Stopping pipeline...");
     runtime.stop().await?;
 
-    let received = *count.lock().unwrap();
     println!("\n✓ Pipeline complete");
-    println!("✓ Processed {} frames", received);
-    println!("✓ Same code works on macOS, Linux, Windows!");
+    println!("✓ Demonstrated:");
+    println!("  • Event-driven architecture (no FPS/tick parameters)");
+    println!("  • Config-based API (TestToneConfig, AudioOutputConfig)");
+    println!("  • Type-safe connections (AudioFrame → AudioFrame)");
+    println!("  • Same code works on macOS, Linux, Windows!");
 
     Ok(())
 }
