@@ -54,7 +54,7 @@ impl SineOscillator {
 
 #[derive(StreamProcessor)]
 pub struct ChordGeneratorProcessor {
-    // Port fields - Arc-wrapped for thread sharing!
+    // Lock-free port (Arc-wrapped for thread sharing)
     #[output]
     chord: Arc<StreamOutput<AudioFrame<2>>>,
 
@@ -81,7 +81,7 @@ impl ChordGeneratorProcessor {
         let amp = amplitude.clamp(0.0, 1.0) as f32;
 
         Self {
-            // Port initialization - Arc-wrapped!
+            // Lock-free port initialization
             chord: Arc::new(StreamOutput::new("chord")),
 
             // Config fields
@@ -183,7 +183,7 @@ impl StreamProcessor for ChordGeneratorProcessor {
         let osc_c4 = Arc::clone(&self.osc_c4);
         let osc_e4 = Arc::clone(&self.osc_e4);
         let osc_g4 = Arc::clone(&self.osc_g4);
-        let chord_output = Arc::clone(&self.chord);  // Direct field access!
+        let chord_output = Arc::clone(&self.chord);
         let frame_counter = Arc::clone(&self.frame_counter);
         let running = Arc::clone(&self.running);
         let buffer_size = self.buffer_size;
@@ -310,12 +310,11 @@ impl StreamProcessor for ChordGeneratorProcessor {
         }
     }
 
-    // Delegate to macro-generated methods
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::PortType> {
         self.get_output_port_type_impl(port_name)
     }
 
-    fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_output_connection_impl(port_name, connection)
+    fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
+        self.wire_output_producer_impl(port_name, producer)
     }
 }

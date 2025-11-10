@@ -41,13 +41,11 @@ impl Default for MixingStrategy {
 
 #[derive(StreamProcessor)]
 pub struct AudioMixerProcessor {
-    // Port fields - annotated!
+    // Lock-free port fields
     #[input]
     left: StreamInput<AudioFrame<1>>,
-
     #[input]
     right: StreamInput<AudioFrame<1>>,
-
     #[output]
     audio: StreamOutput<AudioFrame<2>>,
 
@@ -61,7 +59,7 @@ pub struct AudioMixerProcessor {
 impl AudioMixerProcessor {
     pub fn new(strategy: MixingStrategy) -> Self {
         Self {
-            // Ports
+            // Lock-free port initialization
             left: StreamInput::new("left"),
             right: StreamInput::new("right"),
             audio: StreamOutput::new("audio"),
@@ -223,22 +221,5 @@ impl StreamProcessor for AudioMixerProcessor {
         if port_name == "audio" {
             self.audio.set_downstream_wakeup(wakeup_tx);
         }
-    }
-
-    // Delegate to macro-generated methods
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        self.get_output_port_type_impl(port_name)
-    }
-
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        self.get_input_port_type_impl(port_name)
-    }
-
-    fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_output_connection_impl(port_name, connection)
-    }
-
-    fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_input_connection_impl(port_name, connection)
     }
 }

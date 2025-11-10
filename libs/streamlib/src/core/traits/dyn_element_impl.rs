@@ -84,4 +84,12 @@ where
     fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
         self.wire_input_connection(port_name, connection)
     }
+
+    fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
+        self.wire_output_producer(port_name, producer)
+    }
+
+    fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
+        self.wire_input_consumer(port_name, consumer)
+    }
 }

@@ -42,4 +42,13 @@ pub trait StreamProcessor: StreamElement {
     fn wire_input_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
         false
     }
+
+    // Phase 2: Lock-free owned connection wiring methods
+    fn wire_output_producer(&mut self, _port_name: &str, _producer: Box<dyn std::any::Any + Send>) -> bool {
+        false
+    }
+
+    fn wire_input_consumer(&mut self, _port_name: &str, _consumer: Box<dyn std::any::Any + Send>) -> bool {
+        false
+    }
 }

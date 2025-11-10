@@ -225,11 +225,12 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                 }
             }
 
-            // Check if it's StreamInput or StreamOutput
-            if ident != "StreamInput" && ident != "StreamOutput" {
+            // Check if it's StreamInput, StreamOutput, or V2 variants
+            if ident != "StreamInput" && ident != "StreamOutput" &&
+               ident != "StreamInputV2" && ident != "StreamOutputV2" {
                 return Err(Error::new_spanned(
                     ty,
-                    "Port fields must be StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>",
+                    "Port fields must be StreamInput<T>, StreamOutput<T>, StreamInputV2<T>, StreamOutputV2<T>, or Arc<...>",
                 ));
             }
 

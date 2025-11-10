@@ -32,7 +32,11 @@ pub trait DynStreamElement: Send + 'static {
     fn get_output_port_type(&self, port_name: &str) -> Option<PortType>;
     fn get_input_port_type(&self, port_name: &str) -> Option<PortType>;
 
+    // Phase 1 methods (deprecated, for backward compatibility)
     fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool;
-
     fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool;
+
+    // Phase 2 methods (lock-free)
+    fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool;
+    fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool;
 }

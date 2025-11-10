@@ -128,6 +128,10 @@ criterion = "0.5"  # Benchmarking framework
 name = "connection_bench"
 harness = false
 
+[[bench]]
+name = "phase2_bench"
+harness = false
+
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features
 all-features = true

@@ -325,15 +325,6 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
             self.audio.set_downstream_wakeup(wakeup_tx);
         }
     }
-
-    // Delegate to macro-generated methods
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        self.get_output_port_type_impl(port_name)
-    }
-
-    fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_output_connection_impl(port_name, connection)
-    }
 }
 
 #[cfg(test)]

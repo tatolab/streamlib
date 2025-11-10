@@ -293,3 +293,200 @@ mod tests {
         assert_ne!(conn1.id, conn2.id);
     }
 }
+
+/// Phase 2: Lock-Free Connection Architecture
+///
+/// Owned producer that wraps rtrb::Producer directly without Arc<Mutex>.
+/// Provides true lock-free writes using rtrb's internal atomic operations.
+pub struct OwnedProducer<T: Clone + Send + 'static> {
+    inner: Producer<T>,
+    cached_size: Arc<AtomicUsize>,
+}
+
+impl<T: Clone + Send + 'static> OwnedProducer<T> {
+    pub fn new(producer: Producer<T>, cached_size: Arc<AtomicUsize>) -> Self {
+        Self {
+            inner: producer,
+            cached_size,
+        }
+    }
+
+    /// Write data to the connection with roll-off semantics (lock-free)
+    ///
+    /// Note: Roll-off is NOT possible in owned mode because we can't access
+    /// the consumer from the producer thread. Data is dropped if buffer is full.
+    pub fn write(&mut self, data: T) {
+        match self.inner.push(data) {
+            Ok(()) => {
+                self.cached_size.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(rtrb::PushError::Full(_dropped)) => {
+                // In lock-free mode, we can't pop from consumer side
+                // Data is dropped on overflow (acceptable for real-time)
+                tracing::warn!("OwnedProducer: Buffer full, dropping data");
+            }
+        }
+    }
+
+    /// Try to write data, returning the data back if buffer is full (lock-free)
+    pub fn try_write(&mut self, data: T) -> Result<(), T> {
+        match self.inner.push(data) {
+            Ok(()) => {
+                self.cached_size.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(rtrb::PushError::Full(data)) => Err(data),
+        }
+    }
+
+    /// Check if data is available (lock-free, atomic read)
+    pub fn has_data(&self) -> bool {
+        self.cached_size.load(Ordering::Relaxed) > 0
+    }
+}
+
+/// Owned consumer that wraps rtrb::Consumer directly without Arc<Mutex>.
+/// Provides true lock-free reads using rtrb's internal atomic operations.
+pub struct OwnedConsumer<T: Clone + Send + 'static> {
+    inner: Consumer<T>,
+    cached_size: Arc<AtomicUsize>,
+}
+
+impl<T: Clone + Send + 'static> OwnedConsumer<T> {
+    pub fn new(consumer: Consumer<T>, cached_size: Arc<AtomicUsize>) -> Self {
+        Self {
+            inner: consumer,
+            cached_size,
+        }
+    }
+
+    /// Read and return the most recent item, discarding all older items (lock-free)
+    pub fn read_latest(&mut self) -> Option<T> {
+        let available = self.inner.slots();
+        if available == 0 {
+            return None;
+        }
+
+        // Use chunk API for zero-copy discard of N-1 items
+        match self.inner.read_chunk(available) {
+            Ok(chunk) => {
+                let (first, second) = chunk.as_slices();
+                let latest = if !second.is_empty() {
+                    second.last().cloned()
+                } else {
+                    first.last().cloned()
+                };
+
+                chunk.commit_all();
+                self.cached_size.fetch_sub(available, Ordering::Relaxed);
+                latest
+            }
+            Err(_) => {
+                // Fallback: pop all items one by one
+                let mut latest = None;
+                let mut count = 0;
+                while let Ok(data) = self.inner.pop() {
+                    latest = Some(data);
+                    count += 1;
+                }
+                if count > 0 {
+                    self.cached_size.fetch_sub(count, Ordering::Relaxed);
+                }
+                latest
+            }
+        }
+    }
+
+    /// Read next item without consuming it (lock-free)
+    pub fn peek(&mut self) -> Option<T> {
+        self.inner.peek().ok().cloned()
+    }
+
+    /// Read a single item (lock-free)
+    pub fn read(&mut self) -> Option<T> {
+        match self.inner.pop() {
+            Ok(data) => {
+                self.cached_size.fetch_sub(1, Ordering::Relaxed);
+                Some(data)
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Check if data is available (lock-free, atomic read)
+    pub fn has_data(&self) -> bool {
+        self.cached_size.load(Ordering::Relaxed) > 0
+    }
+
+    /// Get number of available items (lock-free)
+    pub fn available(&self) -> usize {
+        self.inner.slots()
+    }
+}
+
+/// Factory function to create a lock-free producer/consumer pair
+pub fn create_owned_connection<T: Clone + Send + 'static>(
+    capacity: usize,
+) -> (OwnedProducer<T>, OwnedConsumer<T>) {
+    let (producer, consumer) = RingBuffer::new(capacity);
+    let cached_size = Arc::new(AtomicUsize::new(0));
+
+    (
+        OwnedProducer::new(producer, Arc::clone(&cached_size)),
+        OwnedConsumer::new(consumer, cached_size),
+    )
+}
+
+#[cfg(test)]
+mod phase2_tests {
+    use super::*;
+
+    #[test]
+    fn test_owned_write_read() {
+        let (mut producer, mut consumer) = create_owned_connection::<i32>(10);
+
+        producer.write(42);
+        assert_eq!(consumer.read(), Some(42));
+        assert_eq!(consumer.read(), None);
+    }
+
+    #[test]
+    fn test_owned_read_latest() {
+        let (mut producer, mut consumer) = create_owned_connection::<i32>(10);
+
+        producer.write(1);
+        producer.write(2);
+        producer.write(3);
+
+        assert_eq!(consumer.read_latest(), Some(3));
+        assert_eq!(consumer.read(), None);
+    }
+
+    #[test]
+    fn test_owned_has_data() {
+        let (mut producer, consumer) = create_owned_connection::<i32>(10);
+
+        assert!(!consumer.has_data());
+        producer.write(42);
+        assert!(consumer.has_data());
+    }
+
+    #[test]
+    fn test_owned_overflow_drops() {
+        let (mut producer, mut consumer) = create_owned_connection::<i32>(3);
+
+        // Fill buffer
+        producer.write(1);
+        producer.write(2);
+        producer.write(3);
+
+        // This should drop silently (no roll-off in owned mode)
+        producer.write(4);
+
+        // Should still have original 3 items
+        assert_eq!(consumer.read(), Some(1));
+        assert_eq!(consumer.read(), Some(2));
+        assert_eq!(consumer.read(), Some(3));
+        assert_eq!(consumer.read(), None);
+    }
+}

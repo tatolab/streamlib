@@ -737,76 +737,174 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         }
     };
 
-    // Generate wire_input_connection implementation
+    // Generate wire_input_consumer implementation (Phase 2: lock-free)
     let input_wire_arms = input_ports.iter().map(|p| {
         let field_name = &p.field_name;
         let port_name = &p.port_name;
         let message_type = &p.message_type;
-        quote! {
-            #port_name => {
-                if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<crate::core::ProcessorConnection<#message_type>>>() {
-                    self.#field_name.set_connection(std::sync::Arc::clone(&typed_conn));
-                    return true;
+        let is_arc_wrapped = p.is_arc_wrapped;
+
+        if is_arc_wrapped {
+            // Arc-wrapped: need to call .as_ref() to get &StreamInput
+            quote! {
+                #port_name => {
+                    if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<#message_type>>() {
+                        self.#field_name.as_ref().set_consumer(*typed_consumer);
+                        return true;
+                    }
+                    false
                 }
-                false
+            }
+        } else {
+            // Normal: direct access
+            quote! {
+                #port_name => {
+                    if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<#message_type>>() {
+                        self.#field_name.set_consumer(*typed_consumer);
+                        return true;
+                    }
+                    false
+                }
             }
         }
     });
 
-    let wire_input_connection_impl = if !input_ports.is_empty() {
+    let wire_input_consumer_impl = if !input_ports.is_empty() {
         quote! {
-            pub fn wire_input_connection_impl(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_input_consumer_impl(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
                 match port_name {
                     #(#input_wire_arms,)*
                     _ => false,
                 }
             }
+
+            // Backward compatibility alias
+            pub fn wire_input_connection_impl(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
+                self.wire_input_consumer_impl(port_name, consumer)
+            }
         }
     } else {
         quote! {
-            pub fn wire_input_connection_impl(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_input_consumer_impl(&mut self, _port_name: &str, _consumer: Box<dyn std::any::Any + Send>) -> bool {
+                false
+            }
+
+            pub fn wire_input_connection_impl(&mut self, _port_name: &str, _consumer: Box<dyn std::any::Any + Send>) -> bool {
                 false
             }
         }
     };
 
-    // Generate wire_output_connection implementation
+    // Generate wire_output_producer implementation (Phase 2: lock-free)
     let output_wire_arms = output_ports.iter().map(|p| {
         let field_name = &p.field_name;
         let port_name = &p.port_name;
         let message_type = &p.message_type;
-        quote! {
-            #port_name => {
-                if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<crate::core::ProcessorConnection<#message_type>>>() {
-                    self.#field_name.add_connection(std::sync::Arc::clone(&typed_conn));
-                    return true;
+        let is_arc_wrapped = p.is_arc_wrapped;
+
+        if is_arc_wrapped {
+            // Arc-wrapped: need to call .as_ref() to get &StreamOutput
+            quote! {
+                #port_name => {
+                    if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<#message_type>>() {
+                        self.#field_name.as_ref().add_producer(*typed_producer);
+                        return true;
+                    }
+                    false
                 }
-                false
+            }
+        } else {
+            // Normal: direct access
+            quote! {
+                #port_name => {
+                    if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<#message_type>>() {
+                        self.#field_name.add_producer(*typed_producer);
+                        return true;
+                    }
+                    false
+                }
             }
         }
     });
 
-    let wire_output_connection_impl = if !output_ports.is_empty() {
+    let wire_output_producer_impl = if !output_ports.is_empty() {
         quote! {
-            pub fn wire_output_connection_impl(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_output_producer_impl(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
                 match port_name {
                     #(#output_wire_arms,)*
                     _ => false,
                 }
             }
+
+            // Backward compatibility alias
+            pub fn wire_output_connection_impl(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
+                self.wire_output_producer_impl(port_name, producer)
+            }
         }
     } else {
         quote! {
-            pub fn wire_output_connection_impl(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_output_producer_impl(&mut self, _port_name: &str, _producer: Box<dyn std::any::Any + Send>) -> bool {
+                false
+            }
+
+            pub fn wire_output_connection_impl(&mut self, _port_name: &str, _producer: Box<dyn std::any::Any + Send>) -> bool {
                 false
             }
         }
     };
 
+    // Generate StreamProcessor trait method implementations that delegate to the _impl methods
+    let has_inputs = !input_ports.is_empty();
+    let has_outputs = !output_ports.is_empty();
+
+    let wire_input_consumer_trait = if has_inputs {
+        quote! {
+            fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
+                self.wire_input_consumer_impl(port_name, consumer)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let wire_output_producer_trait = if has_outputs {
+        quote! {
+            fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
+                self.wire_output_producer_impl(port_name, producer)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let get_input_port_type_trait = if has_inputs {
+        quote! {
+            fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::PortType> {
+                self.get_input_port_type_impl(port_name)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let get_output_port_type_trait = if has_outputs {
+        quote! {
+            fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::PortType> {
+                self.get_output_port_type_impl(port_name)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #get_input_port_type_impl
         #get_output_port_type_impl
-        #wire_input_connection_impl
-        #wire_output_connection_impl
+        #wire_input_consumer_impl
+        #wire_output_producer_impl
+        #get_input_port_type_trait
+        #get_output_port_type_trait
+        #wire_input_consumer_trait
+        #wire_output_producer_trait
     }
 }

@@ -24,9 +24,10 @@ pub use clap::{
     ParameterAutomation, ClapParameterControl,
 };
 pub use bus::{
-    Bus, ProcessorConnection, ConnectionId, ConnectionManager,
+    Bus, ConnectionId, ConnectionManager,
     PortAddress, PortType, PortMessage,
     StreamOutput, StreamInput,
+    OwnedProducer, OwnedConsumer, create_owned_connection,
 };
 pub use context::{GpuContext, AudioContext, RuntimeContext};
 pub use error::{StreamError, Result};
