@@ -2,7 +2,6 @@
 pub mod core;
 
 pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
-pub use streamlib_macros::port_registry;
 
 pub use core::{
     media_clock::MediaClock,
