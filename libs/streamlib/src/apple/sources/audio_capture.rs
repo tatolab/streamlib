@@ -1,19 +1,26 @@
 
 use crate::core::{
-    AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice, AudioCaptureOutputPorts,
+    AudioCaptureProcessor as AudioCaptureProcessorTrait, AudioInputDevice,
     AudioFrame, Result, StreamError, StreamOutput, ProcessorDescriptor,
     PortDescriptor,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use crate::core::bus::PortMessage;
+use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use parking_lot::Mutex;
 
+#[derive(DeriveStreamProcessor)]
 pub struct AppleAudioCaptureProcessor {
+    // Port field - annotated!
+    #[output]
+    audio: StreamOutput<AudioFrame<1>>,
+
+    // Config fields
     device_info: AudioInputDevice,
 
     _device: Device,
@@ -32,8 +39,6 @@ pub struct AppleAudioCaptureProcessor {
     sample_rate: u32,
 
     channels: u32,
-
-    pub ports: AudioCaptureOutputPorts,
 
     wakeup_tx: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>,
 }
@@ -136,11 +141,11 @@ impl AppleAudioCaptureProcessor {
             .play()
             .map_err(|e| StreamError::Configuration(format!("Failed to start audio stream: {}", e)))?;
 
-        let ports = AudioCaptureOutputPorts {
-            audio: StreamOutput::new("audio".to_string()),
-        };
-
         Ok(Self {
+            // Port
+            audio: StreamOutput::new("audio"),
+
+            // Config fields
             device_info,
             _device: device,
             _stream: stream,
@@ -150,7 +155,6 @@ impl AppleAudioCaptureProcessor {
             frame_counter,
             sample_rate,
             channels,
-            ports,
             wakeup_tx: Arc::new(Mutex::new(None)),  // Will be set by runtime via set_wakeup_channel()
         })
     }
@@ -204,9 +208,6 @@ impl AudioCaptureProcessorTrait for AppleAudioCaptureProcessor {
         *self.current_level.lock()
     }
 
-    fn output_ports(&mut self) -> &mut AudioCaptureOutputPorts {
-        &mut self.ports
-    }
 }
 
 impl StreamElement for AppleAudioCaptureProcessor {
@@ -292,7 +293,7 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
             frame_number,
         );
 
-        self.ports.audio.write(frame);
+        self.audio.write(frame);
         Ok(())
     }
 
@@ -321,28 +322,17 @@ impl StreamProcessor for AppleAudioCaptureProcessor {
 
     fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
         if port_name == "audio" {
-            self.ports.audio.set_downstream_wakeup(wakeup_tx);
+            self.audio.set_downstream_wakeup(wakeup_tx);
         }
     }
 
+    // Delegate to macro-generated methods
     fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        match port_name {
-            "audio" => Some(crate::core::bus::PortType::Audio1),
-            _ => None,
-        }
+        self.get_output_port_type_impl(port_name)
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::bus::ProcessorConnection;
-        use crate::core::AudioFrame;
-
-        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {
-            if port_name == "audio" {
-                self.ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
-                return true;
-            }
-        }
-        false
+        self.wire_output_connection_impl(port_name, connection)
     }
 }
 

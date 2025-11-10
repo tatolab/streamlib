@@ -13,7 +13,6 @@ pub use audio_mixer::{
 };
 pub use clap_effect::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
-    ClapEffectInputPorts, ClapEffectOutputPorts,
 };
 pub use simple_passthrough::SimplePassthroughProcessor;
 

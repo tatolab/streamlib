@@ -39,7 +39,7 @@ pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
 
 pub use sources::{
     CameraProcessor, CameraDevice, CameraConfig,
-    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
+    AudioCaptureProcessor, AudioInputDevice, AudioCaptureConfig,
     ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
 };
 pub use sinks::{
@@ -48,7 +48,6 @@ pub use sinks::{
 };
 pub use transformers::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
-    ClapEffectInputPorts, ClapEffectOutputPorts,
     AudioMixerProcessor, MixingStrategy,
     AudioMixerOutputPorts, AudioMixerConfig,
 };

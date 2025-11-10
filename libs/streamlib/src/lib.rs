@@ -13,7 +13,7 @@ pub use core::{
     CameraDevice, CameraConfig,
     WindowId, DisplayConfig,
     AudioDevice, AudioOutputConfig,
-    AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
+    AudioInputDevice, AudioCaptureConfig,
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     ParameterInfo, PluginInfo,
     ParameterModulator, LfoWaveform,
