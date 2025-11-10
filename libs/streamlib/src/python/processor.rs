@@ -9,14 +9,12 @@ use super::types_ext::{PyStreamInput, PyStreamOutput, PyInputPorts, PyOutputPort
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-
 pub struct PythonInputPorts {
-    pub ports: HashMap<String, Arc<Mutex<StreamInput<VideoFrame>>>>,
+    pub ports: HashMap<String, StreamInput<VideoFrame>>,
 }
 
 pub struct PythonOutputPorts {
-    pub ports: HashMap<String, Arc<Mutex<StreamOutput<VideoFrame>>>>,
+    pub ports: HashMap<String, StreamOutput<VideoFrame>>,
 }
 
 pub struct PythonProcessor {
@@ -53,12 +51,12 @@ impl PythonProcessor {
     ) -> Result<Self> {
         let mut input_ports_map = HashMap::new();
         for port_name in input_port_names {
-            input_ports_map.insert(port_name.clone(), Arc::new(Mutex::new(StreamInput::new(&port_name))));
+            input_ports_map.insert(port_name.clone(), StreamInput::new(&port_name));
         }
 
         let mut output_ports_map = HashMap::new();
         for port_name in output_port_names {
-            output_ports_map.insert(port_name.clone(), Arc::new(Mutex::new(StreamOutput::new(&port_name))));
+            output_ports_map.insert(port_name.clone(), StreamOutput::new(&port_name));
         }
 
         Ok(Self {
@@ -78,6 +76,94 @@ impl PythonProcessor {
             description,
             usage_context,
             tags,
+        })
+    }
+
+    /// Discover input ports from Python class decorated with @StreamProcessor
+    fn discover_input_ports(py: Python, python_class: &PyAny) -> Result<Vec<String>> {
+        use crate::core::StreamError;
+
+        match python_class.getattr("__streamlib_inputs__") {
+            Ok(inputs_dict) => {
+                // Parse dictionary of port metadata
+                let mut port_names = Vec::new();
+
+                if let Ok(dict) = inputs_dict.downcast::<pyo3::types::PyDict>() {
+                    for (name, _metadata) in dict.iter() {
+                        if let Ok(port_name) = name.extract::<String>() {
+                            port_names.push(port_name);
+                        }
+                    }
+                }
+
+                Ok(port_names)
+            }
+            Err(_) => {
+                // No @StreamProcessor decorator or no input ports
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// Discover output ports from Python class decorated with @StreamProcessor
+    fn discover_output_ports(py: Python, python_class: &PyAny) -> Result<Vec<String>> {
+        use crate::core::StreamError;
+
+        match python_class.getattr("__streamlib_outputs__") {
+            Ok(outputs_dict) => {
+                // Parse dictionary of port metadata
+                let mut port_names = Vec::new();
+
+                if let Ok(dict) = outputs_dict.downcast::<pyo3::types::PyDict>() {
+                    for (name, _metadata) in dict.iter() {
+                        if let Ok(port_name) = name.extract::<String>() {
+                            port_names.push(port_name);
+                        }
+                    }
+                }
+
+                Ok(port_names)
+            }
+            Err(_) => {
+                // No @StreamProcessor decorator or no output ports
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// Create a PythonProcessor from a Python class using decorator-based port discovery
+    pub fn from_python_class(
+        python_class: Py<PyAny>,
+        name: String,
+        description: Option<String>,
+        usage_context: Option<String>,
+        tags: Vec<String>,
+    ) -> Result<Self> {
+        use crate::core::StreamError;
+
+        Python::with_gil(|py| -> Result<Self> {
+            let class_ref = python_class.bind(py);
+
+            // Discover ports from Python decorators
+            let input_port_names = Self::discover_input_ports(py, class_ref)?;
+            let output_port_names = Self::discover_output_ports(py, class_ref)?;
+
+            tracing::info!(
+                "[PythonProcessor] Discovered {} input ports and {} output ports from Python class",
+                input_port_names.len(),
+                output_port_names.len()
+            );
+
+            // Use the standard constructor with discovered port names
+            Self::new(
+                python_class,
+                name,
+                input_port_names,
+                output_port_names,
+                description,
+                usage_context,
+                tags,
+            )
         })
     }
 
@@ -144,16 +230,18 @@ impl StreamProcessor for PythonProcessor {
             );
 
             let mut py_inputs_map = HashMap::new();
-            for (name, rust_port_arc) in &self.input_ports.ports {
+            for (name, rust_port) in &self.input_ports.ports {
+                // Wrap the port in Arc<Mutex<>> for Python access
                 py_inputs_map.insert(name.clone(), PyStreamInput {
-                    port: Arc::clone(rust_port_arc),
+                    port: Arc::new(parking_lot::Mutex::new(rust_port.clone())),
                 });
             }
 
             let mut py_outputs_map = HashMap::new();
-            for (name, rust_port_arc) in &self.output_ports.ports {
+            for (name, rust_port) in &self.output_ports.ports {
+                // Wrap the port in Arc<Mutex<>> for Python access
                 py_outputs_map.insert(name.clone(), PyStreamOutput {
-                    port: Arc::clone(rust_port_arc),
+                    port: Arc::new(parking_lot::Mutex::new(rust_port.clone())),
                 });
             }
 
@@ -247,5 +335,47 @@ def gpu_context(self):
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        // For now, PythonProcessor only supports VideoFrame ports
+        if self.input_ports.ports.contains_key(port_name) {
+            Some(crate::core::bus::PortType::Video)
+        } else {
+            None
+        }
+    }
+
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        // For now, PythonProcessor only supports VideoFrame ports
+        if self.output_ports.ports.contains_key(port_name) {
+            Some(crate::core::bus::PortType::Video)
+        } else {
+            None
+        }
+    }
+
+    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::bus::ProcessorConnection;
+
+        if let Some(port) = self.input_ports.ports.get_mut(port_name) {
+            if let Ok(typed_conn) = connection.downcast::<Arc<ProcessorConnection<VideoFrame>>>() {
+                port.set_connection(Arc::clone(&typed_conn));
+                return true;
+            }
+        }
+        false
+    }
+
+    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        use crate::core::bus::ProcessorConnection;
+
+        if let Some(port) = self.output_ports.ports.get_mut(port_name) {
+            if let Ok(typed_conn) = connection.downcast::<Arc<ProcessorConnection<VideoFrame>>>() {
+                port.add_connection(Arc::clone(&typed_conn));
+                return true;
+            }
+        }
+        false
     }
 }
