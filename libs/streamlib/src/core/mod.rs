@@ -48,8 +48,7 @@ pub use sinks::{
 };
 pub use transformers::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
-    AudioMixerProcessor, MixingStrategy,
-    AudioMixerOutputPorts, AudioMixerConfig,
+    AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]

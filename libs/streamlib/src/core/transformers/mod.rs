@@ -7,9 +7,7 @@ pub mod simple_passthrough;
 pub mod performance_overlay;
 
 pub use audio_mixer::{
-    AudioMixerProcessor, MixingStrategy,
-    AudioMixerOutputPorts,
-    AudioMixerConfig,
+    AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
 };
 pub use clap_effect::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,

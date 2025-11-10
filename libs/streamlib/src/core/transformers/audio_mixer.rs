@@ -1,27 +1,27 @@
 use crate::core::{
-    Result, StreamError, StreamInput, StreamOutput,
-    ProcessorDescriptor, PortDescriptor, AudioRequirements,
+    Result, StreamInput, StreamOutput,
+    ProcessorDescriptor, AudioRequirements,
 };
 use crate::core::frames::AudioFrame;
 use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
+use crate::core::schema::PortDescriptor;
 use serde::{Serialize, Deserialize};
 use dasp::Signal;
+use streamlib_macros::StreamProcessor;
+
+// Re-export for macro use
+use crate as streamlib;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioMixerConfig {
     pub strategy: MixingStrategy,
-    /// Timestamp alignment tolerance in milliseconds
-    /// If Some(ms), mixer will wait until all input timestamps are within ±ms
-    /// If None, no timestamp checking (legacy behavior)
-    pub timestamp_tolerance_ms: Option<u32>,
 }
 
 impl Default for AudioMixerConfig {
     fn default() -> Self {
         Self {
             strategy: MixingStrategy::SumNormalized,
-            timestamp_tolerance_ms: Some(10), // Default: 10ms tolerance
         }
     }
 }
@@ -39,53 +39,43 @@ impl Default for MixingStrategy {
     }
 }
 
-pub struct AudioMixerProcessor<const N: usize> {
+#[derive(StreamProcessor)]
+pub struct AudioMixerProcessor {
+    // Port fields - annotated!
+    #[input]
+    left: StreamInput<AudioFrame<1>>,
+
+    #[input]
+    right: StreamInput<AudioFrame<1>>,
+
+    #[output]
+    audio: StreamOutput<AudioFrame<2>>,
+
+    // Config fields
     strategy: MixingStrategy,
-    timestamp_tolerance_ms: Option<u32>,
     sample_rate: u32,
     buffer_size: usize,
     frame_counter: u64,
-
-    pub input_ports: [StreamInput<AudioFrame<1>>; N],
-
-    pub output_ports: AudioMixerOutputPorts,
 }
 
-pub struct AudioMixerOutputPorts {
-    pub audio: StreamOutput<AudioFrame<2>>,
-}
+impl AudioMixerProcessor {
+    pub fn new(strategy: MixingStrategy) -> Self {
+        Self {
+            // Ports
+            left: StreamInput::new("left"),
+            right: StreamInput::new("right"),
+            audio: StreamOutput::new("audio"),
 
-impl<const N: usize> AudioMixerProcessor<N> {
-    pub fn new(strategy: MixingStrategy) -> Result<Self> {
-        Self::new_with_tolerance(strategy, Some(10))
-    }
-
-    pub fn new_with_tolerance(strategy: MixingStrategy, timestamp_tolerance_ms: Option<u32>) -> Result<Self> {
-        if N == 0 {
-            return Err(StreamError::Configuration(
-                "AudioMixerProcessor requires at least 1 input".into()
-            ));
-        }
-
-        let input_ports: [StreamInput<AudioFrame<1>>; N] = std::array::from_fn(|i| {
-            StreamInput::new(format!("input_{}", i))
-        });
-
-        Ok(Self {
+            // Config fields
             strategy,
-            timestamp_tolerance_ms,
             sample_rate: 48000,
             buffer_size: 128,
             frame_counter: 0,
-            input_ports,
-            output_ports: AudioMixerOutputPorts {
-                audio: StreamOutput::new("audio"),
-            },
-        })
+        }
     }
 }
 
-impl<const N: usize> StreamElement for AudioMixerProcessor<N> {
+impl StreamElement for AudioMixerProcessor {
     fn name(&self) -> &str {
         "audio_mixer"
     }
@@ -99,14 +89,20 @@ impl<const N: usize> StreamElement for AudioMixerProcessor<N> {
     }
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
-        (0..N)
-            .map(|i| PortDescriptor {
-                name: format!("input_{}", i),
+        vec![
+            PortDescriptor {
+                name: "left".to_string(),
                 schema: AudioFrame::<1>::schema(),
                 required: true,
-                description: format!("Mono audio input {} for mixing", i),
-            })
-            .collect()
+                description: "Left channel mono audio input".to_string(),
+            },
+            PortDescriptor {
+                name: "right".to_string(),
+                schema: AudioFrame::<1>::schema(),
+                required: true,
+                description: "Right channel mono audio input".to_string(),
+            },
+        ]
     }
 
     fn output_ports(&self) -> Vec<PortDescriptor> {
@@ -124,8 +120,7 @@ impl<const N: usize> StreamElement for AudioMixerProcessor<N> {
         self.frame_counter = 0;
 
         tracing::info!(
-            "AudioMixer<{}>: Starting ({} Hz, {} samples buffer, strategy: {:?})",
-            N,
+            "AudioMixer: Starting ({} Hz, {} samples buffer, strategy: {:?})",
             self.sample_rate,
             self.buffer_size,
             self.strategy
@@ -134,28 +129,28 @@ impl<const N: usize> StreamElement for AudioMixerProcessor<N> {
     }
 
     fn stop(&mut self) -> Result<()> {
-        tracing::info!("AudioMixer<{}>: Stopped", N);
+        tracing::info!("AudioMixer: Stopped");
         Ok(())
     }
 }
 
-impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
+impl StreamProcessor for AudioMixerProcessor {
     type Config = AudioMixerConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
-        Self::new_with_tolerance(config.strategy, config.timestamp_tolerance_ms)
+        Ok(Self::new(config.strategy))
     }
 
     fn descriptor() -> Option<ProcessorDescriptor> {
         Some(
             ProcessorDescriptor::new(
-                &format!("AudioMixerProcessor<{}>", N),
-                &format!("Mixes {} mono signals into a stereo signal using dasp", N)
+                "AudioMixerProcessor",
+                "Mixes two mono signals (left and right) into a stereo signal"
             )
             .with_usage_context(
-                "Use when you need to combine multiple mono audio sources into a stereo stream. \
-                 All mixing is performed using lazy dasp signal combinators - zero-copy until samples are consumed. \
-                 Input channels are compile-time constant for type safety."
+                "Use when you need to combine two mono audio sources into a stereo stream. \
+                 Left input becomes left channel, right input becomes right channel. \
+                 Mixing is performed using dasp signal combinators."
             )
             .with_audio_requirements(AudioRequirements {
                 preferred_buffer_size: Some(2048),
@@ -163,203 +158,87 @@ impl<const N: usize> StreamProcessor for AudioMixerProcessor<N> {
                 supported_sample_rates: vec![44100, 48000, 96000],
                 required_channels: Some(2),
             })
-            .with_tags(vec!["audio", "mixer", "transform", "multi-input", "dasp"])
+            .with_tags(vec!["audio", "mixer", "transform", "stereo", "dasp"])
         )
     }
 
     fn process(&mut self) -> Result<()> {
-        tracing::info!("[AudioMixer<{}>] process() called", N);
+        tracing::debug!("[AudioMixer] process() called");
 
-        // Check if timestamp alignment is enabled
-        if let Some(tolerance_ms) = self.timestamp_tolerance_ms {
-            // Timestamp-based synchronization
-            let tolerance_ns = tolerance_ms as i64 * 1_000_000;
-
-            // Peek at all timestamps WITHOUT consuming
-            let peeked_frames: [Option<AudioFrame<1>>; N] = std::array::from_fn(|i| {
-                self.input_ports[i].peek()
-            });
-
-            // Check if all inputs have data
-            if peeked_frames.iter().any(|f| f.is_none()) {
-                tracing::debug!("[AudioMixer<{}>] Waiting for all inputs to have data", N);
+        // Check if both inputs have data
+        let left_frame = match self.left.read_latest() {
+            Some(f) => f,
+            None => {
+                tracing::debug!("[AudioMixer] Left input has no data");
                 return Ok(());
             }
+        };
 
-            // Extract timestamps
-            let timestamps: [i64; N] = std::array::from_fn(|i| {
-                peeked_frames[i].as_ref().unwrap().timestamp_ns
-            });
-
-            // Check timestamp alignment
-            let min_ts = *timestamps.iter().min().unwrap();
-            let max_ts = *timestamps.iter().max().unwrap();
-            let spread_ns = max_ts - min_ts;
-
-            if spread_ns > tolerance_ns {
-                tracing::debug!(
-                    "[AudioMixer<{}>] Timestamps not aligned: spread={}ms (tolerance={}ms), min={}, max={}",
-                    N,
-                    spread_ns / 1_000_000,
-                    tolerance_ms,
-                    min_ts,
-                    max_ts
-                );
-
-                // If spread is excessive (>100ms), drop old frames to catch up
-                let max_drift_ns = 100_000_000; // 100ms maximum drift before dropping
-                if spread_ns > max_drift_ns {
-                    tracing::warn!(
-                        "[AudioMixer<{}>] Excessive timestamp drift ({}ms), dropping old frames",
-                        N,
-                        spread_ns / 1_000_000
-                    );
-
-                    // Drop frames from inputs that are behind
-                    for (i, &ts) in timestamps.iter().enumerate() {
-                        if ts < max_ts - tolerance_ns {
-                            // This input is lagging - drop its frame
-                            let dropped = self.input_ports[i].read_latest();
-                            tracing::debug!(
-                                "[AudioMixer<{}>] Dropped frame from input {}: ts={} ({}ms behind)",
-                                N,
-                                i,
-                                ts,
-                                (max_ts - ts) / 1_000_000
-                            );
-                            // Verify we actually dropped something
-                            if dropped.is_none() {
-                                tracing::error!(
-                                    "[AudioMixer<{}>] Failed to drop frame from input {} (peek showed data but read returned None)",
-                                    N,
-                                    i
-                                );
-                            }
-                        }
-                    }
-                }
-
+        let right_frame = match self.right.read_latest() {
+            Some(f) => f,
+            None => {
+                tracing::debug!("[AudioMixer] Right input has no data");
                 return Ok(());
             }
+        };
 
-            // All aligned - consume frames
-            let input_frames: [AudioFrame<1>; N] = std::array::from_fn(|i| {
-                self.input_ports[i].read_latest().expect("checked via peek")
-            });
+        // Use the newer timestamp
+        let timestamp_ns = left_frame.timestamp_ns.max(right_frame.timestamp_ns);
 
-            tracing::debug!(
-                "[AudioMixer<{}>] Timestamps aligned (spread={}ms), mixing",
-                N,
-                spread_ns / 1_000_000
-            );
+        // Create dasp signals from both inputs
+        let mut left_signal = left_frame.read();
+        let mut right_signal = right_frame.read();
 
-            // Mix and output
-            self.mix_frames(&input_frames)
-        } else {
-            // Legacy mode: no timestamp checking
-            let all_ready = self.input_ports.iter().all(|input| input.has_data());
-            if !all_ready {
-                tracing::debug!("[AudioMixer<{}>] Not all inputs have data yet, skipping", N);
-                return Ok(());
-            }
+        // Interleave left and right samples into stereo
+        let mut stereo_samples = Vec::with_capacity(self.buffer_size * 2);
 
-            let input_frames: [AudioFrame<1>; N] = std::array::from_fn(|i| {
-                self.input_ports[i].read_latest().expect("checked has_data")
-            });
+        for _ in 0..self.buffer_size {
+            let left_sample = left_signal.next()[0];
+            let right_sample = right_signal.next()[0];
 
-            self.mix_frames(&input_frames)
+            // Apply mixing strategy (in case inputs need combining)
+            let (final_left, final_right) = match self.strategy {
+                MixingStrategy::Sum => (left_sample, right_sample),
+                MixingStrategy::SumNormalized => (left_sample, right_sample),
+                MixingStrategy::SumClipped => (
+                    left_sample.clamp(-1.0, 1.0),
+                    right_sample.clamp(-1.0, 1.0),
+                ),
+            };
+
+            stereo_samples.push(final_left);   // Left channel
+            stereo_samples.push(final_right);  // Right channel
         }
+
+        let output_frame = AudioFrame::<2>::new(stereo_samples, timestamp_ns, self.frame_counter);
+        self.audio.write(output_frame);
+
+        tracing::debug!("[AudioMixer] Wrote mixed stereo frame");
+        self.frame_counter += 1;
+
+        Ok(())
     }
 
     fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
         if port_name == "audio" {
-            self.output_ports.audio.set_downstream_wakeup(wakeup_tx);
+            self.audio.set_downstream_wakeup(wakeup_tx);
         }
     }
 
+    // Delegate to macro-generated methods
     fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        match port_name {
-            "audio" => Some(crate::core::bus::PortType::Audio2),
-            _ => None,
-        }
+        self.get_output_port_type_impl(port_name)
     }
 
     fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        if let Some(index_str) = port_name.strip_prefix("input_") {
-            if let Ok(index) = index_str.parse::<usize>() {
-                if index < N {
-                    return Some(crate::core::bus::PortType::Audio1);
-                }
-            }
-        }
-        None
+        self.get_input_port_type_impl(port_name)
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::bus::ProcessorConnection;
-        use crate::core::AudioFrame;
-
-        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
-            if port_name == "audio" {
-                self.output_ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
-                return true;
-            }
-        }
-        false
+        self.wire_output_connection_impl(port_name, connection)
     }
 
     fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::bus::ProcessorConnection;
-        use crate::core::AudioFrame;
-
-        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<1>>>>() {
-            if let Some(index_str) = port_name.strip_prefix("input_") {
-                if let Ok(index) = index_str.parse::<usize>() {
-                    if index < N {
-                        self.input_ports[index].set_connection(std::sync::Arc::clone(&typed_conn));
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
-}
-
-// Helper methods outside trait impl
-impl<const N: usize> AudioMixerProcessor<N> {
-    fn mix_frames(&mut self, input_frames: &[AudioFrame<1>; N]) -> Result<()> {
-        let timestamp_ns = input_frames[0].timestamp_ns;
-
-        let mut signals: Vec<_> = input_frames.iter()
-            .map(|frame| frame.read())
-            .collect();
-
-        let mut mixed_samples = Vec::with_capacity(self.buffer_size * 2); // *2 for stereo
-
-        for _ in 0..self.buffer_size {
-            let mut mixed_mono = 0.0f32;
-            for signal in &mut signals {
-                mixed_mono += signal.next()[0];
-            }
-
-            let final_sample = match self.strategy {
-                MixingStrategy::Sum => mixed_mono,
-                MixingStrategy::SumNormalized => mixed_mono / N as f32,
-                MixingStrategy::SumClipped => mixed_mono.clamp(-1.0, 1.0),
-            };
-
-            mixed_samples.push(final_sample);  // Left
-            mixed_samples.push(final_sample);  // Right
-        }
-
-        let output_frame = AudioFrame::<2>::new(mixed_samples, timestamp_ns, self.frame_counter);
-
-        self.output_ports.audio.write(output_frame);
-        tracing::debug!("[AudioMixer<{}>] Wrote mixed stereo frame", N);
-
-        self.frame_counter += 1;
-
-        Ok(())
+        self.wire_input_connection_impl(port_name, connection)
     }
 }
