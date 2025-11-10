@@ -7,14 +7,14 @@ use crate::core::{
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use crate::core::bus::PortMessage;
-use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+use streamlib_macros::StreamProcessor;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use parking_lot::Mutex;
 
-#[derive(DeriveStreamProcessor)]
+#[derive(StreamProcessor)]
 pub struct AppleAudioCaptureProcessor {
     // Port field - annotated!
     #[output]

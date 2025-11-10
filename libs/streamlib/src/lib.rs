@@ -1,7 +1,9 @@
 
 pub mod core;
 
-pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+// Re-export derive macro with same name as trait (standard Rust pattern)
+// The macro and trait occupy different namespaces, so no collision occurs
+pub use streamlib_macros::StreamProcessor;
 
 pub use core::{
     media_clock::MediaClock,

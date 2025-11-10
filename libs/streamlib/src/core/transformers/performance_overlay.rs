@@ -6,7 +6,7 @@ use crate::core::{
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+use streamlib_macros::StreamProcessor;
 
 // Re-export for macro use
 use crate as streamlib;
@@ -136,7 +136,7 @@ impl PerformanceMetrics {
 }
 
 #[cfg(feature = "debug-overlay")]
-#[derive(DeriveStreamProcessor)]
+#[derive(StreamProcessor)]
 pub struct PerformanceOverlayProcessor {
     // Port fields - annotated!
     #[input]

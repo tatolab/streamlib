@@ -13,11 +13,11 @@ use objc2_quartz_core::{CAMetalLayer, CAMetalDrawable};
 use objc2_metal::MTLPixelFormat;
 use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc};
 use metal;
-use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+use streamlib_macros::StreamProcessor;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(DeriveStreamProcessor)]
+#[derive(StreamProcessor)]
 pub struct AppleDisplayProcessor {
     // Port field - annotated!
     #[input]

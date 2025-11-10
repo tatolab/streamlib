@@ -6,7 +6,7 @@ use crate::core::{
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
-use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+use streamlib_macros::StreamProcessor;
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::ffi::c_void;
@@ -95,7 +95,7 @@ impl CameraDelegate {
     }
 }
 
-#[derive(DeriveStreamProcessor)]
+#[derive(StreamProcessor)]
 pub struct AppleCameraProcessor {
     // Port field - annotated!
     #[output]

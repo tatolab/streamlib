@@ -8,7 +8,7 @@ use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::schema::PortDescriptor;
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
-use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+use streamlib_macros::StreamProcessor;
 
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
@@ -33,7 +33,7 @@ impl Default for ClapEffectConfig {
     }
 }
 
-#[derive(DeriveStreamProcessor)]
+#[derive(StreamProcessor)]
 pub struct ClapEffectProcessor {
     // Port fields - annotated!
     #[input]

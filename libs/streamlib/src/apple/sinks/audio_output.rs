@@ -7,11 +7,11 @@ use crate::core::frames::AudioFrame;
 use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
-use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+use streamlib_macros::StreamProcessor;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
 
-#[derive(DeriveStreamProcessor)]
+#[derive(StreamProcessor)]
 pub struct AppleAudioOutputProcessor {
     // Port field - annotated!
     #[input]

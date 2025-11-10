@@ -5,7 +5,7 @@ use crate::core::schema::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAM
 use crate::core::RuntimeContext;
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
-use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+use streamlib_macros::StreamProcessor;
 
 // Re-export for macro use (macro expects `streamlib::` path)
 use crate as streamlib;
@@ -22,7 +22,7 @@ impl Default for SimplePassthroughConfig {
 }
 
 // NEW PATTERN: Ports directly on processor struct!
-#[derive(DeriveStreamProcessor)]
+#[derive(StreamProcessor)]
 pub struct SimplePassthroughProcessor {
     // Config fields (non-ports)
     name: String,
