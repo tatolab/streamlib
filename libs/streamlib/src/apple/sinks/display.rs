@@ -1,6 +1,6 @@
 
 use crate::core::{
-    DisplayInputPorts, WindowId,
+    WindowId, StreamInput, VideoFrame,
     Result, StreamError,
     ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
@@ -13,10 +13,17 @@ use objc2_quartz_core::{CAMetalLayer, CAMetalDrawable};
 use objc2_metal::MTLPixelFormat;
 use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc};
 use metal;
+use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(DeriveStreamProcessor)]
 pub struct AppleDisplayProcessor {
+    // Port field - annotated!
+    #[input]
+    video: StreamInput<VideoFrame>,
+
+    // Config fields
     window: Option<Retained<NSWindow>>,
     metal_layer: Option<Retained<CAMetalLayer>>,
 
@@ -29,7 +36,6 @@ pub struct AppleDisplayProcessor {
 
     wgpu_bridge: Option<Arc<WgpuBridge>>,
 
-    ports: DisplayInputPorts,
     window_id: WindowId,
     window_title: String,
     width: u32,
@@ -62,6 +68,10 @@ impl AppleDisplayProcessor {
         let window_title = "streamlib Display".to_string();
 
         Ok(Self {
+            // Port
+            video: StreamInput::new("video"),
+
+            // Config fields
             window: None,
             metal_layer: None,
             layer_addr: Arc::new(AtomicUsize::new(0)),
@@ -69,9 +79,6 @@ impl AppleDisplayProcessor {
             metal_command_queue,
             gpu_context: None,
             wgpu_bridge: None,
-            ports: DisplayInputPorts {
-                video: crate::core::StreamInput::new("video"),
-            },
             window_id,
             window_title,
             width,
@@ -163,7 +170,8 @@ impl StreamProcessor for AppleDisplayProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        if let Some(frame) = self.ports.video.read_latest() {
+        // Direct field access - no nested ports!
+        if let Some(frame) = self.video.read_latest() {
             let wgpu_texture = &frame.texture;
 
         let wgpu_bridge = self.wgpu_bridge.as_ref()
@@ -264,8 +272,26 @@ impl StreamProcessor for AppleDisplayProcessor {
             .with_tags(vec!["sink", "display", "window", "output", "render"])
         )
     }
+
+    // Delegate to macro-generated methods
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_input_port_type_impl(port_name)
+    }
+
+    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        self.wire_input_connection_impl(port_name, connection)
+    }
 }
 
+impl crate::core::DisplayProcessor for AppleDisplayProcessor {
+    fn set_window_title(&mut self, title: &str) {
+        self.window_title = title.to_string();
+    }
+
+    fn window_id(&self) -> Option<WindowId> {
+        Some(self.window_id)
+    }
+}
 
 impl AppleDisplayProcessor {
     pub fn initialize_gpu(&mut self, gpu_context: &crate::core::GpuContext) -> Result<()> {

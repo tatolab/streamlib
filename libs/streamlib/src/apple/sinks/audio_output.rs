@@ -1,27 +1,26 @@
 use crate::core::{
-    AudioDevice,
+    AudioDevice, StreamInput,
     Result, StreamError,
     ProcessorDescriptor, PortDescriptor,
-    StreamInput,
 };
 use crate::core::frames::AudioFrame;
 use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
+use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
 
-
-pub struct AudioOutputInputPorts {
-    pub audio: StreamInput<AudioFrame<2>>,
-}
-
+#[derive(DeriveStreamProcessor)]
 pub struct AppleAudioOutputProcessor {
+    // Port field - annotated!
+    #[input]
+    audio: StreamInput<AudioFrame<2>>,
+
+    // Config fields
     device_id: Option<usize>,
     device_name: String,
     device_info: Option<AudioDevice>,
-
-    input_ports: AudioOutputInputPorts,
 
     stream: Option<Stream>,
     stream_setup_done: bool,
@@ -36,22 +35,19 @@ unsafe impl Send for AppleAudioOutputProcessor {}
 impl AppleAudioOutputProcessor {
     fn new_internal(device_id: Option<usize>) -> Result<Self> {
         Ok(Self {
+            // Port
+            audio: StreamInput::new("audio"),
+
+            // Config fields
             device_id,
             device_name: "Unknown".to_string(),
             device_info: None,
-            input_ports: AudioOutputInputPorts {
-                audio: StreamInput::new("audio"),
-            },
             stream: None,
             stream_setup_done: false,
             sample_rate: 48000,
             channels: 2,
             buffer_size: 512,
         })
-    }
-
-    pub fn input_ports(&mut self) -> &mut AudioOutputInputPorts {
-        &mut self.input_ports
     }
 }
 
@@ -116,7 +112,7 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
         tracing::info!("AudioOutput: process() called - setting up stream now that connections are wired");
 
-        let input_connection = self.input_ports.audio.clone_connection()
+        let input_connection = self.audio.clone_connection()
             .ok_or_else(|| StreamError::Configuration("Input port not connected".into()))?;
 
         tracing::info!("AudioOutput: Successfully cloned connection from input port");
@@ -192,23 +188,38 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         )
     }
 
+    // Delegate to macro-generated methods
     fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        match port_name {
-            "audio" => Some(self.input_ports.audio.port_type()),
-            _ => None,
-        }
+        self.get_input_port_type_impl(port_name)
     }
 
     fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::bus::ProcessorConnection;
-        use crate::core::AudioFrame;
-
-        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
-            if port_name == "audio" {
-                self.input_ports.audio.set_connection(std::sync::Arc::clone(&typed_conn));
-                return true;
-            }
-        }
-        false
+        self.wire_input_connection_impl(port_name, connection)
     }
+}
+
+impl crate::core::AudioOutputProcessor for AppleAudioOutputProcessor {
+    fn new(device_id: Option<usize>) -> Result<Self> {
+        Self::new_internal(device_id)
+    }
+
+    fn list_devices() -> Result<Vec<AudioDevice>> {
+        // TODO: Implement device enumeration
+        Ok(vec![])
+    }
+
+    fn current_device(&self) -> &AudioDevice {
+        self.device_info.as_ref().unwrap_or_else(|| {
+            // Return a default device info if not initialized
+            static DEFAULT: AudioDevice = AudioDevice {
+                id: 0,
+                name: String::new(),
+                sample_rate: 48000,
+                channels: 2,
+                is_default: true,
+            };
+            &DEFAULT
+        })
+    }
+
 }

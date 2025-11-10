@@ -5,6 +5,10 @@ use crate::core::schema::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAM
 use crate::core::RuntimeContext;
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
+use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+
+// Re-export for macro use (macro expects `streamlib::` path)
+use crate as streamlib;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePassthroughConfig {
@@ -17,14 +21,19 @@ impl Default for SimplePassthroughConfig {
     }
 }
 
+// NEW PATTERN: Ports directly on processor struct!
+#[derive(DeriveStreamProcessor)]
 pub struct SimplePassthroughProcessor {
+    // Config fields (non-ports)
     name: String,
+    scale: f32,
 
+    // Port fields - annotated!
+    #[input]
     input: StreamInput<VideoFrame>,
 
+    #[output]
     output: StreamOutput<VideoFrame>,
-
-    scale: f32,
 }
 
 impl StreamElement for SimplePassthroughProcessor {
@@ -75,19 +84,22 @@ impl StreamElement for SimplePassthroughProcessor {
     }
 }
 
+// Manual StreamProcessor implementation
 impl StreamProcessor for SimplePassthroughProcessor {
     type Config = SimplePassthroughConfig;
 
     fn from_config(config: Self::Config) -> Result<Self> {
         Ok(Self {
             name: "simple_passthrough".to_string(),
+            scale: config.scale,
+            // Port construction
             input: StreamInput::new("input"),
             output: StreamOutput::new("output"),
-            scale: config.scale,
         })
     }
 
     fn process(&mut self) -> Result<()> {
+        // Direct field access - no nested ports struct!
         if let Some(frame) = self.input.read_latest() {
             self.output.write(frame);
         }
@@ -116,6 +128,23 @@ impl StreamProcessor for SimplePassthroughProcessor {
             .with_tags(vec!["transform", "video", "test", "passthrough"])
         )
     }
+
+    // Delegate to macro-generated methods
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_input_port_type_impl(port_name)
+    }
+
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_output_port_type_impl(port_name)
+    }
+
+    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        self.wire_input_connection_impl(port_name, connection)
+    }
+
+    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        self.wire_output_connection_impl(port_name, connection)
+    }
 }
 
 impl SimplePassthroughProcessor {
@@ -131,6 +160,7 @@ impl SimplePassthroughProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::bus::PortType;
 
     #[test]
     fn test_processor_can_be_created_from_config() {
@@ -208,5 +238,31 @@ mod tests {
         let mut processor = SimplePassthroughProcessor::from_config(config).unwrap();
 
         assert!(processor.process().is_ok());
+    }
+
+    #[test]
+    fn test_port_introspection() {
+        let config = SimplePassthroughConfig::default();
+        let processor = SimplePassthroughProcessor::from_config(config).unwrap();
+
+        // Test macro-generated port type lookups
+        assert_eq!(processor.get_input_port_type("input"), Some(PortType::Video));
+        assert_eq!(processor.get_input_port_type("nonexistent"), None);
+
+        assert_eq!(processor.get_output_port_type("output"), Some(PortType::Video));
+        assert_eq!(processor.get_output_port_type("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_ports_convenience_method() {
+        let config = SimplePassthroughConfig::default();
+        let processor = SimplePassthroughProcessor::from_config(config).unwrap();
+
+        // Test macro-generated ports() method
+        let ports = processor.ports();
+
+        // Access via ports() method (backward compatibility)
+        let _input_ref = ports.inputs.input;
+        let _output_ref = ports.outputs.output;
     }
 }

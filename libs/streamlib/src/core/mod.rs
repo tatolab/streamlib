@@ -38,13 +38,13 @@ pub use frames::{
 pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
 
 pub use sources::{
-    CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig,
+    CameraProcessor, CameraDevice, CameraConfig,
     AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
     ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
 };
 pub use sinks::{
-    DisplayProcessor, WindowId, DisplayInputPorts, DisplayConfig,
-    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
+    DisplayProcessor, WindowId, DisplayConfig,
+    AudioOutputProcessor, AudioDevice, AudioOutputConfig,
 };
 pub use transformers::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,

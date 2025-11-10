@@ -184,7 +184,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
 
     let get_input_port_type_impl = if !input_port_type_arms.is_empty() {
         quote! {
-            fn get_input_port_type(&self, port_name: &str) -> Option<streamlib::PortType> {
+            pub fn get_input_port_type(&self, port_name: &str) -> Option<streamlib::PortType> {
                 match port_name {
                     #(#input_port_type_arms,)*
                     _ => None,
@@ -193,7 +193,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
         }
     } else {
         quote! {
-            fn get_input_port_type(&self, _port_name: &str) -> Option<streamlib::PortType> {
+            pub fn get_input_port_type(&self, _port_name: &str) -> Option<streamlib::PortType> {
                 None
             }
         }
@@ -210,7 +210,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
 
     let get_output_port_type_impl = if !output_port_type_arms.is_empty() {
         quote! {
-            fn get_output_port_type(&self, port_name: &str) -> Option<streamlib::PortType> {
+            pub fn get_output_port_type(&self, port_name: &str) -> Option<streamlib::PortType> {
                 match port_name {
                     #(#output_port_type_arms,)*
                     _ => None,
@@ -219,7 +219,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
         }
     } else {
         quote! {
-            fn get_output_port_type(&self, _port_name: &str) -> Option<streamlib::PortType> {
+            pub fn get_output_port_type(&self, _port_name: &str) -> Option<streamlib::PortType> {
                 None
             }
         }
@@ -244,7 +244,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
 
     let wire_input_connection_impl = if !input_wire_arms.is_empty() {
         quote! {
-            fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
                 match port_name {
                     #(#input_wire_arms,)*
                     _ => false,
@@ -253,7 +253,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
         }
     } else {
         quote! {
-            fn wire_input_connection(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_input_connection(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
                 false
             }
         }
@@ -278,7 +278,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
 
     let wire_output_connection_impl = if !output_wire_arms.is_empty() {
         quote! {
-            fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
                 match port_name {
                     #(#output_wire_arms,)*
                     _ => false,
@@ -287,7 +287,7 @@ pub fn generate_port_registry(input: &DeriveInput) -> Result<TokenStream> {
         }
     } else {
         quote! {
-            fn wire_output_connection(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+            pub fn wire_output_connection(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
                 false
             }
         }

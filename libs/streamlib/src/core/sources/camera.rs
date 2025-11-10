@@ -32,9 +32,8 @@ pub struct CameraDevice {
     pub name: String,
 }
 
-pub struct CameraOutputPorts {
-    pub video: StreamOutput<VideoFrame>,
-}
+// Ports are now defined directly on platform-specific implementations
+// No shared port struct needed - each implementation uses #[derive(StreamProcessor)]
 
 pub fn descriptor() -> ProcessorDescriptor {
     ProcessorDescriptor::new(
@@ -88,8 +87,6 @@ pub trait CameraProcessor: StreamElement + StreamProcessor<Config = CameraConfig
     fn set_device_id(&mut self, device_id: &str) -> Result<()>;
 
     fn list_devices() -> Result<Vec<CameraDevice>>;
-
-    fn output_ports(&mut self) -> &mut CameraOutputPorts;
 }
 
 
