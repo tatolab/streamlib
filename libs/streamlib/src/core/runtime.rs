@@ -199,7 +199,7 @@ impl StreamRuntime {
 
         {
             let mut processor = processor_arc.lock();
-            processor.set_wakeup_channel_dyn(wakeup_tx.clone());
+            processor.set_wakeup_channel(wakeup_tx.clone());
         }
 
         let id_for_thread = processor_id.clone();
@@ -208,7 +208,7 @@ impl StreamRuntime {
 
         let sched_config = {
             let processor = processor_arc.lock();
-            processor.scheduling_config_dyn()
+            processor.scheduling_config()
         };
 
         let handle = std::thread::spawn(move || {
@@ -216,7 +216,7 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_start_dyn(&runtime_context) {
+                if let Err(e) = processor.on_start(&runtime_context) {
                     tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                     return;
                 }
@@ -247,7 +247,7 @@ impl StreamRuntime {
 
                         {
                             let mut processor = processor_for_thread.lock();
-                            if let Err(e) = processor.process_dyn() {
+                            if let Err(e) = processor.process() {
                                 tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
                             }
                         }
@@ -264,14 +264,14 @@ impl StreamRuntime {
                                     Ok(WakeupEvent::DataAvailable) => {
                                         tracing::debug!("[{}] Received DataAvailable wakeup", id_for_thread);
                                         let mut processor = processor_for_thread.lock();
-                                        if let Err(e) = processor.process_dyn() {
+                                        if let Err(e) = processor.process() {
                                             tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                         }
                                     }
                                     Ok(WakeupEvent::TimerTick) => {
                                         tracing::debug!("[{}] Received TimerTick wakeup", id_for_thread);
                                         let mut processor = processor_for_thread.lock();
-                                        if let Err(e) = processor.process_dyn() {
+                                        if let Err(e) = processor.process() {
                                             tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
                                         }
                                     }
@@ -300,7 +300,7 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_stop_dyn() {
+                if let Err(e) = processor.on_stop() {
                     tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
                 }
             }
@@ -428,8 +428,8 @@ impl StreamRuntime {
             let source_guard = source_processor.lock();
             let dest_guard = dest_processor.lock();
 
-            let source_descriptor = source_guard.descriptor_instance_dyn();
-            let dest_descriptor = dest_guard.descriptor_instance_dyn();
+            let source_descriptor = source_guard.descriptor_instance();
+            let dest_descriptor = dest_guard.descriptor_instance();
 
             if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
                 if let (Some(source_audio), Some(dest_audio)) =
@@ -624,7 +624,7 @@ impl StreamRuntime {
                 if let (Some(src), Some(dst)) = (source_handle, dest_handle) {
                     if let Some(src_proc) = src.processor.as_ref() {
                         let mut source_guard = src_proc.lock();
-                        source_guard.set_output_wakeup_dyn(&pending.source_port_name, dst.wakeup_tx.clone());
+                        source_guard.set_output_wakeup(&pending.source_port_name, dst.wakeup_tx.clone());
 
                         tracing::debug!(
                             "Wired wakeup notification: {} ({}) → {} ({})",
@@ -645,7 +645,7 @@ impl StreamRuntime {
             let processors = self.processors.lock();
             for (proc_id, handle) in processors.iter() {
                 if let Some(proc_ref) = &handle.processor {
-                    let sched_config = proc_ref.lock().scheduling_config_dyn();
+                    let sched_config = proc_ref.lock().scheduling_config();
                     if matches!(sched_config.mode, crate::core::scheduling::SchedulingMode::Pull) {
                         if let Err(e) = handle.wakeup_tx.send(WakeupEvent::DataAvailable) {
                             tracing::warn!("[{}] Failed to send Pull mode initialization wakeup: {}", proc_id, e);
@@ -886,7 +886,7 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_arc.lock();
-                processor.set_wakeup_channel_dyn(wakeup_tx.clone());
+                processor.set_wakeup_channel(wakeup_tx.clone());
             }
 
             let runtime_context = crate::core::RuntimeContext::new(gpu_context.clone());
@@ -897,7 +897,7 @@ impl StreamRuntime {
 
             let sched_config = {
                 let processor = processor_arc.lock();
-                processor.scheduling_config_dyn()
+                processor.scheduling_config()
             };
 
             let handle = std::thread::spawn(move || {
@@ -905,7 +905,7 @@ impl StreamRuntime {
 
                 {
                     let mut processor = processor_for_thread.lock();
-                    if let Err(e) = processor.on_start_dyn(&runtime_context) {
+                    if let Err(e) = processor.on_start(&runtime_context) {
                         tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                         return;
                     }
@@ -921,7 +921,7 @@ impl StreamRuntime {
                                     Ok(_) => {
                                         tracing::info!("[{}] Pull mode - connections ready, calling process() for initialization", id_for_thread);
                                         let mut processor = processor_for_thread.lock();
-                                        processor.process_dyn()
+                                        processor.process()
                                     }
                                     Err(e) => {
                                         tracing::error!("[{}] Wakeup channel closed before initialization: {}", id_for_thread, e);
@@ -963,7 +963,7 @@ impl StreamRuntime {
 
                             {
                                 let mut processor = processor_for_thread.lock();
-                                if let Err(e) = processor.process_dyn() {
+                                if let Err(e) = processor.process() {
                                     tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
                                 }
                             }
@@ -979,13 +979,13 @@ impl StreamRuntime {
                                     match result {
                                         Ok(WakeupEvent::DataAvailable) => {
                                             let mut processor = processor_for_thread.lock();
-                                            if let Err(e) = processor.process_dyn() {
+                                            if let Err(e) = processor.process() {
                                                 tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                             }
                                         }
                                         Ok(WakeupEvent::TimerTick) => {
                                             let mut processor = processor_for_thread.lock();
-                                            if let Err(e) = processor.process_dyn() {
+                                            if let Err(e) = processor.process() {
                                                 tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
                                             }
                                         }
@@ -1014,7 +1014,7 @@ impl StreamRuntime {
 
                 {
                     let mut processor = processor_for_thread.lock();
-                    if let Err(e) = processor.on_stop_dyn() {
+                    if let Err(e) = processor.on_stop() {
                         tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
                     }
                 }

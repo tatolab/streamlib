@@ -5,78 +5,83 @@ use crate::core::runtime::WakeupEvent;
 use crate::core::traits::ElementType;
 use std::sync::Arc;
 
+/// Blanket implementation of DynStreamElement for all StreamProcessor types.
+///
+/// This allows any StreamProcessor to be used as a trait object (Box<dyn DynStreamElement>)
+/// in the runtime's heterogeneous processor collections.
 impl<T> DynStreamElement for T
 where
     T: StreamProcessor,
 {
-    fn on_start_dyn(&mut self, ctx: &RuntimeContext) -> Result<()> {
+    fn on_start(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.start(ctx)
     }
 
-    fn on_stop_dyn(&mut self) -> Result<()> {
+    fn on_stop(&mut self) -> Result<()> {
         self.stop()
     }
 
-    fn start_dyn(&mut self, ctx: &RuntimeContext) -> Result<()> {
+    fn start(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.start(ctx)
     }
 
-    fn stop_dyn(&mut self) -> Result<()> {
+    fn stop(&mut self) -> Result<()> {
         self.stop()
     }
 
-    fn dispatch_dyn(&mut self) -> Result<()> {
+    fn dispatch(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn process_dyn(&mut self) -> Result<()> {
+    fn process(&mut self) -> Result<()> {
         self.process()
     }
 
-    fn set_output_wakeup_dyn(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
+    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
         self.set_output_wakeup(port_name, wakeup_tx)
     }
 
-    fn set_wakeup_channel_dyn(&mut self, _wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
+    fn set_wakeup_channel(&mut self, _wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
+        // No-op for now - processors use data-driven wakeups
     }
 
-    fn element_type_dyn(&self) -> ElementType {
+    fn element_type(&self) -> ElementType {
         self.element_type()
     }
 
-    fn descriptor_dyn(&self) -> Option<ProcessorDescriptor> {
-        self.descriptor()
+    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+        <T as StreamProcessor>::descriptor()
     }
 
-    fn descriptor_instance_dyn(&self) -> Option<ProcessorDescriptor> {
-        self.descriptor()
+    fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
+        <T as StreamProcessor>::descriptor()
     }
 
-    fn name_dyn(&self) -> &str {
+    fn name(&self) -> &str {
         self.name()
     }
 
-    fn as_any_mut_dyn(&mut self) -> &mut dyn std::any::Any {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 
-    fn scheduling_config_dyn(&self) -> crate::core::scheduling::SchedulingConfig {
+    fn scheduling_config(&self) -> crate::core::scheduling::SchedulingConfig {
         self.scheduling_config()
     }
 
     fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        StreamProcessor::get_output_port_type(self, port_name)
+        self.get_output_port_type(port_name)
     }
 
     fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        StreamProcessor::get_input_port_type(self, port_name)
+        self.get_input_port_type(port_name)
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        StreamProcessor::wire_output_connection(self, port_name, connection)
+        self.wire_output_connection(port_name, connection)
     }
 
     fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        StreamProcessor::wire_input_connection(self, port_name, connection)
+        self.wire_input_connection(port_name, connection)
     }
 }
