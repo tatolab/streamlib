@@ -6,6 +6,10 @@ use crate::core::schema::{ProcessorDescriptor, PortDescriptor, AudioRequirements
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Serialize, Deserialize};
+use streamlib_macros::StreamProcessor;
+
+// Re-export for macro use
+use crate as streamlib;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChordGeneratorConfig {
@@ -18,10 +22,6 @@ impl Default for ChordGeneratorConfig {
             amplitude: 0.15, // 15% to avoid clipping when mixed
         }
     }
-}
-
-pub struct ChordGeneratorOutputPorts {
-    pub chord: Arc<StreamOutput<AudioFrame<2>>>,
 }
 
 struct SineOscillator {
@@ -52,20 +52,21 @@ impl SineOscillator {
     }
 }
 
+#[derive(StreamProcessor)]
 pub struct ChordGeneratorProcessor {
+    // Port fields - Arc-wrapped for thread sharing!
+    #[output]
+    chord: Arc<StreamOutput<AudioFrame<2>>>,
+
+    // Config fields
     name: String,
     amplitude: f64,
-
-    output_ports: ChordGeneratorOutputPorts,
-
     osc_c4: Arc<Mutex<SineOscillator>>,
     osc_e4: Arc<Mutex<SineOscillator>>,
     osc_g4: Arc<Mutex<SineOscillator>>,
-
     sample_rate: u32,
     buffer_size: usize,
     frame_counter: Arc<Mutex<u64>>,
-
     running: Arc<AtomicBool>,
     loop_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -80,11 +81,12 @@ impl ChordGeneratorProcessor {
         let amp = amplitude.clamp(0.0, 1.0) as f32;
 
         Self {
+            // Port initialization - Arc-wrapped!
+            chord: Arc::new(StreamOutput::new("chord")),
+
+            // Config fields
             name: "chord_generator".to_string(),
             amplitude: amplitude.clamp(0.0, 1.0),
-            output_ports: ChordGeneratorOutputPorts {
-                chord: Arc::new(StreamOutput::new("chord")),
-            },
             osc_c4: Arc::new(Mutex::new(SineOscillator::new(Self::FREQ_C4, amp, sample_rate))),
             osc_e4: Arc::new(Mutex::new(SineOscillator::new(Self::FREQ_E4, amp, sample_rate))),
             osc_g4: Arc::new(Mutex::new(SineOscillator::new(Self::FREQ_G4, amp, sample_rate))),
@@ -94,10 +96,6 @@ impl ChordGeneratorProcessor {
             running: Arc::new(AtomicBool::new(false)),
             loop_handle: None,
         }
-    }
-
-    pub fn output_ports(&mut self) -> &mut ChordGeneratorOutputPorts {
-        &mut self.output_ports
     }
 }
 
@@ -185,7 +183,7 @@ impl StreamProcessor for ChordGeneratorProcessor {
         let osc_c4 = Arc::clone(&self.osc_c4);
         let osc_e4 = Arc::clone(&self.osc_e4);
         let osc_g4 = Arc::clone(&self.osc_g4);
-        let chord_output = Arc::clone(&self.output_ports.chord);
+        let chord_output = Arc::clone(&self.chord);  // Direct field access!
         let frame_counter = Arc::clone(&self.frame_counter);
         let running = Arc::clone(&self.running);
         let buffer_size = self.buffer_size;
@@ -308,27 +306,16 @@ impl StreamProcessor for ChordGeneratorProcessor {
 
     fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
         if port_name == "chord" {
-            self.output_ports.chord.set_downstream_wakeup(wakeup_tx);
+            self.chord.set_downstream_wakeup(wakeup_tx);
         }
     }
 
+    // Delegate to macro-generated methods
     fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        match port_name {
-            "chord" => Some(crate::core::bus::PortType::Audio2),
-            _ => None,
-        }
+        self.get_output_port_type_impl(port_name)
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::bus::ProcessorConnection;
-        use crate::core::AudioFrame;
-
-        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
-            if port_name == "chord" {
-                self.output_ports.chord.add_connection(std::sync::Arc::clone(&typed_conn));
-                return true;
-            }
-        }
-        false
+        self.wire_output_connection_impl(port_name, connection)
     }
 }

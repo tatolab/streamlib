@@ -40,7 +40,7 @@ pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
 pub use sources::{
     CameraProcessor, CameraDevice, CameraConfig,
     AudioCaptureProcessor, AudioInputDevice, AudioCaptureConfig,
-    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
+    ChordGeneratorProcessor, ChordGeneratorConfig,
 };
 pub use sinks::{
     DisplayProcessor, WindowId, DisplayConfig,

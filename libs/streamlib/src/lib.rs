@@ -19,7 +19,7 @@ pub use core::{
     ParameterInfo, PluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
+    ChordGeneratorProcessor, ChordGeneratorConfig,
     AudioMixerProcessor, MixingStrategy,
     AudioMixerOutputPorts, AudioMixerConfig,
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
