@@ -6,6 +6,10 @@ use crate::core::{
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use streamlib_macros::StreamProcessor;
+
+// Re-export for macro use
+use crate as streamlib;
 
 #[derive(Debug, Clone, Default)]
 pub struct PerformanceOverlayConfig {
@@ -131,20 +135,18 @@ impl PerformanceMetrics {
     }
 }
 
-pub struct PerformanceOverlayInputPorts {
-    pub video: StreamInput<VideoFrame>,
-}
-
-pub struct PerformanceOverlayOutputPorts {
-    pub video: StreamOutput<VideoFrame>,
-}
-
 #[cfg(feature = "debug-overlay")]
+#[derive(StreamProcessor)]
 pub struct PerformanceOverlayProcessor {
-    gpu_context: Option<GpuContext>,
-    input_ports: PerformanceOverlayInputPorts,
-    output_ports: PerformanceOverlayOutputPorts,
+    // Port fields - annotated!
+    #[input]
+    video: StreamInput<VideoFrame>,
 
+    #[output]
+    video_out: StreamOutput<VideoFrame>,
+
+    // Config fields
+    gpu_context: Option<GpuContext>,
     metrics: PerformanceMetrics,
 
     #[cfg(feature = "debug-overlay")]
@@ -168,13 +170,12 @@ impl PerformanceOverlayProcessor {
         let roboto_font = include_bytes!("./assets/Roboto-Regular.ttf").to_vec();
 
         Ok(Self {
+            // Ports
+            video: StreamInput::new("video"),
+            video_out: StreamOutput::new("video"),
+
+            // Config fields
             gpu_context: None,
-            input_ports: PerformanceOverlayInputPorts {
-                video: StreamInput::new("video"),
-            },
-            output_ports: PerformanceOverlayOutputPorts {
-                video: StreamOutput::new("video"),
-            },
             metrics: PerformanceMetrics::default(),
             profiler: None,
             vello_renderer: None,
@@ -185,14 +186,6 @@ impl PerformanceOverlayProcessor {
             composite_pipeline: None,
             composite_bind_group_layout: None,
         })
-    }
-
-    pub fn input_ports(&mut self) -> &mut PerformanceOverlayInputPorts {
-        &mut self.input_ports
-    }
-
-    pub fn output_ports(&mut self) -> &mut PerformanceOverlayOutputPorts {
-        &mut self.output_ports
     }
 
     fn draw_text(&self, scene: &mut Scene, text: &str, x: f32, y: f32, size: f32) {
@@ -785,7 +778,8 @@ impl StreamProcessor for PerformanceOverlayProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        let input = match self.input_ports.video.read_latest() {
+        // Direct field access - no nested ports!
+        let input = match self.video.read_latest() {
             Some(frame) => frame,
             None => {
                 return Ok(());
@@ -805,7 +799,7 @@ impl StreamProcessor for PerformanceOverlayProcessor {
             }
         };
 
-        self.output_ports.video.write(output);
+        self.video_out.write(output);
 
         Ok(())
     }
@@ -848,10 +842,24 @@ impl StreamProcessor for PerformanceOverlayProcessor {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
-}
 
-pub use PerformanceOverlayInputPorts as PerformanceOverlayInput;
-pub use PerformanceOverlayOutputPorts as PerformanceOverlayOutput;
+    // Delegate to macro-generated methods
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_input_port_type_impl(port_name)
+    }
+
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_output_port_type_impl(port_name)
+    }
+
+    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        self.wire_input_connection_impl(port_name, connection)
+    }
+
+    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        self.wire_output_connection_impl(port_name, connection)
+    }
+}
 
 #[cfg(all(test, feature = "debug-overlay"))]
 mod tests {

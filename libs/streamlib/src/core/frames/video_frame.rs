@@ -1,8 +1,11 @@
 
 use super::metadata::MetadataValue;
-use super::super::ports::{PortMessage, PortType};
+use crate::core::bus::{PortMessage, PortType};
 use std::sync::Arc;
 use std::collections::HashMap;
+
+// Implement sealed trait
+impl crate::core::bus::ports::sealed::Sealed for VideoFrame {}
 
 #[derive(Clone)]
 pub struct VideoFrame {

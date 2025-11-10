@@ -1,25 +1,26 @@
 
 pub mod core;
 
-pub use streamlib_macros::StreamProcessor as DeriveStreamProcessor;
+// Re-export derive macro with same name as trait (standard Rust pattern)
+// The macro and trait occupy different namespaces, so no collision occurs
+pub use streamlib_macros::StreamProcessor;
 
 pub use core::{
     media_clock::MediaClock,
     StreamError, Result, GpuContext, AudioContext, RuntimeContext,
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
     StreamElement, ElementType, DynStreamElement,
-    StreamOutput, StreamInput, PortType, PortMessage,
-    CameraDevice, CameraOutputPorts, CameraConfig,
-    WindowId, DisplayInputPorts, DisplayConfig,
-    AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
-    AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
+    StreamOutput, StreamInput, PortType, PortMessage, ProcessorConnection,
+    CameraDevice, CameraConfig,
+    WindowId, DisplayConfig,
+    AudioDevice, AudioOutputConfig,
+    AudioInputDevice, AudioCaptureConfig,
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     ParameterInfo, PluginInfo,
     ParameterModulator, LfoWaveform,
     ParameterAutomation,
-    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
-    AudioMixerProcessor, MixingStrategy,
-    AudioMixerOutputPorts, AudioMixerConfig,
+    ChordGeneratorProcessor, ChordGeneratorConfig,
+    AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
     Schema, Field, FieldType, SemanticVersion, SerializationFormat,
     ProcessorDescriptor, PortDescriptor, ProcessorExample,
     AudioRequirements,

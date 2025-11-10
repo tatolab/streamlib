@@ -1,8 +1,6 @@
 
 pub mod bus;
 pub mod clap;
-pub mod connection;
-pub mod connection_manager;
 pub mod context;
 pub mod error;
 pub mod frames;
@@ -12,7 +10,6 @@ pub mod registry;
 pub mod runtime;
 pub mod schema;
 pub mod scheduling;
-pub mod ports;
 pub mod sources;
 pub mod sinks;
 pub mod transformers;
@@ -26,9 +23,11 @@ pub use clap::{
     ParameterModulator, LfoWaveform,
     ParameterAutomation, ClapParameterControl,
 };
-pub use connection::{ProcessorConnection, ConnectionId};
-pub use connection_manager::ConnectionManager;
-pub use bus::Bus;
+pub use bus::{
+    Bus, ProcessorConnection, ConnectionId, ConnectionManager,
+    PortAddress, PortType, PortMessage,
+    StreamOutput, StreamInput,
+};
 pub use context::{GpuContext, AudioContext, RuntimeContext};
 pub use error::{StreamError, Result};
 pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
@@ -37,24 +36,19 @@ pub use frames::{
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
 };
 pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
-pub use ports::{
-    StreamOutput, StreamInput, PortType, PortMessage,
-};
 
 pub use sources::{
-    CameraProcessor, CameraDevice, CameraOutputPorts, CameraConfig,
-    AudioCaptureProcessor, AudioInputDevice, AudioCaptureOutputPorts, AudioCaptureConfig,
-    ChordGeneratorProcessor, ChordGeneratorOutputPorts, ChordGeneratorConfig,
+    CameraProcessor, CameraDevice, CameraConfig,
+    AudioCaptureProcessor, AudioInputDevice, AudioCaptureConfig,
+    ChordGeneratorProcessor, ChordGeneratorConfig,
 };
 pub use sinks::{
-    DisplayProcessor, WindowId, DisplayInputPorts, DisplayConfig,
-    AudioOutputProcessor, AudioDevice, AudioOutputInputPorts, AudioOutputConfig,
+    DisplayProcessor, WindowId, DisplayConfig,
+    AudioOutputProcessor, AudioDevice, AudioOutputConfig,
 };
 pub use transformers::{
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
-    ClapEffectInputPorts, ClapEffectOutputPorts,
-    AudioMixerProcessor, MixingStrategy,
-    AudioMixerOutputPorts, AudioMixerConfig,
+    AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]

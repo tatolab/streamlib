@@ -44,10 +44,7 @@ pub trait AudioCaptureProcessor: StreamElement + StreamProcessor<Config = AudioC
     fn current_level(&self) -> f32 {
         0.0 // Default implementation
     }
-
-    fn output_ports(&mut self) -> &mut AudioCaptureOutputPorts;
 }
 
-pub struct AudioCaptureOutputPorts {
-    pub audio: StreamOutput<AudioFrame<1>>,
-}
+// Ports are now defined directly on platform-specific implementations
+// No shared port struct needed - each implementation uses #[derive(StreamProcessor)]

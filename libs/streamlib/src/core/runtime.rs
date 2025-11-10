@@ -1,7 +1,7 @@
 use super::traits::{StreamProcessor, DynStreamElement};
 use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
-use super::ports::PortType;
+use super::bus::PortType;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -199,7 +199,7 @@ impl StreamRuntime {
 
         {
             let mut processor = processor_arc.lock();
-            processor.set_wakeup_channel_dyn(wakeup_tx.clone());
+            processor.set_wakeup_channel(wakeup_tx.clone());
         }
 
         let id_for_thread = processor_id.clone();
@@ -208,7 +208,7 @@ impl StreamRuntime {
 
         let sched_config = {
             let processor = processor_arc.lock();
-            processor.scheduling_config_dyn()
+            processor.scheduling_config()
         };
 
         let handle = std::thread::spawn(move || {
@@ -216,7 +216,7 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_start_dyn(&runtime_context) {
+                if let Err(e) = processor.on_start(&runtime_context) {
                     tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                     return;
                 }
@@ -247,7 +247,7 @@ impl StreamRuntime {
 
                         {
                             let mut processor = processor_for_thread.lock();
-                            if let Err(e) = processor.process_dyn() {
+                            if let Err(e) = processor.process() {
                                 tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
                             }
                         }
@@ -264,14 +264,14 @@ impl StreamRuntime {
                                     Ok(WakeupEvent::DataAvailable) => {
                                         tracing::debug!("[{}] Received DataAvailable wakeup", id_for_thread);
                                         let mut processor = processor_for_thread.lock();
-                                        if let Err(e) = processor.process_dyn() {
+                                        if let Err(e) = processor.process() {
                                             tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                         }
                                     }
                                     Ok(WakeupEvent::TimerTick) => {
                                         tracing::debug!("[{}] Received TimerTick wakeup", id_for_thread);
                                         let mut processor = processor_for_thread.lock();
-                                        if let Err(e) = processor.process_dyn() {
+                                        if let Err(e) = processor.process() {
                                             tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
                                         }
                                     }
@@ -300,7 +300,7 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_stop_dyn() {
+                if let Err(e) = processor.on_stop() {
                     tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
                 }
             }
@@ -327,7 +327,7 @@ impl StreamRuntime {
         Ok(processor_id)
     }
 
-    pub fn connect<T: crate::core::ports::PortMessage>(
+    pub fn connect<T: crate::core::bus::PortMessage>(
         &mut self,
         output: crate::core::handles::OutputPortRef<T>,
         input: crate::core::handles::InputPortRef<T>,
@@ -428,8 +428,8 @@ impl StreamRuntime {
             let source_guard = source_processor.lock();
             let dest_guard = dest_processor.lock();
 
-            let source_descriptor = source_guard.descriptor_instance_dyn();
-            let dest_descriptor = dest_guard.descriptor_instance_dyn();
+            let source_descriptor = source_guard.descriptor_instance();
+            let dest_descriptor = dest_guard.descriptor_instance();
 
             if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
                 if let (Some(source_audio), Some(dest_audio)) =
@@ -481,75 +481,75 @@ impl StreamRuntime {
             (src_type, dst_type)
         };
 
+        // Create PortAddresses for the new generic API
+        use crate::core::bus::PortAddress;
+        let source_addr = PortAddress::new(source_proc_id.to_string(), source_port.to_string());
+        let dest_addr = PortAddress::new(dest_proc_id.to_string(), dest_port.to_string());
+        let capacity = source_port_type.default_capacity();
+
+        // Use the new generic API - map PortType to concrete frame type
         let connection: Arc<dyn std::any::Any + Send + Sync> = match source_port_type {
             PortType::Audio1 => {
-                let conn = self.bus.create_audio_connection::<1>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<1>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio2 => {
-                let conn = self.bus.create_audio_connection::<2>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<2>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio4 => {
-                let conn = self.bus.create_audio_connection::<4>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<4>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio6 => {
-                let conn = self.bus.create_audio_connection::<6>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<6>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Audio8 => {
-                let conn = self.bus.create_audio_connection::<8>(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::AudioFrame;
+                let conn = self.bus.create_connection::<AudioFrame<8>>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Video => {
-                let conn = self.bus.create_video_connection(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::VideoFrame;
+                let conn = self.bus.create_connection::<VideoFrame>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
             PortType::Data => {
-                let conn = self.bus.create_data_connection(
-                    source_proc_id.to_string(),
-                    source_port.to_string(),
-                    dest_proc_id.to_string(),
-                    dest_port.to_string(),
-                    source_port_type.default_capacity(),
-                );
+                use crate::core::frames::DataFrame;
+                let conn = self.bus.create_connection::<DataFrame>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                )?;
                 Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
             },
         };
@@ -624,7 +624,7 @@ impl StreamRuntime {
                 if let (Some(src), Some(dst)) = (source_handle, dest_handle) {
                     if let Some(src_proc) = src.processor.as_ref() {
                         let mut source_guard = src_proc.lock();
-                        source_guard.set_output_wakeup_dyn(&pending.source_port_name, dst.wakeup_tx.clone());
+                        source_guard.set_output_wakeup(&pending.source_port_name, dst.wakeup_tx.clone());
 
                         tracing::debug!(
                             "Wired wakeup notification: {} ({}) → {} ({})",
@@ -645,7 +645,7 @@ impl StreamRuntime {
             let processors = self.processors.lock();
             for (proc_id, handle) in processors.iter() {
                 if let Some(proc_ref) = &handle.processor {
-                    let sched_config = proc_ref.lock().scheduling_config_dyn();
+                    let sched_config = proc_ref.lock().scheduling_config();
                     if matches!(sched_config.mode, crate::core::scheduling::SchedulingMode::Pull) {
                         if let Err(e) = handle.wakeup_tx.send(WakeupEvent::DataAvailable) {
                             tracing::warn!("[{}] Failed to send Pull mode initialization wakeup: {}", proc_id, e);
@@ -886,7 +886,7 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_arc.lock();
-                processor.set_wakeup_channel_dyn(wakeup_tx.clone());
+                processor.set_wakeup_channel(wakeup_tx.clone());
             }
 
             let runtime_context = crate::core::RuntimeContext::new(gpu_context.clone());
@@ -897,7 +897,7 @@ impl StreamRuntime {
 
             let sched_config = {
                 let processor = processor_arc.lock();
-                processor.scheduling_config_dyn()
+                processor.scheduling_config()
             };
 
             let handle = std::thread::spawn(move || {
@@ -905,7 +905,7 @@ impl StreamRuntime {
 
                 {
                     let mut processor = processor_for_thread.lock();
-                    if let Err(e) = processor.on_start_dyn(&runtime_context) {
+                    if let Err(e) = processor.on_start(&runtime_context) {
                         tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
                         return;
                     }
@@ -921,7 +921,7 @@ impl StreamRuntime {
                                     Ok(_) => {
                                         tracing::info!("[{}] Pull mode - connections ready, calling process() for initialization", id_for_thread);
                                         let mut processor = processor_for_thread.lock();
-                                        processor.process_dyn()
+                                        processor.process()
                                     }
                                     Err(e) => {
                                         tracing::error!("[{}] Wakeup channel closed before initialization: {}", id_for_thread, e);
@@ -963,7 +963,7 @@ impl StreamRuntime {
 
                             {
                                 let mut processor = processor_for_thread.lock();
-                                if let Err(e) = processor.process_dyn() {
+                                if let Err(e) = processor.process() {
                                     tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
                                 }
                             }
@@ -979,13 +979,13 @@ impl StreamRuntime {
                                     match result {
                                         Ok(WakeupEvent::DataAvailable) => {
                                             let mut processor = processor_for_thread.lock();
-                                            if let Err(e) = processor.process_dyn() {
+                                            if let Err(e) = processor.process() {
                                                 tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                             }
                                         }
                                         Ok(WakeupEvent::TimerTick) => {
                                             let mut processor = processor_for_thread.lock();
-                                            if let Err(e) = processor.process_dyn() {
+                                            if let Err(e) = processor.process() {
                                                 tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
                                             }
                                         }
@@ -1014,7 +1014,7 @@ impl StreamRuntime {
 
                 {
                     let mut processor = processor_for_thread.lock();
-                    if let Err(e) = processor.on_stop_dyn() {
+                    if let Err(e) = processor.on_stop() {
                         tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
                     }
                 }

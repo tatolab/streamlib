@@ -4,21 +4,17 @@ use crate::core::{
     StreamInput, StreamOutput,
 };
 use crate::core::frames::AudioFrame;
-use crate::core::ports::PortMessage;
+use crate::core::bus::PortMessage;
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::schema::PortDescriptor;
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
+use streamlib_macros::StreamProcessor;
 
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 
-pub struct ClapEffectInputPorts {
-    pub audio: StreamInput<AudioFrame<2>>,
-}
-
-pub struct ClapEffectOutputPorts {
-    pub audio: StreamOutput<AudioFrame<2>>,
-}
+// Re-export for macro use
+use crate as streamlib;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClapEffectConfig {
@@ -37,14 +33,19 @@ impl Default for ClapEffectConfig {
     }
 }
 
+#[derive(StreamProcessor)]
 pub struct ClapEffectProcessor {
+    // Port fields - annotated!
+    #[input]
+    audio_in: StreamInput<AudioFrame<2>>,
+
+    #[output]
+    audio_out: StreamOutput<AudioFrame<2>>,
+
+    // Config fields
     config: ClapEffectConfig,
 
     host: Option<ClapPluginHost>,
-
-    input_ports: ClapEffectInputPorts,
-
-    output_ports: ClapEffectOutputPorts,
 
     sample_rate: u32,
 
@@ -119,13 +120,6 @@ impl ClapEffectProcessor {
         Ok(output_frame)
     }
 
-    pub fn input_ports(&mut self) -> &mut ClapEffectInputPorts {
-        &mut self.input_ports
-    }
-
-    pub fn output_ports(&mut self) -> &mut ClapEffectOutputPorts {
-        &mut self.output_ports
-    }
 }
 
 
@@ -236,14 +230,13 @@ impl StreamProcessor for ClapEffectProcessor {
 
     fn from_config(config: Self::Config) -> Result<Self> {
         Ok(Self {
+            // Ports
+            audio_in: StreamInput::new("audio"),
+            audio_out: StreamOutput::new("audio"),
+
+            // Config fields
             config,
             host: None,
-            input_ports: ClapEffectInputPorts {
-                audio: StreamInput::new("audio"),
-            },
-            output_ports: ClapEffectOutputPorts {
-                audio: StreamOutput::new("audio"),
-            },
             sample_rate: 48000,  // Default, overridden in start()
             buffer_size: 2048,   // Default, overridden in start()
         })
@@ -252,12 +245,13 @@ impl StreamProcessor for ClapEffectProcessor {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[ClapEffect] process() called");
 
-        if let Some(input_frame) = self.input_ports.audio.read_latest() {
+        // Direct field access - no nested ports!
+        if let Some(input_frame) = self.audio_in.read_latest() {
             tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
 
             let output_frame = self.process_audio_through_clap(&input_frame)?;
 
-            self.output_ports.audio.write(output_frame);
+            self.audio_out.write(output_frame);
             tracing::debug!("[ClapEffect] Wrote output frame");
         } else {
             tracing::debug!("[ClapEffect] No input available");
@@ -300,48 +294,25 @@ impl StreamProcessor for ClapEffectProcessor {
 
     fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
         if port_name == "audio" {
-            self.output_ports.audio.set_downstream_wakeup(wakeup_tx);
+            self.audio_out.set_downstream_wakeup(wakeup_tx);
         }
     }
 
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
-        match port_name {
-            "audio" => Some(self.output_ports.audio.port_type()),
-            _ => None,
-        }
+    // Delegate to macro-generated methods
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_output_port_type_impl(port_name)
     }
 
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::ports::PortType> {
-        match port_name {
-            "audio" => Some(self.input_ports.audio.port_type()),
-            _ => None,
-        }
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_input_port_type_impl(port_name)
     }
 
     fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
-        use crate::core::AudioFrame;
-
-        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
-            if port_name == "audio" {
-                self.output_ports.audio.add_connection(std::sync::Arc::clone(&typed_conn));
-                return true;
-            }
-        }
-        false
+        self.wire_output_connection_impl(port_name, connection)
     }
 
     fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::connection::ProcessorConnection;
-        use crate::core::AudioFrame;
-
-        if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<ProcessorConnection<AudioFrame<2>>>>() {
-            if port_name == "audio" {
-                self.input_ports.audio.set_connection(std::sync::Arc::clone(&typed_conn));
-                return true;
-            }
-        }
-        false
+        self.wire_input_connection_impl(port_name, connection)
     }
 }
 

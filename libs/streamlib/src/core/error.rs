@@ -18,6 +18,9 @@ pub enum StreamError {
     #[error("Port connection error: {0}")]
     PortError(String),
 
+    #[error("Connection error: {0}")]
+    Connection(String),
+
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 

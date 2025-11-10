@@ -22,41 +22,24 @@ use syn::Type;
 pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     let struct_name = &analysis.struct_name;
 
-    // Generate config struct (or use existing/EmptyConfig)
-    let config_struct = generate_config_struct(analysis);
+    // Generate view structs and ports() method
+    let view_structs = generate_ports_view_structs(analysis);
+    let ports_method = generate_ports_convenience_method(analysis);
 
-    // Generate from_config() body
-    let from_config_body = generate_from_config_body(analysis);
-
-    // Generate descriptor() implementation
-    let descriptor_impl = generate_descriptor(analysis);
-
-    // Generate as_any_mut() implementation
-    let as_any_mut_impl = generate_as_any_mut(struct_name);
-
-    // Generate port connection methods
-    let port_methods = generate_port_methods(analysis);
+    // Generate port introspection methods (these are added to existing impls)
+    let port_introspection = generate_port_introspection_methods(analysis);
 
     quote! {
-        #config_struct
+        #view_structs
 
-        impl crate::core::StreamProcessor for #struct_name {
-            type Config = Config;
+        impl #struct_name {
+            #ports_method
+        }
 
-            fn from_config(config: Self::Config) -> crate::core::Result<Self> {
-                #from_config_body
-            }
-
-            #descriptor_impl
-
-            #as_any_mut_impl
-
-            #port_methods
-
-            fn process(&mut self) -> crate::core::Result<()> {
-                // Default implementation - users must provide their own process() method
-                Ok(())
-            }
+        // Generate extension impl with port introspection methods
+        // Users will need to implement the full StreamProcessor trait themselves
+        impl #struct_name {
+            #port_introspection
         }
     }
 }
@@ -553,5 +536,277 @@ fn generate_port_methods(analysis: &AnalysisResult) -> TokenStream {
         #take_output_impl
         #connect_input_impl
         #set_wakeup_impl
+    }
+}
+
+/// Generate view structs for the ports() convenience method
+fn generate_ports_view_structs(analysis: &AnalysisResult) -> TokenStream {
+    let struct_name = &analysis.struct_name;
+    let ports_struct_name = format_ident!("{}Ports", struct_name);
+    let input_ports_struct_name = format_ident!("{}InputPorts", struct_name);
+    let output_ports_struct_name = format_ident!("{}OutputPorts", struct_name);
+
+    let input_ports: Vec<_> = analysis.input_ports().collect();
+    let output_ports: Vec<_> = analysis.output_ports().collect();
+
+    // Generate input ports view struct
+    let input_fields = input_ports.iter().map(|p| {
+        let name = &p.field_name;
+        if p.is_arc_wrapped {
+            // Arc-wrapped: &'a Arc<StreamInput<T>>
+            let field_type = &p.field_type;
+            quote! { pub #name: &'a #field_type }
+        } else {
+            // Normal: &'a StreamInput<T>
+            let message_type = &p.message_type;
+            quote! { pub #name: &'a crate::core::StreamInput<#message_type> }
+        }
+    });
+
+    let input_struct = if !input_ports.is_empty() {
+        quote! {
+            pub struct #input_ports_struct_name<'a> {
+                #(#input_fields),*
+            }
+        }
+    } else {
+        quote! {
+            pub struct #input_ports_struct_name<'a> {
+                _phantom: std::marker::PhantomData<&'a ()>,
+            }
+        }
+    };
+
+    // Generate output ports view struct
+    let output_fields = output_ports.iter().map(|p| {
+        let name = &p.field_name;
+        if p.is_arc_wrapped {
+            // Arc-wrapped: &'a Arc<StreamOutput<T>>
+            let field_type = &p.field_type;
+            quote! { pub #name: &'a #field_type }
+        } else {
+            // Normal: &'a StreamOutput<T>
+            let message_type = &p.message_type;
+            quote! { pub #name: &'a crate::core::StreamOutput<#message_type> }
+        }
+    });
+
+    let output_struct = if !output_ports.is_empty() {
+        quote! {
+            pub struct #output_ports_struct_name<'a> {
+                #(#output_fields),*
+            }
+        }
+    } else {
+        quote! {
+            pub struct #output_ports_struct_name<'a> {
+                _phantom: std::marker::PhantomData<&'a ()>,
+            }
+        }
+    };
+
+    // Generate main ports view struct
+    let ports_struct = quote! {
+        pub struct #ports_struct_name<'a> {
+            pub inputs: #input_ports_struct_name<'a>,
+            pub outputs: #output_ports_struct_name<'a>,
+        }
+    };
+
+    quote! {
+        #input_struct
+        #output_struct
+        #ports_struct
+    }
+}
+
+/// Generate the ports() convenience method
+fn generate_ports_convenience_method(analysis: &AnalysisResult) -> TokenStream {
+    let struct_name = &analysis.struct_name;
+    let ports_struct_name = format_ident!("{}Ports", struct_name);
+    let input_ports_struct_name = format_ident!("{}InputPorts", struct_name);
+    let output_ports_struct_name = format_ident!("{}OutputPorts", struct_name);
+
+    let input_ports: Vec<_> = analysis.input_ports().collect();
+    let output_ports: Vec<_> = analysis.output_ports().collect();
+
+    // Generate input field initialization
+    let input_field_inits = input_ports.iter().map(|p| {
+        let name = &p.field_name;
+        quote! { #name: &self.#name }
+    });
+
+    let input_init = if !input_ports.is_empty() {
+        quote! {
+            #input_ports_struct_name {
+                #(#input_field_inits),*
+            }
+        }
+    } else {
+        quote! {
+            #input_ports_struct_name {
+                _phantom: std::marker::PhantomData,
+            }
+        }
+    };
+
+    // Generate output field initialization
+    let output_field_inits = output_ports.iter().map(|p| {
+        let name = &p.field_name;
+        quote! { #name: &self.#name }
+    });
+
+    let output_init = if !output_ports.is_empty() {
+        quote! {
+            #output_ports_struct_name {
+                #(#output_field_inits),*
+            }
+        }
+    } else {
+        quote! {
+            #output_ports_struct_name {
+                _phantom: std::marker::PhantomData,
+            }
+        }
+    };
+
+    quote! {
+        pub fn ports(&self) -> #ports_struct_name<'_> {
+            #ports_struct_name {
+                inputs: #input_init,
+                outputs: #output_init,
+            }
+        }
+    }
+}
+
+/// Generate port introspection methods for MCP server compatibility
+fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream {
+    let input_ports: Vec<_> = analysis.input_ports().collect();
+    let output_ports: Vec<_> = analysis.output_ports().collect();
+
+    // Generate get_input_port_type implementation
+    let input_port_type_arms = input_ports.iter().map(|p| {
+        let port_name = &p.port_name;
+        let message_type = &p.message_type;
+        quote! {
+            #port_name => Some(<#message_type as crate::core::PortMessage>::port_type())
+        }
+    });
+
+    let get_input_port_type_impl = if !input_ports.is_empty() {
+        quote! {
+            pub fn get_input_port_type_impl(&self, port_name: &str) -> Option<crate::core::PortType> {
+                match port_name {
+                    #(#input_port_type_arms,)*
+                    _ => None,
+                }
+            }
+        }
+    } else {
+        quote! {
+            pub fn get_input_port_type_impl(&self, _port_name: &str) -> Option<crate::core::PortType> {
+                None
+            }
+        }
+    };
+
+    // Generate get_output_port_type implementation
+    let output_port_type_arms = output_ports.iter().map(|p| {
+        let port_name = &p.port_name;
+        let message_type = &p.message_type;
+        quote! {
+            #port_name => Some(<#message_type as crate::core::PortMessage>::port_type())
+        }
+    });
+
+    let get_output_port_type_impl = if !output_ports.is_empty() {
+        quote! {
+            pub fn get_output_port_type_impl(&self, port_name: &str) -> Option<crate::core::PortType> {
+                match port_name {
+                    #(#output_port_type_arms,)*
+                    _ => None,
+                }
+            }
+        }
+    } else {
+        quote! {
+            pub fn get_output_port_type_impl(&self, _port_name: &str) -> Option<crate::core::PortType> {
+                None
+            }
+        }
+    };
+
+    // Generate wire_input_connection implementation
+    let input_wire_arms = input_ports.iter().map(|p| {
+        let field_name = &p.field_name;
+        let port_name = &p.port_name;
+        let message_type = &p.message_type;
+        quote! {
+            #port_name => {
+                if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<crate::core::ProcessorConnection<#message_type>>>() {
+                    self.#field_name.set_connection(std::sync::Arc::clone(&typed_conn));
+                    return true;
+                }
+                false
+            }
+        }
+    });
+
+    let wire_input_connection_impl = if !input_ports.is_empty() {
+        quote! {
+            pub fn wire_input_connection_impl(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+                match port_name {
+                    #(#input_wire_arms,)*
+                    _ => false,
+                }
+            }
+        }
+    } else {
+        quote! {
+            pub fn wire_input_connection_impl(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+                false
+            }
+        }
+    };
+
+    // Generate wire_output_connection implementation
+    let output_wire_arms = output_ports.iter().map(|p| {
+        let field_name = &p.field_name;
+        let port_name = &p.port_name;
+        let message_type = &p.message_type;
+        quote! {
+            #port_name => {
+                if let Ok(typed_conn) = connection.downcast::<std::sync::Arc<crate::core::ProcessorConnection<#message_type>>>() {
+                    self.#field_name.add_connection(std::sync::Arc::clone(&typed_conn));
+                    return true;
+                }
+                false
+            }
+        }
+    });
+
+    let wire_output_connection_impl = if !output_ports.is_empty() {
+        quote! {
+            pub fn wire_output_connection_impl(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+                match port_name {
+                    #(#output_wire_arms,)*
+                    _ => false,
+                }
+            }
+        }
+    } else {
+        quote! {
+            pub fn wire_output_connection_impl(&mut self, _port_name: &str, _connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
+                false
+            }
+        }
+    };
+
+    quote! {
+        #get_input_port_type_impl
+        #get_output_port_type_impl
+        #wire_input_connection_impl
+        #wire_output_connection_impl
     }
 }

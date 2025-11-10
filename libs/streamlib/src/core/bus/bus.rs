@@ -1,7 +1,8 @@
 
 use super::connection_manager::ConnectionManager;
 use super::connection::ProcessorConnection;
-use super::frames::{AudioFrame, VideoFrame, DataFrame};
+use super::ports::{PortAddress, PortMessage};
+use crate::core::Result;
 use std::sync::Arc;
 use parking_lot::RwLock;
 
@@ -16,88 +17,67 @@ impl Bus {
         }
     }
 
-    pub fn create_audio_connection<const CHANNELS: usize>(
+    /// Create a generic connection between source and destination ports
+    pub fn create_connection<T: PortMessage + 'static>(
         &self,
-        source_processor: String,
-        source_port: String,
-        dest_processor: String,
-        dest_port: String,
+        source: PortAddress,
+        dest: PortAddress,
         capacity: usize,
-    ) -> Arc<ProcessorConnection<AudioFrame<CHANNELS>>> {
-        self.manager.write().create_audio_connection(
-            source_processor,
-            source_port,
-            dest_processor,
-            dest_port,
-            capacity,
-        )
+    ) -> Result<Arc<ProcessorConnection<T>>> {
+        self.manager.write().create_connection(source, dest, capacity)
     }
 
-    pub fn get_audio_connections_from_output<const CHANNELS: usize>(
+    /// Get all connections from a source port
+    pub fn connections_from_source<T: PortMessage + 'static>(
         &self,
-        source_processor: &str,
-        source_port: &str,
-    ) -> Vec<Arc<ProcessorConnection<AudioFrame<CHANNELS>>>> {
-        self.manager.read().get_audio_connections_from_output(source_processor, source_port)
+        source: &PortAddress,
+    ) -> Vec<Arc<ProcessorConnection<T>>> {
+        self.manager.read().connections_from_source(source)
     }
 
-    pub fn create_video_connection(
+    /// Get connection at destination port
+    pub fn connection_at_dest<T: PortMessage + 'static>(
         &self,
-        source_processor: String,
-        source_port: String,
-        dest_processor: String,
-        dest_port: String,
-        capacity: usize,
-    ) -> Arc<ProcessorConnection<VideoFrame>> {
-        self.manager.write().create_video_connection(
-            source_processor,
-            source_port,
-            dest_processor,
-            dest_port,
-            capacity,
-        )
+        dest: &PortAddress,
+    ) -> Option<Arc<ProcessorConnection<T>>> {
+        self.manager.read().connection_at_dest(dest)
     }
 
-    pub fn get_video_connections_from_output(
-        &self,
-        source_processor: &str,
-        source_port: &str,
-    ) -> Vec<Arc<ProcessorConnection<VideoFrame>>> {
-        self.manager.read().get_video_connections_from_output(source_processor, source_port)
+    /// Disconnect a connection by ID
+    pub fn disconnect(&self, id: super::connection::ConnectionId) -> Result<()> {
+        self.manager.write().disconnect(id)
     }
 
-    pub fn create_data_connection(
-        &self,
-        source_processor: String,
-        source_port: String,
-        dest_processor: String,
-        dest_port: String,
-        capacity: usize,
-    ) -> Arc<ProcessorConnection<DataFrame>> {
-        self.manager.write().create_data_connection(
-            source_processor,
-            source_port,
-            dest_processor,
-            dest_port,
-            capacity,
-        )
-    }
-
-    pub fn get_data_connections_from_output(
-        &self,
-        source_processor: &str,
-        source_port: &str,
-    ) -> Vec<Arc<ProcessorConnection<DataFrame>>> {
-        self.manager.read().get_data_connections_from_output(source_processor, source_port)
-    }
-
+    /// Get total connection count
     pub fn connection_count(&self) -> usize {
         self.manager.read().connection_count()
+    }
+
+    /// Check if destination is already connected
+    pub fn is_dest_connected(&self, dest: &PortAddress) -> bool {
+        self.manager.read().is_dest_connected(dest)
     }
 }
 
 impl Default for Bus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bus_creation() {
+        let bus = Bus::new();
+        assert_eq!(bus.connection_count(), 0);
+    }
+
+    #[test]
+    fn test_bus_default() {
+        let bus = Bus::default();
+        assert_eq!(bus.connection_count(), 0);
     }
 }

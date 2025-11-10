@@ -108,11 +108,19 @@ impl ProcessorAttributes {
 
 impl PortAttributes {
     /// Parse #[input(...)] or #[output(...)] attribute
+    ///
+    /// Supports both bare attributes (#[input]) and attributes with parameters (#[input(name = "foo")])
     pub fn parse(attrs: &[Attribute], attr_name: &str) -> Result<Self> {
         let mut result = Self::default();
 
         for attr in attrs {
             if !attr.path().is_ident(attr_name) {
+                continue;
+            }
+
+            // Check if attribute has content (tokens)
+            if attr.meta.require_path_only().is_ok() {
+                // Bare attribute like #[input] - no parameters to parse
                 continue;
             }
 

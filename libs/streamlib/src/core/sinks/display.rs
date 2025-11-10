@@ -1,6 +1,5 @@
 
 use crate::core::{
-    StreamInput, VideoFrame,
     ProcessorDescriptor, PortDescriptor, ProcessorExample, SCHEMA_VIDEO_FRAME,
 };
 use std::sync::Arc;
@@ -26,9 +25,8 @@ impl Default for DisplayConfig {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64);
 
-pub struct DisplayInputPorts {
-    pub video: StreamInput<VideoFrame>,
-}
+// Ports are now defined directly on platform-specific implementations
+// No shared port struct needed - each implementation uses #[derive(StreamProcessor)]
 
 pub fn descriptor() -> ProcessorDescriptor {
     ProcessorDescriptor::new(
@@ -85,8 +83,6 @@ pub trait DisplayProcessor {
     fn set_window_title(&mut self, title: &str);
 
     fn window_id(&self) -> Option<WindowId>;
-
-    fn input_ports(&mut self) -> &mut DisplayInputPorts;
 }
 
 
@@ -142,10 +138,6 @@ mod tests {
 
         fn window_id(&self) -> Option<WindowId> {
             None
-        }
-
-        fn input_ports(&mut self) -> &mut DisplayInputPorts {
-            unimplemented!()
         }
     }
 

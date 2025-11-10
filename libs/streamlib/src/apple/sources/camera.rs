@@ -1,11 +1,12 @@
 
 use crate::core::{
-    CameraProcessor, CameraOutputPorts, CameraDevice,
-    VideoFrame, Result, StreamError,
+    CameraProcessor, CameraDevice,
+    VideoFrame, StreamOutput, Result, StreamError,
     ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
 use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
+use streamlib_macros::StreamProcessor;
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::ffi::c_void;
@@ -94,10 +95,15 @@ impl CameraDelegate {
     }
 }
 
+#[derive(StreamProcessor)]
 pub struct AppleCameraProcessor {
+    // Port field - annotated!
+    #[output]
+    video: StreamOutput<VideoFrame>,
+
+    // Config fields
     #[allow(dead_code)] // Stored for future device management features
     device_id: Option<String>,
-    ports: CameraOutputPorts,
     frame_count: u64,
 
     latest_frame: Arc<Mutex<Option<FrameHolder>>>,
@@ -283,10 +289,11 @@ impl AppleCameraProcessor {
         tracing::info!("Camera: AVFoundation session running (will capture frames)");
 
         Ok(Self {
+            // Port
+            video: StreamOutput::new("video"),
+
+            // Config fields
             device_id: device_id.map(String::from),
-            ports: CameraOutputPorts {
-                video: crate::core::StreamOutput::new("video"),
-            },
             frame_count: 0,
             latest_frame,
             gpu_context: None,  // Will be set by runtime in on_start()
@@ -340,9 +347,6 @@ impl CameraProcessor for AppleCameraProcessor {
         }
     }
 
-    fn output_ports(&mut self) -> &mut CameraOutputPorts {
-        &mut self.ports
-    }
 }
 
 
@@ -519,7 +523,7 @@ impl StreamProcessor for AppleCameraProcessor {
                 );
             }
 
-            self.ports.video.write(frame);
+            self.video.write(frame);
             Ok(())
         }
     }
@@ -544,6 +548,21 @@ impl StreamProcessor for AppleCameraProcessor {
             )
             .with_tags(vec!["video", "source", "camera", "avfoundation", "metal", "macos"])
         )
+    }
+
+    // Delegate to macro-generated methods
+    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+        self.get_output_port_type_impl(port_name)
+    }
+
+    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        self.wire_output_connection_impl(port_name, connection)
+    }
+
+    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
+        if port_name == "video" {
+            self.video.set_downstream_wakeup(wakeup_tx);
+        }
     }
 }
 

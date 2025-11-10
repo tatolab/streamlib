@@ -1,8 +1,11 @@
 use super::metadata::MetadataValue;
-use super::super::ports::{PortMessage, PortType};
+use crate::core::bus::{PortMessage, PortType};
 use std::sync::Arc;
 use std::collections::HashMap;
 use dasp::Frame;
+
+// Implement sealed trait for all AudioFrame variants
+impl<const CHANNELS: usize> crate::core::bus::ports::sealed::Sealed for AudioFrame<CHANNELS> {}
 use dasp::slice::{FromSampleSlice, ToSampleSlice};
 use dasp::Signal;
 

@@ -34,10 +34,7 @@ pub trait AudioOutputProcessor {
     fn list_devices() -> Result<Vec<AudioDevice>>;
 
     fn current_device(&self) -> &AudioDevice;
-
-    fn input_ports(&mut self) -> &mut AudioOutputInputPorts;
 }
 
-pub struct AudioOutputInputPorts {
-    pub audio: StreamInput<AudioFrame<2>>,
-}
+// Ports are now defined directly on platform-specific implementations
+// No shared port struct needed - each implementation uses #[derive(StreamProcessor)]
