@@ -552,8 +552,15 @@ fn generate_ports_view_structs(analysis: &AnalysisResult) -> TokenStream {
     // Generate input ports view struct
     let input_fields = input_ports.iter().map(|p| {
         let name = &p.field_name;
-        let message_type = &p.message_type;
-        quote! { pub #name: &'a crate::core::StreamInput<#message_type> }
+        if p.is_arc_wrapped {
+            // Arc-wrapped: &'a Arc<StreamInput<T>>
+            let field_type = &p.field_type;
+            quote! { pub #name: &'a #field_type }
+        } else {
+            // Normal: &'a StreamInput<T>
+            let message_type = &p.message_type;
+            quote! { pub #name: &'a crate::core::StreamInput<#message_type> }
+        }
     });
 
     let input_struct = if !input_ports.is_empty() {
@@ -573,8 +580,15 @@ fn generate_ports_view_structs(analysis: &AnalysisResult) -> TokenStream {
     // Generate output ports view struct
     let output_fields = output_ports.iter().map(|p| {
         let name = &p.field_name;
-        let message_type = &p.message_type;
-        quote! { pub #name: &'a crate::core::StreamOutput<#message_type> }
+        if p.is_arc_wrapped {
+            // Arc-wrapped: &'a Arc<StreamOutput<T>>
+            let field_type = &p.field_type;
+            quote! { pub #name: &'a #field_type }
+        } else {
+            // Normal: &'a StreamOutput<T>
+            let message_type = &p.message_type;
+            quote! { pub #name: &'a crate::core::StreamOutput<#message_type> }
+        }
     });
 
     let output_struct = if !output_ports.is_empty() {

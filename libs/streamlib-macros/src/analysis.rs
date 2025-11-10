@@ -31,6 +31,12 @@ pub struct PortField {
     /// Message type (e.g., VideoFrame, AudioFrame)
     pub message_type: Type,
 
+    /// Whether the port is Arc-wrapped (Arc<StreamInput/Output<T>>)
+    pub is_arc_wrapped: bool,
+
+    /// Full field type (for code generation)
+    pub field_type: Type,
+
     /// Parsed port attributes
     pub attributes: PortAttributes,
 }
@@ -100,7 +106,7 @@ impl AnalysisResult {
             // Check for #[input] attribute
             if has_attribute(&field.attrs, "input") {
                 let port_attrs = PortAttributes::parse(&field.attrs, "input")?;
-                let message_type = extract_message_type(&field.ty)?;
+                let (message_type, is_arc_wrapped) = extract_message_type(&field.ty)?;
 
                 port_fields.push(PortField {
                     port_name: port_attrs
@@ -110,6 +116,8 @@ impl AnalysisResult {
                     field_name,
                     direction: PortDirection::Input,
                     message_type,
+                    is_arc_wrapped,
+                    field_type: field.ty.clone(),
                     attributes: port_attrs,
                 });
                 continue;
@@ -118,7 +126,7 @@ impl AnalysisResult {
             // Check for #[output] attribute
             if has_attribute(&field.attrs, "output") {
                 let port_attrs = PortAttributes::parse(&field.attrs, "output")?;
-                let message_type = extract_message_type(&field.ty)?;
+                let (message_type, is_arc_wrapped) = extract_message_type(&field.ty)?;
 
                 port_fields.push(PortField {
                     port_name: port_attrs
@@ -128,6 +136,8 @@ impl AnalysisResult {
                     field_name,
                     direction: PortDirection::Output,
                     message_type,
+                    is_arc_wrapped,
+                    field_type: field.ty.clone(),
                     attributes: port_attrs,
                 });
                 continue;
@@ -178,20 +188,48 @@ impl AnalysisResult {
     }
 }
 
-/// Extract message type from StreamInput<T> or StreamOutput<T>
-fn extract_message_type(ty: &Type) -> Result<Type> {
+/// Extract message type from StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>
+/// Returns (message_type, is_arc_wrapped)
+fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
     match ty {
         Type::Path(type_path) => {
             let last_segment = type_path.path.segments.last().ok_or_else(|| {
                 Error::new_spanned(ty, "Expected type path")
             })?;
 
-            // Check if it's StreamInput or StreamOutput
             let ident = &last_segment.ident;
+
+            // Check if it's Arc<...>
+            if ident == "Arc" {
+                // Extract inner type from Arc<T>
+                match &last_segment.arguments {
+                    PathArguments::AngleBracketed(args) => {
+                        let first_arg = args.args.first().ok_or_else(|| {
+                            Error::new_spanned(ty, "Arc requires type parameter")
+                        })?;
+
+                        if let GenericArgument::Type(inner_type) = first_arg {
+                            // Recursively extract from inner type (should be StreamInput/Output<T>)
+                            let (message_type, _) = extract_message_type(inner_type)?;
+                            return Ok((message_type, true)); // Arc-wrapped!
+                        } else {
+                            return Err(Error::new_spanned(ty, "Expected type parameter in Arc"));
+                        }
+                    }
+                    _ => {
+                        return Err(Error::new_spanned(
+                            ty,
+                            "Arc must have angle-bracketed type parameter",
+                        ));
+                    }
+                }
+            }
+
+            // Check if it's StreamInput or StreamOutput
             if ident != "StreamInput" && ident != "StreamOutput" {
                 return Err(Error::new_spanned(
                     ty,
-                    "Port fields must be StreamInput<T> or StreamOutput<T>",
+                    "Port fields must be StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>",
                 ));
             }
 
@@ -203,7 +241,7 @@ fn extract_message_type(ty: &Type) -> Result<Type> {
                     })?;
 
                     if let GenericArgument::Type(inner_type) = first_arg {
-                        Ok(inner_type.clone())
+                        Ok((inner_type.clone(), false)) // Not Arc-wrapped
                     } else {
                         Err(Error::new_spanned(
                             ty,
@@ -219,7 +257,7 @@ fn extract_message_type(ty: &Type) -> Result<Type> {
         }
         _ => Err(Error::new_spanned(
             ty,
-            "Port field must be StreamInput<T> or StreamOutput<T>",
+            "Port field must be StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>",
         )),
     }
 }
@@ -257,8 +295,17 @@ mod tests {
     #[test]
     fn test_extract_message_type() {
         let ty: Type = parse_quote! { StreamInput<VideoFrame> };
-        let result = extract_message_type(&ty).unwrap();
+        let (result, is_arc) = extract_message_type(&ty).unwrap();
         assert!(is_video_frame_type(&result));
+        assert!(!is_arc);
+    }
+
+    #[test]
+    fn test_extract_message_type_arc_wrapped() {
+        let ty: Type = parse_quote! { Arc<StreamOutput<AudioFrame>> };
+        let (result, is_arc) = extract_message_type(&ty).unwrap();
+        assert!(is_audio_frame_type(&result));
+        assert!(is_arc);
     }
 
     #[test]
