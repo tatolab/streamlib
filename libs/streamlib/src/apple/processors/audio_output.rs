@@ -1,9 +1,30 @@
-use crate::core::{AudioDevice, StreamInput, Result, StreamError};
+use crate::core::{StreamInput, Result, StreamError};
 use crate::core::frames::AudioFrame;
 use streamlib_macros::StreamProcessor;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
 use std::sync::Arc;
+
+// Apple-specific configuration and device types
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AppleAudioOutputConfig {
+    pub device_id: Option<String>,
+}
+
+impl Default for AppleAudioOutputConfig {
+    fn default() -> Self {
+        Self { device_id: None }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AppleAudioDevice {
+    pub id: usize,
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u32,
+    pub is_default: bool,
+}
 
 #[derive(StreamProcessor)]
 #[processor(
@@ -15,12 +36,12 @@ pub struct AppleAudioOutputProcessor {
     audio: Arc<StreamInput<AudioFrame<2>>>,
 
     #[config]
-    config: crate::core::AudioOutputConfig,
+    config: AppleAudioOutputConfig,
 
     // Runtime state fields - auto-detected (no attribute needed)
     device_id: Option<usize>,
     device_name: String,
-    device_info: Option<AudioDevice>,
+    device_info: Option<AppleAudioDevice>,
     stream: Option<Stream>,
     stream_setup_done: bool,
     sample_rate: u32,
@@ -108,30 +129,3 @@ impl AppleAudioOutputProcessor {
     }
 }
 
-impl crate::core::AudioOutputProcessor for AppleAudioOutputProcessor {
-    fn new(device_id: Option<usize>) -> Result<Self> {
-        // Use from_config with appropriate config
-        Self::from_config(crate::core::AudioOutputConfig {
-            device_id: device_id.map(|id| id.to_string()),
-        })
-    }
-
-    fn list_devices() -> Result<Vec<AudioDevice>> {
-        // TODO: Implement device enumeration
-        Ok(vec![])
-    }
-
-    fn current_device(&self) -> &AudioDevice {
-        self.device_info.as_ref().unwrap_or_else(|| {
-            // Return a default device info if not initialized
-            static DEFAULT: AudioDevice = AudioDevice {
-                id: 0,
-                name: String::new(),
-                sample_rate: 48000,
-                channels: 2,
-                is_default: true,
-            };
-            &DEFAULT
-        })
-    }
-}

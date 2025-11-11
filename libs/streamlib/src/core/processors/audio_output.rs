@@ -1,46 +1,23 @@
-
-use crate::core::{StreamInput, Result};
-use crate::core::frames::AudioFrame;
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AudioOutputConfig {
-    pub device_id: Option<String>,
-}
-
-impl Default for AudioOutputConfig {
-    fn default() -> Self {
-        Self { device_id: None }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AudioDevice {
-    pub id: usize,
-
-    pub name: String,
-
-    pub sample_rate: u32,
-
-    pub channels: u32,
-
-    pub is_default: bool,
-}
-
-pub trait AudioOutputProcessor {
-    fn new(device_id: Option<usize>) -> Result<Self>
-    where
-        Self: Sized;
-
-    fn list_devices() -> Result<Vec<AudioDevice>>;
-
-    fn current_device(&self) -> &AudioDevice;
-}
-
-// Platform-specific processor re-exports
-// This allows `use streamlib::core::AudioOutputProcessor` to work across platforms
+// Platform-specific re-exports with unified names
+// Users import these common names and get the appropriate platform implementation
 #[cfg(target_os = "macos")]
-pub use crate::apple::processors::audio_output::AppleAudioOutputProcessor;
+pub use crate::apple::processors::audio_output::{
+    AppleAudioOutputProcessor as AudioOutputProcessor,
+    AppleAudioOutputConfig as AudioOutputConfig,
+    AppleAudioDevice as AudioDevice,
+};
 
-// TODO: Add Linux/Windows implementations
+// Future platform implementations
 // #[cfg(target_os = "linux")]
-// pub use crate::linux::processors::audio_output::LinuxAudioOutputProcessor;
+// pub use crate::linux::processors::audio_output::{
+//     LinuxAudioOutputProcessor as AudioOutputProcessor,
+//     LinuxAudioOutputConfig as AudioOutputConfig,
+//     LinuxAudioDevice as AudioDevice,
+// };
+
+// #[cfg(target_os = "windows")]
+// pub use crate::windows::processors::audio_output::{
+//     WindowsAudioOutputProcessor as AudioOutputProcessor,
+//     WindowsAudioOutputConfig as AudioOutputConfig,
+//     WindowsAudioDevice as AudioDevice,
+// };
