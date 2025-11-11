@@ -28,15 +28,15 @@ pub struct ProcessorAttributes {
     pub audio_requirements: Option<TokenStream>,
 
     /// Custom process method name: `process = "my_process"`
-    /// Defaults to "process" if not specified
+    /// Defaults to auto-detecting "process" method
     pub process_method: Option<String>,
 
     /// Custom on_start method name: `on_start = "my_start"`
-    /// If not specified, looks for "on_start" method
+    /// Defaults to auto-detecting "on_start" method
     pub on_start_method: Option<String>,
 
     /// Custom on_stop method name: `on_stop = "my_stop"`
-    /// If not specified, looks for "on_stop" method
+    /// Defaults to auto-detecting "on_stop" method
     pub on_stop_method: Option<String>,
 
     /// Custom processor name: `name = "MyProcessor"`
@@ -46,11 +46,6 @@ pub struct ProcessorAttributes {
     /// Scheduling mode: `mode = Pull` or `mode = Push`
     /// Defaults to Pull if not specified
     pub scheduling_mode: Option<String>,
-
-    /// Generate complete trait implementations: `generate_impls = true`
-    /// When true, generates both StreamElement and StreamProcessor implementations
-    /// When false (default for now), only generates helper methods for backward compatibility
-    pub generate_impls: bool,
 }
 
 /// Parsed attributes from #[input(...)] or #[output(...)]
@@ -64,6 +59,13 @@ pub struct PortAttributes {
 
     /// Required flag (inputs only): `required = true`
     pub required: Option<bool>,
+}
+
+/// Parsed attributes from #[state]
+#[derive(Debug, Default)]
+pub struct StateAttributes {
+    /// Custom default expression: `default = "expression"`
+    pub default_expr: Option<String>,
 }
 
 impl ProcessorAttributes {
@@ -165,15 +167,6 @@ impl ProcessorAttributes {
                     return Ok(());
                 }
 
-                // generate_impls = true/false
-                if meta.path.is_ident("generate_impls") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Bool(b) = value {
-                        result.generate_impls = b.value;
-                    }
-                    return Ok(());
-                }
-
                 Err(meta.error("unsupported processor attribute"))
             })?;
         }
@@ -226,6 +219,39 @@ impl PortAttributes {
                 }
 
                 Err(meta.error("unsupported port attribute"))
+            })?;
+        }
+
+        Ok(result)
+    }
+}
+
+impl StateAttributes {
+    /// Parse #[state(...)] attribute
+    pub fn parse(attrs: &[Attribute]) -> Result<Self> {
+        let mut result = Self::default();
+
+        for attr in attrs {
+            if !attr.path().is_ident("state") {
+                continue;
+            }
+
+            // Check if attribute has content (tokens)
+            if attr.meta.require_path_only().is_ok() {
+                // Bare #[state] attribute - use Default::default()
+                continue;
+            }
+
+            // Parse the attribute content
+            attr.parse_nested_meta(|meta| {
+                // default = "expression"
+                if meta.path.is_ident("default") {
+                    let value = parse_string_value(&meta)?;
+                    result.default_expr = Some(value);
+                    return Ok(());
+                }
+
+                Err(meta.error("unsupported state attribute"))
             })?;
         }
 

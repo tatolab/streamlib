@@ -21,10 +21,9 @@ impl Default for SimplePassthroughConfig {
     }
 }
 
-// NEW PATTERN: Complete trait generation with generate_impls = true!
+// NEW PATTERN: Complete trait generation - always generates implementations!
 #[derive(StreamProcessor)]
 #[processor(
-    generate_impls = true,
     config = SimplePassthroughConfig,
     name = "SimplePassthroughProcessor",
     description = "Passes video frames through unchanged (for testing)"

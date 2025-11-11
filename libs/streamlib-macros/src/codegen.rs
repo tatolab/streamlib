@@ -29,48 +29,27 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     // Generate port introspection methods (these are added to existing impls)
     let port_introspection = generate_port_introspection_methods(analysis);
 
-    // Only generate complete trait implementations if explicitly requested
-    let generate_complete_impls = analysis.processor_attrs.generate_impls;
+    // Always generate complete trait implementations
+    let stream_element_impl = generate_stream_element_impl(analysis);
+    let stream_processor_impl = generate_stream_processor_impl(analysis);
 
-    if generate_complete_impls {
-        // Generate complete StreamElement trait implementation
-        let stream_element_impl = generate_stream_element_impl(analysis);
+    quote! {
+        #view_structs
 
-        // Generate complete StreamProcessor trait implementation
-        let stream_processor_impl = generate_stream_processor_impl(analysis);
-
-        quote! {
-            #view_structs
-
-            impl #struct_name {
-                #ports_method
-            }
-
-            // Generate extension impl with port introspection methods (for backward compatibility)
-            impl #struct_name {
-                #port_introspection
-            }
-
-            // Generate complete StreamElement implementation
-            #stream_element_impl
-
-            // Generate complete StreamProcessor implementation
-            #stream_processor_impl
+        impl #struct_name {
+            #ports_method
         }
-    } else {
-        // Backward compatibility mode - only generate helper methods
-        quote! {
-            #view_structs
 
-            impl #struct_name {
-                #ports_method
-            }
-
-            // Generate extension impl with port introspection methods
-            impl #struct_name {
-                #port_introspection
-            }
+        // Generate extension impl with port introspection methods
+        impl #struct_name {
+            #port_introspection
         }
+
+        // Generate complete StreamElement implementation
+        #stream_element_impl
+
+        // Generate complete StreamProcessor implementation
+        #stream_processor_impl
     }
 }
 
@@ -975,38 +954,41 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
         }
     };
 
-    // Determine lifecycle method names (from attributes or defaults)
-    // For now, we'll use default implementations (Ok(())) since we can't easily detect
-    // if methods exist at macro expansion time. Users can override via attributes if needed.
-    let start_impl = if analysis.processor_attrs.on_start_method.is_some() {
-        let on_start_method = format_ident!("{}", analysis.processor_attrs.on_start_method.as_ref().unwrap());
-        quote! {
-            fn start(&mut self, ctx: &crate::core::RuntimeContext) -> crate::core::Result<()> {
-                self.#on_start_method(ctx)
+    // Determine lifecycle method names (from attributes or default to "on_start"/"on_stop")
+    // Try to call user's method if it exists, otherwise do nothing
+    let on_start_method = analysis
+        .processor_attrs
+        .on_start_method
+        .as_ref()
+        .map(|s| format_ident!("{}", s))
+        .unwrap_or_else(|| format_ident!("on_start"));
+
+    let start_impl = quote! {
+        fn start(&mut self, ctx: &crate::core::RuntimeContext) -> crate::core::Result<()> {
+            // Try to call user's on_start method (will fail gracefully if not present)
+            #[allow(unreachable_code)]
+            {
+                return self.#on_start_method(ctx);
             }
-        }
-    } else {
-        // Default implementation - does nothing
-        quote! {
-            fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> crate::core::Result<()> {
-                Ok(())
-            }
+            Ok(())
         }
     };
 
-    let stop_impl = if analysis.processor_attrs.on_stop_method.is_some() {
-        let on_stop_method = format_ident!("{}", analysis.processor_attrs.on_stop_method.as_ref().unwrap());
-        quote! {
-            fn stop(&mut self) -> crate::core::Result<()> {
-                self.#on_stop_method()
+    let on_stop_method = analysis
+        .processor_attrs
+        .on_stop_method
+        .as_ref()
+        .map(|s| format_ident!("{}", s))
+        .unwrap_or_else(|| format_ident!("on_stop"));
+
+    let stop_impl = quote! {
+        fn stop(&mut self) -> crate::core::Result<()> {
+            // Try to call user's on_stop method (will fail gracefully if not present)
+            #[allow(unreachable_code)]
+            {
+                return self.#on_stop_method();
             }
-        }
-    } else {
-        // Default implementation - does nothing
-        quote! {
-            fn stop(&mut self) -> crate::core::Result<()> {
-                Ok(())
-            }
+            Ok(())
         }
     };
 
@@ -1187,24 +1169,26 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
 pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     let struct_name = &analysis.struct_name;
 
-    // Determine config type
-    let config_type = analysis
-        .processor_attrs
-        .config_type
-        .as_ref()
-        .map(|t| quote! { #t })
-        .unwrap_or_else(|| {
-            if analysis.config_fields.is_empty() {
-                quote! { crate::core::EmptyConfig }
-            } else {
-                quote! { Config }
-            }
-        });
+    // Determine config type - prefer #[config] field type, fall back to processor attribute, then EmptyConfig
+    let config_type = if let Some(config_ty) = &analysis.config_field_type {
+        // Use type from #[config] field
+        quote! { #config_ty }
+    } else if let Some(config_ty) = &analysis.processor_attrs.config_type {
+        // Fall back to processor attribute (backward compat)
+        quote! { #config_ty }
+    } else if !analysis.config_fields.is_empty() {
+        // Legacy pattern with config fields - would need to generate Config struct
+        // For now, default to EmptyConfig
+        quote! { crate::core::EmptyConfig }
+    } else {
+        // No config at all - use EmptyConfig
+        quote! { crate::core::EmptyConfig }
+    };
 
     // Generate from_config() method body
     let from_config_body = generate_from_config_impl(analysis);
 
-    // Determine process method name (from attribute or default)
+    // Determine process method name (from attribute or default to "process")
     let process_method = analysis
         .processor_attrs
         .process_method
@@ -1454,7 +1438,22 @@ fn generate_from_config_impl(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
-    // Generate config field assignments
+    // Auto-add config field if there's a #[config] field or processor config attribute
+    let config_init = if analysis.config_field_type.is_some() {
+        // User has #[config] field - initialize it
+        quote! { config: config }
+    } else if analysis.processor_attrs.config_type.is_some() {
+        // Backward compat: processor attribute specifies config - store it
+        quote! { config: config }
+    } else if !analysis.config_fields.is_empty() {
+        // Has config fields in the struct - keep old behavior for backward compatibility
+        quote! {}
+    } else {
+        // No config type and no config fields - use EmptyConfig, no field needed
+        quote! {}
+    };
+
+    // Generate config field assignments (for backward compatibility with old pattern)
     let config_assignments: Vec<TokenStream> = analysis
         .config_fields
         .iter()
@@ -1464,12 +1463,47 @@ fn generate_from_config_impl(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
-    quote! {
-        fn from_config(config: Self::Config) -> crate::core::Result<Self> {
-            Ok(Self {
-                #(#port_constructions,)*
-                #(#config_assignments,)*
-            })
+    // Generate state field initializations
+    let state_initializations: Vec<TokenStream> = analysis
+        .state_fields
+        .iter()
+        .map(|field| {
+            let field_name = &field.field_name;
+            if let Some(default_expr) = &field.attributes.default_expr {
+                // Custom default expression
+                let expr: proc_macro2::TokenStream = default_expr.parse().unwrap_or_else(|_| {
+                    quote! { Default::default() }
+                });
+                quote! { #field_name: #expr }
+            } else {
+                // Use Default::default()
+                quote! { #field_name: Default::default() }
+            }
+        })
+        .collect();
+
+    // Combine all initializations
+    let has_config_init = analysis.config_field_type.is_some() || analysis.processor_attrs.config_type.is_some();
+
+    if has_config_init {
+        quote! {
+            fn from_config(config: Self::Config) -> crate::core::Result<Self> {
+                Ok(Self {
+                    #(#port_constructions,)*
+                    #config_init,
+                    #(#state_initializations,)*
+                })
+            }
+        }
+    } else {
+        quote! {
+            fn from_config(config: Self::Config) -> crate::core::Result<Self> {
+                Ok(Self {
+                    #(#port_constructions,)*
+                    #(#config_assignments,)*
+                    #(#state_initializations,)*
+                })
+            }
         }
     }
 }

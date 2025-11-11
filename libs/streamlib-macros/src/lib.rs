@@ -174,7 +174,7 @@ use syn::{parse_macro_input, DeriveInput};
 ///     }
 /// }
 /// ```
-#[proc_macro_derive(StreamProcessor, attributes(processor, input, output))]
+#[proc_macro_derive(StreamProcessor, attributes(processor, input, output, state, config))]
 pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
