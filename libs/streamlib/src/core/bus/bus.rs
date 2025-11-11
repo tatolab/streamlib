@@ -1,6 +1,6 @@
 
 use super::connection_manager::ConnectionManager;
-use super::connection::ProcessorConnection;
+use super::connection::{OwnedProducer, OwnedConsumer};
 use super::ports::{PortAddress, PortMessage};
 use crate::core::Result;
 use std::sync::Arc;
@@ -17,30 +17,15 @@ impl Bus {
         }
     }
 
-    /// Create a generic connection between source and destination ports
+    /// Create a lock-free connection between source and destination ports
+    /// Returns owned producer/consumer pair for lock-free operations
     pub fn create_connection<T: PortMessage + 'static>(
         &self,
         source: PortAddress,
         dest: PortAddress,
         capacity: usize,
-    ) -> Result<Arc<ProcessorConnection<T>>> {
+    ) -> Result<(OwnedProducer<T>, OwnedConsumer<T>)> {
         self.manager.write().create_connection(source, dest, capacity)
-    }
-
-    /// Get all connections from a source port
-    pub fn connections_from_source<T: PortMessage + 'static>(
-        &self,
-        source: &PortAddress,
-    ) -> Vec<Arc<ProcessorConnection<T>>> {
-        self.manager.read().connections_from_source(source)
-    }
-
-    /// Get connection at destination port
-    pub fn connection_at_dest<T: PortMessage + 'static>(
-        &self,
-        dest: &PortAddress,
-    ) -> Option<Arc<ProcessorConnection<T>>> {
-        self.manager.read().connection_at_dest(dest)
     }
 
     /// Disconnect a connection by ID

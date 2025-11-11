@@ -487,92 +487,218 @@ impl StreamRuntime {
         let dest_addr = PortAddress::new(dest_proc_id.to_string(), dest_port.to_string());
         let capacity = source_port_type.default_capacity();
 
-        // Use the new generic API - map PortType to concrete frame type
-        let connection: Arc<dyn std::any::Any + Send + Sync> = match source_port_type {
+        // Phase 2: create_connection returns (OwnedProducer, OwnedConsumer)
+        // We need to split them and pass separately via Box<dyn Any + Send>
+        match source_port_type {
             PortType::Audio1 => {
                 use crate::core::frames::AudioFrame;
-                let conn = self.bus.create_connection::<AudioFrame<1>>(
+                let (producer, consumer) = self.bus.create_connection::<AudioFrame<1>>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
                 )?;
-                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+
+                let mut source_guard = source_processor.lock();
+                let success = source_guard.wire_output_producer(source_port, Box::new(producer));
+                drop(source_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire producer to output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    )));
+                }
+
+                let mut dest_guard = dest_processor.lock();
+                let success = dest_guard.wire_input_consumer(dest_port, Box::new(consumer));
+                drop(dest_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire consumer to input port '{}' on processor '{}'",
+                        dest_port, dest_proc_id
+                    )));
+                }
             },
             PortType::Audio2 => {
                 use crate::core::frames::AudioFrame;
-                let conn = self.bus.create_connection::<AudioFrame<2>>(
+                let (producer, consumer) = self.bus.create_connection::<AudioFrame<2>>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
                 )?;
-                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+
+                let mut source_guard = source_processor.lock();
+                let success = source_guard.wire_output_producer(source_port, Box::new(producer));
+                drop(source_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire producer to output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    )));
+                }
+
+                let mut dest_guard = dest_processor.lock();
+                let success = dest_guard.wire_input_consumer(dest_port, Box::new(consumer));
+                drop(dest_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire consumer to input port '{}' on processor '{}'",
+                        dest_port, dest_proc_id
+                    )));
+                }
             },
             PortType::Audio4 => {
                 use crate::core::frames::AudioFrame;
-                let conn = self.bus.create_connection::<AudioFrame<4>>(
+                let (producer, consumer) = self.bus.create_connection::<AudioFrame<4>>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
                 )?;
-                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+
+                let mut source_guard = source_processor.lock();
+                let success = source_guard.wire_output_producer(source_port, Box::new(producer));
+                drop(source_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire producer to output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    )));
+                }
+
+                let mut dest_guard = dest_processor.lock();
+                let success = dest_guard.wire_input_consumer(dest_port, Box::new(consumer));
+                drop(dest_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire consumer to input port '{}' on processor '{}'",
+                        dest_port, dest_proc_id
+                    )));
+                }
             },
             PortType::Audio6 => {
                 use crate::core::frames::AudioFrame;
-                let conn = self.bus.create_connection::<AudioFrame<6>>(
+                let (producer, consumer) = self.bus.create_connection::<AudioFrame<6>>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
                 )?;
-                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+
+                let mut source_guard = source_processor.lock();
+                let success = source_guard.wire_output_producer(source_port, Box::new(producer));
+                drop(source_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire producer to output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    )));
+                }
+
+                let mut dest_guard = dest_processor.lock();
+                let success = dest_guard.wire_input_consumer(dest_port, Box::new(consumer));
+                drop(dest_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire consumer to input port '{}' on processor '{}'",
+                        dest_port, dest_proc_id
+                    )));
+                }
             },
             PortType::Audio8 => {
                 use crate::core::frames::AudioFrame;
-                let conn = self.bus.create_connection::<AudioFrame<8>>(
+                let (producer, consumer) = self.bus.create_connection::<AudioFrame<8>>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
                 )?;
-                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+
+                let mut source_guard = source_processor.lock();
+                let success = source_guard.wire_output_producer(source_port, Box::new(producer));
+                drop(source_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire producer to output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    )));
+                }
+
+                let mut dest_guard = dest_processor.lock();
+                let success = dest_guard.wire_input_consumer(dest_port, Box::new(consumer));
+                drop(dest_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire consumer to input port '{}' on processor '{}'",
+                        dest_port, dest_proc_id
+                    )));
+                }
             },
             PortType::Video => {
                 use crate::core::frames::VideoFrame;
-                let conn = self.bus.create_connection::<VideoFrame>(
+                let (producer, consumer) = self.bus.create_connection::<VideoFrame>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
                 )?;
-                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
+
+                let mut source_guard = source_processor.lock();
+                let success = source_guard.wire_output_producer(source_port, Box::new(producer));
+                drop(source_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire producer to output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    )));
+                }
+
+                let mut dest_guard = dest_processor.lock();
+                let success = dest_guard.wire_input_consumer(dest_port, Box::new(consumer));
+                drop(dest_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire consumer to input port '{}' on processor '{}'",
+                        dest_port, dest_proc_id
+                    )));
+                }
             },
             PortType::Data => {
                 use crate::core::frames::DataFrame;
-                let conn = self.bus.create_connection::<DataFrame>(
+                let (producer, consumer) = self.bus.create_connection::<DataFrame>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
                 )?;
-                Arc::new(conn) as Arc<dyn std::any::Any + Send + Sync>
-            },
-        };
 
-        {
-            let mut source_guard = source_processor.lock();
-            let success = source_guard.wire_output_connection(source_port, connection.clone());
-            if !success {
-                return Err(StreamError::Configuration(format!(
-                    "Failed to wire connection to output port '{}' on processor '{}'",
-                    source_port, source_proc_id
-                )));
-            }
-        }
+                let mut source_guard = source_processor.lock();
+                let success = source_guard.wire_output_producer(source_port, Box::new(producer));
+                drop(source_guard);
 
-        {
-            let mut dest_guard = dest_processor.lock();
-            let success = dest_guard.wire_input_connection(dest_port, connection);
-            if !success {
-                return Err(StreamError::Configuration(format!(
-                    "Failed to wire connection to input port '{}' on processor '{}'",
-                    dest_port, dest_proc_id
-                )));
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire producer to output port '{}' on processor '{}'",
+                        source_port, source_proc_id
+                    )));
+                }
+
+                let mut dest_guard = dest_processor.lock();
+                let success = dest_guard.wire_input_consumer(dest_port, Box::new(consumer));
+                drop(dest_guard);
+
+                if !success {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to wire consumer to input port '{}' on processor '{}'",
+                        dest_port, dest_proc_id
+                    )));
+                }
             }
         }
 

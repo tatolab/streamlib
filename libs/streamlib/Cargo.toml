@@ -122,6 +122,15 @@ core-graphics = "0.24"
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
+criterion = "0.5"  # Benchmarking framework
+
+[[bench]]
+name = "connection_bench"
+harness = false
+
+[[bench]]
+name = "phase2_bench"
+harness = false
 
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features

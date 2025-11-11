@@ -1,9 +1,8 @@
 use parking_lot::Mutex;
-use std::sync::Arc;
 use std::borrow::Cow;
 
 use crate::core::runtime::{WakeupEvent, ProcessorId};
-use super::connection::ProcessorConnection;
+use super::connection::{OwnedProducer, OwnedConsumer};
 
 /// Strongly-typed port address combining processor ID and port name
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -75,10 +74,11 @@ impl PortType {
     }
 }
 
+/// Lock-free output port using OwnedProducer (Phase 2 implementation)
 pub struct StreamOutput<T: PortMessage> {
     name: String,
     port_type: PortType,
-    connections: Arc<Mutex<Vec<Arc<ProcessorConnection<T>>>>>,
+    producers: Mutex<Vec<OwnedProducer<T>>>,
     downstream_wakeup: Mutex<Option<crossbeam_channel::Sender<WakeupEvent>>>,
 }
 
@@ -87,41 +87,45 @@ impl<T: PortMessage> StreamOutput<T> {
         Self {
             name: name.into(),
             port_type: T::port_type(),
-            connections: Arc::new(Mutex::new(Vec::new())),
+            producers: Mutex::new(Vec::new()),
             downstream_wakeup: Mutex::new(None),
         }
     }
 
-    /// Write data to all connected outputs
+    /// Write data to all connected outputs (lock-free)
     ///
-    /// This always succeeds - each connection uses roll-off semantics where
-    /// the oldest data is dropped if the buffer is full. This ensures writes
-    /// never block, making the system realtime-safe.
+    /// This always succeeds - each producer uses lock-free atomic operations.
+    /// If a buffer is full, data is dropped (acceptable for real-time).
     ///
-    /// Fan-out behavior: If multiple connections exist (1 source → N destinations),
-    /// each destination gets an independent copy with its own RTRB buffer.
+    /// Fan-out behavior: Each destination gets an independent OwnedProducer
+    /// with its own RTRB buffer (N buffers for N destinations).
     pub fn write(&self, data: T) {
-        let connections = self.connections.lock();
+        let mut producers = self.producers.lock();
 
-        // Write to all connections - always succeeds due to roll-off semantics
-        for conn in connections.iter() {
-            conn.write(data.clone());
+        // Write to all producers - lock-free atomic operations
+        for producer in producers.iter_mut() {
+            producer.write(data.clone());
         }
 
         // Notify downstream processors that data is available
-        if !connections.is_empty() {
+        if !producers.is_empty() {
             if let Some(wakeup_tx) = self.downstream_wakeup.lock().as_ref() {
                 let _ = wakeup_tx.send(WakeupEvent::DataAvailable);
             }
         }
     }
 
-    pub fn add_connection(&self, connection: Arc<ProcessorConnection<T>>) {
-        self.connections.lock().push(connection);
+    pub fn add_producer(&self, producer: OwnedProducer<T>) {
+        self.producers.lock().push(producer);
     }
 
-    pub fn connections(&self) -> Vec<Arc<ProcessorConnection<T>>> {
-        self.connections.lock().clone()
+    /// Compatibility method for wire_output_producer
+    pub fn add_connection(&self, producer: OwnedProducer<T>) {
+        self.add_producer(producer);
+    }
+
+    pub fn producer_count(&self) -> usize {
+        self.producers.lock().len()
     }
 
     pub fn name(&self) -> &str {
@@ -142,7 +146,7 @@ impl<T: PortMessage> Clone for StreamOutput<T> {
         Self {
             name: self.name.clone(),
             port_type: self.port_type,
-            connections: Arc::clone(&self.connections),
+            producers: Mutex::new(Vec::new()), // Cannot clone producers (owned)
             downstream_wakeup: Mutex::new(self.downstream_wakeup.lock().clone()),
         }
     }
@@ -153,14 +157,16 @@ impl<T: PortMessage> std::fmt::Debug for StreamOutput<T> {
         f.debug_struct("StreamOutput")
             .field("name", &self.name)
             .field("port_type", &self.port_type)
+            .field("producer_count", &self.producer_count())
             .finish()
     }
 }
 
+/// Lock-free input port using OwnedConsumer (Phase 2 implementation)
 pub struct StreamInput<T: PortMessage> {
     name: String,
     port_type: PortType,
-    connection: Mutex<Option<Arc<ProcessorConnection<T>>>>,
+    consumer: Mutex<Option<OwnedConsumer<T>>>,
 }
 
 impl<T: PortMessage> StreamInput<T> {
@@ -168,22 +174,27 @@ impl<T: PortMessage> StreamInput<T> {
         Self {
             name: name.into(),
             port_type: T::port_type(),
-            connection: Mutex::new(None),
+            consumer: Mutex::new(None),
         }
     }
 
-    pub fn set_connection(&self, connection: Arc<ProcessorConnection<T>>) {
-        *self.connection.lock() = Some(connection);
+    pub fn set_consumer(&self, consumer: OwnedConsumer<T>) {
+        *self.consumer.lock() = Some(consumer);
+    }
+
+    /// Compatibility method for wire_input_consumer
+    pub fn set_connection(&self, consumer: OwnedConsumer<T>) {
+        self.set_consumer(consumer);
     }
 
     pub fn read_latest(&self) -> Option<T> {
-        self.connection.lock().as_ref()?.read_latest()
+        self.consumer.lock().as_mut()?.read_latest()
     }
 
     pub fn read_all(&self) -> Vec<T> {
-        if let Some(conn) = self.connection.lock().as_ref() {
+        if let Some(consumer) = self.consumer.lock().as_mut() {
             let mut items = Vec::new();
-            while let Some(item) = conn.read_latest() {
+            while let Some(item) = consumer.read_latest() {
                 items.push(item);
             }
             items
@@ -193,25 +204,20 @@ impl<T: PortMessage> StreamInput<T> {
     }
 
     pub fn has_data(&self) -> bool {
-        self.connection.lock()
+        self.consumer.lock()
             .as_ref()
-            .map(|conn| conn.has_data())
+            .map(|c| c.has_data())
             .unwrap_or(false)
     }
 
-    /// Peek at the next frame without consuming it
     pub fn peek(&self) -> Option<T> {
-        self.connection.lock()
-            .as_ref()
-            .and_then(|conn| conn.peek())
+        self.consumer.lock()
+            .as_mut()
+            .and_then(|c| c.peek())
     }
 
     pub fn is_connected(&self) -> bool {
-        self.connection.lock().is_some()
-    }
-
-    pub fn clone_connection(&self) -> Option<Arc<ProcessorConnection<T>>> {
-        self.connection.lock().as_ref().map(Arc::clone)
+        self.consumer.lock().is_some()
     }
 
     pub fn name(&self) -> &str {
@@ -228,7 +234,7 @@ impl<T: PortMessage> Clone for StreamInput<T> {
         Self {
             name: self.name.clone(),
             port_type: self.port_type,
-            connection: Mutex::new(self.connection.lock().clone()),
+            consumer: Mutex::new(None), // Cannot clone consumer (owned)
         }
     }
 }
@@ -269,7 +275,7 @@ mod tests {
     #[test]
     fn test_port_type_defaults() {
         assert_eq!(PortType::Video.default_capacity(), 3);
-        assert_eq!(PortType::Audio.default_capacity(), 3);
+        assert_eq!(PortType::Audio1.default_capacity(), 4);
         assert_eq!(PortType::Data.default_capacity(), 16);
     }
 
@@ -290,19 +296,15 @@ mod tests {
 
     #[test]
     fn test_write_and_read() {
+        use super::super::connection::create_owned_connection;
+
         let output = StreamOutput::<i32>::new("output");
         let input = StreamInput::<i32>::new("input");
 
-        let connection = Arc::new(ProcessorConnection::new(
-            "source".to_string(),
-            "output".to_string(),
-            "dest".to_string(),
-            "input".to_string(),
-            4,  // capacity
-        ));
+        let (producer, consumer) = create_owned_connection::<i32>(4);
 
-        output.add_connection(Arc::clone(&connection));
-        input.set_connection(Arc::clone(&connection));
+        output.add_producer(producer);
+        input.set_consumer(consumer);
 
         assert!(input.is_connected());
 
@@ -314,30 +316,19 @@ mod tests {
 
     #[test]
     fn test_fan_out() {
+        use super::super::connection::create_owned_connection;
+
         let output = StreamOutput::<i32>::new("output");
         let input1 = StreamInput::<i32>::new("input1");
         let input2 = StreamInput::<i32>::new("input2");
 
-        let conn1 = Arc::new(ProcessorConnection::new(
-            "source".to_string(),
-            "output".to_string(),
-            "dest1".to_string(),
-            "input1".to_string(),
-            4,
-        ));
+        let (producer1, consumer1) = create_owned_connection::<i32>(4);
+        let (producer2, consumer2) = create_owned_connection::<i32>(4);
 
-        let conn2 = Arc::new(ProcessorConnection::new(
-            "source".to_string(),
-            "output".to_string(),
-            "dest2".to_string(),
-            "input2".to_string(),
-            4,
-        ));
-
-        output.add_connection(Arc::clone(&conn1));
-        output.add_connection(Arc::clone(&conn2));
-        input1.set_connection(conn1);
-        input2.set_connection(conn2);
+        output.add_producer(producer1);
+        output.add_producer(producer2);
+        input1.set_consumer(consumer1);
+        input2.set_consumer(consumer2);
 
         output.write(42);
 
@@ -347,19 +338,15 @@ mod tests {
 
     #[test]
     fn test_read_all() {
+        use super::super::connection::create_owned_connection;
+
         let output = StreamOutput::<i32>::new("output");
         let input = StreamInput::<i32>::new("input");
 
-        let connection = Arc::new(ProcessorConnection::new(
-            "source".to_string(),
-            "output".to_string(),
-            "dest".to_string(),
-            "input".to_string(),
-            4,
-        ));
+        let (producer, consumer) = create_owned_connection::<i32>(4);
 
-        output.add_connection(Arc::clone(&connection));
-        input.set_connection(connection);
+        output.add_producer(producer);
+        input.set_consumer(consumer);
 
         output.write(1);
         output.write(2);

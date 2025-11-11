@@ -355,24 +355,34 @@ def gpu_context(self):
         }
     }
 
-    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::bus::ProcessorConnection;
+    fn wire_input_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        // Phase 1 not supported - use wire_input_consumer
+        false
+    }
+
+    fn wire_output_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+        // Phase 1 not supported - use wire_output_producer
+        false
+    }
+
+    fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
+        use crate::core::OwnedConsumer;
 
         if let Some(port) = self.input_ports.ports.get_mut(port_name) {
-            if let Ok(typed_conn) = connection.downcast::<Arc<ProcessorConnection<VideoFrame>>>() {
-                port.set_connection(Arc::clone(&typed_conn));
+            if let Ok(typed_consumer) = consumer.downcast::<OwnedConsumer<VideoFrame>>() {
+                port.set_consumer(*typed_consumer);
                 return true;
             }
         }
         false
     }
 
-    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        use crate::core::bus::ProcessorConnection;
+    fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
+        use crate::core::OwnedProducer;
 
         if let Some(port) = self.output_ports.ports.get_mut(port_name) {
-            if let Ok(typed_conn) = connection.downcast::<Arc<ProcessorConnection<VideoFrame>>>() {
-                port.add_connection(Arc::clone(&typed_conn));
+            if let Ok(typed_producer) = producer.downcast::<OwnedProducer<VideoFrame>>() {
+                port.add_producer(*typed_producer);
                 return true;
             }
         }

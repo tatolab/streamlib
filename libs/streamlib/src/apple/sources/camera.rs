@@ -550,15 +550,6 @@ impl StreamProcessor for AppleCameraProcessor {
         )
     }
 
-    // Delegate to macro-generated methods
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        self.get_output_port_type_impl(port_name)
-    }
-
-    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_output_connection_impl(port_name, connection)
-    }
-
     fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
         if port_name == "video" {
             self.video.set_downstream_wakeup(wakeup_tx);

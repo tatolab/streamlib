@@ -297,23 +297,6 @@ impl StreamProcessor for ClapEffectProcessor {
             self.audio_out.set_downstream_wakeup(wakeup_tx);
         }
     }
-
-    // Delegate to macro-generated methods
-    fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        self.get_output_port_type_impl(port_name)
-    }
-
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
-        self.get_input_port_type_impl(port_name)
-    }
-
-    fn wire_output_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_output_connection_impl(port_name, connection)
-    }
-
-    fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_input_connection_impl(port_name, connection)
-    }
 }
 
 pub use crate::core::clap::{ClapScanner, ClapPluginInfo};

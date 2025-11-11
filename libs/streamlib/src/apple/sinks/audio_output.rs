@@ -10,12 +10,13 @@ use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 use streamlib_macros::StreamProcessor;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
+use std::sync::Arc;
 
 #[derive(StreamProcessor)]
 pub struct AppleAudioOutputProcessor {
-    // Port field - annotated!
+    // Lock-free port (Arc-wrapped for sharing with audio callback thread)
     #[input]
-    audio: StreamInput<AudioFrame<2>>,
+    audio: Arc<StreamInput<AudioFrame<2>>>,
 
     // Config fields
     device_id: Option<usize>,
@@ -35,8 +36,8 @@ unsafe impl Send for AppleAudioOutputProcessor {}
 impl AppleAudioOutputProcessor {
     fn new_internal(device_id: Option<usize>) -> Result<Self> {
         Ok(Self {
-            // Port
-            audio: StreamInput::new("audio"),
+            // Lock-free port initialization
+            audio: Arc::new(StreamInput::new("audio")),
 
             // Config fields
             device_id,
@@ -112,12 +113,10 @@ impl StreamProcessor for AppleAudioOutputProcessor {
 
         tracing::info!("AudioOutput: process() called - setting up stream now that connections are wired");
 
-        let input_connection = self.audio.clone_connection()
-            .ok_or_else(|| StreamError::Configuration("Input port not connected".into()))?;
+        // Clone the Arc-wrapped port for the audio callback thread
+        let audio_port = Arc::clone(&self.audio);
 
-        tracing::info!("AudioOutput: Successfully cloned connection from input port");
-
-        let connection_for_callback = input_connection;
+        tracing::info!("AudioOutput: Cloned audio port for callback thread");
 
         tracing::info!("AudioOutput: Setting up audio output with cpal");
 
@@ -125,7 +124,8 @@ impl StreamProcessor for AppleAudioOutputProcessor {
             self.device_id,
             self.buffer_size,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                if let Some(audio_frame) = connection_for_callback.read_latest() {
+                // Lock-free read_latest() call
+                if let Some(audio_frame) = audio_port.read_latest() {
                     let samples = &audio_frame.samples;
 
                     tracing::debug!("AudioOutput: Got audio frame with {} samples", samples.len());
@@ -188,13 +188,12 @@ impl StreamProcessor for AppleAudioOutputProcessor {
         )
     }
 
-    // Delegate to macro-generated methods
-    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::bus::PortType> {
+    fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::PortType> {
         self.get_input_port_type_impl(port_name)
     }
 
-    fn wire_input_connection(&mut self, port_name: &str, connection: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> bool {
-        self.wire_input_connection_impl(port_name, connection)
+    fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
+        self.wire_input_consumer_impl(port_name, consumer)
     }
 }
 
