@@ -1,50 +1,23 @@
+// Platform-specific re-exports with unified names
+// Users import these common names and get the appropriate platform implementation
+#[cfg(target_os = "macos")]
+pub use crate::apple::processors::audio_capture::{
+    AppleAudioCaptureProcessor as AudioCaptureProcessor,
+    AppleAudioCaptureConfig as AudioCaptureConfig,
+    AppleAudioInputDevice as AudioInputDevice,
+};
 
-use crate::core::{StreamOutput, AudioFrame, Result};
-use crate::core::traits::{StreamElement, StreamProcessor};
+// Future platform implementations
+// #[cfg(target_os = "linux")]
+// pub use crate::linux::processors::audio_capture::{
+//     LinuxAudioCaptureProcessor as AudioCaptureProcessor,
+//     LinuxAudioCaptureConfig as AudioCaptureConfig,
+//     LinuxAudioInputDevice as AudioInputDevice,
+// };
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AudioCaptureConfig {
-    pub device_id: Option<String>,
-    pub sample_rate: u32,
-    pub channels: u32,
-}
-
-impl Default for AudioCaptureConfig {
-    fn default() -> Self {
-        Self {
-            device_id: None,
-            sample_rate: 48000,
-            channels: 2,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AudioInputDevice {
-    pub id: usize,
-
-    pub name: String,
-
-    pub sample_rate: u32,
-
-    pub channels: u32,
-
-    pub is_default: bool,
-}
-
-pub trait AudioCaptureProcessor: StreamElement + StreamProcessor<Config = AudioCaptureConfig> {
-    fn new(device_id: Option<usize>, sample_rate: u32, channels: u32) -> Result<Self>
-    where
-        Self: Sized;
-
-    fn list_devices() -> Result<Vec<AudioInputDevice>>;
-
-    fn current_device(&self) -> &AudioInputDevice;
-
-    fn current_level(&self) -> f32 {
-        0.0 // Default implementation
-    }
-}
-
-// Ports are now defined directly on platform-specific implementations
-// No shared port struct needed - each implementation uses #[derive(StreamProcessor)]
+// #[cfg(target_os = "windows")]
+// pub use crate::windows::processors::audio_capture::{
+//     WindowsAudioCaptureProcessor as AudioCaptureProcessor,
+//     WindowsAudioCaptureConfig as AudioCaptureConfig,
+//     WindowsAudioInputDevice as AudioInputDevice,
+// };
