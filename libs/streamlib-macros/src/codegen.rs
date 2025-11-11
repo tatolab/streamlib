@@ -13,6 +13,11 @@
 //! - Examples from PortMessage::examples()
 //! - Audio requirements for audio processors
 
+// TODO(@jonathan): Review unused code generation functions - many appear to be from old macro implementation
+// Functions like generate_config_struct(), generate_descriptor(), generate_tags(), humanize_*() are unused
+// Consider removing if not needed for future features
+#![allow(dead_code)]
+
 use crate::analysis::{AnalysisResult, PortDirection, PortField};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
@@ -978,12 +983,8 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
 
     let start_impl = quote! {
         fn start(&mut self, ctx: &::streamlib::core::RuntimeContext) -> ::streamlib::core::Result<()> {
-            // Try to call user's on_start method (will fail gracefully if not present)
-            #[allow(unreachable_code)]
-            {
-                return self.#on_start_method(ctx);
-            }
-            Ok(())
+            // Call user's on_start method
+            self.#on_start_method(ctx)
         }
     };
 
@@ -996,12 +997,8 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
 
     let stop_impl = quote! {
         fn stop(&mut self) -> ::streamlib::core::Result<()> {
-            // Try to call user's on_stop method (will fail gracefully if not present)
-            #[allow(unreachable_code)]
-            {
-                return self.#on_stop_method();
-            }
-            Ok(())
+            // Call user's on_stop method
+            self.#on_stop_method()
         }
     };
 

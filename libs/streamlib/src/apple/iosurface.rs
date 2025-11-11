@@ -1,3 +1,6 @@
+// TODO(@jonathan): IOSurface module has unused utilities (PixelFormat enum, create_iosurface(), pixel_format_to_iosurface())
+// Review if these are needed for future texture format support or can be removed
+#![allow(dead_code)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

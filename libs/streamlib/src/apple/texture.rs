@@ -1,3 +1,6 @@
+// TODO(@jonathan): Metal texture module has unused create_metal_texture() function
+// Review if this texture creation utility is needed or can be removed
+#![allow(dead_code)]
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

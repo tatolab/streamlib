@@ -3,6 +3,10 @@
 //! Classifies struct fields as ports or config fields,
 //! extracts type parameters, and builds analysis result.
 
+// TODO(@jonathan): Review unused helper functions in this module - may be leftover from old implementation
+// Functions like has_audio_ports(), is_audio_frame_type(), is_video_frame_type() are currently unused
+#![allow(dead_code)]
+
 use crate::attributes::{PortAttributes, ProcessorAttributes, StateAttributes};
 use proc_macro2::Ident;
 use syn::{
@@ -115,7 +119,7 @@ impl AnalysisResult {
 
         // Classify fields
         let mut port_fields = Vec::new();
-        let mut config_fields = Vec::new();
+        let config_fields = Vec::new();
         let mut state_fields = Vec::new();
         let mut config_field_type: Option<Type> = None;
 

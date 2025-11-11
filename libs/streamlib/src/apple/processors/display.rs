@@ -47,6 +47,8 @@ pub struct AppleDisplayProcessor {
 
     // Runtime state fields - auto-detected (no attribute needed)
     window: Option<Retained<NSWindow>>,
+    // TODO(@jonathan): metal_layer field is never read - review if needed for debugging or can be removed
+    #[allow(dead_code)]
     metal_layer: Option<Retained<CAMetalLayer>>,
     layer_addr: Arc<AtomicUsize>,
     metal_device: Option<MetalDevice>,
@@ -289,6 +291,7 @@ impl AppleDisplayProcessor {
 
             let app = NSApplication::sharedApplication(mtm);
             app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+            #[allow(deprecated)]
             app.activateIgnoringOtherApps(true);
 
             let _ = Retained::into_raw(window);  // Leak window
