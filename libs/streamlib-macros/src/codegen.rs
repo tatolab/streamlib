@@ -29,6 +29,12 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     // Generate port introspection methods (these are added to existing impls)
     let port_introspection = generate_port_introspection_methods(analysis);
 
+    // Generate complete StreamElement trait implementation
+    let stream_element_impl = generate_stream_element_impl(analysis);
+
+    // Generate complete StreamProcessor trait implementation
+    let stream_processor_impl = generate_stream_processor_impl(analysis);
+
     quote! {
         #view_structs
 
@@ -36,11 +42,16 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #ports_method
         }
 
-        // Generate extension impl with port introspection methods
-        // Users will need to implement the full StreamProcessor trait themselves
+        // Generate extension impl with port introspection methods (for backward compatibility)
         impl #struct_name {
             #port_introspection
         }
+
+        // Generate complete StreamElement implementation
+        #stream_element_impl
+
+        // Generate complete StreamProcessor implementation
+        #stream_processor_impl
     }
 }
 
@@ -906,5 +917,608 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         #get_output_port_type_trait
         #wire_input_consumer_trait
         #wire_output_producer_trait
+    }
+}
+
+/// Generate complete StreamElement trait implementation
+///
+/// This generates all methods of the StreamElement trait, eliminating the need for
+/// users to manually implement the trait.
+pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
+    let struct_name = &analysis.struct_name;
+
+    // Determine the processor name (from attribute or struct name)
+    let processor_name = analysis
+        .processor_attrs
+        .processor_name
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| struct_name.to_string());
+
+    // Determine element type from port configuration
+    let has_inputs = !analysis.input_ports().collect::<Vec<_>>().is_empty();
+    let has_outputs = !analysis.output_ports().collect::<Vec<_>>().is_empty();
+
+    let element_type = match (has_inputs, has_outputs) {
+        (false, true) => quote! { crate::core::ElementType::Source },
+        (true, false) => quote! { crate::core::ElementType::Sink },
+        (true, true) => quote! { crate::core::ElementType::Transform },
+        (false, false) => {
+            // No ports - treat as transform (unusual case)
+            quote! { crate::core::ElementType::Transform }
+        }
+    };
+
+    // Generate descriptor call (delegates to StreamProcessor::descriptor)
+    let descriptor_impl = quote! {
+        fn descriptor(&self) -> Option<crate::core::ProcessorDescriptor> {
+            <Self as crate::core::StreamProcessor>::descriptor()
+        }
+    };
+
+    // Determine lifecycle method names (from attributes or defaults)
+    // For now, we'll use default implementations (Ok(())) since we can't easily detect
+    // if methods exist at macro expansion time. Users can override via attributes if needed.
+    let start_impl = if analysis.processor_attrs.on_start_method.is_some() {
+        let on_start_method = format_ident!("{}", analysis.processor_attrs.on_start_method.as_ref().unwrap());
+        quote! {
+            fn start(&mut self, ctx: &crate::core::RuntimeContext) -> crate::core::Result<()> {
+                self.#on_start_method(ctx)
+            }
+        }
+    } else {
+        // Default implementation - does nothing
+        quote! {
+            fn start(&mut self, _ctx: &crate::core::RuntimeContext) -> crate::core::Result<()> {
+                Ok(())
+            }
+        }
+    };
+
+    let stop_impl = if analysis.processor_attrs.on_stop_method.is_some() {
+        let on_stop_method = format_ident!("{}", analysis.processor_attrs.on_stop_method.as_ref().unwrap());
+        quote! {
+            fn stop(&mut self) -> crate::core::Result<()> {
+                self.#on_stop_method()
+            }
+        }
+    } else {
+        // Default implementation - does nothing
+        quote! {
+            fn stop(&mut self) -> crate::core::Result<()> {
+                Ok(())
+            }
+        }
+    };
+
+    // Generate input_ports() method
+    let input_port_descriptors: Vec<TokenStream> = analysis
+        .input_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let message_type = &field.message_type;
+            let description = field
+                .attributes
+                .description
+                .as_deref()
+                .unwrap_or("");
+            let required = field.attributes.required.unwrap_or(true);
+
+            quote! {
+                crate::core::PortDescriptor {
+                    name: #port_name.to_string(),
+                    schema: <#message_type as crate::core::PortMessage>::schema(),
+                    required: #required,
+                    description: #description.to_string(),
+                }
+            }
+        })
+        .collect();
+
+    let input_ports_impl = quote! {
+        fn input_ports(&self) -> Vec<crate::core::PortDescriptor> {
+            vec![#(#input_port_descriptors),*]
+        }
+    };
+
+    // Generate output_ports() method
+    let output_port_descriptors: Vec<TokenStream> = analysis
+        .output_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let message_type = &field.message_type;
+            let description = field
+                .attributes
+                .description
+                .as_deref()
+                .unwrap_or("");
+
+            quote! {
+                crate::core::PortDescriptor {
+                    name: #port_name.to_string(),
+                    schema: <#message_type as crate::core::PortMessage>::schema(),
+                    required: true,
+                    description: #description.to_string(),
+                }
+            }
+        })
+        .collect();
+
+    let output_ports_impl = quote! {
+        fn output_ports(&self) -> Vec<crate::core::PortDescriptor> {
+            vec![#(#output_port_descriptors),*]
+        }
+    };
+
+    // Generate as_source/as_sink/as_transform methods based on element type
+    let (as_source, as_source_mut, as_sink, as_sink_mut, as_transform, as_transform_mut) =
+        match (has_inputs, has_outputs) {
+            (false, true) => {
+                // Source
+                (
+                    quote! {
+                        fn as_source(&self) -> Option<&dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                    quote! {
+                        fn as_source_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                    quote! {},
+                    quote! {},
+                    quote! {},
+                    quote! {},
+                )
+            },
+            (true, false) => {
+                // Sink
+                (
+                    quote! {},
+                    quote! {},
+                    quote! {
+                        fn as_sink(&self) -> Option<&dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                    quote! {
+                        fn as_sink_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                    quote! {},
+                    quote! {},
+                )
+            },
+            (true, true) => {
+                // Transform
+                (
+                    quote! {},
+                    quote! {},
+                    quote! {},
+                    quote! {},
+                    quote! {
+                        fn as_transform(&self) -> Option<&dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                    quote! {
+                        fn as_transform_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                )
+            },
+            (false, false) => {
+                // No ports - treat as transform
+                (
+                    quote! {},
+                    quote! {},
+                    quote! {},
+                    quote! {},
+                    quote! {
+                        fn as_transform(&self) -> Option<&dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                    quote! {
+                        fn as_transform_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+                            Some(self)
+                        }
+                    },
+                )
+            }
+        };
+
+    quote! {
+        impl crate::core::StreamElement for #struct_name {
+            fn name(&self) -> &str {
+                #processor_name
+            }
+
+            fn element_type(&self) -> crate::core::ElementType {
+                #element_type
+            }
+
+            #descriptor_impl
+
+            #start_impl
+
+            #stop_impl
+
+            #input_ports_impl
+
+            #output_ports_impl
+
+            #as_source
+            #as_source_mut
+            #as_sink
+            #as_sink_mut
+            #as_transform
+            #as_transform_mut
+        }
+    }
+}
+
+/// Generate complete StreamProcessor trait implementation
+///
+/// This generates all methods of the StreamProcessor trait, eliminating the need for
+/// users to manually implement the trait.
+pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream {
+    let struct_name = &analysis.struct_name;
+
+    // Determine config type
+    let config_type = analysis
+        .processor_attrs
+        .config_type
+        .as_ref()
+        .map(|t| quote! { #t })
+        .unwrap_or_else(|| {
+            if analysis.config_fields.is_empty() {
+                quote! { crate::core::EmptyConfig }
+            } else {
+                quote! { Config }
+            }
+        });
+
+    // Generate from_config() method body
+    let from_config_body = generate_from_config_impl(analysis);
+
+    // Determine process method name (from attribute or default)
+    let process_method = analysis
+        .processor_attrs
+        .process_method
+        .as_ref()
+        .map(|s| format_ident!("{}", s))
+        .unwrap_or_else(|| format_ident!("process"));
+
+    // Generate process() delegation
+    let process_impl = quote! {
+        fn process(&mut self) -> crate::core::Result<()> {
+            self.#process_method()
+        }
+    };
+
+    // Determine scheduling mode (from attribute or default to Pull)
+    let scheduling_mode = analysis
+        .processor_attrs
+        .scheduling_mode
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or("Pull");
+
+    let scheduling_config_impl = if scheduling_mode == "Push" {
+        quote! {
+            fn scheduling_config(&self) -> crate::core::SchedulingConfig {
+                crate::core::SchedulingConfig::Push
+            }
+        }
+    } else {
+        quote! {
+            fn scheduling_config(&self) -> crate::core::SchedulingConfig {
+                crate::core::SchedulingConfig::Pull
+            }
+        }
+    };
+
+    // Generate descriptor() - reuse existing logic
+    let descriptor_impl = generate_descriptor_impl(analysis);
+
+    // Generate get_output_port_type()
+    let output_port_type_arms: Vec<TokenStream> = analysis
+        .output_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let message_type = &field.message_type;
+            quote! {
+                #port_name => Some(crate::core::PortType::of::<#message_type>())
+            }
+        })
+        .collect();
+
+    let get_output_port_type_impl = if output_port_type_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn get_output_port_type(&self, port_name: &str) -> Option<crate::core::PortType> {
+                match port_name {
+                    #(#output_port_type_arms,)*
+                    _ => None
+                }
+            }
+        }
+    };
+
+    // Generate get_input_port_type()
+    let input_port_type_arms: Vec<TokenStream> = analysis
+        .input_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let message_type = &field.message_type;
+            quote! {
+                #port_name => Some(crate::core::PortType::of::<#message_type>())
+            }
+        })
+        .collect();
+
+    let get_input_port_type_impl = if input_port_type_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn get_input_port_type(&self, port_name: &str) -> Option<crate::core::PortType> {
+                match port_name {
+                    #(#input_port_type_arms,)*
+                    _ => None
+                }
+            }
+        }
+    };
+
+    // Generate wire_output_producer()
+    let wire_output_producer_arms: Vec<TokenStream> = analysis
+        .output_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let field_name = &field.field_name;
+            let message_type = &field.message_type;
+            let is_arc_wrapped = field.is_arc_wrapped;
+
+            if is_arc_wrapped {
+                quote! {
+                    #port_name => {
+                        if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<#message_type>>() {
+                            self.#field_name.as_ref().add_producer(*typed_producer);
+                            return true;
+                        }
+                        false
+                    }
+                }
+            } else {
+                quote! {
+                    #port_name => {
+                        if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<#message_type>>() {
+                            self.#field_name.add_producer(*typed_producer);
+                            return true;
+                        }
+                        false
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let wire_output_producer_impl = if wire_output_producer_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
+                match port_name {
+                    #(#wire_output_producer_arms,)*
+                    _ => false
+                }
+            }
+        }
+    };
+
+    // Generate wire_input_consumer()
+    let wire_input_consumer_arms: Vec<TokenStream> = analysis
+        .input_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let field_name = &field.field_name;
+            let message_type = &field.message_type;
+            let is_arc_wrapped = field.is_arc_wrapped;
+
+            if is_arc_wrapped {
+                quote! {
+                    #port_name => {
+                        if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<#message_type>>() {
+                            self.#field_name.as_ref().add_consumer(*typed_consumer);
+                            return true;
+                        }
+                        false
+                    }
+                }
+            } else {
+                quote! {
+                    #port_name => {
+                        if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<#message_type>>() {
+                            self.#field_name.add_consumer(*typed_consumer);
+                            return true;
+                        }
+                        false
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let wire_input_consumer_impl = if wire_input_consumer_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
+                match port_name {
+                    #(#wire_input_consumer_arms,)*
+                    _ => false
+                }
+            }
+        }
+    };
+
+    quote! {
+        impl crate::core::StreamProcessor for #struct_name {
+            type Config = #config_type;
+
+            #from_config_body
+
+            #process_impl
+
+            #scheduling_config_impl
+
+            #descriptor_impl
+
+            #get_output_port_type_impl
+
+            #get_input_port_type_impl
+
+            #wire_output_producer_impl
+
+            #wire_input_consumer_impl
+        }
+    }
+}
+
+/// Generate from_config() implementation
+fn generate_from_config_impl(analysis: &AnalysisResult) -> TokenStream {
+    // Generate port construction
+    let port_constructions: Vec<TokenStream> = analysis
+        .port_fields
+        .iter()
+        .map(|field| {
+            let field_name = &field.field_name;
+            let port_name = &field.port_name;
+            let message_type = &field.message_type;
+            let is_arc_wrapped = field.is_arc_wrapped;
+
+            match field.direction {
+                PortDirection::Input => {
+                    if is_arc_wrapped {
+                        quote! {
+                            #field_name: std::sync::Arc::new(crate::core::StreamInput::<#message_type>::new(#port_name))
+                        }
+                    } else {
+                        quote! {
+                            #field_name: crate::core::StreamInput::<#message_type>::new(#port_name)
+                        }
+                    }
+                }
+                PortDirection::Output => {
+                    if is_arc_wrapped {
+                        quote! {
+                            #field_name: std::sync::Arc::new(crate::core::StreamOutput::<#message_type>::new(#port_name))
+                        }
+                    } else {
+                        quote! {
+                            #field_name: crate::core::StreamOutput::<#message_type>::new(#port_name)
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
+    // Generate config field assignments
+    let config_assignments: Vec<TokenStream> = analysis
+        .config_fields
+        .iter()
+        .map(|field| {
+            let field_name = &field.field_name;
+            quote! { #field_name: config.#field_name }
+        })
+        .collect();
+
+    quote! {
+        fn from_config(config: Self::Config) -> crate::core::Result<Self> {
+            Ok(Self {
+                #(#port_constructions,)*
+                #(#config_assignments,)*
+            })
+        }
+    }
+}
+
+/// Generate descriptor() static method implementation
+fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
+    let struct_name = &analysis.struct_name;
+    let processor_name = analysis
+        .processor_attrs
+        .processor_name
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| struct_name.to_string());
+
+    // Description: use attribute or generate smart default
+    let description = analysis
+        .processor_attrs
+        .description
+        .as_deref()
+        .unwrap_or("Generated processor");
+
+    // Generate input port descriptors
+    let input_ports: Vec<TokenStream> = analysis
+        .input_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let message_type = &field.message_type;
+            let description = field
+                .attributes
+                .description
+                .as_deref()
+                .unwrap_or("");
+            let required = field.attributes.required.unwrap_or(true);
+
+            quote! {
+                .with_input(
+                    #port_name,
+                    <#message_type as crate::core::PortMessage>::schema(),
+                    #description,
+                    #required
+                )
+            }
+        })
+        .collect();
+
+    // Generate output port descriptors
+    let output_ports: Vec<TokenStream> = analysis
+        .output_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let message_type = &field.message_type;
+            let description = field
+                .attributes
+                .description
+                .as_deref()
+                .unwrap_or("");
+
+            quote! {
+                .with_output(
+                    #port_name,
+                    <#message_type as crate::core::PortMessage>::schema(),
+                    #description
+                )
+            }
+        })
+        .collect();
+
+    quote! {
+        fn descriptor() -> Option<crate::core::ProcessorDescriptor> {
+            Some(
+                crate::core::ProcessorDescriptor::new(#processor_name, #description)
+                    #(#input_ports)*
+                    #(#output_ports)*
+            )
+        }
     }
 }
