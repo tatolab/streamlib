@@ -29,29 +29,48 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     // Generate port introspection methods (these are added to existing impls)
     let port_introspection = generate_port_introspection_methods(analysis);
 
-    // Generate complete StreamElement trait implementation
-    let stream_element_impl = generate_stream_element_impl(analysis);
+    // Only generate complete trait implementations if explicitly requested
+    let generate_complete_impls = analysis.processor_attrs.generate_impls;
 
-    // Generate complete StreamProcessor trait implementation
-    let stream_processor_impl = generate_stream_processor_impl(analysis);
+    if generate_complete_impls {
+        // Generate complete StreamElement trait implementation
+        let stream_element_impl = generate_stream_element_impl(analysis);
 
-    quote! {
-        #view_structs
+        // Generate complete StreamProcessor trait implementation
+        let stream_processor_impl = generate_stream_processor_impl(analysis);
 
-        impl #struct_name {
-            #ports_method
+        quote! {
+            #view_structs
+
+            impl #struct_name {
+                #ports_method
+            }
+
+            // Generate extension impl with port introspection methods (for backward compatibility)
+            impl #struct_name {
+                #port_introspection
+            }
+
+            // Generate complete StreamElement implementation
+            #stream_element_impl
+
+            // Generate complete StreamProcessor implementation
+            #stream_processor_impl
         }
+    } else {
+        // Backward compatibility mode - only generate helper methods
+        quote! {
+            #view_structs
 
-        // Generate extension impl with port introspection methods (for backward compatibility)
-        impl #struct_name {
-            #port_introspection
+            impl #struct_name {
+                #ports_method
+            }
+
+            // Generate extension impl with port introspection methods
+            impl #struct_name {
+                #port_introspection
+            }
         }
-
-        // Generate complete StreamElement implementation
-        #stream_element_impl
-
-        // Generate complete StreamProcessor implementation
-        #stream_processor_impl
     }
 }
 

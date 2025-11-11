@@ -46,6 +46,11 @@ pub struct ProcessorAttributes {
     /// Scheduling mode: `mode = Pull` or `mode = Push`
     /// Defaults to Pull if not specified
     pub scheduling_mode: Option<String>,
+
+    /// Generate complete trait implementations: `generate_impls = true`
+    /// When true, generates both StreamElement and StreamProcessor implementations
+    /// When false (default for now), only generates helper methods for backward compatibility
+    pub generate_impls: bool,
 }
 
 /// Parsed attributes from #[input(...)] or #[output(...)]
@@ -157,6 +162,15 @@ impl ProcessorAttributes {
                         ));
                     }
                     result.scheduling_mode = Some(mode);
+                    return Ok(());
+                }
+
+                // generate_impls = true/false
+                if meta.path.is_ident("generate_impls") {
+                    let value: Lit = meta.value()?.parse()?;
+                    if let Lit::Bool(b) = value {
+                        result.generate_impls = b.value;
+                    }
                     return Ok(());
                 }
 
