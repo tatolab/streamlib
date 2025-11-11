@@ -178,6 +178,31 @@ impl PyGpuContext {
     }
 }
 
+#[pyclass(name = "RuntimeContext", module = "streamlib")]
+pub struct PyRuntimeContext {
+    pub(crate) inner: crate::core::RuntimeContext,
+}
+
+#[pymethods]
+impl PyRuntimeContext {
+    #[getter]
+    fn gpu(&self) -> PyGpuContext {
+        PyGpuContext::from_rust(&self.inner.gpu)
+    }
+
+    fn __repr__(&self) -> String {
+        "RuntimeContext(gpu, audio)".to_string()
+    }
+}
+
+impl PyRuntimeContext {
+    pub fn from_rust(context: &crate::core::RuntimeContext) -> Self {
+        Self {
+            inner: context.clone(),
+        }
+    }
+}
+
 #[pyclass(name = "InputPorts", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyInputPorts {

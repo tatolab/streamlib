@@ -2,10 +2,10 @@
 use pyo3::prelude::*;
 use crate::core::{
     StreamProcessor, TimedTick, Result,
-    StreamInput, StreamOutput, VideoFrame, GpuContext,
+    StreamInput, StreamOutput, VideoFrame, GpuContext, RuntimeContext,
     ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME,
 };
-use super::types_ext::{PyStreamInput, PyStreamOutput, PyInputPorts, PyOutputPorts, PyGpuContext};
+use super::types_ext::{PyStreamInput, PyStreamOutput, PyInputPorts, PyOutputPorts, PyGpuContext, PyRuntimeContext};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -218,20 +218,31 @@ impl StreamProcessor for PythonProcessor {
         None
     }
 
-    fn on_start(&mut self, gpu_context: &GpuContext) -> Result<()> {
+    fn on_start(&mut self, runtime_context: &RuntimeContext) -> Result<()> {
         use crate::core::StreamError;
 
+        let gpu_context = &runtime_context.gpu;
         self.gpu_context = Some(gpu_context.clone());
 
         Python::with_gil(|py| -> Result<()> {
+            let class_ref = self.python_class.bind(py);
+
+            // Instantiate Python class
             self.python_instance = Some(
                 self.python_class.call0(py)
                     .map_err(|e| StreamError::Configuration(format!("Failed to instantiate Python processor: {}", e)))?
             );
 
+            // Detect which pattern the Python processor uses
+            let pattern = class_ref.getattr("__streamlib_pattern__")
+                .ok()
+                .and_then(|p| p.extract::<String>().ok())
+                .unwrap_or_else(|| "nested_classes".to_string());
+
+            tracing::info!("[PythonProcessor:{}] Detected pattern: {}", self.name, pattern);
+
             let mut py_inputs_map = HashMap::new();
             for (name, rust_port) in &self.input_ports.ports {
-                // Wrap the port in Arc<Mutex<>> for Python access
                 py_inputs_map.insert(name.clone(), PyStreamInput {
                     port: Arc::new(parking_lot::Mutex::new(rust_port.clone())),
                 });
@@ -239,30 +250,44 @@ impl StreamProcessor for PythonProcessor {
 
             let mut py_outputs_map = HashMap::new();
             for (name, rust_port) in &self.output_ports.ports {
-                // Wrap the port in Arc<Mutex<>> for Python access
                 py_outputs_map.insert(name.clone(), PyStreamOutput {
                     port: Arc::new(parking_lot::Mutex::new(rust_port.clone())),
                 });
             }
 
-            self.py_input_ports = Some(Py::new(py, PyInputPorts::new(py_inputs_map))
-                .map_err(|e| StreamError::Configuration(format!("Failed to create input ports wrapper: {}", e)))?);
-
-            self.py_output_ports = Some(Py::new(py, PyOutputPorts::new(py_outputs_map))
-                .map_err(|e| StreamError::Configuration(format!("Failed to create output ports wrapper: {}", e)))?);
-
-            self.py_gpu_context = Some(Py::new(py, PyGpuContext::from_rust(gpu_context))
-                .map_err(|e| StreamError::Configuration(format!("Failed to create GPU context wrapper: {}", e)))?);
-
             let instance = self.python_instance.as_ref().unwrap();
-            instance.setattr(py, "_input_ports", self.py_input_ports.as_ref().unwrap())
-                .map_err(|e| StreamError::Configuration(format!("Failed to inject input ports: {}", e)))?;
-            instance.setattr(py, "_output_ports", self.py_output_ports.as_ref().unwrap())
-                .map_err(|e| StreamError::Configuration(format!("Failed to inject output ports: {}", e)))?;
-            instance.setattr(py, "_gpu_context", self.py_gpu_context.as_ref().unwrap())
-                .map_err(|e| StreamError::Configuration(format!("Failed to inject GPU context: {}", e)))?;
 
-            let setup_code = r#"
+            // Inject ports based on pattern
+            if pattern == "field_decorators" {
+                // New pattern: inject ports directly as fields (e.g., self.video_in)
+                tracing::info!("[PythonProcessor:{}] Using field decorator pattern - injecting ports as direct fields", self.name);
+
+                for (name, py_port) in &py_inputs_map {
+                    instance.setattr(py, name.as_str(), py_port.clone())
+                        .map_err(|e| StreamError::Configuration(format!("Failed to inject input port '{}': {}", name, e)))?;
+                }
+
+                for (name, py_port) in &py_outputs_map {
+                    instance.setattr(py, name.as_str(), py_port.clone())
+                        .map_err(|e| StreamError::Configuration(format!("Failed to inject output port '{}': {}", name, e)))?;
+                }
+            } else {
+                // Old pattern: inject via _input_ports, _output_ports accessors
+                tracing::info!("[PythonProcessor:{}] Using nested class pattern - injecting ports via accessors", self.name);
+
+                self.py_input_ports = Some(Py::new(py, PyInputPorts::new(py_inputs_map))
+                    .map_err(|e| StreamError::Configuration(format!("Failed to create input ports wrapper: {}", e)))?);
+
+                self.py_output_ports = Some(Py::new(py, PyOutputPorts::new(py_outputs_map))
+                    .map_err(|e| StreamError::Configuration(format!("Failed to create output ports wrapper: {}", e)))?);
+
+                instance.setattr(py, "_input_ports", self.py_input_ports.as_ref().unwrap())
+                    .map_err(|e| StreamError::Configuration(format!("Failed to inject input ports: {}", e)))?;
+                instance.setattr(py, "_output_ports", self.py_output_ports.as_ref().unwrap())
+                    .map_err(|e| StreamError::Configuration(format!("Failed to inject output ports: {}", e)))?;
+
+                // Inject accessor methods
+                let setup_code = r#"
 def input_ports(self):
     return self._input_ports
 
@@ -273,23 +298,74 @@ def gpu_context(self):
     return self._gpu_context
 "#;
 
-            let module = py.import_bound("types").map_err(|e| StreamError::Configuration(format!("Failed to import types module: {}", e)))?;
-            let method_type = module.getattr("MethodType").map_err(|e| StreamError::Configuration(format!("Failed to get MethodType: {}", e)))?;
+                let module = py.import_bound("types").map_err(|e| StreamError::Configuration(format!("Failed to import types module: {}", e)))?;
+                let method_type = module.getattr("MethodType").map_err(|e| StreamError::Configuration(format!("Failed to get MethodType: {}", e)))?;
 
-            let locals = pyo3::types::PyDict::new_bound(py);
-            py.run_bound(setup_code, None, Some(&locals))
-                .map_err(|e| StreamError::Configuration(format!("Failed to define accessor methods: {}", e)))?;
+                let locals = pyo3::types::PyDict::new_bound(py);
+                py.run_bound(setup_code, None, Some(&locals))
+                    .map_err(|e| StreamError::Configuration(format!("Failed to define accessor methods: {}", e)))?;
 
-            for method_name in ["input_ports", "output_ports", "gpu_context"] {
-                let func = locals.get_item(method_name)
-                    .map_err(|e| StreamError::Configuration(format!("Failed to get {}: {}", method_name, e)))?
-                    .ok_or_else(|| StreamError::Configuration(format!("{} not found in locals", method_name)))?;
+                for method_name in ["input_ports", "output_ports", "gpu_context"] {
+                    let func = locals.get_item(method_name)
+                        .map_err(|e| StreamError::Configuration(format!("Failed to get {}: {}", method_name, e)))?
+                        .ok_or_else(|| StreamError::Configuration(format!("{} not found in locals", method_name)))?;
+
+                    let bound_method = method_type.call1((func, instance))
+                        .map_err(|e| StreamError::Configuration(format!("Failed to bind {}: {}", method_name, e)))?;
+
+                    instance.setattr(py, method_name, bound_method)
+                        .map_err(|e| StreamError::Configuration(format!("Failed to set {}: {}", method_name, e)))?;
+                }
+            }
+
+            // Always inject GPU context (for backward compat)
+            self.py_gpu_context = Some(Py::new(py, PyGpuContext::from_rust(gpu_context))
+                .map_err(|e| StreamError::Configuration(format!("Failed to create GPU context wrapper: {}", e)))?);
+            instance.setattr(py, "_gpu_context", self.py_gpu_context.as_ref().unwrap())
+                .map_err(|e| StreamError::Configuration(format!("Failed to inject GPU context: {}", e)))?;
+
+            // If new pattern, also inject gpu_context() method
+            if pattern == "field_decorators" {
+                let setup_code = r#"
+def gpu_context(self):
+    return self._gpu_context
+"#;
+                let module = py.import_bound("types").map_err(|e| StreamError::Configuration(format!("Failed to import types module: {}", e)))?;
+                let method_type = module.getattr("MethodType").map_err(|e| StreamError::Configuration(format!("Failed to get MethodType: {}", e)))?;
+
+                let locals = pyo3::types::PyDict::new_bound(py);
+                py.run_bound(setup_code, None, Some(&locals))
+                    .map_err(|e| StreamError::Configuration(format!("Failed to define gpu_context method: {}", e)))?;
+
+                let func = locals.get_item("gpu_context")
+                    .map_err(|e| StreamError::Configuration(format!("Failed to get gpu_context: {}", e)))?
+                    .ok_or_else(|| StreamError::Configuration("gpu_context not found in locals".to_string()))?;
 
                 let bound_method = method_type.call1((func, instance))
-                    .map_err(|e| StreamError::Configuration(format!("Failed to bind {}: {}", method_name, e)))?;
+                    .map_err(|e| StreamError::Configuration(format!("Failed to bind gpu_context: {}", e)))?;
 
-                instance.setattr(py, method_name, bound_method)
-                    .map_err(|e| StreamError::Configuration(format!("Failed to set {}: {}", method_name, e)))?;
+                instance.setattr(py, "gpu_context", bound_method)
+                    .map_err(|e| StreamError::Configuration(format!("Failed to set gpu_context: {}", e)))?;
+            }
+
+            // Call Python's on_start(ctx) if it exists
+            if instance.hasattr(py, "on_start")? {
+                tracing::info!("[PythonProcessor:{}] Calling Python on_start(ctx)", self.name);
+                let py_ctx = Py::new(py, PyRuntimeContext::from_rust(runtime_context))
+                    .map_err(|e| StreamError::Configuration(format!("Failed to create runtime context wrapper: {}", e)))?;
+
+                instance.call_method1(py, "on_start", (py_ctx,))
+                    .map_err(|e| {
+                        let traceback = if let Some(traceback) = e.traceback_bound(py) {
+                            match traceback.format() {
+                                Ok(tb) => format!("\n{}", tb),
+                                Err(_) => String::new(),
+                            }
+                        } else {
+                            String::new()
+                        };
+                        StreamError::Configuration(format!("Python on_start() failed: {}{}", e, traceback))
+                    })?;
             }
 
             Ok(())
@@ -329,6 +405,30 @@ def gpu_context(self):
     }
 
     fn on_stop(&mut self) -> Result<()> {
+        use crate::core::StreamError;
+
+        // Call Python's on_stop() if it exists
+        if let Some(instance) = &self.python_instance {
+            Python::with_gil(|py| -> Result<()> {
+                if instance.hasattr(py, "on_stop")? {
+                    tracing::info!("[PythonProcessor:{}] Calling Python on_stop()", self.name);
+                    instance.call_method0(py, "on_stop")
+                        .map_err(|e| {
+                            let traceback = if let Some(traceback) = e.traceback_bound(py) {
+                                match traceback.format() {
+                                    Ok(tb) => format!("\n{}", tb),
+                                    Err(_) => String::new(),
+                                }
+                            } else {
+                                String::new()
+                            };
+                            StreamError::Configuration(format!("Python on_stop() failed: {}{}", e, traceback))
+                        })?;
+                }
+                Ok(())
+            })?;
+        }
+
         tracing::info!("[PythonProcessor:{}] Stopped", self.name);
         Ok(())
     }
