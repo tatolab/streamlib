@@ -1230,13 +1230,19 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
     let scheduling_config_impl = if scheduling_mode == "Push" {
         quote! {
             fn scheduling_config(&self) -> crate::core::SchedulingConfig {
-                crate::core::SchedulingConfig::Push
+                crate::core::SchedulingConfig {
+                    mode: crate::core::SchedulingMode::Push,
+                    priority: crate::core::ThreadPriority::Normal,
+                }
             }
         }
     } else {
         quote! {
             fn scheduling_config(&self) -> crate::core::SchedulingConfig {
-                crate::core::SchedulingConfig::Pull
+                crate::core::SchedulingConfig {
+                    mode: crate::core::SchedulingMode::Pull,
+                    priority: crate::core::ThreadPriority::Normal,
+                }
             }
         }
     };
@@ -1251,7 +1257,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             let port_name = &field.port_name;
             let message_type = &field.message_type;
             quote! {
-                #port_name => Some(crate::core::PortType::of::<#message_type>())
+                #port_name => Some(<#message_type as crate::core::bus::PortMessage>::port_type())
             }
         })
         .collect();
@@ -1276,7 +1282,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             let port_name = &field.port_name;
             let message_type = &field.message_type;
             quote! {
-                #port_name => Some(crate::core::PortType::of::<#message_type>())
+                #port_name => Some(<#message_type as crate::core::bus::PortMessage>::port_type())
             }
         })
         .collect();
@@ -1353,7 +1359,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
                 quote! {
                     #port_name => {
                         if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<#message_type>>() {
-                            self.#field_name.as_ref().add_consumer(*typed_consumer);
+                            self.#field_name.as_ref().set_consumer(*typed_consumer);
                             return true;
                         }
                         false
@@ -1363,7 +1369,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
                 quote! {
                     #port_name => {
                         if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<#message_type>>() {
-                            self.#field_name.add_consumer(*typed_consumer);
+                            self.#field_name.set_consumer(*typed_consumer);
                             return true;
                         }
                         false
@@ -1499,12 +1505,12 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
             let required = field.attributes.required.unwrap_or(true);
 
             quote! {
-                .with_input(
-                    #port_name,
-                    <#message_type as crate::core::PortMessage>::schema(),
-                    #description,
-                    #required
-                )
+                .with_input(crate::core::PortDescriptor {
+                    name: #port_name.to_string(),
+                    schema: <#message_type as crate::core::bus::PortMessage>::schema(),
+                    required: #required,
+                    description: #description.to_string(),
+                })
             }
         })
         .collect();
@@ -1522,11 +1528,12 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
                 .unwrap_or("");
 
             quote! {
-                .with_output(
-                    #port_name,
-                    <#message_type as crate::core::PortMessage>::schema(),
-                    #description
-                )
+                .with_output(crate::core::PortDescriptor {
+                    name: #port_name.to_string(),
+                    schema: <#message_type as crate::core::bus::PortMessage>::schema(),
+                    required: true,
+                    description: #description.to_string(),
+                })
             }
         })
         .collect();
