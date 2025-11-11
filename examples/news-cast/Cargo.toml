@@ -9,6 +9,10 @@ edition = "2021"
 [dependencies]
 # StreamLib platform-agnostic facade (with debug overlay enabled)
 streamlib = { path = "../../libs/streamlib", features = ["debug-overlay"] }
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
 
 # GPU-native 2D rendering with vello
 # Using specific commit with wgpu 25.0.2 support (commit verified via GitHub blame)

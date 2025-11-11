@@ -8,7 +8,7 @@ use streamlib::{
     AudioCaptureProcessor, AudioOutputProcessor,
     AudioFrame, Result,
 };
-use streamlib::core::config::{
+use streamlib::core::{
     AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig,
 };
 
@@ -77,7 +77,6 @@ async fn main() -> Result<()> {
     let audio_config = runtime.audio_config();
     println!("   Sample rate: {} Hz", audio_config.sample_rate);
     println!("   Buffer size: {} samples", audio_config.buffer_size);
-    println!("   Channels: {}", audio_config.channels);
 
     // Step 4: Add microphone input processor using config-based API
     println!("\n🎤 Adding microphone input...");
@@ -85,7 +84,7 @@ async fn main() -> Result<()> {
         AudioCaptureConfig {
             device_id: None, // Use default mic
             sample_rate: audio_config.sample_rate,
-            channels: audio_config.channels,
+            channels: 2, // Stereo
         }
     )?;
     println!("✅ Microphone processor added");
@@ -96,8 +95,7 @@ async fn main() -> Result<()> {
         ClapEffectConfig {
             plugin_path,
             plugin_name: None, // Use first plugin in bundle
-            sample_rate: audio_config.sample_rate,
-            buffer_size: audio_config.buffer_size,
+            plugin_index: None,
         }
     )?;
     println!("✅ CLAP effect processor added");
@@ -116,12 +114,12 @@ async fn main() -> Result<()> {
     // Step 7: Connect the pipeline using type-safe handles
     println!("\n🔗 Building audio pipeline...");
     runtime.connect(
-        mic.output_port::<AudioFrame>("audio"),
-        reverb.input_port::<AudioFrame>("audio"),
+        mic.output_port::<AudioFrame<2>>("audio"),
+        reverb.input_port::<AudioFrame<2>>("audio"),
     )?;
     runtime.connect(
-        reverb.output_port::<AudioFrame>("audio"),
-        speaker.input_port::<AudioFrame>("audio"),
+        reverb.output_port::<AudioFrame<2>>("audio"),
+        speaker.input_port::<AudioFrame<2>>("audio"),
     )?;
     println!("✅ Pipeline connected: mic → reverb → speaker");
 

@@ -8,8 +8,7 @@ use streamlib::{
     ChordGeneratorProcessor, AudioOutputProcessor,
     Result, AudioFrame,
 };
-use streamlib::core::sources::chord_generator::ChordGeneratorConfig;
-use streamlib::core::sinks::audio_output::AudioOutputConfig;
+use streamlib::core::{ChordGeneratorConfig, AudioOutputConfig};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,11 +36,11 @@ async fn main() -> Result<()> {
     println!("🎹 Adding chord generator (C major chord)...");
     println!("   Generates stereo output with C4 + E4 + G4 pre-mixed");
 
-    let chord_gen = runtime.add_element_with_config::<ChordGeneratorProcessor>(
+    let chord_gen = runtime.add_processor_with_config::<ChordGeneratorProcessor>(
         ChordGeneratorConfig {
             amplitude: 0.15,              // 15% volume per tone (pre-mixed)
         }
-    ).await?;
+    )?;
     println!("   ✅ C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)");
     println!("   ✅ Pre-mixed stereo output on port 'chord'");
     println!("   All 3 tones generated from single synchronized source\n");
@@ -107,11 +106,11 @@ async fn main() -> Result<()> {
 
     // Step 5: Add speaker output
     println!("🔊 Adding speaker output...");
-    let speaker = runtime.add_element_with_config::<AudioOutputProcessor>(
+    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
         AudioOutputConfig {
             device_id: None, // Use default speaker
         }
-    ).await?;
+    )?;
     println!("   Using default audio device\n");
 
     // Step 6: Connect the audio pipeline using type-safe handles

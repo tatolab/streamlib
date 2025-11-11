@@ -35,6 +35,6 @@ pub use simple_passthrough::SimplePassthroughProcessor;
 
 #[cfg(feature = "debug-overlay")]
 pub use performance_overlay::{
-    PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+    PerformanceOverlayProcessor,
     PerformanceOverlayConfig,
 };

@@ -14,7 +14,7 @@
 //! Everything stays on GPU - no CPU copies!
 
 use streamlib::{Result, StreamRuntime, CameraProcessor, DisplayProcessor, VideoFrame};
-use streamlib::core::config::{CameraConfig, DisplayConfig, PerformanceOverlayConfig};
+use streamlib::core::{CameraConfig, DisplayConfig, PerformanceOverlayConfig};
 
 // Import core processors (performance overlay requires debug-overlay feature)
 use streamlib::core::PerformanceOverlayProcessor;
@@ -72,10 +72,10 @@ async fn main() -> Result<()> {
     tracing::info!("Connecting pipeline...");
     runtime.connect(
         camera.output_port::<VideoFrame>("video"),
-        lower_third.input_port::<VideoFrame>("video"),
+        lower_third.input_port::<VideoFrame>("input"),
     )?;
     runtime.connect(
-        lower_third.output_port::<VideoFrame>("video"),
+        lower_third.output_port::<VideoFrame>("output"),
         perf_overlay.input_port::<VideoFrame>("video"),
     )?;
     runtime.connect(

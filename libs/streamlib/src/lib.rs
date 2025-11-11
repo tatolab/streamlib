@@ -1,3 +1,5 @@
+// Allow `::streamlib::` paths to work inside this crate (for proc macro generated code)
+extern crate self as streamlib;
 
 pub mod core;
 

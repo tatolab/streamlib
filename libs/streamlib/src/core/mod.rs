@@ -51,7 +51,7 @@ pub use processors::{
 
 #[cfg(feature = "debug-overlay")]
 pub use processors::{
-    PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+    PerformanceOverlayProcessor,
     PerformanceOverlayConfig,
 };
 pub use schema::{
