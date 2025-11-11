@@ -36,5 +36,11 @@ pub trait AudioOutputProcessor {
     fn current_device(&self) -> &AudioDevice;
 }
 
-// Ports are now defined directly on platform-specific implementations
-// No shared port struct needed - each implementation uses #[derive(StreamProcessor)]
+// Platform-specific processor re-exports
+// This allows `use streamlib::core::AudioOutputProcessor` to work across platforms
+#[cfg(target_os = "macos")]
+pub use crate::apple::processors::audio_output::AppleAudioOutputProcessor;
+
+// TODO: Add Linux/Windows implementations
+// #[cfg(target_os = "linux")]
+// pub use crate::linux::processors::audio_output::LinuxAudioOutputProcessor;
