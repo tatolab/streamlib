@@ -18,3 +18,7 @@ pub use element::{
 pub use processor::StreamProcessor;
 
 pub use dyn_element::DynStreamElement;
+
+/// Empty config type for processors that don't need configuration
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EmptyConfig;
