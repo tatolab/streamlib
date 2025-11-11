@@ -1,20 +1,10 @@
-
-use crate::core::{
-    Result,
-    StreamInput, StreamOutput,
-};
+use crate::core::{Result, StreamInput, StreamOutput};
 use crate::core::frames::AudioFrame;
-use crate::core::bus::PortMessage;
-use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::schema::PortDescriptor;
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 use streamlib_macros::StreamProcessor;
 
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
-
-// Re-export for macro use
-use crate as streamlib;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClapEffectConfig {
@@ -34,21 +24,23 @@ impl Default for ClapEffectConfig {
 }
 
 #[derive(StreamProcessor)]
+#[processor(
+    mode = Push,
+    description = "CLAP audio plugin processor with parameter control and automation"
+)]
 pub struct ClapEffectProcessor {
-    // Port fields - annotated!
-    #[input]
+    #[input(description = "Stereo audio frame to process through CLAP plugin")]
     audio_in: StreamInput<AudioFrame<2>>,
 
-    #[output]
+    #[output(description = "Processed stereo audio frame from CLAP plugin")]
     audio_out: StreamOutput<AudioFrame<2>>,
 
-    // Config fields
+    #[config]
     config: ClapEffectConfig,
 
+    // Runtime state fields - auto-detected (no attribute needed)
     host: Option<ClapPluginHost>,
-
     sample_rate: u32,
-
     buffer_size: usize,
 }
 
@@ -120,45 +112,8 @@ impl ClapEffectProcessor {
         Ok(output_frame)
     }
 
-}
-
-
-impl StreamElement for ClapEffectProcessor {
-    fn name(&self) -> &str {
-        self.host.as_ref()
-            .map(|h| h.plugin_info().name.as_str())
-            .unwrap_or("ClapEffect")
-    }
-
-    fn element_type(&self) -> ElementType {
-        ElementType::Transform
-    }
-
-    fn descriptor(&self) -> Option<crate::core::schema::ProcessorDescriptor> {
-        <ClapEffectProcessor as StreamProcessor>::descriptor()
-    }
-
-    fn input_ports(&self) -> Vec<PortDescriptor> {
-        vec![PortDescriptor {
-            name: "audio".to_string(),
-            schema: AudioFrame::<2>::schema(),
-            required: true,
-            description: "Stereo audio frame to process through CLAP plugin".to_string(),
-        }]
-    }
-
-    fn output_ports(&self) -> Vec<PortDescriptor> {
-        vec![PortDescriptor {
-            name: "audio".to_string(),
-            schema: AudioFrame::<2>::schema(),
-            required: true,
-            description: "Processed stereo audio frame from CLAP plugin".to_string(),
-        }]
-    }
-
-    fn start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        
-
+    // Lifecycle - auto-detected by macro
+    fn on_start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
         self.sample_rate = ctx.audio.sample_rate;
         self.buffer_size = ctx.audio.buffer_size;
 
@@ -197,7 +152,7 @@ impl StreamElement for ClapEffectProcessor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn on_stop(&mut self) -> Result<()> {
         use crate::core::StreamError;
 
         let host = self.host.as_mut()
@@ -205,6 +160,24 @@ impl StreamElement for ClapEffectProcessor {
 
         host.deactivate()?;
         tracing::info!("[ClapEffect] Deactivated plugin '{}'", host.plugin_info().name);
+        Ok(())
+    }
+
+    // Business logic - called by macro-generated process()
+    fn process(&mut self) -> Result<()> {
+        tracing::debug!("[ClapEffect] process() called");
+
+        if let Some(input_frame) = self.audio_in.read_latest() {
+            tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
+
+            let output_frame = self.process_audio_through_clap(&input_frame)?;
+
+            self.audio_out.write(output_frame);
+            tracing::debug!("[ClapEffect] Wrote output frame");
+        } else {
+            tracing::debug!("[ClapEffect] No input available");
+        }
+
         Ok(())
     }
 }
@@ -221,81 +194,6 @@ impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
 
     fn end_edit(&mut self, id: u32) -> Result<()> {
         self.end_edit(id)
-    }
-}
-
-
-impl StreamProcessor for ClapEffectProcessor {
-    type Config = ClapEffectConfig;
-
-    fn from_config(config: Self::Config) -> Result<Self> {
-        Ok(Self {
-            // Ports
-            audio_in: StreamInput::new("audio"),
-            audio_out: StreamOutput::new("audio"),
-
-            // Config fields
-            config,
-            host: None,
-            sample_rate: 48000,  // Default, overridden in start()
-            buffer_size: 2048,   // Default, overridden in start()
-        })
-    }
-
-    fn process(&mut self) -> Result<()> {
-        tracing::debug!("[ClapEffect] process() called");
-
-        // Direct field access - no nested ports!
-        if let Some(input_frame) = self.audio_in.read_latest() {
-            tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
-
-            let output_frame = self.process_audio_through_clap(&input_frame)?;
-
-            self.audio_out.write(output_frame);
-            tracing::debug!("[ClapEffect] Wrote output frame");
-        } else {
-            tracing::debug!("[ClapEffect] No input available");
-        }
-
-        Ok(())
-    }
-
-    fn scheduling_config(&self) -> crate::core::scheduling::SchedulingConfig {
-        use crate::core::scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
-
-        SchedulingConfig {
-            mode: SchedulingMode::Push,
-            priority: ThreadPriority::RealTime,
-        }
-    }
-
-    fn descriptor() -> Option<crate::core::schema::ProcessorDescriptor> {
-        use crate::core::schema::{ProcessorDescriptor, AudioRequirements};
-
-        Some(
-            ProcessorDescriptor::new(
-                "ClapEffectProcessor",
-                "CLAP audio plugin processor with parameter control and automation"
-            )
-            .with_usage_context(
-                "Use for loading and processing audio through CLAP plugins. \
-                 Supports parameter enumeration, modification, transactions (begin_edit/end_edit), \
-                 and automation. Most CLAP plugins require stereo input at specific buffer sizes."
-            )
-            .with_audio_requirements(AudioRequirements {
-                preferred_buffer_size: Some(2048),  // Standard CLAP buffer size
-                required_buffer_size: Some(2048),    // Many plugins require this
-                supported_sample_rates: vec![44100, 48000, 96000],  // Common rates
-                required_channels: Some(2),          // Most plugins expect stereo
-            })
-            .with_tags(vec!["audio", "effect", "clap", "plugin", "transform"])
-        )
-    }
-
-    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>) {
-        if port_name == "audio" {
-            self.audio_out.set_downstream_wakeup(wakeup_tx);
-        }
     }
 }
 

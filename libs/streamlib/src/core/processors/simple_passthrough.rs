@@ -1,14 +1,9 @@
-
 use crate::core::{Result, StreamInput, StreamOutput, VideoFrame};
-use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::schema::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
-use crate::core::RuntimeContext;
 use serde::{Serialize, Deserialize};
-use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
-// Re-export for macro use (macro expects `streamlib::` path)
-use crate as streamlib;
+#[cfg(test)]
+use crate::core::traits::ElementType;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePassthroughConfig {
@@ -24,26 +19,33 @@ impl Default for SimplePassthroughConfig {
 // NEW PATTERN: Complete trait generation - always generates implementations!
 #[derive(StreamProcessor)]
 #[processor(
-    config = SimplePassthroughConfig,
-    name = "SimplePassthroughProcessor",
+    mode = Pull,
     description = "Passes video frames through unchanged (for testing)"
 )]
 pub struct SimplePassthroughProcessor {
-    // Config fields (non-ports)
-    scale: f32,
-
-    // Port fields - annotated with descriptions!
     #[input(description = "Input video stream")]
     input: StreamInput<VideoFrame>,
 
     #[output(description = "Output video stream")]
     output: StreamOutput<VideoFrame>,
+
+    #[config]
+    config: SimplePassthroughConfig,
 }
 
 // Only business logic implementation needed!
 impl SimplePassthroughProcessor {
+    // Lifecycle - auto-detected by macro (empty implementations for simple processor)
+    fn on_start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn on_stop(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
-        // Direct field access - no nested ports struct!
         if let Some(frame) = self.input.read_latest() {
             self.output.write(frame);
         }
@@ -53,11 +55,11 @@ impl SimplePassthroughProcessor {
 
 impl SimplePassthroughProcessor {
     pub fn scale(&self) -> f32 {
-        self.scale
+        self.config.scale
     }
 
     pub fn set_scale(&mut self, scale: f32) {
-        self.scale = scale;
+        self.config.scale = scale;
     }
 }
 
