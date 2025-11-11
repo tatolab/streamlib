@@ -149,19 +149,27 @@ impl AppleCameraProcessor {
         tracing::info!("Camera: Initializing AVFoundation capture session");
 
         let metal_device = MetalDevice::new()?;
-        self.metal_device = Some(metal_device.clone());
+
+        // Create metal crate command queue from objc2 Metal device
+        let metal_command_queue = {
+            use metal::foreign_types::ForeignTypeRef;
+            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+            let metal_device_ref = unsafe {
+                metal::DeviceRef::from_ptr(device_ptr as *mut _)
+            };
+            metal_device_ref.new_command_queue()
+        };
 
         // Create wgpu bridge from shared device
         let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-            ctx.gpu.device.clone(),
-            ctx.gpu.queue.clone(),
-            metal_device.device().clone(),
+            metal_device.clone_device(),
+            ctx.gpu.device().as_ref().clone(),
+            ctx.gpu.queue().as_ref().clone(),
         ));
-        self.wgpu_bridge = Some(wgpu_bridge);
 
-        // Create Metal command queue
-        let command_queue = metal_device.device().new_command_queue();
-        self.metal_command_queue = Some(command_queue);
+        self.wgpu_bridge = Some(wgpu_bridge);
+        self.metal_command_queue = Some(metal_command_queue);
+        self.metal_device = Some(metal_device);
 
         let session = unsafe { AVCaptureSession::new() };
 
