@@ -105,6 +105,8 @@ use syn::{parse_macro_input, DeriveInput};
 /// - `usage = "..."` - Usage context (overrides smart default)
 /// - `tags = ["tag1", "tag2"]` - Custom tags (overrides smart defaults)
 /// - `audio_requirements = {...}` - Custom audio requirements
+/// - `mode = Pull` or `mode = Push` - Scheduling mode (Pull = pull-based, Push = push-based)
+/// - `unsafe_send` - Generate `unsafe impl Send` for types with !Send hardware resources
 ///
 /// ## `#[input(...)]` or `#[output(...)]` - Port-level attributes
 ///

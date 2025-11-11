@@ -33,6 +33,16 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     let stream_element_impl = generate_stream_element_impl(analysis);
     let stream_processor_impl = generate_stream_processor_impl(analysis);
 
+    // Optionally generate unsafe impl Send
+    let unsafe_send_impl = if analysis.processor_attrs.unsafe_send {
+        quote! {
+            // SAFETY: Type contains !Send fields (e.g., hardware resources) that are safe to send between threads
+            unsafe impl Send for #struct_name {}
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #view_structs
 
@@ -50,6 +60,9 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
 
         // Generate complete StreamProcessor implementation
         #stream_processor_impl
+
+        // Generate unsafe impl Send if requested
+        #unsafe_send_impl
     }
 }
 

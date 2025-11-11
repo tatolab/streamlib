@@ -46,6 +46,10 @@ pub struct ProcessorAttributes {
     /// Scheduling mode: `mode = Pull` or `mode = Push`
     /// Defaults to Pull if not specified
     pub scheduling_mode: Option<String>,
+
+    /// Generate unsafe impl Send: `unsafe_send`
+    /// When true, generates `unsafe impl Send for StructName {}`
+    pub unsafe_send: bool,
 }
 
 /// Parsed attributes from #[input(...)] or #[output(...)]
@@ -164,6 +168,12 @@ impl ProcessorAttributes {
                         ));
                     }
                     result.scheduling_mode = Some(mode);
+                    return Ok(());
+                }
+
+                // unsafe_send (flag attribute, no value)
+                if meta.path.is_ident("unsafe_send") {
+                    result.unsafe_send = true;
                     return Ok(());
                 }
 
