@@ -1,33 +1,6 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use super::port::ProcessorPort;
-
-#[pyclass(module = "streamlib")]
-#[derive(Clone)]
-pub struct PortsProxy {
-    processor_name: String,
-    port_names: Vec<String>,
-    is_input: bool,
-}
-
-#[pymethods]
-impl PortsProxy {
-    fn __getattr__(&self, _py: Python<'_>, name: String) -> PyResult<ProcessorPort> {
-        if self.port_names.contains(&name) {
-            Ok(ProcessorPort::create(self.processor_name.clone(), name, self.is_input))
-        } else {
-            Err(pyo3::exceptions::PyAttributeError::new_err(
-                format!("Port '{}' not found. Available ports: {:?}", name, self.port_names)
-            ))
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        let direction = if self.is_input { "InputPorts" } else { "OutputPorts" };
-        format!("{}({})", direction, self.port_names.join(", "))
-    }
-}
 
 #[pyclass(module = "streamlib")]
 pub struct ProcessorProxy {
@@ -99,22 +72,6 @@ impl ProcessorProxy {
             usage_context,
             tags: tags.unwrap_or_default(),
         }
-    }
-
-    fn output_ports(&self, _py: Python<'_>) -> PyResult<PortsProxy> {
-        Ok(PortsProxy {
-            processor_name: self.processor_name.clone(),
-            port_names: self.output_port_names.clone(),
-            is_input: false,
-        })
-    }
-
-    fn input_ports(&self, _py: Python<'_>) -> PyResult<PortsProxy> {
-        Ok(PortsProxy {
-            processor_name: self.processor_name.clone(),
-            port_names: self.input_port_names.clone(),
-            is_input: true,
-        })
     }
 
     fn __repr__(&self) -> String {

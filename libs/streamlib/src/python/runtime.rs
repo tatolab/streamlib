@@ -47,42 +47,6 @@ impl PyProcessorHandle {
     }
 }
 
-#[pyclass(module = "streamlib")]
-pub struct TestPort {
-    #[pyo3(get)]
-    pub name: String,
-}
-
-#[pymethods]
-impl TestPort {
-    #[new]
-    fn new(name: String) -> Self {
-        Self { name }
-    }
-
-    fn test(&self) -> String {
-        format!("Test: {}", self.name)
-    }
-}
-
-#[pyclass(name = "Stream", module = "streamlib")]
-pub struct PyStream {
-    pub(crate) name: String,
-    #[pyo3(get)]
-    pub inputs: PyObject,
-    #[pyo3(get)]
-    pub outputs: PyObject,
-    pub(crate) is_prebuilt: bool,
-    pub(crate) processor_type: Option<String>,
-}
-
-#[pymethods]
-impl PyStream {
-    fn __repr__(&self) -> String {
-        format!("Stream(name={})", self.name)
-    }
-}
-
 
 #[pyclass(name = "StreamRuntime", module = "streamlib")]
 pub struct PyStreamRuntime {

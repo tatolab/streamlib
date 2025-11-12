@@ -11,21 +11,18 @@ mod gpu_wrappers;
 use pyo3::prelude::*;
 
 pub use error::{PyStreamError, Result};
-pub use runtime::{PyStreamRuntime, PyStream, PyProcessorHandle, TestPort};
+pub use runtime::{PyStreamRuntime, PyProcessorHandle};
 pub use port::ProcessorPort;
 pub use types::PyVideoFrame;
-pub use decorators::{processor as processor_decorator, ProcessorProxy, PortsProxy};
+pub use decorators::{processor as processor_decorator, ProcessorProxy};
 pub use processor::PythonProcessor;
 
 pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types::PyVideoFrame>()?;
     m.add_class::<runtime::PyStreamRuntime>()?;
-    m.add_class::<runtime::PyStream>()?;
     m.add_class::<runtime::PyProcessorHandle>()?;
     m.add_class::<port::ProcessorPort>()?;
-    m.add_class::<runtime::TestPort>()?;  // Test struct
     m.add_class::<decorators::ProcessorProxy>()?;
-    m.add_class::<decorators::PortsProxy>()?;
 
     m.add_class::<types_ext::PyStreamInput>()?;
     m.add_class::<types_ext::PyStreamOutput>()?;
@@ -42,8 +39,6 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types_ext::PyStreamInputData>()?;
     m.add_class::<types_ext::PyStreamOutputData>()?;
     m.add_class::<types_ext::PyGpuContext>()?;
-    m.add_class::<types_ext::PyInputPorts>()?;
-    m.add_class::<types_ext::PyOutputPorts>()?;
 
     m.add_class::<gpu_wrappers::PyWgpuDevice>()?;
     m.add_class::<gpu_wrappers::PyWgpuQueue>()?;
@@ -77,9 +72,6 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("DISPLAY_PROCESSOR", "DisplayProcessor")?;
 
     let py = m.py();
-
-    m.add("TEST_MARKER", "test_value")?;
-
     let type_fn = py.eval_bound("type", None, None)?;
 
     let stream_input_dict = pyo3::types::PyDict::new_bound(py);
