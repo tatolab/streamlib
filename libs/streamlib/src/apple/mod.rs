@@ -20,6 +20,8 @@ pub mod time;
 
 pub mod thread_priority;
 
+pub mod display_link;
+
 
 pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;

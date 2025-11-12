@@ -1,5 +1,5 @@
 use crate::core::{StreamInput, VideoFrame, Result, StreamError};
-use crate::apple::{metal::MetalDevice, WgpuBridge};
+use crate::apple::{metal::MetalDevice, WgpuBridge, display_link::DisplayLink};
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
 use objc2_app_kit::{NSWindow, NSBackingStoreType, NSWindowStyleMask, NSApplication, NSApplicationActivationPolicy};
@@ -34,8 +34,8 @@ static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(StreamProcessor)]
 #[processor(
-    mode = Push,
-    description = "Displays video frames in a window using Metal",
+    mode = Pull,
+    description = "Displays video frames in a window using Metal with vsync",
     unsafe_send
 )]
 pub struct AppleDisplayProcessor {
@@ -61,6 +61,7 @@ pub struct AppleDisplayProcessor {
     height: u32,
     frames_rendered: u64,
     window_creation_dispatched: bool,
+    display_link: Option<DisplayLink>,
 }
 
 // SAFETY: NSWindow, CAMetalLayer, and Metal objects are Objective-C objects that can be sent between threads
@@ -100,6 +101,18 @@ impl AppleDisplayProcessor {
         self.metal_command_queue = Some(metal_command_queue);
         self.metal_device = Some(metal_device);
 
+        // Initialize CVDisplayLink for vsync
+        let display_link = DisplayLink::new()?;
+        display_link.start()?;
+
+        if let Ok(period) = display_link.get_nominal_output_video_refresh_period() {
+            tracing::info!("Display {}: Vsync enabled (refresh period: {:?})", self.window_title, period);
+        } else {
+            tracing::info!("Display {}: Vsync enabled", self.window_title);
+        }
+
+        self.display_link = Some(display_link);
+
         tracing::info!("Display {}: Initialized ({}x{})", self.window_title, self.width, self.height);
 
         // EAGER WINDOW CREATION: Create window immediately instead of waiting for first frame
@@ -113,12 +126,22 @@ impl AppleDisplayProcessor {
         Ok(())
     }
 
-    // Business logic - called by macro-generated process()
+    // Business logic - called once by macro-generated process() in Pull mode
+    // Sets up vsync-driven rendering loop
     fn process(&mut self) -> Result<()> {
-        if let Some(frame) = self.video.read_latest() {
-            self.render_frame(frame)?;
+        // Pull mode: process() is called once to set up the loop
+        // Loop continuously, waiting for vsync to drive frame presentation
+        loop {
+            // Wait for vsync signal from CVDisplayLink
+            if let Some(ref display_link) = self.display_link {
+                display_link.wait_for_frame();
+            }
+
+            // Render the latest available frame (if any)
+            if let Some(frame) = self.video.read_latest() {
+                self.render_frame(frame)?;
+            }
         }
-        Ok(())
     }
 
     // Helper methods

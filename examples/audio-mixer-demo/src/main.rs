@@ -10,7 +10,7 @@ use streamlib::{
 };
 use streamlib::core::{ChordGeneratorConfig, AudioOutputConfig};
 
-#[tokio::main]
+
 async fn main() -> Result<()> {
     // Initialize logging - use DEBUG level for diagnostics
     tracing_subscriber::fmt()
@@ -192,13 +192,12 @@ async fn main() -> Result<()> {
     println!("   • Hardware sources drive the clock");
     println!("   • Type-safe connections verified at compile time\n");
 
-    runtime.start().await?;
-
-    // Run until interrupted
-    tokio::signal::ctrl_c().await?;
+    runtime.start()?;
+    runtime.run()?;
+    
 
     println!("\n\n⏹️  Stopping...");
-    runtime.stop().await?;
+    
     println!("✅ Stopped\n");
 
     Ok(())
