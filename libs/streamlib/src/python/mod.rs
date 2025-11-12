@@ -13,12 +13,25 @@ use pyo3::prelude::*;
 pub use error::{PyStreamError, Result};
 pub use runtime::{PyStreamRuntime, PyProcessorHandle};
 pub use port::ProcessorPort;
-pub use types::PyVideoFrame;
+pub use types::{
+    PyVideoFrame,
+    PyAudioFrame1, PyAudioFrame2, PyAudioFrame4, PyAudioFrame6, PyAudioFrame8,
+    PyDataFrame
+};
 pub use decorators::{processor as processor_decorator, ProcessorProxy};
 pub use processor::PythonProcessor;
 
 pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Frame types
     m.add_class::<types::PyVideoFrame>()?;
+    m.add_class::<types::PyAudioFrame1>()?;
+    m.add_class::<types::PyAudioFrame2>()?;
+    m.add_class::<types::PyAudioFrame4>()?;
+    m.add_class::<types::PyAudioFrame6>()?;
+    m.add_class::<types::PyAudioFrame8>()?;
+    m.add_class::<types::PyDataFrame>()?;
+
+    // Runtime and processors
     m.add_class::<runtime::PyStreamRuntime>()?;
     m.add_class::<runtime::PyProcessorHandle>()?;
     m.add_class::<port::ProcessorPort>()?;
