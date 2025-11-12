@@ -3,8 +3,6 @@ use super::handles::{ProcessorHandle, PendingConnection};
 use super::{Result, StreamError};
 use super::bus::PortType;
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::thread::JoinHandle;
@@ -67,7 +65,7 @@ impl Connection {
     }
 }
 
-pub type EventLoopFn = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send>;
+pub type EventLoopFn = Box<dyn FnOnce() -> Result<()> + Send>;
 
 pub struct StreamRuntime {
     pub(crate) processors: Arc<Mutex<HashMap<ProcessorId, RuntimeProcessorHandle>>>,
@@ -136,57 +134,61 @@ impl StreamRuntime {
         &mut self,
         config: P::Config,
     ) -> Result<ProcessorHandle> {
-        if self.running {
-            return Err(StreamError::Runtime(
-                "Cannot add processor while runtime is running. Use add_processor_runtime() instead.".into()
-            ));
-        }
-
         let processor = P::from_config(config)?;
+        let processor_dyn: DynProcessor = Box::new(processor);
+        self.add_boxed_processor(processor_dyn)
+    }
 
+    /// Add a boxed processor (for dynamic processor creation like Python processors)
+    /// Works both before and during runtime - automatically detects runtime state
+    pub fn add_boxed_processor(&mut self, processor: DynProcessor) -> Result<ProcessorHandle> {
         let id = format!("processor_{}", self.next_processor_id);
         self.next_processor_id += 1;
 
-        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+        if self.running {
+            // Runtime is running - spawn thread immediately
+            self.spawn_processor_thread(id.clone(), processor)?;
+            tracing::info!("Added processor with ID: {} (runtime running, thread spawned)", id);
+        } else {
+            // Runtime not running - add to pending processors
+            let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+            let (dummy_wakeup_tx, _dummy_wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
 
-        let (dummy_wakeup_tx, _dummy_wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
+            let handle = RuntimeProcessorHandle {
+                id: id.clone(),
+                name: format!("Processor {}", self.next_processor_id - 1),
+                thread: None,
+                shutdown_tx,
+                wakeup_tx: dummy_wakeup_tx,
+                status: Arc::new(Mutex::new(ProcessorStatus::Pending)),
+                processor: None,
+            };
 
-        let handle = RuntimeProcessorHandle {
-            id: id.clone(),
-            name: format!("Processor {}", self.next_processor_id - 1),
-            thread: None,
-            shutdown_tx,
-            wakeup_tx: dummy_wakeup_tx,
-            status: Arc::new(Mutex::new(ProcessorStatus::Pending)),
-            processor: None,
-        };
+            {
+                let mut processors = self.processors.lock();
+                processors.insert(id.clone(), handle);
+            }
 
-        {
-            let mut processors = self.processors.lock();
-            processors.insert(id.clone(), handle);
+            self.pending_processors.push((id.clone(), processor, shutdown_rx));
+            tracing::info!("Added processor with ID: {} (pending)", id);
         }
-
-        self.pending_processors.push((id.clone(), Box::new(processor) as DynProcessor, shutdown_rx));
-
-        tracing::info!("Added processor with ID: {}", id);
 
         Ok(ProcessorHandle::new(id))
     }
 
-    pub async fn add_processor_runtime(
+    /// Internal helper: Spawn a processor thread immediately (runtime must be running)
+    fn spawn_processor_thread(
         &mut self,
-        processor: Box<dyn DynStreamElement>,
-    ) -> Result<ProcessorId> {
+        processor_id: ProcessorId,
+        processor: DynProcessor,
+    ) -> Result<()> {
         if !self.running {
             return Err(StreamError::Runtime(
-                "Cannot add processor at runtime - runtime is not running. Use add_processor() instead.".into()
+                "Cannot spawn processor thread - runtime is not running".into()
             ));
         }
 
-        let processor_id = format!("processor_{}", self.next_processor_id);
-        self.next_processor_id += 1;
-
-        tracing::info!("[{}] Adding processor to running runtime...", processor_id);
+        tracing::info!("[{}] Spawning processor thread in running runtime...", processor_id);
 
         let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
 
@@ -215,7 +217,15 @@ impl StreamRuntime {
         };
 
         let handle = std::thread::spawn(move || {
-            tracing::info!("[{}] Thread started (mode: {:?})", id_for_thread, sched_config.mode);
+            tracing::info!("[{}] Thread started (mode: {:?}, priority: {:?})", id_for_thread, sched_config.mode, sched_config.priority);
+
+            // Apply thread priority
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            {
+                if let Err(e) = crate::apple::thread_priority::apply_thread_priority(sched_config.priority) {
+                    tracing::warn!("[{}] Failed to apply thread priority: {}", id_for_thread, e);
+                }
+            }
 
             {
                 let mut processor = processor_for_thread.lock();
@@ -326,8 +336,8 @@ impl StreamRuntime {
             processors.insert(processor_id.clone(), proc_handle);
         }
 
-        tracing::info!("[{}] Processor added to running runtime", processor_id);
-        Ok(processor_id)
+        tracing::info!("[{}] Processor thread spawned successfully", processor_id);
+        Ok(())
     }
 
     pub fn connect<T: crate::core::bus::PortMessage>(
@@ -727,7 +737,7 @@ impl StreamRuntime {
         Ok(connection_id)
     }
 
-    async fn wire_pending_connections(&mut self) -> Result<()> {
+    fn wire_pending_connections(&mut self) -> Result<()> {
         if self.pending_connections.is_empty() {
             tracing::debug!("No pending connections to wire");
             return Ok(());
@@ -789,7 +799,7 @@ impl StreamRuntime {
         Ok(())
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self) -> Result<()> {
         if self.running {
             return Err(StreamError::Configuration("Runtime already running".into()));
         }
@@ -816,7 +826,7 @@ impl StreamRuntime {
         }
 
         tracing::info!("Initializing GPU context...");
-        let gpu_context = crate::core::context::GpuContext::init_for_platform().await?;
+        let gpu_context = crate::core::context::GpuContext::init_for_platform_sync()?;
         tracing::info!("GPU context initialized: {:?}", gpu_context);
         self.gpu_context = Some(gpu_context);
 
@@ -824,35 +834,48 @@ impl StreamRuntime {
 
         self.spawn_handler_threads()?;
 
-        self.wire_pending_connections().await?;
+        self.wire_pending_connections()?;
 
         tracing::info!("Runtime started successfully");
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> Result<()> {
         if !self.running {
-            self.start().await?;
+            self.start()?;
         }
 
         tracing::info!("Runtime running (press Ctrl+C to stop)");
 
         if let Some(event_loop) = self.event_loop.take() {
             tracing::debug!("Using platform-specific event loop");
-            event_loop().await?;
+            event_loop()?;
         } else {
-            tokio::signal::ctrl_c().await.map_err(|e| {
-                StreamError::Configuration(format!("Failed to listen for shutdown signal: {}", e))
-            })?;
+            // Default: use ctrlc crate for cross-platform Ctrl+C handling
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, Ordering};
+
+            let running = Arc::new(AtomicBool::new(true));
+            let r = running.clone();
+
+            ctrlc::set_handler(move || {
+                r.store(false, Ordering::SeqCst);
+            }).map_err(|e| StreamError::Configuration(
+                format!("Failed to set Ctrl+C handler: {}", e)
+            ))?;
+
+            while running.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
 
             tracing::info!("Shutdown signal received");
         }
 
-        self.stop().await?;
+        self.stop()?;
         Ok(())
     }
 
-    pub async fn stop(&mut self) -> Result<()> {
+    pub fn stop(&mut self) -> Result<()> {
         if !self.running {
             return Ok(());
         }
@@ -908,7 +931,7 @@ impl StreamRuntime {
         Ok(())
     }
 
-    pub async fn remove_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
+    pub fn remove_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
         let shutdown_tx = {
             let mut processors = self.processors.lock();
             let processor = processors.get_mut(processor_id).ok_or_else(|| {
@@ -947,12 +970,8 @@ impl StreamRuntime {
         };
 
         if let Some(handle) = thread_handle {
-            let join_result = tokio::task::spawn_blocking(move || {
-                handle.join()
-            }).await;
-
-            match join_result {
-                Ok(Ok(_)) => {
+            match handle.join() {
+                Ok(_) => {
                     tracing::info!("[{}] Processor thread joined successfully", processor_id);
 
                     let mut processors = self.processors.lock();
@@ -960,7 +979,7 @@ impl StreamRuntime {
                         *proc.status.lock() = ProcessorStatus::Stopped;
                     }
                 }
-                Ok(Err(panic_err)) => {
+                Err(panic_err) => {
                     tracing::error!("[{}] Processor thread panicked: {:?}", processor_id, panic_err);
 
                     let mut processors = self.processors.lock();
@@ -970,13 +989,6 @@ impl StreamRuntime {
 
                     return Err(StreamError::Runtime(format!(
                         "Processor '{}' thread panicked",
-                        processor_id
-                    )));
-                }
-                Err(join_err) => {
-                    tracing::error!("[{}] Failed to join thread: {:?}", processor_id, join_err);
-                    return Err(StreamError::Runtime(format!(
-                        "Failed to join processor '{}' thread",
                         processor_id
                     )));
                 }
@@ -1030,7 +1042,15 @@ impl StreamRuntime {
             };
 
             let handle = std::thread::spawn(move || {
-                tracing::info!("[{}] Thread started (mode: {:?})", id_for_thread, sched_config.mode);
+                tracing::info!("[{}] Thread started (mode: {:?}, priority: {:?})", id_for_thread, sched_config.mode, sched_config.priority);
+
+                // Apply thread priority
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                {
+                    if let Err(e) = crate::apple::thread_priority::apply_thread_priority(sched_config.priority) {
+                        tracing::warn!("[{}] Failed to apply thread priority: {}", id_for_thread, e);
+                    }
+                }
 
                 {
                     let mut processor = processor_for_thread.lock();
@@ -1178,7 +1198,7 @@ pub struct RuntimeStatus {
 mod tests {
     use super::*;
     use crate::core::traits::StreamProcessor;
-    use crate::core::{schema, ProcessorDescriptor};
+    use crate::core::ProcessorDescriptor;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[derive(Clone)]
@@ -1218,10 +1238,6 @@ mod tests {
                 )
             )
         }
-
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
     }
 
     #[test]
@@ -1242,8 +1258,8 @@ mod tests {
         assert_eq!(runtime.pending_processors.len(), 1);
     }
 
-    #[tokio::test]
-    async fn test_runtime_lifecycle() {
+    #[test]
+    fn test_runtime_lifecycle() {
         let mut runtime = StreamRuntime::new();
 
         let count1 = Arc::new(AtomicU64::new(0));
@@ -1255,7 +1271,7 @@ mod tests {
         runtime.add_processor_with_config::<CounterProcessor>(config1).unwrap();
         runtime.add_processor_with_config::<CounterProcessor>(config2).unwrap();
 
-        runtime.start().await.unwrap();
+        runtime.start().unwrap();
         assert!(runtime.running);
 
         {
@@ -1263,9 +1279,9 @@ mod tests {
             assert_eq!(processors.len(), 2);
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
-        runtime.stop().await.unwrap();
+        runtime.stop().unwrap();
         assert!(!runtime.running);
 
         let c1 = count1.load(Ordering::Relaxed);
@@ -1275,8 +1291,8 @@ mod tests {
         assert!(c2 > 0);
     }
 
-    #[tokio::test]
-    async fn test_true_parallelism() {
+    #[test]
+    fn test_true_parallelism() {
         use std::time::Instant;
 
         #[derive(Clone)]
@@ -1336,10 +1352,6 @@ mod tests {
                     )
                 )
             }
-
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
         }
 
         let mut runtime = StreamRuntime::new();
@@ -1360,11 +1372,11 @@ mod tests {
         runtime.add_processor_with_config::<WorkProcessor>(config1).unwrap();
         runtime.add_processor_with_config::<WorkProcessor>(config2).unwrap();
 
-        runtime.start().await.unwrap();
+        runtime.start().unwrap();
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
+        std::thread::sleep(std::time::Duration::from_millis(350));
 
-        runtime.stop().await.unwrap();
+        runtime.stop().unwrap();
 
         let times1 = start_times1.lock();
         let times2 = start_times2.lock();

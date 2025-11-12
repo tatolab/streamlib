@@ -1,57 +1,71 @@
-
 use crate::core::StreamRuntime;
-use objc2::{MainThreadMarker, rc::Retained, msg_send};
-use objc2_app_kit::{NSApplication, NSEvent, NSEventMask};
-use objc2_foundation::NSDate;
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventType};
+use objc2_foundation::NSPoint;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
-extern "C" {
-    fn CFRunLoopRunInMode(
-        mode: core_foundation::string::CFStringRef,
-        seconds: core_foundation::date::CFTimeInterval,
-        returnAfterSourceHandled: bool,
-    ) -> i32;
-}
-
 pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
-    let running = Arc::new(AtomicBool::new(true));
-    let running_event_loop = Arc::clone(&running);
+    let should_stop = Arc::new(AtomicBool::new(false));
+    let should_stop_handler = Arc::clone(&should_stop);
 
-    let event_loop = Box::new(move || {
-        Box::pin(async move {
-            unsafe {
-                let mtm = MainThreadMarker::new().expect("Must be on main thread");
-                let app = NSApplication::sharedApplication(mtm);
+    // Install Ctrl+C handler to stop event loop
+    ctrlc::set_handler(move || {
+        tracing::info!("macOS: Ctrl+C received, initiating shutdown...");
 
-                while running_event_loop.load(Ordering::Relaxed) {
-                    use core_foundation::string::CFString;
-                    use core_foundation::base::TCFType;
+        // Set the stop flag
+        should_stop_handler.store(true, Ordering::SeqCst);
 
-                    let mode = CFString::new("kCFRunLoopDefaultMode");
-                    CFRunLoopRunInMode(mode.as_concrete_TypeRef(), 0.016, true);
+        // Stop NSApplication on main thread
+        use dispatch2::DispatchQueue;
+        DispatchQueue::main().exec_async(move || {
+            if let Some(mtm) = MainThreadMarker::new() {
+                unsafe {
+                    let app = NSApplication::sharedApplication(mtm);
+                    app.stop(None);
 
-                    loop {
-                        let distant_past = NSDate::distantPast();
-                        let event: Option<Retained<NSEvent>> = msg_send![
-                            &*app,
-                            nextEventMatchingMask: NSEventMask::Any,
-                            untilDate: &*distant_past,
-                            inMode: objc2_foundation::NSDefaultRunLoopMode,
-                            dequeue: true
-                        ];
-
-                        match event {
-                            Some(evt) => {
-                                app.sendEvent(&evt);
-                            }
-                            None => break,
-                        }
+                    // Post a dummy event to wake up the event loop
+                    // This is needed because stop() doesn't immediately exit the run loop
+                    if let Some(event) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+                        NSEventType::ApplicationDefined,
+                        NSPoint::new(0.0, 0.0),
+                        objc2_app_kit::NSEventModifierFlags::empty(),
+                        0.0,
+                        0,
+                        None,
+                        0,
+                        0,
+                        0,
+                    ) {
+                        app.postEvent_atStart(&event, true);
                     }
                 }
             }
+        });
+    }).expect("Failed to set Ctrl+C handler");
 
-            Ok(())
-        }) as std::pin::Pin<Box<dyn std::future::Future<Output = crate::core::Result<()>> + Send>>
+    let event_loop = Box::new(move || {
+        let mtm = MainThreadMarker::new().expect("Must be on main thread");
+        let app = unsafe { NSApplication::sharedApplication(mtm) };
+
+        unsafe {
+            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        }
+
+        tracing::info!("macOS: Starting NSApplication event loop (blocking)");
+
+        // This blocks until app.stop() is called
+        unsafe {
+            app.run();
+        }
+
+        tracing::info!("macOS: NSApplication event loop stopped");
+
+        // Check if we should stop (Ctrl+C was pressed)
+        if should_stop.load(Ordering::SeqCst) {
+            tracing::info!("macOS: Shutdown requested via Ctrl+C");
+        }
+
+        Ok(())
     }) as crate::core::runtime::EventLoopFn;
 
     runtime.set_event_loop(event_loop);

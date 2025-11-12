@@ -41,16 +41,16 @@ impl StreamRuntime {
         self.inner.connect(output, input)
     }
 
-    pub async fn start(&mut self) -> Result<()> {
-        self.inner.start().await
+    pub fn start(&mut self) -> Result<()> {
+        self.inner.start()
     }
 
-    pub async fn run(&mut self) -> Result<()> {
-        self.inner.run().await
+    pub fn run(&mut self) -> Result<()> {
+        self.inner.run()
     }
 
-    pub async fn stop(&mut self) -> Result<()> {
-        self.inner.stop().await
+    pub fn stop(&mut self) -> Result<()> {
+        self.inner.stop()
     }
 
     pub fn audio_config(&self) -> AudioContext {
