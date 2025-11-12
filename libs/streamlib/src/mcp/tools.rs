@@ -6,7 +6,6 @@ use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::collections::HashSet;
-use tokio::sync::Mutex as TokioMutex;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Tool {
@@ -214,7 +213,7 @@ pub async fn execute_tool(
     tool_name: &str,
     arguments: JsonValue,
     registry: Arc<Mutex<ProcessorRegistry>>,
-    runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
+    runtime: Option<Arc<Mutex<StreamRuntime>>>,
     permissions: Arc<HashSet<String>>,
 ) -> Result<ToolResult> {
     match tool_name {
@@ -366,14 +365,22 @@ pub async fn execute_tool(
                         McpError::Runtime(format!("Failed to create Python processor: {}", e))
                     })?;
 
-                    let mut rt = runtime.lock().await;
-                    match rt.add_processor_runtime(processor).await {
-                        Ok(processor_id) => {
+                    // Use spawn_blocking to call sync runtime from async context
+                    let runtime_clone = Arc::clone(&runtime);
+                    let result = tokio::task::spawn_blocking(move || {
+                        let mut rt = runtime_clone.lock();
+                        rt.add_boxed_processor(processor)
+                    }).await.map_err(|e| {
+                        McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
+                    })?;
+
+                    match result {
+                        Ok(handle) => {
                             return Ok(ToolResult {
                                 success: true,
                                 message: format!("Successfully added Python processor"),
                                 data: Some(serde_json::json!({
-                                    "processor_id": processor_id,
+                                    "processor_id": handle.id(),
                                 })),
                             });
                         }
@@ -416,8 +423,16 @@ pub async fn execute_tool(
                 )
             })?;
 
-            let mut rt = runtime.lock().await;
-            match rt.remove_processor(&args.name).await {
+            let runtime_clone = Arc::clone(&runtime);
+            let name = args.name.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut rt = runtime_clone.lock();
+                rt.remove_processor(&name)
+            }).await.map_err(|e| {
+                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
+            })?;
+
+            match result {
                 Ok(_) => {
                     Ok(ToolResult {
                         success: true,
@@ -451,8 +466,17 @@ pub async fn execute_tool(
                 )
             })?;
 
-            let mut rt = runtime.lock().await;
-            match rt.connect_at_runtime(&args.source, &args.destination).await {
+            let runtime_clone = Arc::clone(&runtime);
+            let source = args.source.clone();
+            let destination = args.destination.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut rt = runtime_clone.lock();
+                rt.connect_at_runtime(&source, &destination)
+            }).await.map_err(|e| {
+                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
+            })?;
+
+            match result {
                 Ok(connection_id) => {
                     Ok(ToolResult {
                         success: true,
@@ -488,8 +512,9 @@ pub async fn execute_tool(
                 )
             })?;
 
-            let processors = {
-                let rt = runtime.lock().await;
+            let runtime_clone = Arc::clone(&runtime);
+            let processors = tokio::task::spawn_blocking(move || {
+                let rt = runtime_clone.lock();
                 let processors_map = rt.processors.lock();
 
                 processors_map
@@ -503,7 +528,9 @@ pub async fn execute_tool(
                         })
                     })
                     .collect::<Vec<_>>()
-            };
+            }).await.map_err(|e| {
+                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
+            })?;
 
             Ok(ToolResult {
                 success: true,
@@ -523,8 +550,9 @@ pub async fn execute_tool(
                 )
             })?;
 
-            let connections = {
-                let rt = runtime.lock().await;
+            let runtime_clone = Arc::clone(&runtime);
+            let connections = tokio::task::spawn_blocking(move || {
+                let rt = runtime_clone.lock();
                 let connections_map = rt.connections.lock();
 
                 connections_map
@@ -538,7 +566,9 @@ pub async fn execute_tool(
                         })
                     })
                     .collect::<Vec<_>>()
-            };
+            }).await.map_err(|e| {
+                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
+            })?;
 
             Ok(ToolResult {
                 success: true,

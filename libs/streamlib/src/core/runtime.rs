@@ -136,13 +136,18 @@ impl StreamRuntime {
     ) -> Result<ProcessorHandle> {
         let processor = P::from_config(config)?;
         let processor_dyn: DynProcessor = Box::new(processor);
+        self.add_boxed_processor(processor_dyn)
+    }
 
+    /// Add a boxed processor (for dynamic processor creation like Python processors)
+    /// Works both before and during runtime - automatically detects runtime state
+    pub fn add_boxed_processor(&mut self, processor: DynProcessor) -> Result<ProcessorHandle> {
         let id = format!("processor_{}", self.next_processor_id);
         self.next_processor_id += 1;
 
         if self.running {
             // Runtime is running - spawn thread immediately
-            self.spawn_processor_thread(id.clone(), processor_dyn)?;
+            self.spawn_processor_thread(id.clone(), processor)?;
             tracing::info!("Added processor with ID: {} (runtime running, thread spawned)", id);
         } else {
             // Runtime not running - add to pending processors
@@ -164,7 +169,7 @@ impl StreamRuntime {
                 processors.insert(id.clone(), handle);
             }
 
-            self.pending_processors.push((id.clone(), processor_dyn, shutdown_rx));
+            self.pending_processors.push((id.clone(), processor, shutdown_rx));
             tracing::info!("Added processor with ID: {} (pending)", id);
         }
 
@@ -212,7 +217,15 @@ impl StreamRuntime {
         };
 
         let handle = std::thread::spawn(move || {
-            tracing::info!("[{}] Thread started (mode: {:?})", id_for_thread, sched_config.mode);
+            tracing::info!("[{}] Thread started (mode: {:?}, priority: {:?})", id_for_thread, sched_config.mode, sched_config.priority);
+
+            // Apply thread priority
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            {
+                if let Err(e) = crate::apple::thread_priority::apply_thread_priority(sched_config.priority) {
+                    tracing::warn!("[{}] Failed to apply thread priority: {}", id_for_thread, e);
+                }
+            }
 
             {
                 let mut processor = processor_for_thread.lock();
@@ -1029,7 +1042,15 @@ impl StreamRuntime {
             };
 
             let handle = std::thread::spawn(move || {
-                tracing::info!("[{}] Thread started (mode: {:?})", id_for_thread, sched_config.mode);
+                tracing::info!("[{}] Thread started (mode: {:?}, priority: {:?})", id_for_thread, sched_config.mode, sched_config.priority);
+
+                // Apply thread priority
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                {
+                    if let Err(e) = crate::apple::thread_priority::apply_thread_priority(sched_config.priority) {
+                        tracing::warn!("[{}] Failed to apply thread priority: {}", id_for_thread, e);
+                    }
+                }
 
                 {
                     let mut processor = processor_for_thread.lock();
@@ -1177,7 +1198,7 @@ pub struct RuntimeStatus {
 mod tests {
     use super::*;
     use crate::core::traits::StreamProcessor;
-    use crate::core::{schema, ProcessorDescriptor};
+    use crate::core::ProcessorDescriptor;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[derive(Clone)]
@@ -1217,10 +1238,6 @@ mod tests {
                 )
             )
         }
-
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
     }
 
     #[test]
@@ -1241,8 +1258,8 @@ mod tests {
         assert_eq!(runtime.pending_processors.len(), 1);
     }
 
-    #[tokio::test]
-    async fn test_runtime_lifecycle() {
+    #[test]
+    fn test_runtime_lifecycle() {
         let mut runtime = StreamRuntime::new();
 
         let count1 = Arc::new(AtomicU64::new(0));
@@ -1254,7 +1271,7 @@ mod tests {
         runtime.add_processor_with_config::<CounterProcessor>(config1).unwrap();
         runtime.add_processor_with_config::<CounterProcessor>(config2).unwrap();
 
-        runtime.start().await.unwrap();
+        runtime.start().unwrap();
         assert!(runtime.running);
 
         {
@@ -1262,9 +1279,9 @@ mod tests {
             assert_eq!(processors.len(), 2);
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
-        runtime.stop().await.unwrap();
+        runtime.stop().unwrap();
         assert!(!runtime.running);
 
         let c1 = count1.load(Ordering::Relaxed);
@@ -1274,8 +1291,8 @@ mod tests {
         assert!(c2 > 0);
     }
 
-    #[tokio::test]
-    async fn test_true_parallelism() {
+    #[test]
+    fn test_true_parallelism() {
         use std::time::Instant;
 
         #[derive(Clone)]
@@ -1335,10 +1352,6 @@ mod tests {
                     )
                 )
             }
-
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
         }
 
         let mut runtime = StreamRuntime::new();
@@ -1359,11 +1372,11 @@ mod tests {
         runtime.add_processor_with_config::<WorkProcessor>(config1).unwrap();
         runtime.add_processor_with_config::<WorkProcessor>(config2).unwrap();
 
-        runtime.start().await.unwrap();
+        runtime.start().unwrap();
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
+        std::thread::sleep(std::time::Duration::from_millis(350));
 
-        runtime.stop().await.unwrap();
+        runtime.stop().unwrap();
 
         let times1 = start_times1.lock();
         let times2 = start_times2.lock();

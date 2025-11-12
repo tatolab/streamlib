@@ -18,6 +18,8 @@ pub use runtime_ext::configure_macos_event_loop;
 
 pub mod time;
 
+pub mod thread_priority;
+
 
 pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;

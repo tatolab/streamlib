@@ -115,6 +115,7 @@ metal = "0.31"  # Metal crate for wgpu-hal interop
 dispatch2 = "0.3"  # GCD dispatch queues
 pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
+mach2 = "0.4"  # Mach kernel API for thread priorities and timing
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"

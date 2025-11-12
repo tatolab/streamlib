@@ -361,19 +361,12 @@ impl PyStreamRuntime {
         println!("✅ Processors instantiated");
         println!("🚀 Starting runtime...\n");
 
+        // Note: macOS event loop is already configured by StreamRuntime::new()
+
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyStreamError::Runtime(format!("Failed to create tokio runtime: {}", e)))?;
-
-            rt.block_on(async {
-                runtime.start().await
-                    .map_err(|e| PyStreamError::Runtime(format!("Failed to start: {}", e)))?;
-
-                runtime.run().await
-                    .map_err(|e| PyStreamError::Runtime(format!("Runtime error: {}", e)))?;
-
-                Ok::<(), PyStreamError>(())
-            })?;
+            // Runtime.run() is now synchronous and blocks until shutdown
+            runtime.run()
+                .map_err(|e| PyStreamError::Runtime(format!("Runtime error: {}", e)))?;
 
             Ok(())
         })

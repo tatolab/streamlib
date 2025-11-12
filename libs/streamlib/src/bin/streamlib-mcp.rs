@@ -4,7 +4,7 @@ use streamlib::core::StreamRuntime;
 use streamlib::{request_camera_permission, request_display_permission, request_audio_permission};
 use clap::Parser;
 use std::sync::Arc;
-use tokio::sync::Mutex as TokioMutex;
+use parking_lot::Mutex;
 
 #[derive(Parser, Debug)]
 #[command(name = "streamlib-mcp")]
@@ -120,18 +120,34 @@ async fn async_main(args: Args, permissions: std::collections::HashSet<String>) 
     let registry = global_registry();
 
     tracing::info!("Auto-registered {} processors from inventory", {
-        let reg = registry.lock().unwrap();
+        let reg = registry.lock();
         reg.list().len()
     });
 
     tracing::info!("Creating StreamRuntime");
     let mut runtime = StreamRuntime::new();
 
-    tracing::info!("Starting StreamRuntime...");
-    runtime.start().await?;
-    tracing::info!("StreamRuntime started successfully");
+    // Configure macOS event loop before starting
+    #[cfg(target_os = "macos")]
+    streamlib::configure_macos_event_loop(&mut runtime);
 
-    let runtime = Arc::new(TokioMutex::new(runtime));
+    // Spawn runtime in dedicated thread (runtime.run() blocks)
+    let runtime = Arc::new(Mutex::new(runtime));
+    let runtime_clone = Arc::clone(&runtime);
+
+    let runtime_handle = std::thread::spawn(move || {
+        tracing::info!("Starting StreamRuntime on dedicated thread...");
+        let mut rt = runtime_clone.lock();
+        if let Err(e) = rt.run() {
+            tracing::error!("StreamRuntime error: {}", e);
+        }
+        tracing::info!("StreamRuntime stopped");
+    });
+
+    // Give runtime a moment to start
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    tracing::info!("StreamRuntime started successfully on background thread");
 
     let server = McpServer::with_runtime(registry.clone(), runtime.clone())
         .with_permissions(permissions);
@@ -151,10 +167,16 @@ async fn async_main(args: Args, permissions: std::collections::HashSet<String>) 
         server.run_stdio().await?;
     }
 
-    tracing::info!("Stopping StreamRuntime...");
-    let mut rt = runtime.lock().await;
-    rt.stop().await?;
-    tracing::info!("StreamRuntime stopped");
+    tracing::info!("Shutting down StreamRuntime...");
+    // Send shutdown signal to runtime thread
+    {
+        let mut rt = runtime.lock();
+        rt.stop()?;
+    }
+
+    // Wait for runtime thread to finish
+    runtime_handle.join().map_err(|_| anyhow::anyhow!("Failed to join runtime thread"))?;
+    tracing::info!("StreamRuntime thread joined");
 
     Ok(())
 }

@@ -52,6 +52,7 @@ pub use apple::{
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
     WgpuBridge,
     MetalDevice,
+    configure_macos_event_loop,
 };
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -12,7 +12,6 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use std::future::Future;
 use std::collections::HashSet;
-use tokio::sync::Mutex as TokioMutex;
 
 use rmcp::{
     model::*,
@@ -31,7 +30,7 @@ use rmcp::{
 pub struct McpServer {
     registry: Arc<Mutex<ProcessorRegistry>>,
 
-    runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
+    runtime: Option<Arc<Mutex<StreamRuntime>>>,
 
     permissions: Arc<HashSet<String>>,
 
@@ -53,7 +52,7 @@ impl McpServer {
 
     pub fn with_runtime(
         registry: Arc<Mutex<ProcessorRegistry>>,
-        runtime: Arc<TokioMutex<StreamRuntime>>,
+        runtime: Arc<Mutex<StreamRuntime>>,
     ) -> Self {
         Self {
             registry,
@@ -220,7 +219,7 @@ impl McpServer {
 #[derive(Clone)]
 struct StreamlibMcpHandler {
     registry: Arc<Mutex<ProcessorRegistry>>,
-    runtime: Option<Arc<TokioMutex<StreamRuntime>>>,
+    runtime: Option<Arc<Mutex<StreamRuntime>>>,
     permissions: Arc<HashSet<String>>,
     name: String,
     version: String,
