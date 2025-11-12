@@ -8,34 +8,31 @@ Zero-copy GPU pipeline:
     Camera → WebGPU texture → Display swapchain
 """
 
-from streamlib import camera_processor, display_processor, StreamRuntime
-
-
-@camera_processor(device_id="0x1424001bcf2284")  
-def camera():
-    """Zero-copy camera source - no code needed!"""
-    pass
-
-
-@display_processor(title="Camera Feed - streamlib")
-def display():
-    """Zero-copy display sink - no code needed!"""
-    pass
+from streamlib import StreamRuntime, CAMERA_PROCESSOR, DISPLAY_PROCESSOR
 
 
 def main():
     print("🎥 Starting camera-to-display pipeline...")
     print("Press Ctrl+C to stop\n")
 
-    # Create runtime (30 FPS, 1920x1080)
-    runtime = StreamRuntime(fps=30, width=1920, height=1080, enable_gpu=True)
+    # Create runtime (configuration is per-processor)
+    runtime = StreamRuntime()
 
-    # Add processors to runtime (decorated functions)
-    runtime.add_stream(camera)
-    runtime.add_stream(display)
+    # Add processors with explicit keyword arguments and type-safe constants
+    camera_handle = runtime.add_processor(
+        processor=CAMERA_PROCESSOR,
+        config={"device_id": "0x1424001bcf2284"}
+    )
+    display_handle = runtime.add_processor(
+        processor=DISPLAY_PROCESSOR,
+        config={"width": 1920, "height": 1080, "title": "Camera Feed - streamlib"}
+    )
 
-    # Connect camera output to display input
-    runtime.connect(camera.output_ports().video, display.input_ports().video)
+    # Connect using explicit keyword arguments
+    runtime.connect(
+        output=camera_handle.output_port("video"),
+        input=display_handle.input_port("video")
+    )
 
     # Start the pipeline and run until interrupted
     print("✅ Pipeline configured")

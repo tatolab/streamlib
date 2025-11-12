@@ -7,22 +7,21 @@ mod error;
 mod port;
 mod processor;
 mod gpu_wrappers;
-mod executor;
 
 use pyo3::prelude::*;
 
 pub use error::{PyStreamError, Result};
-pub use runtime::{PyStreamRuntime, PyStream, TestPort};
+pub use runtime::{PyStreamRuntime, PyStream, PyProcessorHandle, TestPort};
 pub use port::ProcessorPort;
 pub use types::PyVideoFrame;
-pub use decorators::{camera_processor, display_processor, processor as processor_decorator, ProcessorProxy, PortsProxy};
+pub use decorators::{processor as processor_decorator, ProcessorProxy, PortsProxy};
 pub use processor::PythonProcessor;
-pub use executor::create_processor_from_code;
 
 pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types::PyVideoFrame>()?;
     m.add_class::<runtime::PyStreamRuntime>()?;
     m.add_class::<runtime::PyStream>()?;
+    m.add_class::<runtime::PyProcessorHandle>()?;
     m.add_class::<port::ProcessorPort>()?;
     m.add_class::<runtime::TestPort>()?;  // Test struct
     m.add_class::<decorators::ProcessorProxy>()?;
@@ -30,7 +29,18 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<types_ext::PyStreamInput>()?;
     m.add_class::<types_ext::PyStreamOutput>()?;
-    m.add_class::<types_ext::PyTimedTick>()?;
+    m.add_class::<types_ext::PyStreamInputAudio1>()?;
+    m.add_class::<types_ext::PyStreamOutputAudio1>()?;
+    m.add_class::<types_ext::PyStreamInputAudio2>()?;
+    m.add_class::<types_ext::PyStreamOutputAudio2>()?;
+    m.add_class::<types_ext::PyStreamInputAudio4>()?;
+    m.add_class::<types_ext::PyStreamOutputAudio4>()?;
+    m.add_class::<types_ext::PyStreamInputAudio6>()?;
+    m.add_class::<types_ext::PyStreamOutputAudio6>()?;
+    m.add_class::<types_ext::PyStreamInputAudio8>()?;
+    m.add_class::<types_ext::PyStreamOutputAudio8>()?;
+    m.add_class::<types_ext::PyStreamInputData>()?;
+    m.add_class::<types_ext::PyStreamOutputData>()?;
     m.add_class::<types_ext::PyGpuContext>()?;
     m.add_class::<types_ext::PyInputPorts>()?;
     m.add_class::<types_ext::PyOutputPorts>()?;
@@ -56,12 +66,15 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<gpu_wrappers::PyTextureFormat>()?;
     m.add_class::<gpu_wrappers::PyBufferBindingType>()?;
 
-    m.add_function(wrap_pyfunction!(decorators::camera_processor, m)?)?;
-    m.add_function(wrap_pyfunction!(decorators::display_processor, m)?)?;
+    // Only keep the @processor decorator for custom Python processors
     m.add_function(wrap_pyfunction!(decorators::processor, m)?)?;
 
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__doc__", "Real-time streaming infrastructure for AI agents")?;
+
+    // Built-in processor type constants
+    m.add("CAMERA_PROCESSOR", "CameraProcessor")?;
+    m.add("DISPLAY_PROCESSOR", "DisplayProcessor")?;
 
     let py = m.py();
 

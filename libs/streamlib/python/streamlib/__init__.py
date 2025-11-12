@@ -50,7 +50,7 @@ class InputDescriptor:
         self.name = name
         self.description = description
         self.required = required
-        self.frame_type = frame_type
+        self.frame_type = frame_type  # e.g. "VideoFrame", "AudioFrame<2>", "DataFrame"
         self._port = None
 
     def __get__(self, obj, objtype=None):
@@ -67,7 +67,7 @@ class OutputDescriptor:
     def __init__(self, name: str, description: str, frame_type: str):
         self.name = name
         self.description = description
-        self.frame_type = frame_type
+        self.frame_type = frame_type  # e.g. "VideoFrame", "AudioFrame<2>", "DataFrame"
         self._port = None
 
     def __get__(self, obj, objtype=None):
@@ -138,6 +138,75 @@ def output(description: str = "", type_hint: Any = None):
     # Return a descriptor that will be detected by @StreamProcessor
     frame_type = type_hint.__name__ if type_hint and hasattr(type_hint, '__name__') else 'VideoFrame'
     return OutputDescriptor('', description, frame_type)
+
+
+def video_input(description: str = "", required: bool = True):
+    """
+    Field marker for video input port (VideoFrame).
+
+    Usage:
+        video_in = video_input(description="Video frames to process")
+    """
+    return InputDescriptor('', description, required, 'VideoFrame')
+
+
+def video_output(description: str = ""):
+    """
+    Field marker for video output port (VideoFrame).
+
+    Usage:
+        video_out = video_output(description="Processed video frames")
+    """
+    return OutputDescriptor('', description, 'VideoFrame')
+
+
+def audio_input(description: str = "", required: bool = True, channels: int = 1):
+    """
+    Field marker for audio input port (AudioFrame<CHANNELS>).
+
+    Usage:
+        audio_in = audio_input(description="Audio input", channels=2)
+
+    Args:
+        description: Human-readable description
+        required: Whether this port must be connected
+        channels: Number of audio channels (1=mono, 2=stereo, etc.)
+    """
+    return InputDescriptor('', description, required, f'AudioFrame<{channels}>')
+
+
+def audio_output(description: str = "", channels: int = 1):
+    """
+    Field marker for audio output port (AudioFrame<CHANNELS>).
+
+    Usage:
+        audio_out = audio_output(description="Audio output", channels=2)
+
+    Args:
+        description: Human-readable description
+        channels: Number of audio channels (1=mono, 2=stereo, etc.)
+    """
+    return OutputDescriptor('', description, f'AudioFrame<{channels}>')
+
+
+def data_input(description: str = "", required: bool = True):
+    """
+    Field marker for data input port (DataFrame).
+
+    Usage:
+        data_in = data_input(description="Generic data input")
+    """
+    return InputDescriptor('', description, required, 'DataFrame')
+
+
+def data_output(description: str = ""):
+    """
+    Field marker for data output port (DataFrame).
+
+    Usage:
+        data_out = data_output(description="Generic data output")
+    """
+    return OutputDescriptor('', description, 'DataFrame')
 
 
 def config(default: Any = None):

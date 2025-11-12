@@ -4,52 +4,46 @@ Python Edge Detector Example using NEW field marker API.
 Demonstrates:
 - New field marker pattern: input(), output(), config()
 - Direct field access: self.video_in.read_latest()
-- Lifecycle methods: on_start(ctx), on_stop()
+- Lifecycle methods: start(ctx), stop()
 - GPU-accelerated processing with WebGPU
 
 This example matches the Rust macro ergonomics!
 """
 
 from streamlib import (
-    StreamProcessor, input, output, config,
-    VideoFrame,
-    camera_processor, display_processor, StreamRuntime,
+    processor,
+    StreamRuntime,
+    CAMERA_PROCESSOR, DISPLAY_PROCESSOR,
 )
 
 
-@camera_processor(device_id=None)  # None = first available camera
-def camera():
-    """Zero-copy camera source"""
-    pass
-
-
-@StreamProcessor(mode="Pull", description="GPU-accelerated edge detector")
+@processor(description="GPU-accelerated edge detector")
 class EdgeDetector:
     """
     Detects edges in video frames using a Sobel filter on the GPU.
 
-    This demonstrates the NEW field marker API that matches Rust's ergonomics:
-    - Direct field access instead of self.input_ports().video
-    - Lifecycle methods on_start() and on_stop()
-    - Config fields
+    Ports are injected during wiring:
+    - self.video_in (input): Video frames to process
+    - self.video_out (output): Edge-detected frames
+
+    Lifecycle methods:
+    - start(ctx): Called when processor starts
+    - stop(): Called when processor stops
     """
 
-    # Port declarations using field markers (matches Rust!)
-    video_in = input(description="Video frames to process")
-    video_out = output(description="Edge-detected frames")
+    def __init__(self):
+        """Initialize processor state"""
+        self.initialized = False
+        self.pipeline = None
+        self.threshold = 0.1
 
-    # Config field with default value
-    threshold = config(0.1)
-
-    def on_start(self, ctx):
+    def start(self, ctx):
         """Called when processor starts - initialize GPU resources"""
         print(f"EdgeDetector starting with threshold={self.threshold}")
         self.gpu = ctx.gpu
-        self.initialized = False
-        self.pipeline = None
         print("GPU context initialized!")
 
-    def on_stop(self):
+    def stop(self):
         """Called when processor stops - cleanup resources"""
         print("EdgeDetector stopping, cleaning up resources...")
 
@@ -116,8 +110,8 @@ class EdgeDetector:
         self.initialized = True
 
     def process(self):
-        """Process each frame - NEW direct field access!"""
-        # NEW: Direct field access instead of self.input_ports().video
+        """Process each frame - ports injected directly during wiring"""
+        # Direct field access - ports injected as self.video_in and self.video_out
         frame = self.video_in.read_latest()
 
         if not frame:
@@ -130,14 +124,8 @@ class EdgeDetector:
         # For now, pass through (actual GPU processing would go here)
         processed_frame = frame
 
-        # NEW: Direct field access instead of self.output_ports().video_out
+        # Write to output port
         self.video_out.write(processed_frame)
-
-
-@display_processor(title="Edge Detector - streamlib")
-def display():
-    """Zero-copy display sink"""
-    pass
 
 
 def main():
@@ -146,21 +134,33 @@ def main():
     print("This example demonstrates the new Rust-like API:")
     print("  - Field markers: input(), output(), config()")
     print("  - Direct access: self.video_in.read_latest()")
-    print("  - Lifecycle: on_start(ctx), on_stop()")
+    print("  - Lifecycle: start(ctx), stop()")
     print("=" * 60)
     print()
 
-    # Create runtime
-    runtime = StreamRuntime(fps=30, width=1920, height=1080, enable_gpu=True)
+    # Create runtime (configuration is per-processor)
+    runtime = StreamRuntime()
 
-    # Add processors
-    runtime.add_stream(camera)
-    runtime.add_stream(EdgeDetector)
-    runtime.add_stream(display)
+    # Add processors with explicit keyword arguments
+    camera_handle = runtime.add_processor(
+        processor=CAMERA_PROCESSOR,
+        config={"device_id": None}  # None = first available camera
+    )
+    edge_handle = runtime.add_processor(processor=EdgeDetector)
+    display_handle = runtime.add_processor(
+        processor=DISPLAY_PROCESSOR,
+        config={"width": 1920, "height": 1080, "title": "Edge Detector - streamlib"}
+    )
 
-    # Connect pipeline: camera → edge_detector → display
-    runtime.connect(camera.output_ports().video, EdgeDetector.input_ports().video_in)
-    runtime.connect(EdgeDetector.output_ports().video_out, display.input_ports().video)
+    # Connect pipeline using explicit keyword arguments
+    runtime.connect(
+        output=camera_handle.output_port("video"),
+        input=edge_handle.input_port("video_in")
+    )
+    runtime.connect(
+        output=edge_handle.output_port("video_out"),
+        input=display_handle.input_port("video")
+    )
 
     print("✅ Pipeline configured: Camera → Edge Detector → Display")
     print("✅ Starting runtime...\n")

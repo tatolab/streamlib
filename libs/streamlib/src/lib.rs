@@ -117,6 +117,7 @@ use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn streamlib(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pyo3(name = "streamlib")]
+fn streamlib_py(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     python::register_python_module(m)
 }
