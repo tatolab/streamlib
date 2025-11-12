@@ -11,7 +11,7 @@ use streamlib::{
 use streamlib::core::{ChordGeneratorConfig, AudioOutputConfig};
 
 
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Initialize logging - use DEBUG level for diagnostics
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)

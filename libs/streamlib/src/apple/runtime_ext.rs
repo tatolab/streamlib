@@ -5,12 +5,15 @@ use objc2_foundation::NSPoint;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
-    let running = Arc::new(AtomicBool::new(true));
-    let running_loop = Arc::clone(&running);
+    let should_stop = Arc::new(AtomicBool::new(false));
+    let should_stop_handler = Arc::clone(&should_stop);
 
     // Install Ctrl+C handler to stop event loop
     ctrlc::set_handler(move || {
-        running_loop.store(false, Ordering::SeqCst);
+        tracing::info!("macOS: Ctrl+C received, initiating shutdown...");
+
+        // Set the stop flag
+        should_stop_handler.store(true, Ordering::SeqCst);
 
         // Stop NSApplication on main thread
         use dispatch2::DispatchQueue;
@@ -56,6 +59,11 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
         }
 
         tracing::info!("macOS: NSApplication event loop stopped");
+
+        // Check if we should stop (Ctrl+C was pressed)
+        if should_stop.load(Ordering::SeqCst) {
+            tracing::info!("macOS: Shutdown requested via Ctrl+C");
+        }
 
         Ok(())
     }) as crate::core::runtime::EventLoopFn;

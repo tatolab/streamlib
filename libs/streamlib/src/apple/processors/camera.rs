@@ -131,7 +131,6 @@ pub struct AppleCameraProcessor {
     metal_device: Option<MetalDevice>,
     wgpu_bridge: Option<Arc<WgpuBridge>>,
     camera_name: String,
-    delegate: Option<Retained<CameraDelegate>>,
     metal_command_queue: Option<metal::CommandQueue>,
 }
 
@@ -140,37 +139,19 @@ impl AppleCameraProcessor {
     // Lifecycle - auto-detected by macro
     fn on_start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
+        tracing::info!("Camera: Processor started, will initialize in process()");
+        Ok(())
+    }
 
-        let mtm = MainThreadMarker::new()
-            .ok_or_else(|| StreamError::Configuration(
-                "CameraProcessor must be created on main thread".into()
-            ))?;
-
-        tracing::info!("Camera: Initializing AVFoundation capture session");
-
-        let metal_device = MetalDevice::new()?;
-
-        // Create metal crate command queue from objc2 Metal device
-        let metal_command_queue = {
-            use metal::foreign_types::ForeignTypeRef;
-            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-            let metal_device_ref = unsafe {
-                metal::DeviceRef::from_ptr(device_ptr as *mut _)
-            };
-            metal_device_ref.new_command_queue()
-        };
-
-        // Create wgpu bridge from shared device
-        let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-            metal_device.clone_device(),
-            ctx.gpu.device().as_ref().clone(),
-            ctx.gpu.queue().as_ref().clone(),
-        ));
-
-        self.wgpu_bridge = Some(wgpu_bridge);
-        self.metal_command_queue = Some(metal_command_queue);
-        self.metal_device = Some(metal_device);
-
+    /// Initialize AVFoundation capture session on main thread
+    /// Must be called from main thread with valid MainThreadMarker
+    /// Returns the camera name as a String
+    /// Note: Session, device, and delegate are leaked to stay on main thread
+    fn initialize_capture_session_on_main_thread(
+        mtm: MainThreadMarker,
+        config: &AppleCameraConfig,
+        latest_frame: Arc<Mutex<Option<FrameHolder>>>,
+    ) -> Result<String> {
         let session = unsafe { AVCaptureSession::new() };
 
         unsafe {
@@ -178,7 +159,7 @@ impl AppleCameraProcessor {
         }
 
         let device = unsafe {
-            if let Some(ref id) = self.config.device_id {
+            if let Some(ref id) = config.device_id {
                 let id_str = NSString::from_str(id);
                 let dev = AVCaptureDevice::deviceWithUniqueID(&id_str);
                 if dev.is_none() {
@@ -200,24 +181,12 @@ impl AppleCameraProcessor {
         };
 
         let device_name = unsafe { device.localizedName().to_string() };
-        let _device_unique_id = unsafe { device.uniqueID().to_string() };
         let device_model = unsafe { device.modelID().to_string() };
-        let _device_manufacturer = unsafe { device.manufacturer().to_string() };
 
         tracing::info!("Camera: Found device: {} ({})", device_name, device_model);
 
-        let media_type = unsafe {
-            AVMediaTypeVideo.ok_or_else(|| StreamError::Configuration(
-                "AVMediaTypeVideo not available".into()
-            ))
-        }?;
-
-        let _status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
-
-
         unsafe {
             if let Err(e) = device.lockForConfiguration() {
-                eprintln!("Camera: Failed to lock device: {:?}", e);
                 return Err(StreamError::Configuration(
                     format!("Failed to lock camera device: {:?}", e)
                 ));
@@ -244,14 +213,13 @@ impl AppleCameraProcessor {
             session.addInput(&input);
         }
 
-        let _ = FRAME_STORAGE.set(self.latest_frame.clone());
+        let _ = FRAME_STORAGE.set(latest_frame);
 
         let wakeup_holder: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>> =
             Arc::new(Mutex::new(None));
         let _ = WAKEUP_CHANNEL.set(wakeup_holder.clone());
 
         let output = unsafe { AVCaptureVideoDataOutput::new() };
-
 
         use objc2_foundation::NSNumber;
 
@@ -300,21 +268,25 @@ impl AppleCameraProcessor {
             session.addOutput(&output);
         }
 
-        self.camera_name = unsafe { device.localizedName().to_string() };
-        self.delegate = Some(delegate);
-
         unsafe {
             session.commitConfiguration();
         }
 
-        tracing::info!("Camera: Starting capture session");
+        // Get camera name before starting
+        let camera_name = unsafe { device.localizedName().to_string() };
+
+        // Start the session
         unsafe { session.startRunning(); }
 
-        // TODO: Properly manage session lifecycle
-        std::mem::forget(session);
+        tracing::info!("Camera: Started AVFoundation session for device: {}", camera_name);
 
-        tracing::info!("Camera {}: AVFoundation session running", self.camera_name);
-        Ok(())
+        // Leak all Objective-C objects to keep them alive on main thread
+        // TODO: Properly manage session lifecycle
+        let _ = Retained::into_raw(session);
+        let _ = Retained::into_raw(device);
+        let _ = Retained::into_raw(delegate);
+
+        Ok(camera_name)
     }
 
     fn on_stop(&mut self) -> Result<()> {
@@ -323,135 +295,240 @@ impl AppleCameraProcessor {
     }
 
     // Business logic - called by macro-generated process()
+    // Pull mode: called once, sets up camera and enters frame processing loop
     fn process(&mut self) -> Result<()> {
-        let frame_holder = {
-            let mut latest = self.latest_frame.lock();
-            latest.take() // Take ownership, leaving None
-        };
+        // First-time setup: Initialize camera on main thread
+        if self.metal_device.is_none() {
+            tracing::info!("Camera: Initializing AVFoundation capture session");
 
-        let holder = frame_holder.ok_or_else(|| {
-            StreamError::Runtime("No frame available from camera callback".into())
-        })?;
+            // AVFoundation requires main thread, so dispatch asynchronously to main thread
+            // and wait for completion using a condvar
+            use dispatch2::DispatchQueue;
+            use std::sync::{Mutex as StdMutex, Condvar};
 
-        unsafe {
-            let pixel_buffer_ref = &*holder.pixel_buffer as *const CVPixelBuffer;
+            // Result holder with condvar for async wait
+            let pair = Arc::new((StdMutex::new(None), Condvar::new()));
+            let pair_clone = Arc::clone(&pair);
+            let config = self.config.clone();
+            let latest_frame = self.latest_frame.clone();
 
-            let iosurface_ref = CVPixelBufferGetIOSurface(pixel_buffer_ref);
-            if iosurface_ref.is_null() {
-                return Err(StreamError::GpuError("Frame has no IOSurface backing".into()));
+            DispatchQueue::main().exec_async(move || {
+                // SAFETY: This closure executes on the main thread via GCD
+                let mtm = unsafe { MainThreadMarker::new_unchecked() };
+
+                let init_result = Self::initialize_capture_session_on_main_thread(mtm, &config, latest_frame);
+                let camera_name = match init_result {
+                    Ok(name) => Ok(name),
+                    Err(e) => Err(e),
+                };
+
+                let (lock, cvar) = &*pair_clone;
+                let mut result = lock.lock().unwrap();
+                *result = Some(camera_name);
+                cvar.notify_one();
+            });
+
+            // Wait for the result
+            let (lock, cvar) = &*pair;
+            let mut result = lock.lock().unwrap();
+            while result.is_none() {
+                result = cvar.wait(result).unwrap();
             }
 
-            let iosurface = Retained::retain(iosurface_ref)
-                .expect("Failed to retain IOSurface");
+            let init_result = result.take()
+                .ok_or_else(|| StreamError::Runtime("Camera initialization failed".into()))?;
 
-            let width = CVPixelBufferGetWidth(pixel_buffer_ref);
-            let height = CVPixelBufferGetHeight(pixel_buffer_ref);
+            self.camera_name = init_result?;
 
-            let metal_device = self.metal_device.as_ref()
-                .ok_or_else(|| StreamError::Configuration("No Metal device".into()))?;
+            tracing::info!("Camera {}: AVFoundation session running", self.camera_name);
 
-            let metal_texture = iosurface::create_metal_texture_from_iosurface(
-                metal_device.device(),
-                &iosurface,
-                0, // plane 0 for BGRA
-            )?;
+            // Initialize Metal resources
+            let metal_device = MetalDevice::new()?;
 
-            let wgpu_bridge = self.wgpu_bridge.as_ref()
-                .ok_or_else(|| StreamError::Configuration("No WebGPU bridge".into()))?;
-
-            let _iosurface_texture = wgpu_bridge.wrap_metal_texture(
-                &metal_texture,
-                wgpu::TextureFormat::Bgra8Unorm,
-                wgpu::TextureUsages::COPY_SRC,
-            )?;
-
-            let metal_rgba_texture = {
-                use objc2_metal::{MTLTextureDescriptor, MTLPixelFormat, MTLTextureUsage, MTLDevice};
-
-                let desc = MTLTextureDescriptor::new();
-                desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-                desc.setWidth(width);
-                desc.setHeight(height);
-                desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
-
-                metal_device.device().newTextureWithDescriptor(&desc)
-                    .ok_or_else(|| StreamError::GpuError("Failed to create RGBA texture".into()))?
+            // Create metal crate command queue from objc2 Metal device
+            let metal_command_queue = {
+                use metal::foreign_types::ForeignTypeRef;
+                let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+                let metal_device_ref = unsafe {
+                    metal::DeviceRef::from_ptr(device_ptr as *mut _)
+                };
+                metal_device_ref.new_command_queue()
             };
 
-            let command_queue = self.metal_command_queue.as_ref()
-                .ok_or_else(|| StreamError::Configuration("Metal command queue not initialized".into()))?;
+            let gpu_context = self.gpu_context.as_ref()
+                .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
-            use metal::foreign_types::ForeignTypeRef;
+            // Create wgpu bridge from shared device
+            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
+                metal_device.clone_device(),
+                gpu_context.device().as_ref().clone(),
+                gpu_context.queue().as_ref().clone(),
+            ));
 
-            let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
-            let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
+            self.wgpu_bridge = Some(wgpu_bridge);
+            self.metal_command_queue = Some(metal_command_queue);
+            self.metal_device = Some(metal_device);
 
-            let dest_texture_ptr = &*metal_rgba_texture as *const _ as *mut std::ffi::c_void;
-            let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
-
-            let command_buffer = command_queue.new_command_buffer();
-            let blit_encoder = command_buffer.new_blit_command_encoder();
-
-            use metal::MTLOrigin;
-            use metal::MTLSize;
-
-            let origin = MTLOrigin { x: 0, y: 0, z: 0 };
-            let size = MTLSize {
-                width: width as u64,
-                height: height as u64,
-                depth: 1,
-            };
-
-            blit_encoder.copy_from_texture(
-                source_texture_ref,
-                0,
-                0,
-                origin,
-                size,
-                dest_texture_ref,
-                0,
-                0,
-                origin,
-            );
-
-            blit_encoder.end_encoding();
-            command_buffer.commit();
-            command_buffer.wait_until_completed();
-
-            let output_texture = wgpu_bridge.wrap_metal_texture(
-                &metal_rgba_texture,
-                wgpu::TextureFormat::Rgba8Unorm,
-                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            )?;
-
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64();
-
-            let frame = VideoFrame::new(
-                Arc::new(output_texture),
-                wgpu::TextureFormat::Rgba8Unorm,
-                timestamp,
-                self.frame_count,
-                width as u32,
-                height as u32,
-            );
-
-            self.frame_count += 1;
-
-            if self.frame_count.is_multiple_of(60) {
-                tracing::info!(
-                    "Camera: Generated frame {} ({}x{}) - WebGPU texture, format=Rgba8Unorm",
-                    self.frame_count,
-                    width,
-                    height
-                );
-            }
-
-            self.video.write(frame);
-            Ok(())
+            tracing::info!("Camera {}: Metal resources initialized", self.camera_name);
         }
+
+        // Main frame processing loop
+        loop {
+            let frame_holder = {
+                let mut latest = self.latest_frame.lock();
+                latest.take() // Take ownership, leaving None
+            };
+
+            let Some(holder) = frame_holder else {
+                // No frame available yet, wait a bit
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            };
+
+            // Process the frame
+            unsafe {
+                let pixel_buffer_ref = &*holder.pixel_buffer as *const CVPixelBuffer;
+
+                let iosurface_ref = CVPixelBufferGetIOSurface(pixel_buffer_ref);
+                if iosurface_ref.is_null() {
+                    tracing::warn!("Camera: Frame has no IOSurface backing, skipping");
+                    continue;
+                }
+
+                let iosurface = Retained::retain(iosurface_ref)
+                    .expect("Failed to retain IOSurface");
+
+                let width = CVPixelBufferGetWidth(pixel_buffer_ref);
+                let height = CVPixelBufferGetHeight(pixel_buffer_ref);
+
+                let metal_device = self.metal_device.as_ref()
+                    .expect("Metal device should be initialized");
+
+                let metal_texture = match iosurface::create_metal_texture_from_iosurface(
+                    metal_device.device(),
+                    &iosurface,
+                    0, // plane 0 for BGRA
+                ) {
+                    Ok(tex) => tex,
+                    Err(e) => {
+                        tracing::warn!("Camera: Failed to create metal texture: {}, skipping frame", e);
+                        continue;
+                    }
+                };
+
+                let wgpu_bridge = self.wgpu_bridge.as_ref()
+                    .expect("WebGPU bridge should be initialized");
+
+                let _iosurface_texture = match wgpu_bridge.wrap_metal_texture(
+                    &metal_texture,
+                    wgpu::TextureFormat::Bgra8Unorm,
+                    wgpu::TextureUsages::COPY_SRC,
+                ) {
+                    Ok(tex) => tex,
+                    Err(e) => {
+                        tracing::warn!("Camera: Failed to wrap iosurface texture: {}, skipping frame", e);
+                        continue;
+                    }
+                };
+
+                let metal_rgba_texture = {
+                    use objc2_metal::{MTLTextureDescriptor, MTLPixelFormat, MTLTextureUsage, MTLDevice};
+
+                    let desc = MTLTextureDescriptor::new();
+                    desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+                    desc.setWidth(width);
+                    desc.setHeight(height);
+                    desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+
+                    match metal_device.device().newTextureWithDescriptor(&desc) {
+                        Some(tex) => tex,
+                        None => {
+                            tracing::warn!("Camera: Failed to create RGBA texture, skipping frame");
+                            continue;
+                        }
+                    }
+                };
+
+                let command_queue = self.metal_command_queue.as_ref()
+                    .expect("Metal command queue should be initialized");
+
+                use metal::foreign_types::ForeignTypeRef;
+
+                let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
+                let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
+
+                let dest_texture_ptr = &*metal_rgba_texture as *const _ as *mut std::ffi::c_void;
+                let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
+
+                let command_buffer = command_queue.new_command_buffer();
+                let blit_encoder = command_buffer.new_blit_command_encoder();
+
+                use metal::MTLOrigin;
+                use metal::MTLSize;
+
+                let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                let size = MTLSize {
+                    width: width as u64,
+                    height: height as u64,
+                    depth: 1,
+                };
+
+                blit_encoder.copy_from_texture(
+                    source_texture_ref,
+                    0,
+                    0,
+                    origin,
+                    size,
+                    dest_texture_ref,
+                    0,
+                    0,
+                    origin,
+                );
+
+                blit_encoder.end_encoding();
+                command_buffer.commit();
+                command_buffer.wait_until_completed();
+
+                let output_texture = match wgpu_bridge.wrap_metal_texture(
+                    &metal_rgba_texture,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                ) {
+                    Ok(tex) => tex,
+                    Err(e) => {
+                        tracing::warn!("Camera: Failed to wrap output texture: {}, skipping frame", e);
+                        continue;
+                    }
+                };
+
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+
+                let frame = VideoFrame::new(
+                    Arc::new(output_texture),
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    timestamp,
+                    self.frame_count,
+                    width as u32,
+                    height as u32,
+                );
+
+                self.frame_count += 1;
+
+                if self.frame_count.is_multiple_of(60) {
+                    tracing::info!(
+                        "Camera: Generated frame {} ({}x{}) - WebGPU texture, format=Rgba8Unorm",
+                        self.frame_count,
+                        width,
+                        height
+                    );
+                }
+
+                self.video.write(frame);
+            } // end unsafe block
+        } // end loop
     }
 
     // Helper methods
