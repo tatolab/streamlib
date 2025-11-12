@@ -752,7 +752,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Lifecycle - auto-detected by macro
-    fn on_start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+    fn setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
         let gpu_context = &ctx.gpu;
         self.gpu_context = Some(gpu_context.clone());
 
@@ -776,7 +776,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         Ok(())
     }
 
-    fn on_stop(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> Result<()> {
         Ok(())
     }
 

@@ -14,10 +14,14 @@ use std::sync::Arc;
 /// typical processing time for media processors. This is acceptable overhead
 /// for the flexibility gained.
 pub trait DynStreamElement: Send + 'static {
-    fn on_start(&mut self, ctx: &RuntimeContext) -> Result<()>;
-    fn on_stop(&mut self) -> Result<()>;
-    fn start(&mut self, ctx: &RuntimeContext) -> Result<()>;
-    fn stop(&mut self) -> Result<()>;
+    fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+        Ok(())  // Default: no-op
+    }
+
+    fn __generated_teardown(&mut self) -> Result<()> {
+        Ok(())  // Default: no-op
+    }
+
     fn dispatch(&mut self) -> Result<()>;
     fn process(&mut self) -> Result<()>;
     fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>);

@@ -93,7 +93,7 @@ impl ChordGeneratorProcessor {
     const FREQ_G4: f64 = 392.00;  // G4
 
     // Lifecycle - auto-detected by macro
-    fn on_start(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+    fn setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
         self.buffer_size = ctx.audio.buffer_size;
         self.sample_rate = ctx.audio.sample_rate;
         *self.frame_counter.lock().unwrap() = 0;
@@ -111,7 +111,7 @@ impl ChordGeneratorProcessor {
         Ok(())
     }
 
-    fn on_stop(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> Result<()> {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.loop_handle.take() {
             let _ = handle.join();
