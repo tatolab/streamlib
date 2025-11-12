@@ -39,10 +39,8 @@ fn main() -> Result<()> {
 
     println!("▶️  Starting pipeline...");
     println!("   Press Ctrl+C to stop\n");
-    runtime.start();
-    runtime.run();
-
-    
+    runtime.start()?;
+    runtime.run()?;
 
     println!("\n✓ Pipeline stopped gracefully");
 

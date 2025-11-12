@@ -41,6 +41,7 @@ struct DisplayLinkContext {
 pub struct DisplayLink {
     display_link: CVDisplayLinkRef,
     frame_ready: Arc<AtomicBool>,
+    context_ptr: *mut std::ffi::c_void,  // Track context for cleanup
 }
 
 unsafe impl Send for DisplayLink {}
@@ -89,6 +90,7 @@ impl DisplayLink {
             Ok(Self {
                 display_link,
                 frame_ready,
+                context_ptr,
             })
         }
     }
@@ -162,10 +164,9 @@ impl Drop for DisplayLink {
                 let _ = self.stop();
             }
 
-            // Get and free context
-            let context_ptr = CVDisplayLinkGetContext(self.display_link);
-            if !context_ptr.is_null() {
-                let _ = Box::from_raw(context_ptr as *mut DisplayLinkContext);
+            // Free context
+            if !self.context_ptr.is_null() {
+                let _ = Box::from_raw(self.context_ptr as *mut DisplayLinkContext);
             }
 
             // Release display link
@@ -203,7 +204,6 @@ extern "C" {
     fn CVDisplayLinkStop(display_link: CVDisplayLinkRef) -> i32;
     fn CVDisplayLinkIsRunning(display_link: CVDisplayLinkRef) -> bool;
     fn CVDisplayLinkRelease(display_link: CVDisplayLinkRef);
-    fn CVDisplayLinkGetContext(display_link: CVDisplayLinkRef) -> *mut std::ffi::c_void;
     fn CVDisplayLinkGetNominalOutputVideoRefreshPeriod(display_link: CVDisplayLinkRef) -> CVTime;
 }
 
