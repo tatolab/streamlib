@@ -1,11 +1,12 @@
 [project]
-name = "audio-test"
+name = "python-edge-detector"
 version = "0.1.0"
-description = "Audio capture and playback test"
+description = "Python edge detector example with GPU-accelerated Sobel filter"
 requires-python = ">=3.10"
 dependencies = [
-    "sounddevice>=0.4.6",
-    "scipy>=1.11.0",
+    "wgpu>=0.25.0",
+    "glfw>=2.7.0",
+    "Pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]

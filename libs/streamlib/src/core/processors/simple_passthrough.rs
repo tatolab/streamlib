@@ -1,14 +1,9 @@
-
 use crate::core::{Result, StreamInput, StreamOutput, VideoFrame};
-use crate::core::traits::{StreamElement, StreamProcessor, ElementType};
-use crate::core::schema::{ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME};
-use crate::core::RuntimeContext;
 use serde::{Serialize, Deserialize};
-use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
-// Re-export for macro use (macro expects `streamlib::` path)
-use crate as streamlib;
+#[cfg(test)]
+use crate::core::traits::ElementType;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePassthroughConfig {
@@ -21,122 +16,50 @@ impl Default for SimplePassthroughConfig {
     }
 }
 
-// NEW PATTERN: Ports directly on processor struct!
+// NEW PATTERN: Complete trait generation - always generates implementations!
 #[derive(StreamProcessor)]
+#[processor(
+    mode = Pull,
+    description = "Passes video frames through unchanged (for testing)"
+)]
 pub struct SimplePassthroughProcessor {
-    // Config fields (non-ports)
-    name: String,
-    scale: f32,
-
-    // Port fields - annotated!
-    #[input]
+    #[input(description = "Input video stream")]
     input: StreamInput<VideoFrame>,
 
-    #[output]
+    #[output(description = "Output video stream")]
     output: StreamOutput<VideoFrame>,
+
+    #[config]
+    config: SimplePassthroughConfig,
 }
 
-impl StreamElement for SimplePassthroughProcessor {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn element_type(&self) -> ElementType {
-        ElementType::Transform
-    }
-
-    fn descriptor(&self) -> Option<ProcessorDescriptor> {
-        <Self as StreamProcessor>::descriptor()
-    }
-
-    fn start(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+// Only business logic implementation needed!
+impl SimplePassthroughProcessor {
+    // Lifecycle - auto-detected by macro (empty implementations for simple processor)
+    fn on_start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn on_stop(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn input_ports(&self) -> Vec<PortDescriptor> {
-        vec![PortDescriptor {
-            name: "input".to_string(),
-            schema: Arc::clone(&SCHEMA_VIDEO_FRAME),
-            required: true,
-            description: "Input video stream".to_string(),
-        }]
-    }
-
-    fn output_ports(&self) -> Vec<PortDescriptor> {
-        vec![PortDescriptor {
-            name: "output".to_string(),
-            schema: Arc::clone(&SCHEMA_VIDEO_FRAME),
-            required: true,
-            description: "Output video stream".to_string(),
-        }]
-    }
-
-    fn as_transform(&self) -> Option<&dyn std::any::Any> {
-        Some(self)
-    }
-
-    fn as_transform_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        Some(self)
-    }
-}
-
-// Manual StreamProcessor implementation
-impl StreamProcessor for SimplePassthroughProcessor {
-    type Config = SimplePassthroughConfig;
-
-    fn from_config(config: Self::Config) -> Result<Self> {
-        Ok(Self {
-            name: "simple_passthrough".to_string(),
-            scale: config.scale,
-            // Port construction
-            input: StreamInput::new("input"),
-            output: StreamOutput::new("output"),
-        })
-    }
-
+    // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
-        // Direct field access - no nested ports struct!
         if let Some(frame) = self.input.read_latest() {
             self.output.write(frame);
         }
         Ok(())
     }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        Some(
-            ProcessorDescriptor::new(
-                "SimplePassthroughProcessor",
-                "Passes video frames through unchanged (for testing)"
-            )
-            .with_usage_context("Connect video input and output for pipeline testing")
-            .with_input(PortDescriptor {
-                name: "input".to_string(),
-                schema: Arc::clone(&SCHEMA_VIDEO_FRAME),
-                required: true,
-                description: "Input video stream".to_string(),
-            })
-            .with_output(PortDescriptor {
-                name: "output".to_string(),
-                schema: Arc::clone(&SCHEMA_VIDEO_FRAME),
-                required: true,
-                description: "Output video stream".to_string(),
-            })
-            .with_tags(vec!["transform", "video", "test", "passthrough"])
-        )
-    }
 }
 
 impl SimplePassthroughProcessor {
     pub fn scale(&self) -> f32 {
-        self.scale
+        self.config.scale
     }
 
     pub fn set_scale(&mut self, scale: f32) {
-        self.scale = scale;
+        self.config.scale = scale;
     }
 }
 

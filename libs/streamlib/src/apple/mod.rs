@@ -7,9 +7,7 @@ pub mod metal;
 pub mod texture;
 pub mod wgpu_bridge;
 
-pub mod sources;
-
-pub mod sinks;
+pub mod processors;
 
 pub mod permissions;
 
@@ -26,12 +24,11 @@ pub mod time;
 pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;
 
-pub use sources::{
+pub use processors::{
+    // Sources
     AppleCameraProcessor,
     AppleAudioCaptureProcessor,
-};
-
-pub use sinks::{
+    // Sinks
     AppleDisplayProcessor,
     AppleAudioOutputProcessor,
 };

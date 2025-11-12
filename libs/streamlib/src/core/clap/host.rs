@@ -1,3 +1,6 @@
+// TODO(@jonathan): CLAP host module has unused structs/fields (HostData, HostShared)
+// Review if these are needed for future CLAP plugin features or can be removed
+#![allow(dead_code)]
 
 use clack_host::{
     prelude::*,

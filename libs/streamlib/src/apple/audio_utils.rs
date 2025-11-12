@@ -2,6 +2,9 @@ use crate::core::{AudioDevice, Result, StreamError};
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Stream, StreamConfig};
 
+// TODO(@jonathan): AudioOutputSetup struct and its fields are unused
+// Review if this setup struct is needed or can be removed
+#[allow(dead_code)]
 pub struct AudioOutputSetup {
     pub stream: Stream,
     pub device: Device,

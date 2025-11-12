@@ -33,6 +33,9 @@ pub enum ProcessorStatus {
 
 type DynProcessor = Box<dyn DynStreamElement>;
 
+// TODO(@jonathan): RuntimeProcessorHandle has unused fields (id, name)
+// Review if these are needed for debugging/introspection or can be removed
+#[allow(dead_code)]
 pub(crate) struct RuntimeProcessorHandle {
     pub id: ProcessorId,
     pub name: String,

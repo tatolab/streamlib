@@ -19,17 +19,18 @@ impl StreamRuntime {
         Self { inner }
     }
 
-    pub async fn add_element_with_config<P>(&mut self, config: P::Config) -> Result<ProcessorHandle>
+    pub fn add_processor_with_config<P>(&mut self, config: P::Config) -> Result<ProcessorHandle>
     where
         P: crate::core::traits::StreamProcessor + 'static,
     {
-        if self.inner.is_running() {
-            let element = P::from_config(config)?;
-            let id = self.inner.add_processor_runtime(Box::new(element)).await?;
-            Ok(ProcessorHandle::new(id))
-        } else {
-            self.inner.add_processor_with_config::<P>(config)
-        }
+        self.inner.add_processor_with_config::<P>(config)
+    }
+
+    pub fn add_processor<P>(&mut self) -> Result<ProcessorHandle>
+    where
+        P: crate::core::traits::StreamProcessor + 'static,
+    {
+        self.inner.add_processor::<P>()
     }
 
     pub fn connect<T: PortMessage>(

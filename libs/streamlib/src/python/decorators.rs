@@ -1,33 +1,6 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use super::port::ProcessorPort;
-
-#[pyclass(module = "streamlib")]
-#[derive(Clone)]
-pub struct PortsProxy {
-    processor_name: String,
-    port_names: Vec<String>,
-    is_input: bool,
-}
-
-#[pymethods]
-impl PortsProxy {
-    fn __getattr__(&self, _py: Python<'_>, name: String) -> PyResult<ProcessorPort> {
-        if self.port_names.contains(&name) {
-            Ok(ProcessorPort::create(self.processor_name.clone(), name, self.is_input))
-        } else {
-            Err(pyo3::exceptions::PyAttributeError::new_err(
-                format!("Port '{}' not found. Available ports: {:?}", name, self.port_names)
-            ))
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        let direction = if self.is_input { "InputPorts" } else { "OutputPorts" };
-        format!("{}({})", direction, self.port_names.join(", "))
-    }
-}
 
 #[pyclass(module = "streamlib")]
 pub struct ProcessorProxy {
@@ -101,101 +74,9 @@ impl ProcessorProxy {
         }
     }
 
-    fn output_ports(&self, _py: Python<'_>) -> PyResult<PortsProxy> {
-        Ok(PortsProxy {
-            processor_name: self.processor_name.clone(),
-            port_names: self.output_port_names.clone(),
-            is_input: false,
-        })
-    }
-
-    fn input_ports(&self, _py: Python<'_>) -> PyResult<PortsProxy> {
-        Ok(PortsProxy {
-            processor_name: self.processor_name.clone(),
-            port_names: self.input_port_names.clone(),
-            is_input: true,
-        })
-    }
-
     fn __repr__(&self) -> String {
         format!("{}(name={})", self.processor_type, self.processor_name)
     }
-}
-
-#[pyfunction]
-#[pyo3(signature = (**kwargs))]
-pub fn camera_processor(
-    py: Python<'_>,
-    kwargs: Option<&Bound<'_, PyDict>>,
-) -> PyResult<Py<PyAny>> {
-    let decorator_code = r#"
-def _make_decorator(config, ProcessorProxy):
-    def _camera_processor_decorator(func):
-        # Get processor name from function
-        processor_name = func.__name__
-
-        # Create ProcessorProxy with camera processor metadata
-        return ProcessorProxy(
-            processor_name=processor_name,
-            processor_type='CameraProcessor',
-            input_port_names=[],
-            output_port_names=['video'],
-            config=config
-        )
-    return _camera_processor_decorator
-"#;
-
-    let locals = PyDict::new_bound(py);
-    locals.set_item("kwargs", kwargs.unwrap_or(&PyDict::new_bound(py)))?;
-
-    let proxy_class = py.get_type_bound::<ProcessorProxy>();
-    locals.set_item("ProcessorProxy", &proxy_class)?;
-
-    py.run_bound(decorator_code, None, Some(&locals))?;
-    let decorator = locals.get_item("_make_decorator")?.unwrap().call((
-        kwargs.unwrap_or(&PyDict::new_bound(py)),
-        &proxy_class,
-    ), None)?;
-
-    Ok(decorator.into())
-}
-
-#[pyfunction]
-#[pyo3(signature = (**kwargs))]
-pub fn display_processor(
-    py: Python<'_>,
-    kwargs: Option<&Bound<'_, PyDict>>,
-) -> PyResult<Py<PyAny>> {
-    let decorator_code = r#"
-def _make_decorator(config, ProcessorProxy):
-    def _display_processor_decorator(func):
-        # Get processor name from function
-        processor_name = func.__name__
-
-        # Create ProcessorProxy with display processor metadata
-        return ProcessorProxy(
-            processor_name=processor_name,
-            processor_type='DisplayProcessor',
-            input_port_names=['video'],
-            output_port_names=[],
-            config=config
-        )
-    return _display_processor_decorator
-"#;
-
-    let locals = PyDict::new_bound(py);
-    locals.set_item("kwargs", kwargs.unwrap_or(&PyDict::new_bound(py)))?;
-
-    let proxy_class = py.get_type_bound::<ProcessorProxy>();
-    locals.set_item("ProcessorProxy", &proxy_class)?;
-
-    py.run_bound(decorator_code, None, Some(&locals))?;
-    let decorator = locals.get_item("_make_decorator")?.unwrap().call((
-        kwargs.unwrap_or(&PyDict::new_bound(py)),
-        &proxy_class,
-    ), None)?;
-
-    Ok(decorator.into())
 }
 
 #[pyfunction]

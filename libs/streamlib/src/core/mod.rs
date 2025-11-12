@@ -10,9 +10,7 @@ pub mod registry;
 pub mod runtime;
 pub mod schema;
 pub mod scheduling;
-pub mod sources;
-pub mod sinks;
-pub mod transformers;
+pub mod processors;
 pub mod sync;
 pub mod texture;
 pub mod topology;
@@ -36,25 +34,24 @@ pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use frames::{
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
 };
-pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor};
+pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor, EmptyConfig};
 
-pub use sources::{
+pub use processors::{
+    // Sources
     CameraProcessor, CameraDevice, CameraConfig,
     AudioCaptureProcessor, AudioInputDevice, AudioCaptureConfig,
     ChordGeneratorProcessor, ChordGeneratorConfig,
-};
-pub use sinks::{
+    // Sinks
     DisplayProcessor, WindowId, DisplayConfig,
     AudioOutputProcessor, AudioDevice, AudioOutputConfig,
-};
-pub use transformers::{
+    // Transformers
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]
-pub use transformers::{
-    PerformanceOverlayProcessor, PerformanceOverlayInputPorts, PerformanceOverlayOutputPorts,
+pub use processors::{
+    PerformanceOverlayProcessor,
     PerformanceOverlayConfig,
 };
 pub use schema::{

@@ -1,7 +1,7 @@
 
 use pyo3::prelude::*;
 use pyo3::exceptions::PyAttributeError;
-use crate::core::{StreamInput, StreamOutput, VideoFrame, TimedTick, GpuContext};
+use crate::core::{StreamInput, StreamOutput, VideoFrame, AudioFrame, DataFrame, GpuContext};
 use super::PyVideoFrame;
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -82,40 +82,175 @@ impl PyStreamOutput {
     }
 }
 
-#[pyclass(name = "TimedTick", module = "streamlib")]
+// Audio frame wrappers for different channel counts
+
+#[pyclass(name = "StreamInputAudio1", module = "streamlib")]
 #[derive(Clone)]
-pub struct PyTimedTick {
-    pub(crate) inner: TimedTick,
+pub struct PyStreamInputAudio1 {
+    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame<1>>>>,
 }
 
-#[pymethods]
-impl PyTimedTick {
-    #[getter]
-    fn frame_number(&self) -> u64 {
-        self.inner.frame_number
-    }
-
-    #[getter]
-    fn timestamp(&self) -> f64 {
-        self.inner.timestamp
-    }
-
-    #[getter]
-    fn delta_time(&self) -> f64 {
-        self.inner.delta_time
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "TimedTick(frame={}, time={:.3}s, dt={:.3}s)",
-            self.inner.frame_number, self.inner.timestamp, self.inner.delta_time
-        )
+impl PyStreamInputAudio1 {
+    pub fn from_port(port: StreamInput<AudioFrame<1>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
     }
 }
 
-impl PyTimedTick {
-    pub fn from_rust(tick: TimedTick) -> Self {
-        Self { inner: tick }
+#[pyclass(name = "StreamOutputAudio1", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamOutputAudio1 {
+    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame<1>>>>,
+}
+
+impl PyStreamOutputAudio1 {
+    pub fn from_port(port: StreamOutput<AudioFrame<1>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamInputAudio2", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamInputAudio2 {
+    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame<2>>>>,
+}
+
+impl PyStreamInputAudio2 {
+    pub fn from_port(port: StreamInput<AudioFrame<2>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamOutputAudio2", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamOutputAudio2 {
+    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame<2>>>>,
+}
+
+impl PyStreamOutputAudio2 {
+    pub fn from_port(port: StreamOutput<AudioFrame<2>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamInputAudio4", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamInputAudio4 {
+    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame<4>>>>,
+}
+
+impl PyStreamInputAudio4 {
+    pub fn from_port(port: StreamInput<AudioFrame<4>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamOutputAudio4", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamOutputAudio4 {
+    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame<4>>>>,
+}
+
+impl PyStreamOutputAudio4 {
+    pub fn from_port(port: StreamOutput<AudioFrame<4>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamInputAudio6", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamInputAudio6 {
+    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame<6>>>>,
+}
+
+impl PyStreamInputAudio6 {
+    pub fn from_port(port: StreamInput<AudioFrame<6>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamOutputAudio6", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamOutputAudio6 {
+    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame<6>>>>,
+}
+
+impl PyStreamOutputAudio6 {
+    pub fn from_port(port: StreamOutput<AudioFrame<6>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamInputAudio8", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamInputAudio8 {
+    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame<8>>>>,
+}
+
+impl PyStreamInputAudio8 {
+    pub fn from_port(port: StreamInput<AudioFrame<8>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamOutputAudio8", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamOutputAudio8 {
+    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame<8>>>>,
+}
+
+impl PyStreamOutputAudio8 {
+    pub fn from_port(port: StreamOutput<AudioFrame<8>>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+// Data frame wrappers
+
+#[pyclass(name = "StreamInputData", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamInputData {
+    pub(crate) port: Arc<Mutex<StreamInput<DataFrame>>>,
+}
+
+impl PyStreamInputData {
+    pub fn from_port(port: StreamInput<DataFrame>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
+    }
+}
+
+#[pyclass(name = "StreamOutputData", module = "streamlib")]
+#[derive(Clone)]
+pub struct PyStreamOutputData {
+    pub(crate) port: Arc<Mutex<StreamOutput<DataFrame>>>,
+}
+
+impl PyStreamOutputData {
+    pub fn from_port(port: StreamOutput<DataFrame>) -> Self {
+        Self {
+            port: Arc::new(Mutex::new(port)),
+        }
     }
 }
 
@@ -178,58 +313,27 @@ impl PyGpuContext {
     }
 }
 
-#[pyclass(name = "InputPorts", module = "streamlib")]
-#[derive(Clone)]
-pub struct PyInputPorts {
-    pub(crate) ports: HashMap<String, PyStreamInput>,
+#[pyclass(name = "RuntimeContext", module = "streamlib")]
+pub struct PyRuntimeContext {
+    pub(crate) inner: crate::core::RuntimeContext,
 }
 
 #[pymethods]
-impl PyInputPorts {
-    fn __getattr__(&self, name: String) -> PyResult<PyStreamInput> {
-        self.ports.get(&name)
-            .cloned()
-            .ok_or_else(|| PyAttributeError::new_err(
-                format!("Input port '{}' not found", name)
-            ))
+impl PyRuntimeContext {
+    #[getter]
+    fn gpu(&self) -> PyGpuContext {
+        PyGpuContext::from_rust(&self.inner.gpu)
     }
 
     fn __repr__(&self) -> String {
-        let port_names: Vec<&str> = self.ports.keys().map(|s| s.as_str()).collect();
-        format!("InputPorts({})", port_names.join(", "))
+        "RuntimeContext(gpu, audio)".to_string()
     }
 }
 
-impl PyInputPorts {
-    pub fn new(ports: HashMap<String, PyStreamInput>) -> Self {
-        Self { ports }
-    }
-}
-
-#[pyclass(name = "OutputPorts", module = "streamlib")]
-#[derive(Clone)]
-pub struct PyOutputPorts {
-    pub(crate) ports: HashMap<String, PyStreamOutput>,
-}
-
-#[pymethods]
-impl PyOutputPorts {
-    fn __getattr__(&self, name: String) -> PyResult<PyStreamOutput> {
-        self.ports.get(&name)
-            .cloned()
-            .ok_or_else(|| PyAttributeError::new_err(
-                format!("Output port '{}' not found", name)
-            ))
-    }
-
-    fn __repr__(&self) -> String {
-        let port_names: Vec<&str> = self.ports.keys().map(|s| s.as_str()).collect();
-        format!("OutputPorts({})", port_names.join(", "))
-    }
-}
-
-impl PyOutputPorts {
-    pub fn new(ports: HashMap<String, PyStreamOutput>) -> Self {
-        Self { ports }
+impl PyRuntimeContext {
+    pub fn from_rust(context: &crate::core::RuntimeContext) -> Self {
+        Self {
+            inner: context.clone(),
+        }
     }
 }

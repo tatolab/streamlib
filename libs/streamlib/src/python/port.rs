@@ -33,10 +33,6 @@ impl ProcessorPort {
         }
     }
 
-    fn test_method(&self) -> String {
-        "test works!".to_string()
-    }
-
     fn __repr__(&self) -> String {
         let direction = if self.is_input { "input" } else { "output" };
         format!("Port({}.{}, {})", self.processor_name, self.port_name, direction)

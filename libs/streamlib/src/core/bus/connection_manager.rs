@@ -6,7 +6,10 @@ use std::collections::HashMap;
 
 /// Metadata-only connection storage
 /// Stores connection metadata without the actual connection (which is owned by processors)
+// TODO(@jonathan): ConnectionMetadata fields (id, source, dest, type_id, type_name, capacity) are never read
+// Review if this metadata tracking is still needed or can be removed
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ConnectionMetadata {
     id: ConnectionId,
     source: PortAddress,

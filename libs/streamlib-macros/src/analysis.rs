@@ -3,7 +3,11 @@
 //! Classifies struct fields as ports or config fields,
 //! extracts type parameters, and builds analysis result.
 
-use crate::attributes::{PortAttributes, ProcessorAttributes};
+// TODO(@jonathan): Review unused helper functions in this module - may be leftover from old implementation
+// Functions like has_audio_ports(), is_audio_frame_type(), is_video_frame_type() are currently unused
+#![allow(dead_code)]
+
+use crate::attributes::{PortAttributes, ProcessorAttributes, StateAttributes};
 use proc_macro2::Ident;
 use syn::{
     Data, DeriveInput, Error, Fields, GenericArgument, PathArguments, Result, Type,
@@ -51,6 +55,19 @@ pub struct ConfigField {
     pub field_type: Type,
 }
 
+/// Information about a state field (runtime state with default initialization)
+#[derive(Debug)]
+pub struct StateField {
+    /// Rust field name
+    pub field_name: Ident,
+
+    /// Field type
+    pub field_type: Type,
+
+    /// Parsed state attributes
+    pub attributes: StateAttributes,
+}
+
 /// Complete analysis result
 #[derive(Debug)]
 pub struct AnalysisResult {
@@ -60,8 +77,14 @@ pub struct AnalysisResult {
     /// Port fields (inputs and outputs)
     pub port_fields: Vec<PortField>,
 
-    /// Config fields (non-ports)
+    /// Config fields (non-ports, non-state)
     pub config_fields: Vec<ConfigField>,
+
+    /// State fields (runtime state with default initialization)
+    pub state_fields: Vec<StateField>,
+
+    /// Config field type (extracted from #[config] field, if present)
+    pub config_field_type: Option<Type>,
 
     /// Processor-level attributes
     pub processor_attrs: ProcessorAttributes,
@@ -96,7 +119,9 @@ impl AnalysisResult {
 
         // Classify fields
         let mut port_fields = Vec::new();
-        let mut config_fields = Vec::new();
+        let config_fields = Vec::new();
+        let mut state_fields = Vec::new();
+        let mut config_field_type: Option<Type> = None;
 
         for field in fields {
             let field_name = field.ident.clone().ok_or_else(|| {
@@ -143,10 +168,29 @@ impl AnalysisResult {
                 continue;
             }
 
-            // Not a port, must be a config field
-            config_fields.push(ConfigField {
+            // Check for #[config] attribute
+            if has_attribute(&field.attrs, "config") {
+                // This is the config field - extract its type
+                config_field_type = Some(field.ty.clone());
+                continue;
+            }
+
+            // Check for explicit #[state] attribute (optional, for clarity)
+            if has_attribute(&field.attrs, "state") {
+                let state_attrs = StateAttributes::parse(&field.attrs)?;
+                state_fields.push(StateField {
+                    field_name,
+                    field_type: field.ty.clone(),
+                    attributes: state_attrs,
+                });
+                continue;
+            }
+
+            // Not a port or config - must be a state field (auto-detected)
+            state_fields.push(StateField {
                 field_name,
                 field_type: field.ty.clone(),
+                attributes: StateAttributes::default(),
             });
         }
 
@@ -162,6 +206,8 @@ impl AnalysisResult {
             struct_name,
             port_fields,
             config_fields,
+            state_fields,
+            config_field_type,
             processor_attrs,
         })
     }

@@ -1,3 +1,7 @@
+// TODO(@jonathan): Mach time module has unused utilities (mach_absolute_time(), mach_ticks_to_ns(), etc.)
+// Review if these high-precision timing functions are needed or can be removed
+#![allow(dead_code)]
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[link(name = "CoreServices", kind = "framework")]

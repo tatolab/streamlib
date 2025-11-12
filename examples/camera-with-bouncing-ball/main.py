@@ -1,8 +1,9 @@
 """
-Camera with animated bouncing ball overlay using @processor decorator.
+Camera with animated bouncing ball overlay - Direct API Example.
 
 This demonstrates:
 - Camera → Python Processor → Display pipeline
+- Direct processor API (no decorators for built-in processors)
 - WebGPU shader for drawing animated graphics
 - Bouncing ball physics simulation
 - GPU-based compositing
@@ -15,8 +16,10 @@ import time
 import struct
 import random
 from streamlib import (
-    camera_processor, processor, display_processor,
-    StreamRuntime, StreamInput, StreamOutput, VideoFrame,
+    processor,
+    StreamRuntime, VideoFrame,
+    # Built-in processor constants
+    CAMERA_PROCESSOR, DISPLAY_PROCESSOR,
     # wgpu enums (no wgpu-py dependency needed!)
     BufferUsage, ShaderStage, TextureSampleType, TextureViewDimension,
     StorageTextureAccess, TextureFormat, BufferBindingType,
@@ -131,12 +134,6 @@ class BouncingBall:
             self.vy += random.uniform(-0.1, 0.1)
 
 
-@camera_processor(device_id="0x1424001bcf2284")  # None = first available camera
-def camera():
-    """Zero-copy camera source - no code needed!"""
-    pass
-
-
 @processor(
     description="GPU-accelerated bouncing ball overlay effect",
     usage_context="Draws an animated bouncing ball on video frames using WebGPU compute shaders",
@@ -148,13 +145,11 @@ class BouncingBallOverlay:
 
     Draws an animated bouncing ball on top of the camera feed using WebGPU.
     Ball physics are calculated on CPU, rendering done on GPU.
+
+    Ports are injected during wiring:
+    - self.video (input): Receives frames from camera
+    - self.video (output): Sends processed frames to display
     """
-
-    class InputPorts:
-        video = StreamInput(VideoFrame)
-
-    class OutputPorts:
-        video = StreamOutput(VideoFrame)
 
     def __init__(self):
         print("BouncingBallOverlay.__init__() called")
@@ -244,10 +239,10 @@ class BouncingBallOverlay:
             traceback.print_exc()
             raise
 
-    def process(self, tick):
+    def process(self):
         """Process each frame: update physics and render ball."""
-        # Read input frame
-        frame = self.input_ports().video.read_latest()
+        # Read input frame - ports are injected directly during wiring
+        frame = self.video.read_latest()
         if not frame:
             return
 
@@ -296,36 +291,66 @@ class BouncingBallOverlay:
         # Submit
         gpu.queue.submit([encoder.finish()])
 
-        # Write output frame
+        # Write output frame - output port also injected directly
         output_frame = frame.clone_with_texture(output)
-        self.output_ports().video.write(output_frame)
-
-
-@display_processor(title="Camera with Bouncing Ball - streamlib")
-def display():
-    """Zero-copy display sink - no code needed!"""
-    pass
+        self.video.write(output_frame)
 
 
 def main():
-    print("🎥 Starting camera-to-display pipeline with bouncing ball overlay...")
-    print("Press Ctrl+C to stop\n")
+    print("🎥 Camera with Bouncing Ball Overlay - Direct API Example")
+    print("=" * 60)
+    print("This example demonstrates:")
+    print("  - Built-in processors (Camera, Display): Direct API without decorators")
+    print("  - Custom processors (BouncingBallOverlay): Decorator API")
+    print("  - GPU-accelerated WebGPU compute shader for ball rendering")
+    print("=" * 60)
+    print()
 
-    # Create runtime (60 FPS for smooth animation, 1920x1080)
-    runtime = StreamRuntime(fps=60, width=1920, height=1080, enable_gpu=True)
+    # Create runtime (configuration is per-processor)
+    runtime = StreamRuntime()
 
-    # Add processors to runtime
-    runtime.add_stream(camera)
-    runtime.add_stream(BouncingBallOverlay)
-    runtime.add_stream(display)
+    # Add built-in processors directly - NO DECORATORS NEEDED!
+    # Use type-safe constants and explicit keyword arguments
+    # Unique IDs are auto-generated (processor_0, processor_1, etc.)
+    camera_handle = runtime.add_processor(
+        processor=CAMERA_PROCESSOR,
+        config={"device_id": "0x1424001bcf2284"}
+    )
+    print(f"✓ Added camera: {camera_handle}")
 
-    # Connect pipeline: camera → bouncing_ball_overlay → display
-    runtime.connect(camera.output_ports().video, BouncingBallOverlay.input_ports().video)
-    runtime.connect(BouncingBallOverlay.output_ports().video, display.input_ports().video)
+    # Add custom Python processor (decorated class)
+    overlay_handle = runtime.add_processor(processor=BouncingBallOverlay)
+    print(f"✓ Added overlay: {overlay_handle}")
+
+    # Add display processor
+    display_handle = runtime.add_processor(
+        processor=DISPLAY_PROCESSOR,
+        config={"width": 1920, "height": 1080, "title": "Camera with Bouncing Ball - streamlib"}
+    )
+    print(f"✓ Added display: {display_handle}")
+
+    # Connect pipeline using keyword arguments (Pythonic!)
+    runtime.connect(
+        output=camera_handle.output_port("video"),
+        input=overlay_handle.input_port("video")
+    )
+    runtime.connect(
+        output=overlay_handle.output_port("video"),
+        input=display_handle.input_port("video")
+    )
+    print("✓ Connected camera → overlay → display\n")
+
+    print("Benefits of Direct API:")
+    print("  - Auto-generated unique IDs (processor_0, processor_1, etc.)")
+    print("  - Type-safe constants (CAMERA_PROCESSOR, DISPLAY_PROCESSOR)")
+    print("  - Explicit keyword arguments for clarity")
+    print("  - No Python decorator code needed for built-ins")
+    print("  - Perfect for MCP tools building pipelines programmatically\n")
 
     # Start the pipeline and run until interrupted
     print("✅ Pipeline configured: Camera → Bouncing Ball (GPU) → Display")
-    print("✅ Starting runtime...\n")
+    print("✅ Starting runtime...")
+    print("Press Ctrl+C to stop\n")
 
     runtime.run()
 

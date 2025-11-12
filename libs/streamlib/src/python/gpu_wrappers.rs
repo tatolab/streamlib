@@ -371,7 +371,7 @@ impl PyWgpuShaderModule {
 
 #[pyclass(name = "WgpuBuffer", module = "streamlib")]
 pub struct PyWgpuBuffer {
-    buffer: std::sync::Arc<wgpu::Buffer>,
+    pub(crate) buffer: std::sync::Arc<wgpu::Buffer>,
 }
 
 #[pymethods]
