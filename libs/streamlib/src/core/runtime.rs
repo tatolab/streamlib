@@ -229,8 +229,8 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_start(&runtime_context) {
-                    tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
+                if let Err(e) = processor.__generated_setup(&runtime_context) {
+                    tracing::error!("[{}] setup() failed: {}", id_for_thread, e);
                     return;
                 }
             }
@@ -313,8 +313,8 @@ impl StreamRuntime {
 
             {
                 let mut processor = processor_for_thread.lock();
-                if let Err(e) = processor.on_stop() {
-                    tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
+                if let Err(e) = processor.__generated_teardown() {
+                    tracing::error!("[{}] teardown() failed: {}", id_for_thread, e);
                 }
             }
 
@@ -1054,8 +1054,8 @@ impl StreamRuntime {
 
                 {
                     let mut processor = processor_for_thread.lock();
-                    if let Err(e) = processor.on_start(&runtime_context) {
-                        tracing::error!("[{}] on_start() failed: {}", id_for_thread, e);
+                    if let Err(e) = processor.__generated_setup(&runtime_context) {
+                        tracing::error!("[{}] setup() failed: {}", id_for_thread, e);
                         return;
                     }
                 }
@@ -1163,8 +1163,8 @@ impl StreamRuntime {
 
                 {
                     let mut processor = processor_for_thread.lock();
-                    if let Err(e) = processor.on_stop() {
-                        tracing::error!("[{}] on_stop() failed: {}", id_for_thread, e);
+                    if let Err(e) = processor.__generated_teardown() {
+                        tracing::error!("[{}] teardown() failed: {}", id_for_thread, e);
                     }
                 }
 

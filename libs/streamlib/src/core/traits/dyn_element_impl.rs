@@ -1,5 +1,5 @@
 use super::{DynStreamElement, StreamProcessor};
-use crate::core::{RuntimeContext, Result};
+use crate::core::Result;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::runtime::WakeupEvent;
 use crate::core::traits::ElementType;
@@ -13,20 +13,14 @@ impl<T> DynStreamElement for T
 where
     T: StreamProcessor,
 {
-    fn on_start(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        self.start(ctx)
+    fn __generated_setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+        use crate::core::traits::StreamElement;
+        self.__generated_setup(ctx)
     }
 
-    fn on_stop(&mut self) -> Result<()> {
-        self.stop()
-    }
-
-    fn start(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        self.start(ctx)
-    }
-
-    fn stop(&mut self) -> Result<()> {
-        self.stop()
+    fn __generated_teardown(&mut self) -> Result<()> {
+        use crate::core::traits::StreamElement;
+        self.__generated_teardown()
     }
 
     fn dispatch(&mut self) -> Result<()> {

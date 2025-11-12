@@ -36,11 +36,11 @@ pub struct SimplePassthroughProcessor {
 // Only business logic implementation needed!
 impl SimplePassthroughProcessor {
     // Lifecycle - auto-detected by macro (empty implementations for simple processor)
-    fn on_start(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+    fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
         Ok(())
     }
 
-    fn on_stop(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> Result<()> {
         Ok(())
     }
 

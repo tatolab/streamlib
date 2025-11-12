@@ -26,16 +26,16 @@ pub trait StreamElement: Send + 'static {
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
 
 
-    fn start(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
+    fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+        Ok(())  // Default: no-op
     }
 
-    fn stop(&mut self) -> Result<()> {
-        Ok(())
+    fn __generated_teardown(&mut self) -> Result<()> {
+        Ok(())  // Default: no-op
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        self.stop()
+        self.__generated_teardown()
     }
 
 
@@ -161,7 +161,7 @@ mod tests {
             name: "test".to_string(),
         };
 
-        assert!(source.stop().is_ok());
+        assert!(source.teardown().is_ok());
         assert!(source.shutdown().is_ok());
     }
 

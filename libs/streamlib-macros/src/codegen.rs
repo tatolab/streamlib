@@ -972,33 +972,29 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
         }
     };
 
-    // Determine lifecycle method names (from attributes or default to "on_start"/"on_stop")
-    // Try to call user's method if it exists, otherwise do nothing
-    let on_start_method = analysis
+    let setup_method = analysis
         .processor_attrs
         .on_start_method
         .as_ref()
         .map(|s| format_ident!("{}", s))
-        .unwrap_or_else(|| format_ident!("on_start"));
+        .unwrap_or_else(|| format_ident!("setup"));
 
-    let start_impl = quote! {
-        fn start(&mut self, ctx: &::streamlib::core::RuntimeContext) -> ::streamlib::core::Result<()> {
-            // Call user's on_start method
-            self.#on_start_method(ctx)
+    let setup_impl = quote! {
+        fn __generated_setup(&mut self, ctx: &::streamlib::core::RuntimeContext) -> ::streamlib::core::Result<()> {
+            self.#setup_method(ctx)
         }
     };
 
-    let on_stop_method = analysis
+    let teardown_method = analysis
         .processor_attrs
         .on_stop_method
         .as_ref()
         .map(|s| format_ident!("{}", s))
-        .unwrap_or_else(|| format_ident!("on_stop"));
+        .unwrap_or_else(|| format_ident!("teardown"));
 
-    let stop_impl = quote! {
-        fn stop(&mut self) -> ::streamlib::core::Result<()> {
-            // Call user's on_stop method
-            self.#on_stop_method()
+    let teardown_impl = quote! {
+        fn __generated_teardown(&mut self) -> ::streamlib::core::Result<()> {
+            self.#teardown_method()
         }
     };
 
@@ -1154,9 +1150,9 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
 
             #descriptor_impl
 
-            #start_impl
+            #setup_impl
 
-            #stop_impl
+            #teardown_impl
 
             #input_ports_impl
 
