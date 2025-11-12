@@ -81,6 +81,12 @@ impl GpuContext {
 
         Ok(Self::new(device, queue))
     }
+
+    /// Synchronous GPU initialization using pollster to block on async operations.
+    /// This should be called from the main thread before starting the runtime.
+    pub fn init_for_platform_sync() -> Result<Self> {
+        pollster::block_on(Self::init_for_platform())
+    }
 }
 
 impl std::fmt::Debug for GpuContext {

@@ -101,6 +101,10 @@ impl AppleDisplayProcessor {
         self.metal_device = Some(metal_device);
 
         tracing::info!("Display {}: Initialized ({}x{})", self.window_title, self.width, self.height);
+
+        // EAGER WINDOW CREATION: Create window immediately instead of waiting for first frame
+        self.initialize_window()?;
+
         Ok(())
     }
 
@@ -131,11 +135,6 @@ impl AppleDisplayProcessor {
     }
 
     fn render_frame(&mut self, frame: VideoFrame) -> Result<()> {
-        // Lazy window creation on first frame
-        if !self.window_creation_dispatched {
-            self.initialize_window()?;
-        }
-
         let wgpu_texture = &frame.texture;
 
         let wgpu_bridge = self.wgpu_bridge.as_ref()

@@ -58,6 +58,7 @@ crossbeam-channel = "0.5"
 inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
 rtrb = "0.3.2"  # Lock-free SPSC ring buffer for real-time audio/video
+ctrlc = "3.5"  # Cross-platform Ctrl+C handling
 
 # Serialization
 serde.workspace = true
