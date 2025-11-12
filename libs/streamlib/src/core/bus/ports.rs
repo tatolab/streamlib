@@ -1,5 +1,6 @@
 use parking_lot::Mutex;
 use std::borrow::Cow;
+use std::cell::UnsafeCell;
 
 use crate::core::runtime::{WakeupEvent, ProcessorId};
 use super::connection::{OwnedProducer, OwnedConsumer};
@@ -74,49 +75,81 @@ impl PortType {
     }
 }
 
-/// Lock-free output port using OwnedProducer (Phase 2 implementation)
+/// Lock-free output port using OwnedProducer
+///
+/// SAFETY: The producers and downstream_wakeup are wrapped in UnsafeCell to avoid
+/// mutex overhead in the hot path (write()). This is safe because:
+/// 1. Ports are owned by a single processor
+/// 2. Only that processor's thread calls write() during process()
+/// 3. Connection setup (add_producer, set_downstream_wakeup) happens during
+///    initialization before the processor thread starts, or with external synchronization
 pub struct StreamOutput<T: PortMessage> {
     name: String,
     port_type: PortType,
-    producers: Mutex<Vec<OwnedProducer<T>>>,
-    downstream_wakeup: Mutex<Option<crossbeam_channel::Sender<WakeupEvent>>>,
+    /// Lock-free producers - each write is atomic
+    /// UnsafeCell for zero-cost abstraction in hot path
+    producers: UnsafeCell<Vec<OwnedProducer<T>>>,
+    /// Wakeup channel for downstream processors
+    /// UnsafeCell for zero-cost abstraction in hot path
+    downstream_wakeup: UnsafeCell<Option<crossbeam_channel::Sender<WakeupEvent>>>,
+    /// Mutex for connection setup (cold path only)
+    setup_lock: Mutex<()>,
 }
+
+// SAFETY: StreamOutput can be safely shared between threads because:
+// 1. The setup_lock Mutex ensures connection setup is synchronized
+// 2. The processor thread has exclusive access during write() (single owner pattern)
+// 3. OwnedProducer and Sender<WakeupEvent> are already Send+Sync
+unsafe impl<T: PortMessage> Sync for StreamOutput<T> {}
 
 impl<T: PortMessage> StreamOutput<T> {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             port_type: T::port_type(),
-            producers: Mutex::new(Vec::new()),
-            downstream_wakeup: Mutex::new(None),
+            producers: UnsafeCell::new(Vec::new()),
+            downstream_wakeup: UnsafeCell::new(None),
+            setup_lock: Mutex::new(()),
         }
     }
 
-    /// Write data to all connected outputs (lock-free)
+    /// Write data to all connected outputs (truly lock-free hot path)
     ///
     /// This always succeeds - each producer uses lock-free atomic operations.
     /// If a buffer is full, data is dropped (acceptable for real-time).
     ///
     /// Fan-out behavior: Each destination gets an independent OwnedProducer
     /// with its own RTRB buffer (N buffers for N destinations).
+    ///
+    /// SAFETY: This is safe because the processor thread has exclusive access
+    /// to its own output ports during process().
     pub fn write(&self, data: T) {
-        let mut producers = self.producers.lock();
+        unsafe {
+            let producers = &mut *self.producers.get();
 
-        // Write to all producers - lock-free atomic operations
-        for producer in producers.iter_mut() {
-            producer.write(data.clone());
-        }
+            // Write to all producers - lock-free atomic operations
+            for producer in producers.iter_mut() {
+                producer.write(data.clone());
+            }
 
-        // Notify downstream processors that data is available
-        if !producers.is_empty() {
-            if let Some(wakeup_tx) = self.downstream_wakeup.lock().as_ref() {
-                let _ = wakeup_tx.send(WakeupEvent::DataAvailable);
+            // Notify downstream processors that data is available
+            if !producers.is_empty() {
+                if let Some(wakeup_tx) = (*self.downstream_wakeup.get()).as_ref() {
+                    let _ = wakeup_tx.send(WakeupEvent::DataAvailable);
+                }
             }
         }
     }
 
+    /// Add a producer during connection setup (cold path)
+    ///
+    /// SAFETY: Uses setup_lock to ensure this only happens during initialization
+    /// before processor threads start, or with external synchronization
     pub fn add_producer(&self, producer: OwnedProducer<T>) {
-        self.producers.lock().push(producer);
+        let _lock = self.setup_lock.lock();
+        unsafe {
+            (*self.producers.get()).push(producer);
+        }
     }
 
     /// Compatibility method for wire_output_producer
@@ -125,7 +158,8 @@ impl<T: PortMessage> StreamOutput<T> {
     }
 
     pub fn producer_count(&self) -> usize {
-        self.producers.lock().len()
+        let _lock = self.setup_lock.lock();
+        unsafe { (*self.producers.get()).len() }
     }
 
     pub fn name(&self) -> &str {
@@ -136,18 +170,27 @@ impl<T: PortMessage> StreamOutput<T> {
         self.port_type
     }
 
+    /// Set downstream wakeup channel during connection setup (cold path)
+    ///
+    /// SAFETY: Uses setup_lock to ensure this only happens during initialization
+    /// before processor threads start, or with external synchronization
     pub fn set_downstream_wakeup(&self, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
-        *self.downstream_wakeup.lock() = Some(wakeup_tx);
+        let _lock = self.setup_lock.lock();
+        unsafe {
+            *self.downstream_wakeup.get() = Some(wakeup_tx);
+        }
     }
 }
 
 impl<T: PortMessage> Clone for StreamOutput<T> {
     fn clone(&self) -> Self {
+        let _lock = self.setup_lock.lock();
         Self {
             name: self.name.clone(),
             port_type: self.port_type,
-            producers: Mutex::new(Vec::new()), // Cannot clone producers (owned)
-            downstream_wakeup: Mutex::new(self.downstream_wakeup.lock().clone()),
+            producers: UnsafeCell::new(Vec::new()), // Cannot clone producers (owned)
+            downstream_wakeup: unsafe { UnsafeCell::new((*self.downstream_wakeup.get()).clone()) },
+            setup_lock: Mutex::new(()),
         }
     }
 }
@@ -162,24 +205,48 @@ impl<T: PortMessage> std::fmt::Debug for StreamOutput<T> {
     }
 }
 
-/// Lock-free input port using OwnedConsumer (Phase 2 implementation)
+/// Lock-free input port using OwnedConsumer
+///
+/// SAFETY: The consumer is wrapped in UnsafeCell to avoid mutex overhead in the hot path (read_latest()).
+/// This is safe because:
+/// 1. Ports are owned by a single processor
+/// 2. Only that processor's thread calls read_latest() during process()
+/// 3. Connection setup (set_consumer) happens during initialization before processor threads start
 pub struct StreamInput<T: PortMessage> {
     name: String,
     port_type: PortType,
-    consumer: Mutex<Option<OwnedConsumer<T>>>,
+    /// Lock-free consumer - each read is atomic
+    /// UnsafeCell for zero-cost abstraction in hot path
+    consumer: UnsafeCell<Option<OwnedConsumer<T>>>,
+    /// Mutex for connection setup (cold path only)
+    setup_lock: Mutex<()>,
 }
+
+// SAFETY: StreamInput can be safely shared between threads because:
+// 1. The setup_lock Mutex ensures connection setup is synchronized
+// 2. The processor thread has exclusive access during read_latest() (single owner pattern)
+// 3. OwnedConsumer is already Send+Sync
+unsafe impl<T: PortMessage> Sync for StreamInput<T> {}
 
 impl<T: PortMessage> StreamInput<T> {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             port_type: T::port_type(),
-            consumer: Mutex::new(None),
+            consumer: UnsafeCell::new(None),
+            setup_lock: Mutex::new(()),
         }
     }
 
+    /// Set consumer during connection setup (cold path)
+    ///
+    /// SAFETY: Uses setup_lock to ensure this only happens during initialization
+    /// before processor threads start, or with external synchronization
     pub fn set_consumer(&self, consumer: OwnedConsumer<T>) {
-        *self.consumer.lock() = Some(consumer);
+        let _lock = self.setup_lock.lock();
+        unsafe {
+            *self.consumer.get() = Some(consumer);
+        }
     }
 
     /// Compatibility method for wire_input_consumer
@@ -187,37 +254,62 @@ impl<T: PortMessage> StreamInput<T> {
         self.set_consumer(consumer);
     }
 
+    /// Read the latest available data (truly lock-free hot path)
+    ///
+    /// SAFETY: This is safe because the processor thread has exclusive access
+    /// to its own input ports during process().
     pub fn read_latest(&self) -> Option<T> {
-        self.consumer.lock().as_mut()?.read_latest()
-    }
-
-    pub fn read_all(&self) -> Vec<T> {
-        if let Some(consumer) = self.consumer.lock().as_mut() {
-            let mut items = Vec::new();
-            while let Some(item) = consumer.read_latest() {
-                items.push(item);
-            }
-            items
-        } else {
-            Vec::new()
+        unsafe {
+            (*self.consumer.get()).as_mut()?.read_latest()
         }
     }
 
-    pub fn has_data(&self) -> bool {
-        self.consumer.lock()
-            .as_ref()
-            .map(|c| c.has_data())
-            .unwrap_or(false)
+    /// Read all available data (truly lock-free hot path)
+    ///
+    /// SAFETY: This is safe because the processor thread has exclusive access
+    /// to its own input ports during process().
+    pub fn read_all(&self) -> Vec<T> {
+        unsafe {
+            if let Some(consumer) = (*self.consumer.get()).as_mut() {
+                let mut items = Vec::new();
+                while let Some(item) = consumer.read_latest() {
+                    items.push(item);
+                }
+                items
+            } else {
+                Vec::new()
+            }
+        }
     }
 
+    /// Check if data is available (truly lock-free hot path)
+    ///
+    /// SAFETY: This is safe because the processor thread has exclusive access
+    /// to its own input ports during process().
+    pub fn has_data(&self) -> bool {
+        unsafe {
+            (*self.consumer.get())
+                .as_ref()
+                .map(|c| c.has_data())
+                .unwrap_or(false)
+        }
+    }
+
+    /// Peek at data without consuming (truly lock-free hot path)
+    ///
+    /// SAFETY: This is safe because the processor thread has exclusive access
+    /// to its own input ports during process().
     pub fn peek(&self) -> Option<T> {
-        self.consumer.lock()
-            .as_mut()
-            .and_then(|c| c.peek())
+        unsafe {
+            (*self.consumer.get())
+                .as_mut()
+                .and_then(|c| c.peek())
+        }
     }
 
     pub fn is_connected(&self) -> bool {
-        self.consumer.lock().is_some()
+        let _lock = self.setup_lock.lock();
+        unsafe { (*self.consumer.get()).is_some() }
     }
 
     pub fn name(&self) -> &str {
@@ -234,7 +326,8 @@ impl<T: PortMessage> Clone for StreamInput<T> {
         Self {
             name: self.name.clone(),
             port_type: self.port_type,
-            consumer: Mutex::new(None), // Cannot clone consumer (owned)
+            consumer: UnsafeCell::new(None), // Cannot clone consumer (owned)
+            setup_lock: Mutex::new(()),
         }
     }
 }
