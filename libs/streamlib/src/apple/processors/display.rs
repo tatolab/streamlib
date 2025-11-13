@@ -130,8 +130,10 @@ impl AppleDisplayProcessor {
     // Sets up vsync-driven rendering loop
     fn process(&mut self) -> Result<()> {
         // Pull mode: process() is called once to set up the loop
-        // Loop continuously, waiting for vsync to drive frame presentation
-        loop {
+        // Loop continuously, waiting for vsync to drive frame presentation - with shutdown awareness
+        use crate::core::{shutdown_aware_loop, LoopControl};
+
+        shutdown_aware_loop(|| {
             // Wait for vsync signal from CVDisplayLink
             if let Some(ref display_link) = self.display_link {
                 display_link.wait_for_frame();
@@ -141,7 +143,9 @@ impl AppleDisplayProcessor {
             if let Some(frame) = self.video.read_latest() {
                 self.render_frame(frame)?;
             }
-        }
+
+            Ok(LoopControl::Continue)
+        })
     }
 
     // Helper methods

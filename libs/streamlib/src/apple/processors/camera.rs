@@ -372,8 +372,10 @@ impl AppleCameraProcessor {
             tracing::info!("Camera {}: Metal resources initialized", self.camera_name);
         }
 
-        // Main frame processing loop
-        loop {
+        // Main frame processing loop - with shutdown awareness
+        use crate::core::{shutdown_aware_loop, LoopControl};
+
+        shutdown_aware_loop(|| {
             let frame_holder = {
                 let mut latest = self.latest_frame.lock();
                 latest.take() // Take ownership, leaving None
@@ -382,7 +384,7 @@ impl AppleCameraProcessor {
             let Some(holder) = frame_holder else {
                 // No frame available yet, wait a bit
                 std::thread::sleep(std::time::Duration::from_millis(1));
-                continue;
+                return Ok(LoopControl::Continue);
             };
 
             // Process the frame
@@ -392,7 +394,7 @@ impl AppleCameraProcessor {
                 let iosurface_ref = CVPixelBufferGetIOSurface(pixel_buffer_ref);
                 if iosurface_ref.is_null() {
                     tracing::warn!("Camera: Frame has no IOSurface backing, skipping");
-                    continue;
+                    return Ok(LoopControl::Continue);
                 }
 
                 let iosurface = Retained::retain(iosurface_ref)
@@ -412,7 +414,7 @@ impl AppleCameraProcessor {
                     Ok(tex) => tex,
                     Err(e) => {
                         tracing::warn!("Camera: Failed to create metal texture: {}, skipping frame", e);
-                        continue;
+                        return Ok(LoopControl::Continue);
                     }
                 };
 
@@ -427,7 +429,7 @@ impl AppleCameraProcessor {
                     Ok(tex) => tex,
                     Err(e) => {
                         tracing::warn!("Camera: Failed to wrap iosurface texture: {}, skipping frame", e);
-                        continue;
+                        return Ok(LoopControl::Continue);
                     }
                 };
 
@@ -444,7 +446,7 @@ impl AppleCameraProcessor {
                         Some(tex) => tex,
                         None => {
                             tracing::warn!("Camera: Failed to create RGBA texture, skipping frame");
-                            continue;
+                            return Ok(LoopControl::Continue);
                         }
                     }
                 };
@@ -497,7 +499,7 @@ impl AppleCameraProcessor {
                     Ok(tex) => tex,
                     Err(e) => {
                         tracing::warn!("Camera: Failed to wrap output texture: {}, skipping frame", e);
-                        continue;
+                        return Ok(LoopControl::Continue);
                     }
                 };
 
@@ -528,7 +530,9 @@ impl AppleCameraProcessor {
 
                 self.video.write(frame);
             } // end unsafe block
-        } // end loop
+
+            Ok(LoopControl::Continue)
+        }) // end shutdown_aware_loop
     }
 
     // Helper methods

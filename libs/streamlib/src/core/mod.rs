@@ -3,7 +3,9 @@ pub mod bus;
 pub mod clap;
 pub mod context;
 pub mod error;
+pub mod loop_utils;
 pub mod pubsub;
+pub mod signals;
 pub mod frames;
 pub mod handles;
 pub mod media_clock;
@@ -86,4 +88,7 @@ pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, Text
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
 pub use scheduling::{
     SchedulingConfig, SchedulingMode, ThreadPriority,
+};
+pub use loop_utils::{
+    shutdown_aware_loop, LoopControl,
 };

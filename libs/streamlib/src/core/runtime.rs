@@ -235,6 +235,14 @@ impl StreamRuntime {
                 }
             }
 
+            // Publish ProcessorEvent::Started
+            {
+                use crate::core::pubsub::{Event, ProcessorEvent, EVENT_BUS};
+                let started_event = Event::processor(&id_for_thread, ProcessorEvent::Started);
+                EVENT_BUS.publish(&started_event.topic(), &started_event);
+                tracing::debug!("[{}] Published ProcessorEvent::Started", id_for_thread);
+            }
+
             match sched_config.mode {
                 crate::core::scheduling::SchedulingMode::Pull => {
                     tracing::info!("[{}] Pull mode - processor manages own callback, waiting for shutdown", id_for_thread);
@@ -316,6 +324,14 @@ impl StreamRuntime {
                 if let Err(e) = processor.__generated_teardown() {
                     tracing::error!("[{}] teardown() failed: {}", id_for_thread, e);
                 }
+            }
+
+            // Publish ProcessorEvent::Stopped
+            {
+                use crate::core::pubsub::{Event, ProcessorEvent, EVENT_BUS};
+                let stopped_event = Event::processor(&id_for_thread, ProcessorEvent::Stopped);
+                EVENT_BUS.publish(&stopped_event.topic(), &stopped_event);
+                tracing::debug!("[{}] Published ProcessorEvent::Stopped", id_for_thread);
             }
 
             tracing::info!("[{}] Thread stopped", id_for_thread);
@@ -845,24 +861,47 @@ impl StreamRuntime {
             self.start()?;
         }
 
+        // Install native signal handlers (SIGTERM, SIGINT)
+        crate::core::signals::install_signal_handlers()
+            .map_err(|e| StreamError::Configuration(
+                format!("Failed to install signal handlers: {}", e)
+            ))?;
+
         tracing::info!("Runtime running (press Ctrl+C to stop)");
 
         if let Some(event_loop) = self.event_loop.take() {
             tracing::debug!("Using platform-specific event loop");
             event_loop()?;
         } else {
-            // Default: use ctrlc crate for cross-platform Ctrl+C handling
+            // Default: wait for shutdown event via event bus
             use std::sync::Arc;
             use std::sync::atomic::{AtomicBool, Ordering};
+            use crate::core::pubsub::{Event, EventListener, RuntimeEvent, EVENT_BUS, topics};
+            use parking_lot::Mutex;
 
             let running = Arc::new(AtomicBool::new(true));
-            let r = running.clone();
+            let running_clone = Arc::clone(&running);
 
-            ctrlc::set_handler(move || {
-                r.store(false, Ordering::SeqCst);
-            }).map_err(|e| StreamError::Configuration(
-                format!("Failed to set Ctrl+C handler: {}", e)
-            ))?;
+            // Shutdown listener that sets the running flag
+            struct ShutdownListener {
+                running: Arc<AtomicBool>,
+            }
+
+            impl EventListener for ShutdownListener {
+                fn on_event(&mut self, event: &Event) -> Result<()> {
+                    if let Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown) = event {
+                        tracing::info!("Runtime received shutdown event, stopping...");
+                        self.running.store(false, Ordering::SeqCst);
+                    }
+                    Ok(())
+                }
+            }
+
+            let listener = ShutdownListener { running: running_clone };
+            let _subscription = EVENT_BUS.subscribe(
+                topics::RUNTIME_GLOBAL,
+                Arc::new(Mutex::new(listener)),
+            );
 
             while running.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -882,6 +921,12 @@ impl StreamRuntime {
 
         tracing::info!("Stopping runtime...");
         self.running = false;
+
+        // Publish shutdown event to event bus for shutdown-aware loops
+        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+        let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
+        EVENT_BUS.publish(&shutdown_event.topic(), &shutdown_event);
+        tracing::debug!("Published shutdown event to event bus");
 
         {
             let processors = self.processors.lock();
@@ -928,6 +973,7 @@ impl StreamRuntime {
         }
 
         tracing::info!("Runtime stopped");
+
         Ok(())
     }
 
@@ -1060,6 +1106,14 @@ impl StreamRuntime {
                     }
                 }
 
+                // Publish ProcessorEvent::Started
+                {
+                    use crate::core::pubsub::{Event, ProcessorEvent, EVENT_BUS};
+                    let started_event = Event::processor(&id_for_thread, ProcessorEvent::Started);
+                    EVENT_BUS.publish(&started_event.topic(), &started_event);
+                    tracing::debug!("[{}] Published ProcessorEvent::Started", id_for_thread);
+                }
+
                 match sched_config.mode {
                     crate::core::scheduling::SchedulingMode::Pull => {
                         tracing::info!("[{}] Pull mode - waiting for connections to be wired", id_for_thread);
@@ -1166,6 +1220,14 @@ impl StreamRuntime {
                     if let Err(e) = processor.__generated_teardown() {
                         tracing::error!("[{}] teardown() failed: {}", id_for_thread, e);
                     }
+                }
+
+                // Publish ProcessorEvent::Stopped
+                {
+                    use crate::core::pubsub::{Event, ProcessorEvent, EVENT_BUS};
+                    let stopped_event = Event::processor(&id_for_thread, ProcessorEvent::Stopped);
+                    EVENT_BUS.publish(&stopped_event.topic(), &stopped_event);
+                    tracing::debug!("[{}] Published ProcessorEvent::Stopped", id_for_thread);
                 }
 
                 tracing::info!("[{}] Thread stopped", id_for_thread);
