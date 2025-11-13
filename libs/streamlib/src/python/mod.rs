@@ -7,6 +7,7 @@ mod error;
 mod port;
 mod processor;
 mod gpu_wrappers;
+mod events;
 
 use pyo3::prelude::*;
 
@@ -73,6 +74,9 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<gpu_wrappers::PyStorageTextureAccess>()?;
     m.add_class::<gpu_wrappers::PyTextureFormat>()?;
     m.add_class::<gpu_wrappers::PyBufferBindingType>()?;
+
+    // Event bus
+    events::register_events(m)?;
 
     // Only keep the @processor decorator for custom Python processors
     m.add_function(wrap_pyfunction!(decorators::processor, m)?)?;
