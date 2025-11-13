@@ -145,6 +145,9 @@ impl StreamRuntime {
         let id = format!("processor_{}", self.next_processor_id);
         self.next_processor_id += 1;
 
+        // Get processor type name for the event
+        let processor_type = std::any::type_name_of_val(&*processor).to_string();
+
         if self.running {
             // Runtime is running - spawn thread immediately
             self.spawn_processor_thread(id.clone(), processor)?;
@@ -171,6 +174,17 @@ impl StreamRuntime {
 
             self.pending_processors.push((id.clone(), processor, shutdown_rx));
             tracing::info!("Added processor with ID: {} (pending)", id);
+        }
+
+        // Publish ProcessorAdded event
+        {
+            use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+            let added_event = Event::RuntimeGlobal(RuntimeEvent::ProcessorAdded {
+                processor_id: id.clone(),
+                processor_type,
+            });
+            EVENT_BUS.publish(&added_event.topic(), &added_event);
+            tracing::debug!("[{}] Published RuntimeEvent::ProcessorAdded", id);
         }
 
         Ok(ProcessorHandle::new(id))
@@ -1041,6 +1055,16 @@ impl StreamRuntime {
             }
         } else {
             tracing::warn!("[{}] No thread handle found (processor may not have started)", processor_id);
+        }
+
+        // Publish ProcessorRemoved event
+        {
+            use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+            let removed_event = Event::RuntimeGlobal(RuntimeEvent::ProcessorRemoved {
+                processor_id: processor_id.to_string(),
+            });
+            EVENT_BUS.publish(&removed_event.topic(), &removed_event);
+            tracing::debug!("[{}] Published RuntimeEvent::ProcessorRemoved", processor_id);
         }
 
         tracing::info!("[{}] Processor removed", processor_id);
