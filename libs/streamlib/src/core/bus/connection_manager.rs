@@ -137,50 +137,75 @@ impl Default for ConnectionManager {
 mod tests {
     use super::*;
 
-    // Mock frame type for testing
-    #[derive(Clone)]
-    struct TestFrame(i32);
-
-    impl PortMessage for TestFrame {
-        fn port_type() -> crate::core::bus::PortType {
-            crate::core::bus::PortType::Data
-        }
-
-        fn schema() -> Arc<crate::core::Schema> {
-            Arc::new(crate::core::Schema::new(
-                "TestFrame",
-                crate::core::SemanticVersion::new(1, 0, 0),
-                vec![],
-                crate::core::SerializationFormat::Bincode,
-            ))
-        }
-    }
-
     #[test]
     fn test_create_connection() {
-        let mut manager = ConnectionManager::new();
+        use crate::core::frames::DataFrame;
 
+        let mut manager = ConnectionManager::new();
         let source = PortAddress::new("proc1", "out");
         let dest = PortAddress::new("proc2", "in");
 
-        // This will panic until Phase 1.3 - that's expected
-        // let conn = manager.create_connection::<TestFrame>(source, dest, 4);
-        // assert!(conn.is_ok());
+        let result = manager.create_connection::<DataFrame>(source.clone(), dest.clone(), 4);
+        assert!(result.is_ok());
+
+        // Verify connection was registered
+        assert!(manager.is_dest_connected(&dest));
+        assert_eq!(manager.connection_count(), 1);
     }
 
     #[test]
     fn test_one_to_one_enforcement() {
-        // Will implement once ProcessorConnection is updated
+        use crate::core::frames::DataFrame;
+
+        let mut manager = ConnectionManager::new();
+        let source1 = PortAddress::new("proc1", "out");
+        let source2 = PortAddress::new("proc2", "out");
+        let dest = PortAddress::new("proc3", "in");
+
+        // First connection should succeed
+        let result1 = manager.create_connection::<DataFrame>(source1, dest.clone(), 4);
+        assert!(result1.is_ok());
+
+        // Verify destination is connected
+        assert!(manager.is_dest_connected(&dest));
+
+        // Second connection to same destination should fail (1-to-1 rule)
+        let result2 = manager.create_connection::<DataFrame>(source2, dest, 4);
+        assert!(result2.is_err());
+
+        if let Err(e) = result2 {
+            assert!(matches!(e, StreamError::Connection(_)));
+        }
     }
 
     #[test]
-    fn test_type_safety() {
-        // Will implement once ProcessorConnection is updated
+    fn test_multiple_outputs_allowed() {
+        use crate::core::frames::DataFrame;
+
+        let mut manager = ConnectionManager::new();
+        let source = PortAddress::new("proc1", "out");
+        let dest1 = PortAddress::new("proc2", "in");
+        let dest2 = PortAddress::new("proc3", "in");
+
+        // Source can connect to multiple destinations
+        let result1 = manager.create_connection::<DataFrame>(source.clone(), dest1, 4);
+        assert!(result1.is_ok());
+
+        let result2 = manager.create_connection::<DataFrame>(source, dest2, 4);
+        assert!(result2.is_ok());
     }
 
     #[test]
     fn test_connection_count() {
-        let manager = ConnectionManager::new();
+        use crate::core::frames::DataFrame;
+
+        let mut manager = ConnectionManager::new();
         assert_eq!(manager.connection_count(), 0);
+
+        let source = PortAddress::new("proc1", "out");
+        let dest = PortAddress::new("proc2", "in");
+
+        manager.create_connection::<DataFrame>(source, dest, 4).unwrap();
+        assert_eq!(manager.connection_count(), 1);
     }
 }

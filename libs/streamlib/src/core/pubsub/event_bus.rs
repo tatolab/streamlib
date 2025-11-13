@@ -122,7 +122,6 @@ impl EventBus {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
     // Test listener that counts events (thread-safe)
     struct CountingListener {
@@ -152,12 +151,15 @@ mod tests {
     fn test_topic_routing() {
         let bus = EventBus::new();
 
-        let audio_listener = Arc::new(Mutex::new(CountingListener::new()));
-        let video_listener = Arc::new(Mutex::new(CountingListener::new()));
+        let audio_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let video_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
+
+        let audio_listener: Arc<Mutex<dyn EventListener>> = audio_listener_concrete.clone();
+        let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
 
         // Subscribe to different topics
-        bus.subscribe("processor:audio", Arc::clone(&audio_listener));
-        bus.subscribe("processor:video", Arc::clone(&video_listener));
+        bus.subscribe("processor:audio", audio_listener);
+        bus.subscribe("processor:video", video_listener);
 
         // Publish to audio topic
         bus.publish("processor:audio", &Event::ProcessorEvent {
@@ -167,20 +169,23 @@ mod tests {
 
         // Rayon scope ensures all tasks complete before returning
         // Only audio subscriber receives
-        assert_eq!(audio_listener.lock().count(), 1);
-        assert_eq!(video_listener.lock().count(), 0);
+        assert_eq!(audio_listener_concrete.lock().count(), 1);
+        assert_eq!(video_listener_concrete.lock().count(), 0);
     }
 
     #[test]
     fn test_runtime_global_broadcast() {
         let bus = EventBus::new();
 
-        let listener1 = Arc::new(Mutex::new(CountingListener::new()));
-        let listener2 = Arc::new(Mutex::new(CountingListener::new()));
+        let listener1_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener2_concrete = Arc::new(Mutex::new(CountingListener::new()));
+
+        let listener1: Arc<Mutex<dyn EventListener>> = listener1_concrete.clone();
+        let listener2: Arc<Mutex<dyn EventListener>> = listener2_concrete.clone();
 
         // Multiple subscribers to runtime:global
-        bus.subscribe("runtime:global", Arc::clone(&listener1));
-        bus.subscribe("runtime:global", Arc::clone(&listener2));
+        bus.subscribe("runtime:global", listener1);
+        bus.subscribe("runtime:global", listener2);
 
         // Publish to runtime:global
         bus.publish("runtime:global", &Event::RuntimeGlobal(
@@ -188,8 +193,8 @@ mod tests {
         ));
 
         // Both subscribers receive (rayon scope ensures completion)
-        assert_eq!(listener1.lock().count(), 1);
-        assert_eq!(listener2.lock().count(), 1);
+        assert_eq!(listener1_concrete.lock().count(), 1);
+        assert_eq!(listener2_concrete.lock().count(), 1);
     }
 
     #[test]
@@ -217,11 +222,12 @@ mod tests {
         });
 
         // Now subscribe
-        let listener = Arc::new(Mutex::new(CountingListener::new()));
-        bus.subscribe("bar", Arc::clone(&listener));
+        let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
+        bus.subscribe("bar", listener);
 
         // Should have no messages (first message was lost)
-        assert_eq!(listener.lock().count(), 0);
+        assert_eq!(listener_concrete.lock().count(), 0);
 
         // Publish second message
         bus.publish("bar", &Event::Custom {
@@ -230,7 +236,7 @@ mod tests {
         });
 
         // Subscriber should receive second message only
-        assert_eq!(listener.lock().count(), 1);
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 
     #[test]
@@ -238,17 +244,23 @@ mod tests {
         let bus = EventBus::new();
 
         // Subscribe 5 subscribers to the same topic
-        let listener1 = Arc::new(Mutex::new(CountingListener::new()));
-        let listener2 = Arc::new(Mutex::new(CountingListener::new()));
-        let listener3 = Arc::new(Mutex::new(CountingListener::new()));
-        let listener4 = Arc::new(Mutex::new(CountingListener::new()));
-        let listener5 = Arc::new(Mutex::new(CountingListener::new()));
+        let listener1_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener2_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener3_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener4_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener5_concrete = Arc::new(Mutex::new(CountingListener::new()));
 
-        bus.subscribe("broadcast", Arc::clone(&listener1));
-        bus.subscribe("broadcast", Arc::clone(&listener2));
-        bus.subscribe("broadcast", Arc::clone(&listener3));
-        bus.subscribe("broadcast", Arc::clone(&listener4));
-        bus.subscribe("broadcast", Arc::clone(&listener5));
+        let listener1: Arc<Mutex<dyn EventListener>> = listener1_concrete.clone();
+        let listener2: Arc<Mutex<dyn EventListener>> = listener2_concrete.clone();
+        let listener3: Arc<Mutex<dyn EventListener>> = listener3_concrete.clone();
+        let listener4: Arc<Mutex<dyn EventListener>> = listener4_concrete.clone();
+        let listener5: Arc<Mutex<dyn EventListener>> = listener5_concrete.clone();
+
+        bus.subscribe("broadcast", listener1);
+        bus.subscribe("broadcast", listener2);
+        bus.subscribe("broadcast", listener3);
+        bus.subscribe("broadcast", listener4);
+        bus.subscribe("broadcast", listener5);
 
         // Publish one message
         bus.publish("broadcast", &Event::Custom {
@@ -257,22 +269,23 @@ mod tests {
         });
 
         // All 5 subscribers should receive the message (parallel dispatch)
-        assert_eq!(listener1.lock().count(), 1);
-        assert_eq!(listener2.lock().count(), 1);
-        assert_eq!(listener3.lock().count(), 1);
-        assert_eq!(listener4.lock().count(), 1);
-        assert_eq!(listener5.lock().count(), 1);
+        assert_eq!(listener1_concrete.lock().count(), 1);
+        assert_eq!(listener2_concrete.lock().count(), 1);
+        assert_eq!(listener3_concrete.lock().count(), 1);
+        assert_eq!(listener4_concrete.lock().count(), 1);
+        assert_eq!(listener5_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_dropped_listener_auto_cleanup() {
         let bus = EventBus::new();
 
-        let listener = Arc::new(Mutex::new(CountingListener::new()));
-        bus.subscribe("test", Arc::clone(&listener));
+        let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
+        bus.subscribe("test", listener);
 
-        // Drop the listener
-        drop(listener);
+        // Drop the concrete listener
+        drop(listener_concrete);
 
         // Publishing should not panic and should clean up the dead listener
         bus.publish("test", &Event::Custom {

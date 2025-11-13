@@ -330,10 +330,11 @@ mod tests {
     #[test]
     fn test_keyboard_event_routing() {
         let bus = EventBus::new();
-        let listener = Arc::new(Mutex::new(TestListener::new()));
+        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to keyboard topic
-        bus.subscribe(topics::KEYBOARD, Arc::clone(&listener));
+        bus.subscribe(topics::KEYBOARD, listener);
 
         // Create keyboard event
         let event = Event::keyboard(
@@ -349,16 +350,17 @@ mod tests {
         bus.publish(&event.topic(), &event);
 
         // Verify listener received it
-        assert_eq!(listener.lock().count(), 1);
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_mouse_event_routing() {
         let bus = EventBus::new();
-        let listener = Arc::new(Mutex::new(TestListener::new()));
+        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to mouse topic
-        bus.subscribe(topics::MOUSE, Arc::clone(&listener));
+        bus.subscribe(topics::MOUSE, listener);
 
         // Create mouse event
         let event = Event::mouse(
@@ -374,16 +376,17 @@ mod tests {
         bus.publish(&event.topic(), &event);
 
         // Verify listener received it
-        assert_eq!(listener.lock().count(), 1);
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_window_event_routing() {
         let bus = EventBus::new();
-        let listener = Arc::new(Mutex::new(TestListener::new()));
+        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to window topic
-        bus.subscribe(topics::WINDOW, Arc::clone(&listener));
+        bus.subscribe(topics::WINDOW, listener);
 
         // Create window event
         let event = Event::window(WindowEventType::Resized {
@@ -398,19 +401,20 @@ mod tests {
         bus.publish(&event.topic(), &event);
 
         // Verify listener received it
-        assert_eq!(listener.lock().count(), 1);
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_processor_event_routing() {
         let bus = EventBus::new();
-        let listener = Arc::new(Mutex::new(TestListener::new()));
+        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         let processor_id = "audio-mixer";
         let topic = topics::processor(processor_id);
 
         // Subscribe to processor-specific topic
-        bus.subscribe(&topic, Arc::clone(&listener));
+        bus.subscribe(&topic, listener);
 
         // Create processor event
         let event = Event::processor(processor_id, ProcessorEvent::Started);
@@ -422,16 +426,17 @@ mod tests {
         bus.publish(&event.topic(), &event);
 
         // Verify listener received it
-        assert_eq!(listener.lock().count(), 1);
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_runtime_global_event_routing() {
         let bus = EventBus::new();
-        let listener = Arc::new(Mutex::new(TestListener::new()));
+        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to runtime global topic
-        bus.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+        bus.subscribe(topics::RUNTIME_GLOBAL, listener);
 
         // Create runtime event (non-input)
         let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStart);
@@ -443,18 +448,19 @@ mod tests {
         bus.publish(&event.topic(), &event);
 
         // Verify listener received it
-        assert_eq!(listener.lock().count(), 1);
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_custom_event_routing() {
         let bus = EventBus::new();
-        let listener = Arc::new(Mutex::new(TestListener::new()));
+        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         let custom_topic = "game:player-scored";
 
         // Subscribe to custom topic
-        bus.subscribe(custom_topic, Arc::clone(&listener));
+        bus.subscribe(custom_topic, listener);
 
         // Create custom event
         let event = Event::custom(
@@ -469,23 +475,28 @@ mod tests {
         bus.publish(&event.topic(), &event);
 
         // Verify listener received it
-        assert_eq!(listener.lock().count(), 1);
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_input_events_routed_to_specific_topics() {
         let bus = EventBus::new();
 
-        let keyboard_listener = Arc::new(Mutex::new(TestListener::new()));
-        let mouse_listener = Arc::new(Mutex::new(TestListener::new()));
-        let window_listener = Arc::new(Mutex::new(TestListener::new()));
-        let runtime_listener = Arc::new(Mutex::new(TestListener::new()));
+        let keyboard_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let mouse_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let window_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let runtime_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+
+        let keyboard_listener: Arc<Mutex<dyn EventListener>> = keyboard_listener_concrete.clone();
+        let mouse_listener: Arc<Mutex<dyn EventListener>> = mouse_listener_concrete.clone();
+        let window_listener: Arc<Mutex<dyn EventListener>> = window_listener_concrete.clone();
+        let runtime_listener: Arc<Mutex<dyn EventListener>> = runtime_listener_concrete.clone();
 
         // Subscribe to all topics
-        bus.subscribe(topics::KEYBOARD, Arc::clone(&keyboard_listener));
-        bus.subscribe(topics::MOUSE, Arc::clone(&mouse_listener));
-        bus.subscribe(topics::WINDOW, Arc::clone(&window_listener));
-        bus.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&runtime_listener));
+        bus.subscribe(topics::KEYBOARD, keyboard_listener);
+        bus.subscribe(topics::MOUSE, mouse_listener);
+        bus.subscribe(topics::WINDOW, window_listener);
+        bus.subscribe(topics::RUNTIME_GLOBAL, runtime_listener);
 
         // Create keyboard input event (RuntimeEvent variant but routed to KEYBOARD)
         let kb_event = Event::RuntimeGlobal(RuntimeEvent::KeyboardInput {
@@ -518,18 +529,19 @@ mod tests {
         bus.publish(&runtime_event.topic(), &runtime_event);
 
         // Verify routing - each listener only received its specific events
-        assert_eq!(keyboard_listener.lock().count(), 1);
-        assert_eq!(mouse_listener.lock().count(), 1);
-        assert_eq!(window_listener.lock().count(), 1);
-        assert_eq!(runtime_listener.lock().count(), 1);
+        assert_eq!(keyboard_listener_concrete.lock().count(), 1);
+        assert_eq!(mouse_listener_concrete.lock().count(), 1);
+        assert_eq!(window_listener_concrete.lock().count(), 1);
+        assert_eq!(runtime_listener_concrete.lock().count(), 1);
     }
 
     #[test]
     fn test_modifier_keys_as_regular_keys() {
         let bus = EventBus::new();
-        let listener = Arc::new(Mutex::new(TestListener::new()));
+        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
-        bus.subscribe(topics::KEYBOARD, Arc::clone(&listener));
+        bus.subscribe(topics::KEYBOARD, listener);
 
         // Test pressing shift key itself
         let shift_event = Event::keyboard(
@@ -548,7 +560,7 @@ mod tests {
         bus.publish(&a_with_shift.topic(), &a_with_shift);
 
         // Both events should be received
-        assert_eq!(listener.lock().count(), 2);
+        assert_eq!(listener_concrete.lock().count(), 2);
     }
 
     #[test]
@@ -584,12 +596,15 @@ mod tests {
     fn test_multiple_processors_isolated_topics() {
         let bus = EventBus::new();
 
-        let audio_listener = Arc::new(Mutex::new(TestListener::new()));
-        let video_listener = Arc::new(Mutex::new(TestListener::new()));
+        let audio_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+        let video_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
+
+        let audio_listener: Arc<Mutex<dyn EventListener>> = audio_listener_concrete.clone();
+        let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
 
         // Subscribe to different processor topics
-        bus.subscribe(&topics::processor("audio-mixer"), Arc::clone(&audio_listener));
-        bus.subscribe(&topics::processor("video-filter"), Arc::clone(&video_listener));
+        bus.subscribe(&topics::processor("audio-mixer"), audio_listener);
+        bus.subscribe(&topics::processor("video-filter"), video_listener);
 
         // Publish to audio processor
         let audio_event = Event::processor("audio-mixer", ProcessorEvent::Paused);
@@ -600,8 +615,8 @@ mod tests {
         bus.publish(&video_event.topic(), &video_event);
 
         // Each listener only received its own processor's events
-        assert_eq!(audio_listener.lock().count(), 1);
-        assert_eq!(video_listener.lock().count(), 1);
+        assert_eq!(audio_listener_concrete.lock().count(), 1);
+        assert_eq!(video_listener_concrete.lock().count(), 1);
     }
 
     #[test]

@@ -77,7 +77,6 @@ pub trait StreamElement: Send + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::traits::source::StreamSource;
 
     struct MockSource {
         name: String,
@@ -161,7 +160,8 @@ mod tests {
             name: "test".to_string(),
         };
 
-        assert!(source.teardown().is_ok());
+        // Test that default lifecycle methods work
+        assert!(source.__generated_teardown().is_ok());
         assert!(source.shutdown().is_ok());
     }
 
