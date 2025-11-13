@@ -347,6 +347,8 @@ impl<T: PortMessage> std::fmt::Debug for StreamInput<T> {
 mod tests {
     use super::*;
 
+    impl sealed::Sealed for i32 {}
+
     impl PortMessage for i32 {
         fn port_type() -> PortType {
             PortType::Data

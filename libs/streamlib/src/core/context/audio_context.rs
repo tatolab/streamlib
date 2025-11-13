@@ -43,7 +43,7 @@ mod tests {
     fn test_audio_context_default() {
         let ctx = AudioContext::default();
         assert_eq!(ctx.sample_rate, 48000);
-        assert_eq!(ctx.buffer_size, 512);
+        assert_eq!(ctx.buffer_size, 128);  // Default is 128, not 512
     }
 
     #[test]

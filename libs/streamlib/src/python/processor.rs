@@ -358,7 +358,7 @@ impl StreamElement for PythonProcessor {
         Some(self.get_descriptor())
     }
 
-    fn start(&mut self, runtime_context: &RuntimeContext) -> Result<()> {
+    fn __generated_setup(&mut self, runtime_context: &RuntimeContext) -> Result<()> {
         use crate::core::StreamError;
 
         let gpu_context = &runtime_context.gpu;
@@ -403,17 +403,17 @@ def gpu_context(self):
             instance.setattr(py, "gpu_context", bound_method)
                 .map_err(|e| StreamError::Configuration(format!("Failed to set gpu_context: {}", e)))?;
 
-            // Call Python's start(ctx) if it exists
+            // Call Python's setup(ctx) if it exists
             let instance_bound = instance.bind(py);
-            let has_start = instance_bound.hasattr("start")
+            let has_setup = instance_bound.hasattr("setup")
                 .map_err(|e| StreamError::Configuration(format!("hasattr error: {}", e)))?;
 
-            if has_start {
-                tracing::info!("[PythonProcessor:{}] Calling Python start(ctx)", self.name);
+            if has_setup {
+                tracing::info!("[PythonProcessor:{}] Calling Python setup(ctx)", self.name);
                 let py_ctx = Py::new(py, PyRuntimeContext::from_rust(runtime_context))
                     .map_err(|e| StreamError::Configuration(format!("Failed to create runtime context wrapper: {}", e)))?;
 
-                instance.call_method1(py, "start", (py_ctx,))
+                instance.call_method1(py, "setup", (py_ctx,))
                     .map_err(|e| {
                         let traceback = if let Some(traceback) = e.traceback_bound(py) {
                             match traceback.format() {
@@ -423,31 +423,31 @@ def gpu_context(self):
                         } else {
                             String::new()
                         };
-                        StreamError::Configuration(format!("Python start() failed: {}{}", e, traceback))
+                        StreamError::Configuration(format!("Python setup() failed: {}{}", e, traceback))
                     })?;
             }
 
             Ok(())
         })?;
 
-        tracing::info!("[PythonProcessor:{}] Started and instantiated", self.name);
+        tracing::info!("[PythonProcessor:{}] Setup complete and instantiated", self.name);
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn __generated_teardown(&mut self) -> Result<()> {
         use crate::core::StreamError;
 
-        // Call Python's stop() if it exists
+        // Call Python's teardown() if it exists
         if let Some(instance) = &self.python_instance {
             Python::with_gil(|py| -> Result<()> {
                 let instance_bound = instance.bind(py);
-                let has_stop = instance_bound.hasattr("stop")
+                let has_teardown = instance_bound.hasattr("teardown")
                     .map_err(|e| StreamError::Configuration(format!("hasattr error: {}", e)))?;
 
-                if has_stop {
-                    tracing::info!("[PythonProcessor:{}] Calling Python stop()", self.name);
+                if has_teardown {
+                    tracing::info!("[PythonProcessor:{}] Calling Python teardown()", self.name);
 
-                    instance.call_method0(py, "stop")
+                    instance.call_method0(py, "teardown")
                         .map_err(|e| {
                             let traceback = if let Some(traceback) = e.traceback_bound(py) {
                                 match traceback.format() {
@@ -457,14 +457,14 @@ def gpu_context(self):
                             } else {
                                 String::new()
                             };
-                            StreamError::Configuration(format!("Python stop() failed: {}{}", e, traceback))
+                            StreamError::Configuration(format!("Python teardown() failed: {}{}", e, traceback))
                         })?;
                 }
                 Ok(())
             })?;
         }
 
-        tracing::info!("[PythonProcessor:{}] Stopped", self.name);
+        tracing::info!("[PythonProcessor:{}] Teardown complete", self.name);
         Ok(())
     }
 

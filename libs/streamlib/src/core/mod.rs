@@ -3,6 +3,9 @@ pub mod bus;
 pub mod clap;
 pub mod context;
 pub mod error;
+pub mod loop_utils;
+pub mod pubsub;
+pub mod signals;
 pub mod frames;
 pub mod handles;
 pub mod media_clock;
@@ -29,6 +32,13 @@ pub use bus::{
 };
 pub use context::{GpuContext, AudioContext, RuntimeContext};
 pub use error::{StreamError, Result};
+pub use pubsub::{
+    EVENT_BUS, Event, RuntimeEvent, ProcessorEvent, ProcessorState,
+    KeyCode, KeyState, Modifiers,
+    MouseButton, MouseState,
+    WindowEventType,
+    EventListener,
+};
 pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
 pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
 pub use frames::{
@@ -78,4 +88,7 @@ pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, Text
 pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
 pub use scheduling::{
     SchedulingConfig, SchedulingMode, ThreadPriority,
+};
+pub use loop_utils::{
+    shutdown_aware_loop, LoopControl,
 };

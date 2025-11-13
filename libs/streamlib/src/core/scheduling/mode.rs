@@ -23,8 +23,11 @@ mod tests {
     #[test]
     fn test_scheduling_mode_equality() {
         assert_eq!(SchedulingMode::Loop, SchedulingMode::Loop);
+        assert_eq!(SchedulingMode::Push, SchedulingMode::Push);
+        assert_eq!(SchedulingMode::Pull, SchedulingMode::Pull);
         assert_ne!(SchedulingMode::Loop, SchedulingMode::Push);
-        assert_ne!(SchedulingMode::Callback, SchedulingMode::Timer);
+        assert_ne!(SchedulingMode::Push, SchedulingMode::Pull);
+        assert_ne!(SchedulingMode::Loop, SchedulingMode::Pull);
     }
 
     #[test]
@@ -41,9 +44,11 @@ mod tests {
 
     #[test]
     fn test_scheduling_mode_serde() {
-        let mode = SchedulingMode::Callback;
-        let json = serde_json::to_string(&mode).unwrap();
-        let deserialized: SchedulingMode = serde_json::from_str(&json).unwrap();
-        assert_eq!(mode, deserialized);
+        // Test all variants
+        for mode in [SchedulingMode::Loop, SchedulingMode::Push, SchedulingMode::Pull] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let deserialized: SchedulingMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(mode, deserialized);
+        }
     }
 }

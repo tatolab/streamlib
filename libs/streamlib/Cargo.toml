@@ -58,7 +58,10 @@ crossbeam-channel = "0.5"
 inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
 rtrb = "0.3.2"  # Lock-free SPSC ring buffer for real-time audio/video
-ctrlc = "3.5"  # Cross-platform Ctrl+C handling
+signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
+ctrlc = "3.4"  # Cross-platform Ctrl+C handler (works with GUI apps)
+dashmap = "6.1"  # Lock-free concurrent HashMap for event bus topic routing
+rayon = "1.10"  # Parallel task execution for event bus dispatch
 
 # Serialization
 serde.workspace = true
@@ -132,6 +135,10 @@ harness = false
 
 [[bench]]
 name = "phase2_bench"
+harness = false
+
+[[bench]]
+name = "event_bus_bench"
 harness = false
 
 [package.metadata.docs.rs]

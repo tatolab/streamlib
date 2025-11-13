@@ -38,6 +38,9 @@ fn main() -> Result<()> {
     println!("✓ Pipeline connected\n");
 
     println!("▶️  Starting pipeline...");
+    #[cfg(target_os = "macos")]
+    println!("   Press Cmd+Q to stop\n");
+    #[cfg(not(target_os = "macos"))]
     println!("   Press Ctrl+C to stop\n");
     runtime.start()?;
     runtime.run()?;

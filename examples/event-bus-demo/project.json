@@ -1,0 +1,23 @@
+{
+  "name": "event-bus-demo",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "examples/event-bus-demo",
+  "projectType": "application",
+  "targets": {
+    "run": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --active python main.py",
+        "cwd": "examples/event-bus-demo"
+      }
+    },
+    "sync": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv sync",
+        "cwd": "examples/event-bus-demo"
+      }
+    }
+  },
+  "tags": ["python", "example", "event-bus"]
+}
