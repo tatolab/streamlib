@@ -72,6 +72,7 @@ impl EventBus {
     /// ```
     pub fn publish(&self, topic: &str, event: &Event) {
         if let Some(subscribers) = self.topics.get(topic) {
+            eprintln!("[EVENT_BUS] Publishing to topic '{}', {} subscribers registered", topic, subscribers.len());
             tracing::info!("EVENT_BUS: Publishing to topic '{}', {} subscribers registered", topic, subscribers.len());
 
             // Share event via Arc to avoid cloning for each listener
@@ -82,9 +83,12 @@ impl EventBus {
             for weak_listener in subscribers.iter() {
                 if let Some(listener) = weak_listener.upgrade() {
                     live_listeners.push(listener);
+                } else {
+                    eprintln!("[EVENT_BUS]   - Weak ref upgrade failed (listener dropped)");
                 }
             }
 
+            eprintln!("[EVENT_BUS]   - {} live listeners (weak refs upgraded successfully)", live_listeners.len());
             tracing::info!("EVENT_BUS: {} live listeners (weak refs upgraded successfully)", live_listeners.len());
 
             // Dispatch in parallel to all listeners
@@ -96,15 +100,18 @@ impl EventBus {
                         // Try lock without blocking
                         // If listener is busy, skip (fire-and-forget)
                         if let Some(mut guard) = listener.try_lock() {
+                            eprintln!("[EVENT_BUS]   - Calling on_event for listener");
                             tracing::info!("EVENT_BUS: Calling on_event for listener");
                             let _ = guard.on_event(&event);
                         } else {
+                            eprintln!("[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)");
                             tracing::warn!("EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)");
                         }
                     });
                 }
             });
         } else {
+            eprintln!("[EVENT_BUS] No subscribers for topic '{}'", topic);
             tracing::warn!("EVENT_BUS: No subscribers for topic '{}'", topic);
         }
         // If no subscribers, event is dropped (true fire-and-forget)

@@ -17,7 +17,7 @@ use crate::core::pubsub::topics as event_topics;
 use crate::core::error::{Result, StreamError};
 
 /// Python wrapper for Event
-#[pyclass(name = "Event")]
+#[pyclass(name = "Event", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyEvent {
     inner: Event,
@@ -215,28 +215,42 @@ struct PyEventListener {
 
 impl EventListener for PyEventListener {
     fn on_event(&mut self, event: &Event) -> Result<()> {
+        eprintln!("[RUST] PyEventListener::on_event called for topic: {}", event.topic());
+        tracing::info!("PyEventListener::on_event called for topic: {}", event.topic());
         Python::with_gil(|py| {
+            eprintln!("[RUST]   - GIL acquired, calling Python callback");
+            tracing::info!("GIL acquired, calling Python callback");
             let py_event = PyEvent::from_rust(event.clone());
 
             self.callback.call1(py, (py_event,))
                 .map_err(|e| {
+                    eprintln!("[RUST]   - ERROR: Python callback error: {}", e);
+                    tracing::error!("Python callback error: {}", e);
                     StreamError::Runtime(format!("Python event listener error: {}", e))
                 })?;
 
+            eprintln!("[RUST]   - Python callback completed successfully");
+            tracing::info!("Python callback completed");
             Ok(())
         })
     }
 }
 
 /// Python wrapper for the global EventBus
-#[pyclass(name = "EventBus")]
-pub struct PyEventBus;
+#[pyclass(name = "EventBus", module = "streamlib")]
+pub struct PyEventBus {
+    /// Keep strong references to listeners so they don't get dropped
+    /// The Vec holds the Arc references to keep listeners alive
+    _listeners: Arc<ParkingLotMutex<Vec<Arc<ParkingLotMutex<dyn EventListener>>>>>,
+}
 
 #[pymethods]
 impl PyEventBus {
     #[new]
     fn new() -> Self {
-        Self
+        Self {
+            _listeners: Arc::new(ParkingLotMutex::new(Vec::new())),
+        }
     }
 
     /// Subscribe to a topic with a callback
@@ -258,13 +272,19 @@ impl PyEventBus {
     ///     bus.subscribe("input:keyboard", on_keyboard)
     ///     ```
     fn subscribe(&self, topic: String, callback: Py<PyAny>) -> PyResult<()> {
+        eprintln!("[RUST] PyEventBus::subscribe called for topic: {}", topic);
+        tracing::info!("PyEventBus::subscribe called for topic: {}", topic);
         Python::with_gil(|py| {
             let callback_bound = callback.bind(py);
 
             // Check if it's a callable or has on_event method
             let actual_callback = if callback_bound.is_callable() {
+                eprintln!("[RUST]   - Callback is a function");
+                tracing::info!("  - Callback is a function");
                 callback.clone_ref(py)
             } else if callback_bound.hasattr("on_event")? {
+                eprintln!("[RUST]   - Callback is an object with on_event method");
+                tracing::info!("  - Callback is an object with on_event method");
                 callback_bound.getattr("on_event")?.into()
             } else {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
@@ -276,7 +296,14 @@ impl PyEventBus {
                 callback: actual_callback,
             }));
 
-            EVENT_BUS.subscribe(&topic, listener);
+            // Subscribe to event bus
+            EVENT_BUS.subscribe(&topic, listener.clone());
+
+            // Keep strong reference to prevent listener from being dropped
+            self._listeners.lock().push(listener);
+
+            eprintln!("[RUST]   - Listener registered successfully");
+            tracing::info!("  - Listener registered successfully");
             Ok(())
         })
     }
@@ -293,9 +320,19 @@ impl PyEventBus {
     ///     event = Event.custom("my-topic", {"data": 123})
     ///     bus.publish("my-topic", event)
     ///     ```
-    fn publish(&self, topic: String, event: PyEvent) -> PyResult<()> {
+    fn publish(&self, py: Python<'_>, topic: String, event: PyEvent) -> PyResult<()> {
+        eprintln!("[RUST] PyEventBus::publish called for topic: {}", topic);
+        tracing::info!("PyEventBus::publish called for topic: {}", topic);
         let rust_event = event.into_rust();
-        EVENT_BUS.publish(&topic, &rust_event);
+
+        // Release GIL before publishing to avoid deadlock with rayon threads
+        // that need to acquire GIL to call Python callbacks
+        py.allow_threads(|| {
+            EVENT_BUS.publish(&topic, &rust_event);
+        });
+
+        eprintln!("[RUST]   - Event published");
+        tracing::info!("  - Event published");
         Ok(())
     }
 

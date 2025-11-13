@@ -23,6 +23,15 @@ pub use decorators::{processor as processor_decorator, ProcessorProxy};
 pub use processor::PythonProcessor;
 
 pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Initialize tracing if RUST_LOG is set
+    use std::sync::Once;
+    static INIT_TRACING: Once = Once::new();
+    INIT_TRACING.call_once(|| {
+        if std::env::var("RUST_LOG").is_ok() {
+            tracing_subscriber::fmt::init();
+        }
+    });
+
     // Frame types
     m.add_class::<types::PyVideoFrame>()?;
     m.add_class::<types::PyAudioFrame1>()?;
