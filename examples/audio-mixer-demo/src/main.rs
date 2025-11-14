@@ -22,24 +22,14 @@ fn main() -> Result<()> {
     // Step 1: Create runtime (event-driven, no FPS parameter!)
     println!("🎛️  Creating audio runtime...");
     let mut runtime = StreamRuntime::new();
-    let audio_config = runtime.audio_config();
-    println!("   Sample rate: {} Hz", audio_config.sample_rate);
-    println!("   Buffer size: {} samples\n", audio_config.buffer_size);
 
-    // Calculate optimal tick rate to match audio buffer size
-    // This ensures we generate exactly the right number of samples per tick
-    // to match CoreAudio's consumption rate, eliminating buffer underruns
-    let tick_rate = audio_config.sample_rate as f64 / audio_config.buffer_size as f64;
-    println!("   Optimal tick rate: {:.2} Hz (matches buffer size)", tick_rate);
 
     // Step 2: Add chord generator (now outputs pre-mixed stereo)
     println!("🎹 Adding chord generator (C major chord)...");
     println!("   Generates stereo output with C4 + E4 + G4 pre-mixed");
 
     let chord_gen = runtime.add_processor_with_config::<ChordGeneratorProcessor>(
-        ChordGeneratorConfig {
-            amplitude: 0.15,              // 15% volume per tone (pre-mixed)
-        }
+        ChordGeneratorConfig::default()
     )?;
     println!("   ✅ C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)");
     println!("   ✅ Pre-mixed stereo output on port 'chord'");
@@ -183,7 +173,7 @@ fn main() -> Result<()> {
     println!("     └─ Output 'chord' (stereo with all 3 tones mixed)");
     println!("   • ChordGen → Speaker (direct connection, no effects)\n");
     println!("⏰ Clock Synchronization:");
-    println!("   • Single hardware-like source @ {:.2} Hz", tick_rate);
+    
     println!("   • All 3 tones generated and mixed in single callback");
     println!("   • Zero mixing overhead - pre-mixed stereo output");
     println!("   • Demonstrates single-output source pattern\n");

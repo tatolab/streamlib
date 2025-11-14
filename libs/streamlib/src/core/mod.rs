@@ -30,7 +30,7 @@ pub use bus::{
     StreamOutput, StreamInput,
     OwnedProducer, OwnedConsumer, create_owned_connection,
 };
-pub use context::{GpuContext, AudioContext, RuntimeContext};
+pub use context::{GpuContext, RuntimeContext};
 pub use error::{StreamError, Result};
 pub use pubsub::{
     EVENT_BUS, Event, RuntimeEvent, ProcessorEvent, ProcessorState,

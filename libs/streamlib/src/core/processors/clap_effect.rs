@@ -12,6 +12,8 @@ pub struct ClapEffectConfig {
     pub plugin_path: PathBuf,
     pub plugin_name: Option<String>,
     pub plugin_index: Option<usize>,
+    pub sample_rate: u32,
+    pub buffer_size: usize,
 }
 
 impl Default for ClapEffectConfig {
@@ -20,6 +22,8 @@ impl Default for ClapEffectConfig {
             plugin_path: PathBuf::new(),
             plugin_name: None,
             plugin_index: None,
+            sample_rate: 48000,
+            buffer_size: 512,
         }
     }
 }
@@ -114,39 +118,39 @@ impl ClapEffectProcessor {
     }
 
     // Lifecycle - auto-detected by macro
-    fn setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        self.sample_rate = ctx.audio.sample_rate;
-        self.buffer_size = ctx.audio.buffer_size;
+    fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+        self.sample_rate = self.config.sample_rate;
+        self.buffer_size = self.config.buffer_size;
 
         let mut host = if let Some(name) = self.config.plugin_name.as_deref() {
             ClapPluginHost::load_by_name(
                 &self.config.plugin_path,
                 name,
-                ctx.audio.sample_rate,
-                ctx.audio.buffer_size
+                self.config.sample_rate,
+                self.config.buffer_size
             )?
         } else if let Some(index) = self.config.plugin_index {
             ClapPluginHost::load_by_index(
                 &self.config.plugin_path,
                 index,
-                ctx.audio.sample_rate,
-                ctx.audio.buffer_size
+                self.config.sample_rate,
+                self.config.buffer_size
             )?
         } else {
             ClapPluginHost::load(
                 &self.config.plugin_path,
-                ctx.audio.sample_rate,
-                ctx.audio.buffer_size
+                self.config.sample_rate,
+                self.config.buffer_size
             )?
         };
 
-        host.activate(ctx.audio.sample_rate, ctx.audio.buffer_size)?;
+        host.activate(self.config.sample_rate, self.config.buffer_size)?;
 
         tracing::info!(
             "[ClapEffect] Loaded and activated plugin '{}' at {} Hz with {} buffer size",
             host.plugin_info().name,
-            ctx.audio.sample_rate,
-            ctx.audio.buffer_size
+            self.config.sample_rate,
+            self.config.buffer_size
         );
 
         self.host = Some(host);

@@ -9,7 +9,7 @@ pub use streamlib_macros::StreamProcessor;
 
 pub use core::{
     media_clock::MediaClock,
-    StreamError, Result, GpuContext, AudioContext, RuntimeContext,
+    StreamError, Result, GpuContext, RuntimeContext,
     VideoFrame, AudioFrame, DataFrame, MetadataValue,
     StreamElement, ElementType, DynStreamElement,
     StreamOutput, StreamInput, PortType, PortMessage,

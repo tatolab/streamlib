@@ -19,8 +19,6 @@ pub enum WakeupEvent {
     Shutdown,
 }
 
-pub use crate::core::context::AudioContext;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessorStatus {
     Pending,
@@ -78,7 +76,6 @@ pub struct StreamRuntime {
     next_processor_id: usize,
     pub(crate) connections: Arc<Mutex<HashMap<ConnectionId, Connection>>>,
     next_connection_id: usize,
-    audio_context: AudioContext,
     pending_connections: Vec<PendingConnection>,
     bus: crate::core::Bus,
 }
@@ -95,7 +92,6 @@ impl StreamRuntime {
             next_processor_id: 0,
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
-            audio_context: AudioContext::default(),
             bus: crate::core::Bus::new(),
             pending_connections: Vec::new(),
         }
@@ -103,17 +99,6 @@ impl StreamRuntime {
 
     pub fn is_running(&self) -> bool {
         self.running
-    }
-
-    pub fn audio_config(&self) -> AudioContext {
-        self.audio_context
-    }
-
-    pub fn set_audio_config(&mut self, config: AudioContext) {
-        if self.running {
-            tracing::warn!("Changing audio config while runtime is running may cause issues");
-        }
-        self.audio_context = config;
     }
 
     /// Request camera permission from the system.
@@ -1555,24 +1540,5 @@ mod tests {
                 "Processors should start processing nearly simultaneously"
             );
         }
-    }
-
-
-    #[test]
-    fn test_audio_config_getter_setter() {
-        let mut runtime = StreamRuntime::new();
-
-        let config = runtime.audio_config();
-        assert_eq!(config.sample_rate, 48000);
-        assert_eq!(config.buffer_size, 128); // AudioContext default
-
-        runtime.set_audio_config(AudioContext {
-            sample_rate: 44100,
-            buffer_size: 1024,
-        });
-
-        let new_config = runtime.audio_config();
-        assert_eq!(new_config.sample_rate, 44100);
-        assert_eq!(new_config.buffer_size, 1024);
     }
 }

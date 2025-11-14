@@ -8,12 +8,16 @@ use streamlib_macros::StreamProcessor;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChordGeneratorConfig {
     pub amplitude: f64,
+    pub sample_rate: u32,
+    pub buffer_size: usize,
 }
 
 impl Default for ChordGeneratorConfig {
     fn default() -> Self {
         Self {
             amplitude: 0.15, // 15% to avoid clipping when mixed
+            sample_rate: 48000,
+            buffer_size: 512,
         }
     }
 }
@@ -93,9 +97,9 @@ impl ChordGeneratorProcessor {
     const FREQ_G4: f64 = 392.00;  // G4
 
     // Lifecycle - auto-detected by macro
-    fn setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        self.buffer_size = ctx.audio.buffer_size;
-        self.sample_rate = ctx.audio.sample_rate;
+    fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+        self.buffer_size = self.config.buffer_size;
+        self.sample_rate = self.config.sample_rate;
         *self.frame_counter.lock().unwrap() = 0;
 
         let amp = self.config.amplitude as f32;

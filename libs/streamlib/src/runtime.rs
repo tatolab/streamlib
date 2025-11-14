@@ -1,6 +1,5 @@
 use crate::core::{Result, bus::PortMessage};
 
-pub use crate::core::runtime::AudioContext;
 pub use crate::core::handles::ProcessorHandle;
 
 pub struct StreamRuntime {
@@ -51,14 +50,6 @@ impl StreamRuntime {
 
     pub fn stop(&mut self) -> Result<()> {
         self.inner.stop()
-    }
-
-    pub fn audio_config(&self) -> AudioContext {
-        self.inner.audio_config()
-    }
-
-    pub fn set_audio_config(&mut self, config: AudioContext) {
-        self.inner.set_audio_config(config)
     }
 
     /// Request camera permission from the system.
