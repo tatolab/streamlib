@@ -158,7 +158,8 @@ impl AppleMp4WriterProcessor {
         }
 
         // Try to read frames from both inputs
-        let audio = match self.audio.read_latest() {
+        // Use read() for audio (sequential) and read_latest() for video (latest frame)
+        let audio = match self.audio.read() {
             Some(frame) => frame,
             None => return Ok(()), // No audio available
         };

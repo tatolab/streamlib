@@ -186,7 +186,7 @@ impl ChordGeneratorProcessor {
                     val
                 };
 
-                let chord_frame = AudioFrame::<2>::new(stereo_samples, timestamp_ns, counter);
+                let chord_frame = AudioFrame::<2>::new(stereo_samples, timestamp_ns, counter, sample_rate);
 
                 if iteration_count == 1 {
                     tracing::info!("ChordGenerator FIRST iteration: writing stereo chord frame");

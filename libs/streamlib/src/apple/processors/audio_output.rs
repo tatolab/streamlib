@@ -85,24 +85,37 @@ impl AppleAudioOutputProcessor {
 
         tracing::info!("AudioOutput: Setting up audio output with cpal");
 
+        // Buffer for accumulating frames when device wants larger buffers than we provide
+        let mut frame_buffer: Vec<f32> = Vec::new();
+
         let setup = crate::apple::audio_utils::setup_audio_output(
             self.device_id,
             self.buffer_size,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                // Lock-free read_latest() call
-                if let Some(audio_frame) = audio_port.read_latest() {
-                    let samples = &audio_frame.samples;
+                // Device may request more data than our frame size (e.g., 1920 samples when we provide 1024)
+                // Accumulate frames until we have enough to fill the device buffer
 
-                    tracing::debug!("AudioOutput: Got audio frame with {} samples", samples.len());
-
-                    let copy_len = data.len().min(samples.len());
-                    data[..copy_len].copy_from_slice(&samples[..copy_len]);
-
-                    if copy_len < data.len() {
-                        data[copy_len..].fill(0.0);
+                while frame_buffer.len() < data.len() {
+                    if let Some(audio_frame) = audio_port.read() {
+                        frame_buffer.extend_from_slice(&audio_frame.samples);
+                    } else {
+                        // No more frames available - break and use what we have
+                        break;
                     }
+                }
+
+                if frame_buffer.len() >= data.len() {
+                    // We have enough data - copy and remove from buffer
+                    data.copy_from_slice(&frame_buffer[..data.len()]);
+                    frame_buffer.drain(..data.len());
+                } else if !frame_buffer.is_empty() {
+                    // We have some data but not enough - copy what we have and pad with silence
+                    let copy_len = frame_buffer.len();
+                    data[..copy_len].copy_from_slice(&frame_buffer);
+                    data[copy_len..].fill(0.0);
+                    frame_buffer.clear();
                 } else {
-                    tracing::debug!("AudioOutput: No data available, outputting silence");
+                    // No data at all - output silence
                     data.fill(0.0);
                 }
             }

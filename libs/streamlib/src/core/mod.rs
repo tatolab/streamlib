@@ -58,6 +58,9 @@ pub use processors::{
     // Transformers
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
+    AudioResamplerProcessor, AudioResamplerConfig, ResamplingQuality,
+    AudioChannelConverterProcessor, AudioChannelConverterConfig, ChannelConversionMode,
+    BufferRechunkerProcessor, BufferRechunkerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]

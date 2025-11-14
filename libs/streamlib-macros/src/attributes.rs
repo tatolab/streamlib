@@ -157,16 +157,24 @@ impl ProcessorAttributes {
                     return Ok(());
                 }
 
-                // mode = Pull or mode = Push
+                // mode = SchedulingMode::Pull, SchedulingMode::Push, or SchedulingMode::Loop
                 if meta.path.is_ident("mode") {
-                    let ident: syn::Ident = meta.value()?.parse()?;
-                    let mode = ident.to_string();
-                    if mode != "Pull" && mode != "Push" {
+                    // Parse as a full path (e.g., SchedulingMode::Push)
+                    let path: syn::Path = meta.value()?.parse()?;
+
+                    // Extract the last segment (Push, Pull, Loop)
+                    let mode = path.segments.last()
+                        .map(|seg| seg.ident.to_string())
+                        .ok_or_else(|| Error::new_spanned(&path, "Invalid mode path"))?;
+
+                    // Validate against SchedulingMode enum variants
+                    if mode != "Pull" && mode != "Push" && mode != "Loop" {
                         return Err(Error::new_spanned(
-                            ident,
-                            "mode must be either Pull or Push"
+                            path,
+                            format!("mode must be SchedulingMode::Pull, SchedulingMode::Push, or SchedulingMode::Loop (got '{}')", mode)
                         ));
                     }
+
                     result.scheduling_mode = Some(mode);
                     return Ok(());
                 }

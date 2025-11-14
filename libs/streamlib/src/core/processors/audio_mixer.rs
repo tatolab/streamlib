@@ -1,6 +1,7 @@
 use crate::core::{Result, StreamInput, StreamOutput};
 use crate::core::frames::AudioFrame;
 use serde::{Serialize, Deserialize};
+use std::sync::Arc;
 use dasp::Signal;
 use streamlib_macros::StreamProcessor;
 
@@ -32,7 +33,7 @@ impl Default for MixingStrategy {
 
 #[derive(StreamProcessor)]
 #[processor(
-    mode = Pull,
+    mode = Push,
     description = "Mixes two mono signals (left and right) into a stereo signal"
 )]
 pub struct AudioMixerProcessor {
@@ -43,7 +44,7 @@ pub struct AudioMixerProcessor {
     right: StreamInput<AudioFrame<1>>,
 
     #[output(description = "Mixed stereo audio output")]
-    audio: StreamOutput<AudioFrame<2>>,
+    audio: Arc<StreamOutput<AudioFrame<2>>>,
 
     #[config]
     config: AudioMixerConfig,
@@ -81,7 +82,8 @@ impl AudioMixerProcessor {
         tracing::debug!("[AudioMixer] process() called");
 
         // Check if both inputs have data
-        let left_frame = match self.left.read_latest() {
+        // Use read() for sequential audio consumption (not read_latest() which skips frames)
+        let left_frame = match self.left.read() {
             Some(f) => f,
             None => {
                 tracing::debug!("[AudioMixer] Left input has no data");
@@ -89,7 +91,7 @@ impl AudioMixerProcessor {
             }
         };
 
-        let right_frame = match self.right.read_latest() {
+        let right_frame = match self.right.read() {
             Some(f) => f,
             None => {
                 tracing::debug!("[AudioMixer] Right input has no data");
@@ -125,7 +127,7 @@ impl AudioMixerProcessor {
             stereo_samples.push(final_right);  // Right channel
         }
 
-        let output_frame = AudioFrame::<2>::new(stereo_samples, timestamp_ns, self.frame_counter);
+        let output_frame = AudioFrame::<2>::new(stereo_samples, timestamp_ns, self.frame_counter, self.sample_rate);
         self.audio.write(output_frame);
 
         tracing::debug!("[AudioMixer] Wrote mixed stereo frame");

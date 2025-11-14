@@ -503,7 +503,8 @@ impl ClapPluginHost {
         Ok(AudioFrame::new(
             output_samples,
             input.timestamp_ns,
-            input.frame_number
+            input.frame_number,
+            input.sample_rate
         ))
     }
 

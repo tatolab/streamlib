@@ -19,6 +19,7 @@ pub struct AudioFrame<const CHANNELS: usize> {
     pub samples: Arc<Vec<f32>>,
     pub timestamp_ns: i64,
     pub frame_number: u64,
+    pub sample_rate: u32,
     pub metadata: Option<HashMap<String, MetadataValue>>,
 }
 
@@ -27,6 +28,7 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
         samples: Vec<f32>,
         timestamp_ns: i64,
         frame_number: u64,
+        sample_rate: u32,
     ) -> Self {
         assert_eq!(
             samples.len() % CHANNELS,
@@ -40,6 +42,7 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
             samples: Arc::new(samples),
             timestamp_ns,
             frame_number,
+            sample_rate,
             metadata: None,
         }
     }
@@ -63,12 +66,12 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
         }
     }
 
-    pub fn duration(&self, sample_rate: u32) -> f64 {
-        self.sample_count() as f64 / sample_rate as f64
+    pub fn duration(&self) -> f64 {
+        self.sample_count() as f64 / self.sample_rate as f64
     }
 
-    pub fn duration_ns(&self, sample_rate: u32) -> i64 {
-        (self.sample_count() as i64 * 1_000_000_000) / sample_rate as i64
+    pub fn duration_ns(&self) -> i64 {
+        (self.sample_count() as i64 * 1_000_000_000) / self.sample_rate as i64
     }
 
     pub fn timestamp_seconds(&self) -> f64 {
@@ -92,6 +95,7 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
         frames: &[F],
         timestamp_ns: i64,
         frame_number: u64,
+        sample_rate: u32,
     ) -> Self
     where
         F: Frame<Sample = f32>,
@@ -103,7 +107,7 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
 
         let sample_slice: &[f32] = frames.to_sample_slice();
         let samples = sample_slice.to_vec();
-        Self::new(samples, timestamp_ns, frame_number)
+        Self::new(samples, timestamp_ns, frame_number, sample_rate)
     }
 
 }
@@ -134,6 +138,11 @@ impl<const CHANNELS: usize> PortMessage for AudioFrame<CHANNELS> {
                 "metadata": {}
             })),
         ]
+    }
+
+    fn consumption_strategy() -> crate::core::bus::ports::ConsumptionStrategy {
+        // Audio frames must be consumed sequentially to avoid audio dropouts/glitches
+        crate::core::bus::ports::ConsumptionStrategy::Sequential
     }
 }
 
@@ -167,7 +176,7 @@ mod tests {
     #[test]
     fn test_audioframe_creation() {
         let samples = vec![0.0; 480 * 2];
-        let frame = AudioFrame::<2>::new(samples, 0, 0);
+        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 
         assert_eq!(frame.sample_count(), 480);
         assert_eq!(frame.channels(), 2);
@@ -177,10 +186,10 @@ mod tests {
     #[test]
     fn test_audioframe_duration() {
         let samples = vec![0.0; 480 * 2];
-        let frame = AudioFrame::<2>::new(samples, 0, 0);
+        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 
-        assert_eq!(frame.duration(48000), 0.01);
-        assert_eq!(frame.duration_ns(48000), 10_000_000);
+        assert_eq!(frame.duration(), 0.01);
+        assert_eq!(frame.duration_ns(), 10_000_000);
     }
 
     #[test]
@@ -190,7 +199,7 @@ mod tests {
             2.0, -2.0,
             3.0, -3.0,
         ];
-        let frame = AudioFrame::<2>::new(samples, 0, 0);
+        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 
         let frames = frame.as_frames::<[f32; 2]>();
 
@@ -203,7 +212,7 @@ mod tests {
     #[test]
     fn test_audioframe_timestamp_conversion() {
         let samples = vec![0.0; 480 * 2];
-        let frame = AudioFrame::<2>::new(samples, 1_500_000_000, 0);
+        let frame = AudioFrame::<2>::new(samples, 1_500_000_000, 0, 48000);
 
         assert_eq!(frame.timestamp_seconds(), 1.5);
     }
@@ -212,7 +221,7 @@ mod tests {
     #[should_panic(expected = "samples.len()")]
     fn test_audioframe_invalid_sample_count() {
         let samples = vec![0.0; 5];
-        AudioFrame::<2>::new(samples, 0, 0);
+        AudioFrame::<2>::new(samples, 0, 0, 48000);
     }
 
     #[test]
@@ -223,7 +232,7 @@ mod tests {
             [3.0, -3.0],
         ];
 
-        let frame = AudioFrame::<2>::from_frames(dasp_frames, 0, 0);
+        let frame = AudioFrame::<2>::from_frames(dasp_frames, 0, 0, 48000);
 
         assert_eq!(frame.channels(), 2);
         assert_eq!(frame.sample_count(), 3);
@@ -233,7 +242,7 @@ mod tests {
     #[test]
     fn test_audioframe_validate_buffer_size() {
         let samples = vec![0.0; 512 * 2];
-        let frame = AudioFrame::<2>::new(samples, 0, 0);
+        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 
         assert!(frame.validate_buffer_size(512));
         assert!(!frame.validate_buffer_size(1024));
@@ -242,7 +251,7 @@ mod tests {
     #[test]
     fn test_audioframe_mono() {
         let samples = vec![1.0, 2.0, 3.0];
-        let frame = AudioFrame::<1>::new(samples, 0, 0);
+        let frame = AudioFrame::<1>::new(samples, 0, 0, 48000);
 
         assert_eq!(frame.channels(), 1);
         assert_eq!(frame.sample_count(), 3);
@@ -251,7 +260,7 @@ mod tests {
     #[test]
     fn test_audioframe_quad() {
         let samples = vec![0.0; 512 * 4];
-        let frame = AudioFrame::<4>::new(samples, 0, 0);
+        let frame = AudioFrame::<4>::new(samples, 0, 0, 48000);
 
         assert_eq!(frame.channels(), 4);
         assert_eq!(frame.sample_count(), 512);
@@ -264,7 +273,7 @@ mod tests {
             3.0, 4.0,  // Frame 1
             5.0, 6.0,  // Frame 2
         ];
-        let frame = AudioFrame::<2>::new(samples, 0, 0);
+        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 
         let mut signal = frame.read();
 
@@ -279,7 +288,7 @@ mod tests {
     #[test]
     fn test_audioframe_read_signal_mono() {
         let samples = vec![1.0, 2.0, 3.0];
-        let frame = AudioFrame::<1>::new(samples, 0, 0);
+        let frame = AudioFrame::<1>::new(samples, 0, 0, 48000);
 
         let mut signal = frame.read();
 

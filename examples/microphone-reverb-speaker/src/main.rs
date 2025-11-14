@@ -5,11 +5,16 @@
 
 use streamlib::{
     StreamRuntime, ClapEffectProcessor, ClapScanner,
-    AudioCaptureProcessor, AudioOutputProcessor, AudioMixerProcessor,
+    AudioCaptureProcessor, AudioOutputProcessor,
+    AudioChannelConverterProcessor, AudioResamplerProcessor,
+    BufferRechunkerProcessor,
     AudioFrame, Result,
 };
 use streamlib::core::{
-    AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig, AudioMixerConfig,
+    AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig,
+    AudioChannelConverterConfig, ChannelConversionMode,
+    AudioResamplerConfig, ResamplingQuality,
+    BufferRechunkerConfig,
 };
 
 fn main() -> Result<()> {
@@ -96,16 +101,38 @@ fn main() -> Result<()> {
             device_id: None
         }
     )?;
-    println!("✅ Microphone processor added (mono output)");
+    println!("✅ Microphone processor added (mono output at 24kHz)");
 
-    // Step 5: Add audio mixer to convert mono to stereo
-    println!("\n🎚️  Adding audio mixer (mono → stereo)...");
-    let mixer = runtime.add_processor_with_config::<AudioMixerProcessor>(
-        AudioMixerConfig::default()
+    // Step 5: Add resampler (24kHz → 48kHz)
+    println!("\n🔄 Adding resampler (24kHz → 48kHz)...");
+    let resampler = runtime.add_processor_with_config::<AudioResamplerProcessor>(
+        AudioResamplerConfig {
+            source_sample_rate: 24000,
+            target_sample_rate: 48000,
+            quality: ResamplingQuality::High,
+        }
     )?;
-    println!("✅ Audio mixer added");
+    println!("✅ Resampler added (upsamples to match runtime sample rate)");
 
-    // Step 6: Add CLAP reverb plugin using config-based API
+    // Step 6: Add channel converter (mono → stereo)
+    println!("\n🎛️  Adding channel converter (mono → stereo)...");
+    let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
+        AudioChannelConverterConfig {
+            mode: ChannelConversionMode::Duplicate,
+        }
+    )?;
+    println!("✅ Channel converter added (duplicates mono to L+R)");
+
+    // Step 7: Add buffer rechunker (variable → fixed size)
+    println!("\n🔧 Adding buffer rechunker (normalizes buffer sizes)...");
+    let rechunker = runtime.add_processor_with_config::<BufferRechunkerProcessor>(
+        BufferRechunkerConfig {
+            target_buffer_size: None, // Use runtime's buffer_size
+        }
+    )?;
+    println!("✅ Buffer rechunker added (ensures fixed {} sample chunks)", audio_config.buffer_size);
+
+    // Step 8: Add CLAP reverb plugin using config-based API
     println!("\n🎛️  Adding CLAP plugin...");
     let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(
         ClapEffectConfig {
@@ -118,7 +145,7 @@ fn main() -> Result<()> {
     println!("   Note: Plugin activates automatically with runtime's audio config");
     println!("   Note: Use parameter automation API for runtime parameter changes");
 
-    // Step 7: Add speaker output processor using config-based API
+    // Step 9: Add speaker output processor using config-based API
     println!("\n🔊 Adding speaker output...");
     let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
         AudioOutputConfig {
@@ -127,31 +154,43 @@ fn main() -> Result<()> {
     )?;
     println!("✅ Speaker processor added");
 
-    // Step 8: Connect the pipeline using type-safe handles
+    // Step 10: Connect the pipeline using type-safe handles
     println!("\n🔗 Building audio pipeline...");
 
-    // Connect mono mic to both left and right inputs of mixer
+    // Pipeline: mic (mono 24kHz) → resampler (mono 48kHz) → channel_converter (stereo) → rechunker → reverb → speaker
     runtime.connect(
         mic.output_port::<AudioFrame<1>>("audio"),
-        mixer.input_port::<AudioFrame<1>>("left"),
+        resampler.input_port::<AudioFrame<1>>("audio_in"),
     )?;
-    runtime.connect(
-        mic.output_port::<AudioFrame<1>>("audio"),
-        mixer.input_port::<AudioFrame<1>>("right"),
-    )?;
-    println!("   ✓ mic (mono) → mixer (left + right)");
+    println!("   ✓ mic (mono 24kHz) → resampler");
 
-    // TODO: Connect CLAP reverb when port names are fixed
-    // For now, bypass reverb and connect mixer directly to speaker
     runtime.connect(
-        mixer.output_port::<AudioFrame<2>>("audio"),
+        resampler.output_port::<AudioFrame<1>>("audio_out"),
+        channel_converter.input_port::<AudioFrame<1>>("audio_in"),
+    )?;
+    println!("   ✓ resampler (mono 48kHz) → channel_converter");
+
+    runtime.connect(
+        channel_converter.output_port::<AudioFrame<2>>("audio_out"),
+        rechunker.input_port::<AudioFrame<2>>("audio_in"),
+    )?;
+    println!("   ✓ channel_converter (stereo) → rechunker");
+
+    runtime.connect(
+        rechunker.output_port::<AudioFrame<2>>("audio_out"),
+        reverb.input_port::<AudioFrame<2>>("audio_in"),
+    )?;
+    println!("   ✓ rechunker (fixed-size stereo) → reverb");
+
+    runtime.connect(
+        reverb.output_port::<AudioFrame<2>>("audio_out"),
         speaker.input_port::<AudioFrame<2>>("audio"),
     )?;
-    println!("   ✓ mixer (stereo) → speaker");
+    println!("   ✓ reverb (stereo) → speaker");
 
-    println!("✅ Pipeline connected: mic (mono) → mixer → speaker (stereo)");
+    println!("✅ Pipeline connected: mic → resampler → channel_converter → rechunker → reverb → speaker");
 
-    // Step 9: Start the runtime
+    // Step 11: Start the runtime
     println!("\n▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
     println!("🎙️  Speak into your microphone - you should hear yourself with reverb!\n");

@@ -1217,22 +1217,18 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         .map(|s| s.as_str())
         .unwrap_or("Pull");
 
-    let scheduling_config_impl = if scheduling_mode == "Push" {
-        quote! {
-            fn scheduling_config(&self) -> ::streamlib::core::SchedulingConfig {
-                ::streamlib::core::SchedulingConfig {
-                    mode: ::streamlib::core::SchedulingMode::Push,
-                    priority: ::streamlib::core::ThreadPriority::Normal,
-                }
-            }
-        }
-    } else {
-        quote! {
-            fn scheduling_config(&self) -> ::streamlib::core::SchedulingConfig {
-                ::streamlib::core::SchedulingConfig {
-                    mode: ::streamlib::core::SchedulingMode::Pull,
-                    priority: ::streamlib::core::ThreadPriority::Normal,
-                }
+    let mode_variant = match scheduling_mode {
+        "Push" => quote! { ::streamlib::core::SchedulingMode::Push },
+        "Pull" => quote! { ::streamlib::core::SchedulingMode::Pull },
+        "Loop" => quote! { ::streamlib::core::SchedulingMode::Loop },
+        _ => quote! { ::streamlib::core::SchedulingMode::Pull }, // Default fallback
+    };
+
+    let scheduling_config_impl = quote! {
+        fn scheduling_config(&self) -> ::streamlib::core::SchedulingConfig {
+            ::streamlib::core::SchedulingConfig {
+                mode: #mode_variant,
+                priority: ::streamlib::core::ThreadPriority::Normal,
             }
         }
     };
@@ -1382,6 +1378,43 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         }
     };
 
+    // Generate set_output_wakeup()
+    let set_output_wakeup_arms: Vec<TokenStream> = analysis
+        .output_ports()
+        .map(|field| {
+            let port_name = &field.port_name;
+            let field_name = &field.field_name;
+            let is_arc_wrapped = field.is_arc_wrapped;
+
+            if is_arc_wrapped {
+                quote! {
+                    #port_name => {
+                        self.#field_name.as_ref().set_downstream_wakeup(wakeup_tx);
+                    }
+                }
+            } else {
+                quote! {
+                    #port_name => {
+                        self.#field_name.set_downstream_wakeup(wakeup_tx);
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let set_output_wakeup_impl = if set_output_wakeup_arms.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<::streamlib::core::runtime::WakeupEvent>) {
+                match port_name {
+                    #(#set_output_wakeup_arms,)*
+                    _ => {},
+                }
+            }
+        }
+    };
+
     quote! {
         impl ::streamlib::core::StreamProcessor for #struct_name {
             type Config = #config_type;
@@ -1401,6 +1434,8 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             #wire_output_producer_impl
 
             #wire_input_consumer_impl
+
+            #set_output_wakeup_impl
         }
     }
 }

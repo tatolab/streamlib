@@ -4,6 +4,7 @@ use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 use streamlib_macros::StreamProcessor;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,7 +34,7 @@ pub struct ClapEffectProcessor {
     audio_in: StreamInput<AudioFrame<2>>,
 
     #[output(description = "Processed stereo audio frame from CLAP plugin")]
-    audio_out: StreamOutput<AudioFrame<2>>,
+    audio_out: Arc<StreamOutput<AudioFrame<2>>>,
 
     #[config]
     config: ClapEffectConfig,
@@ -167,7 +168,8 @@ impl ClapEffectProcessor {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[ClapEffect] process() called");
 
-        if let Some(input_frame) = self.audio_in.read_latest() {
+        // Use read() for sequential audio consumption (not read_latest() which skips frames)
+        if let Some(input_frame) = self.audio_in.read() {
             tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
 
             let output_frame = self.process_audio_through_clap(&input_frame)?;
