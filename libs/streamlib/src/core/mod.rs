@@ -54,6 +54,7 @@ pub use processors::{
     // Sinks
     DisplayProcessor, WindowId, DisplayConfig,
     AudioOutputProcessor, AudioDevice, AudioOutputConfig,
+    Mp4WriterProcessor, Mp4WriterConfig,
     // Transformers
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     AudioMixerProcessor, MixingStrategy, AudioMixerConfig,

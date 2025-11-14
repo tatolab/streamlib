@@ -33,6 +33,7 @@ pub use processors::{
     // Sinks
     AppleDisplayProcessor,
     AppleAudioOutputProcessor,
+    AppleMp4WriterProcessor,
 };
 
 #[cfg(test)]

@@ -1,0 +1,7 @@
+# Rust build artifacts
+/target/
+*.mp4
+*.mov
+
+# Lock file (workspace manages this)
+Cargo.lock

@@ -5,6 +5,7 @@ members = [
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "examples/simple-pipeline", # Example: Basic processing pipeline
     "examples/camera-display",  # Example: Camera capture and display
+    "examples/camera-audio-recorder", # Example: Record camera + audio to MP4
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
@@ -35,6 +36,7 @@ objc2 = "0.6.3"
 objc2-metal = "0.3.2"
 objc2-io-surface = "0.3.2"
 objc2-core-video = "0.3.2"
+objc2-core-media = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-av-foundation = "0.3.2"
 objc2-app-kit = "0.3.2"

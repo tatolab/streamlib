@@ -5,21 +5,30 @@
 
 use streamlib::{
     StreamRuntime, ClapEffectProcessor, ClapScanner,
-    AudioCaptureProcessor, AudioOutputProcessor,
-    AudioFrame, Result,
+    AudioCaptureProcessor, AudioOutputProcessor, AudioMixerProcessor,
+    AudioFrame, Result, request_audio_permission,
 };
 use streamlib::core::{
-    AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig,
+    AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig, AudioMixerConfig,
 };
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
     println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");
+
+    // Request audio permission (Deno model - explicit permission request)
+    println!("🔒 Requesting microphone permission...");
+    if !request_audio_permission()? {
+        eprintln!("❌ Microphone permission denied!");
+        eprintln!("\nThis example requires microphone access.");
+        eprintln!("Please grant permission in System Settings → Privacy & Security → Microphone");
+        return Ok(());
+    }
+    println!("✅ Microphone permission granted\n");
 
     // Step 1: Scan for installed CLAP plugins
     println!("🔍 Scanning for installed CLAP plugins...");
@@ -82,14 +91,19 @@ async fn main() -> Result<()> {
     println!("\n🎤 Adding microphone input...");
     let mic = runtime.add_processor_with_config::<AudioCaptureProcessor>(
         AudioCaptureConfig {
-            device_id: None, // Use default mic
-            sample_rate: audio_config.sample_rate,
-            channels: 2, // Stereo
+            device_id: None
         }
     )?;
-    println!("✅ Microphone processor added");
+    println!("✅ Microphone processor added (mono output)");
 
-    // Step 5: Add CLAP reverb plugin using config-based API
+    // Step 5: Add audio mixer to convert mono to stereo
+    println!("\n🎚️  Adding audio mixer (mono → stereo)...");
+    let mixer = runtime.add_processor_with_config::<AudioMixerProcessor>(
+        AudioMixerConfig::default()
+    )?;
+    println!("✅ Audio mixer added");
+
+    // Step 6: Add CLAP reverb plugin using config-based API
     println!("\n🎛️  Adding CLAP plugin...");
     let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(
         ClapEffectConfig {
@@ -102,7 +116,7 @@ async fn main() -> Result<()> {
     println!("   Note: Plugin activates automatically with runtime's audio config");
     println!("   Note: Use parameter automation API for runtime parameter changes");
 
-    // Step 6: Add speaker output processor using config-based API
+    // Step 7: Add speaker output processor using config-based API
     println!("\n🔊 Adding speaker output...");
     let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
         AudioOutputConfig {
@@ -111,31 +125,41 @@ async fn main() -> Result<()> {
     )?;
     println!("✅ Speaker processor added");
 
-    // Step 7: Connect the pipeline using type-safe handles
+    // Step 8: Connect the pipeline using type-safe handles
     println!("\n🔗 Building audio pipeline...");
+
+    // Connect mono mic to both left and right inputs of mixer
     runtime.connect(
-        mic.output_port::<AudioFrame<2>>("audio"),
-        reverb.input_port::<AudioFrame<2>>("audio"),
+        mic.output_port::<AudioFrame<1>>("audio"),
+        mixer.input_port::<AudioFrame<1>>("left"),
     )?;
     runtime.connect(
-        reverb.output_port::<AudioFrame<2>>("audio"),
+        mic.output_port::<AudioFrame<1>>("audio"),
+        mixer.input_port::<AudioFrame<1>>("right"),
+    )?;
+    println!("   ✓ mic (mono) → mixer (left + right)");
+
+    // TODO: Connect CLAP reverb when port names are fixed
+    // For now, bypass reverb and connect mixer directly to speaker
+    runtime.connect(
+        mixer.output_port::<AudioFrame<2>>("audio"),
         speaker.input_port::<AudioFrame<2>>("audio"),
     )?;
-    println!("✅ Pipeline connected: mic → reverb → speaker");
+    println!("   ✓ mixer (stereo) → speaker");
 
-    // Step 8: Start the runtime
+    println!("✅ Pipeline connected: mic (mono) → mixer → speaker (stereo)");
+
+    // Step 9: Start the runtime
     println!("\n▶️  Starting audio processing...");
     println!("   Press Ctrl+C to stop\n");
     println!("🎙️  Speak into your microphone - you should hear yourself with reverb!\n");
 
-    runtime.start().await?;
+    runtime.start()?;
 
-    // Run until interrupted
-    tokio::signal::ctrl_c().await?;
+    // Run until interrupted (blocks until Ctrl+C)
+    runtime.run()?;
 
-    println!("\n\n⏹️  Stopping...");
-    runtime.stop().await?;
-    println!("✅ Stopped\n");
+    println!("\n✅ Stopped\n");
 
     Ok(())
 }

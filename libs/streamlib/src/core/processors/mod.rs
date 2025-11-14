@@ -6,6 +6,7 @@ pub mod audio_capture;
 // Sinks
 pub mod display;
 pub mod audio_output;
+pub mod mp4_writer;
 
 // Transformers
 pub mod audio_mixer;
@@ -23,6 +24,7 @@ pub use audio_capture::{AudioCaptureProcessor, AudioInputDevice, AudioCaptureCon
 // Sink exports
 pub use display::{DisplayProcessor, WindowId, DisplayConfig};
 pub use audio_output::{AudioOutputProcessor, AudioDevice, AudioOutputConfig};
+pub use mp4_writer::{Mp4WriterProcessor, Mp4WriterConfig};
 
 // Transformer exports
 pub use audio_mixer::{
