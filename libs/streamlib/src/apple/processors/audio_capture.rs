@@ -256,11 +256,19 @@ impl AppleAudioCaptureProcessor {
                 window: WindowFunction::BlackmanHarris2,
             };
 
+            // Calculate input chunk size for SincFixedIn
+            // SincFixedIn expects a fixed number of INPUT samples to produce OUTPUT samples
+            let ratio = self.device_sample_rate as f64 / self.runtime_sample_rate as f64;
+            let input_chunk_size = ((self.runtime_buffer_size as f64 * ratio).ceil() as usize).max(1);
+
+            tracing::info!("[AudioCapture] Creating resampler: input_chunk_size={} samples → output={} samples (ratio={})",
+                input_chunk_size, self.runtime_buffer_size, ratio);
+
             let resampler = SincFixedIn::<f32>::new(
                 self.runtime_sample_rate as f64 / self.device_sample_rate as f64,
                 2.0, // max relative ratio change
                 params,
-                self.runtime_buffer_size,
+                input_chunk_size, // INPUT chunk size, not output!
                 1, // mono channel
             ).map_err(|e| StreamError::Configuration(format!("Failed to create resampler: {}", e)))?;
 
@@ -314,17 +322,18 @@ impl AppleAudioCaptureProcessor {
                     ((runtime_buffer_size as f64 * ratio).ceil() as usize) * device_channels as usize
                 };
 
-                tracing::debug!("[AudioCapture Callback] Buffer has {} samples, need {}", buffer.len(), samples_needed);
+                tracing::info!("[AudioCapture Processing] Buffer has {} samples, need {} (device: {}Hz {}ch, runtime: {}Hz {}samples)",
+                    buffer.len(), samples_needed, device_sample_rate, device_channels, runtime_sample_rate, runtime_buffer_size);
 
                 // Check if we have enough samples
                 if buffer.len() < samples_needed {
                     // Not enough samples - wait for more from device callback
-                    tracing::debug!("[AudioCapture Callback] Not enough samples yet, waiting...");
+                    tracing::info!("[AudioCapture Processing] Not enough samples yet, waiting for more...");
                     return;
                 }
 
                 // Extract exactly what we need, leaving rest for next iteration
-                tracing::debug!("[AudioCapture Callback] Draining {} samples from buffer", samples_needed);
+                tracing::info!("[AudioCapture Processing] Draining {} samples from buffer", samples_needed);
                 buffer.drain(..samples_needed).collect::<Vec<f32>>()
             };
 
@@ -378,8 +387,9 @@ impl AppleAudioCaptureProcessor {
                 frame_number,
             );
 
-            tracing::debug!("[AudioCapture Callback] Writing frame {} with {} samples", frame_number, output_samples.len());
+            tracing::info!("[AudioCapture Processing] *** WRITING FRAME {} *** with {} samples", frame_number, output_samples.len());
             audio_output.write(frame);
+            tracing::info!("[AudioCapture Processing] Frame {} written successfully", frame_number);
 
             // Check if we have enough samples for another frame
             // If yes, loop and produce another frame immediately
