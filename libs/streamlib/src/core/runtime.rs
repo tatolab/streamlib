@@ -116,7 +116,31 @@ impl StreamRuntime {
         self.audio_context = config;
     }
 
+    /// Request camera permission from the system.
+    /// Must be called on the main thread before adding camera processors.
+    /// Returns true if permission is granted, false if denied.
+    #[cfg(target_os = "macos")]
+    pub fn request_camera(&self) -> Result<bool> {
+        crate::request_camera_permission()
+    }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn request_camera(&self) -> Result<bool> {
+        Ok(true) // No permission system on other platforms
+    }
+
+    /// Request microphone permission from the system.
+    /// Must be called on the main thread before adding audio capture processors.
+    /// Returns true if permission is granted, false if denied.
+    #[cfg(target_os = "macos")]
+    pub fn request_microphone(&self) -> Result<bool> {
+        crate::request_audio_permission()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn request_microphone(&self) -> Result<bool> {
+        Ok(true) // No permission system on other platforms
+    }
 
     pub fn set_event_loop(&mut self, event_loop: EventLoopFn) {
         self.event_loop = Some(event_loop);

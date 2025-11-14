@@ -1,4 +1,4 @@
-use streamlib::{Result, StreamRuntime, request_camera_permission, request_audio_permission};
+use streamlib::{Result, StreamRuntime};
 use streamlib::{CameraProcessor, AudioCaptureProcessor, Mp4WriterProcessor};
 use streamlib::core::{CameraConfig, AudioCaptureConfig, Mp4WriterConfig, VideoFrame, AudioFrame};
 use std::path::PathBuf;
@@ -11,9 +11,12 @@ fn main() -> Result<()> {
 
     println!("=== Camera + Audio → MP4 Recorder Pipeline ===\n");
 
-    // Request camera and microphone permissions (Deno model)
+    // Create runtime first
+    let mut runtime = StreamRuntime::new();
+
+    // Request camera and microphone permissions (must be on main thread)
     println!("🔒 Requesting camera permission...");
-    if !request_camera_permission()? {
+    if !runtime.request_camera()? {
         eprintln!("❌ Camera permission denied!");
         eprintln!("Please grant permission in System Settings → Privacy & Security → Camera");
         return Ok(());
@@ -21,14 +24,12 @@ fn main() -> Result<()> {
     println!("✅ Camera permission granted\n");
 
     println!("🔒 Requesting microphone permission...");
-    if !request_audio_permission()? {
+    if !runtime.request_microphone()? {
         eprintln!("❌ Microphone permission denied!");
         eprintln!("Please grant permission in System Settings → Privacy & Security → Microphone");
         return Ok(());
     }
     println!("✅ Microphone permission granted\n");
-
-    let mut runtime = StreamRuntime::new();
 
     // Get audio config from runtime
     let audio_config = runtime.audio_config();

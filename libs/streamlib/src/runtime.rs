@@ -61,4 +61,17 @@ impl StreamRuntime {
         self.inner.set_audio_config(config)
     }
 
+    /// Request camera permission from the system.
+    /// Must be called on the main thread before adding camera processors.
+    /// Returns true if permission is granted, false if denied.
+    pub fn request_camera(&self) -> Result<bool> {
+        self.inner.request_camera()
+    }
+
+    /// Request microphone permission from the system.
+    /// Must be called on the main thread before adding audio capture processors.
+    /// Returns true if permission is granted, false if denied.
+    pub fn request_microphone(&self) -> Result<bool> {
+        self.inner.request_microphone()
+    }
 }

@@ -6,7 +6,7 @@
 use streamlib::{
     StreamRuntime, ClapEffectProcessor, ClapScanner,
     AudioCaptureProcessor, AudioOutputProcessor, AudioMixerProcessor,
-    AudioFrame, Result, request_audio_permission,
+    AudioFrame, Result,
 };
 use streamlib::core::{
     AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig, AudioMixerConfig,
@@ -20,9 +20,12 @@ fn main() -> Result<()> {
 
     println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");
 
-    // Request audio permission (Deno model - explicit permission request)
+    // Create runtime first
+    let mut runtime = StreamRuntime::new();
+
+    // Request microphone permission (must be on main thread before adding audio processors)
     println!("🔒 Requesting microphone permission...");
-    if !request_audio_permission()? {
+    if !runtime.request_microphone()? {
         eprintln!("❌ Microphone permission denied!");
         eprintln!("\nThis example requires microphone access.");
         eprintln!("Please grant permission in System Settings → Privacy & Security → Microphone");
@@ -80,9 +83,8 @@ fn main() -> Result<()> {
         }
     };
 
-    // Step 3: Create runtime (event-driven, no FPS parameter!)
-    println!("\n🎛️  Creating audio runtime...");
-    let mut runtime = StreamRuntime::new();
+    // Step 3: Get audio config from runtime
+    println!("\n🎛️  Audio runtime configuration...");
     let audio_config = runtime.audio_config();
     println!("   Sample rate: {} Hz", audio_config.sample_rate);
     println!("   Buffer size: {} samples", audio_config.buffer_size);
