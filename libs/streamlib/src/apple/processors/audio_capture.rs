@@ -157,6 +157,21 @@ impl AppleAudioCaptureProcessor {
             self.runtime_buffer_size
         );
 
+        // Log supported input configs for debugging
+        tracing::info!("[AudioCapture] Checking device supported input configs...");
+        if let Ok(mut configs) = device.supported_input_configs() {
+            let mut count = 0;
+            for config in configs.by_ref().take(5) {
+                tracing::info!("[AudioCapture]   Supported config: {:?}", config);
+                count += 1;
+            }
+            if count == 0 {
+                tracing::warn!("[AudioCapture] No supported input configs found!");
+            }
+        } else {
+            tracing::warn!("[AudioCapture] Failed to query supported input configs");
+        }
+
         let device_info = AppleAudioInputDevice {
             id: 0,
             name: device_name.clone(),
@@ -175,6 +190,8 @@ impl AppleAudioCaptureProcessor {
         let resampler_clone = self.resampler.clone();
 
         // Use device's native configuration to avoid unsupported config errors
+        // IMPORTANT: We must keep buffer_size as Default for input streams on macOS
+        // Fixed buffer sizes can prevent the callback from being invoked
         let stream_config = StreamConfig {
             channels: self.device_channels,
             sample_rate: cpal::SampleRate(self.device_sample_rate),
@@ -182,12 +199,16 @@ impl AppleAudioCaptureProcessor {
         };
 
         tracing::info!("[AudioCapture] About to build input stream...");
+        tracing::info!("[AudioCapture] Stream config: {}Hz, {} channels, buffer_size: Default",
+            self.device_sample_rate, self.device_channels);
 
         let stream = device
             .build_input_stream(
                 &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    tracing::debug!("[AudioCapture Callback] Received {} samples", data.len());
+                move |data: &[f32], info: &cpal::InputCallbackInfo| {
+                    // Temporarily use INFO level to diagnose callback invocation
+                    tracing::info!("[AudioCapture Callback] *** INVOKED *** Received {} samples, timestamp: {:?}",
+                        data.len(), info.timestamp());
 
                     // Add samples to buffer
                     {
@@ -222,6 +243,8 @@ impl AppleAudioCaptureProcessor {
             .map_err(|e| StreamError::Configuration(format!("Failed to start audio stream: {}", e)))?;
 
         tracing::info!("[AudioCapture] Stream.play() succeeded - stream is now active");
+        tracing::info!("[AudioCapture] Stream object address: {:p}", &stream);
+        tracing::info!("[AudioCapture] Storing stream in self._stream to keep it alive...");
 
         // Create resampler if sample rates differ (wrap in Arc<Mutex> for callback access)
         self.resampler = Arc::new(Mutex::new(if self.device_sample_rate != self.runtime_sample_rate {
