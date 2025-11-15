@@ -35,8 +35,8 @@ type DynProcessor = Box<dyn DynStreamElement>;
 pub(crate) struct RuntimeProcessorHandle {
     pub id: ProcessorId,
     pub name: String,
-    thread: Option<JoinHandle<()>>,
-    shutdown_tx: crossbeam_channel::Sender<()>,
+    pub(crate) thread: Option<JoinHandle<()>>,
+    pub(crate) shutdown_tx: crossbeam_channel::Sender<()>,
     pub(crate) wakeup_tx: crossbeam_channel::Sender<WakeupEvent>,
     pub(crate) status: Arc<Mutex<ProcessorStatus>>,
     pub(crate) processor: Option<Arc<Mutex<DynProcessor>>>,

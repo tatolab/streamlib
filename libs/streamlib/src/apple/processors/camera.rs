@@ -183,7 +183,9 @@ impl AppleCameraProcessor {
         let device_name = unsafe { device.localizedName().to_string() };
         let device_model = unsafe { device.modelID().to_string() };
 
-        tracing::info!("Camera: Found device: {} ({})", device_name, device_model);
+        // NOTE: Cannot use tracing::info here - this runs in a dispatch queue callback
+        // where stdout/stderr might not be available, causing panics
+        // tracing::info!("Camera: Found device: {} ({})", device_name, device_model);
 
         unsafe {
             if let Err(e) = device.lockForConfiguration() {
@@ -278,7 +280,8 @@ impl AppleCameraProcessor {
         // Start the session
         unsafe { session.startRunning(); }
 
-        tracing::info!("Camera: Started AVFoundation session for device: {}", camera_name);
+        // NOTE: Cannot use tracing::info here - this runs in a dispatch queue callback
+        // tracing::info!("Camera: Started AVFoundation session for device: {}", camera_name);
 
         // Leak all Objective-C objects to keep them alive on main thread
         // TODO: Properly manage session lifecycle
@@ -503,10 +506,7 @@ impl AppleCameraProcessor {
                     }
                 };
 
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs_f64();
+                let timestamp = crate::core::media_clock::MediaClock::now().as_secs_f64();
 
                 let frame = VideoFrame::new(
                     Arc::new(output_texture),

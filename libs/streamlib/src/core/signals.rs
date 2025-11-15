@@ -48,6 +48,31 @@ pub fn install_signal_handlers() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Force reinstall signal handlers (useful if external libraries override them)
+///
+/// Some libraries (like CoreAudio) may install their own signal handlers that override ours.
+/// Call this AFTER initializing processors to re-claim signal handling.
+pub fn reinstall_signal_handlers() -> std::io::Result<()> {
+    tracing::info!("Force reinstalling signal handlers...");
+
+    #[cfg(target_os = "macos")]
+    {
+        install_macos_signal_handlers()?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        install_unix_signal_handlers()?;
+    }
+
+    #[cfg(windows)]
+    {
+        install_windows_signal_handlers()?;
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn install_macos_signal_handlers() -> std::io::Result<()> {
     // Use ctrlc crate for Ctrl+C - it works reliably with NSApplication

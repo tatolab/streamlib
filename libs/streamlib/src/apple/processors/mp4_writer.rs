@@ -4,26 +4,25 @@ use crate::core::{
 };
 use streamlib_macros::StreamProcessor;
 use std::path::PathBuf;
-use tracing::{debug, info, warn, error};
+use tracing::{trace, debug, info, warn, error};
 use objc2::rc::Retained;
 use objc2_foundation::{NSString, NSURL};
 use objc2_av_foundation::{
     AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
 };
-use objc2_io_surface::IOSurface;
-use objc2_core_video::{kCVPixelFormatType_32BGRA, CVPixelBuffer};
+use objc2_core_video::{CVPixelBuffer, CVPixelBufferLockFlags};
 use objc2_core_media::CMTime;
+use objc2_io_surface::IOSurface;
 use crate::apple::{metal::MetalDevice, WgpuBridge};
 use std::sync::Arc;
 use objc2::runtime::AnyObject;
 use objc2::{ClassType, msg_send};
 use objc2_foundation::{NSDictionary, NSNumber};
 
-// FFI bindings for Metal
-#[link(name = "Metal", kind = "framework")]
+// FFI bindings for CoreVideo functions
+#[link(name = "CoreVideo", kind = "framework")]
 extern "C" {
-    /// Get the IOSurface backing a Metal texture
-    fn MTLTextureGetIOSurface(texture: *const std::ffi::c_void) -> *mut IOSurface;
+    fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
 }
 
 /// Configuration for MP4 writer processor
@@ -98,7 +97,10 @@ pub struct AppleMp4WriterProcessor {
     #[config]
     config: AppleMp4WriterConfig,
 
-    // AVFoundation objects
+    // RuntimeContext for main thread dispatch
+    ctx: Option<crate::core::RuntimeContext>,
+
+    // AVFoundation objects (accessed via main thread dispatch)
     writer: Option<Retained<AVAssetWriter>>,
     video_input: Option<Retained<AVAssetWriterInput>>,
     audio_input: Option<Retained<AVAssetWriterInput>>,
@@ -110,18 +112,31 @@ pub struct AppleMp4WriterProcessor {
     last_video_timestamp: f64,
     start_time_set: bool,
     start_time_ns: i64,
+    writer_failed: bool,
 
     sync_tolerance_ms: f64,
     frames_written: u64,
     frames_dropped: u64,
     frames_duplicated: u64,
 
-    is_writing: bool,
+    // Latest frames for realtime streaming
+    latest_video: Option<VideoFrame>,
+
     video_width: u32,
     video_height: u32,
 
+    // Last written timestamp to ensure monotonic increasing
+    last_written_timestamp_ns: i64,
+
+    // Track last written video frame number to avoid duplicates
+    last_written_video_frame_number: Option<u64>,
+
+    // Track total audio samples written for timestamp calculation
+    total_audio_samples_written: u64,
+
     // GPU resources for texture conversion
     metal_device: Option<MetalDevice>,
+    metal_command_queue: Option<metal::CommandQueue>,
     wgpu_bridge: Option<Arc<WgpuBridge>>,
     gpu_context: Option<crate::core::GpuContext>,
 }
@@ -132,11 +147,25 @@ impl AppleMp4WriterProcessor {
     fn setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
         info!("Setting up MP4 writer processor");
 
+        // Store RuntimeContext for main thread dispatch
+        self.ctx = Some(ctx.clone());
+
         self.sync_tolerance_ms = self.config.sync_tolerance_ms.unwrap_or(DEFAULT_SYNC_TOLERANCE_MS);
         self.gpu_context = Some(ctx.gpu.clone());
 
         // Initialize Metal device and wgpu bridge for texture conversion
         let metal_device = MetalDevice::new()?;
+
+        // Create metal crate command queue from objc2 Metal device
+        let metal_command_queue = {
+            use metal::foreign_types::ForeignTypeRef;
+            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+            let metal_device_ref = unsafe {
+                metal::DeviceRef::from_ptr(device_ptr as *mut _)
+            };
+            metal_device_ref.new_command_queue()
+        };
+
         let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
             metal_device.clone_device(),
             ctx.gpu.device().as_ref().clone(),
@@ -144,58 +173,247 @@ impl AppleMp4WriterProcessor {
         ));
 
         self.metal_device = Some(metal_device);
+        self.metal_command_queue = Some(metal_command_queue);
         self.wgpu_bridge = Some(wgpu_bridge);
 
-        self.initialize_writer()?;
-
+        // AVAssetWriter initialization will happen in process() on first frame
+        // This is because setup() runs before main thread event loop starts,
+        // so run_on_main_blocking() would deadlock
+        info!("MP4 writer setup complete, will initialize AVAssetWriter in process()");
         Ok(())
     }
 
     /// Process lifecycle method - auto-detected by macro
     fn process(&mut self) -> Result<()> {
-        if !self.is_writing {
+        debug!("=== MP4Writer process() called ===");
+
+        // Wait for both audio and video connections before initializing
+        if self.writer.is_none() {
+            let audio_connected = self.audio.is_connected();
+            let video_connected = self.video.is_connected();
+
+            debug!("Connections: audio={}, video={}", audio_connected, video_connected);
+
+            if !audio_connected || !video_connected {
+                debug!("Waiting for both connections (audio={}, video={})", audio_connected, video_connected);
+                return Ok(());
+            }
+
+            // Both connected, now wait for first video frame to get dimensions
+            if let Some(first_video) = self.video.peek() {
+                info!("🎬 INITIALIZING AVAssetWriter with video dimensions: {}x{}", first_video.width, first_video.height);
+
+                // Initialize writer
+                self.initialize_writer()?;
+
+                // Configure video input with dimensions from first frame
+                self.configure_video_input(first_video.width, first_video.height)?;
+                info!("✅ VIDEO INPUT CONFIGURED: {}x{}", first_video.width, first_video.height);
+
+                // Configure audio input
+                self.configure_audio_input()?;
+                info!("✅ AUDIO INPUT CONFIGURED");
+
+                // Start the writing session (all inputs configured)
+                let writer = self.writer.as_ref()
+                    .ok_or_else(|| StreamError::Configuration("AVAssetWriter not initialized".into()))?;
+
+                info!("🎬 STARTING AVAssetWriter session...");
+                let started = unsafe { writer.startWriting() };
+                if !started {
+                    self.writer_failed = true;
+                    let error_msg = unsafe {
+                        writer.error().map(|e| e.localizedDescription().to_string())
+                            .unwrap_or_else(|| "Unknown error".to_string())
+                    };
+                    return Err(StreamError::Configuration(format!("Failed to start AVAssetWriter: {}", error_msg)));
+                }
+
+                // Get timestamps from both audio and video
+                let first_audio_ts = self.audio.peek()
+                    .map(|a| a.timestamp_ns)
+                    .unwrap_or(0);
+
+                // Convert video timestamp (seconds) to nanoseconds
+                let first_video_ts = (first_video.timestamp * 1_000_000_000.0) as i64;
+
+                // Use the FIRST VIDEO frame timestamp as the session start time
+                // This ensures audio and video start at the same point
+                // (we'll skip audio frames that came before the first video frame)
+                let session_start_ts = first_video_ts;
+
+                let start_time = unsafe {
+                    CMTime::new(0, 1_000_000_000)
+                };
+                unsafe {
+                    writer.startSessionAtSourceTime(start_time);
+                }
+
+                // Set start_time_ns to the first video timestamp
+                self.start_time_ns = session_start_ts;
+                info!("✅ AVAssetWriter session started at time 0");
+                info!("   Audio first frame: {}ns ({:.6}s)", first_audio_ts, first_audio_ts as f64 / 1_000_000_000.0);
+                info!("   Video first frame: {}ns ({:.6}s)", first_video_ts, first_video_ts as f64 / 1_000_000_000.0);
+                info!("   Session start:     {}ns ({:.6}s) [synced to first video frame]", session_start_ts, session_start_ts as f64 / 1_000_000_000.0);
+            } else {
+                debug!("Waiting for first video frame to get dimensions");
+                return Ok(());
+            }
+        }
+
+        // Check if we have any audio frames to process
+        let has_audio = self.audio.peek().is_some();
+        debug!("has_audio = {}", has_audio);
+
+        if !has_audio {
+            debug!("No audio frames available, skipping process()");
             return Ok(());
         }
 
-        // Try to read frames from both inputs
-        // Use read() for audio (sequential) and read_latest() for video (latest frame)
-        let audio = match self.audio.read() {
-            Some(frame) => frame,
-            None => return Ok(()), // No audio available
-        };
+        // Process every audio frame immediately
+        while let Some(audio) = self.audio.read() {
+            trace!("Processing audio frame: timestamp_ns={}, sample_count={}, channels={}",
+                audio.timestamp_ns, audio.sample_count(), audio.channels());
 
-        let video = match self.video.read_latest() {
-            Some(frame) => frame,
-            None => return Ok(()), // No video available
-        };
+            // IMPORTANT: Check for new video frame for EACH audio frame
+            if let Some(video) = self.video.read_latest() {
+                debug!("New video frame received: timestamp={:.6}s, frame_number={}, size={}x{}",
+                    video.timestamp, video.frame_number, video.width, video.height);
+                self.last_video_frame = Some(video);
+            }
 
-        // Write synchronized frames
-        self.write_synced_frame(audio, video)?;
+            // Use capture timestamp (same clock as video) and make it relative to start
+            // This keeps audio and video on the same time base
+            let audio_relative_ns = audio.timestamp_ns - self.start_time_ns;
 
+            trace!("Audio timestamps: original={}ns, start={}ns, relative={}ns ({:.6}s)",
+                audio.timestamp_ns, self.start_time_ns, audio_relative_ns,
+                audio_relative_ns as f64 / 1_000_000_000.0);
+
+            // Skip audio frames that came BEFORE the first video frame (negative timestamps)
+            if audio_relative_ns < 0 {
+                debug!("Skipping audio frame before first video (relative_ts={:.6}s)",
+                    audio_relative_ns as f64 / 1_000_000_000.0);
+                continue;
+            }
+
+            // Write audio frame independently
+            let mut audio_to_write = audio.clone();
+            audio_to_write.timestamp_ns = audio_relative_ns;
+            trace!("Writing audio: timestamp={}ns ({:.6}s), samples={}, channels={}",
+                audio_to_write.timestamp_ns, audio_to_write.timestamp_ns as f64 / 1_000_000_000.0,
+                audio_to_write.sample_count(), audio_to_write.channels());
+
+            self.write_audio_frame(&audio_to_write)?;
+
+            // Write video frame independently if available (only write each frame once)
+            if let Some(last_video) = self.last_video_frame.clone() {
+                // Check if this is a new video frame (not already written)
+                let should_write = match self.last_written_video_frame_number {
+                    None => true, // First video frame
+                    Some(last_num) => last_video.frame_number != last_num, // New frame
+                };
+
+                if should_write {
+                    // Calculate relative timestamp from video frame
+                    // video.timestamp is in seconds (f64), start_time_ns is in nanoseconds
+                    // Convert video timestamp to ns, subtract start_time_ns, then back to seconds
+                    let video_timestamp_ns = (last_video.timestamp * 1_000_000_000.0) as i64;
+                    let video_relative_ns = video_timestamp_ns - self.start_time_ns;
+                    let video_timestamp_s = video_relative_ns as f64 / 1_000_000_000.0;
+
+                    let mut video_to_write = last_video.clone();
+                    video_to_write.timestamp = video_timestamp_s;
+
+                    debug!("Writing video: frame_number={}, relative_ts={:.6}s",
+                        video_to_write.frame_number, video_to_write.timestamp);
+
+                    self.write_video_frame(&video_to_write)?;
+                    self.last_written_video_frame_number = Some(last_video.frame_number);
+                }
+            }
+        }
+
+        debug!("=== MP4Writer process() finished ===");
         Ok(())
     }
 
     /// Teardown lifecycle method - auto-detected by macro
     fn teardown(&mut self) -> Result<()> {
         info!("Tearing down MP4 writer processor");
+
+        // No buffering, so nothing to flush - just finalize
         self.finalize_writer()?;
+
+        // Cleanup: AVFoundation objects will be dropped on main thread
+        // when self.asset_writer is dropped (happens automatically)
+
         Ok(())
     }
 
-    /// Initialize AVAssetWriter and input writers
+    /// Initialize AVAssetWriter on the main thread
     ///
-    /// Creates the AVAssetWriter, configures video and audio inputs,
-    /// and starts the writing session.
+    /// CRITICAL: AVAssetWriter creation happens on main thread which has NSApplication's run loop.
     fn initialize_writer(&mut self) -> Result<()> {
         info!("Initializing MP4 writer for: {:?}", self.config.output_path);
 
+        let ctx = self.ctx.as_ref()
+            .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
+
+        let path_str = self.config.output_path.to_string_lossy().to_string();
+        let video_codec = self.config.video_codec.clone().unwrap_or_else(|| "avc1".to_string());
+        let audio_codec = self.config.audio_codec.clone().unwrap_or_else(|| "aac".to_string());
+        let sync_tolerance_ms = self.sync_tolerance_ms;
+
+        // Dispatch to main thread (which has active run loop) to create AVAssetWriter
+        // Returns raw pointer since Retained<AVAssetWriter> is not Send
+        info!("Dispatching AVAssetWriter initialization to main thread...");
+        let writer_ptr = ctx.run_on_main_blocking(move || {
+            match Self::initialize_writer_on_main_thread(
+                &path_str,
+                &video_codec,
+                &audio_codec,
+                sync_tolerance_ms,
+            ) {
+                Ok(writer) => {
+                    // Convert to raw pointer to send back across thread boundary
+                    Ok(Retained::into_raw(writer) as usize)
+                }
+                Err(e) => Err(e),
+            }
+        })?;
+
+        // SAFETY: We just created this pointer on the main thread
+        let writer = unsafe {
+            Retained::retain(writer_ptr as *mut AVAssetWriter)
+                .ok_or_else(|| StreamError::Configuration("Failed to retain AVAssetWriter".into()))?
+        };
+
+        self.writer = Some(writer);
+
+        info!("AVAssetWriter initialized successfully on main thread");
+        Ok(())
+    }
+
+    /// Helper function that runs on the main thread to create AVAssetWriter
+    fn initialize_writer_on_main_thread(
+        path_str: &str,
+        video_codec: &str,
+        audio_codec: &str,
+        sync_tolerance_ms: f64,
+    ) -> Result<Retained<AVAssetWriter>> {
+        // Delete existing file if it exists (AVAssetWriter requires file to not exist)
+        if std::path::Path::new(path_str).exists() {
+            info!("Deleting existing file: {}", path_str);
+            std::fs::remove_file(path_str)
+                .map_err(|e| StreamError::Configuration(format!("Failed to delete existing file: {}", e)))?;
+        }
+
         // Create file URL
-        let path_str = self.config.output_path.to_string_lossy();
-        let ns_path = NSString::from_str(&path_str);
+        let ns_path = NSString::from_str(path_str);
         let url = NSURL::fileURLWithPath(&ns_path);
 
         // Create AVAssetWriter
-        // Use "com.apple.quicktime-movie" as the file type
         let file_type_str = NSString::from_str("com.apple.quicktime-movie");
         let writer = unsafe {
             match AVAssetWriter::assetWriterWithURL_fileType_error(&url, &file_type_str) {
@@ -208,36 +426,80 @@ impl AppleMp4WriterProcessor {
         };
 
         info!("AVAssetWriter created successfully");
-        info!("Video codec: {:?}", self.config.video_codec);
-        info!("Audio codec: {:?}", self.config.audio_codec);
-        info!("Sync tolerance: {:.1}ms", self.sync_tolerance_ms);
+        info!("Video codec: {:?}", video_codec);
+        info!("Audio codec: {:?}", audio_codec);
+        info!("Sync tolerance: {:.1}ms", sync_tolerance_ms);
 
-        // Store writer for later use
-        self.writer = Some(writer);
-        self.is_writing = true;
-
-        Ok(())
+        Ok(writer)
     }
 
     /// Configure video input with H.264 encoding settings
     ///
-    /// NOTE: This is a helper that will be called when we receive the first video frame
-    /// (so we know the dimensions)
+    /// CRITICAL: This must run on the av_thread. Called when first video frame arrives.
     fn configure_video_input(&mut self, width: u32, height: u32) -> Result<()> {
         if self.video_input.is_some() {
             return Ok(()); // Already configured
         }
 
-        info!("Configuring video input: {}x{}", width, height);
-
         self.video_width = width;
         self.video_height = height;
 
-        let writer = self.writer.as_ref()
-            .ok_or_else(|| StreamError::Configuration("AVAssetWriter not initialized".into()))?;
+        let ctx = self.ctx.as_ref()
+            .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
 
-        // Build H.264 video output settings NSDictionary
-        // Keys from AVFoundation: AVVideoCodecKey, AVVideoWidthKey, AVVideoHeightKey, AVVideoCompressionPropertiesKey
+        let writer = self.writer.take()
+            .ok_or_else(|| StreamError::Configuration("AVAssetWriter not initialized".into()))?;
+        let writer_ptr = Retained::into_raw(writer) as usize;
+
+        let video_bitrate = self.config.video_bitrate.unwrap_or(5_000_000);
+        let video_codec = self.config.video_codec.clone().unwrap_or_else(|| "avc1".to_string());
+
+        // Dispatch to main thread to configure video input
+        // Returns raw pointers since Retained types are not Send
+        let (video_input_ptr, pixel_buffer_adaptor_ptr) = ctx.run_on_main_blocking(move || {
+            // SAFETY: We just converted this from a Retained
+            let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
+
+            match Self::configure_video_input_on_main_thread(
+                writer,
+                width,
+                height,
+                &video_codec,
+                video_bitrate,
+            ) {
+                Ok((writer, video_input, pixel_buffer_adaptor)) => {
+                    // Convert to raw pointers to send back across thread boundary
+                    let _ = Retained::into_raw(writer); // Already leaked, ignore
+                    Ok((
+                        Retained::into_raw(video_input) as usize,
+                        Retained::into_raw(pixel_buffer_adaptor) as usize,
+                    ))
+                }
+                Err(e) => Err(e),
+            }
+        })?;
+
+        // SAFETY: We just created these pointers on the main thread
+        let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
+        let video_input = unsafe { Retained::retain(video_input_ptr as *mut AVAssetWriterInput).unwrap() };
+        let pixel_buffer_adaptor = unsafe { Retained::retain(pixel_buffer_adaptor_ptr as *mut AVAssetWriterInputPixelBufferAdaptor).unwrap() };
+
+        self.writer = Some(writer);
+        self.video_input = Some(video_input);
+        self.pixel_buffer_adaptor = Some(pixel_buffer_adaptor);
+
+        Ok(())
+    }
+
+    /// Helper function that runs on the main thread to configure video input
+    /// Takes ownership of writer and returns it back along with the created inputs
+    fn configure_video_input_on_main_thread(
+        writer: Retained<AVAssetWriter>,
+        width: u32,
+        height: u32,
+        video_codec: &str,
+        video_bitrate: u32,
+    ) -> Result<(Retained<AVAssetWriter>, Retained<AVAssetWriterInput>, Retained<AVAssetWriterInputPixelBufferAdaptor>)> {
         use objc2::runtime::AnyClass;
 
         let video_settings_ptr: *mut AnyObject = unsafe {
@@ -245,7 +507,7 @@ impl AppleMp4WriterProcessor {
 
             // Create codec key/value
             let codec_key = NSString::from_str("AVVideoCodecKey");
-            let codec_value = NSString::from_str(self.config.video_codec.as_ref().unwrap_or(&"avc1".to_string()));
+            let codec_value = NSString::from_str(video_codec);
 
             // Create width key/value
             let width_key = NSString::from_str("AVVideoWidthKey");
@@ -255,38 +517,24 @@ impl AppleMp4WriterProcessor {
             let height_key = NSString::from_str("AVVideoHeightKey");
             let height_value = NSNumber::new_u32(height);
 
-            // Create compression properties dictionary with bitrate
-            let bitrate_key = NSString::from_str("AVVideoAverageBitRateKey");
-            let bitrate_value = NSNumber::new_u32(self.config.video_bitrate.unwrap_or(5_000_000));
-
-            let compression_dict: *mut AnyObject = msg_send![
-                dict_cls,
-                dictionaryWithObject: &*bitrate_value as *const _ as *const AnyObject,
-                forKey: &*bitrate_key as *const _ as *const AnyObject
-            ];
-
-            // Create compression properties key
-            let compression_key = NSString::from_str("AVVideoCompressionPropertiesKey");
-
-            // Build main settings dictionary with 4 key-value pairs
+            // Build main settings dictionary with 3 key-value pairs (codec, width, height)
+            // Note: Bitrate is not supported for H.264 in AVAssetWriterInput outputSettings
             let keys = [
                 &*codec_key as *const _ as *const AnyObject,
                 &*width_key as *const _ as *const AnyObject,
                 &*height_key as *const _ as *const AnyObject,
-                &*compression_key as *const _ as *const AnyObject,
             ];
             let values = [
                 &*codec_value as *const _ as *const AnyObject,
                 &*width_value as *const _ as *const AnyObject,
                 &*height_value as *const _ as *const AnyObject,
-                compression_dict,
             ];
 
             msg_send![
                 dict_cls,
                 dictionaryWithObjects: values.as_ptr(),
                 forKeys: keys.as_ptr(),
-                count: 4usize
+                count: 3usize
             ]
         };
 
@@ -318,52 +566,65 @@ impl AppleMp4WriterProcessor {
             writer.addInput(&video_input);
         }
 
-        // Create pixel buffer adaptor
-        let pixel_format_key = NSString::from_str("kCVPixelBufferPixelFormatTypeKey");
-        let pixel_format_value = NSNumber::new_u32(kCVPixelFormatType_32BGRA);
-
-        let adaptor_attrs_ptr: *mut AnyObject = unsafe {
-            let dict_cls: &AnyClass = NSDictionary::<AnyObject, AnyObject>::class();
-            msg_send![
-                dict_cls,
-                dictionaryWithObject: &*pixel_format_value as *const _ as *const AnyObject,
-                forKey: &*pixel_format_key as *const _ as *const AnyObject
-            ]
-        };
-
-        let adaptor_attrs = unsafe {
-            std::mem::transmute::<*mut AnyObject, *const NSDictionary<NSString, AnyObject>>(adaptor_attrs_ptr)
-        };
-
+        // Create pixel buffer adaptor with nil attributes to let AVAssetWriter choose optimal format
+        // Per Apple TN3121, passing nil allows AVAssetWriter to select YUV format for H.264 encoding
+        // which is more efficient than BGRA. We'll use VTPixelTransferSession to convert RGBA→YUV.
         let pixel_buffer_adaptor = unsafe {
             AVAssetWriterInputPixelBufferAdaptor::assetWriterInputPixelBufferAdaptorWithAssetWriterInput_sourcePixelBufferAttributes(
                 &video_input,
-                adaptor_attrs.as_ref(),
+                None,
             )
         };
 
-        self.video_input = Some(video_input);
-        self.pixel_buffer_adaptor = Some(pixel_buffer_adaptor);
-
-        info!("Video input configured: {}x{} H.264 @ {} bps", width, height, self.config.video_bitrate.unwrap_or(5_000_000));
-
-        Ok(())
+        Ok((writer, video_input, pixel_buffer_adaptor))
     }
 
     /// Configure audio input with LPCM (uncompressed) settings
-    /// Using LPCM for simplicity - AAC encoding can be added later
+    ///
+    /// CRITICAL: This must run on the av_thread. Called when first audio frame arrives.
     fn configure_audio_input(&mut self) -> Result<()> {
         if self.audio_input.is_some() {
             return Ok(()); // Already configured
         }
 
-        info!("Configuring audio input: stereo, 48kHz, LPCM");
+        let ctx = self.ctx.as_ref()
+            .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
 
-        let writer = self.writer.as_ref()
+        let writer = self.writer.take()
             .ok_or_else(|| StreamError::Configuration("AVAssetWriter not initialized".into()))?;
+        let writer_ptr = Retained::into_raw(writer) as usize;
 
-        // Build LPCM audio output settings NSDictionary
-        // Keys: AVFormatIDKey, AVSampleRateKey, AVNumberOfChannelsKey, AVLinearPCMBitDepthKey, etc.
+        // Dispatch to main thread to configure audio input
+        // Returns raw pointer since Retained types are not Send
+        let audio_input_ptr = ctx.run_on_main_blocking(move || {
+            // SAFETY: We just converted this from a Retained
+            let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
+
+            match Self::configure_audio_input_on_main_thread(writer) {
+                Ok((writer, audio_input)) => {
+                    // Convert to raw pointers to send back across thread boundary
+                    let _ = Retained::into_raw(writer); // Already leaked, ignore
+                    Ok(Retained::into_raw(audio_input) as usize)
+                }
+                Err(e) => Err(e),
+            }
+        })?;
+
+        // SAFETY: We just created these pointers on the main thread
+        let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
+        let audio_input = unsafe { Retained::retain(audio_input_ptr as *mut AVAssetWriterInput).unwrap() };
+
+        self.writer = Some(writer);
+        self.audio_input = Some(audio_input);
+
+        info!("Audio input configured: stereo 48kHz 16-bit LPCM");
+        Ok(())
+    }
+
+    /// Helper function that runs on the main thread to configure audio input
+    fn configure_audio_input_on_main_thread(
+        writer: Retained<AVAssetWriter>,
+    ) -> Result<(Retained<AVAssetWriter>, Retained<AVAssetWriterInput>)> {
         use objc2::runtime::AnyClass;
 
         let audio_settings_ptr: *mut AnyObject = unsafe {
@@ -393,7 +654,11 @@ impl AppleMp4WriterProcessor {
             let is_big_endian_key = NSString::from_str("AVLinearPCMIsBigEndianKey");
             let is_big_endian_value = NSNumber::new_bool(false);
 
-            // Build settings dictionary with 6 key-value pairs
+            // AVLinearPCMIsNonInterleaved: NO (interleaved)
+            let is_non_interleaved_key = NSString::from_str("AVLinearPCMIsNonInterleaved");
+            let is_non_interleaved_value = NSNumber::new_bool(false);
+
+            // Build settings dictionary with 7 key-value pairs
             let keys = [
                 &*format_key as *const _ as *const AnyObject,
                 &*sample_rate_key as *const _ as *const AnyObject,
@@ -401,6 +666,7 @@ impl AppleMp4WriterProcessor {
                 &*bit_depth_key as *const _ as *const AnyObject,
                 &*is_float_key as *const _ as *const AnyObject,
                 &*is_big_endian_key as *const _ as *const AnyObject,
+                &*is_non_interleaved_key as *const _ as *const AnyObject,
             ];
             let values = [
                 &*format_value as *const _ as *const AnyObject,
@@ -409,13 +675,14 @@ impl AppleMp4WriterProcessor {
                 &*bit_depth_value as *const _ as *const AnyObject,
                 &*is_float_value as *const _ as *const AnyObject,
                 &*is_big_endian_value as *const _ as *const AnyObject,
+                &*is_non_interleaved_value as *const _ as *const AnyObject,
             ];
 
             msg_send![
                 dict_cls,
                 dictionaryWithObjects: values.as_ptr(),
                 forKeys: keys.as_ptr(),
-                count: 6usize
+                count: 7usize
             ]
         };
 
@@ -447,11 +714,7 @@ impl AppleMp4WriterProcessor {
             writer.addInput(&audio_input);
         }
 
-        self.audio_input = Some(audio_input);
-
-        info!("Audio input configured: stereo 48kHz 16-bit LPCM");
-
-        Ok(())
+        Ok((writer, audio_input))
     }
 
     /// Write a synchronized audio and video frame
@@ -464,18 +727,36 @@ impl AppleMp4WriterProcessor {
         audio: AudioFrame<2>,
         video: VideoFrame,
     ) -> Result<()> {
-        // Configure inputs on first frame (need dimensions from video)
+        // Initialize AVAssetWriter on first frame (lazy initialization)
+        if self.writer.is_none() {
+            self.initialize_writer()?;
+        }
+
+        // Configure video input on first video frame
         if self.video_input.is_none() {
             self.configure_video_input(video.width, video.height)?;
-            self.configure_audio_input()?;
+        }
 
-            // Start writing session
+        // Configure audio input on first audio frame
+        if self.audio_input.is_none() {
+            self.configure_audio_input()?;
+        }
+
+        // Start writing session only when BOTH inputs are configured
+        if self.video_input.is_some() && self.audio_input.is_some() && !self.start_time_set && !self.writer_failed {
             let writer = self.writer.as_ref()
                 .ok_or_else(|| StreamError::Configuration("AVAssetWriter not initialized".into()))?;
 
+            info!("Both audio and video inputs configured, starting AVAssetWriter session...");
+
             let started = unsafe { writer.startWriting() };
             if !started {
-                return Err(StreamError::Configuration("Failed to start AVAssetWriter".into()));
+                self.writer_failed = true;
+                let error_msg = unsafe {
+                    writer.error().map(|e| e.localizedDescription().to_string())
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                };
+                return Err(StreamError::Configuration(format!("Failed to start AVAssetWriter: {}", error_msg)));
             }
 
             // Start session at source time (use audio timestamp as reference)
@@ -487,131 +768,232 @@ impl AppleMp4WriterProcessor {
                 writer.startSessionAtSourceTime(start_time);
             }
 
+            // Set start time
+            self.start_time_ns = audio.timestamp_ns;
+            self.start_time_set = true;
+
             info!("AVAssetWriter session started at timestamp {}ns", audio.timestamp_ns);
         }
 
-        // Set start time on first frame pair
-        if !self.start_time_set {
-            self.start_time_ns = audio.timestamp_ns;
-            self.start_time_set = true;
-            info!("Recording start time: {}ns", self.start_time_ns);
+        // If not both inputs are ready yet, skip this frame
+        if self.video_input.is_none() || self.audio_input.is_none() {
+            return Ok(());
         }
 
-        // Check synchronization
-        let action = sync_action(&video, &audio, self.sync_tolerance_ms);
-
-        match action {
-            SyncAction::NoAction => {
-                // Frames are synchronized - write both
-                debug!(
-                    "Writing synced frames: video={:.3}s audio={:.3}s",
-                    video.timestamp,
-                    audio.timestamp_ns as f64 / 1_000_000_000.0
-                );
-
-                self.write_video_frame(&video)?;
-                self.write_audio_frame(&audio)?;
-
-                self.last_video_frame = Some(video.clone());
-                self.last_video_timestamp = video.timestamp;
-                self.last_audio_timestamp_ns = audio.timestamp_ns;
-                self.frames_written += 1;
-            }
-
-            SyncAction::DropVideoFrame => {
-                // Video is ahead - drop this frame
-                warn!(
-                    "Dropping video frame: video={:.3}s audio={:.3}s (drift: {:.1}ms)",
-                    video.timestamp,
-                    audio.timestamp_ns as f64 / 1_000_000_000.0,
-                    (video.timestamp * 1000.0) - (audio.timestamp_ns as f64 / 1_000_000.0)
-                );
-
-                self.write_audio_frame(&audio)?;
-                self.last_audio_timestamp_ns = audio.timestamp_ns;
-                self.frames_dropped += 1;
-            }
-
-            SyncAction::DuplicateVideoFrame => {
-                // Video is behind - duplicate last frame
-                if let Some(ref last_video) = self.last_video_frame {
-                    warn!(
-                        "Duplicating video frame: video={:.3}s audio={:.3}s (drift: {:.1}ms)",
-                        video.timestamp,
-                        audio.timestamp_ns as f64 / 1_000_000_000.0,
-                        (video.timestamp * 1000.0) - (audio.timestamp_ns as f64 / 1_000_000.0)
-                    );
-
-                    self.write_video_frame(last_video)?;
-                    self.write_audio_frame(&audio)?;
-
-                    self.last_audio_timestamp_ns = audio.timestamp_ns;
-                    self.frames_duplicated += 1;
-                } else {
-                    // No previous frame to duplicate - just write current
-                    debug!("No previous video frame to duplicate, writing current");
-                    self.write_video_frame(&video)?;
-                    self.write_audio_frame(&audio)?;
-
-                    self.last_video_frame = Some(video.clone());
-                    self.last_video_timestamp = video.timestamp;
-                    self.last_audio_timestamp_ns = audio.timestamp_ns;
-                }
+        // Check if pixel buffer pool is ready (becomes available after startWriting())
+        if let Some(adaptor) = self.pixel_buffer_adaptor.as_ref() {
+            let pool_ready = unsafe { adaptor.pixelBufferPool().is_some() };
+            if !pool_ready {
+                // Pool not ready yet, wait for next frame
+                debug!("Pixel buffer pool not ready, skipping frame");
+                return Ok(());
             }
         }
+
+        // No sync logic - just write every audio frame with paired video frame
+        debug!(
+            "Writing frames: video={:.3}s audio={:.3}s",
+            video.timestamp,
+            audio.timestamp_ns as f64 / 1_000_000_000.0
+        );
+
+        self.write_video_frame(&video)?;
+        self.write_audio_frame(&audio)?;
+
+        self.last_video_frame = Some(video.clone());
+        self.last_video_timestamp = video.timestamp;
+        self.last_audio_timestamp_ns = audio.timestamp_ns;
+        self.frames_written += 1;
 
         Ok(())
     }
 
     /// Write a video frame to the MP4 file
     ///
-    /// Converts wgpu::Texture → Metal → IOSurface → CVPixelBuffer and appends via pixel buffer adaptor
+    /// Copies wgpu texture → RGB → NV12 (YUV 420) → CVPixelBuffer → AVAssetWriter
+    /// Uses SIMD-optimized RGB→NV12 conversion via `yuv` crate
     fn write_video_frame(&self, frame: &VideoFrame) -> Result<()> {
-        let wgpu_bridge = self.wgpu_bridge.as_ref()
-            .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?;
-
         let pixel_buffer_adaptor = self.pixel_buffer_adaptor.as_ref()
             .ok_or_else(|| StreamError::Configuration("Pixel buffer adaptor not initialized".into()))?;
 
-        // Step 1: Convert wgpu texture to Metal texture
-        let metal_texture = unsafe {
-            wgpu_bridge.unwrap_to_metal_texture(&frame.texture)
-        }?;
+        let video_input = self.video_input.as_ref()
+            .ok_or_else(|| StreamError::Configuration("Video input not initialized".into()))?;
 
-        // Step 2: Get IOSurface from Metal texture using FFI
-        let metal_texture_ptr = &*metal_texture as *const _ as *const std::ffi::c_void;
-        let iosurface_ptr = unsafe {
-            MTLTextureGetIOSurface(metal_texture_ptr)
-        };
-
-        if iosurface_ptr.is_null() {
-            return Err(StreamError::GpuError("Metal texture has no IOSurface backing".into()));
+        // Check if video input is ready for more data
+        let is_ready = unsafe { video_input.isReadyForMoreMediaData() };
+        if !is_ready {
+            debug!("Video input not ready for more data, skipping frame");
+            return Ok(());
         }
 
-        // Step 3: Get CVPixelBuffer reference from IOSurface
-        // Note: The Metal texture's IOSurface is already a valid CVPixelBuffer
-        // We can cast the IOSurface pointer to CVPixelBuffer
-        let pixel_buffer = unsafe {
-            &*(iosurface_ptr as *const CVPixelBuffer)
+        let gpu_ctx = self.gpu_context.as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+
+        // Step 1: Get a CVPixelBuffer from the adaptor's pool (will be NV12 format for H.264)
+        let pixel_buffer_pool = unsafe {
+            pixel_buffer_adaptor.pixelBufferPool()
+                .ok_or_else(|| StreamError::Configuration("Pixel buffer pool not available".into()))?
         };
 
-        // Step 4: Create CMTime for presentation timestamp
-        // Convert f64 seconds to nanoseconds, then to CMTime with 1_000_000_000 timescale
+        // Step 2: Create a pixel buffer from the pool
+        #[allow(deprecated)]
+        let mut pixel_buffer_ptr: *mut CVPixelBuffer = std::ptr::null_mut();
+        let mut pixel_buffer_out = std::ptr::NonNull::new(&mut pixel_buffer_ptr as *mut _)
+            .ok_or_else(|| StreamError::GpuError("Failed to create NonNull pointer".into()))?;
+
+        let status = unsafe {
+            objc2_core_video::CVPixelBufferPoolCreatePixelBuffer(
+                None,
+                &*pixel_buffer_pool,
+                pixel_buffer_out
+            )
+        };
+
+        if status != 0 || pixel_buffer_ptr.is_null() {
+            return Err(StreamError::GpuError(format!("Failed to create pixel buffer from pool (status: {})", status).into()));
+        }
+
+        let pixel_buffer = unsafe {
+            objc2::rc::Retained::retain(pixel_buffer_ptr).unwrap()
+        };
+
+        // Step 3: Read RGBA texture from GPU to CPU
+        let rgba_bytes_per_row = frame.width as usize * 4; // RGBA8
+        let rgba_buffer_size = (rgba_bytes_per_row * frame.height as usize) as u64;
+
+        let staging_buffer = gpu_ctx.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("MP4 RGBA Staging Buffer"),
+            size: rgba_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = gpu_ctx.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("MP4 Texture Copy"),
+        });
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &frame.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(rgba_bytes_per_row as u32),
+                    rows_per_image: Some(frame.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        gpu_ctx.queue().submit(Some(encoder.finish()));
+
+        // Map staging buffer to read RGBA data
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+
+        gpu_ctx.device().poll(wgpu::MaintainBase::Wait);
+        rx.recv().unwrap().map_err(|e| StreamError::GpuError(format!("Failed to map RGBA staging buffer: {:?}", e)))?;
+
+        let rgba_data = buffer_slice.get_mapped_range();
+
+        // Step 4: Lock NV12 pixel buffer for CPU write access
+        let lock_status = unsafe {
+            objc2_core_video::CVPixelBufferLockBaseAddress(&*pixel_buffer, CVPixelBufferLockFlags::empty())
+        };
+
+        if lock_status != 0 {
+            return Err(StreamError::GpuError(format!("Failed to lock pixel buffer (status: {})", lock_status)));
+        }
+
+        // Step 5: Get Y and UV plane pointers for NV12 format (bi-planar)
+        let y_plane = unsafe {
+            objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(&*pixel_buffer, 0)
+        };
+        let uv_plane = unsafe {
+            objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(&*pixel_buffer, 1)
+        };
+
+        if y_plane.is_null() || uv_plane.is_null() {
+            unsafe { objc2_core_video::CVPixelBufferUnlockBaseAddress(&*pixel_buffer, CVPixelBufferLockFlags::empty()); }
+            return Err(StreamError::GpuError("NV12 plane addresses are null".into()));
+        }
+
+        let y_stride = unsafe {
+            objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(&*pixel_buffer, 0)
+        };
+        let uv_stride = unsafe {
+            objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(&*pixel_buffer, 1)
+        };
+
+        // Step 6: Convert RGBA → NV12 using SIMD-optimized yuv crate
+        {
+            // Create YuvBiPlanarImageMut for the destination NV12 buffer
+            let y_slice = unsafe {
+                std::slice::from_raw_parts_mut(y_plane as *mut u8, y_stride as usize * frame.height as usize)
+            };
+            let uv_slice = unsafe {
+                std::slice::from_raw_parts_mut(uv_plane as *mut u8, uv_stride as usize * (frame.height as usize / 2))
+            };
+
+            let mut yuv_image = yuv::YuvBiPlanarImageMut {
+                y_plane: yuv::BufferStoreMut::Borrowed(y_slice),
+                y_stride: y_stride as u32,
+                uv_plane: yuv::BufferStoreMut::Borrowed(uv_slice),
+                uv_stride: uv_stride as u32,
+                width: frame.width,
+                height: frame.height,
+            };
+
+            yuv::bgra_to_yuv_nv12(
+                &mut yuv_image,
+                rgba_data.as_ref(),
+                rgba_bytes_per_row as u32,
+                yuv::YuvRange::Limited,           // Limited range (16-235 for Y, 16-240 for UV) - standard for video
+                yuv::YuvStandardMatrix::Bt709,    // BT.709 color matrix (standard for HD video)
+                yuv::YuvConversionMode::Balanced, // High precision with good performance (default)
+            ).map_err(|e| StreamError::GpuError(format!("BGRA→NV12 conversion failed: {:?}", e)))?;
+        }
+
+        // Step 7: Unlock pixel buffer
+        unsafe {
+            objc2_core_video::CVPixelBufferUnlockBaseAddress(&*pixel_buffer, CVPixelBufferLockFlags::empty());
+        }
+
+        // Drop buffer before unmapping
+        drop(rgba_data);
+        staging_buffer.unmap();
+
+        // Step 7: Create CMTime for presentation timestamp
         let timestamp_ns = (frame.timestamp * 1_000_000_000.0) as i64;
         let presentation_time = unsafe {
             CMTime::new(timestamp_ns, 1_000_000_000)
         };
 
-        // Step 5: Append pixel buffer to adaptor
+        trace!("Appending video to AVAssetWriter: timestamp={:.6}s ({}ns), size={}x{}",
+            frame.timestamp, timestamp_ns, frame.width, frame.height);
+
+        // Step 8: Append pixel buffer to adaptor
         let success = unsafe {
-            pixel_buffer_adaptor.appendPixelBuffer_withPresentationTime(pixel_buffer, presentation_time)
+            pixel_buffer_adaptor.appendPixelBuffer_withPresentationTime(&*pixel_buffer, presentation_time)
         };
 
         if !success {
             return Err(StreamError::GpuError("Failed to append pixel buffer to adaptor".into()));
         }
 
-        debug!("Wrote video frame at timestamp {:.3}s", frame.timestamp);
+        trace!("Video appended successfully");
         Ok(())
     }
 
@@ -629,21 +1011,243 @@ impl AppleMp4WriterProcessor {
             return Ok(());
         }
 
-        // For now, log that we would write the audio frame
-        // Full implementation requires:
-        // 1. Create CMBlockBuffer from PCM samples
-        // 2. Create CMAudioFormatDescription for LPCM
-        // 3. Create CMSampleBuffer with timing info
-        // 4. Call audio_input.appendSampleBuffer()
-        //
-        // This is complex FFI that requires additional CoreMedia bindings
-        // for CMBlockBufferCreate, CMAudioFormatDescriptionCreate, etc.
+        // AudioFrame<2> stores samples as Vec<f32> with interleaved channels
+        // We need to convert f32 → i16 PCM for LPCM format
+        let total_samples = frame.samples.len();
+        let num_channels = frame.channels();
+        let num_samples_per_channel = frame.sample_count(); // This is samples.len() / CHANNELS
+
+        info!("Writing audio frame: sample_rate={}, channels={}, total_samples={}, num_frames={}, duration_ms={:.2}",
+            frame.sample_rate, num_channels, total_samples, num_samples_per_channel,
+            (num_samples_per_channel as f64 / frame.sample_rate as f64) * 1000.0);
+        let mut pcm_data: Vec<i16> = Vec::with_capacity(total_samples);
+
+        for sample in frame.samples.iter() {
+            // Clamp to [-1.0, 1.0] and convert to i16
+            let clamped = sample.max(-1.0).min(1.0);
+            let pcm_sample = (clamped * 32767.0) as i16;
+            pcm_data.push(pcm_sample);
+        }
+
+        let byte_count = pcm_data.len() * 2;
+
+        // Create CMBlockBuffer - we need to use raw FFI since objc2 doesn't fully wrap this
+        use objc2_core_media::CMBlockBuffer;
+        use std::ptr::NonNull;
+
+        let mut block_buffer_ptr: *mut CMBlockBuffer = std::ptr::null_mut();
+        let block_buffer_out = NonNull::new(&mut block_buffer_ptr as *mut _)
+            .ok_or_else(|| StreamError::GpuError("Failed to create NonNull for block buffer".into()))?;
+
+        // Create CMBlockBuffer that allocates its own memory and copies our data
+        let status = unsafe {
+            CMBlockBuffer::create_with_memory_block(
+                None, // structure_allocator (use default allocator)
+                std::ptr::null_mut(), // memoryBlock = NULL means CMBlockBuffer allocates memory
+                byte_count,
+                None, // block_allocator (use default)
+                std::ptr::null(), // custom_block_source
+                0, // offset_to_data
+                byte_count, // data_length
+                0, // flags
+                block_buffer_out,
+            )
+        };
+
+        if status != 0 {
+            return Err(StreamError::GpuError(format!("Failed to create CMBlockBuffer: status {}", status)));
+        }
+
+        let block_buffer = unsafe {
+            objc2::rc::Retained::retain(block_buffer_ptr)
+                .ok_or_else(|| StreamError::GpuError("CMBlockBuffer is null".into()))?
+        };
+
+        // Copy PCM data into the CMBlockBuffer
+        extern "C" {
+            fn CMBlockBufferReplaceDataBytes(
+                sourceBytes: *const std::ffi::c_void,
+                destinationBuffer: *const CMBlockBuffer,
+                offsetIntoDestination: usize,
+                dataLength: usize,
+            ) -> i32;
+        }
+
+        let copy_status = unsafe {
+            CMBlockBufferReplaceDataBytes(
+                pcm_data.as_ptr() as *const std::ffi::c_void,
+                &*block_buffer as *const _,
+                0,
+                byte_count,
+            )
+        };
+
+        if copy_status != 0 {
+            return Err(StreamError::GpuError(format!("Failed to copy PCM data to CMBlockBuffer: status {}", copy_status)));
+        }
+
+        // Create timing info
+        use objc2_core_media::CMTime;
+        let presentation_time = unsafe {
+            CMTime::new(frame.timestamp_ns, 1_000_000_000)
+        };
+
+        let duration = unsafe {
+            CMTime::new(num_samples_per_channel as i64 * 1_000_000_000 / frame.sample_rate as i64, 1_000_000_000)
+        };
+
+        // Create CMSampleBuffer using raw FFI
+        use objc2_core_media::CMSampleBuffer;
+
+        let mut sample_buffer_ptr: *mut CMSampleBuffer = std::ptr::null_mut();
+        let sample_buffer_out = NonNull::new(&mut sample_buffer_ptr as *mut _)
+            .ok_or_else(|| StreamError::GpuError("Failed to create NonNull for sample buffer".into()))?;
+
+        // We need to use CMAudioSampleBufferCreateWithPacketDescriptions
+        // But first we need the format description which is already set in the audio input
+        // Actually, we can get it from the audio input's outputSettings
+        // For now, let's create a simple one inline using raw FFI
+
+        // Create AudioStreamBasicDescription manually
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        struct AudioStreamBasicDescription {
+            mSampleRate: f64,
+            mFormatID: u32,
+            mFormatFlags: u32,
+            mBytesPerPacket: u32,
+            mFramesPerPacket: u32,
+            mBytesPerFrame: u32,
+            mChannelsPerFrame: u32,
+            mBitsPerChannel: u32,
+            mReserved: u32,
+        }
+
+        // Create ASBD from frame metadata (sample_rate, channels)
+        // NOTE: This must match what we told AVAssetWriterInput in configure_audio_input
+        // Currently AVAssetWriterInput is hardcoded to 48kHz stereo
+        let bytes_per_frame = (num_channels * 2) as u32; // 2 bytes per sample (16-bit)
+        let asbd = AudioStreamBasicDescription {
+            mSampleRate: frame.sample_rate as f64,
+            mFormatID: 0x6c70636d, // 'lpcm'
+            mFormatFlags: 0xC, // kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked
+            mBytesPerPacket: bytes_per_frame,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: bytes_per_frame,
+            mChannelsPerFrame: num_channels as u32,
+            mBitsPerChannel: 16,
+            mReserved: 0,
+        };
+
+        // Create CMAudioFormatDescription using the ASBD
+        extern "C" {
+            fn CMAudioFormatDescriptionCreate(
+                allocator: *const std::ffi::c_void,
+                asbd: *const AudioStreamBasicDescription,
+                layoutSize: usize,
+                layout: *const std::ffi::c_void,
+                magicCookieSize: usize,
+                magicCookie: *const std::ffi::c_void,
+                extensions: *const std::ffi::c_void,
+                formatDescriptionOut: *mut *const std::ffi::c_void,
+            ) -> i32;
+        }
+
+        use objc2_core_media::CMFormatDescription;
+        let mut format_desc_ptr: *const std::ffi::c_void = std::ptr::null();
+
+        let status = unsafe {
+            CMAudioFormatDescriptionCreate(
+                std::ptr::null(), // allocator
+                &asbd as *const _,
+                0, // layoutSize
+                std::ptr::null(), // layout
+                0, // magicCookieSize
+                std::ptr::null(), // magicCookie
+                std::ptr::null(), // extensions
+                &mut format_desc_ptr as *mut _,
+            )
+        };
+
+        if status != 0 {
+            return Err(StreamError::GpuError(format!("Failed to create CMAudioFormatDescription: status {}", status)));
+        }
+
+        let _format_desc = unsafe {
+            objc2::rc::Retained::retain(format_desc_ptr as *mut CMFormatDescription)
+                .ok_or_else(|| StreamError::GpuError("Format description is null".into()))?
+        };
+
+        // Use CMAudioSampleBufferCreateWithPacketDescriptions which is designed for audio
+        extern "C" {
+            fn CMAudioSampleBufferCreateWithPacketDescriptions(
+                allocator: *const std::ffi::c_void,
+                dataBuffer: *const CMBlockBuffer,
+                dataReady: bool,
+                makeDataReadyCallback: *const std::ffi::c_void,
+                makeDataReadyRefcon: *const std::ffi::c_void,
+                formatDescription: *const CMFormatDescription,
+                numSamples: i64,
+                presentationTimeStamp: CMTime,
+                packetDescriptions: *const AudioStreamPacketDescription,
+                sampleBufferOut: *mut *mut CMSampleBuffer,
+            ) -> i32;
+        }
+
+        #[repr(C)]
+        struct AudioStreamPacketDescription {
+            mStartOffset: i64,
+            mVariableFramesInPacket: u32,
+            mDataByteSize: u32,
+        }
+
+        let status = unsafe {
+            CMAudioSampleBufferCreateWithPacketDescriptions(
+                std::ptr::null(),
+                &*block_buffer as *const _,
+                true, // dataReady
+                std::ptr::null(), // makeDataReadyCallback
+                std::ptr::null(), // makeDataReadyRefcon
+                format_desc_ptr as *const CMFormatDescription,
+                num_samples_per_channel as i64,
+                presentation_time,
+                std::ptr::null(), // packetDescriptions (NULL for CBR formats like LPCM)
+                &mut sample_buffer_ptr as *mut _,
+            )
+        };
+
+        if status != 0 {
+            return Err(StreamError::GpuError(format!("Failed to create audio CMSampleBuffer: status {}", status)));
+        }
+
+        let sample_buffer = unsafe {
+            objc2::rc::Retained::retain(sample_buffer_ptr)
+                .ok_or_else(|| StreamError::GpuError("Sample buffer is null".into()))?
+        };
+
+        trace!("Appending audio to AVAssetWriter: timestamp={}ns ({:.6}s), samples={}, channels={}, rate={}Hz",
+            frame.timestamp_ns, frame.timestamp_ns as f64 / 1_000_000_000.0,
+            num_samples_per_channel, num_channels, frame.sample_rate);
+
+        // Append to audio input
+        let success = unsafe {
+            audio_input.appendSampleBuffer(&sample_buffer)
+        };
+
+        if !success {
+            return Err(StreamError::GpuError("Failed to append audio sample buffer".into()));
+        }
+
+        trace!("Audio appended successfully");
 
         debug!(
-            "Would write audio frame: {} samples per channel at timestamp {}ns",
-            frame.samples.len() / 2,  // 2 channels
+            "Wrote audio frame: {} samples per channel at timestamp {}ns",
+            num_samples_per_channel,
             frame.timestamp_ns
         );
+
+        // Keep data alive until sample buffer is appended
+        drop(pcm_data);
 
         Ok(())
     }
@@ -652,7 +1256,8 @@ impl AppleMp4WriterProcessor {
     ///
     /// Marks inputs as finished and calls finishWriting to close the file properly
     fn finalize_writer(&mut self) -> Result<()> {
-        if !self.is_writing {
+        // Only finalize if writer was initialized
+        if self.writer.is_none() {
             return Ok(());
         }
 
@@ -684,7 +1289,6 @@ impl AppleMp4WriterProcessor {
             info!("AVAssetWriter finishWriting() called");
         }
 
-        self.is_writing = false;
         info!("MP4 file finalized successfully");
 
         Ok(())

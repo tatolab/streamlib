@@ -185,10 +185,7 @@ impl AppleAudioCaptureProcessor {
 
                     // Create mono audio frame directly (no conversion needed)
                     let frame_number = frame_counter_clone.fetch_add(1, Ordering::Relaxed);
-                    let timestamp_ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as i64;
+                    let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
                     let frame = AudioFrame::<1>::new(
                         data.to_vec(),

@@ -8,6 +8,7 @@ members = [
     "examples/camera-audio-recorder", # Example: Record camera + audio to MP4
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams
+    "examples/test-main-thread-dispatch", # Test: Main thread dispatch validation
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 
@@ -65,3 +66,6 @@ hyper = "1.7.0"
 # Using 25.0.2 for compatibility with vello 0.5.0 and pygfx ecosystem
 wgpu = "25.0.2"
 wgpu-hal = "25.0.2"
+
+# YUV/RGB conversion (SIMD-optimized)
+yuv = "0.8"

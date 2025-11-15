@@ -102,9 +102,9 @@ impl AudioResamplerProcessor {
     fn process(&mut self) -> Result<()> {
         // Read input frame
         if let Some(input_frame) = self.audio_in.read() {
-            // Initialize resampler on first frame
+            // Initialize resampler on first frame (use actual frame sample rate, not config)
             if self.resampler.is_none() {
-                self.input_sample_rate = self.config.source_sample_rate;
+                self.input_sample_rate = input_frame.sample_rate;
 
                 // Only create resampler if sample rates differ
                 if self.input_sample_rate != self.output_sample_rate {

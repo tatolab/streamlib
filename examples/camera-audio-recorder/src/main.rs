@@ -1,6 +1,14 @@
 use streamlib::{Result, StreamRuntime};
-use streamlib::{CameraProcessor, AudioCaptureProcessor, Mp4WriterProcessor};
-use streamlib::core::{CameraConfig, AudioCaptureConfig, Mp4WriterConfig, VideoFrame, AudioFrame};
+use streamlib::{
+    CameraProcessor, AudioCaptureProcessor, Mp4WriterProcessor,
+    AudioResamplerProcessor, AudioChannelConverterProcessor,
+};
+use streamlib::core::{
+    CameraConfig, AudioCaptureConfig, Mp4WriterConfig,
+    AudioResamplerConfig, ResamplingQuality,
+    AudioChannelConverterConfig, ChannelConversionMode,
+    VideoFrame, AudioFrame,
+};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
@@ -31,20 +39,21 @@ fn main() -> Result<()> {
     }
     println!("✅ Microphone permission granted\n");
 
-    // Get audio config from runtime
-    let audio_config = runtime.audio_config();
-
-    // Determine output path
+    // Determine output path - save in example folder by default
     let output_path = std::env::var("OUTPUT_PATH")
-        .unwrap_or_else(|_| "/tmp/recording.mp4".to_string());
+        .unwrap_or_else(|_| {
+            // Get example directory (parent of Cargo.toml)
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+                .unwrap_or_else(|_| ".".to_string());
+            format!("{}/recording.mp4", manifest_dir)
+        });
 
     println!("📹 Output file: {}\n", output_path);
-    println!("🎵 Audio config: {} Hz, {} channels\n", audio_config.sample_rate, 2);
 
     println!("📷 Adding camera processor...");
     let camera = runtime.add_processor_with_config::<CameraProcessor>(
         CameraConfig {
-            device_id: None, // Use default camera
+            device_id: Some("0x1424001bcf2284".to_string()), // Use default camera
         }
     )?;
     println!("✓ Camera added (capturing video)\n");
@@ -55,7 +64,25 @@ fn main() -> Result<()> {
             device_id: None, // Use default microphone
         }
     )?;
-    println!("✓ Audio capture added (capturing mono audio @ {} Hz)\n", audio_config.sample_rate);
+    println!("✓ Audio capture added (mono @ 24kHz)\n");
+
+    println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
+    let resampler = runtime.add_processor_with_config::<AudioResamplerProcessor>(
+        AudioResamplerConfig {
+            source_sample_rate: 24000,
+            target_sample_rate: 48000,
+            quality: ResamplingQuality::High,
+        }
+    )?;
+    println!("✓ Resampler added\n");
+
+    println!("🎛️  Adding channel converter (mono → stereo)...");
+    let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
+        AudioChannelConverterConfig {
+            mode: ChannelConversionMode::Duplicate,
+        }
+    )?;
+    println!("✓ Channel converter added\n");
 
     println!("💾 Adding MP4 writer processor...");
     let mp4_writer = runtime.add_processor_with_config::<Mp4WriterProcessor>(
@@ -68,7 +95,7 @@ fn main() -> Result<()> {
             audio_bitrate: Some(128_000), // 128 kbps
         }
     )?;
-    println!("✓ MP4 writer added (H.264 video + LPCM audio)\n");
+    println!("✓ MP4 writer added (H.264 video + stereo LPCM audio @ 48kHz)\n");
 
     println!("🔗 Connecting pipeline:");
     println!("   camera.video → mp4_writer.video");
@@ -78,29 +105,40 @@ fn main() -> Result<()> {
     )?;
     println!("   ✓ Video connected");
 
-    println!("   audio_capture.audio → mp4_writer.audio");
+    println!("   audio_capture.audio → resampler.audio_in");
     runtime.connect(
-        audio_capture.output_port::<AudioFrame<2>>("audio"),
+        audio_capture.output_port::<AudioFrame<1>>("audio"),
+        resampler.input_port::<AudioFrame<1>>("audio_in"),
+    )?;
+    println!("   ✓ Audio capture → resampler");
+
+    println!("   resampler.audio_out → channel_converter.audio_in");
+    runtime.connect(
+        resampler.output_port::<AudioFrame<1>>("audio_out"),
+        channel_converter.input_port::<AudioFrame<1>>("audio_in"),
+    )?;
+    println!("   ✓ Resampler → channel converter");
+
+    println!("   channel_converter.audio_out → mp4_writer.audio");
+    runtime.connect(
+        channel_converter.output_port::<AudioFrame<2>>("audio_out"),
         mp4_writer.input_port::<AudioFrame<2>>("audio"),
     )?;
-    println!("   ✓ Audio connected\n");
+    println!("   ✓ Channel converter → MP4 writer\n");
 
     println!("▶️  Starting recording pipeline...");
     println!("   Recording to: {}", output_path);
-    #[cfg(target_os = "macos")]
-    println!("   Press Cmd+Q or Ctrl+C to stop recording\n");
-    #[cfg(not(target_os = "macos"))]
     println!("   Press Ctrl+C to stop recording\n");
 
-    println!("📊 Pipeline will maintain A/V sync with tolerance of 16.6ms");
-    println!("   - Video frames ahead: dropped");
-    println!("   - Video frames behind: duplicated\n");
+    println!("📊 Audio pipeline: mic (mono 24kHz) → resampler (48kHz) → converter (stereo) → MP4");
+    println!("📊 Video pipeline: camera → MP4");
+    println!("📊 A/V sync tolerance: 16.6ms (video frames may be dropped/duplicated)\n");
 
     runtime.start()?;
     runtime.run()?;
 
-    println!("\n✓ Recording stopped");
-    println!("✓ MP4 file finalized: {}", output_path);
+    println!("\n✅ Recording stopped");
+    println!("✅ MP4 file finalized: {}", output_path);
     println!("\n📊 To view sync statistics, check the logs above");
     println!("💡 Play with: ffplay {} or QuickTime Player", output_path);
 
