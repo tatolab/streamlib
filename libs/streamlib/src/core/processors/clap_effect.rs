@@ -4,6 +4,7 @@ use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 use streamlib_macros::StreamProcessor;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,6 +12,8 @@ pub struct ClapEffectConfig {
     pub plugin_path: PathBuf,
     pub plugin_name: Option<String>,
     pub plugin_index: Option<usize>,
+    pub sample_rate: u32,
+    pub buffer_size: usize,
 }
 
 impl Default for ClapEffectConfig {
@@ -19,6 +22,8 @@ impl Default for ClapEffectConfig {
             plugin_path: PathBuf::new(),
             plugin_name: None,
             plugin_index: None,
+            sample_rate: 48000,
+            buffer_size: 512,
         }
     }
 }
@@ -33,7 +38,7 @@ pub struct ClapEffectProcessor {
     audio_in: StreamInput<AudioFrame<2>>,
 
     #[output(description = "Processed stereo audio frame from CLAP plugin")]
-    audio_out: StreamOutput<AudioFrame<2>>,
+    audio_out: Arc<StreamOutput<AudioFrame<2>>>,
 
     #[config]
     config: ClapEffectConfig,
@@ -113,39 +118,39 @@ impl ClapEffectProcessor {
     }
 
     // Lifecycle - auto-detected by macro
-    fn setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        self.sample_rate = ctx.audio.sample_rate;
-        self.buffer_size = ctx.audio.buffer_size;
+    fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+        self.sample_rate = self.config.sample_rate;
+        self.buffer_size = self.config.buffer_size;
 
         let mut host = if let Some(name) = self.config.plugin_name.as_deref() {
             ClapPluginHost::load_by_name(
                 &self.config.plugin_path,
                 name,
-                ctx.audio.sample_rate,
-                ctx.audio.buffer_size
+                self.config.sample_rate,
+                self.config.buffer_size
             )?
         } else if let Some(index) = self.config.plugin_index {
             ClapPluginHost::load_by_index(
                 &self.config.plugin_path,
                 index,
-                ctx.audio.sample_rate,
-                ctx.audio.buffer_size
+                self.config.sample_rate,
+                self.config.buffer_size
             )?
         } else {
             ClapPluginHost::load(
                 &self.config.plugin_path,
-                ctx.audio.sample_rate,
-                ctx.audio.buffer_size
+                self.config.sample_rate,
+                self.config.buffer_size
             )?
         };
 
-        host.activate(ctx.audio.sample_rate, ctx.audio.buffer_size)?;
+        host.activate(self.config.sample_rate, self.config.buffer_size)?;
 
         tracing::info!(
             "[ClapEffect] Loaded and activated plugin '{}' at {} Hz with {} buffer size",
             host.plugin_info().name,
-            ctx.audio.sample_rate,
-            ctx.audio.buffer_size
+            self.config.sample_rate,
+            self.config.buffer_size
         );
 
         self.host = Some(host);
@@ -167,7 +172,8 @@ impl ClapEffectProcessor {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[ClapEffect] process() called");
 
-        if let Some(input_frame) = self.audio_in.read_latest() {
+        // Use read() for sequential audio consumption (not read_latest() which skips frames)
+        if let Some(input_frame) = self.audio_in.read() {
             tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
 
             let output_frame = self.process_audio_through_clap(&input_frame)?;

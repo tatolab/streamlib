@@ -106,7 +106,8 @@ objc2-metal.workspace = true
 objc2-io-surface.workspace = true
 objc2-core-video.workspace = true
 objc2-foundation.workspace = true
-objc2-av-foundation.workspace = true
+objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
+objc2-core-media.workspace = true
 objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
@@ -116,6 +117,7 @@ libc.workspace = true
 # Apple-specific crates
 metal = "0.31"  # Metal crate for wgpu-hal interop
 dispatch2 = "0.3"  # GCD dispatch queues
+yuv.workspace = true  # SIMD-optimized RGB→YUV conversion for MP4 writing
 pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 mach2 = "0.4"  # Mach kernel API for thread priorities and timing
@@ -139,6 +141,10 @@ harness = false
 
 [[bench]]
 name = "event_bus_bench"
+harness = false
+
+[[bench]]
+name = "stream_output_bench"
 harness = false
 
 [package.metadata.docs.rs]

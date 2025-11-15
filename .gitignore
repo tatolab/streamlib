@@ -19,6 +19,8 @@ htmlcov/
 
 # Output files
 output/
+*.mp4
+output.log
 
 # IDE
 .idea/

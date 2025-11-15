@@ -19,8 +19,6 @@ pub enum WakeupEvent {
     Shutdown,
 }
 
-pub use crate::core::context::AudioContext;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessorStatus {
     Pending,
@@ -37,8 +35,8 @@ type DynProcessor = Box<dyn DynStreamElement>;
 pub(crate) struct RuntimeProcessorHandle {
     pub id: ProcessorId,
     pub name: String,
-    thread: Option<JoinHandle<()>>,
-    shutdown_tx: crossbeam_channel::Sender<()>,
+    pub(crate) thread: Option<JoinHandle<()>>,
+    pub(crate) shutdown_tx: crossbeam_channel::Sender<()>,
     pub(crate) wakeup_tx: crossbeam_channel::Sender<WakeupEvent>,
     pub(crate) status: Arc<Mutex<ProcessorStatus>>,
     pub(crate) processor: Option<Arc<Mutex<DynProcessor>>>,
@@ -78,7 +76,6 @@ pub struct StreamRuntime {
     next_processor_id: usize,
     pub(crate) connections: Arc<Mutex<HashMap<ConnectionId, Connection>>>,
     next_connection_id: usize,
-    audio_context: AudioContext,
     pending_connections: Vec<PendingConnection>,
     bus: crate::core::Bus,
 }
@@ -95,7 +92,6 @@ impl StreamRuntime {
             next_processor_id: 0,
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
-            audio_context: AudioContext::default(),
             bus: crate::core::Bus::new(),
             pending_connections: Vec::new(),
         }
@@ -105,18 +101,31 @@ impl StreamRuntime {
         self.running
     }
 
-    pub fn audio_config(&self) -> AudioContext {
-        self.audio_context
+    /// Request camera permission from the system.
+    /// Must be called on the main thread before adding camera processors.
+    /// Returns true if permission is granted, false if denied.
+    #[cfg(target_os = "macos")]
+    pub fn request_camera(&self) -> Result<bool> {
+        crate::request_camera_permission()
     }
 
-    pub fn set_audio_config(&mut self, config: AudioContext) {
-        if self.running {
-            tracing::warn!("Changing audio config while runtime is running may cause issues");
-        }
-        self.audio_context = config;
+    #[cfg(not(target_os = "macos"))]
+    pub fn request_camera(&self) -> Result<bool> {
+        Ok(true) // No permission system on other platforms
     }
 
+    /// Request microphone permission from the system.
+    /// Must be called on the main thread before adding audio capture processors.
+    /// Returns true if permission is granted, false if denied.
+    #[cfg(target_os = "macos")]
+    pub fn request_microphone(&self) -> Result<bool> {
+        crate::request_audio_permission()
+    }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn request_microphone(&self) -> Result<bool> {
+        Ok(true) // No permission system on other platforms
+    }
 
     pub fn set_event_loop(&mut self, event_loop: EventLoopFn) {
         self.event_loop = Some(event_loop);
@@ -1531,24 +1540,5 @@ mod tests {
                 "Processors should start processing nearly simultaneously"
             );
         }
-    }
-
-
-    #[test]
-    fn test_audio_config_getter_setter() {
-        let mut runtime = StreamRuntime::new();
-
-        let config = runtime.audio_config();
-        assert_eq!(config.sample_rate, 48000);
-        assert_eq!(config.buffer_size, 128); // AudioContext default
-
-        runtime.set_audio_config(AudioContext {
-            sample_rate: 44100,
-            buffer_size: 1024,
-        });
-
-        let new_config = runtime.audio_config();
-        assert_eq!(new_config.sample_rate, 44100);
-        assert_eq!(new_config.buffer_size, 1024);
     }
 }

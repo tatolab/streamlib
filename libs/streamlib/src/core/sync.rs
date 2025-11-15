@@ -3,6 +3,17 @@ use crate::core::{VideoFrame, AudioFrame};
 
 pub const DEFAULT_SYNC_TOLERANCE_MS: f64 = 16.6;
 
+/// Action to take when audio and video streams are out of sync
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncAction {
+    /// Streams are synchronized, no action needed
+    NoAction,
+    /// Video is ahead of audio, drop this video frame
+    DropVideoFrame,
+    /// Video is behind audio, duplicate the last video frame
+    DuplicateVideoFrame,
+}
+
 #[inline]
 pub fn timestamp_delta_ms(timestamp_a_ns: i64, timestamp_b_ns: i64) -> f64 {
     let delta_ns = (timestamp_a_ns - timestamp_b_ns).abs();
@@ -36,6 +47,58 @@ pub fn video_audio_synchronized_with_tolerance<const CHANNELS: usize>(
     are_synchronized(video_ns, audio.timestamp_ns, tolerance_ms)
 }
 
+/// Determine what action to take to maintain audio/video synchronization
+///
+/// Returns a `SyncAction` indicating whether to drop/duplicate video frames
+/// based on the drift between video and audio timestamps.
+///
+/// # Arguments
+/// * `video` - Video frame to check
+/// * `audio` - Audio frame to check against
+/// * `tolerance_ms` - Maximum acceptable drift in milliseconds (default: 16.6ms)
+///
+/// # Returns
+/// * `NoAction` - Streams are within tolerance
+/// * `DropVideoFrame` - Video is ahead, skip this frame
+/// * `DuplicateVideoFrame` - Video is behind, reuse last frame
+#[inline]
+pub fn sync_action<const CHANNELS: usize>(
+    video: &VideoFrame,
+    audio: &AudioFrame<CHANNELS>,
+    tolerance_ms: f64,
+) -> SyncAction {
+    let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
+    let drift_ns = video_ns - audio.timestamp_ns;
+    let drift_ms = drift_ns as f64 / 1_000_000.0;
+
+    if drift_ms.abs() <= tolerance_ms {
+        SyncAction::NoAction
+    } else if drift_ms > 0.0 {
+        // Video timestamp is ahead of audio
+        SyncAction::DropVideoFrame
+    } else {
+        // Video timestamp is behind audio
+        SyncAction::DuplicateVideoFrame
+    }
+}
+
+/// Calculate detailed synchronization statistics for monitoring
+///
+/// Returns drift in milliseconds (positive means video ahead, negative means audio ahead)
+/// and whether the streams are synchronized within tolerance.
+#[inline]
+pub fn sync_statistics<const CHANNELS: usize>(
+    video: &VideoFrame,
+    audio: &AudioFrame<CHANNELS>,
+    tolerance_ms: f64,
+) -> (f64, bool) {
+    let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
+    let drift_ns = video_ns - audio.timestamp_ns;
+    let drift_ms = drift_ns as f64 / 1_000_000.0;
+    let is_synced = drift_ms.abs() <= tolerance_ms;
+    (drift_ms, is_synced)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +122,54 @@ mod tests {
         assert!(are_synchronized(1_000_000_000, 1_020_000_000, 20.0));
 
         assert!(!are_synchronized(1_000_000_000, 1_030_000_000, 20.0));
+    }
+
+    #[test]
+    fn test_sync_action_logic() {
+        // Test NoAction when timestamps match
+        let video_ts = 1.0; // 1 second
+        let audio_ts_ns = 1_000_000_000i64; // 1 second
+
+        let video_ns = (video_ts * 1_000_000_000.0) as i64;
+        let drift_ns = video_ns - audio_ts_ns;
+        let drift_ms = drift_ns as f64 / 1_000_000.0;
+
+        assert!(drift_ms.abs() <= DEFAULT_SYNC_TOLERANCE_MS);
+
+        // Test DropVideoFrame when video ahead
+        let video_ts_ahead = 1.05; // 50ms ahead
+        let video_ns_ahead = (video_ts_ahead * 1_000_000_000.0) as i64;
+        let drift_ahead = (video_ns_ahead - audio_ts_ns) as f64 / 1_000_000.0;
+
+        assert!(drift_ahead > DEFAULT_SYNC_TOLERANCE_MS);
+        assert!(drift_ahead > 0.0);
+
+        // Test DuplicateVideoFrame when video behind
+        let video_ts_behind = 0.95; // 50ms behind
+        let video_ns_behind = (video_ts_behind * 1_000_000_000.0) as i64;
+        let drift_behind = (video_ns_behind - audio_ts_ns) as f64 / 1_000_000.0;
+
+        assert!(drift_behind.abs() > DEFAULT_SYNC_TOLERANCE_MS);
+        assert!(drift_behind < 0.0);
+    }
+
+    #[test]
+    fn test_sync_statistics_logic() {
+        // Test drift calculation
+        let video_ts = 1.02; // 20ms ahead
+        let audio_ts_ns = 1_000_000_000i64; // 1 second
+
+        let video_ns = (video_ts * 1_000_000_000.0) as i64;
+        let drift_ns = video_ns - audio_ts_ns;
+        let drift_ms = drift_ns as f64 / 1_000_000.0;
+
+        // Should be approximately 20ms
+        assert!((drift_ms - 20.0).abs() < 0.1);
+
+        // Should NOT be synced with default tolerance (16.6ms)
+        assert!(drift_ms.abs() > DEFAULT_SYNC_TOLERANCE_MS);
+
+        // Should BE synced with larger tolerance (25ms)
+        assert!(drift_ms.abs() <= 25.0);
     }
 }

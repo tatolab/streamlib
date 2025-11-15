@@ -1,5 +1,6 @@
 use crate::core::{Result, StreamInput, StreamOutput, VideoFrame};
 use serde::{Serialize, Deserialize};
+use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +25,7 @@ pub struct SimplePassthroughProcessor {
     input: StreamInput<VideoFrame>,
 
     #[output(description = "Output video stream")]
-    output: StreamOutput<VideoFrame>,
+    output: Arc<StreamOutput<VideoFrame>>,
 
     #[config]
     config: SimplePassthroughConfig,

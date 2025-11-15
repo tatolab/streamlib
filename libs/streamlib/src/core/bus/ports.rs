@@ -51,6 +51,15 @@ pub mod sealed {
     pub trait Sealed {}
 }
 
+/// Consumption strategy for reading from ports
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumptionStrategy {
+    /// Read the latest item, discarding older ones (optimal for video)
+    Latest,
+    /// Read items sequentially in order (required for audio)
+    Sequential,
+}
+
 /// Trait for types that can be sent through ports
 /// This is a sealed trait - only types in this crate can implement it
 pub trait PortMessage: sealed::Sealed + Clone + Send + 'static {
@@ -59,13 +68,21 @@ pub trait PortMessage: sealed::Sealed + Clone + Send + 'static {
     fn examples() -> Vec<(&'static str, serde_json::Value)> {
         Vec::new()
     }
+
+    /// Determines how this type should be consumed from the ring buffer
+    /// - Video frames: Latest (skip old frames to show newest)
+    /// - Audio frames: Sequential (must play every frame in order)
+    fn consumption_strategy() -> ConsumptionStrategy {
+        // Default to Latest for backwards compatibility with video
+        ConsumptionStrategy::Latest
+    }
 }
 
 impl PortType {
     pub fn default_capacity(&self) -> usize {
         match self {
             PortType::Video => 3,
-            PortType::Audio1 | PortType::Audio2 | PortType::Audio4 | PortType::Audio6 | PortType::Audio8 => 4,
+            PortType::Audio1 | PortType::Audio2 | PortType::Audio4 | PortType::Audio6 | PortType::Audio8 => 32,
             PortType::Data => 16,
         }
     }
@@ -89,9 +106,9 @@ pub struct StreamOutput<T: PortMessage> {
     /// Lock-free producers - each write is atomic
     /// UnsafeCell for zero-cost abstraction in hot path
     producers: UnsafeCell<Vec<OwnedProducer<T>>>,
-    /// Wakeup channel for downstream processors
+    /// Wakeup channels for downstream processors (supports fan-out to multiple Push mode processors)
     /// UnsafeCell for zero-cost abstraction in hot path
-    downstream_wakeup: UnsafeCell<Option<crossbeam_channel::Sender<WakeupEvent>>>,
+    downstream_wakeups: UnsafeCell<Vec<crossbeam_channel::Sender<WakeupEvent>>>,
     /// Mutex for connection setup (cold path only)
     setup_lock: Mutex<()>,
 }
@@ -108,7 +125,7 @@ impl<T: PortMessage> StreamOutput<T> {
             name: name.into(),
             port_type: T::port_type(),
             producers: UnsafeCell::new(Vec::new()),
-            downstream_wakeup: UnsafeCell::new(None),
+            downstream_wakeups: UnsafeCell::new(Vec::new()),
             setup_lock: Mutex::new(()),
         }
     }
@@ -132,10 +149,18 @@ impl<T: PortMessage> StreamOutput<T> {
                 producer.write(data.clone());
             }
 
-            // Notify downstream processors that data is available
+            // Notify all downstream Push mode processors that data is available
             if !producers.is_empty() {
-                if let Some(wakeup_tx) = (*self.downstream_wakeup.get()).as_ref() {
-                    let _ = wakeup_tx.send(WakeupEvent::DataAvailable);
+                let wakeups = &*self.downstream_wakeups.get();
+                if !wakeups.is_empty() {
+                    tracing::info!("[StreamOutput] Sending {} wakeup events to downstream processors", wakeups.len());
+                    for wakeup_tx in wakeups.iter() {
+                        if let Err(e) = wakeup_tx.send(WakeupEvent::DataAvailable) {
+                            tracing::error!("[StreamOutput] Failed to send wakeup: {}", e);
+                        }
+                    }
+                } else {
+                    tracing::warn!("[StreamOutput] Producers exist but no wakeup channels configured!");
                 }
             }
         }
@@ -176,8 +201,9 @@ impl<T: PortMessage> StreamOutput<T> {
     /// before processor threads start, or with external synchronization
     pub fn set_downstream_wakeup(&self, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
         let _lock = self.setup_lock.lock();
+        tracing::info!("[StreamOutput] Adding downstream wakeup channel");
         unsafe {
-            *self.downstream_wakeup.get() = Some(wakeup_tx);
+            (*self.downstream_wakeups.get()).push(wakeup_tx);
         }
     }
 }
@@ -189,7 +215,7 @@ impl<T: PortMessage> Clone for StreamOutput<T> {
             name: self.name.clone(),
             port_type: self.port_type,
             producers: UnsafeCell::new(Vec::new()), // Cannot clone producers (owned)
-            downstream_wakeup: unsafe { UnsafeCell::new((*self.downstream_wakeup.get()).clone()) },
+            downstream_wakeups: unsafe { UnsafeCell::new((*self.downstream_wakeups.get()).clone()) },
             setup_lock: Mutex::new(()),
         }
     }
@@ -304,6 +330,25 @@ impl<T: PortMessage> StreamInput<T> {
             (*self.consumer.get())
                 .as_mut()
                 .and_then(|c| c.peek())
+        }
+    }
+
+    /// Read item using type-appropriate strategy (truly lock-free hot path)
+    ///
+    /// The consumption strategy is determined by the type:
+    /// - Video frames: Latest (skips old frames to show newest)
+    /// - Audio frames: Sequential (reads every frame in order)
+    ///
+    /// SAFETY: This is safe because the processor thread has exclusive access
+    /// to its own input ports during process().
+    pub fn read(&self) -> Option<T> {
+        unsafe {
+            (*self.consumer.get()).as_mut().and_then(|c| {
+                match T::consumption_strategy() {
+                    ConsumptionStrategy::Latest => c.read_latest(),
+                    ConsumptionStrategy::Sequential => c.read(),
+                }
+            })
         }
     }
 

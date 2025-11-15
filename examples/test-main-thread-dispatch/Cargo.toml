@@ -1,0 +1,13 @@
+[package]
+name = "test-main-thread-dispatch"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test-main-thread-dispatch"
+path = "src/main.rs"
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib" }
+tracing = "0.1"
+tracing-subscriber = "0.3"

@@ -30,7 +30,7 @@ pub use bus::{
     StreamOutput, StreamInput,
     OwnedProducer, OwnedConsumer, create_owned_connection,
 };
-pub use context::{GpuContext, AudioContext, RuntimeContext};
+pub use context::{GpuContext, RuntimeContext};
 pub use error::{StreamError, Result};
 pub use pubsub::{
     EVENT_BUS, Event, RuntimeEvent, ProcessorEvent, ProcessorState,
@@ -54,9 +54,13 @@ pub use processors::{
     // Sinks
     DisplayProcessor, WindowId, DisplayConfig,
     AudioOutputProcessor, AudioDevice, AudioOutputConfig,
+    Mp4WriterProcessor, Mp4WriterConfig,
     // Transformers
     ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
     AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
+    AudioResamplerProcessor, AudioResamplerConfig, ResamplingQuality,
+    AudioChannelConverterProcessor, AudioChannelConverterConfig, ChannelConversionMode,
+    BufferRechunkerProcessor, BufferRechunkerConfig,
 };
 
 #[cfg(feature = "debug-overlay")]
