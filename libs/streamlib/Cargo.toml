@@ -86,6 +86,12 @@ webrtc = "0.14.0"  # WebRTC implementation for real-time streaming
 bytes = "1.5"      # Zero-copy byte buffers for RTP samples
 fastrand = "2.0"   # Fast PRNG for RTP timestamp base
 
+# HTTP client for WHIP signaling (reuses existing hyper from workspace)
+hyper = { workspace = true }  # HTTP client core
+hyper-rustls = { version = "0.27", features = ["http2", "native-tokio", "ring"] }  # TLS support (ring for crypto)
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }  # HTTP client utilities
+http-body-util = "0.1"  # Body handling utilities
+
 # Optional: Debug overlay dependencies
 vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }
 skrifa = { version = "0.22", optional = true }
@@ -136,6 +142,7 @@ core-graphics = "0.24"
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 criterion = "0.5"  # Benchmarking framework
+rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
 
 [[bench]]
 name = "connection_bench"
