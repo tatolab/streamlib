@@ -90,7 +90,7 @@ struct EncodedVideoFrame {
 }
 
 /// Internal representation of encoded Opus frame
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct EncodedAudioFrame {
     data: Vec<u8>,
     timestamp_ns: i64,
@@ -137,7 +137,7 @@ impl Default for VideoEncoderConfig {
 // OPUS ENCODING CONFIGURATION
 // ============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AudioEncoderConfig {
     pub sample_rate: u32,
     pub channels: u16,
@@ -654,23 +654,123 @@ trait AudioEncoderOpus: Send {
 // OPUS ENCODER IMPLEMENTATION
 // ============================================================================
 
+/// Opus audio encoder for real-time WebRTC streaming.
+///
+/// # Requirements
+/// - Input must be stereo (`AudioFrame<2>`)
+/// - Sample rate must be 48kHz
+/// - Frame size must be exactly 960 samples (20ms @ 48kHz)
+///
+/// # Pipeline Setup
+/// Typical pipeline for Opus encoding requires preprocessing:
+/// - AudioSource → AudioResamplerProcessor(48kHz) → BufferRechunkerProcessor(960) → OpusEncoder
+///
+/// # Configuration
+/// - **Bitrate**: 128 kbps default (adjust with `set_bitrate()`)
+/// - **VBR**: Enabled by default for better quality
+/// - **FEC**: Forward error correction enabled for packet loss resilience
+#[derive(Debug)]
 struct OpusEncoder {
     config: AudioEncoderConfig,
-    // TODO: Add opus encoder state
+    encoder: opus::Encoder,
+    frame_size: usize,  // 960 samples per channel @ 48kHz (20ms)
 }
 
 impl OpusEncoder {
     fn new(config: AudioEncoderConfig) -> Result<Self> {
+        // Validate config
+        if config.sample_rate != 48000 {
+            return Err(StreamError::Configuration(
+                format!("Opus encoder only supports 48kHz sample rate, got {}Hz", config.sample_rate)
+            ));
+        }
+        if config.channels != 2 {
+            return Err(StreamError::Configuration(
+                format!("Opus encoder only supports stereo (2 channels), got {}", config.channels)
+            ));
+        }
+
+        // Calculate frame size (20ms @ 48kHz = 960 samples per channel)
+        let frame_size = (config.sample_rate as usize * config.frame_duration_ms as usize) / 1000;
+
+        // Create opus encoder
+        let mut encoder = opus::Encoder::new(
+            config.sample_rate,
+            opus::Channels::Stereo,
+            opus::Application::Audio,  // Use Audio for best quality (music/broadcast)
+        ).map_err(|e| StreamError::Configuration(format!("Failed to create Opus encoder: {:?}", e)))?;
+
+        // Configure encoder
+        encoder.set_bitrate(opus::Bitrate::Bits(config.bitrate_bps as i32))
+            .map_err(|e| StreamError::Configuration(format!("Failed to set bitrate: {:?}", e)))?;
+
+        encoder.set_vbr(config.vbr)
+            .map_err(|e| StreamError::Configuration(format!("Failed to set VBR: {:?}", e)))?;
+
+        // Enable FEC (Forward Error Correction) for better packet loss resilience
+        encoder.set_inband_fec(true)
+            .map_err(|e| StreamError::Configuration(format!("Failed to set FEC: {:?}", e)))?;
+
+        tracing::info!(
+            "OpusEncoder initialized: {}Hz, {} channels, {} kbps, {}ms frames, VBR={}",
+            config.sample_rate,
+            config.channels,
+            config.bitrate_bps / 1000,
+            config.frame_duration_ms,
+            config.vbr
+        );
+
         Ok(Self {
             config,
+            encoder,
+            frame_size,
         })
     }
 }
 
 impl AudioEncoderOpus for OpusEncoder {
-    fn encode(&mut self, _frame: &AudioFrame<2>) -> Result<EncodedAudioFrame> {
-        // TODO: Implement Opus encoding
-        Err(StreamError::NotSupported("Opus encoding not yet implemented".into()))
+    fn encode(&mut self, frame: &AudioFrame<2>) -> Result<EncodedAudioFrame> {
+        // Validate sample rate
+        if frame.sample_rate != 48000 {
+            return Err(StreamError::Configuration(
+                format!(
+                    "Expected 48kHz, got {}Hz. Use AudioResamplerProcessor upstream to convert to 48kHz.",
+                    frame.sample_rate
+                )
+            ));
+        }
+
+        // Validate frame size (should be exactly 960 samples per channel for 20ms @ 48kHz)
+        let expected_samples = self.frame_size;  // 960
+        let actual_samples = frame.sample_count();
+
+        if actual_samples != expected_samples {
+            return Err(StreamError::Configuration(
+                format!(
+                    "Expected {} samples (20ms @ 48kHz), got {}. Use BufferRechunkerProcessor(960) upstream.",
+                    expected_samples, actual_samples
+                )
+            ));
+        }
+
+        // Encode (opus expects interleaved f32, which is what AudioFrame uses)
+        // Max packet size ~4KB is enough for worst case Opus output
+        let encoded_data = self.encoder
+            .encode_vec_float(&frame.samples, 4000)
+            .map_err(|e| StreamError::Runtime(format!("Opus encoding failed: {:?}", e)))?;
+
+        tracing::trace!(
+            "Encoded audio frame: {} samples → {} bytes (compression: {:.2}x)",
+            actual_samples * 2,  // Total samples (stereo)
+            encoded_data.len(),
+            (actual_samples * 2 * 4) as f32 / encoded_data.len() as f32  // f32 = 4 bytes per sample
+        );
+
+        Ok(EncodedAudioFrame {
+            data: encoded_data,
+            timestamp_ns: frame.timestamp_ns,  // Preserve timestamp exactly
+            sample_count: actual_samples,
+        })
     }
 
     fn config(&self) -> &AudioEncoderConfig {
@@ -678,7 +778,13 @@ impl AudioEncoderOpus for OpusEncoder {
     }
 
     fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()> {
+        self.encoder
+            .set_bitrate(opus::Bitrate::Bits(bitrate_bps as i32))
+            .map_err(|e| StreamError::Configuration(format!("Failed to set bitrate: {:?}", e)))?;
+
         self.config.bitrate_bps = bitrate_bps;
+
+        tracing::info!("Opus bitrate changed to {} kbps", bitrate_bps / 1000);
         Ok(())
     }
 }
@@ -961,5 +1067,179 @@ mod tests {
         let audio_config = AudioEncoderConfig::default();
         assert_eq!(audio_config.sample_rate, 48000);
         assert_eq!(audio_config.channels, 2);
+    }
+
+    // ========================================================================
+    // OPUS ENCODER TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_opus_encoder_creation() {
+        let config = AudioEncoderConfig::default();
+        let encoder = OpusEncoder::new(config);
+        assert!(encoder.is_ok());
+    }
+
+    #[test]
+    fn test_opus_encoder_invalid_sample_rate() {
+        let mut config = AudioEncoderConfig::default();
+        config.sample_rate = 44100;  // Not supported
+        let encoder = OpusEncoder::new(config);
+        assert!(encoder.is_err());
+        let err = encoder.unwrap_err().to_string();
+        assert!(err.contains("48kHz"));
+    }
+
+    #[test]
+    fn test_opus_encoder_invalid_channels() {
+        let mut config = AudioEncoderConfig::default();
+        config.channels = 1;  // Mono not supported
+        let encoder = OpusEncoder::new(config);
+        assert!(encoder.is_err());
+        let err = encoder.unwrap_err().to_string();
+        assert!(err.contains("stereo"));
+    }
+
+    #[test]
+    fn test_opus_encode_correct_frame_size() {
+        let config = AudioEncoderConfig::default();
+        let mut encoder = OpusEncoder::new(config).unwrap();
+
+        // Create 20ms frame @ 48kHz stereo = 960 samples * 2 channels = 1920 f32
+        let samples = vec![0.0f32; 1920];
+        let frame = AudioFrame::<2>::new(
+            samples,
+            0,      // timestamp_ns
+            0,      // frame_number
+            48000   // sample_rate
+        );
+
+        let result = encoder.encode(&frame);
+        assert!(result.is_ok());
+
+        let encoded = result.unwrap();
+        assert!(encoded.data.len() > 0);
+        assert_eq!(encoded.timestamp_ns, 0);
+        assert_eq!(encoded.sample_count, 960);
+    }
+
+    #[test]
+    fn test_opus_encode_wrong_frame_size() {
+        let config = AudioEncoderConfig::default();
+        let mut encoder = OpusEncoder::new(config).unwrap();
+
+        // Wrong size: 512 samples instead of 960
+        let samples = vec![0.0f32; 512 * 2];
+        let frame = AudioFrame::<2>::new(
+            samples,
+            0,
+            0,
+            48000
+        );
+
+        let result = encoder.encode(&frame);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("BufferRechunkerProcessor"));
+    }
+
+    #[test]
+    fn test_opus_encode_wrong_sample_rate() {
+        let config = AudioEncoderConfig::default();
+        let mut encoder = OpusEncoder::new(config).unwrap();
+
+        // Wrong sample rate
+        let samples = vec![0.0f32; 1920];
+        let frame = AudioFrame::<2>::new(
+            samples,
+            0,
+            0,
+            44100  // Wrong sample rate
+        );
+
+        let result = encoder.encode(&frame);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("AudioResamplerProcessor"));
+    }
+
+    #[test]
+    fn test_opus_timestamp_preservation() {
+        let config = AudioEncoderConfig::default();
+        let mut encoder = OpusEncoder::new(config).unwrap();
+
+        let timestamp_ns = 123456789i64;
+        let samples = vec![0.0f32; 1920];
+        let frame = AudioFrame::<2>::new(
+            samples,
+            timestamp_ns,
+            42,
+            48000
+        );
+
+        let encoded = encoder.encode(&frame).unwrap();
+        assert_eq!(encoded.timestamp_ns, timestamp_ns);
+    }
+
+    #[test]
+    fn test_opus_bitrate_change() {
+        let config = AudioEncoderConfig::default();
+        let mut encoder = OpusEncoder::new(config).unwrap();
+
+        let result = encoder.set_bitrate(96_000);
+        assert!(result.is_ok());
+        assert_eq!(encoder.config().bitrate_bps, 96_000);
+    }
+
+    #[test]
+    fn test_opus_encode_sine_wave() {
+        use std::f32::consts::PI;
+
+        let config = AudioEncoderConfig::default();
+        let mut encoder = OpusEncoder::new(config).unwrap();
+
+        // Generate 20ms of 440Hz sine wave @ 48kHz stereo
+        let mut samples = Vec::with_capacity(1920);
+        for i in 0..960 {
+            let t = i as f32 / 48000.0;
+            let sample = (2.0 * PI * 440.0 * t).sin() * 0.5;
+            samples.push(sample);  // Left
+            samples.push(sample);  // Right
+        }
+
+        let frame = AudioFrame::<2>::new(
+            samples,
+            0,
+            0,
+            48000
+        );
+        let encoded = encoder.encode(&frame).unwrap();
+
+        // Encoded size should be reasonable (< 4KB for 20ms)
+        assert!(encoded.data.len() > 10);  // At least some bytes
+        assert!(encoded.data.len() < 4000);  // Not too large
+    }
+
+    #[test]
+    fn test_opus_encode_multiple_frames() {
+        let config = AudioEncoderConfig::default();
+        let mut encoder = OpusEncoder::new(config).unwrap();
+
+        // Simulate encoding 10 frames (200ms of audio)
+        for frame_num in 0..10 {
+            let timestamp_ns = frame_num * 20_000_000;  // 20ms increments
+            let samples = vec![0.1f32; 1920];
+            let frame = AudioFrame::<2>::new(
+                samples,
+                timestamp_ns,
+                frame_num as u64,
+                48000
+            );
+
+            let encoded = encoder.encode(&frame).unwrap();
+            assert!(encoded.data.len() > 0);
+            assert_eq!(encoded.timestamp_ns, timestamp_ns);
+            assert_eq!(encoded.sample_count, 960);
+        }
     }
 }
