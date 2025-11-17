@@ -2,6 +2,7 @@
 pub mod arkit;
 pub mod audio_utils;
 pub mod iosurface;
+pub mod pixel_transfer;
 pub mod media_clock;
 pub mod metal;
 pub mod texture;
@@ -25,6 +26,7 @@ pub mod display_link;
 
 pub use metal::MetalDevice;
 pub use wgpu_bridge::WgpuBridge;
+pub use pixel_transfer::PixelTransferSession;
 
 pub use processors::{
     // Sources

@@ -67,5 +67,5 @@ hyper = "1.7.0"
 wgpu = "25.0.2"
 wgpu-hal = "25.0.2"
 
-# YUV/RGB conversion (SIMD-optimized)
-yuv = "0.8"
+# YUV/RGB conversion - REMOVED (now using GPU-accelerated VTPixelTransferSession)
+# yuv = "0.8"

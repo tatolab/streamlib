@@ -70,9 +70,11 @@ use crate::core::{
     VideoFrame, AudioFrame, StreamError, Result,
     media_clock::MediaClock, GpuContext,
 };
+use crate::apple::{PixelTransferSession, WgpuBridge};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferLockFlags};
+use objc2::runtime::ProtocolObject;
 
 // ============================================================================
 // INTERNAL TYPES (not exported)
@@ -178,6 +180,7 @@ mod videotoolbox {
     pub type CFBooleanRef = *const c_void;
     pub type CMBlockBufferRef = *mut c_void;
     pub type CMFormatDescriptionRef = *mut c_void;
+    pub type VTPixelTransferSessionRef = *mut c_void;
 
     #[repr(C)]
     pub struct CMTime {
@@ -262,6 +265,22 @@ mod videotoolbox {
             property_value: *const c_void,
         ) -> OSStatus;
 
+        // VTPixelTransferSession - GPU-accelerated format conversion
+        pub fn VTPixelTransferSessionCreate(
+            allocator: *const c_void,
+            pixel_transfer_session_out: *mut VTPixelTransferSessionRef,
+        ) -> OSStatus;
+
+        pub fn VTPixelTransferSessionTransferImage(
+            session: VTPixelTransferSessionRef,
+            source_buffer: CVPixelBufferRef,
+            destination_buffer: CVPixelBufferRef,
+        ) -> OSStatus;
+
+        pub fn VTPixelTransferSessionInvalidate(
+            session: VTPixelTransferSessionRef,
+        );
+
         // For getting encoded data from CMSampleBuffer
         pub fn CMSampleBufferGetDataBuffer(
             sbuf: CMSampleBufferRef,
@@ -327,6 +346,10 @@ struct VideoToolboxH264Encoder {
     force_next_keyframe: bool,
     gpu_context: Option<GpuContext>,
 
+    // GPU-accelerated texture → NV12 conversion
+    pixel_transfer: Option<PixelTransferSession>,
+    wgpu_bridge: Option<Arc<WgpuBridge>>,
+
     // For storing encoded output from callback
     encoded_frames: Arc<Mutex<VecDeque<EncodedVideoFrame>>>,
 }
@@ -339,6 +362,8 @@ impl VideoToolboxH264Encoder {
             frame_count: 0,
             force_next_keyframe: true, // First frame should be keyframe
             gpu_context,
+            pixel_transfer: None,
+            wgpu_bridge: None,
             encoded_frames: Arc::new(Mutex::new(VecDeque::new())),
         };
 
@@ -375,6 +400,45 @@ impl VideoToolboxH264Encoder {
         tracing::info!("VideoToolbox compression session created: {}x{} @ {}fps",
             self.config.width, self.config.height, self.config.fps);
 
+        // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
+        if let Some(gpu_ctx) = &self.gpu_context {
+            // Create WgpuBridge from GPU context
+            use wgpu::hal;
+            use metal::foreign_types::ForeignTypeRef;
+
+            // Extract Metal device from wgpu device and convert to objc2_metal device
+            let metal_device_ptr = unsafe {
+                gpu_ctx.device().as_hal::<hal::api::Metal, _, _>(|hal_device_opt| -> Result<*mut std::ffi::c_void> {
+                    let hal_device = hal_device_opt
+                        .ok_or_else(|| StreamError::GpuError("Failed to get HAL device".into()))?;
+                    // raw_device() returns &Mutex<Device>, we need to get the raw pointer
+                    let device_mutex_ref = hal_device.raw_device();
+                    Ok(device_mutex_ref as *const _ as *mut std::ffi::c_void)
+                })
+            }?;
+            let objc2_device_ref = unsafe {
+                &*(metal_device_ptr as *const ProtocolObject<dyn objc2_metal::MTLDevice>)
+            };
+
+            use objc2::rc::Retained;
+            let objc2_device = unsafe { Retained::retain(objc2_device_ref as *const _ as *mut _).unwrap() };
+
+            // Create WgpuBridge
+            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
+                objc2_device,
+                (**gpu_ctx.device()).clone(),
+                (**gpu_ctx.queue()).clone(),
+            ));
+
+            // Create PixelTransferSession
+            let pixel_transfer = PixelTransferSession::new(wgpu_bridge.clone())?;
+
+            self.wgpu_bridge = Some(wgpu_bridge);
+            self.pixel_transfer = Some(pixel_transfer);
+
+            tracing::info!("GPU-accelerated pixel transfer initialized");
+        }
+
         Ok(())
     }
 
@@ -386,153 +450,17 @@ impl VideoToolboxH264Encoder {
     // Current overhead: ~13ms for 1080p (GPU copy + CPU YUV conversion)
     // Target overhead: <2ms for 1080p (GPU-only conversion)
     fn convert_texture_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
-        let gpu_ctx = self.gpu_context.as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not available".into()))?;
+        // GPU-accelerated conversion using VTPixelTransferSession
+        let pixel_transfer = self.pixel_transfer.as_ref()
+            .ok_or_else(|| StreamError::Configuration("PixelTransferSession not initialized".into()))?;
 
-        let width = frame.width as usize;
-        let height = frame.height as usize;
-
-        // Step 1: Create staging buffer to copy texture data to CPU
-        let rgba_buffer_size = (width * height * 4) as u64;
-        let staging_buffer = gpu_ctx.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some("VideoEncoder Staging Buffer"),
-            size: rgba_buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        // Step 2: Copy texture to staging buffer
-        let mut encoder = gpu_ctx.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("VideoEncoder Texture Copy"),
-        });
-
-        encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
-                texture: &frame.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::ImageCopyBuffer {
-                buffer: &staging_buffer,
-                layout: wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width as u32 * 4),
-                    rows_per_image: Some(height as u32),
-                },
-            },
-            wgpu::Extent3d {
-                width: width as u32,
-                height: height as u32,
-                depth_or_array_layers: 1,
-            },
+        return pixel_transfer.convert_to_nv12(
+            &frame.texture,
+            frame.width,
+            frame.height,
         );
-
-        gpu_ctx.queue().submit(Some(encoder.finish()));
-
-        // Step 3: Map buffer and read RGBA data
-        let buffer_slice = staging_buffer.slice(..);
-        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-        gpu_ctx.device().poll(wgpu::MaintainBase::Wait);
-
-        let rgba_data = buffer_slice.get_mapped_range();
-
-        // Step 4: Create CVPixelBuffer (NV12 format for H.264)
-        let mut pixel_buffer: *mut CVPixelBuffer = std::ptr::null_mut();
-
-        // Create pixel buffer attributes for NV12 (kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
-        let kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange: u32 = 0x34323076; // '420v'
-
-        unsafe {
-            let status = objc2_core_video::CVPixelBufferCreate(
-                None, // allocator
-                width,
-                height,
-                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-                None, // pixel buffer attributes
-                std::ptr::NonNull::from(&mut pixel_buffer),
-            );
-
-            if status != 0 {
-                drop(rgba_data);
-                staging_buffer.unmap();
-                return Err(StreamError::GpuError(format!("CVPixelBufferCreate failed: {}", status)));
-            }
-        }
-
-        // Step 5: Lock pixel buffer for CPU access
-        unsafe {
-            let lock_status = objc2_core_video::CVPixelBufferLockBaseAddress(
-                &*pixel_buffer,
-                CVPixelBufferLockFlags::empty(),
-            );
-
-            if lock_status != 0 {
-                drop(rgba_data);
-                staging_buffer.unmap();
-                return Err(StreamError::GpuError(format!("CVPixelBufferLockBaseAddress failed: {}", lock_status)));
-            }
-        }
-
-        // Step 6: Get Y and UV plane pointers
-        let y_plane = unsafe {
-            objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(&*pixel_buffer, 0)
-        };
-        let uv_plane = unsafe {
-            objc2_core_video::CVPixelBufferGetBaseAddressOfPlane(&*pixel_buffer, 1)
-        };
-
-        let y_stride = unsafe {
-            objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(&*pixel_buffer, 0)
-        };
-        let uv_stride = unsafe {
-            objc2_core_video::CVPixelBufferGetBytesPerRowOfPlane(&*pixel_buffer, 1)
-        };
-
-        // Step 7: Convert RGBA → NV12 using yuv crate
-        unsafe {
-            let y_slice = std::slice::from_raw_parts_mut(y_plane as *mut u8, y_stride * height);
-            let uv_slice = std::slice::from_raw_parts_mut(uv_plane as *mut u8, uv_stride * (height / 2));
-
-            let mut yuv_image = yuv::YuvBiPlanarImageMut {
-                y_plane: yuv::BufferStoreMut::Borrowed(y_slice),
-                y_stride: y_stride as u32,
-                uv_plane: yuv::BufferStoreMut::Borrowed(uv_slice),
-                uv_stride: uv_stride as u32,
-                width: width as u32,
-                height: height as u32,
-            };
-
-            // Note: Assuming input texture is RGBA8 (common for camera output)
-            // bgra_to_yuv_nv12 expects BGRA but most textures are RGBA,
-            // so we might need rgba_to_yuv_nv12 instead
-            yuv::rgba_to_yuv_nv12(
-                &mut yuv_image,
-                rgba_data.as_ref(),
-                width as u32 * 4, // RGBA stride
-                yuv::YuvRange::Limited,           // Limited range (16-235 for Y, 16-240 for UV)
-                yuv::YuvStandardMatrix::Bt709,    // BT.709 color matrix (HD video standard)
-                yuv::YuvConversionMode::Balanced, // Balanced conversion mode (good quality/performance)
-            );
-        }
-
-        // Step 8: Unlock pixel buffer
-        unsafe {
-            objc2_core_video::CVPixelBufferUnlockBaseAddress(
-                &*pixel_buffer,
-                CVPixelBufferLockFlags::empty(),
-            );
-        }
-
-        // Step 9: Cleanup staging buffer
-        drop(rgba_data);
-        staging_buffer.unmap();
-
-        Ok(pixel_buffer)
     }
 }
-
-// Compression output callback - called by VideoToolbox when frames are encoded
 extern "C" fn compression_output_callback(
     output_callback_ref_con: *mut std::ffi::c_void,
     _source_frame_ref_con: *mut std::ffi::c_void,
