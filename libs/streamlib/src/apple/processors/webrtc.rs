@@ -383,7 +383,7 @@ struct VideoToolboxH264Encoder {
 }
 
 impl VideoToolboxH264Encoder {
-    fn new(config: VideoEncoderConfig, gpu_context: Option<GpuContext>) -> Result<Self> {
+    fn new(config: VideoEncoderConfig, gpu_context: Option<GpuContext>, ctx: &RuntimeContext) -> Result<Self> {
         let mut encoder = Self {
             config,
             compression_session: None,
@@ -396,124 +396,140 @@ impl VideoToolboxH264Encoder {
             callback_context: None,
         };
 
-        encoder.setup_compression_session()?;
+        encoder.setup_compression_session(ctx)?;
         Ok(encoder)
     }
 
-    fn setup_compression_session(&mut self) -> Result<()> {
+    fn setup_compression_session(&mut self, ctx: &RuntimeContext) -> Result<()> {
         let encoded_frames_ref = Arc::clone(&self.encoded_frames);
-        let callback_context = Box::into_raw(Box::new(encoded_frames_ref)) as *mut std::ffi::c_void;
 
-        let mut session: videotoolbox::VTCompressionSessionRef = std::ptr::null_mut();
+        let width = self.config.width;
+        let height = self.config.height;
+        let keyframe_interval = self.config.keyframe_interval_frames;
+        let bitrate = self.config.bitrate_bps;
+        let fps = self.config.fps;
 
-        unsafe {
-            let status = videotoolbox::VTCompressionSessionCreate(
-                std::ptr::null(), // allocator
-                self.config.width as i32,
-                self.config.height as i32,
-                videotoolbox::K_CMVIDEO_CODEC_TYPE_H264,
-                std::ptr::null(), // encoder specification
-                std::ptr::null(), // source image buffer attributes
-                std::ptr::null(), // compressed data allocator
-                compression_output_callback,
-                callback_context,
-                &mut session,
-            );
+        // CRITICAL: VideoToolbox APIs MUST run on main thread
+        // Cast pointers to usize for Send compatibility across thread boundary
+        let (session_ptr, callback_context_ptr) = ctx.run_on_main_blocking(move || {
+            // Create callback context on main thread
+            let callback_context = Box::into_raw(Box::new(encoded_frames_ref)) as *mut std::ffi::c_void;
+            let mut session: videotoolbox::VTCompressionSessionRef = std::ptr::null_mut();
 
-            if status != videotoolbox::NO_ERR {
-                // Clean up callback context on error
-                let _ = Box::from_raw(callback_context as *mut Arc<Mutex<VecDeque<EncodedVideoFrame>>>);
-                return Err(StreamError::Runtime(format!("VTCompressionSessionCreate failed: {}", status)));
+            unsafe {
+                let status = videotoolbox::VTCompressionSessionCreate(
+                    std::ptr::null(), // allocator
+                    width as i32,
+                    height as i32,
+                    videotoolbox::K_CMVIDEO_CODEC_TYPE_H264,
+                    std::ptr::null(), // encoder specification
+                    std::ptr::null(), // source image buffer attributes
+                    std::ptr::null(), // compressed data allocator
+                    compression_output_callback,
+                    callback_context,
+                    &mut session,
+                );
+
+                if status != videotoolbox::NO_ERR {
+                    // Clean up callback context on error
+                    let _ = Box::from_raw(callback_context as *mut Arc<Mutex<VecDeque<EncodedVideoFrame>>>);
+                    return Err(StreamError::Runtime(format!("VTCompressionSessionCreate failed: {}", status)));
+                }
+
+                // Configure encoder properties for WebRTC streaming
+                // Set H.264 Baseline Profile Level 3.1 (matches 42e01f in SDP)
+                // This ensures compatibility with Cloudflare Stream and other WebRTC services
+                let status = videotoolbox::VTSessionSetProperty(
+                    session,
+                    videotoolbox::kVTCompressionPropertyKey_ProfileLevel,
+                    videotoolbox::kVTProfileLevel_H264_Baseline_3_1 as *const _,
+                );
+                if status != videotoolbox::NO_ERR {
+                    tracing::warn!("Failed to set H.264 profile level: {}", status);
+                }
+
+                // Enable real-time encoding for low latency
+                let status = videotoolbox::VTSessionSetProperty(
+                    session,
+                    videotoolbox::kVTCompressionPropertyKey_RealTime,
+                    videotoolbox::kCFBooleanTrue as *const _,
+                );
+                if status != videotoolbox::NO_ERR {
+                    tracing::warn!("Failed to enable real-time encoding: {}", status);
+                }
+
+                // Disable frame reordering (B-frames) for low latency
+                let status = videotoolbox::VTSessionSetProperty(
+                    session,
+                    videotoolbox::kVTCompressionPropertyKey_AllowFrameReordering,
+                    videotoolbox::kCFBooleanFalse as *const _,
+                );
+                if status != videotoolbox::NO_ERR {
+                    tracing::warn!("Failed to disable frame reordering: {}", status);
+                }
+
+                // Set keyframe interval
+                let max_keyframe_interval = keyframe_interval as i32;
+                let max_keyframe_interval_num = videotoolbox::CFNumberCreate(
+                    std::ptr::null(),
+                    videotoolbox::K_CFNUMBER_SINT32_TYPE,
+                    &max_keyframe_interval as *const _ as *const _,
+                );
+                let status = videotoolbox::VTSessionSetProperty(
+                    session,
+                    videotoolbox::kVTCompressionPropertyKey_MaxKeyFrameInterval,
+                    max_keyframe_interval_num as *const _,
+                );
+                videotoolbox::CFRelease(max_keyframe_interval_num as *const _);
+                if status != videotoolbox::NO_ERR {
+                    tracing::warn!("Failed to set keyframe interval: {}", status);
+                }
+
+                // Set average bitrate
+                let avg_bitrate = bitrate as i32;
+                let avg_bitrate_num = videotoolbox::CFNumberCreate(
+                    std::ptr::null(),
+                    videotoolbox::K_CFNUMBER_SINT32_TYPE,
+                    &avg_bitrate as *const _ as *const _,
+                );
+                let status = videotoolbox::VTSessionSetProperty(
+                    session,
+                    videotoolbox::kVTCompressionPropertyKey_AverageBitRate,
+                    avg_bitrate_num as *const _,
+                );
+                videotoolbox::CFRelease(avg_bitrate_num as *const _);
+                if status != videotoolbox::NO_ERR {
+                    tracing::warn!("Failed to set average bitrate: {}", status);
+                }
+
+                // Set expected frame rate
+                let expected_fps = fps as i32;
+                let expected_fps_num = videotoolbox::CFNumberCreate(
+                    std::ptr::null(),
+                    videotoolbox::K_CFNUMBER_SINT32_TYPE,
+                    &expected_fps as *const _ as *const _,
+                );
+                let status = videotoolbox::VTSessionSetProperty(
+                    session,
+                    videotoolbox::kVTCompressionPropertyKey_ExpectedFrameRate,
+                    expected_fps_num as *const _,
+                );
+                videotoolbox::CFRelease(expected_fps_num as *const _);
+                if status != videotoolbox::NO_ERR {
+                    tracing::warn!("Failed to set expected frame rate: {}", status);
+                }
             }
-        }
+
+            // Return pointers as usize for Send compatibility
+            Ok((session as usize, callback_context as usize))
+        })?;
+
+        // Cast back to proper pointer types
+        let session = session_ptr as videotoolbox::VTCompressionSessionRef;
+        let callback_context = callback_context_ptr as *mut std::ffi::c_void;
 
         self.compression_session = Some(session);
         self.callback_context = Some(callback_context);
-
-        // Configure encoder properties for WebRTC streaming
-        unsafe {
-            // Set H.264 Baseline Profile Level 3.1 (matches 42e01f in SDP)
-            // This ensures compatibility with Cloudflare Stream and other WebRTC services
-            let status = videotoolbox::VTSessionSetProperty(
-                session,
-                videotoolbox::kVTCompressionPropertyKey_ProfileLevel,
-                videotoolbox::kVTProfileLevel_H264_Baseline_3_1 as *const _,
-            );
-            if status != videotoolbox::NO_ERR {
-                tracing::warn!("Failed to set H.264 profile level: {}", status);
-            }
-
-            // Enable real-time encoding for low latency
-            let status = videotoolbox::VTSessionSetProperty(
-                session,
-                videotoolbox::kVTCompressionPropertyKey_RealTime,
-                videotoolbox::kCFBooleanTrue as *const _,
-            );
-            if status != videotoolbox::NO_ERR {
-                tracing::warn!("Failed to enable real-time encoding: {}", status);
-            }
-
-            // Disable frame reordering (B-frames) for low latency
-            let status = videotoolbox::VTSessionSetProperty(
-                session,
-                videotoolbox::kVTCompressionPropertyKey_AllowFrameReordering,
-                videotoolbox::kCFBooleanFalse as *const _,
-            );
-            if status != videotoolbox::NO_ERR {
-                tracing::warn!("Failed to disable frame reordering: {}", status);
-            }
-
-            // Set keyframe interval
-            let max_keyframe_interval = self.config.keyframe_interval_frames as i32;
-            let max_keyframe_interval_num = videotoolbox::CFNumberCreate(
-                std::ptr::null(),
-                videotoolbox::K_CFNUMBER_SINT32_TYPE,
-                &max_keyframe_interval as *const _ as *const _,
-            );
-            let status = videotoolbox::VTSessionSetProperty(
-                session,
-                videotoolbox::kVTCompressionPropertyKey_MaxKeyFrameInterval,
-                max_keyframe_interval_num as *const _,
-            );
-            videotoolbox::CFRelease(max_keyframe_interval_num as *const _);
-            if status != videotoolbox::NO_ERR {
-                tracing::warn!("Failed to set keyframe interval: {}", status);
-            }
-
-            // Set average bitrate
-            let avg_bitrate = self.config.bitrate_bps as i32;
-            let avg_bitrate_num = videotoolbox::CFNumberCreate(
-                std::ptr::null(),
-                videotoolbox::K_CFNUMBER_SINT32_TYPE,
-                &avg_bitrate as *const _ as *const _,
-            );
-            let status = videotoolbox::VTSessionSetProperty(
-                session,
-                videotoolbox::kVTCompressionPropertyKey_AverageBitRate,
-                avg_bitrate_num as *const _,
-            );
-            videotoolbox::CFRelease(avg_bitrate_num as *const _);
-            if status != videotoolbox::NO_ERR {
-                tracing::warn!("Failed to set average bitrate: {}", status);
-            }
-
-            // Set expected frame rate
-            let expected_fps = self.config.fps as i32;
-            let expected_fps_num = videotoolbox::CFNumberCreate(
-                std::ptr::null(),
-                videotoolbox::K_CFNUMBER_SINT32_TYPE,
-                &expected_fps as *const _ as *const _,
-            );
-            let status = videotoolbox::VTSessionSetProperty(
-                session,
-                videotoolbox::kVTCompressionPropertyKey_ExpectedFrameRate,
-                expected_fps_num as *const _,
-            );
-            videotoolbox::CFRelease(expected_fps_num as *const _);
-            if status != videotoolbox::NO_ERR {
-                tracing::warn!("Failed to set expected frame rate: {}", status);
-            }
-        }
 
         tracing::info!("VideoToolbox compression session created: {}x{} @ {}fps, H.264 Baseline 3.1",
             self.config.width, self.config.height, self.config.fps);
@@ -1768,9 +1784,13 @@ pub struct WebRtcWhipProcessor {
     #[config]
     config: WebRtcWhipConfig,
 
+    // RuntimeContext for main thread dispatch
+    ctx: Option<RuntimeContext>,
+
     // Session state
     session_started: bool,
     start_time_ns: Option<i64>,
+    gpu_context: Option<GpuContext>,  // Store for lazy encoder init
 
     // Encoders (will be Box<dyn Trait> when implemented)
     #[cfg(target_os = "macos")]
@@ -1788,19 +1808,18 @@ pub struct WebRtcWhipProcessor {
 
 impl WebRtcWhipProcessor {
     /// Called by StreamProcessor macro during setup phase.
-    /// Initializes encoders and starts the WebRTC WHIP session.
+    /// Stores GPU context and runtime context for lazy encoder initialization.
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        // Initialize video encoder with GPU context
-        let gpu_context = Some(ctx.gpu.clone());
-        self.video_encoder = Some(VideoToolboxH264Encoder::new(self.config.video.clone(), gpu_context)?);
+        // Store contexts for lazy encoder initialization
+        // IMPORTANT: VideoToolbox encoder MUST be created on main thread,
+        // so we defer creation until start_session() is called from process()
+        self.gpu_context = Some(ctx.gpu.clone());
+        self.ctx = Some(ctx.clone());
 
-        // Initialize audio encoder
+        // Initialize audio encoder (doesn't require main thread)
         self.audio_encoder = Some(OpusEncoder::new(self.config.audio.clone())?);
 
-        // Note: We don't start the WebRTC session here. We wait for the first
-        // video + audio frames in process() to ensure encoders are ready.
-
-        tracing::info!("WebRtcWhipProcessor initialized (encoders ready, waiting for first frames)");
+        tracing::info!("WebRtcWhipProcessor initialized (will create video encoder on first frames)");
         Ok(())
     }
 
@@ -1864,10 +1883,27 @@ impl WebRtcWhipProcessor {
     /// Starts the WebRTC WHIP session.
     /// Called automatically when the first video+audio frames arrive.
     fn start_session(&mut self) -> Result<()> {
-        // 1. Set start time
+        // 1. Initialize VideoToolbox encoder lazily (deferred from setup() phase)
+        // NOTE: VideoToolbox initialization requires main thread dispatch, which is
+        // handled inside VideoToolboxH264Encoder::new() via setup_compression_session()
+        // We defer creation from setup() to here because we need RuntimeContext
+        if self.video_encoder.is_none() {
+            let gpu_context = self.gpu_context.clone();
+            let ctx = self.ctx.as_ref().ok_or_else(|| {
+                StreamError::Runtime("RuntimeContext not available".into())
+            })?;
+            self.video_encoder = Some(VideoToolboxH264Encoder::new(
+                self.config.video.clone(),
+                gpu_context,
+                ctx
+            )?);
+            tracing::info!("VideoToolbox H.264 encoder initialized");
+        }
+
+        // 2. Set start time
         self.start_time_ns = Some(MediaClock::now().as_nanos() as i64);
 
-        // 2. Initialize RTP timestamp calculators
+        // 3. Initialize RTP timestamp calculators
         self.video_rtp_calc = Some(RtpTimestampCalculator::new(
             self.start_time_ns.unwrap(),
             90000 // 90kHz for video
