@@ -81,6 +81,11 @@ rubato = "0.16"
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
 
+# WebRTC streaming dependencies
+webrtc = "0.14.0"  # WebRTC implementation for real-time streaming
+bytes = "1.5"      # Zero-copy byte buffers for RTP samples
+fastrand = "2.0"   # Fast PRNG for RTP timestamp base
+
 # Optional: Debug overlay dependencies
 vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }
 skrifa = { version = "0.22", optional = true }
