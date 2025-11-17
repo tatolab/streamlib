@@ -76,6 +76,12 @@ use std::collections::VecDeque;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferLockFlags};
 use objc2::runtime::ProtocolObject;
 
+// WHIP HTTP client imports
+use hyper;
+use hyper_rustls;
+use hyper_util;
+use http_body_util;
+
 // ============================================================================
 // INTERNAL TYPES (not exported)
 // ============================================================================
@@ -320,8 +326,23 @@ mod videotoolbox {
     // CFNumber types
     pub const K_CFNUMBER_SINT32_TYPE: i32 = 3;
 
-    // VideoToolbox property keys (simplified - in real code would use actual CFString constants)
-    // For now we'll just use simplified approach
+    // VideoToolbox property keys and values
+    #[link(name = "VideoToolbox", kind = "framework")]
+    extern "C" {
+        // Profile/Level property key
+        pub static kVTCompressionPropertyKey_ProfileLevel: CFStringRef;
+
+        // H.264 Baseline Profile Level 3.1 (matches 42e01f in SDP)
+        // This is the most compatible profile for WebRTC streaming
+        pub static kVTProfileLevel_H264_Baseline_3_1: CFStringRef;
+
+        // Real-time encoding properties
+        pub static kVTCompressionPropertyKey_RealTime: CFStringRef;
+        pub static kVTCompressionPropertyKey_AllowFrameReordering: CFStringRef;
+        pub static kVTCompressionPropertyKey_MaxKeyFrameInterval: CFStringRef;
+        pub static kVTCompressionPropertyKey_AverageBitRate: CFStringRef;
+        pub static kVTCompressionPropertyKey_ExpectedFrameRate: CFStringRef;
+    }
 }
 
 // ============================================================================
@@ -404,7 +425,93 @@ impl VideoToolboxH264Encoder {
 
         self.compression_session = Some(session);
         self.callback_context = Some(callback_context);
-        tracing::info!("VideoToolbox compression session created: {}x{} @ {}fps",
+
+        // Configure encoder properties for WebRTC streaming
+        unsafe {
+            // Set H.264 Baseline Profile Level 3.1 (matches 42e01f in SDP)
+            // This ensures compatibility with Cloudflare Stream and other WebRTC services
+            let status = videotoolbox::VTSessionSetProperty(
+                session,
+                videotoolbox::kVTCompressionPropertyKey_ProfileLevel,
+                videotoolbox::kVTProfileLevel_H264_Baseline_3_1 as *const _,
+            );
+            if status != videotoolbox::NO_ERR {
+                tracing::warn!("Failed to set H.264 profile level: {}", status);
+            }
+
+            // Enable real-time encoding for low latency
+            let status = videotoolbox::VTSessionSetProperty(
+                session,
+                videotoolbox::kVTCompressionPropertyKey_RealTime,
+                videotoolbox::kCFBooleanTrue as *const _,
+            );
+            if status != videotoolbox::NO_ERR {
+                tracing::warn!("Failed to enable real-time encoding: {}", status);
+            }
+
+            // Disable frame reordering (B-frames) for low latency
+            let status = videotoolbox::VTSessionSetProperty(
+                session,
+                videotoolbox::kVTCompressionPropertyKey_AllowFrameReordering,
+                videotoolbox::kCFBooleanFalse as *const _,
+            );
+            if status != videotoolbox::NO_ERR {
+                tracing::warn!("Failed to disable frame reordering: {}", status);
+            }
+
+            // Set keyframe interval
+            let max_keyframe_interval = self.config.keyframe_interval_frames as i32;
+            let max_keyframe_interval_num = videotoolbox::CFNumberCreate(
+                std::ptr::null(),
+                videotoolbox::K_CFNUMBER_SINT32_TYPE,
+                &max_keyframe_interval as *const _ as *const _,
+            );
+            let status = videotoolbox::VTSessionSetProperty(
+                session,
+                videotoolbox::kVTCompressionPropertyKey_MaxKeyFrameInterval,
+                max_keyframe_interval_num as *const _,
+            );
+            videotoolbox::CFRelease(max_keyframe_interval_num as *const _);
+            if status != videotoolbox::NO_ERR {
+                tracing::warn!("Failed to set keyframe interval: {}", status);
+            }
+
+            // Set average bitrate
+            let avg_bitrate = self.config.bitrate_bps as i32;
+            let avg_bitrate_num = videotoolbox::CFNumberCreate(
+                std::ptr::null(),
+                videotoolbox::K_CFNUMBER_SINT32_TYPE,
+                &avg_bitrate as *const _ as *const _,
+            );
+            let status = videotoolbox::VTSessionSetProperty(
+                session,
+                videotoolbox::kVTCompressionPropertyKey_AverageBitRate,
+                avg_bitrate_num as *const _,
+            );
+            videotoolbox::CFRelease(avg_bitrate_num as *const _);
+            if status != videotoolbox::NO_ERR {
+                tracing::warn!("Failed to set average bitrate: {}", status);
+            }
+
+            // Set expected frame rate
+            let expected_fps = self.config.fps as i32;
+            let expected_fps_num = videotoolbox::CFNumberCreate(
+                std::ptr::null(),
+                videotoolbox::K_CFNUMBER_SINT32_TYPE,
+                &expected_fps as *const _ as *const _,
+            );
+            let status = videotoolbox::VTSessionSetProperty(
+                session,
+                videotoolbox::kVTCompressionPropertyKey_ExpectedFrameRate,
+                expected_fps_num as *const _,
+            );
+            videotoolbox::CFRelease(expected_fps_num as *const _);
+            if status != videotoolbox::NO_ERR {
+                tracing::warn!("Failed to set expected frame rate: {}", status);
+            }
+        }
+
+        tracing::info!("VideoToolbox compression session created: {}x{} @ {}fps, H.264 Baseline 3.1",
             self.config.width, self.config.height, self.config.fps);
 
         // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
@@ -1010,27 +1117,364 @@ impl RtpTimestampCalculator {
 #[derive(Clone)]
 pub struct WhipConfig {
     pub endpoint_url: String,
-    pub auth_token: String,
+    /// Optional Bearer token for authentication.
+    /// Set to None for endpoints that don't require authentication (e.g., Cloudflare Stream).
+    pub auth_token: Option<String>,
     pub timeout_ms: u64,
 }
 
+/// WHIP (WebRTC-HTTP Ingestion Protocol) client per RFC 9725
+///
+/// Handles HTTP signaling for WebRTC streaming:
+/// - POST /whip: Create session (SDP offer → answer)
+/// - PATCH /session: Send ICE candidates (trickle ICE)
+/// - DELETE /session: Terminate session
+///
+/// Uses pollster::block_on() for async HTTP calls (same pattern as WebRtcSession).
 struct WhipClient {
     config: WhipConfig,
+
+    /// HTTP client with HTTPS support
+    /// Body type: http_body_util::combinators::BoxBody for flexibility
+    http_client: hyper_util::client::legacy::Client<
+        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+        http_body_util::combinators::BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>,
+    >,
+
+    /// Session URL (from Location header after POST success)
+    session_url: Option<String>,
+
+    /// Session ETag (for ICE restart - future use)
+    session_etag: Option<String>,
+
+    /// Pending ICE candidates (buffered for batch sending)
+    pending_candidates: Arc<Mutex<Vec<String>>>,
 }
 
 impl WhipClient {
-    fn new(config: WhipConfig) -> Self {
-        Self { config }
+    fn new(config: WhipConfig) -> Result<Self> {
+        // Build HTTPS connector using rustls with native CA roots
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()  // Use system CA store
+            .map_err(|e| StreamError::Configuration(format!("Failed to load CA roots: {}", e)))?
+            .https_or_http()      // Allow http:// for local testing
+            .enable_http1()
+            .enable_http2()
+            .build();
+
+        // Create HTTP client
+        let http_client = hyper_util::client::legacy::Client::builder(
+            hyper_util::rt::TokioExecutor::new()
+        )
+        .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .build(https);
+
+        Ok(Self {
+            config,
+            http_client,
+            session_url: None,
+            session_etag: None,
+            pending_candidates: Arc::new(Mutex::new(Vec::new())),
+        })
     }
 
-    fn post_offer(&self, _sdp_offer: &str) -> Result<String> {
-        // TODO: Implement WHIP POST request
-        Err(StreamError::NotSupported("WHIP POST not yet implemented".into()))
+    /// POST SDP offer to WHIP endpoint, receive SDP answer
+    ///
+    /// RFC 9725 Section 4.1: Client creates session by POSTing SDP offer.
+    /// Server responds with 201 Created, Location header (session URL), and SDP answer.
+    ///
+    /// # Arguments
+    /// * `sdp_offer` - SDP offer string (application/sdp)
+    ///
+    /// # Returns
+    /// SDP answer string from server
+    ///
+    /// # Errors
+    /// - 400 Bad Request: Malformed SDP
+    /// - 401 Unauthorized: Invalid auth token
+    /// - 422 Unprocessable Content: Unsupported SDP configuration
+    /// - 503 Service Unavailable: Server overloaded (should retry with backoff)
+    /// - 307 Temporary Redirect: Load balancing (automatically followed)
+    fn post_offer(&mut self, sdp_offer: &str) -> Result<String> {
+        use pollster::block_on;
+        use hyper::{Request, StatusCode, header};
+        use http_body_util::Full;
+
+        block_on(async {
+            // Build POST request per RFC 9725 Section 4.1
+            use http_body_util::BodyExt;
+            let body = Full::new(bytes::Bytes::from(sdp_offer.to_owned()));
+            let boxed_body = body.map_err(|never| match never {}).boxed();
+
+            let mut req_builder = Request::builder()
+                .method("POST")
+                .uri(&self.config.endpoint_url)
+                .header(header::CONTENT_TYPE, "application/sdp");
+
+            // Add Authorization header only if token is provided
+            if let Some(token) = &self.config.auth_token {
+                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+            }
+
+            let req = req_builder.body(boxed_body)
+                .map_err(|e| StreamError::Runtime(format!("Failed to build WHIP POST request: {}", e)))?;
+
+            tracing::debug!("WHIP POST to {}", self.config.endpoint_url);
+
+            // Send request with timeout
+            let response = tokio::time::timeout(
+                std::time::Duration::from_millis(self.config.timeout_ms),
+                self.http_client.request(req),
+            )
+            .await
+            .map_err(|_| StreamError::Runtime(format!("WHIP POST timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|e| StreamError::Runtime(format!("WHIP POST request failed: {}", e)))?;
+
+            let status = response.status();
+            let headers = response.headers().clone();
+
+            // Read response body
+            let body_bytes = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .map_err(|e| StreamError::Runtime(format!("Failed to read WHIP response body: {}", e)))?
+                .to_bytes();
+
+            match status {
+                StatusCode::CREATED => {
+                    // Extract Location header (REQUIRED per RFC 9725)
+                    self.session_url = headers
+                        .get(header::LOCATION)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_owned());
+
+                    if self.session_url.is_none() {
+                        return Err(StreamError::Runtime(
+                            "WHIP server returned 201 Created without Location header".into()
+                        ));
+                    }
+
+                    // Extract ETag header (optional, used for ICE restart)
+                    self.session_etag = headers
+                        .get(header::ETAG)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_owned());
+
+                    // TODO: Parse Link header for STUN/TURN servers (RFC 9725 Section 4.1)
+                    // Format: Link: <stun:stun.example.com>; rel="ice-server"
+
+                    // Parse SDP answer from body
+                    let sdp_answer = String::from_utf8(body_bytes.to_vec())
+                        .map_err(|e| StreamError::Runtime(format!("Invalid UTF-8 in SDP answer: {}", e)))?;
+
+                    tracing::info!(
+                        "WHIP session created: {} (ETag: {})",
+                        self.session_url.as_ref().unwrap(),
+                        self.session_etag.as_deref().unwrap_or("none")
+                    );
+
+                    Ok(sdp_answer)
+                }
+
+                StatusCode::TEMPORARY_REDIRECT => {
+                    // Handle redirect per RFC 9725 Section 4.5
+                    let location = headers
+                        .get(header::LOCATION)
+                        .and_then(|v| v.to_str().ok())
+                        .ok_or_else(|| StreamError::Runtime(
+                            "WHIP 307 redirect without Location header".into()
+                        ))?;
+
+                    tracing::info!("WHIP redirecting to: {}", location);
+
+                    // Update endpoint and retry (recursive, but 307 should be rare)
+                    self.config.endpoint_url = location.to_owned();
+                    self.post_offer(sdp_offer)
+                }
+
+                StatusCode::SERVICE_UNAVAILABLE => {
+                    // Server overloaded - caller should retry with backoff
+                    let retry_after = headers
+                        .get(header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown");
+
+                    Err(StreamError::Runtime(format!(
+                        "WHIP server overloaded (503), retry after: {}",
+                        retry_after
+                    )))
+                }
+
+                _ => {
+                    // Other error (400, 401, 422, etc.)
+                    let error_body = String::from_utf8(body_bytes.to_vec())
+                        .unwrap_or_else(|_| format!("HTTP {}", status));
+
+                    Err(StreamError::Runtime(format!(
+                        "WHIP POST failed ({}): {}",
+                        status,
+                        error_body
+                    )))
+                }
+            }
+        })
     }
 
+    /// Queue an ICE candidate for batched transmission
+    ///
+    /// Candidates are buffered and sent in batches via PATCH to reduce HTTP overhead.
+    ///
+    /// # Arguments
+    /// * `candidate_sdp` - ICE candidate in SDP fragment format (e.g., "a=candidate:...")
+    fn queue_ice_candidate(&self, candidate_sdp: String) {
+        self.pending_candidates.lock().unwrap().push(candidate_sdp);
+    }
+
+    /// Send pending ICE candidates to WHIP server via PATCH
+    ///
+    /// RFC 9725 Section 4.2: Trickle ICE candidates sent via PATCH with
+    /// Content-Type: application/trickle-ice-sdpfrag
+    ///
+    /// Sends all buffered candidates in a single PATCH request, then clears the queue.
+    fn send_ice_candidates(&self) -> Result<()> {
+        use pollster::block_on;
+        use hyper::{Request, StatusCode, header};
+        use http_body_util::{BodyExt, Full};
+
+        let session_url = match &self.session_url {
+            Some(url) => url,
+            None => {
+                return Err(StreamError::Configuration(
+                    "Cannot send ICE candidates: no WHIP session URL".into()
+                ));
+            }
+        };
+
+        // Drain pending candidates (atomic swap)
+        let candidates = {
+            let mut queue = self.pending_candidates.lock().unwrap();
+            if queue.is_empty() {
+                return Ok(()); // Nothing to send
+            }
+            queue.drain(..).collect::<Vec<_>>()
+        };
+
+        // Build SDP fragment per RFC 8840 (trickle-ice-sdpfrag)
+        // Format: Multiple "a=candidate:..." lines joined by CRLF
+        let sdp_fragment = candidates.join("\r\n");
+
+        block_on(async {
+            let body = Full::new(bytes::Bytes::from(sdp_fragment));
+            let boxed_body = body.map_err(|never| match never {}).boxed();
+
+            let mut req_builder = Request::builder()
+                .method("PATCH")
+                .uri(session_url)
+                .header(header::CONTENT_TYPE, "application/trickle-ice-sdpfrag");
+
+            // Add Authorization header only if token is provided
+            if let Some(token) = &self.config.auth_token {
+                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+            }
+
+            let req = req_builder.body(boxed_body)
+                .map_err(|e| StreamError::Runtime(format!("Failed to build WHIP PATCH request: {}", e)))?;
+
+            tracing::debug!("WHIP PATCH to {} ({} candidates)", session_url, candidates.len());
+
+            let response = tokio::time::timeout(
+                std::time::Duration::from_millis(self.config.timeout_ms),
+                self.http_client.request(req),
+            )
+            .await
+            .map_err(|_| StreamError::Runtime(format!("WHIP PATCH timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|e| StreamError::Runtime(format!("WHIP PATCH request failed: {}", e)))?;
+
+            let status = response.status();
+
+            match status {
+                StatusCode::NO_CONTENT => {
+                    tracing::debug!("Sent {} ICE candidates to WHIP server", candidates.len());
+                    Ok(())
+                }
+                StatusCode::OK => {
+                    // 200 OK with body indicates ICE restart (server sends new candidates)
+                    // We'll ignore server candidates for now (Phase 4.1)
+                    tracing::debug!("ICE restart response (200 OK) - ignoring server candidates");
+                    Ok(())
+                }
+                _ => {
+                    // Read error body for debugging
+                    let body_bytes = BodyExt::collect(response.into_body())
+                        .await
+                        .ok()
+                        .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
+                        .unwrap_or_else(|| format!("HTTP {}", status));
+
+                    Err(StreamError::Runtime(format!(
+                        "WHIP PATCH failed: {}",
+                        body_bytes
+                    )))
+                }
+            }
+        })
+    }
+
+    /// DELETE session to WHIP server (graceful shutdown)
+    ///
+    /// RFC 9725 Section 4.4: Client terminates session by DELETEing session URL.
+    /// Server responds with 200 OK.
     fn terminate(&self) -> Result<()> {
-        // TODO: Implement WHIP DELETE request
-        Ok(())
+        use pollster::block_on;
+        use hyper::{Request, header};
+        use http_body_util::Empty;
+
+        let session_url = match &self.session_url {
+            Some(url) => url,
+            None => {
+                tracing::debug!("No WHIP session to terminate");
+                return Ok(()); // No session was created
+            }
+        };
+
+        block_on(async {
+            use http_body_util::BodyExt;
+            let body = Empty::<bytes::Bytes>::new();
+            let boxed_body = body.map_err(|never| match never {}).boxed();
+
+            let mut req_builder = Request::builder()
+                .method("DELETE")
+                .uri(session_url);
+
+            // Add Authorization header only if token is provided
+            if let Some(token) = &self.config.auth_token {
+                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+            }
+
+            let req = req_builder.body(boxed_body)
+                .map_err(|e| StreamError::Runtime(format!("Failed to build WHIP DELETE request: {}", e)))?;
+
+            tracing::debug!("WHIP DELETE to {}", session_url);
+
+            let response = tokio::time::timeout(
+                std::time::Duration::from_millis(self.config.timeout_ms),
+                self.http_client.request(req),
+            )
+            .await
+            .map_err(|_| StreamError::Runtime(format!("WHIP DELETE timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|e| StreamError::Runtime(format!("WHIP DELETE request failed: {}", e)))?;
+
+            if response.status().is_success() {
+                tracing::info!("WHIP session terminated: {}", session_url);
+                Ok(())
+            } else {
+                // Non-fatal - session will timeout server-side
+                tracing::warn!(
+                    "WHIP DELETE failed (status {}), session may still exist server-side",
+                    response.status()
+                );
+                Ok(())
+            }
+        })
     }
 }
 
@@ -1068,7 +1512,15 @@ impl WebRtcSession {
     /// Creates a new WebRTC session with H.264 video and Opus audio tracks.
     ///
     /// Uses pollster::block_on() for async initialization (runs in processor thread).
-    fn new() -> Result<Self> {
+    ///
+    /// # Arguments
+    /// * `on_ice_candidate` - Callback invoked when ICE candidates are discovered
+    ///   - Receives SDP fragment format: "a=candidate:..."
+    ///   - Should queue candidates for WHIP PATCH transmission
+    fn new<F>(on_ice_candidate: F) -> Result<Self>
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
         // Use pollster to block on async initialization
         // This is the same pattern as gpu_context.rs (line 145)
         pollster::block_on(async {
@@ -1090,14 +1542,44 @@ impl WebRtcSession {
                 .await
                 .map_err(|e| StreamError::Configuration(format!("Failed to create PeerConnection: {}", e)))?;
 
+            // Subscribe to ICE candidate events
+            // Convert webrtc-rs ICE candidate to SDP fragment and call callback
+            let on_candidate = Arc::new(on_ice_candidate);
+            peer_connection.on_ice_candidate(Box::new(move |candidate_opt| {
+                let callback = Arc::clone(&on_candidate);
+                Box::pin(async move {
+                    if let Some(candidate) = candidate_opt {
+                        // Convert RTCIceCandidate to SDP fragment format per RFC 8840
+                        // Format: "a=candidate:..." (without the "a=" prefix in JSON)
+                        if let Ok(json) = candidate.to_json() {
+                            let sdp_fragment = format!("a={}", json.candidate);
+                            tracing::debug!("ICE candidate discovered: {}", sdp_fragment);
+                            callback(sdp_fragment);
+                        }
+                    } else {
+                        // None indicates end of candidates
+                        tracing::debug!("ICE candidate gathering complete");
+                    }
+                    // Return unit future
+                    ()
+                })
+            }));
+
             // Create video track (H.264)
+            // Use Constrained Baseline Profile Level 3.1 (42e01f) for maximum compatibility
+            // This matches Cloudflare Stream's requirements and is the most widely supported H.264 profile
             let video_track = Arc::new(
                 webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample::new(
                     webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
                         mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
                         clock_rate: 90000,
                         channels: 0,
-                        sdp_fmtp_line: String::new(),
+                        // RFC 6184 H.264 SDP parameters:
+                        // - profile-level-id=42e01f: Constrained Baseline Profile Level 3.1
+                        //   (42=Baseline, e0=Constrained, 1f=Level 3.1)
+                        // - packetization-mode=1: Non-interleaved mode (standard for WebRTC)
+                        // - level-asymmetry-allowed=1: Receiver can decode higher levels
+                        sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f".to_owned(),
                         rtcp_feedback: vec![],
                     },
                     "video".to_owned(),
@@ -1259,7 +1741,7 @@ impl Default for WebRtcWhipConfig {
         Self {
             whip: WhipConfig {
                 endpoint_url: String::new(),
-                auth_token: String::new(),
+                auth_token: None, // No authentication by default
                 timeout_ms: 10000,
             },
             video: VideoEncoderConfig::default(),
@@ -1285,7 +1767,7 @@ pub struct WebRtcWhipProcessor {
     audio_rtp_calc: Option<RtpTimestampCalculator>,
 
     // WHIP and WebRTC
-    whip_client: Option<WhipClient>,
+    whip_client: Option<Arc<Mutex<WhipClient>>>,
     webrtc_session: Option<WebRtcSession>,
 }
 
@@ -1325,20 +1807,32 @@ impl WebRtcWhipProcessor {
         ));
 
         // 3. Create WHIP client
-        self.whip_client = Some(WhipClient::new(self.config.whip.clone()));
+        let whip_client = Arc::new(Mutex::new(WhipClient::new(self.config.whip.clone())?));
+        self.whip_client = Some(whip_client.clone());
 
-        // 4. Create WebRTC session
-        self.webrtc_session = Some(WebRtcSession::new()?);
+        // 4. Create WebRTC session with ICE callback
+        // Callback queues ICE candidates for WHIP PATCH transmission
+        let whip_clone = whip_client.clone();
+        let mut webrtc_session = WebRtcSession::new(move |candidate_sdp| {
+            if let Ok(whip) = whip_clone.lock() {
+                whip.queue_ice_candidate(candidate_sdp);
+            }
+        })?;
 
         // 5. Create SDP offer
-        let offer = self.webrtc_session.as_ref().unwrap().create_offer()?;
+        let offer = webrtc_session.create_offer()?;
 
-        // 6. POST to WHIP endpoint
-        let answer = self.whip_client.as_ref().unwrap().post_offer(&offer)?;
+        // 6. POST to WHIP endpoint (receives SDP answer)
+        let answer = whip_client.lock().unwrap().post_offer(&offer)?;
 
         // 7. Set remote answer
-        self.webrtc_session.as_mut().unwrap().set_remote_answer(&answer)?;
+        webrtc_session.set_remote_answer(&answer)?;
 
+        // 8. Send any buffered ICE candidates to WHIP server
+        // (Candidates may be discovered during offer/answer exchange)
+        whip_client.lock().unwrap().send_ice_candidates()?;
+
+        self.webrtc_session = Some(webrtc_session);
         self.session_started = true;
 
         tracing::info!("WebRTC WHIP session started");
@@ -1393,7 +1887,9 @@ impl WebRtcWhipProcessor {
 impl Drop for WebRtcWhipProcessor {
     fn drop(&mut self) {
         if let Some(whip_client) = &self.whip_client {
-            let _ = whip_client.terminate();
+            if let Ok(client) = whip_client.lock() {
+                let _ = client.terminate();
+            }
         }
     }
 }
