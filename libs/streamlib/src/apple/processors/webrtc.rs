@@ -352,6 +352,9 @@ struct VideoToolboxH264Encoder {
 
     // For storing encoded output from callback
     encoded_frames: Arc<Mutex<VecDeque<EncodedVideoFrame>>>,
+
+    // Callback context that needs to be freed in Drop
+    callback_context: Option<*mut std::ffi::c_void>,
 }
 
 impl VideoToolboxH264Encoder {
@@ -365,6 +368,7 @@ impl VideoToolboxH264Encoder {
             pixel_transfer: None,
             wgpu_bridge: None,
             encoded_frames: Arc::new(Mutex::new(VecDeque::new())),
+            callback_context: None,
         };
 
         encoder.setup_compression_session()?;
@@ -392,11 +396,14 @@ impl VideoToolboxH264Encoder {
             );
 
             if status != videotoolbox::NO_ERR {
+                // Clean up callback context on error
+                let _ = Box::from_raw(callback_context as *mut Arc<Mutex<VecDeque<EncodedVideoFrame>>>);
                 return Err(StreamError::Runtime(format!("VTCompressionSessionCreate failed: {}", status)));
             }
         }
 
         self.compression_session = Some(session);
+        self.callback_context = Some(callback_context);
         tracing::info!("VideoToolbox compression session created: {}x{} @ {}fps",
             self.config.width, self.config.height, self.config.fps);
 
@@ -615,9 +622,19 @@ impl VideoEncoderH264 for VideoToolboxH264Encoder {
 
 impl Drop for VideoToolboxH264Encoder {
     fn drop(&mut self) {
-        if let Some(session) = self.compression_session {
-            unsafe {
+        unsafe {
+            // Clean up VTCompressionSession
+            if let Some(session) = self.compression_session {
+                // Invalidate the session (stops encoding)
                 videotoolbox::VTCompressionSessionInvalidate(session);
+
+                // Release the CoreFoundation object (free memory)
+                videotoolbox::CFRelease(session as *const std::ffi::c_void);
+            }
+
+            // Clean up callback context (the leaked Box from setup_compression_session)
+            if let Some(context) = self.callback_context {
+                let _ = Box::from_raw(context as *mut Arc<Mutex<VecDeque<EncodedVideoFrame>>>);
             }
         }
     }
