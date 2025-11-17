@@ -27,14 +27,12 @@ pub fn are_synchronized(timestamp_a_ns: i64, timestamp_b_ns: i64, tolerance_ms: 
 
 #[inline]
 pub fn video_audio_delta_ms<const CHANNELS: usize>(video: &VideoFrame, audio: &AudioFrame<CHANNELS>) -> f64 {
-    let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
-    timestamp_delta_ms(video_ns, audio.timestamp_ns)
+    timestamp_delta_ms(video.timestamp_ns, audio.timestamp_ns)
 }
 
 #[inline]
 pub fn video_audio_synchronized<const CHANNELS: usize>(video: &VideoFrame, audio: &AudioFrame<CHANNELS>) -> bool {
-    let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
-    are_synchronized(video_ns, audio.timestamp_ns, DEFAULT_SYNC_TOLERANCE_MS)
+    are_synchronized(video.timestamp_ns, audio.timestamp_ns, DEFAULT_SYNC_TOLERANCE_MS)
 }
 
 #[inline]
@@ -43,8 +41,7 @@ pub fn video_audio_synchronized_with_tolerance<const CHANNELS: usize>(
     audio: &AudioFrame<CHANNELS>,
     tolerance_ms: f64,
 ) -> bool {
-    let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
-    are_synchronized(video_ns, audio.timestamp_ns, tolerance_ms)
+    are_synchronized(video.timestamp_ns, audio.timestamp_ns, tolerance_ms)
 }
 
 /// Determine what action to take to maintain audio/video synchronization
@@ -67,8 +64,7 @@ pub fn sync_action<const CHANNELS: usize>(
     audio: &AudioFrame<CHANNELS>,
     tolerance_ms: f64,
 ) -> SyncAction {
-    let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
-    let drift_ns = video_ns - audio.timestamp_ns;
+    let drift_ns = video.timestamp_ns - audio.timestamp_ns;
     let drift_ms = drift_ns as f64 / 1_000_000.0;
 
     if drift_ms.abs() <= tolerance_ms {
@@ -92,8 +88,7 @@ pub fn sync_statistics<const CHANNELS: usize>(
     audio: &AudioFrame<CHANNELS>,
     tolerance_ms: f64,
 ) -> (f64, bool) {
-    let video_ns = (video.timestamp * 1_000_000_000.0) as i64;
-    let drift_ns = video_ns - audio.timestamp_ns;
+    let drift_ns = video.timestamp_ns - audio.timestamp_ns;
     let drift_ms = drift_ns as f64 / 1_000_000.0;
     let is_synced = drift_ms.abs() <= tolerance_ms;
     (drift_ms, is_synced)

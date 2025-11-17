@@ -117,7 +117,7 @@ libc.workspace = true
 # Apple-specific crates
 metal = "0.31"  # Metal crate for wgpu-hal interop
 dispatch2 = "0.3"  # GCD dispatch queues
-yuv.workspace = true  # SIMD-optimized RGB→YUV conversion for MP4 writing
+# yuv.workspace = true  # REMOVED - now using GPU-accelerated VTPixelTransferSession
 pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 mach2 = "0.4"  # Mach kernel API for thread priorities and timing
