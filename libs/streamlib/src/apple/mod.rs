@@ -36,6 +36,13 @@ pub use processors::{
     AppleDisplayProcessor,
     AppleAudioOutputProcessor,
     AppleMp4WriterProcessor,
+    // Streaming
+    WebRtcWhipProcessor,
+    WebRtcWhipConfig,
+    WhipConfig,
+    VideoEncoderConfig,
+    AudioEncoderConfig,
+    H264Profile,
 };
 
 #[cfg(test)]

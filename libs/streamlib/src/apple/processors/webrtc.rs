@@ -69,12 +69,16 @@
 use crate::core::{
     VideoFrame, AudioFrame, StreamError, Result,
     media_clock::MediaClock, GpuContext,
+    StreamInput, RuntimeContext,
+    SchedulingConfig, SchedulingMode, ThreadPriority,
 };
+use streamlib_macros::StreamProcessor;
 use crate::apple::{PixelTransferSession, WgpuBridge};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferLockFlags};
 use objc2::runtime::ProtocolObject;
+use serde::{Deserialize, Serialize};
 
 // WHIP HTTP client imports
 use hyper;
@@ -107,14 +111,14 @@ struct EncodedAudioFrame {
 // H.264 ENCODING CONFIGURATION
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum H264Profile {
     Baseline,
     Main,
     High,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct VideoEncoderConfig {
     pub width: u32,
     pub height: u32,
@@ -143,7 +147,7 @@ impl Default for VideoEncoderConfig {
 // OPUS ENCODING CONFIGURATION
 // ============================================================================
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AudioEncoderConfig {
     pub sample_rate: u32,
     pub channels: u16,
@@ -1114,7 +1118,7 @@ impl RtpTimestampCalculator {
 // WHIP SIGNALING
 // ============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WhipConfig {
     pub endpoint_url: String,
     /// Optional Bearer token for authentication.
@@ -1729,7 +1733,7 @@ impl WebRtcSession {
 // MAIN WEBRTC WHIP PROCESSOR
 // ============================================================================
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WebRtcWhipConfig {
     pub whip: WhipConfig,
     pub video: VideoEncoderConfig,
@@ -1750,7 +1754,18 @@ impl Default for WebRtcWhipConfig {
     }
 }
 
+#[derive(StreamProcessor)]
+#[processor(
+    description = "Streams video and audio to Cloudflare Stream via WebRTC WHIP"
+)]
 pub struct WebRtcWhipProcessor {
+    #[input(description = "Input video frames to encode and stream")]
+    video_in: StreamInput<VideoFrame>,
+
+    #[input(description = "Input audio frames to encode and stream")]
+    audio_in: StreamInput<AudioFrame<2>>,
+
+    #[config]
     config: WebRtcWhipConfig,
 
     // Session state
@@ -1772,26 +1787,82 @@ pub struct WebRtcWhipProcessor {
 }
 
 impl WebRtcWhipProcessor {
-    pub fn new(config: WebRtcWhipConfig) -> Result<Self> {
-        Ok(Self {
-            config,
-            session_started: false,
-            start_time_ns: None,
-            video_encoder: None,
-            audio_encoder: None,
-            video_rtp_calc: None,
-            audio_rtp_calc: None,
-            whip_client: None,
-            webrtc_session: None,
-        })
-    }
-
-    fn initialize_encoders(&mut self, gpu_context: Option<GpuContext>) -> Result<()> {
+    /// Called by StreamProcessor macro during setup phase.
+    /// Initializes encoders and starts the WebRTC WHIP session.
+    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
+        // Initialize video encoder with GPU context
+        let gpu_context = Some(ctx.gpu.clone());
         self.video_encoder = Some(VideoToolboxH264Encoder::new(self.config.video.clone(), gpu_context)?);
+
+        // Initialize audio encoder
         self.audio_encoder = Some(OpusEncoder::new(self.config.audio.clone())?);
+
+        // Note: We don't start the WebRTC session here. We wait for the first
+        // video + audio frames in process() to ensure encoders are ready.
+
+        tracing::info!("WebRtcWhipProcessor initialized (encoders ready, waiting for first frames)");
         Ok(())
     }
 
+    /// Called by StreamProcessor macro during teardown phase.
+    /// Gracefully shuts down the WebRTC session and closes the WHIP connection.
+    fn teardown(&mut self) -> Result<()> {
+        tracing::info!("WebRtcWhipProcessor shutting down");
+
+        // Close WebRTC session
+        if let Some(webrtc_session) = &self.webrtc_session {
+            if let Err(e) = webrtc_session.close() {
+                tracing::warn!("Error closing WebRTC session: {}", e);
+            }
+        }
+
+        // Terminate WHIP session (DELETE request)
+        if let Some(whip_client) = &self.whip_client {
+            if let Ok(client) = whip_client.lock() {
+                if let Err(e) = client.terminate() {
+                    tracing::warn!("Error terminating WHIP session: {}", e);
+                }
+            }
+        }
+
+        tracing::info!("WebRtcWhipProcessor shutdown complete");
+        Ok(())
+    }
+
+    /// Main processing loop: reads video/audio frames, encodes them, and streams via WebRTC
+    fn process(&mut self) -> Result<()> {
+        // Read latest video and audio frames from input ports
+        let video_frame = self.video_in.read_latest();
+        let audio_frame = self.audio_in.read_latest();
+
+        // Start session once we have both video and audio
+        if !self.session_started && video_frame.is_some() && audio_frame.is_some() {
+            self.start_session()?;
+        }
+
+        // Process video if available
+        if let Some(frame) = video_frame {
+            self.process_video_frame(&frame)?;
+        }
+
+        // Process audio if available
+        if let Some(frame) = audio_frame {
+            self.process_audio_frame(&frame)?;
+        }
+
+        Ok(())
+    }
+
+    /// Configures this processor to run in Push mode (wake on input data).
+    fn scheduling_config(&self) -> SchedulingConfig {
+        SchedulingConfig {
+            mode: SchedulingMode::Push,  // Wake when video/audio arrives
+            priority: ThreadPriority::RealTime,  // Real-time priority for streaming
+        }
+    }
+
+    /// Starts the WebRTC WHIP session.
+    /// Called automatically when the first video+audio frames arrive.
     fn start_session(&mut self) -> Result<()> {
         // 1. Set start time
         self.start_time_ns = Some(MediaClock::now().as_nanos() as i64);
