@@ -234,8 +234,8 @@ impl AppleMp4WriterProcessor {
                     .map(|a| a.timestamp_ns)
                     .unwrap_or(0);
 
-                // Convert video timestamp (seconds) to nanoseconds
-                let first_video_ts = (first_video.timestamp * 1_000_000_000.0) as i64;
+                // Video timestamp is already in nanoseconds
+                let first_video_ts = first_video.timestamp_ns;
 
                 // Use the FIRST VIDEO frame timestamp as the session start time
                 // This ensures audio and video start at the same point
@@ -277,8 +277,8 @@ impl AppleMp4WriterProcessor {
 
             // IMPORTANT: Check for new video frame for EACH audio frame
             if let Some(video) = self.video.read_latest() {
-                debug!("New video frame received: timestamp={:.6}s, frame_number={}, size={}x{}",
-                    video.timestamp, video.frame_number, video.width, video.height);
+                debug!("New video frame received: timestamp_ns={}, frame_number={}, size={}x{}",
+                    video.timestamp_ns, video.frame_number, video.width, video.height);
                 self.last_video_frame = Some(video);
             }
 
@@ -316,17 +316,15 @@ impl AppleMp4WriterProcessor {
 
                 if should_write {
                     // Calculate relative timestamp from video frame
-                    // video.timestamp is in seconds (f64), start_time_ns is in nanoseconds
-                    // Convert video timestamp to ns, subtract start_time_ns, then back to seconds
-                    let video_timestamp_ns = (last_video.timestamp * 1_000_000_000.0) as i64;
-                    let video_relative_ns = video_timestamp_ns - self.start_time_ns;
+                    // Both timestamps are now in nanoseconds
+                    let video_relative_ns = last_video.timestamp_ns - self.start_time_ns;
                     let video_timestamp_s = video_relative_ns as f64 / 1_000_000_000.0;
 
                     let mut video_to_write = last_video.clone();
-                    video_to_write.timestamp = video_timestamp_s;
+                    video_to_write.timestamp_ns = video_relative_ns;
 
                     debug!("Writing video: frame_number={}, relative_ts={:.6}s",
-                        video_to_write.frame_number, video_to_write.timestamp);
+                        video_to_write.frame_number, video_timestamp_s);
 
                     self.write_video_frame(&video_to_write)?;
                     self.last_written_video_frame_number = Some(last_video.frame_number);
@@ -793,7 +791,7 @@ impl AppleMp4WriterProcessor {
         // No sync logic - just write every audio frame with paired video frame
         debug!(
             "Writing frames: video={:.3}s audio={:.3}s",
-            video.timestamp,
+            video.timestamp_ns as f64 / 1_000_000_000.0,
             audio.timestamp_ns as f64 / 1_000_000_000.0
         );
 
@@ -801,7 +799,7 @@ impl AppleMp4WriterProcessor {
         self.write_audio_frame(&audio)?;
 
         self.last_video_frame = Some(video.clone());
-        self.last_video_timestamp = video.timestamp;
+        self.last_video_timestamp = video.timestamp_ns as f64 / 1_000_000_000.0;
         self.last_audio_timestamp_ns = audio.timestamp_ns;
         self.frames_written += 1;
 
@@ -976,13 +974,13 @@ impl AppleMp4WriterProcessor {
         staging_buffer.unmap();
 
         // Step 7: Create CMTime for presentation timestamp
-        let timestamp_ns = (frame.timestamp * 1_000_000_000.0) as i64;
+        let timestamp_ns = frame.timestamp_ns;
         let presentation_time = unsafe {
             CMTime::new(timestamp_ns, 1_000_000_000)
         };
 
         trace!("Appending video to AVAssetWriter: timestamp={:.6}s ({}ns), size={}x{}",
-            frame.timestamp, timestamp_ns, frame.width, frame.height);
+            timestamp_ns as f64 / 1_000_000_000.0, timestamp_ns, frame.width, frame.height);
 
         // Step 8: Append pixel buffer to adaptor
         let success = unsafe {

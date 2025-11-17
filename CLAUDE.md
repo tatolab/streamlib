@@ -1,0 +1,292 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+StreamLib is a real-time audio/video processing framework for Rust and Python, featuring:
+- GPU-accelerated video processing (wgpu/Metal)
+- Real-time audio processing with CLAP plugin support
+- Graph-based processor pipeline architecture
+- Platform-specific optimizations (macOS/iOS via Apple frameworks)
+- Python bindings via PyO3
+
+## Repository Structure
+
+This is an **Nx monorepo** using Cargo workspaces to manage multiple related projects:
+
+```
+streamlib/
+├── libs/                     # Library crates
+│   ├── streamlib/           # Core streaming library
+│   │   └── CLAUDE.md        # 📖 Detailed library documentation
+│   ├── streamlib-macros/    # Procedural macros for #[derive(StreamProcessor)]
+│   │   └── CLAUDE.md        # 📖 Macro implementation details
+│   └── yuv/                 # SIMD-optimized YUV/RGB conversion
+├── examples/                 # Standalone example applications
+│   ├── camera-display/      # Rust: Camera → Display pipeline
+│   ├── microphone-reverb-speaker/  # Rust: Audio with CLAP plugins
+│   ├── camera-audio-recorder/      # Rust: Record MP4 files
+│   ├── news-cast/                  # Rust: Multi-source composition
+│   └── python/                     # Python bindings examples
+├── docs/                     # Project documentation
+├── Cargo.toml               # Workspace configuration
+└── nx.json                  # Nx build system configuration
+```
+
+### Core Projects
+
+#### `libs/streamlib` - Core Library
+The main streaming library implementing the graph-based processor pipeline.
+- **Documentation**: See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md)
+- **Purpose**: Core runtime, processor traits, built-in processors, GPU context, and platform integrations
+- **Build**: `cargo build -p streamlib`
+- **Test**: `cargo test -p streamlib`
+
+#### `libs/streamlib-macros` - Procedural Macros
+Provides the `#[derive(StreamProcessor)]` macro for ergonomic processor creation.
+- **Documentation**: See [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md)
+- **Purpose**: Code generation for processor boilerplate, port introspection, and trait implementations
+- **Build**: `cargo build -p streamlib-macros`
+
+#### `libs/yuv` - Color Conversion
+SIMD-optimized color space conversions (RGBA ↔ YUV formats).
+- **Purpose**: High-performance color conversions for video encoding/decoding
+- **Build**: `cargo build -p yuv`
+
+### Examples
+
+Examples are **standalone applications** demonstrating StreamLib usage:
+- **Location**: `examples/` directory
+- **Build from workspace root**: `cargo build -p camera-display`
+- **Run from workspace root**: `cargo run -p camera-display`
+
+Examples also serve as **integration tests** - they must compile and run successfully.
+
+## Quick Start Commands
+
+### Building
+```bash
+# Build entire workspace
+cargo build
+
+# Build library only (faster)
+cargo build --lib -p streamlib
+
+# Build specific example
+cargo build -p camera-display
+
+# Build with features
+cargo build -p streamlib --features python
+cargo build -p streamlib --features mcp
+```
+
+### Testing
+```bash
+# Run all workspace tests
+cargo test
+
+# Test specific crate
+cargo test -p streamlib
+cargo test -p yuv
+
+# Run specific test
+cargo test test_name
+
+# Run with output
+cargo test -- --nocapture
+```
+
+### Running Examples
+```bash
+# Run example (must be from workspace root)
+cargo run -p camera-display
+
+# With logging
+RUST_LOG=debug cargo run -p camera-audio-recorder
+RUST_LOG=trace cargo run -p news-cast
+```
+
+### Documentation
+```bash
+# Generate and open all docs
+cargo doc --open
+
+# Document specific crate
+cargo doc -p streamlib --open --no-deps
+cargo doc -p yuv --open --no-deps
+```
+
+## Architecture Overview
+
+StreamLib uses a **graph-based processing pipeline** where processors are nodes in a directed acyclic graph (DAG):
+
+```
+[CameraProcessor] --VideoFrame--> [DisplayProcessor]
+                                      ↓
+                                  (renders to window)
+```
+
+### Key Concepts
+
+- **Processor**: Node in graph implementing `StreamProcessor` trait
+- **Port**: Typed input/output endpoints (`StreamInput<T>`, `StreamOutput<T>`)
+- **Frame**: Data flowing between processors:
+  - `VideoFrame` - GPU texture with metadata
+  - `AudioFrame<N>` - Audio buffer with N channels (generic const)
+  - `DataFrame` - Generic binary data
+- **Runtime**: Manages processor lifecycle, threading, scheduling, and GPU context
+
+### Critical Design Patterns
+
+These patterns are fundamental to working with StreamLib. For detailed implementation guidance, see the respective crate documentation.
+
+#### 1. Main Thread Dispatch (macOS/iOS)
+Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) **require** main thread execution.
+
+**Solution**: Use `RuntimeContext::run_on_main_blocking()` or `run_on_main_async()`
+
+See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md) and [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
+
+#### 2. Processor Macro System
+Use `#[derive(StreamProcessor)]` to automatically generate boilerplate.
+
+See [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md) for implementation details.
+
+#### 3. Monotonic Timestamp System
+All frames use monotonic nanoseconds (`i64`) from `MediaClock::now()` - never `SystemTime::now()`.
+
+See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md#4-timestamp-system-critical-for-av-sync) for timestamp handling.
+
+#### 4. Lock-Free Bus Architecture
+Processors communicate via lock-free ring buffers (`OwnedProducer`/`OwnedConsumer`).
+
+See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md#4-lock-free-bus-architecture-phase-2) for details.
+
+## Development Workflow
+
+### Working on Core Library
+```bash
+# Navigate to library directory
+cd libs/streamlib
+
+# Build, test, document from library directory
+cargo build --lib
+cargo test
+cargo doc --open --no-deps
+
+# Or from workspace root
+cd ../../
+cargo build -p streamlib
+cargo test -p streamlib
+```
+
+See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md) for detailed library development instructions.
+
+### Working on Macros
+```bash
+# Navigate to macros directory
+cd libs/streamlib-macros
+
+# Test macro expansion
+cargo expand --test macro_tests
+
+# Or from workspace root
+cd ../../
+cargo build -p streamlib-macros
+cargo test -p streamlib-macros
+```
+
+See [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md) for macro development details.
+
+### Adding Examples
+1. Create new directory in `examples/`
+2. Add `Cargo.toml` with `streamlib` dependency
+3. Implement in `src/main.rs`
+4. Run from **workspace root**: `cargo run -p example-name`
+
+Examples serve as integration tests and usage documentation.
+
+## Project Conventions
+
+### Commit Messages
+Use conventional commits with Claude Code attribution:
+```
+feat: Add WebRTC H.264 encoder processor
+
+Implement VideoToolbox-based H.264 encoding for WebRTC streaming.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+### Git Workflow
+- **Main branch**: `main`
+- **Feature branches**: `phase-N-feature-name` (e.g., `phase-1-videotoolbox-h264-encoder`)
+- **Commit format**: Conventional commits (feat, fix, refactor, docs, etc.)
+
+### Error Handling
+- Use `StreamError` enum from `streamlib::core::error`
+- Return `Result<T>` from all fallible operations
+- Prefer `?` operator over `.unwrap()` in library code
+- `.unwrap()` acceptable in examples and tests
+
+### Code Organization
+- **Platform-agnostic code**: `libs/streamlib/src/core/`
+- **macOS/iOS code**: `libs/streamlib/src/apple/`
+- **Platform re-exports**: `libs/streamlib/src/lib.rs` with `#[cfg(target_os = "...")]`
+- **DO NOT** use `#[cfg]` inside platform-specific directories (already conditionally compiled)
+
+## Documentation
+
+### Project Documentation
+- **Main thread dispatch**: [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md)
+- **WebRTC implementation**: [`WEBRTC_IMPLEMENTATION_PLAN.md`](WEBRTC_IMPLEMENTATION_PLAN.md)
+- **Graceful shutdown**: [`docs/graceful_shutdown.md`](docs/graceful_shutdown.md)
+- **Project scorecard**: [`scorecard.md`](scorecard.md)
+
+### Crate-Specific Documentation
+- **Core library**: [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md)
+  - Detailed architecture, lifecycle, threading, GPU context
+  - Apple-specific patterns (main thread dispatch, Metal interop)
+  - Adding processors, working with VideoToolbox
+  - Performance optimization, testing strategies
+- **Procedural macros**: [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md)
+  - Macro implementation details, code generation
+  - Adding attributes, testing macro changes
+  - Arc-wrapped output enforcement
+
+### Rust API Documentation
+```bash
+# Generate and browse API docs
+cargo doc --open
+```
+
+## Common Issues
+
+### Circular Dependencies in Examples
+Build the library first, then examples:
+```bash
+cargo build --lib
+cargo build -p example-name
+```
+
+### Main Thread Deadlock
+**NEVER** call `run_on_main_blocking()` from the main thread - it will deadlock.
+
+See [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
+
+### Platform-Specific Builds
+Some processors only compile on specific platforms:
+- `CameraProcessor`, `DisplayProcessor` - macOS/iOS only
+- `AudioOutputProcessor`, `AudioCaptureProcessor` - macOS/iOS only
+- `MP4WriterProcessor` - macOS/iOS only
+
+Use `#[cfg(target_os = "macos")]` in examples that depend on platform-specific processors.
+
+## Additional Resources
+
+- **Nx workspace**: Uses Nx for caching and task orchestration
+- **Cargo workspace**: Manages dependencies and builds across crates
+- **Platform support**: macOS (primary), iOS (partial), Linux/Windows (core only)

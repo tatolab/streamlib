@@ -13,7 +13,7 @@ pub struct VideoFrame {
 
     pub format: wgpu::TextureFormat,
 
-    pub timestamp: f64,
+    pub timestamp_ns: i64,
 
     pub frame_number: u64,
 
@@ -28,7 +28,7 @@ impl VideoFrame {
     pub fn new(
         texture: Arc<wgpu::Texture>,
         format: wgpu::TextureFormat,
-        timestamp: f64,
+        timestamp_ns: i64,
         frame_number: u64,
         width: u32,
         height: u32,
@@ -36,7 +36,7 @@ impl VideoFrame {
         Self {
             texture,
             format,
-            timestamp,
+            timestamp_ns,
             frame_number,
             width,
             height,
@@ -47,7 +47,7 @@ impl VideoFrame {
     pub fn with_metadata(
         texture: Arc<wgpu::Texture>,
         format: wgpu::TextureFormat,
-        timestamp: f64,
+        timestamp_ns: i64,
         frame_number: u64,
         width: u32,
         height: u32,
@@ -56,7 +56,7 @@ impl VideoFrame {
         Self {
             texture,
             format,
-            timestamp,
+            timestamp_ns,
             frame_number,
             width,
             height,
@@ -69,7 +69,7 @@ impl VideoFrame {
             "width": 1280,
             "height": 720,
             "format": "Rgba8Unorm",
-            "timestamp": 0.033,
+            "timestamp_ns": 33_000_000,
             "frame_number": 1,
             "metadata": {}
         })
@@ -80,7 +80,7 @@ impl VideoFrame {
             "width": 1920,
             "height": 1080,
             "format": "Rgba8Unorm",
-            "timestamp": 0.033,
+            "timestamp_ns": 33_000_000,
             "frame_number": 1,
             "metadata": {}
         })
@@ -91,7 +91,7 @@ impl VideoFrame {
             "width": 3840,
             "height": 2160,
             "format": "Rgba8Unorm",
-            "timestamp": 0.033,
+            "timestamp_ns": 33_000_000,
             "frame_number": 1,
             "metadata": {}
         })

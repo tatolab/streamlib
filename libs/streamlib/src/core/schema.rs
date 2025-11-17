@@ -640,8 +640,8 @@ pub static SCHEMA_VIDEO_FRAME: LazyLock<Arc<Schema>> = LazyLock::new(|| {
                     .with_description("Frame width in pixels"),
                 Field::new("height", FieldType::UInt32)
                     .with_description("Frame height in pixels"),
-                Field::new("timestamp", FieldType::Float64)
-                    .with_description("Timestamp in seconds since stream start"),
+                Field::new("timestamp_ns", FieldType::Int64)
+                    .with_description("Timestamp in nanoseconds from MediaClock (monotonic time)"),
                 Field::new("frame_number", FieldType::UInt64)
                     .with_description("Sequential frame number"),
                 Field::new("metadata", FieldType::Optional(Box::new(FieldType::Struct(vec![

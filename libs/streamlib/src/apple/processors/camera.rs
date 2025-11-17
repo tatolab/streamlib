@@ -506,12 +506,12 @@ impl AppleCameraProcessor {
                     }
                 };
 
-                let timestamp = crate::core::media_clock::MediaClock::now().as_secs_f64();
+                let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
                 let frame = VideoFrame::new(
                     Arc::new(output_texture),
                     wgpu::TextureFormat::Rgba8Unorm,
-                    timestamp,
+                    timestamp_ns,
                     self.frame_count,
                     width as u32,
                     height as u32,
