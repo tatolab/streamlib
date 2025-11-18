@@ -1,17 +1,22 @@
 use streamlib::{Result, StreamRuntime};
 use streamlib::{
     CameraProcessor, AudioCaptureProcessor, WebRtcWhipProcessor,
-    AudioResamplerProcessor, AudioChannelConverterProcessor,
+    AudioResamplerProcessor, AudioChannelConverterProcessor, BufferRechunkerProcessor,
     WebRtcWhipConfig, WhipConfig, VideoEncoderConfig, AudioEncoderConfig, H264Profile,
 };
 use streamlib::core::{
     CameraConfig, AudioCaptureConfig,
     AudioResamplerConfig, ResamplingQuality,
     AudioChannelConverterConfig, ChannelConversionMode,
+    BufferRechunkerConfig,
     VideoFrame, AudioFrame,
 };
 
 fn main() -> Result<()> {
+    // Initialize rustls crypto provider (required by webrtc crate)
+    // MUST be called before any TLS/DTLS operations
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
@@ -76,6 +81,14 @@ fn main() -> Result<()> {
     )?;
     println!("✓ Channel converter added\n");
 
+    println!("📦 Adding buffer rechunker (512 samples → 960 samples for Opus)...");
+    let rechunker = runtime.add_processor_with_config::<BufferRechunkerProcessor>(
+        BufferRechunkerConfig {
+            target_buffer_size: 960, // 20ms @ 48kHz (Opus requirement)
+        }
+    )?;
+    println!("✓ Buffer rechunker added\n");
+
     println!("🌐 Adding WebRTC WHIP streaming processor...");
     let webrtc = runtime.add_processor_with_config::<WebRtcWhipProcessor>(
         WebRtcWhipConfig {
@@ -127,12 +140,19 @@ fn main() -> Result<()> {
     )?;
     println!("   ✓ Resampler → channel converter");
 
-    println!("   channel_converter.audio_out → webrtc.audio_in");
+    println!("   channel_converter.audio_out → rechunker.audio_in");
     runtime.connect(
         channel_converter.output_port::<AudioFrame<2>>("audio_out"),
+        rechunker.input_port::<AudioFrame<2>>("audio_in"),
+    )?;
+    println!("   ✓ Channel converter → rechunker");
+
+    println!("   rechunker.audio_out → webrtc.audio_in");
+    runtime.connect(
+        rechunker.output_port::<AudioFrame<2>>("audio_out"),
         webrtc.input_port::<AudioFrame<2>>("audio_in"),
     )?;
-    println!("   ✓ Channel converter → WebRTC\n");
+    println!("   ✓ Rechunker → WebRTC\n");
 
     println!("✅ Pipeline connected\n");
 

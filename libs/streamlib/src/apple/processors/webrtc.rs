@@ -191,6 +191,7 @@ mod videotoolbox {
     pub type CMBlockBufferRef = *mut c_void;
     pub type CMFormatDescriptionRef = *mut c_void;
     pub type VTPixelTransferSessionRef = *mut c_void;
+    pub type CFArrayRef = *const c_void;
 
     #[repr(C)]
     pub struct CMTime {
@@ -310,6 +311,15 @@ mod videotoolbox {
         pub fn CMSampleBufferGetFormatDescription(
             sbuf: CMSampleBufferRef,
         ) -> CMFormatDescriptionRef;
+
+        // For checking keyframe status via sample attachments
+        pub fn CMSampleBufferGetSampleAttachmentsArray(
+            sbuf: CMSampleBufferRef,
+            create_if_necessary: bool,
+        ) -> CFArrayRef;
+
+        // Sample attachment keys
+        pub static kCMSampleAttachmentKey_NotSync: CFStringRef;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -321,6 +331,16 @@ mod videotoolbox {
         ) -> CFNumberRef;
 
         pub fn CFRelease(cf: *const c_void);
+
+        // CFArray functions for accessing sample attachments
+        pub fn CFArrayGetCount(the_array: CFArrayRef) -> isize;
+        pub fn CFArrayGetValueAtIndex(the_array: CFArrayRef, idx: isize) -> *const c_void;
+
+        // CFDictionary functions for checking attachment keys
+        pub fn CFDictionaryGetValue(
+            the_dict: CFDictionaryRef,
+            key: *const c_void,
+        ) -> *const c_void;
 
         // Boolean constants
         pub static kCFBooleanTrue: CFBooleanRef;
@@ -346,6 +366,24 @@ mod videotoolbox {
         pub static kVTCompressionPropertyKey_MaxKeyFrameInterval: CFStringRef;
         pub static kVTCompressionPropertyKey_AverageBitRate: CFStringRef;
         pub static kVTCompressionPropertyKey_ExpectedFrameRate: CFStringRef;
+
+        // Encode frame options
+        pub static kVTEncodeFrameOptionKey_ForceKeyFrame: CFStringRef;
+    }
+
+    // CoreFoundation dictionary types
+    pub type CFDictionaryRef = *const c_void;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        pub fn CFDictionaryCreate(
+            allocator: *const c_void,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: isize,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> CFDictionaryRef;
     }
 }
 
@@ -413,7 +451,8 @@ impl VideoToolboxH264Encoder {
         // Cast pointers to usize for Send compatibility across thread boundary
         let (session_ptr, callback_context_ptr) = ctx.run_on_main_blocking(move || {
             // Create callback context on main thread
-            let callback_context = Box::into_raw(Box::new(encoded_frames_ref)) as *mut std::ffi::c_void;
+            // Use Arc::into_raw to increment ref count - keeps the Arc alive for the callback
+            let callback_context = Arc::into_raw(encoded_frames_ref) as *mut std::ffi::c_void;
             let mut session: videotoolbox::VTCompressionSessionRef = std::ptr::null_mut();
 
             unsafe {
@@ -431,8 +470,8 @@ impl VideoToolboxH264Encoder {
                 );
 
                 if status != videotoolbox::NO_ERR {
-                    // Clean up callback context on error
-                    let _ = Box::from_raw(callback_context as *mut Arc<Mutex<VecDeque<EncodedVideoFrame>>>);
+                    // Clean up callback context on error - reconstruct Arc to decrement ref count
+                    let _ = Arc::from_raw(callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>);
                     return Err(StreamError::Runtime(format!("VTCompressionSessionCreate failed: {}", status)));
                 }
 
@@ -459,13 +498,15 @@ impl VideoToolboxH264Encoder {
                 }
 
                 // Disable frame reordering (B-frames) for low latency
+                // CRITICAL: Set to TRUE to allow encoder to generate keyframes properly
+                // Baseline profile doesn't use B-frames anyway, but encoder needs this enabled
                 let status = videotoolbox::VTSessionSetProperty(
                     session,
                     videotoolbox::kVTCompressionPropertyKey_AllowFrameReordering,
-                    videotoolbox::kCFBooleanFalse as *const _,
+                    videotoolbox::kCFBooleanTrue as *const _,
                 );
                 if status != videotoolbox::NO_ERR {
-                    tracing::warn!("Failed to disable frame reordering: {}", status);
+                    tracing::warn!("Failed to set frame reordering: {}", status);
                 }
 
                 // Set keyframe interval
@@ -535,42 +576,28 @@ impl VideoToolboxH264Encoder {
             self.config.width, self.config.height, self.config.fps);
 
         // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
-        if let Some(gpu_ctx) = &self.gpu_context {
-            // Create WgpuBridge from GPU context
-            use wgpu::hal;
-            use metal::foreign_types::ForeignTypeRef;
+        if let Some(ref gpu_ctx) = self.gpu_context {
+            use crate::apple::{MetalDevice, WgpuBridge, PixelTransferSession};
 
-            // Extract Metal device from wgpu device and convert to objc2_metal device
-            let metal_device_ptr = unsafe {
-                gpu_ctx.device().as_hal::<hal::api::Metal, _, _>(|hal_device_opt| -> Result<*mut std::ffi::c_void> {
-                    let hal_device = hal_device_opt
-                        .ok_or_else(|| StreamError::GpuError("Failed to get HAL device".into()))?;
-                    // raw_device() returns &Mutex<Device>, we need to get the raw pointer
-                    let device_mutex_ref = hal_device.raw_device();
-                    Ok(device_mutex_ref as *const _ as *mut std::ffi::c_void)
-                })
-            }?;
-            let objc2_device_ref = unsafe {
-                &*(metal_device_ptr as *const ProtocolObject<dyn objc2_metal::MTLDevice>)
-            };
+            // Create Metal device (gets system default, same as wgpu)
+            let metal_device = MetalDevice::new()?;
 
-            use objc2::rc::Retained;
-            let objc2_device = unsafe { Retained::retain(objc2_device_ref as *const _ as *mut _).unwrap() };
-
-            // Create WgpuBridge
+            // Create WgpuBridge with Metal device and wgpu device/queue from GpuContext
             let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-                objc2_device,
-                (**gpu_ctx.device()).clone(),
-                (**gpu_ctx.queue()).clone(),
+                metal_device.clone_device(),
+                gpu_ctx.device().as_ref().clone(),
+                gpu_ctx.queue().as_ref().clone(),
             ));
 
-            // Create PixelTransferSession
+            // Create PixelTransferSession for GPU-accelerated RGBA → NV12 conversion
             let pixel_transfer = PixelTransferSession::new(wgpu_bridge.clone())?;
 
             self.wgpu_bridge = Some(wgpu_bridge);
             self.pixel_transfer = Some(pixel_transfer);
 
-            tracing::info!("GPU-accelerated pixel transfer initialized");
+            tracing::info!("GPU-accelerated pixel transfer (RGBA → NV12) initialized");
+        } else {
+            tracing::warn!("No GPU context available, cannot initialize GPU-accelerated pixel transfer");
         }
 
         Ok(())
@@ -612,12 +639,17 @@ extern "C" fn compression_output_callback(
     }
 
     // Get the encoded_frames queue from the context
+    // CRITICAL: The pointer is from Arc::into_raw() which leaks the Arc
+    // We can safely dereference the raw pointer because:
+    // 1. Arc::into_raw() keeps the allocation alive (ref count > 0)
+    // 2. The Mutex won't be freed until Drop calls Arc::from_raw()
+    // 3. Drop calls VTCompressionSessionCompleteFrames() first, ensuring no callbacks are running
     let encoded_frames = unsafe {
         let ptr = output_callback_ref_con as *const Mutex<VecDeque<EncodedVideoFrame>>;
-        &*ptr
+        &*ptr  // Directly deref the raw pointer
     };
 
-    // Extract encoded data from sample buffer
+    // Extract encoded data from sample buffer and convert to AVCC format
     unsafe {
         let block_buffer = videotoolbox::CMSampleBufferGetDataBuffer(sample_buffer);
         if block_buffer.is_null() {
@@ -626,13 +658,13 @@ extern "C" fn compression_output_callback(
         }
 
         let data_length = videotoolbox::CMBlockBufferGetDataLength(block_buffer);
-        let mut data = vec![0u8; data_length];
+        let mut raw_data = vec![0u8; data_length];
 
         let copy_status = videotoolbox::CMBlockBufferCopyDataBytes(
             block_buffer,
             0,
             data_length,
-            data.as_mut_ptr(),
+            raw_data.as_mut_ptr(),
         );
 
         if copy_status != videotoolbox::NO_ERR {
@@ -640,12 +672,50 @@ extern "C" fn compression_output_callback(
             return;
         }
 
-        // Check if this is a keyframe (simplified - would need to parse NAL units properly)
-        let is_keyframe = data.len() > 5 &&
-            data[4] == 0x65; // NAL unit type 5 = IDR frame
+        // VideoToolbox outputs elementary stream (raw NAL units)
+        // We need to convert to AVCC format (length-prefixed NAL units)
+        // CRITICAL: Each NAL unit must be prefixed with its 4-byte length in big-endian
+
+        // For now, assume single NAL unit per sample (common for WebRTC)
+        // TODO: Handle multiple NAL units per sample (e.g., SPS+PPS+IDR in keyframes)
+        let avcc_data = convert_elementary_stream_to_avcc(&raw_data);
+
+        // Check if this is a keyframe using CMSampleBuffer attachments (Apple's official method)
+        // The kCMSampleAttachmentKey_NotSync key is ONLY present for non-sync frames (P/B frames)
+        // If the key is absent, the frame is a sync frame (keyframe/I-frame)
+        let is_keyframe = {
+            let attachments = videotoolbox::CMSampleBufferGetSampleAttachmentsArray(sample_buffer, false);
+            if !attachments.is_null() {
+                let count = videotoolbox::CFArrayGetCount(attachments);
+                if count > 0 {
+                    let attachment = videotoolbox::CFArrayGetValueAtIndex(attachments, 0);
+                    if !attachment.is_null() {
+                        let not_sync = videotoolbox::CFDictionaryGetValue(
+                            attachment,
+                            videotoolbox::kCMSampleAttachmentKey_NotSync as *const std::ffi::c_void,
+                        );
+                        // If NotSync key is NULL (absent), this is a keyframe
+                        not_sync.is_null()
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        // Log frame info for debugging
+        if is_keyframe {
+            tracing::info!("[VideoToolbox] 🔑 KEYFRAME detected: {} bytes", avcc_data.len());
+        } else {
+            tracing::trace!("[VideoToolbox] P-frame: {} bytes", avcc_data.len());
+        }
 
         let encoded_frame = EncodedVideoFrame {
-            data,
+            data: avcc_data,
             timestamp_ns: 0, // Will be set by caller
             is_keyframe,
             frame_number: 0, // Will be set by caller
@@ -655,6 +725,37 @@ extern "C" fn compression_output_callback(
             queue.push_back(encoded_frame);
         }
     }
+}
+
+/// Convert elementary stream (raw NAL units) to AVCC format (length-prefixed)
+///
+/// Elementary stream: [NAL data]
+/// AVCC format: [4-byte length in big-endian][NAL data]
+///
+/// WebRTC requires AVCC format for H.264 RTP packetization.
+fn convert_elementary_stream_to_avcc(elementary_stream: &[u8]) -> Vec<u8> {
+    if elementary_stream.is_empty() {
+        return Vec::new();
+    }
+
+    // AVCC format: prepend 4-byte length header
+    let nal_length = elementary_stream.len() as u32;
+    let mut avcc_data = Vec::with_capacity(4 + elementary_stream.len());
+
+    // Write length as 4-byte big-endian
+    avcc_data.extend_from_slice(&nal_length.to_be_bytes());
+
+    // Copy NAL unit data
+    avcc_data.extend_from_slice(elementary_stream);
+
+    tracing::trace!(
+        "[AVCC Conversion] Elementary stream {} bytes → AVCC {} bytes (length prefix: {})",
+        elementary_stream.len(),
+        avcc_data.len(),
+        nal_length
+    );
+
+    avcc_data
 }
 
 // SAFETY: VideoToolbox compression session will only be accessed from the main thread
@@ -673,17 +774,40 @@ impl VideoEncoderH264 for VideoToolboxH264Encoder {
         let presentation_time = videotoolbox::CMTime::new(frame.timestamp_ns, 1_000_000_000);
         let duration = videotoolbox::CMTime::invalid(); // Let VideoToolbox calculate duration
 
-        // Step 3: Encode the frame
+        // Step 3: Determine if we should force a keyframe
+        // Force keyframe on first frame and every keyframe_interval frames
+        let should_force_keyframe = self.frame_count == 0 ||
+            (self.frame_count % self.config.keyframe_interval_frames as u64 == 0);
+
+        // Step 4: Encode the frame
         unsafe {
+            let frame_properties = if should_force_keyframe {
+                tracing::info!("[VideoToolbox] 🔑 Forcing keyframe at frame {} (dict created: yes)", self.frame_count);
+                let dict = Self::create_force_keyframe_properties();
+                if dict.is_null() {
+                    tracing::error!("[VideoToolbox] ❌ CFDictionary creation FAILED!");
+                } else {
+                    tracing::debug!("[VideoToolbox] CFDictionary created successfully at {:p}", dict);
+                }
+                dict
+            } else {
+                std::ptr::null()
+            };
+
             let status = videotoolbox::VTCompressionSessionEncodeFrame(
                 session,
                 pixel_buffer as videotoolbox::CVPixelBufferRef,
                 presentation_time,
                 duration,
-                std::ptr::null(), // frame properties
+                frame_properties, // Pass keyframe properties
                 std::ptr::null_mut(), // source frame ref con
                 std::ptr::null_mut(), // info flags out
             );
+
+            // Release frame properties dictionary if created
+            if !frame_properties.is_null() {
+                videotoolbox::CFRelease(frame_properties);
+            }
 
             // Release pixel buffer
             objc2::rc::autoreleasepool(|_| {
@@ -747,21 +871,63 @@ impl VideoEncoderH264 for VideoToolboxH264Encoder {
     }
 }
 
+impl VideoToolboxH264Encoder {
+    /// Create a CFDictionary requesting a keyframe
+    ///
+    /// Returns a CFDictionaryRef with {kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue}
+    /// Caller must call CFRelease on the returned pointer
+    unsafe fn create_force_keyframe_properties() -> *const std::ffi::c_void {
+        // Create dictionary with key-value: {kVTEncodeFrameOptionKey_ForceKeyFrame: true}
+        let key = videotoolbox::kVTEncodeFrameOptionKey_ForceKeyFrame as *const std::ffi::c_void;
+        let value = videotoolbox::kCFBooleanTrue as *const std::ffi::c_void;
+
+        let keys = [key];
+        let values = [value];
+
+        let dict = videotoolbox::CFDictionaryCreate(
+            std::ptr::null(), // allocator (default)
+            keys.as_ptr() as *const *const std::ffi::c_void,
+            values.as_ptr() as *const *const std::ffi::c_void,
+            1, // count
+            std::ptr::null(), // key callbacks (default)
+            std::ptr::null(), // value callbacks (default)
+        );
+
+        dict as *const std::ffi::c_void
+    }
+}
+
 impl Drop for VideoToolboxH264Encoder {
     fn drop(&mut self) {
         unsafe {
             // Clean up VTCompressionSession
             if let Some(session) = self.compression_session {
-                // Invalidate the session (stops encoding)
+                // CRITICAL: Complete all pending frames BEFORE invalidating session
+                // This ensures all VideoToolbox callbacks finish executing before we free the callback context
+                // Without this, callbacks may try to access freed memory → SIGABRT crash
+                tracing::debug!("[VideoToolbox] Waiting for all pending frames to complete...");
+                let status = videotoolbox::VTCompressionSessionCompleteFrames(
+                    session,
+                    videotoolbox::CMTime::invalid(), // kCMTimeInvalid = flush all pending frames
+                );
+                if status != videotoolbox::NO_ERR {
+                    tracing::warn!("[VideoToolbox] VTCompressionSessionCompleteFrames failed: {}", status);
+                }
+                tracing::debug!("[VideoToolbox] All pending frames completed");
+
+                // Now safe to invalidate (stops accepting new frames)
                 videotoolbox::VTCompressionSessionInvalidate(session);
 
                 // Release the CoreFoundation object (free memory)
                 videotoolbox::CFRelease(session as *const std::ffi::c_void);
             }
 
-            // Clean up callback context (the leaked Box from setup_compression_session)
+            // Clean up callback context (the leaked Arc from setup_compression_session)
+            // Safe now because VTCompressionSessionCompleteFrames() ensured all callbacks finished
+            // Reconstruct Arc to decrement ref count and potentially drop the Mutex
             if let Some(context) = self.callback_context {
-                let _ = Box::from_raw(context as *mut Arc<Mutex<VecDeque<EncodedVideoFrame>>>);
+                let _ = Arc::from_raw(context as *const Mutex<VecDeque<EncodedVideoFrame>>);
+                tracing::debug!("[VideoToolbox] Callback context freed");
             }
         }
     }
@@ -937,7 +1103,52 @@ impl AudioEncoderOpus for OpusEncoder {
 /// # Performance
 /// - Zero-copy slicing where possible
 /// - ~1-2µs for typical frame (3-5 NAL units)
-fn parse_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
+/// Parse NAL units from AVCC format (length-prefixed, used by VideoToolbox)
+///
+/// AVCC format: [4-byte length][NAL unit][4-byte length][NAL unit]...
+/// Each NAL unit length is a 4-byte big-endian integer.
+fn parse_nal_units_avcc(data: &[u8]) -> Vec<Vec<u8>> {
+    let mut nal_units = Vec::new();
+    let mut i = 0;
+
+    while i + 4 <= data.len() {
+        // Read 4-byte big-endian length
+        let nal_length = u32::from_be_bytes([
+            data[i],
+            data[i + 1],
+            data[i + 2],
+            data[i + 3],
+        ]) as usize;
+
+        i += 4; // Skip length prefix
+
+        // Check bounds
+        if i + nal_length > data.len() {
+            tracing::warn!(
+                "AVCC NAL unit length {} exceeds remaining data {} at offset {}",
+                nal_length,
+                data.len() - i,
+                i - 4
+            );
+            break;
+        }
+
+        // Extract NAL unit
+        let nal_unit = data[i..i + nal_length].to_vec();
+        if !nal_unit.is_empty() {
+            nal_units.push(nal_unit);
+        }
+
+        i += nal_length;
+    }
+
+    nal_units
+}
+
+/// Parse NAL units from Annex B format (start-code-prefixed)
+///
+/// Annex B format: [00 00 00 01 or 00 00 01][NAL unit][start code][NAL unit]...
+fn parse_nal_units_annex_b(data: &[u8]) -> Vec<Vec<u8>> {
     let mut nal_units = Vec::new();
     let mut i = 0;
 
@@ -984,6 +1195,41 @@ fn parse_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
     }
 
     nal_units
+}
+
+/// Auto-detect format and parse NAL units
+///
+/// Checks first 4 bytes to determine if data is AVCC or Annex B format:
+/// - AVCC: First 4 bytes = big-endian length (typically < 100KB for a frame)
+/// - Annex B: Starts with 00 00 00 01 or 00 00 01
+fn parse_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
+    if data.len() < 4 {
+        return Vec::new();
+    }
+
+    // Check for Annex B start codes
+    let is_annex_b = (data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
+        || (data[0] == 0 && data[1] == 0 && data[2] == 1);
+
+    if is_annex_b {
+        tracing::debug!("Detected Annex B format H.264");
+        parse_nal_units_annex_b(data)
+    } else {
+        // Assume AVCC format (VideoToolbox default on macOS)
+        let length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+
+        // Sanity check: length should be reasonable (< 1MB for a single NAL unit)
+        if length > 0 && length < 1_000_000 && length + 4 <= data.len() {
+            tracing::debug!("Detected AVCC format H.264 (first NAL length: {})", length);
+            parse_nal_units_avcc(data)
+        } else {
+            tracing::warn!(
+                "Unknown H.264 format: first 4 bytes = {:02x} {:02x} {:02x} {:02x} (length={}, data_len={})",
+                data[0], data[1], data[2], data[3], length, data.len()
+            );
+            Vec::new()
+        }
+    }
 }
 
 // ============================================================================
@@ -1169,25 +1415,45 @@ struct WhipClient {
 
     /// Pending ICE candidates (buffered for batch sending)
     pending_candidates: Arc<Mutex<Vec<String>>>,
+
+    /// Tokio runtime for HTTP operations (required for tokio::time::timeout)
+    _runtime: tokio::runtime::Runtime,
 }
 
 impl WhipClient {
     fn new(config: WhipConfig) -> Result<Self> {
-        // Build HTTPS connector using rustls with native CA roots
+        tracing::info!("[WhipClient] Creating WHIP client for endpoint: {}", config.endpoint_url);
+
+        // Build HTTPS connector using rustls with ring crypto provider and native CA roots
+        tracing::debug!("[WhipClient] Building HTTPS connector with native roots...");
         let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()  // Use system CA store
-            .map_err(|e| StreamError::Configuration(format!("Failed to load CA roots: {}", e)))?
+            .with_native_roots()  // Use system CA store (includes ring provider via feature flag)
+            .map_err(|e| {
+                tracing::error!("[WhipClient] Failed to load CA roots: {}", e);
+                StreamError::Configuration(format!("Failed to load CA roots: {}", e))
+            })?
             .https_or_http()      // Allow http:// for local testing
             .enable_http1()
             .enable_http2()
             .build();
+        tracing::debug!("[WhipClient] HTTPS connector built successfully");
 
         // Create HTTP client
+        tracing::debug!("[WhipClient] Creating HTTP client...");
         let http_client = hyper_util::client::legacy::Client::builder(
             hyper_util::rt::TokioExecutor::new()
         )
         .pool_idle_timeout(std::time::Duration::from_secs(30))
         .build(https);
+        tracing::info!("[WhipClient] HTTP client created successfully");
+
+        // Create Tokio runtime for HTTP operations (tokio::time::timeout needs it)
+        tracing::debug!("[WhipClient] Creating Tokio runtime for HTTP operations...");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| StreamError::Runtime(format!("Failed to create Tokio runtime for WHIP client: {}", e)))?;
+        tracing::debug!("[WhipClient] Tokio runtime created successfully");
 
         Ok(Self {
             config,
@@ -1195,6 +1461,7 @@ impl WhipClient {
             session_url: None,
             session_etag: None,
             pending_candidates: Arc::new(Mutex::new(Vec::new())),
+            _runtime: runtime,
         })
     }
 
@@ -1216,11 +1483,19 @@ impl WhipClient {
     /// - 503 Service Unavailable: Server overloaded (should retry with backoff)
     /// - 307 Temporary Redirect: Load balancing (automatically followed)
     fn post_offer(&mut self, sdp_offer: &str) -> Result<String> {
-        use pollster::block_on;
         use hyper::{Request, StatusCode, header};
         use http_body_util::Full;
 
-        block_on(async {
+        // Clone what we need to avoid borrow issues
+        let endpoint_url = self.config.endpoint_url.clone();
+        let auth_token = self.config.auth_token.clone();
+        let timeout_ms = self.config.timeout_ms;
+
+        // Extract http_client reference before async block
+        let http_client = &self.http_client;
+
+        // MUST use Tokio runtime (tokio::time::timeout requires it)
+        let result = self._runtime.block_on(async {
             // Build POST request per RFC 9725 Section 4.1
             use http_body_util::BodyExt;
             let body = Full::new(bytes::Bytes::from(sdp_offer.to_owned()));
@@ -1228,26 +1503,26 @@ impl WhipClient {
 
             let mut req_builder = Request::builder()
                 .method("POST")
-                .uri(&self.config.endpoint_url)
+                .uri(&endpoint_url)
                 .header(header::CONTENT_TYPE, "application/sdp");
 
             // Add Authorization header only if token is provided
-            if let Some(token) = &self.config.auth_token {
+            if let Some(token) = &auth_token {
                 req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
             }
 
             let req = req_builder.body(boxed_body)
                 .map_err(|e| StreamError::Runtime(format!("Failed to build WHIP POST request: {}", e)))?;
 
-            tracing::debug!("WHIP POST to {}", self.config.endpoint_url);
+            tracing::debug!("WHIP POST to {}", endpoint_url);
 
             // Send request with timeout
             let response = tokio::time::timeout(
-                std::time::Duration::from_millis(self.config.timeout_ms),
-                self.http_client.request(req),
+                std::time::Duration::from_millis(timeout_ms),
+                http_client.request(req),
             )
             .await
-            .map_err(|_| StreamError::Runtime(format!("WHIP POST timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|_| StreamError::Runtime(format!("WHIP POST timed out after {}ms", timeout_ms)))?
             .map_err(|e| StreamError::Runtime(format!("WHIP POST request failed: {}", e)))?;
 
             let status = response.status();
@@ -1259,19 +1534,42 @@ impl WhipClient {
                 .map_err(|e| StreamError::Runtime(format!("Failed to read WHIP response body: {}", e)))?
                 .to_bytes();
 
-            match status {
-                StatusCode::CREATED => {
-                    // Extract Location header (REQUIRED per RFC 9725)
-                    self.session_url = headers
-                        .get(header::LOCATION)
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_owned());
+            // Return status, headers, and body for processing outside async block
+            Ok::<_, StreamError>((status, headers, body_bytes))
+        })?;
 
-                    if self.session_url.is_none() {
-                        return Err(StreamError::Runtime(
-                            "WHIP server returned 201 Created without Location header".into()
-                        ));
-                    }
+        // Process response outside async block to avoid borrow conflicts
+        let (status, headers, body_bytes) = result;
+
+        match status {
+            StatusCode::CREATED => {
+                // Extract Location header (REQUIRED per RFC 9725)
+                let location = headers
+                    .get(header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| StreamError::Runtime(
+                        "WHIP server returned 201 Created without Location header".into()
+                    ))?;
+
+                // Convert relative URLs to absolute URLs
+                // Cloudflare returns relative paths like "/stream-id/webRTC/publish/session-id"
+                self.session_url = if location.starts_with('/') {
+                    // Parse endpoint URL to get base
+                    let base_url = self.config.endpoint_url
+                        .split('/')
+                        .take(3)  // Take "https:", "", "hostname"
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    Some(format!("{}{}", base_url, location))
+                } else {
+                    Some(location.to_owned())
+                };
+
+                tracing::debug!(
+                    "WHIP Location header: '{}' → session URL: '{}'",
+                    location,
+                    self.session_url.as_ref().unwrap()
+                );
 
                     // Extract ETag header (optional, used for ICE restart)
                     self.session_etag = headers
@@ -1335,8 +1633,7 @@ impl WhipClient {
                         error_body
                     )))
                 }
-            }
-        })
+        }
     }
 
     /// Queue an ICE candidate for batched transmission
@@ -1356,7 +1653,6 @@ impl WhipClient {
     ///
     /// Sends all buffered candidates in a single PATCH request, then clears the queue.
     fn send_ice_candidates(&self) -> Result<()> {
-        use pollster::block_on;
         use hyper::{Request, StatusCode, header};
         use http_body_util::{BodyExt, Full};
 
@@ -1382,7 +1678,8 @@ impl WhipClient {
         // Format: Multiple "a=candidate:..." lines joined by CRLF
         let sdp_fragment = candidates.join("\r\n");
 
-        block_on(async {
+        // MUST use Tokio runtime for HTTP operations
+        self._runtime.block_on(async {
             let body = Full::new(bytes::Bytes::from(sdp_fragment));
             let boxed_body = body.map_err(|never| match never {}).boxed();
 
@@ -1444,7 +1741,6 @@ impl WhipClient {
     /// RFC 9725 Section 4.4: Client terminates session by DELETEing session URL.
     /// Server responds with 200 OK.
     fn terminate(&self) -> Result<()> {
-        use pollster::block_on;
         use hyper::{Request, header};
         use http_body_util::Empty;
 
@@ -1456,7 +1752,8 @@ impl WhipClient {
             }
         };
 
-        block_on(async {
+        // MUST use Tokio runtime for HTTP operations
+        self._runtime.block_on(async {
             use http_body_util::BodyExt;
             let body = Empty::<bytes::Bytes>::new();
             let boxed_body = body.map_err(|never| match never {}).boxed();
@@ -1526,6 +1823,15 @@ struct WebRtcSession {
 
     /// Audio track (Opus @ 48kHz)
     audio_track: Option<Arc<webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample>>,
+
+    /// Flag indicating ICE connection is ready (tracks are bound with correct PT)
+    /// CRITICAL: Must be true before calling write_sample() to ensure PT is set correctly
+    /// Set to true when ICE connection state becomes Connected
+    ice_connected: Arc<std::sync::atomic::AtomicBool>,
+
+    /// Tokio runtime for WebRTC background tasks
+    /// CRITICAL: Must stay alive for session lifetime (ICE gathering, DTLS, stats)
+    _runtime: tokio::runtime::Runtime,
 }
 
 impl WebRtcSession {
@@ -1541,31 +1847,108 @@ impl WebRtcSession {
     where
         F: Fn(String) + Send + Sync + 'static,
     {
-        // Use pollster to block on async initialization
-        // This is the same pattern as gpu_context.rs (line 145)
-        pollster::block_on(async {
-            // Create MediaEngine and register default codecs (H.264, Opus, VP8, VP9, etc.)
-            let mut media_engine = webrtc::api::media_engine::MediaEngine::default();
-            media_engine
-                .register_default_codecs()
-                .map_err(|e| StreamError::Configuration(format!("Failed to register default codecs: {}", e)))?;
+        // CRITICAL: WebRTC crate requires Tokio runtime for background tasks
+        // (ICE gathering, DTLS, SRTP, stats collection, mDNS)
+        // We create a dedicated multi-threaded Tokio runtime for WebRTC operations
+        // NOTE: pollster::block_on() doesn't work here - webrtc needs tokio::spawn()
+        // NOTE: Single-threaded runtime doesn't work either - mDNS spawns tasks that need runtime context
 
-            // Create API with MediaEngine
+        // Create Tokio runtime for WebRTC (multi-threaded with 2 workers for background tasks)
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)  // Minimal threads: 1 for blocking ops, 1 for background tasks
+            .thread_name("webrtc-tokio")
+            .enable_all()
+            .build()
+            .map_err(|e| StreamError::Runtime(format!("Failed to create Tokio runtime for WebRTC: {}", e)))?;
+
+        tracing::info!("[WebRTC] Created Tokio runtime with 2 worker threads");
+
+        // Block on async initialization within Tokio context
+        let init_result = runtime.block_on(async {
+            tracing::debug!("[WebRTC] Creating MediaEngine and registering codecs...");
+
+            // Create MediaEngine and register ONLY the codecs we use
+            // CRITICAL: Do NOT use register_default_codecs() - it registers ALL codecs (VP8, VP9, H.264, AV1, H.265)
+            // and Cloudflare will choose VP8 as preferred, but we're encoding H.264!
+            let mut media_engine = webrtc::api::media_engine::MediaEngine::default();
+
+            // Register H.264 video codec (Baseline profile)
+            media_engine
+                .register_codec(
+                    webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecParameters {
+                        capability: webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
+                            mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
+                            clock_rate: 90000,
+                            channels: 0,
+                            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f".to_owned(),
+                            rtcp_feedback: vec![],
+                        },
+                        payload_type: 102,
+                        ..Default::default()
+                    },
+                    webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
+                )
+                .map_err(|e| StreamError::Configuration(format!("Failed to register H.264 codec: {}", e)))?;
+
+            // Register Opus audio codec
+            media_engine
+                .register_codec(
+                    webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecParameters {
+                        capability: webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
+                            mime_type: webrtc::api::media_engine::MIME_TYPE_OPUS.to_owned(),
+                            clock_rate: 48000,
+                            channels: 2,
+                            sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+                            rtcp_feedback: vec![],
+                        },
+                        payload_type: 111,
+                        ..Default::default()
+                    },
+                    webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
+                )
+                .map_err(|e| StreamError::Configuration(format!("Failed to register Opus codec: {}", e)))?;
+
+            tracing::info!("[WebRTC] Registered ONLY H.264 (PT=102) and Opus (PT=111) codecs");
+
+            tracing::debug!("[WebRTC] Creating interceptor registry...");
+
+            // Create InterceptorRegistry for RTCP feedback
+            // This is CRITICAL for proper WebRTC operation - provides:
+            // - NACK (negative acknowledgments for lost packets)
+            // - RTCP sender/receiver reports
+            // - Statistics collection
+            let mut registry = webrtc::interceptor::registry::Registry::new();
+
+            // Register default interceptors (NACK, RTCP reports, etc.)
+            registry = webrtc::api::interceptor_registry::register_default_interceptors(registry, &mut media_engine)
+                .map_err(|e| StreamError::Configuration(format!("Failed to register interceptors: {}", e)))?;
+
+            tracing::debug!("[WebRTC] Creating WebRTC API...");
+
+            // Create API with MediaEngine and InterceptorRegistry
             let api = webrtc::api::APIBuilder::new()
                 .with_media_engine(media_engine)
+                .with_interceptor_registry(registry)
                 .build();
+
+            tracing::debug!("[WebRTC] Creating RTCPeerConnection...");
 
             // Create RTCPeerConnection
             let config = webrtc::peer_connection::configuration::RTCConfiguration::default();
-            let peer_connection = api
-                .new_peer_connection(config)
-                .await
-                .map_err(|e| StreamError::Configuration(format!("Failed to create PeerConnection: {}", e)))?;
+            let peer_connection = Arc::new(
+                api
+                    .new_peer_connection(config)
+                    .await
+                    .map_err(|e| StreamError::Configuration(format!("Failed to create PeerConnection: {}", e)))?
+            );
+
+            tracing::debug!("[WebRTC] RTCPeerConnection created successfully");
 
             // Subscribe to ICE candidate events
             // Convert webrtc-rs ICE candidate to SDP fragment and call callback
             let on_candidate = Arc::new(on_ice_candidate);
-            peer_connection.on_ice_candidate(Box::new(move |candidate_opt| {
+            let pc_for_ice_candidate = Arc::clone(&peer_connection);
+            pc_for_ice_candidate.on_ice_candidate(Box::new(move |candidate_opt| {
                 let callback = Arc::clone(&on_candidate);
                 Box::pin(async move {
                     if let Some(candidate) = candidate_opt {
@@ -1585,22 +1968,133 @@ impl WebRtcSession {
                 })
             }));
 
+            // ========================================
+            // COMPREHENSIVE STATE MONITORING
+            // ========================================
+
+            // 1. Monitor signaling state changes
+            peer_connection.on_signaling_state_change(Box::new(move |state| {
+                Box::pin(async move {
+                    tracing::info!("[WebRTC] 🔄 Signaling state: {:?}", state);
+                })
+            }));
+
+            // 2. Monitor peer connection state changes - CRITICAL FOR DTLS!
+            // This tells us if the DTLS handshake completed successfully.
+            // ICE can be Connected but peer connection still Connecting if DTLS fails!
+            peer_connection.on_peer_connection_state_change(Box::new(move |state| {
+                Box::pin(async move {
+                    tracing::info!("[WebRTC] ========================================");
+                    tracing::info!("[WebRTC] 🔗 Peer connection state: {:?}", state);
+                    tracing::info!("[WebRTC] ========================================");
+                    match state {
+                        webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::New => {
+                            tracing::debug!("[WebRTC] Peer connection: New");
+                        }
+                        webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Connecting => {
+                            tracing::info!("[WebRTC] Peer connection: Connecting... (DTLS handshake in progress)");
+                        }
+                        webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Connected => {
+                            tracing::info!("[WebRTC] ✅✅✅ Peer connection: CONNECTED! ✅✅✅");
+                            tracing::info!("[WebRTC] DTLS handshake completed successfully!");
+                            tracing::info!("[WebRTC] RTP packets can now be sent/received!");
+                        }
+                        webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Disconnected => {
+                            tracing::warn!("[WebRTC] ⚠️  Peer connection: DISCONNECTED!");
+                        }
+                        webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Failed => {
+                            tracing::error!("[WebRTC] ❌❌❌ Peer connection: FAILED! ❌❌❌");
+                            tracing::error!("[WebRTC] This means DTLS handshake or ICE failed!");
+                        }
+                        webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Closed => {
+                            tracing::info!("[WebRTC] Peer connection: Closed");
+                        }
+                        _ => {}
+                    }
+                })
+            }));
+
+            // 3. Monitor ICE gathering state
+            peer_connection.on_ice_gathering_state_change(Box::new(move |state| {
+                Box::pin(async move {
+                    tracing::info!("[WebRTC] 🧊 ICE gathering state: {:?}", state);
+                })
+            }));
+
+            // 4. CRITICAL: Subscribe to ICE connection state changes
+            // This signals when track binding is complete and PT values are set correctly.
+            // We MUST wait for Connected state before calling write_sample().
+            let ice_connected_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let ice_connected_clone = Arc::clone(&ice_connected_flag);
+            let pc_for_ice_handler = Arc::clone(&peer_connection);
+
+            peer_connection.on_ice_connection_state_change(Box::new(move |connection_state| {
+                let flag = Arc::clone(&ice_connected_clone);
+                let pc = Arc::clone(&pc_for_ice_handler);
+                Box::pin(async move {
+                    tracing::info!("[WebRTC] ========================================");
+                    tracing::info!("[WebRTC] ICE connection state changed: {:?}", connection_state);
+                    tracing::info!("[WebRTC] ========================================");
+
+                    if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Connected {
+                        tracing::info!("[WebRTC] ✅ ICE Connected - track binding complete!");
+
+                        // CRITICAL: Verify PT values AFTER ICE connection
+                        let transceivers = pc.get_transceivers().await;
+                        tracing::info!("[WebRTC] Verifying PT values for {} transceivers after ICE connection:", transceivers.len());
+
+                        for (i, transceiver) in transceivers.iter().enumerate() {
+                            let sender = transceiver.sender().await;
+                            let params = sender.get_parameters().await;
+
+                            tracing::info!("[WebRTC] ┌─ Transceiver #{} ─────────────────────", i);
+
+                            // Log all codecs
+                            for (codec_idx, codec) in params.rtp_parameters.codecs.iter().enumerate() {
+                                tracing::info!("[WebRTC] │  Codec #{}: {} (PT={})",
+                                    codec_idx,
+                                    codec.capability.mime_type,
+                                    codec.payload_type);
+                            }
+
+                            // Log encoding parameters - THIS IS CRITICAL!
+                            if let Some(enc) = params.encodings.first() {
+                                if enc.payload_type == 0 {
+                                    tracing::error!("[WebRTC] │  ❌ ENCODING: PT={} SSRC={:?} ← STILL WRONG AFTER ICE!",
+                                        enc.payload_type,
+                                        enc.ssrc);
+                                } else {
+                                    tracing::info!("[WebRTC] │  ✅ ENCODING: PT={} SSRC={:?} ← CORRECT!",
+                                        enc.payload_type,
+                                        enc.ssrc);
+                                }
+                            } else {
+                                tracing::error!("[WebRTC] │  ❌ NO ENCODING FOUND!");
+                            }
+
+                            tracing::info!("[WebRTC] └────────────────────────────────────");
+                        }
+
+                        flag.store(true, std::sync::atomic::Ordering::Release);
+                        tracing::info!("[WebRTC] 🚀 Ready to send samples!");
+
+                    } else if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Disconnected
+                           || connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Failed {
+                        tracing::warn!("[WebRTC] ❌ ICE connection lost: {:?}", connection_state);
+                        flag.store(false, std::sync::atomic::Ordering::Release);
+                    }
+
+                    ()
+                })
+            }));
+
             // Create video track (H.264)
-            // Use Constrained Baseline Profile Level 3.1 (42e01f) for maximum compatibility
-            // This matches Cloudflare Stream's requirements and is the most widely supported H.264 profile
+            // Following play-from-disk-h264 example - only specify MIME type, use defaults for rest
             let video_track = Arc::new(
                 webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample::new(
                     webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
                         mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
-                        clock_rate: 90000,
-                        channels: 0,
-                        // RFC 6184 H.264 SDP parameters:
-                        // - profile-level-id=42e01f: Constrained Baseline Profile Level 3.1
-                        //   (42=Baseline, e0=Constrained, 1f=Level 3.1)
-                        // - packetization-mode=1: Non-interleaved mode (standard for WebRTC)
-                        // - level-asymmetry-allowed=1: Receiver can decode higher levels
-                        sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f".to_owned(),
-                        rtcp_feedback: vec![],
+                        ..Default::default()
                     },
                     "video".to_owned(),
                     "streamlib-video".to_owned(),
@@ -1608,20 +2102,43 @@ impl WebRtcSession {
             );
 
             // Add video track to PeerConnection
-            peer_connection
+            let video_rtp_sender = peer_connection
                 .add_track(Arc::clone(&video_track) as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
                 .await
                 .map_err(|e| StreamError::Configuration(format!("Failed to add video track: {}", e)))?;
 
+            // TELEMETRY: Video track binding
+            tracing::info!("[TELEMETRY:VIDEO_TRACK_ADDED] track_id=video");
+            let video_params = video_rtp_sender.get_parameters().await;
+
+            // Log all codec parameters
+            for (idx, codec) in video_params.rtp_parameters.codecs.iter().enumerate() {
+                tracing::info!("[TELEMETRY:VIDEO_CODEC_{}] mime_type={}, pt={}, clock_rate={}, channels={}, fmtp='{}'",
+                    idx,
+                    codec.capability.mime_type,
+                    codec.payload_type,
+                    codec.capability.clock_rate,
+                    codec.capability.channels,
+                    codec.capability.sdp_fmtp_line);
+            }
+
+            // Log encoding parameters
+            if let Some(enc) = video_params.encodings.first() {
+                tracing::info!("[TELEMETRY:VIDEO_ENCODING] pt={}, ssrc={:?}, rid={:?}",
+                    enc.payload_type,
+                    enc.ssrc,
+                    enc.rid);
+            } else {
+                tracing::warn!("[TELEMETRY:VIDEO_ENCODING] NO_ENCODING_FOUND");
+            }
+
             // Create audio track (Opus)
+            // Following play-from-disk-h264 example - only specify MIME type, use defaults for rest
             let audio_track = Arc::new(
                 webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample::new(
                     webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
                         mime_type: webrtc::api::media_engine::MIME_TYPE_OPUS.to_owned(),
-                        clock_rate: 48000,
-                        channels: 2, // Stereo
-                        sdp_fmtp_line: String::new(),
-                        rtcp_feedback: vec![],
+                        ..Default::default()
                     },
                     "audio".to_owned(),
                     "streamlib-audio".to_owned(),
@@ -1629,31 +2146,138 @@ impl WebRtcSession {
             );
 
             // Add audio track to PeerConnection
-            peer_connection
+            let audio_rtp_sender = peer_connection
                 .add_track(Arc::clone(&audio_track) as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
                 .await
                 .map_err(|e| StreamError::Configuration(format!("Failed to add audio track: {}", e)))?;
 
-            Ok(Self {
-                peer_connection: Arc::new(peer_connection),
-                video_track: Some(video_track),
-                audio_track: Some(audio_track),
-            })
+            // TELEMETRY: Audio track binding
+            tracing::info!("[TELEMETRY:AUDIO_TRACK_ADDED] track_id=audio");
+            let audio_params = audio_rtp_sender.get_parameters().await;
+
+            // Log all codec parameters
+            for (idx, codec) in audio_params.rtp_parameters.codecs.iter().enumerate() {
+                tracing::info!("[TELEMETRY:AUDIO_CODEC_{}] mime_type={}, pt={}, clock_rate={}, channels={}, fmtp='{}'",
+                    idx,
+                    codec.capability.mime_type,
+                    codec.payload_type,
+                    codec.capability.clock_rate,
+                    codec.capability.channels,
+                    codec.capability.sdp_fmtp_line);
+            }
+
+            // Log encoding parameters
+            if let Some(enc) = audio_params.encodings.first() {
+                tracing::info!("[TELEMETRY:AUDIO_ENCODING] pt={}, ssrc={:?}, rid={:?}",
+                    enc.payload_type,
+                    enc.ssrc,
+                    enc.rid);
+            } else {
+                tracing::warn!("[TELEMETRY:AUDIO_ENCODING] NO_ENCODING_FOUND");
+            }
+
+            // Set all transceivers to send-only (WHIP ingestion - we're publishing to Cloudflare, not receiving)
+            let transceivers = peer_connection.get_transceivers().await;
+            for transceiver in transceivers {
+                transceiver.set_direction(webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Sendonly).await;
+            }
+            tracing::info!("[WebRTC] Set all transceivers to SendOnly for WHIP ingestion");
+
+            // Return tuple of (peer_connection, video_track, audio_track, ice_connected_flag)
+            Ok::<_, StreamError>((peer_connection, video_track, audio_track, ice_connected_flag))
+        })?;
+
+        // Destructure init result
+        let (peer_connection, video_track, audio_track, ice_connected) = init_result;
+
+        // Return Self with runtime (must stay alive for background tasks)
+        // peer_connection is already Arc-wrapped
+        Ok(Self {
+            peer_connection,
+            video_track: Some(video_track),
+            audio_track: Some(audio_track),
+            ice_connected,
+            _runtime: runtime,
         })
+    }
+
+    /// Adds bandwidth attributes to SDP for WHIP compatibility.
+    ///
+    /// Cloudflare Stream requires explicit bandwidth signaling in the SDP.
+    /// Adds b=AS (Application-Specific) and b=TIAS (Transport-Independent) lines
+    /// after each m= line based on configured bitrates.
+    ///
+    /// # Arguments
+    /// * `sdp` - Original SDP string
+    /// * `video_bitrate_bps` - Video bitrate in bits per second
+    /// * `audio_bitrate_bps` - Audio bitrate in bits per second
+    ///
+    /// # Returns
+    /// Modified SDP with bandwidth attributes
+    fn add_bandwidth_to_sdp(sdp: &str, video_bitrate_bps: u32, audio_bitrate_bps: u32) -> String {
+        let mut result = String::new();
+        let lines: Vec<&str> = sdp.lines().collect();
+        let mut i = 0;
+
+        while i < lines.len() {
+            let line = lines[i];
+            result.push_str(line);
+            result.push('\n');
+
+            // Add bandwidth attributes after m=video line
+            if line.starts_with("m=video") {
+                // Add b=AS (Application-Specific bandwidth in kbps)
+                let bitrate_kbps = video_bitrate_bps / 1000;
+                result.push_str(&format!("b=AS:{}\n", bitrate_kbps));
+
+                // Add b=TIAS (Transport-Independent Application-Specific in bps)
+                result.push_str(&format!("b=TIAS:{}\n", video_bitrate_bps));
+
+                tracing::debug!(
+                    "[WebRTC] Added video bandwidth: b=AS:{} b=TIAS:{}",
+                    bitrate_kbps,
+                    video_bitrate_bps
+                );
+            }
+            // Add bandwidth attributes after m=audio line
+            else if line.starts_with("m=audio") {
+                // Add b=AS (Application-Specific bandwidth in kbps)
+                let bitrate_kbps = audio_bitrate_bps / 1000;
+                result.push_str(&format!("b=AS:{}\n", bitrate_kbps));
+
+                // Add b=TIAS (Transport-Independent Application-Specific in bps)
+                result.push_str(&format!("b=TIAS:{}\n", audio_bitrate_bps));
+
+                tracing::debug!(
+                    "[WebRTC] Added audio bandwidth: b=AS:{} b=TIAS:{}",
+                    bitrate_kbps,
+                    audio_bitrate_bps
+                );
+            }
+
+            i += 1;
+        }
+
+        result
     }
 
     /// Creates SDP offer for WHIP signaling.
     ///
-    /// Uses pollster::block_on() for low-latency async call.
+    /// Uses Tokio runtime (CRITICAL: mDNS ICE gathering needs Tokio context).
     fn create_offer(&self) -> Result<String> {
-        pollster::block_on(async {
+        // MUST use Tokio runtime, not pollster - ICE gathering spawns mDNS tasks
+        self._runtime.block_on(async {
+            tracing::debug!("[WebRTC] Creating SDP offer...");
+
             let offer = self
                 .peer_connection
                 .create_offer(None)
                 .await
                 .map_err(|e| StreamError::Runtime(format!("Failed to create offer: {}", e)))?;
 
-            // Set local description
+            tracing::debug!("[WebRTC] Setting local description (starts ICE gathering)...");
+
+            // Set local description (triggers ICE candidate gathering via mDNS)
             self.peer_connection
                 .set_local_description(offer)
                 .await
@@ -1666,15 +2290,19 @@ impl WebRtcSession {
                 .await
                 .ok_or_else(|| StreamError::Runtime("No local description".into()))?;
 
+            tracing::debug!("[WebRTC] SDP offer created successfully");
             Ok(local_desc.sdp)
         })
     }
 
     /// Sets remote SDP answer from WHIP server.
     ///
-    /// Uses pollster::block_on() for low-latency async call.
+    /// Uses Tokio runtime (required for WebRTC background tasks).
     fn set_remote_answer(&mut self, sdp: &str) -> Result<()> {
-        pollster::block_on(async {
+        // MUST use Tokio runtime for WebRTC operations
+        self._runtime.block_on(async {
+            tracing::debug!("[WebRTC] Setting remote SDP answer...");
+
             let answer = webrtc::peer_connection::sdp::session_description::RTCSessionDescription::answer(sdp.to_owned())
                 .map_err(|e| StreamError::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
 
@@ -1683,60 +2311,249 @@ impl WebRtcSession {
                 .await
                 .map_err(|e| StreamError::Runtime(format!("Failed to set remote description: {}", e)))?;
 
+            tracing::debug!("[WebRTC] Remote SDP answer set successfully");
+
+            // TELEMETRY: After SDP negotiation
+            tracing::info!("[TELEMETRY:SDP_ANSWER_SET] remote_description=set");
+
+            let transceivers = self.peer_connection.get_transceivers().await;
+            for (i, transceiver) in transceivers.iter().enumerate() {
+                let sender = transceiver.sender().await;
+                let params = sender.get_parameters().await;
+
+                // TELEMETRY: Log all codecs for this transceiver
+                for (codec_idx, codec) in params.rtp_parameters.codecs.iter().enumerate() {
+                    tracing::info!("[TELEMETRY:TRANSCEIVER_{}_CODEC_{}] mime_type={}, pt={}, clock_rate={}, channels={}, fmtp='{}'",
+                        i,
+                        codec_idx,
+                        codec.capability.mime_type,
+                        codec.payload_type,
+                        codec.capability.clock_rate,
+                        codec.capability.channels,
+                        codec.capability.sdp_fmtp_line);
+                }
+
+                // TELEMETRY: Log encoding for this transceiver
+                if let Some(first_encoding) = params.encodings.first() {
+                    tracing::info!("[TELEMETRY:TRANSCEIVER_{}_ENCODING] pt={}, ssrc={:?}, rid={:?}",
+                        i,
+                        first_encoding.payload_type,
+                        first_encoding.ssrc,
+                        first_encoding.rid);
+                } else {
+                    tracing::warn!("[TELEMETRY:TRANSCEIVER_{}_ENCODING] NO_ENCODING_FOUND", i);
+                }
+            }
+
             Ok(())
         })
     }
 
+    /// Validate and log H.264 NAL unit format
+    fn validate_and_log_h264_nal(sample_data: &[u8], sample_idx: usize) {
+        if sample_data.len() < 5 {
+            tracing::error!("[H264 Validation] ❌ Sample {}: Too short ({} bytes, need ≥5)",
+                sample_idx, sample_data.len());
+            return;
+        }
+
+        // Log first 8 bytes to identify format
+        tracing::info!("[H264 Validation] Sample {}: First 8 bytes: {:02X?}",
+            sample_idx,
+            &sample_data[..sample_data.len().min(8)]);
+
+        // Check for Annex-B start codes (0x00 0x00 0x00 0x01 or 0x00 0x00 0x01)
+        let is_annex_b = (sample_data.len() >= 4
+            && sample_data[0] == 0x00
+            && sample_data[1] == 0x00
+            && sample_data[2] == 0x00
+            && sample_data[3] == 0x01)
+            || (sample_data.len() >= 3
+                && sample_data[0] == 0x00
+                && sample_data[1] == 0x00
+                && sample_data[2] == 0x01);
+
+        if is_annex_b {
+            tracing::error!("[H264 Validation] ❌❌❌ Sample {}: ANNEX-B FORMAT DETECTED!", sample_idx);
+            tracing::error!("[H264 Validation] WebRTC requires AVCC format (length-prefixed), not Annex-B!");
+            tracing::error!("[H264 Validation] This explains why Cloudflare receives no packets!");
+
+            // Extract NAL unit type from after start code
+            let nal_offset = if sample_data.len() >= 4 && sample_data[3] == 0x01 { 4 } else { 3 };
+            if sample_data.len() > nal_offset {
+                let nal_unit_type = sample_data[nal_offset] & 0x1F;
+                tracing::error!("[H264 Validation] NAL type: {} (after Annex-B start code)", nal_unit_type);
+            }
+            return;
+        }
+
+        // AVCC format: [4-byte length][NAL unit data]
+        let nal_length = u32::from_be_bytes([
+            sample_data[0],
+            sample_data[1],
+            sample_data[2],
+            sample_data[3],
+        ]) as usize;
+
+        if nal_length + 4 != sample_data.len() {
+            tracing::warn!("[H264 Validation] ⚠️  Sample {}: NAL length mismatch (prefix says {}, actual {})",
+                sample_idx, nal_length, sample_data.len() - 4);
+        }
+
+        // Extract NAL unit type from first byte of NAL data (after 4-byte length)
+        let nal_unit_type = sample_data[4] & 0x1F;
+
+        // Log NAL unit type
+        match nal_unit_type {
+            1 => tracing::trace!("[H264] Sample {}: Coded slice (non-IDR)", sample_idx),
+            5 => tracing::info!("[H264] Sample {}: IDR (keyframe) ✅", sample_idx),
+            6 => tracing::trace!("[H264] Sample {}: SEI", sample_idx),
+            7 => tracing::info!("[H264] Sample {}: SPS (Sequence Parameter Set) ✅", sample_idx),
+            8 => tracing::info!("[H264] Sample {}: PPS (Picture Parameter Set) ✅", sample_idx),
+            9 => tracing::trace!("[H264] Sample {}: AUD (Access Unit Delimiter)", sample_idx),
+            _ => tracing::debug!("[H264] Sample {}: NAL type {}", sample_idx, nal_unit_type),
+        }
+    }
+
     /// Writes video samples to the video track.
     ///
-    /// Uses pollster::block_on() to convert async write to sync (<20µs overhead).
+    /// Uses Tokio runtime to convert async write to sync.
     /// webrtc-rs handles RTP packetization automatically.
     ///
     /// # Arguments
     /// * `samples` - H.264 NAL units (one Sample per NAL, without start codes)
     fn write_video_samples(&mut self, samples: Vec<webrtc::media::Sample>) -> Result<()> {
+        // CRITICAL: Wait for ICE connection before writing samples
+        // This ensures track binding is complete and PT values are set correctly.
+        // Without this, PT=0 will be used and Cloudflare will reject packets!
+        if !self.ice_connected.load(std::sync::atomic::Ordering::Acquire) {
+            tracing::debug!("[WebRTC] Skipping video write - waiting for ICE connection");
+            return Ok(()); // Silently skip until connected
+        }
+
         let track = self
             .video_track
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("Video track not initialized".into()))?;
 
-        // Write each sample (NAL unit) to the track
-        // pollster::block_on converts async to sync with <20µs latency
-        for sample in samples {
-            pollster::block_on(async {
-                track
-                    .write_sample(&sample)
-                    .await
-                    .map_err(|e| StreamError::Runtime(format!("Failed to write video sample: {}", e)))
-            })?;
+        static FIRST_WRITE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        let is_first = FIRST_WRITE.swap(false, std::sync::atomic::Ordering::Relaxed);
+
+        if is_first {
+            tracing::info!("[WebRTC] 🎥 FIRST VIDEO WRITE after ICE Connected!");
+            tracing::info!("[WebRTC]    Samples: {}, Total bytes: {}",
+                samples.len(),
+                samples.iter().map(|s| s.data.len()).sum::<usize>());
+
+            // VALIDATION: Check first batch of H.264 NAL units
+            tracing::info!("[WebRTC] 🔍 Validating H.264 NAL units...");
+            for (idx, sample) in samples.iter().enumerate() {
+                Self::validate_and_log_h264_nal(&sample.data, idx);
+            }
+        } else {
+            tracing::debug!("[WebRTC] Writing {} video samples ({} bytes)",
+                samples.len(),
+                samples.iter().map(|s| s.data.len()).sum::<usize>());
         }
 
+        // Write each sample (NAL unit) to the track
+        // MUST use Tokio runtime for WebRTC operations
+        for (i, sample) in samples.iter().enumerate() {
+            // TELEMETRY: Track sample writing (only log first sample to avoid spam)
+            if i == 0 && is_first {
+                tracing::info!("[TELEMETRY:VIDEO_SAMPLE_WRITE] sample_num={}, bytes={}, duration_ms={:?}",
+                    i,
+                    sample.data.len(),
+                    sample.duration.as_millis());
+            }
+
+            let result = self._runtime.block_on(async {
+                track
+                    .write_sample(sample)
+                    .await
+                    .map_err(|e| StreamError::Runtime(format!("Failed to write video sample {}: {}", i, e)))
+            });
+
+            if let Err(ref e) = result {
+                tracing::error!("[WebRTC] ❌ Failed to write video sample {}: {}", i, e);
+                return result;
+            }
+        }
+
+        if is_first {
+            tracing::info!("[WebRTC] ✅ Successfully wrote first batch of {} video samples", samples.len());
+        }
         Ok(())
     }
 
     /// Writes audio sample to the audio track.
     ///
-    /// Uses pollster::block_on() to convert async write to sync (<20µs overhead).
+    /// Uses Tokio runtime to convert async write to sync.
     ///
     /// # Arguments
     /// * `sample` - Opus-encoded audio frame
     fn write_audio_sample(&mut self, sample: webrtc::media::Sample) -> Result<()> {
+        // CRITICAL: Wait for ICE connection before writing samples
+        // This ensures track binding is complete and PT values are set correctly.
+        // Without this, PT=0 will be used and Cloudflare will reject packets!
+        if !self.ice_connected.load(std::sync::atomic::Ordering::Acquire) {
+            tracing::debug!("[WebRTC] Skipping audio write - waiting for ICE connection");
+            return Ok(()); // Silently skip until connected
+        }
+
         let track = self
             .audio_track
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("Audio track not initialized".into()))?;
 
-        pollster::block_on(async {
+        // Track first write and periodic telemetry
+        static AUDIO_SAMPLE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let counter = AUDIO_SAMPLE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        if counter == 0 {
+            tracing::info!("[WebRTC] 🎵 FIRST AUDIO WRITE after ICE Connected!");
+            tracing::info!("[WebRTC]    Bytes: {}, Duration: {:?}",
+                sample.data.len(),
+                sample.duration);
+        } else if counter % 50 == 0 {
+            tracing::debug!("[TELEMETRY:AUDIO_SAMPLE_WRITE] sample_num={}, bytes={}, duration_ms={:?}",
+                counter,
+                sample.data.len(),
+                sample.duration.as_millis());
+        }
+
+        // MUST use Tokio runtime for WebRTC operations
+        let result = self._runtime.block_on(async {
             track
                 .write_sample(&sample)
                 .await
                 .map_err(|e| StreamError::Runtime(format!("Failed to write audio sample: {}", e)))
+        });
+
+        if let Err(ref e) = result {
+            tracing::error!("[WebRTC] ❌ Failed to write audio sample {}: {}", counter, e);
+        } else if counter == 0 {
+            tracing::info!("[WebRTC] ✅ Successfully wrote first audio sample");
+        }
+
+        result
+    }
+
+    /// Gets RTCP statistics from the peer connection.
+    ///
+    /// Returns stats including OutboundRTP (bytes/packets sent) and
+    /// RemoteInboundRTP (Cloudflare's receiver reports with packet loss, jitter, RTT).
+    fn get_stats(&self) -> Result<webrtc::stats::StatsReport> {
+        // MUST use Tokio runtime for WebRTC operations
+        self._runtime.block_on(async {
+            Ok(self.peer_connection.get_stats().await)
         })
     }
 
     /// Closes the WebRTC session.
     fn close(&self) -> Result<()> {
-        pollster::block_on(async {
+        // MUST use Tokio runtime for WebRTC operations
+        self._runtime.block_on(async {
             self.peer_connection
                 .close()
                 .await
@@ -1772,6 +2589,7 @@ impl Default for WebRtcWhipConfig {
 
 #[derive(StreamProcessor)]
 #[processor(
+    mode = Push,
     description = "Streams video and audio to Cloudflare Stream via WebRTC WHIP"
 )]
 pub struct WebRtcWhipProcessor {
@@ -1804,6 +2622,13 @@ pub struct WebRtcWhipProcessor {
     // WHIP and WebRTC
     whip_client: Option<Arc<Mutex<WhipClient>>>,
     webrtc_session: Option<WebRtcSession>,
+
+    // RTCP stats monitoring
+    last_stats_time_ns: i64,
+    last_video_bytes_sent: u64,
+    last_audio_bytes_sent: u64,
+    last_video_packets_sent: u64,
+    last_audio_packets_sent: u64,
 }
 
 impl WebRtcWhipProcessor {
@@ -1854,9 +2679,20 @@ impl WebRtcWhipProcessor {
         let video_frame = self.video_in.read_latest();
         let audio_frame = self.audio_in.read_latest();
 
-        // Start session once we have both video and audio
-        if !self.session_started && video_frame.is_some() && audio_frame.is_some() {
+        // Debug logging to diagnose frame delivery
+        tracing::debug!(
+            "[WebRTC] process() called - video: {}, audio: {}, session_started: {}",
+            if video_frame.is_some() { "YES" } else { "NO" },
+            if audio_frame.is_some() { "YES" } else { "NO" },
+            self.session_started
+        );
+
+        // Start session on first frame (video or audio)
+        // WebRTC can handle streams that start with only one track and add the other later
+        if !self.session_started && (video_frame.is_some() || audio_frame.is_some()) {
+            tracing::info!("[WebRTC] Starting session - received first frame");
             self.start_session()?;
+            self.session_started = true;
         }
 
         // Process video if available
@@ -1869,15 +2705,19 @@ impl WebRtcWhipProcessor {
             self.process_audio_frame(&frame)?;
         }
 
-        Ok(())
-    }
+        // Collect and log RTCP stats every 2 seconds
+        if self.session_started {
+            let current_time_ns = MediaClock::now().as_nanos() as i64;
+            let elapsed_since_last_stats = current_time_ns - self.last_stats_time_ns;
 
-    /// Configures this processor to run in Push mode (wake on input data).
-    fn scheduling_config(&self) -> SchedulingConfig {
-        SchedulingConfig {
-            mode: SchedulingMode::Push,  // Wake when video/audio arrives
-            priority: ThreadPriority::RealTime,  // Real-time priority for streaming
+            // Log stats every 2 seconds (2_000_000_000 ns)
+            if elapsed_since_last_stats >= 2_000_000_000 {
+                self.log_rtcp_stats()?;
+                self.last_stats_time_ns = current_time_ns;
+            }
         }
+
+        Ok(())
     }
 
     /// Starts the WebRTC WHIP session.
@@ -1913,9 +2753,27 @@ impl WebRtcWhipProcessor {
             48000 // 48kHz for Opus
         ));
 
-        // 3. Create WHIP client
+        // 3. Install rustls crypto provider BEFORE creating WHIP client
+        // This is CRITICAL for rustls 0.23+ to avoid "CryptoProvider not set" panic
+        tracing::info!("[WebRTC] Installing rustls crypto provider (ring)...");
+        match rustls::crypto::CryptoProvider::get_default() {
+            Some(_) => {
+                tracing::info!("[WebRTC] Crypto provider already installed");
+            }
+            None => {
+                tracing::info!("[WebRTC] Installing ring crypto provider...");
+                rustls::crypto::ring::default_provider()
+                    .install_default()
+                    .map_err(|e| StreamError::Runtime(format!("Failed to install rustls crypto provider: {:?}", e)))?;
+                tracing::info!("[WebRTC] Ring crypto provider installed successfully");
+            }
+        }
+
+        // 4. Create WHIP client
+        tracing::info!("[WebRTC] Creating WHIP client for endpoint: {}", self.config.whip.endpoint_url);
         let whip_client = Arc::new(Mutex::new(WhipClient::new(self.config.whip.clone())?));
         self.whip_client = Some(whip_client.clone());
+        tracing::info!("[WebRTC] WHIP client created successfully");
 
         // 4. Create WebRTC session with ICE callback
         // Callback queues ICE candidates for WHIP PATCH transmission
@@ -1929,15 +2787,48 @@ impl WebRtcWhipProcessor {
         // 5. Create SDP offer
         let offer = webrtc_session.create_offer()?;
 
+        // 5a. Add bandwidth attributes to SDP for Cloudflare compatibility
+        // CRITICAL: Cloudflare Stream requires explicit bandwidth signaling in SDP
+        // Without b=AS and b=TIAS lines, the dashboard won't show encoding bitrates
+        let offer_with_bandwidth = WebRtcSession::add_bandwidth_to_sdp(
+            &offer,
+            self.config.video.bitrate_bps,
+            self.config.audio.bitrate_bps,
+        );
+
+        tracing::info!("[WebRTC] ========== SDP OFFER (with bandwidth) ==========");
+        for (i, line) in offer_with_bandwidth.lines().enumerate() {
+            tracing::info!("[WebRTC] SDP OFFER [{}]: {}", i, line);
+        }
+        tracing::info!("[WebRTC] ================================");
+
         // 6. POST to WHIP endpoint (receives SDP answer)
-        let answer = whip_client.lock().unwrap().post_offer(&offer)?;
+        let answer = whip_client.lock().unwrap().post_offer(&offer_with_bandwidth)?;
+        tracing::info!("[WebRTC] ========== SDP ANSWER ==========");
+        for (i, line) in answer.lines().enumerate() {
+            tracing::info!("[WebRTC] SDP ANSWER [{}]: {}", i, line);
+        }
+        tracing::info!("[WebRTC] =================================");
 
         // 7. Set remote answer
         webrtc_session.set_remote_answer(&answer)?;
 
         // 8. Send any buffered ICE candidates to WHIP server
         // (Candidates may be discovered during offer/answer exchange)
-        whip_client.lock().unwrap().send_ice_candidates()?;
+        // NOTE: Trickle ICE is OPTIONAL per RFC 9725, some servers (like Cloudflare) don't support it
+        // If PATCH fails, we log a warning but don't fail session startup
+        match whip_client.lock().unwrap().send_ice_candidates() {
+            Ok(_) => {
+                tracing::info!("[WebRTC] ICE candidates sent successfully (trickle ICE supported)");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[WebRTC] Failed to send ICE candidates (trickle ICE not supported): {}. \
+                     This is OK - candidates are already in the SDP offer/answer.",
+                    e
+                );
+            }
+        }
 
         self.webrtc_session = Some(webrtc_session);
         self.session_started = true;
@@ -1986,6 +2877,106 @@ impl WebRtcWhipProcessor {
         // Uses pollster::block_on() internally (<20µs overhead)
         self.webrtc_session.as_mut().unwrap()
             .write_audio_sample(sample)?;
+
+        Ok(())
+    }
+
+    /// Collects and logs RTCP statistics from the WebRTC peer connection.
+    /// Calculates bitrates from delta of bytes sent since last measurement.
+    fn log_rtcp_stats(&mut self) -> Result<()> {
+        let webrtc_session = self.webrtc_session.as_ref()
+            .ok_or_else(|| StreamError::Runtime("WebRTC session not initialized".into()))?;
+
+        // Get stats from peer connection (async operation, run in Tokio runtime)
+        let stats = webrtc_session.get_stats()?;
+
+        let mut video_bytes_sent = 0u64;
+        let mut audio_bytes_sent = 0u64;
+        let mut video_packets_sent = 0u64;
+        let mut audio_packets_sent = 0u64;
+
+        // Iterate over stats to find OutboundRTP for video and audio
+        for (_id, stat_type) in stats.reports.iter() {
+            match stat_type {
+                webrtc::stats::StatsReportType::OutboundRTP(outbound) => {
+                    if outbound.kind == "video" {
+                        video_bytes_sent = outbound.bytes_sent;
+                        video_packets_sent = outbound.packets_sent;
+                        tracing::debug!(
+                            "[WebRTC Stats] Video OutboundRTP - bytes_sent: {}, packets_sent: {}, header_bytes_sent: {}",
+                            outbound.bytes_sent,
+                            outbound.packets_sent,
+                            outbound.header_bytes_sent
+                        );
+                    } else if outbound.kind == "audio" {
+                        audio_bytes_sent = outbound.bytes_sent;
+                        audio_packets_sent = outbound.packets_sent;
+                        tracing::debug!(
+                            "[WebRTC Stats] Audio OutboundRTP - bytes_sent: {}, packets_sent: {}, header_bytes_sent: {}",
+                            outbound.bytes_sent,
+                            outbound.packets_sent,
+                            outbound.header_bytes_sent
+                        );
+                    }
+                }
+                webrtc::stats::StatsReportType::RemoteInboundRTP(remote_inbound) => {
+                    // These stats come from Cloudflare's RTCP receiver reports
+                    // They tell us what Cloudflare is actually receiving
+                    tracing::debug!(
+                        "[WebRTC Stats] RemoteInboundRTP ({}) - packets_received: {}, packets_lost: {}",
+                        remote_inbound.kind,
+                        remote_inbound.packets_received,
+                        remote_inbound.packets_lost
+                    );
+                }
+                _ => {
+                    // Ignore other stat types for now
+                }
+            }
+        }
+
+        // Calculate bitrates from deltas (bytes sent since last measurement)
+        if self.last_stats_time_ns > 0 {
+            let current_time_ns = MediaClock::now().as_nanos() as i64;
+            let delta_time_s = (current_time_ns - self.last_stats_time_ns) as f64 / 1_000_000_000.0;
+
+            let video_bytes_delta = video_bytes_sent.saturating_sub(self.last_video_bytes_sent);
+            let audio_bytes_delta = audio_bytes_sent.saturating_sub(self.last_audio_bytes_sent);
+
+            let video_packets_delta = video_packets_sent.saturating_sub(self.last_video_packets_sent);
+            let audio_packets_delta = audio_packets_sent.saturating_sub(self.last_audio_packets_sent);
+
+            // Calculate bitrates (bits per second)
+            let video_bitrate_bps = (video_bytes_delta as f64 * 8.0) / delta_time_s;
+            let audio_bitrate_bps = (audio_bytes_delta as f64 * 8.0) / delta_time_s;
+
+            // Calculate packet rates (packets per second)
+            let video_packet_rate = video_packets_delta as f64 / delta_time_s;
+            let audio_packet_rate = audio_packets_delta as f64 / delta_time_s;
+
+            tracing::info!(
+                "[WebRTC Stats] ========== OUTBOUND STATS ==========\n\
+                 Video: {:.2} Mbps ({:.0} pps, {} packets, {:.2} MB total)\n\
+                 Audio: {:.2} kbps ({:.0} pps, {} packets, {:.2} KB total)\n\
+                 Total: {:.2} Mbps\n\
+                 ===========================================",
+                video_bitrate_bps / 1_000_000.0,
+                video_packet_rate,
+                video_packets_sent,
+                video_bytes_sent as f64 / 1_000_000.0,
+                audio_bitrate_bps / 1_000.0,
+                audio_packet_rate,
+                audio_packets_sent,
+                audio_bytes_sent as f64 / 1_000.0,
+                (video_bitrate_bps + audio_bitrate_bps) / 1_000_000.0
+            );
+        }
+
+        // Update last stats for next delta calculation
+        self.last_video_bytes_sent = video_bytes_sent;
+        self.last_audio_bytes_sent = audio_bytes_sent;
+        self.last_video_packets_sent = video_packets_sent;
+        self.last_audio_packets_sent = audio_packets_sent;
 
         Ok(())
     }

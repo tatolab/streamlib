@@ -91,6 +91,7 @@ hyper = { workspace = true }  # HTTP client core
 hyper-rustls = { version = "0.27", features = ["http2", "native-tokio", "ring"] }  # TLS support (ring for crypto)
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }  # HTTP client utilities
 http-body-util = "0.1"  # Body handling utilities
+rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
 
 # Optional: Debug overlay dependencies
 vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }
