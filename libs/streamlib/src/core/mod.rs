@@ -14,6 +14,7 @@ pub mod runtime;
 pub mod schema;
 pub mod scheduling;
 pub mod processors;
+pub mod streaming;
 pub mod sync;
 pub mod texture;
 pub mod topology;
@@ -95,4 +96,8 @@ pub use scheduling::{
 };
 pub use loop_utils::{
     shutdown_aware_loop, LoopControl,
+};
+pub use streaming::{
+    OpusEncoder, AudioEncoderOpus, AudioEncoderConfig, EncodedAudioFrame,
+    convert_video_to_samples, convert_audio_to_sample, RtpTimestampCalculator,
 };

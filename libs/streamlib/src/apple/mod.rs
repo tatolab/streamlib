@@ -7,6 +7,8 @@ pub mod media_clock;
 pub mod metal;
 pub mod texture;
 pub mod wgpu_bridge;
+pub mod videotoolbox;
+pub mod webrtc;
 
 pub mod processors;
 
@@ -36,7 +38,16 @@ pub use processors::{
     AppleDisplayProcessor,
     AppleAudioOutputProcessor,
     AppleMp4WriterProcessor,
+    // WebRTC WHIP processor:
+    WebRtcWhipProcessor,
+    WebRtcWhipConfig,
 };
+
+// Re-export webrtc types
+pub use webrtc::{WhipClient, WhipConfig, WebRtcSession};
+
+// Re-export videotoolbox types (VideoEncoderConfig and H264Profile now come from videotoolbox module)
+pub use videotoolbox::{VideoCodec, H264Profile, VideoEncoderConfig, VideoToolboxEncoder};
 
 #[cfg(test)]
 mod tests {

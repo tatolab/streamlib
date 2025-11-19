@@ -1,0 +1,27 @@
+[package]
+name = "h264-opus-validator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+webrtc = "0.11"
+tokio = { version = "1", features = ["full"] }
+opus = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+hyper-rustls = { version = "0.27", features = ["http2", "native-tokio", "ring"] }
+http-body-util = "0.1"
+rustls = { version = "0.23", features = ["ring"] }
+bytes = "1"
+url = "2"
+
+# VideoToolbox for H.264 encoding (macOS only)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-video = "0.3.2"
+objc2-core-media = "0.3.2"
+objc2-foundation = "0.3.2"
+core-foundation = "0.10"
+libc = "0.2"

@@ -153,7 +153,7 @@ impl<T: PortMessage> StreamOutput<T> {
             if !producers.is_empty() {
                 let wakeups = &*self.downstream_wakeups.get();
                 if !wakeups.is_empty() {
-                    tracing::info!("[StreamOutput] Sending {} wakeup events to downstream processors", wakeups.len());
+                    tracing::trace!("[StreamOutput] Sending {} wakeup events to downstream processors", wakeups.len());
                     for wakeup_tx in wakeups.iter() {
                         if let Err(e) = wakeup_tx.send(WakeupEvent::DataAvailable) {
                             tracing::error!("[StreamOutput] Failed to send wakeup: {}", e);

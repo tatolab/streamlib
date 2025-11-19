@@ -81,16 +81,18 @@ rubato = "0.16"
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
 
-# WebRTC streaming dependencies
-webrtc = "0.14.0"  # WebRTC implementation for real-time streaming
+# WebRTC streaming dependencies (using webrtc-rs)
+webrtc = "0.14.0"  # Full-featured WebRTC implementation
 bytes = "1.5"      # Zero-copy byte buffers for RTP samples
 fastrand = "2.0"   # Fast PRNG for RTP timestamp base
+local-ip-address = "0.6"  # Network interface enumeration for ICE candidates
 
 # HTTP client for WHIP signaling (reuses existing hyper from workspace)
 hyper = { workspace = true }  # HTTP client core
 hyper-rustls = { version = "0.27", features = ["http2", "native-tokio", "ring"] }  # TLS support (ring for crypto)
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }  # HTTP client utilities
 http-body-util = "0.1"  # Body handling utilities
+rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
 
 # Optional: Debug overlay dependencies
 vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }

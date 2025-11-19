@@ -43,6 +43,9 @@ pub use core::{
     is_processor_registered, unregister_processor,
     Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView,
     ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge,
+    // Streaming utilities:
+    OpusEncoder, AudioEncoderOpus, AudioEncoderConfig, EncodedAudioFrame,
+    convert_video_to_samples, convert_audio_to_sample, RtpTimestampCalculator,
 };
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -55,6 +58,18 @@ pub use apple::{
     AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
+    // WebRTC WHIP processor and config types:
+    WebRtcWhipProcessor,
+    WebRtcWhipConfig,
+    WhipConfig,
+    WebRtcSession,
+    WhipClient,
+    // VideoToolbox encoder and config types:
+    VideoToolboxEncoder,
+    VideoEncoderConfig,
+    VideoCodec,
+    H264Profile,
+    // Metal/wgpu utilities:
     WgpuBridge,
     MetalDevice,
     configure_macos_event_loop,
