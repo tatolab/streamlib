@@ -9,7 +9,6 @@ members = [
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare
-    "examples/h264-validator", # Test: H.264 keyframe validation
     "examples/test-main-thread-dispatch", # Test: Main thread dispatch validation
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]

@@ -78,6 +78,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 use objc2_core_video::{CVPixelBuffer, CVPixelBufferLockFlags};
 use objc2::runtime::ProtocolObject;
+use webrtc::track::track_local::TrackLocalWriter;
 use serde::{Deserialize, Serialize};
 
 // WHIP HTTP client imports
@@ -672,13 +673,24 @@ extern "C" fn compression_output_callback(
             return;
         }
 
-        // VideoToolbox outputs elementary stream (raw NAL units)
-        // We need to convert to AVCC format (length-prefixed NAL units)
-        // CRITICAL: Each NAL unit must be prefixed with its 4-byte length in big-endian
+        // VideoToolbox ALREADY outputs AVCC format (4-byte length-prefixed NAL units)
+        // when kVTCompressionPropertyKey_H264EncoderMode is set to baseline/main/high
+        // DO NOT call convert_elementary_stream_to_avcc() - that would double-wrap the data!
 
-        // For now, assume single NAL unit per sample (common for WebRTC)
-        // TODO: Handle multiple NAL units per sample (e.g., SPS+PPS+IDR in keyframes)
-        let avcc_data = convert_elementary_stream_to_avcc(&raw_data);
+        // Verify this is AVCC format by checking if first 4 bytes form a valid length
+        if data_length >= 8 {
+            let first_nal_length = u32::from_be_bytes([raw_data[0], raw_data[1], raw_data[2], raw_data[3]]) as usize;
+            if first_nal_length + 4 <= data_length {
+                let nal_type = raw_data[4] & 0x1F;
+                tracing::trace!("[VideoToolbox] AVCC format confirmed: first NAL length={}, type={}", first_nal_length, nal_type);
+            } else {
+                tracing::warn!("[VideoToolbox] Unexpected data format: first 4 bytes = {:02x} {:02x} {:02x} {:02x} (length={})",
+                    raw_data[0], raw_data[1], raw_data[2], raw_data[3], first_nal_length);
+            }
+        }
+
+        // Use raw_data directly - it's already in AVCC format
+        let avcc_data = raw_data;
 
         // Check if this is a keyframe using CMSampleBuffer attachments (Apple's official method)
         // The kCMSampleAttachmentKey_NotSync key is ONLY present for non-sync frames (P/B frames)
@@ -1818,11 +1830,11 @@ struct WebRtcSession {
     /// RTCPeerConnection (handles ICE, DTLS, RTP/RTCP)
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
 
-    /// Video track (H.264 @ 90kHz)
-    video_track: Option<Arc<webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample>>,
+    /// Video track (H.264 @ 90kHz) - using TrackLocalStaticRTP for manual PT control
+    video_track: Option<Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>>,
 
-    /// Audio track (Opus @ 48kHz)
-    audio_track: Option<Arc<webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample>>,
+    /// Audio track (Opus @ 48kHz) - using TrackLocalStaticRTP for manual PT control
+    audio_track: Option<Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>>,
 
     /// Flag indicating ICE connection is ready (tracks are bound with correct PT)
     /// CRITICAL: Must be true before calling write_sample() to ensure PT is set correctly
@@ -2089,11 +2101,14 @@ impl WebRtcSession {
             }));
 
             // Create video track (H.264)
-            // Following play-from-disk-h264 example - only specify MIME type, use defaults for rest
+            // Using TrackLocalStaticRTP for WHIP - we manually construct RTP packets with PT=102
             let video_track = Arc::new(
-                webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample::new(
+                webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP::new(
                     webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
                         mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
+                        clock_rate: 90000,
+                        channels: 0,
+                        sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f".to_owned(),
                         ..Default::default()
                     },
                     "video".to_owned(),
@@ -2108,7 +2123,7 @@ impl WebRtcSession {
                 .map_err(|e| StreamError::Configuration(format!("Failed to add video track: {}", e)))?;
 
             // TELEMETRY: Video track binding
-            tracing::info!("[TELEMETRY:VIDEO_TRACK_ADDED] track_id=video");
+            // tracing::info!("[TELEMETRY:VIDEO_TRACK_ADDED] track_id=video");
             let video_params = video_rtp_sender.get_parameters().await;
 
             // Log all codec parameters
@@ -2133,11 +2148,14 @@ impl WebRtcSession {
             }
 
             // Create audio track (Opus)
-            // Following play-from-disk-h264 example - only specify MIME type, use defaults for rest
+            // Using TrackLocalStaticRTP for WHIP - we manually construct RTP packets with PT=111
             let audio_track = Arc::new(
-                webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample::new(
+                webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP::new(
                     webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
                         mime_type: webrtc::api::media_engine::MIME_TYPE_OPUS.to_owned(),
+                        clock_rate: 48000,
+                        channels: 2,
+                        sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
                         ..Default::default()
                     },
                     "audio".to_owned(),
@@ -2176,12 +2194,18 @@ impl WebRtcSession {
                 tracing::warn!("[TELEMETRY:AUDIO_ENCODING] NO_ENCODING_FOUND");
             }
 
-            // Set all transceivers to send-only (WHIP ingestion - we're publishing to Cloudflare, not receiving)
+            // Set all transceivers with tracks to send-only (WHIP ingestion - we're publishing to Cloudflare, not receiving)
+            // CRITICAL: Only set direction for transceivers that have tracks attached
+            // Setting empty transceivers to SendOnly can confuse decoders
             let transceivers = peer_connection.get_transceivers().await;
             for transceiver in transceivers {
-                transceiver.set_direction(webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Sendonly).await;
+                if transceiver.sender().await.track().await.is_some() {
+                    transceiver.set_direction(webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Sendonly).await;
+                    tracing::info!("[WebRTC] Set transceiver to SendOnly (has track attached)");
+                } else {
+                    tracing::warn!("[WebRTC] Skipping transceiver without track");
+                }
             }
-            tracing::info!("[WebRTC] Set all transceivers to SendOnly for WHIP ingestion");
 
             // Return tuple of (peer_connection, video_track, audio_track, ice_connected_flag)
             Ok::<_, StreamError>((peer_connection, video_track, audio_track, ice_connected_flag))
@@ -2283,14 +2307,26 @@ impl WebRtcSession {
                 .await
                 .map_err(|e| StreamError::Runtime(format!("Failed to set local description: {}", e)))?;
 
-            // Get SDP string
+            // CRITICAL: Wait for ICE gathering to complete
+            // Without this, the SDP will not contain ICE candidates
+            // See: https://github.com/ggarber/whip-go/blob/master/whip.go#L67-L70
+            tracing::debug!("[WebRTC] Waiting for ICE gathering to complete...");
+
+            // Use gathering_complete_promise() instead of hardcoded sleep
+            let mut done_rx = self.peer_connection.gathering_complete_promise().await;
+            let _ = done_rx.recv().await;
+
+            tracing::debug!("[WebRTC] ICE gathering completed");
+
+            // Get updated SDP with ICE candidates included
             let local_desc = self
                 .peer_connection
                 .local_description()
                 .await
                 .ok_or_else(|| StreamError::Runtime("No local description".into()))?;
 
-            tracing::debug!("[WebRTC] SDP offer created successfully");
+            let candidate_count = local_desc.sdp.matches("a=candidate:").count();
+            tracing::debug!("[WebRTC] SDP offer created successfully with {} ICE candidates", candidate_count);
             Ok(local_desc.sdp)
         })
     }
@@ -2423,66 +2459,170 @@ impl WebRtcSession {
     /// # Arguments
     /// * `samples` - H.264 NAL units (one Sample per NAL, without start codes)
     fn write_video_samples(&mut self, samples: Vec<webrtc::media::Sample>) -> Result<()> {
-        // CRITICAL: Wait for ICE connection before writing samples
-        // This ensures track binding is complete and PT values are set correctly.
-        // Without this, PT=0 will be used and Cloudflare will reject packets!
-        if !self.ice_connected.load(std::sync::atomic::Ordering::Acquire) {
-            tracing::debug!("[WebRTC] Skipping video write - waiting for ICE connection");
-            return Ok(()); // Silently skip until connected
-        }
+        // NOTE: No ICE connection check needed - we construct RTP packets manually with hardcoded PT values
+        // PT=102 is set directly in RTP packet header, not through track binding
 
         let track = self
             .video_track
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("Video track not initialized".into()))?;
 
-        static FIRST_WRITE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-        let is_first = FIRST_WRITE.swap(false, std::sync::atomic::Ordering::Relaxed);
+        // Track first write and periodic telemetry
+        static VIDEO_SAMPLE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static VIDEO_SEQ_NUM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        static VIDEO_TIMESTAMP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-        if is_first {
-            tracing::info!("[WebRTC] 🎥 FIRST VIDEO WRITE after ICE Connected!");
-            tracing::info!("[WebRTC]    Samples: {}, Total bytes: {}",
+        let counter = VIDEO_SAMPLE_COUNTER.fetch_add(samples.len() as u64, std::sync::atomic::Ordering::Relaxed);
+
+        if counter == 0 {
+            tracing::info!("[WebRTC] 🎬 FIRST VIDEO WRITE after ICE Connected!");
+            tracing::info!("[WebRTC]    NAL units: {}, First NAL bytes: {}",
                 samples.len(),
-                samples.iter().map(|s| s.data.len()).sum::<usize>());
-
-            // VALIDATION: Check first batch of H.264 NAL units
-            tracing::info!("[WebRTC] 🔍 Validating H.264 NAL units...");
-            for (idx, sample) in samples.iter().enumerate() {
-                Self::validate_and_log_h264_nal(&sample.data, idx);
-            }
-        } else {
-            tracing::debug!("[WebRTC] Writing {} video samples ({} bytes)",
+                samples.first().map(|s| s.data.len()).unwrap_or(0));
+        } else if counter % 30 == 0 {
+            tracing::debug!("[TELEMETRY:VIDEO_SAMPLE_WRITE] sample_num={}, nal_count={}, total_bytes={}",
+                counter,
                 samples.len(),
                 samples.iter().map(|s| s.data.len()).sum::<usize>());
         }
 
-        // Write each sample (NAL unit) to the track
-        // MUST use Tokio runtime for WebRTC operations
+        // RFC 6184 H.264 RTP Packetization
+        // - Single NAL Unit mode: NAL < MTU (send as-is)
+        // - FU-A mode: NAL >= MTU (fragment into multiple packets)
+        use webrtc::rtp::packet::Packet as RtpPacket;
+        use webrtc::rtp::header::Header as RtpHeader;
+
+        const MAX_PAYLOAD_SIZE: usize = 1200; // Conservative MTU minus headers
+        let timestamp_increment = 90000 / 30; // H.264 @ 90kHz, 30fps
+        let current_timestamp = VIDEO_TIMESTAMP.load(std::sync::atomic::Ordering::Relaxed);
+
         for (i, sample) in samples.iter().enumerate() {
-            // TELEMETRY: Track sample writing (only log first sample to avoid spam)
-            if i == 0 && is_first {
-                tracing::info!("[TELEMETRY:VIDEO_SAMPLE_WRITE] sample_num={}, bytes={}, duration_ms={:?}",
-                    i,
-                    sample.data.len(),
-                    sample.duration.as_millis());
+            let is_last_nal_in_frame = i == samples.len() - 1;
+
+            // Decode NAL unit type (bits 0-4 of first byte)
+            let nal_type = sample.data[0] & 0x1F;
+            let nal_type_name = match nal_type {
+                1 => "P-frame (non-IDR)",
+                5 => "IDR (keyframe)",
+                6 => "SEI",
+                7 => "SPS",
+                8 => "PPS",
+                _ => "Other",
+            };
+
+            // Log NAL unit types for debugging decoder issues
+            if counter <= 10 || nal_type == 5 || nal_type == 7 || nal_type == 8 {
+                tracing::info!("[WebRTC] 🎬 NAL unit #{}: type={} ({}), size={} bytes",
+                    counter, nal_type, nal_type_name, sample.data.len());
             }
 
-            let result = self._runtime.block_on(async {
-                track
-                    .write_sample(sample)
-                    .await
-                    .map_err(|e| StreamError::Runtime(format!("Failed to write video sample {}: {}", i, e)))
-            });
+            if sample.data.len() <= MAX_PAYLOAD_SIZE {
+                // Single NAL Unit mode - send entire NAL as one RTP packet
+                let seq_num = VIDEO_SEQ_NUM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            if let Err(ref e) = result {
-                tracing::error!("[WebRTC] ❌ Failed to write video sample {}: {}", i, e);
-                return result;
+                let rtp_packet = RtpPacket {
+                    header: RtpHeader {
+                        version: 2,
+                        padding: false,
+                        extension: false,
+                        marker: is_last_nal_in_frame, // Mark last NAL of frame
+                        payload_type: 102,  // H.264 (registered as PT=102)
+                        sequence_number: seq_num as u16,
+                        timestamp: current_timestamp,
+                        ssrc: 0,  // Will be set by track
+                        ..Default::default()
+                    },
+                    payload: sample.data.clone(),
+                };
+
+                self._runtime.block_on(async {
+                    track
+                        .write_rtp(&rtp_packet)
+                        .await
+                        .map_err(|e| StreamError::Runtime(format!("Failed to write video RTP: {}", e)))
+                })?;
+
+                if counter == 0 && i == 0 {
+                    tracing::info!("[WebRTC] ✅ Successfully wrote first video RTP packet (Single NAL, {} bytes)", sample.data.len());
+                } else if counter % 30 == 0 && i == 0 {
+                    tracing::info!("[WebRTC] 📊 Video RTP packet #{} sent (Single NAL, {} bytes)", counter, sample.data.len());
+                }
+            } else {
+                // FU-A (Fragmentation Unit) mode - split NAL into multiple RTP packets
+                // RFC 6184 Section 5.8: FU-A format
+
+                let nal_header = sample.data[0]; // First byte is NAL header
+                let nal_payload = &sample.data[1..]; // Rest is NAL payload
+
+                // FU Indicator: F=0, NRI from NAL header, Type=28 (FU-A)
+                let fu_indicator = (nal_header & 0xE0) | 28;
+
+                // FU Header: S (start), E (end), R=0, Type from NAL header
+                let nal_type = nal_header & 0x1F;
+
+                let mut offset = 0;
+                let mut frag_count = 0;
+
+                while offset < nal_payload.len() {
+                    let remaining = nal_payload.len() - offset;
+                    let payload_size = remaining.min(MAX_PAYLOAD_SIZE - 2); // -2 for FU indicator + header
+
+                    let is_start = offset == 0;
+                    let is_end = offset + payload_size >= nal_payload.len();
+
+                    // FU Header: S | E | R | Type
+                    let fu_header =
+                        (if is_start { 0x80 } else { 0x00 }) |  // S bit
+                        (if is_end { 0x40 } else { 0x00 }) |    // E bit
+                        nal_type;                                // Type
+
+                    // Build FU-A payload: FU indicator + FU header + NAL fragment
+                    let mut fu_payload = Vec::with_capacity(2 + payload_size);
+                    fu_payload.push(fu_indicator);
+                    fu_payload.push(fu_header);
+                    fu_payload.extend_from_slice(&nal_payload[offset..offset + payload_size]);
+
+                    let seq_num = VIDEO_SEQ_NUM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                    let rtp_packet = RtpPacket {
+                        header: RtpHeader {
+                            version: 2,
+                            padding: false,
+                            extension: false,
+                            marker: is_end && is_last_nal_in_frame, // Mark last fragment of last NAL
+                            payload_type: 102,
+                            sequence_number: seq_num as u16,
+                            timestamp: current_timestamp,
+                            ssrc: 0,
+                            ..Default::default()
+                        },
+                        payload: fu_payload.into(),
+                    };
+
+                    self._runtime.block_on(async {
+                        track
+                            .write_rtp(&rtp_packet)
+                            .await
+                            .map_err(|e| StreamError::Runtime(format!("Failed to write video RTP: {}", e)))
+                    })?;
+
+                    if counter == 0 && i == 0 && frag_count == 0 {
+                        tracing::info!("[WebRTC] ✅ Successfully wrote first video RTP packet (FU-A mode, NAL size {} bytes, fragments ~{})",
+                            sample.data.len(),
+                            (sample.data.len() + MAX_PAYLOAD_SIZE - 1) / MAX_PAYLOAD_SIZE);
+                    } else if counter % 30 == 0 && i == 0 && frag_count == 0 {
+                        tracing::info!("[WebRTC] 📊 Video RTP packet #{} sent (FU-A mode, NAL size {} bytes)", counter, sample.data.len());
+                    }
+
+                    offset += payload_size;
+                    frag_count += 1;
+                }
             }
         }
 
-        if is_first {
-            tracing::info!("[WebRTC] ✅ Successfully wrote first batch of {} video samples", samples.len());
-        }
+        // Increment timestamp for next frame
+        VIDEO_TIMESTAMP.fetch_add(timestamp_increment, std::sync::atomic::Ordering::Relaxed);
+
         Ok(())
     }
 
@@ -2493,13 +2633,8 @@ impl WebRtcSession {
     /// # Arguments
     /// * `sample` - Opus-encoded audio frame
     fn write_audio_sample(&mut self, sample: webrtc::media::Sample) -> Result<()> {
-        // CRITICAL: Wait for ICE connection before writing samples
-        // This ensures track binding is complete and PT values are set correctly.
-        // Without this, PT=0 will be used and Cloudflare will reject packets!
-        if !self.ice_connected.load(std::sync::atomic::Ordering::Acquire) {
-            tracing::debug!("[WebRTC] Skipping audio write - waiting for ICE connection");
-            return Ok(()); // Silently skip until connected
-        }
+        // NOTE: No ICE connection check needed - we construct RTP packets manually with hardcoded PT values
+        // PT=111 is set directly in RTP packet header, not through track binding
 
         let track = self
             .audio_track
@@ -2508,6 +2643,9 @@ impl WebRtcSession {
 
         // Track first write and periodic telemetry
         static AUDIO_SAMPLE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static AUDIO_SEQ_NUM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        static AUDIO_TIMESTAMP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
         let counter = AUDIO_SAMPLE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if counter == 0 {
@@ -2522,21 +2660,44 @@ impl WebRtcSession {
                 sample.duration.as_millis());
         }
 
+        // Construct RTP packet with PT=111 for WHIP unidirectional flow
+        use webrtc::rtp::packet::Packet as RtpPacket;
+        use webrtc::rtp::header::Header as RtpHeader;
+
+        let timestamp_increment = 960; // 20ms @ 48kHz = 960 samples
+
+        let rtp_packet = RtpPacket {
+            header: RtpHeader {
+                version: 2,
+                padding: false,
+                extension: false,
+                marker: false,
+                payload_type: 111,  // Opus (registered as PT=111)
+                sequence_number: AUDIO_SEQ_NUM.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u16,
+                timestamp: AUDIO_TIMESTAMP.fetch_add(timestamp_increment, std::sync::atomic::Ordering::Relaxed),
+                ssrc: 0,  // Will be set by track
+                ..Default::default()
+            },
+            payload: sample.data,
+        };
+
         // MUST use Tokio runtime for WebRTC operations
         let result = self._runtime.block_on(async {
             track
-                .write_sample(&sample)
+                .write_rtp(&rtp_packet)
                 .await
-                .map_err(|e| StreamError::Runtime(format!("Failed to write audio sample: {}", e)))
+                .map_err(|e| StreamError::Runtime(format!("Failed to write audio RTP: {}", e)))
         });
 
         if let Err(ref e) = result {
-            tracing::error!("[WebRTC] ❌ Failed to write audio sample {}: {}", counter, e);
+            tracing::error!("[WebRTC] ❌ Failed to write audio RTP {}: {}", counter, e);
         } else if counter == 0 {
-            tracing::info!("[WebRTC] ✅ Successfully wrote first audio sample");
+            tracing::info!("[WebRTC] ✅ Successfully wrote first audio RTP packet with PT=111");
+        } else if counter % 50 == 0 {
+            tracing::info!("[WebRTC] 📊 Audio RTP packet #{} sent (PT=111, {} bytes)", counter, rtp_packet.payload.len());
         }
 
-        result
+        result.map(|_| ())
     }
 
     /// Gets RTCP statistics from the peer connection.
@@ -2673,9 +2834,9 @@ impl WebRtcWhipProcessor {
         Ok(())
     }
 
-    /// Main processing loop: reads video/audio frames, encodes them, and streams via WebRTC
+    /// Main processing loop: reads video and audio frames, encodes them, and streams via WebRTC
     fn process(&mut self) -> Result<()> {
-        // Read latest video and audio frames from input ports
+        // Read latest frames from input ports
         let video_frame = self.video_in.read_latest();
         let audio_frame = self.audio_in.read_latest();
 
@@ -2688,7 +2849,6 @@ impl WebRtcWhipProcessor {
         );
 
         // Start session on first frame (video or audio)
-        // WebRTC can handle streams that start with only one track and add the other later
         if !self.session_started && (video_frame.is_some() || audio_frame.is_some()) {
             tracing::info!("[WebRTC] Starting session - received first frame");
             self.start_session()?;

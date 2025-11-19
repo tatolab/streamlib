@@ -124,7 +124,7 @@ fn main() -> Result<()> {
         camera.output_port::<VideoFrame>("video"),
         webrtc.input_port::<VideoFrame>("video_in"),
     )?;
-    println!("   ✓ Video connected");
+    println!("   ✓ Camera → WebRTC");
 
     println!("   audio_capture.audio → resampler.audio_in");
     runtime.connect(
