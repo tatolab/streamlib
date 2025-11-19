@@ -14,7 +14,7 @@ use crate::core::{
 };
 use streamlib_macros::StreamProcessor;
 use crate::apple::videotoolbox::VideoToolboxDecoder;
-use crate::apple::webrtc::{WhepClient, WhepConfig, WebRtcSession, SampleCallback};
+use crate::apple::webrtc::{WhepClient, WhepConfig, WebRtcSession};
 use crate::core::streaming::{OpusDecoder, H264RtpDepacketizer};
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
@@ -73,10 +73,10 @@ pub struct WebRtcWhepProcessor {
     audio_decoder: Option<OpusDecoder>,
 
     // RTP depacketization
-    h264_depacketizer: Option<H264RtpDepacketizer>,
+    h264_depacketizer: Arc<Mutex<H264RtpDepacketizer>>,
 
     // WHEP and WebRTC
-    whip_client: Option<Arc<Mutex<WhepClient>>>,
+    whep_client: Option<Arc<Mutex<WhepClient>>>,
     webrtc_session: Option<WebRtcSession>,
 
     // Frame counters
@@ -87,6 +87,9 @@ pub struct WebRtcWhepProcessor {
     // These are written by WebRTC callbacks, read by process()
     pending_video_nals: Arc<Mutex<Vec<Bytes>>>,
     pending_audio_packets: Arc<Mutex<Vec<Bytes>>>,
+
+    // ICE candidate queue (populated by callback, sent via WHEP client)
+    pending_ice_candidates: Arc<Mutex<Vec<String>>>,
 }
 
 impl WebRtcWhepProcessor {
@@ -97,7 +100,6 @@ impl WebRtcWhepProcessor {
 
         // Initialize decoders
         self.audio_decoder = Some(OpusDecoder::new(48000, 2)?);
-        self.h264_depacketizer = Some(H264RtpDepacketizer::new());
 
         // VideoToolboxDecoder will be created lazily when we receive SPS/PPS
 
@@ -131,26 +133,25 @@ impl WebRtcWhepProcessor {
         // 1. Create WHEP client
         let mut whep_client = WhepClient::new(self.config.whep.clone())?;
 
-        // 2. Create WebRTC session in receive mode
-        //    This will generate SDP offer with recvonly transceivers for H.264 and Opus
+        // 2. Set up callbacks for WebRTC session
+        let pending_ice = Arc::clone(&self.pending_ice_candidates);
+        let on_ice_candidate = move |candidate: String| {
+            tracing::debug!("[WHEP ICE] Gathered candidate: {}", candidate);
+            pending_ice.lock().unwrap().push(candidate);
+        };
+
         let pending_nals = Arc::clone(&self.pending_video_nals);
         let pending_audio = Arc::clone(&self.pending_audio_packets);
-        let h264_depacketizer = Arc::new(Mutex::new(H264RtpDepacketizer::new()));
+        let h264_depacketizer = Arc::clone(&self.h264_depacketizer);
 
-        // Note: SampleCallback signature is: Fn(String, Bytes, u32) -> (media_type, payload, timestamp)
-        // We don't get sequence number from the callback, only timestamp
-        let sample_callback: SampleCallback = Arc::new(move |media_type, rtp_payload, timestamp| {
+        let on_sample = move |media_type: String, rtp_payload: Bytes, timestamp: u32| {
             match media_type.as_str() {
                 "video" => {
-                    // For H.264 RTP depacketization, we need sequence numbers
-                    // Since SampleCallback doesn't provide them, we'll track them internally
-                    // or use timestamp-based reassembly
-
-                    // For now, store raw RTP payload and process later
-                    // TODO: Extract seq num from RTP header if available
+                    // Depacketize H.264 RTP → NAL units
                     let mut depacketizer = h264_depacketizer.lock().unwrap();
 
-                    // Fake sequence number (just incrementing) - not ideal but workable for ordered delivery
+                    // Fake sequence number (monotonic increment) - webrtc-rs doesn't expose seq nums via callback
+                    // This works for in-order delivery but won't detect packet loss
                     static FAKE_SEQ: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
                     let seq_num = FAKE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -177,40 +178,50 @@ impl WebRtcWhepProcessor {
                     tracing::debug!("[WHEP RTP] Unknown media type: {}", media_type);
                 }
             }
-        });
+        };
 
-        let webrtc_session = WebRtcSession::new_receive(sample_callback, ctx)?;
+        // 3. Create WebRTC session in receive mode
+        let mut webrtc_session = WebRtcSession::new_receive(on_ice_candidate, on_sample)?;
 
-        // 3. Get SDP offer from session
-        let sdp_offer = webrtc_session.get_local_sdp()?;
+        // 4. Create SDP offer
+        let sdp_offer = webrtc_session.create_offer()?;
         tracing::debug!("[WebRtcWhepProcessor] Generated SDP offer:\n{}", sdp_offer);
 
-        // 4. POST offer to WHEP server, receive answer/counter-offer
+        // 5. POST offer to WHEP server, receive answer/counter-offer
         let (sdp_answer, is_counter_offer) = whep_client.post_offer(&sdp_offer)?;
 
         if is_counter_offer {
-            tracing::warn!("[WebRtcWhepProcessor] Received counter-offer (406) - client should accept server's proposal");
-            // TODO: Handle counter-offer by creating new offer matching server's requirements
+            tracing::warn!("[WebRtcWhepProcessor] Received counter-offer (406) - not yet supported");
             return Err(StreamError::Runtime("WHEP counter-offer not yet supported".into()));
         }
 
         tracing::debug!("[WebRtcWhepProcessor] Received SDP answer:\n{}", sdp_answer);
 
-        // 5. Set remote SDP answer
-        webrtc_session.set_remote_sdp(&sdp_answer)?;
+        // 6. Set remote SDP answer
+        webrtc_session.set_remote_answer(&sdp_answer)?;
 
-        // 6. Collect local ICE candidates and send to server
-        let ice_candidates = webrtc_session.gather_ice_candidates()?;
-        tracing::info!("[WebRtcWhepProcessor] Gathered {} ICE candidates", ice_candidates.len());
+        // 7. Wait a bit for ICE candidates to be gathered, then send them
+        // In a real implementation, we'd send candidates as they're gathered (trickle ICE)
+        // For now, we'll just wait and send them in a batch
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
-        for candidate in ice_candidates {
+        let candidates = {
+            let mut pending = self.pending_ice_candidates.lock().unwrap();
+            std::mem::take(&mut *pending)
+        };
+
+        tracing::info!("[WebRtcWhepProcessor] Sending {} ICE candidates to WHEP server", candidates.len());
+
+        for candidate in candidates {
             whep_client.queue_ice_candidate(candidate);
         }
 
-        whep_client.send_ice_candidates()?;
+        if let Err(e) = whep_client.send_ice_candidates() {
+            tracing::warn!("[WebRtcWhepProcessor] Failed to send ICE candidates: {}", e);
+        }
 
-        // 7. Store session and client
-        self.whip_client = Some(Arc::new(Mutex::new(whep_client)));
+        // 8. Store session and client
+        self.whep_client = Some(Arc::new(Mutex::new(whep_client)));
         self.webrtc_session = Some(webrtc_session);
 
         tracing::info!("[WebRtcWhepProcessor] ✅ WHEP session started successfully");
@@ -247,7 +258,9 @@ impl WebRtcWhepProcessor {
             // IDR (5) or Non-IDR (1) - decode frame
             if nal_type == 1 || nal_type == 5 {
                 if let Some(decoder) = &mut self.video_decoder {
-                    match decoder.decode(&nal) {
+                    let timestamp_ns = MediaClock::now().as_nanos() as i64;
+
+                    match decoder.decode(&nal, timestamp_ns) {
                         Ok(Some(video_frame)) => {
                             self.video_out.write(video_frame);
                             self.video_frame_count += 1;
@@ -261,7 +274,7 @@ impl WebRtcWhepProcessor {
                         }
                     }
                 } else {
-                    tracing::warn!("[WebRtcWhepProcessor] Received video NAL but decoder not ready");
+                    tracing::debug!("[WebRtcWhepProcessor] Received video NAL but decoder not ready (waiting for SPS/PPS)");
                 }
             }
         }
@@ -302,17 +315,16 @@ impl WebRtcWhepProcessor {
 
         Ok(())
     }
-}
 
-impl Drop for WebRtcWhepProcessor {
-    fn drop(&mut self) {
-        if let Some(whep_client) = &self.whip_client {
+    fn teardown(&mut self) -> Result<()> {
+        if let Some(whep_client) = &self.whep_client {
             if let Ok(client) = whep_client.lock() {
                 if let Err(e) = client.terminate() {
                     tracing::error!("[WebRtcWhepProcessor] Failed to terminate WHEP session: {}", e);
                 }
             }
         }
-        tracing::info!("[WebRtcWhepProcessor] Shut down gracefully");
+        tracing::info!("[WebRtcWhepProcessor] Teardown complete");
+        Ok(())
     }
 }
