@@ -36,7 +36,7 @@ pub use processors::{
     AppleDisplayProcessor,
     AppleAudioOutputProcessor,
     AppleMp4WriterProcessor,
-    // Streaming
+    // WebRTC WHIP processor and config types:
     WebRtcWhipProcessor,
     WebRtcWhipConfig,
     WhipConfig,

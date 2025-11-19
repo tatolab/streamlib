@@ -55,12 +55,14 @@ pub use apple::{
     AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
+    // WebRTC WHIP processor and config types:
     WebRtcWhipProcessor,
     WebRtcWhipConfig,
     WhipConfig,
     VideoEncoderConfig,
     AudioEncoderConfig,
     H264Profile,
+    // Metal/wgpu utilities:
     WgpuBridge,
     MetalDevice,
     configure_macos_event_loop,
