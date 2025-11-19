@@ -59,8 +59,11 @@ pub use apple::{
     WebRtcWhipProcessor,
     WebRtcWhipConfig,
     WhipConfig,
-    VideoEncoderConfig,
     AudioEncoderConfig,
+    // VideoToolbox encoder and config types:
+    VideoToolboxEncoder,
+    VideoEncoderConfig,
+    VideoCodec,
     H264Profile,
     // Metal/wgpu utilities:
     WgpuBridge,

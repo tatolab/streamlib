@@ -2,7 +2,8 @@ use streamlib::{Result, StreamRuntime};
 use streamlib::{
     CameraProcessor, AudioCaptureProcessor, WebRtcWhipProcessor,
     AudioResamplerProcessor, AudioChannelConverterProcessor, BufferRechunkerProcessor,
-    WebRtcWhipConfig, WhipConfig, VideoEncoderConfig, AudioEncoderConfig, H264Profile,
+    WebRtcWhipConfig, WhipConfig, VideoEncoderConfig, AudioEncoderConfig,
+    VideoCodec, H264Profile,
 };
 use streamlib::core::{
     CameraConfig, AudioCaptureConfig,
@@ -103,7 +104,7 @@ fn main() -> Result<()> {
                 fps: 30,
                 bitrate_bps: 2_500_000, // 2.5 Mbps
                 keyframe_interval_frames: 60, // Every 2 seconds @ 30fps
-                profile: H264Profile::Baseline, // Cloudflare requires Baseline
+                codec: VideoCodec::H264(H264Profile::Baseline), // Cloudflare requires Baseline
                 low_latency: true,
             },
             audio: AudioEncoderConfig {

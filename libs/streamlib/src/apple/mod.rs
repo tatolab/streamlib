@@ -7,6 +7,7 @@ pub mod media_clock;
 pub mod metal;
 pub mod texture;
 pub mod wgpu_bridge;
+pub mod videotoolbox;
 
 pub mod processors;
 
@@ -40,10 +41,11 @@ pub use processors::{
     WebRtcWhipProcessor,
     WebRtcWhipConfig,
     WhipConfig,
-    VideoEncoderConfig,
     AudioEncoderConfig,
-    H264Profile,
 };
+
+// Re-export videotoolbox types (VideoEncoderConfig and H264Profile now come from videotoolbox module)
+pub use videotoolbox::{VideoCodec, H264Profile, VideoEncoderConfig, VideoToolboxEncoder};
 
 #[cfg(test)]
 mod tests {
