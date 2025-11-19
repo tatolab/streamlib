@@ -317,6 +317,15 @@ extern "C" {
         sample_size_array: *const usize,
         sample_buffer_out: *mut CMSampleBufferRef,
     ) -> OSStatus;
+
+    pub(super) fn CMSampleBufferSetOutputPresentationTimeStamp(
+        sbuf: CMSampleBufferRef,
+        output_presentation_time_stamp: CMTime,
+    ) -> OSStatus;
+
+    pub(super) fn CVPixelBufferGetIOSurface(
+        pixel_buffer: *const c_void,
+    ) -> *mut objc2_io_surface::IOSurface;
 }
 
 #[link(name = "CoreVideo", kind = "framework")]
