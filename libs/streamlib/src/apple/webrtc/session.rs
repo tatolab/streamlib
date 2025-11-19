@@ -1,6 +1,7 @@
 // WebRTC Session Management
 //
 // Manages WebRTC PeerConnection, tracks, and RTP packetization using webrtc-rs.
+// Supports both send (WHIP) and receive (WHEP) modes.
 
 use crate::core::{StreamError, Result};
 use crate::apple::videotoolbox::EncodedVideoFrame;
@@ -8,14 +9,30 @@ use crate::core::streaming::opus::EncodedAudioFrame;
 use std::sync::Arc;
 use webrtc::track::track_local::TrackLocalWriter;
 
+/// WebRTC session mode (send-only vs receive-only)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebRtcSessionMode {
+    /// WHIP mode: Send video/audio to remote peer (sendonly transceivers)
+    SendOnly,
+    /// WHEP mode: Receive video/audio from remote peer (recvonly transceivers)
+    ReceiveOnly,
+}
+
+/// Callback type for receiving RTP samples in WHEP mode
+/// Arguments: (mime_type, payload, timestamp_rtp)
+pub type SampleCallback = Arc<dyn Fn(String, bytes::Bytes, u32) + Send + Sync>;
+
 pub struct WebRtcSession {
+    /// Session mode (send-only for WHIP, receive-only for WHEP)
+    mode: WebRtcSessionMode,
+
     /// RTCPeerConnection (handles ICE, DTLS, RTP/RTCP)
     peer_connection: Arc<webrtc::peer_connection::RTCPeerConnection>,
 
-    /// Video track (H.264 @ 90kHz) - using TrackLocalStaticRTP for manual PT control
+    /// Video track (H.264 @ 90kHz) - using TrackLocalStaticRTP for manual PT control (WHIP only)
     video_track: Option<Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>>,
 
-    /// Audio track (Opus @ 48kHz) - using TrackLocalStaticRTP for manual PT control
+    /// Audio track (Opus @ 48kHz) - using TrackLocalStaticRTP for manual PT control (WHIP only)
     audio_track: Option<Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>>,
 
     /// Flag indicating ICE connection is ready (tracks are bound with correct PT)
@@ -29,7 +46,7 @@ pub struct WebRtcSession {
 }
 
 impl WebRtcSession {
-    /// Creates a new WebRTC session with H.264 video and Opus audio tracks.
+    /// Creates a new WebRTC session with H.264 video and Opus audio tracks in SEND mode (WHIP).
     ///
     /// # Arguments
     /// * `on_ice_candidate` - Callback invoked when ICE candidates are discovered
@@ -331,9 +348,246 @@ impl WebRtcSession {
         let (peer_connection, video_track, audio_track, ice_connected) = init_result;
 
         Ok(Self {
+            mode: WebRtcSessionMode::SendOnly,
             peer_connection,
             video_track: Some(video_track),
             audio_track: Some(audio_track),
+            ice_connected,
+            _runtime: runtime,
+        })
+    }
+
+    /// Creates a new WebRTC session in RECEIVE mode (WHEP) for playback.
+    ///
+    /// # Arguments
+    /// * `on_ice_candidate` - Callback invoked when ICE candidates are discovered
+    /// * `on_sample` - Callback invoked when RTP samples are received (mime_type, payload, rtp_timestamp)
+    pub fn new_receive<F, S>(on_ice_candidate: F, on_sample: S) -> Result<Self>
+    where
+        F: Fn(String) + Send + Sync + 'static,
+        S: Fn(String, bytes::Bytes, u32) + Send + Sync + 'static,
+    {
+        // Create Tokio runtime for WebRTC background tasks
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("webrtc-tokio-recv")
+            .enable_all()
+            .build()
+            .map_err(|e| StreamError::Runtime(format!("Failed to create Tokio runtime for WebRTC: {}", e)))?;
+
+        tracing::info!("[WebRTC WHEP] Created Tokio runtime with 2 worker threads");
+
+        let on_sample = Arc::new(on_sample);
+
+        // Block on async initialization
+        let init_result = runtime.block_on(async {
+            tracing::debug!("[WebRTC WHEP] Creating MediaEngine and registering codecs...");
+
+            // Create MediaEngine and register only the codecs we use
+            let mut media_engine = webrtc::api::media_engine::MediaEngine::default();
+
+            // Register H.264 video codec (same as WHIP)
+            media_engine
+                .register_codec(
+                    webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecParameters {
+                        capability: webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
+                            mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
+                            clock_rate: 90000,
+                            channels: 0,
+                            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f".to_owned(),
+                            rtcp_feedback: vec![],
+                        },
+                        payload_type: 102,
+                        ..Default::default()
+                    },
+                    webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
+                )
+                .map_err(|e| StreamError::Configuration(format!("Failed to register H.264 codec: {}", e)))?;
+
+            // Register Opus audio codec (same as WHIP)
+            media_engine
+                .register_codec(
+                    webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecParameters {
+                        capability: webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
+                            mime_type: webrtc::api::media_engine::MIME_TYPE_OPUS.to_owned(),
+                            clock_rate: 48000,
+                            channels: 2,
+                            sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+                            rtcp_feedback: vec![],
+                        },
+                        payload_type: 111,
+                        ..Default::default()
+                    },
+                    webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
+                )
+                .map_err(|e| StreamError::Configuration(format!("Failed to register Opus codec: {}", e)))?;
+
+            tracing::info!("[WebRTC WHEP] Registered H.264 (PT=102) and Opus (PT=111) codecs for receive");
+
+            // Create InterceptorRegistry for RTCP feedback
+            let mut registry = webrtc::interceptor::registry::Registry::new();
+            registry = webrtc::api::interceptor_registry::register_default_interceptors(registry, &mut media_engine)
+                .map_err(|e| StreamError::Configuration(format!("Failed to register interceptors: {}", e)))?;
+
+            // Create API with MediaEngine and InterceptorRegistry
+            let api = webrtc::api::APIBuilder::new()
+                .with_media_engine(media_engine)
+                .with_interceptor_registry(registry)
+                .build();
+
+            // Create RTCPeerConnection
+            let config = webrtc::peer_connection::configuration::RTCConfiguration::default();
+            let peer_connection = Arc::new(
+                api
+                    .new_peer_connection(config)
+                    .await
+                    .map_err(|e| StreamError::Configuration(format!("Failed to create PeerConnection: {}", e)))?
+            );
+
+            tracing::debug!("[WebRTC WHEP] RTCPeerConnection created successfully");
+
+            // Subscribe to ICE candidate events
+            let on_candidate = Arc::new(on_ice_candidate);
+            let pc_for_ice_candidate = Arc::clone(&peer_connection);
+            pc_for_ice_candidate.on_ice_candidate(Box::new(move |candidate_opt| {
+                let callback = Arc::clone(&on_candidate);
+                Box::pin(async move {
+                    if let Some(candidate) = candidate_opt {
+                        if let Ok(json) = candidate.to_json() {
+                            let sdp_fragment = format!("a={}", json.candidate);
+                            tracing::debug!("[WHEP] ICE candidate discovered: {}", sdp_fragment);
+                            callback(sdp_fragment);
+                        }
+                    } else {
+                        tracing::debug!("[WHEP] ICE candidate gathering complete");
+                    }
+                })
+            }));
+
+            // Monitor connection state changes (same as WHIP)
+            peer_connection.on_signaling_state_change(Box::new(move |state| {
+                Box::pin(async move {
+                    tracing::info!("[WebRTC WHEP] Signaling state: {:?}", state);
+                })
+            }));
+
+            peer_connection.on_peer_connection_state_change(Box::new(move |state| {
+                Box::pin(async move {
+                    tracing::info!("[WebRTC WHEP] Peer connection state: {:?}", state);
+                })
+            }));
+
+            peer_connection.on_ice_gathering_state_change(Box::new(move |state| {
+                Box::pin(async move {
+                    tracing::info!("[WebRTC WHEP] ICE gathering state: {:?}", state);
+                })
+            }));
+
+            // Monitor ICE connection state
+            let ice_connected_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let ice_connected_clone = Arc::clone(&ice_connected_flag);
+
+            peer_connection.on_ice_connection_state_change(Box::new(move |connection_state| {
+                let flag = Arc::clone(&ice_connected_clone);
+                Box::pin(async move {
+                    tracing::info!("[WebRTC WHEP] ICE connection state: {:?}", connection_state);
+
+                    if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Connected {
+                        tracing::info!("[WebRTC WHEP] ICE Connected - ready to receive samples!");
+                        flag.store(true, std::sync::atomic::Ordering::Release);
+                    } else if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Disconnected
+                           || connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Failed {
+                        tracing::warn!("[WebRTC WHEP] ICE connection lost: {:?}", connection_state);
+                        flag.store(false, std::sync::atomic::Ordering::Release);
+                    }
+                })
+            }));
+
+            // CRITICAL: Register on_track handler to receive incoming media streams
+            //
+            // NOTE: webrtc-rs read_rtp() returns RAW RTP payloads, NOT depacketized frames.
+            // For H.264, this means FU-A fragmented packets that require reassembly.
+            // For Opus, payloads are complete and can be decoded directly.
+            //
+            // The WHEP processor must handle:
+            // - H.264: FU-A reassembly (RFC 6184) to reconstruct NAL units
+            // - Opus: Direct decoding of RTP payload
+            let on_sample_clone = Arc::clone(&on_sample);
+            peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
+                let on_sample = Arc::clone(&on_sample_clone);
+                let mime_type = track.codec().capability.mime_type.clone();
+
+                tracing::info!(
+                    "[WebRTC WHEP] Received track: kind={:?}, id={}, mime_type={}",
+                    track.kind(),
+                    track.id(),
+                    mime_type
+                );
+
+                Box::pin(async move {
+                    // Spawn task to read RTP samples from track
+                    tokio::spawn(async move {
+                        loop {
+                            // Read RTP packet (webrtc-rs returns (Packet, attributes))
+                            // IMPORTANT: Payload is RAW RTP data, not depacketized!
+                            match track.read_rtp().await {
+                                Ok((rtp_packet, _attributes)) => {
+                                    // Extract payload and timestamp
+                                    let payload = rtp_packet.payload.clone();
+                                    let timestamp = rtp_packet.header.timestamp;
+
+                                    tracing::trace!(
+                                        "[WHEP] Received RTP: mime={}, size={}, ts={}, seq={}",
+                                        mime_type,
+                                        payload.len(),
+                                        timestamp,
+                                        rtp_packet.header.sequence_number
+                                    );
+
+                                    // Deliver RAW RTP payload to callback
+                                    // Processor must handle FU-A reassembly for H.264
+                                    on_sample(mime_type.clone(), payload, timestamp);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("[WHEP] Track read error: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                })
+            }));
+
+            // Add recvonly transceivers for H.264 video and Opus audio
+            // WHEP spec: Client creates SDP offer with recvonly direction
+            peer_connection.add_transceiver_from_kind(
+                webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
+                Some(webrtc::rtp_transceiver::RTCRtpTransceiverInit {
+                    direction: webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Recvonly,
+                    send_encodings: vec![],
+                })
+            ).await.map_err(|e| StreamError::Configuration(format!("Failed to add video transceiver: {}", e)))?;
+
+            peer_connection.add_transceiver_from_kind(
+                webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
+                Some(webrtc::rtp_transceiver::RTCRtpTransceiverInit {
+                    direction: webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Recvonly,
+                    send_encodings: vec![],
+                })
+            ).await.map_err(|e| StreamError::Configuration(format!("Failed to add audio transceiver: {}", e)))?;
+
+            tracing::info!("[WebRTC WHEP] Added recvonly transceivers for video and audio");
+
+            Ok::<_, StreamError>((peer_connection, ice_connected_flag))
+        })?;
+
+        let (peer_connection, ice_connected) = init_result;
+
+        Ok(Self {
+            mode: WebRtcSessionMode::ReceiveOnly,
+            peer_connection,
+            video_track: None,  // No local tracks in receive mode
+            audio_track: None,
             ice_connected,
             _runtime: runtime,
         })
@@ -439,10 +693,15 @@ impl WebRtcSession {
         })
     }
 
-    /// Sets remote SDP answer from WHIP server.
+    /// Sets remote SDP answer from WHIP/WHEP server.
     pub fn set_remote_answer(&mut self, sdp: &str) -> Result<()> {
         self._runtime.block_on(async {
-            tracing::debug!("[WebRTC] Setting remote SDP answer...");
+            let mode_str = match self.mode {
+                WebRtcSessionMode::SendOnly => "WHIP",
+                WebRtcSessionMode::ReceiveOnly => "WHEP",
+            };
+
+            tracing::debug!("[WebRTC {}] Setting remote SDP answer...", mode_str);
 
             let answer = webrtc::peer_connection::sdp::session_description::RTCSessionDescription::answer(sdp.to_owned())
                 .map_err(|e| StreamError::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
@@ -452,10 +711,74 @@ impl WebRtcSession {
                 .await
                 .map_err(|e| StreamError::Runtime(format!("Failed to set remote description: {}", e)))?;
 
-            tracing::debug!("[WebRTC] Remote SDP answer set successfully");
+            tracing::debug!("[WebRTC {}] Remote SDP answer set successfully", mode_str);
 
+            // Verify negotiated codecs
             let transceivers = self.peer_connection.get_transceivers().await;
-            tracing::debug!("[WebRTC] Configured {} transceivers after SDP negotiation", transceivers.len());
+            tracing::info!("[WebRTC {}] Configured {} transceivers after SDP negotiation", mode_str, transceivers.len());
+
+            for (idx, transceiver) in transceivers.iter().enumerate() {
+                let direction = transceiver.direction();
+
+                if self.mode == WebRtcSessionMode::ReceiveOnly {
+                    // WHEP mode: verify we're receiving the codecs we requested
+                    let receiver = transceiver.receiver().await;
+                    let params = receiver.get_parameters().await;
+
+                    for codec in params.codecs.iter() {
+                        tracing::info!(
+                            "[WebRTC WHEP] Transceiver #{}: direction={:?}, mime={}, pt={}, clock={}, channels={}",
+                            idx,
+                            direction,
+                            codec.capability.mime_type,
+                            codec.payload_type,
+                            codec.capability.clock_rate,
+                            codec.capability.channels
+                        );
+
+                        // Verify we got H.264 or Opus as expected
+                        match codec.capability.mime_type.as_str() {
+                            "video/H264" => {
+                                if codec.payload_type != 102 {
+                                    tracing::warn!(
+                                        "[WebRTC WHEP] Server negotiated H.264 with PT={}, we requested PT=102",
+                                        codec.payload_type
+                                    );
+                                }
+                            }
+                            "audio/opus" => {
+                                if codec.payload_type != 111 {
+                                    tracing::warn!(
+                                        "[WebRTC WHEP] Server negotiated Opus with PT={}, we requested PT=111",
+                                        codec.payload_type
+                                    );
+                                }
+                            }
+                            other => {
+                                tracing::warn!(
+                                    "[WebRTC WHEP] Server negotiated unexpected codec: {} (PT={})",
+                                    other,
+                                    codec.payload_type
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    // WHIP mode: log sender parameters
+                    let sender = transceiver.sender().await;
+                    let params = sender.get_parameters().await;
+
+                    for codec in params.rtp_parameters.codecs.iter() {
+                        tracing::info!(
+                            "[WebRTC WHIP] Transceiver #{}: direction={:?}, mime={}, pt={}",
+                            idx,
+                            direction,
+                            codec.capability.mime_type,
+                            codec.payload_type
+                        );
+                    }
+                }
+            }
 
             Ok(())
         })

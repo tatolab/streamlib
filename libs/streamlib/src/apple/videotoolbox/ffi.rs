@@ -219,4 +219,167 @@ extern "C" {
         key_callbacks: *const c_void,
         value_callbacks: *const c_void,
     ) -> CFDictionaryRef;
+
+    pub(super) fn CFRetain(cf: *const c_void) -> *const c_void;
+}
+
+// ============================================================================
+// DECOMPRESSION SESSION (for decoder)
+// ============================================================================
+
+pub(super) type VTDecompressionSessionRef = *mut c_void;
+pub(super) type CVImageBufferRef = *mut c_void;
+pub(super) type VTDecodeInfoFlags = u32;
+
+// VTDecompressionSession callback type
+pub(super) type VTDecompressionOutputCallback = extern "C" fn(
+    decompress_ref: *mut c_void,
+    source_frame_refcon: *mut c_void,
+    status: OSStatus,
+    info_flags: VTDecodeInfoFlags,
+    image_buffer: CVImageBufferRef,
+    presentation_time_stamp: CMTime,
+    duration: CMTime,
+);
+
+// Pixel format constant for NV12
+pub(super) const kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange: u32 = 0x34323076; // '420v'
+
+#[link(name = "VideoToolbox", kind = "framework")]
+extern "C" {
+    pub(super) fn VTDecompressionSessionCreate(
+        allocator: *const c_void,
+        format_description: CMFormatDescriptionRef,
+        video_decoder_specification: *const c_void,
+        destination_image_buffer_attributes: CFDictionaryRef,
+        output_callback: *const c_void,
+        decompression_session_out: *mut VTDecompressionSessionRef,
+    ) -> OSStatus;
+
+    pub(super) fn VTDecompressionSessionDecodeFrame(
+        session: VTDecompressionSessionRef,
+        sample_buffer: CMSampleBufferRef,
+        decode_flags: u32,
+        source_frame_refcon: *mut c_void,
+        info_flags_out: *mut VTDecodeInfoFlags,
+    ) -> OSStatus;
+
+    pub(super) fn VTDecompressionSessionWaitForAsynchronousFrames(
+        session: VTDecompressionSessionRef,
+    ) -> OSStatus;
+
+    pub(super) fn VTDecompressionSessionInvalidate(
+        session: VTDecompressionSessionRef,
+    );
+
+    pub(super) fn CMVideoFormatDescriptionCreateFromH264ParameterSets(
+        allocator: *const c_void,
+        parameter_set_count: usize,
+        parameter_set_pointers: *const *const u8,
+        parameter_set_sizes: *const usize,
+        nal_unit_header_length: i32,
+        format_description_out: *mut CMFormatDescriptionRef,
+    ) -> OSStatus;
+}
+
+#[link(name = "CoreMedia", kind = "framework")]
+extern "C" {
+    pub(super) fn CMBlockBufferCreateWithMemoryBlock(
+        allocator: *const c_void,
+        memory_block: *mut c_void,
+        block_length: usize,
+        block_allocator: *const c_void,
+        custom_block_source: *const c_void,
+        offset_to_data: usize,
+        data_length: usize,
+        flags: u32,
+        block_buffer_out: *mut CMBlockBufferRef,
+    ) -> OSStatus;
+
+    pub(super) fn CMBlockBufferReplaceDataBytes(
+        source_bytes: *const c_void,
+        destination_buffer: CMBlockBufferRef,
+        offset_into_destination: usize,
+        data_length: usize,
+    ) -> OSStatus;
+
+    pub(super) fn CMSampleBufferCreate(
+        allocator: *const c_void,
+        data_buffer: CMBlockBufferRef,
+        data_ready: bool,
+        make_data_ready_callback: Option<extern "C" fn()>,
+        make_data_ready_refcon: *mut c_void,
+        format_description: CMFormatDescriptionRef,
+        num_samples: isize,
+        num_sample_timing_entries: isize,
+        sample_timing_array: *const c_void,
+        num_sample_size_entries: isize,
+        sample_size_array: *const usize,
+        sample_buffer_out: *mut CMSampleBufferRef,
+    ) -> OSStatus;
+}
+
+#[link(name = "CoreVideo", kind = "framework")]
+extern "C" {
+    pub(super) static kCVPixelBufferPixelFormatTypeKey: CFStringRef;
+    pub(super) static kCVPixelBufferWidthKey: CFStringRef;
+    pub(super) static kCVPixelBufferHeightKey: CFStringRef;
+}
+
+// Helper function to create output attributes dictionary for decompression
+pub(super) unsafe fn create_output_attributes_dict(
+    pixel_format: u32,
+    width: u32,
+    height: u32,
+) -> CFDictionaryRef {
+    use std::ptr;
+
+    // Create CFNumber for pixel format
+    let pixel_format_num = CFNumberCreate(
+        ptr::null(),
+        K_CFNUMBER_SINT32_TYPE,
+        &pixel_format as *const u32 as *const c_void,
+    );
+
+    // Create CFNumber for width
+    let width_num = CFNumberCreate(
+        ptr::null(),
+        K_CFNUMBER_SINT32_TYPE,
+        &width as *const u32 as *const c_void,
+    );
+
+    // Create CFNumber for height
+    let height_num = CFNumberCreate(
+        ptr::null(),
+        K_CFNUMBER_SINT32_TYPE,
+        &height as *const u32 as *const c_void,
+    );
+
+    let keys = [
+        kCVPixelBufferPixelFormatTypeKey as *const c_void,
+        kCVPixelBufferWidthKey as *const c_void,
+        kCVPixelBufferHeightKey as *const c_void,
+    ];
+
+    let values = [
+        pixel_format_num as *const c_void,
+        width_num as *const c_void,
+        height_num as *const c_void,
+    ];
+
+    let dict = CFDictionaryCreate(
+        ptr::null(),
+        keys.as_ptr(),
+        values.as_ptr(),
+        3,
+        ptr::null(),
+        ptr::null(),
+    );
+
+    // Release CFNumbers (dictionary retains them)
+    CFRelease(pixel_format_num as *const c_void);
+    CFRelease(width_num as *const c_void);
+    CFRelease(height_num as *const c_void);
+
+    dict
 }

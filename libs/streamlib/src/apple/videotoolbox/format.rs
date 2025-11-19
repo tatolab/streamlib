@@ -194,6 +194,80 @@ pub fn avcc_to_annex_b(avcc_data: &[u8]) -> Vec<u8> {
     annex_b
 }
 
+/// Convert Annex B format to AVCC format
+///
+/// Annex B uses start codes (0x00000001 or 0x000001) before each NAL unit.
+/// AVCC uses 4-byte length prefix (big-endian) before each NAL unit.
+///
+/// # Arguments
+/// * `annex_b_data` - H.264 data in Annex B format (start codes)
+///
+/// # Returns
+/// AVCC formatted data with 4-byte length prefixes
+pub fn annex_b_to_avcc(annex_b_data: &[u8]) -> crate::core::Result<Vec<u8>> {
+    use crate::core::StreamError;
+
+    let mut avcc = Vec::with_capacity(annex_b_data.len());
+    let mut pos = 0;
+
+    while pos < annex_b_data.len() {
+        // Look for start code (0x00000001 or 0x000001)
+        let start_code_len = if pos + 4 <= annex_b_data.len()
+            && annex_b_data[pos..pos + 4] == [0x00, 0x00, 0x00, 0x01]
+        {
+            4
+        } else if pos + 3 <= annex_b_data.len()
+            && annex_b_data[pos..pos + 3] == [0x00, 0x00, 0x01]
+        {
+            3
+        } else if pos == 0 {
+            // If we don't find a start code at the beginning, data might already be AVCC
+            tracing::warn!("[Annex B → AVCC] No start code found at position 0, data may already be AVCC");
+            return Err(StreamError::Runtime(
+                "Invalid Annex B data: no start code at beginning".to_string(),
+            ));
+        } else {
+            // Skip byte and continue looking
+            pos += 1;
+            continue;
+        };
+
+        pos += start_code_len;
+
+        // Find next start code or end of data
+        let nal_end = if let Some(next_pos) = find_next_start_code(&annex_b_data[pos..]) {
+            pos + next_pos
+        } else {
+            annex_b_data.len()
+        };
+
+        let nal_length = nal_end - pos;
+
+        // Write 4-byte length prefix (big-endian)
+        avcc.extend_from_slice(&(nal_length as u32).to_be_bytes());
+
+        // Write NAL unit data
+        avcc.extend_from_slice(&annex_b_data[pos..nal_end]);
+
+        pos = nal_end;
+    }
+
+    Ok(avcc)
+}
+
+/// Find the next start code (0x00000001 or 0x000001) in the data
+fn find_next_start_code(data: &[u8]) -> Option<usize> {
+    for i in 0..data.len() {
+        if i + 4 <= data.len() && data[i..i + 4] == [0x00, 0x00, 0x00, 0x01] {
+            return Some(i);
+        }
+        if i + 3 <= data.len() && data[i..i + 3] == [0x00, 0x00, 0x01] {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// Extract SPS and PPS parameter sets from CMFormatDescription and prepend to frame data.
 ///
 /// For H.264 keyframes, decoders need SPS (Sequence Parameter Set) and PPS (Picture Parameter Set)
