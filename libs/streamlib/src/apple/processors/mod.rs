@@ -19,7 +19,6 @@ pub use audio_output::AppleAudioOutputProcessor;
 pub use mp4_writer::{AppleMp4WriterProcessor, AppleMp4WriterConfig};
 pub use webrtc::{
     WebRtcWhipProcessor, WebRtcWhipConfig,
-    WhipConfig, AudioEncoderConfig,
 };
 // str0m version (experimental, not working):
 // pub use webrtc_whip::{WebRtcWhipProcessor, WebRtcWhipConfig, WhipConfig, VideoEncoderConfig, AudioEncoderConfig, H264Profile};

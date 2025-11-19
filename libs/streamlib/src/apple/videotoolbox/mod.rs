@@ -48,3 +48,4 @@ mod encoder;
 // Public API exports
 pub use codec::{VideoCodec, H264Profile, CodecInfo};
 pub use encoder::{VideoToolboxEncoder, VideoEncoderConfig, EncodedVideoFrame};
+pub use format::{parse_nal_units, parse_nal_units_avcc, parse_nal_units_annex_b};

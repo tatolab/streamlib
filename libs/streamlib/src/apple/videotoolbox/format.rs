@@ -3,8 +3,147 @@
 // Functions for converting between different H.264 NAL unit formats:
 // - AVCC (length-prefixed) - VideoToolbox default output
 // - Annex B (start-code-prefixed) - WebRTC/RTP requirement
+// - NAL unit parsing (auto-detect format)
 
 use super::ffi;
+
+// ============================================================================
+// H.264 NAL UNIT PARSER
+// ============================================================================
+
+/// Parse NAL units from AVCC format (length-prefixed, used by VideoToolbox)
+///
+/// AVCC format: [4-byte length][NAL unit][4-byte length][NAL unit]...
+/// Each NAL unit length is a 4-byte big-endian integer.
+pub fn parse_nal_units_avcc(data: &[u8]) -> Vec<Vec<u8>> {
+    let mut nal_units = Vec::new();
+    let mut i = 0;
+
+    while i + 4 <= data.len() {
+        // Read 4-byte big-endian length
+        let nal_length = u32::from_be_bytes([
+            data[i],
+            data[i + 1],
+            data[i + 2],
+            data[i + 3],
+        ]) as usize;
+
+        i += 4; // Skip length prefix
+
+        // Check bounds
+        if i + nal_length > data.len() {
+            tracing::warn!(
+                "AVCC NAL unit length {} exceeds remaining data {} at offset {}",
+                nal_length,
+                data.len() - i,
+                i - 4
+            );
+            break;
+        }
+
+        // Extract NAL unit
+        let nal_unit = data[i..i + nal_length].to_vec();
+        if !nal_unit.is_empty() {
+            nal_units.push(nal_unit);
+        }
+
+        i += nal_length;
+    }
+
+    nal_units
+}
+
+/// Parse NAL units from Annex B format (start-code-prefixed)
+///
+/// Annex B format: [00 00 00 01 or 00 00 01][NAL unit][start code][NAL unit]...
+pub fn parse_nal_units_annex_b(data: &[u8]) -> Vec<Vec<u8>> {
+    let mut nal_units = Vec::new();
+    let mut i = 0;
+
+    while i < data.len() {
+        // Look for start code (4-byte or 3-byte)
+        let start_code_len = if i + 3 < data.len()
+            && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1
+        {
+            4
+        } else if i + 2 < data.len()
+            && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1
+        {
+            3
+        } else {
+            i += 1;
+            continue;
+        };
+
+        // Find next start code (or end of data)
+        let mut nal_end = i + start_code_len;
+        while nal_end < data.len() {
+            if (nal_end + 3 < data.len()
+                && data[nal_end] == 0
+                && data[nal_end + 1] == 0
+                && data[nal_end + 2] == 0
+                && data[nal_end + 3] == 1)
+                || (nal_end + 2 < data.len()
+                    && data[nal_end] == 0
+                    && data[nal_end + 1] == 0
+                    && data[nal_end + 2] == 1)
+            {
+                break;
+            }
+            nal_end += 1;
+        }
+
+        // Extract NAL unit (without start code)
+        let nal_unit = data[i + start_code_len..nal_end].to_vec();
+        if !nal_unit.is_empty() {
+            nal_units.push(nal_unit);
+        }
+
+        i = nal_end;
+    }
+
+    nal_units
+}
+
+/// Auto-detect format and parse NAL units
+///
+/// Checks first 4 bytes to determine if data is AVCC or Annex B format:
+/// - AVCC: First 4 bytes = big-endian length (typically < 100KB for a frame)
+/// - Annex B: Starts with 00 00 00 01 or 00 00 01
+pub fn parse_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
+    if data.len() < 4 {
+        return Vec::new();
+    }
+
+    // Check for Annex B start codes
+    let is_annex_b = (data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
+        || (data[0] == 0 && data[1] == 0 && data[2] == 1);
+
+    if is_annex_b {
+        tracing::info!("🔍 [NAL Parser] Detected Annex B format H.264 (start code present)");
+        parse_nal_units_annex_b(data)
+    } else {
+        // Assume AVCC format (VideoToolbox default on macOS)
+        let length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+
+        // Sanity check: length should be reasonable (< 1MB for a single NAL unit)
+        if length > 0 && length < 1_000_000 && length + 4 <= data.len() {
+            tracing::info!("🔍 [NAL Parser] Detected AVCC format H.264 (first NAL length: {}, total data: {} bytes)", length, data.len());
+            parse_nal_units_avcc(data)
+        } else {
+            tracing::error!(
+                "❌ [NAL Parser] UNKNOWN H.264 FORMAT! First 4 bytes = {:02x} {:02x} {:02x} {:02x} (interpreted length={}, total data={})",
+                data[0], data[1], data[2], data[3], length, data.len()
+            );
+            tracing::error!("❌ [NAL Parser] This will result in NO NAL units parsed - stream will fail!");
+            Vec::new()
+        }
+    }
+}
+
+// ============================================================================
+// H.264 FORMAT CONVERSION
+// ============================================================================
 
 /// Convert AVCC format to Annex B format.
 ///
