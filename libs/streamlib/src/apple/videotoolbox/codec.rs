@@ -30,6 +30,7 @@ pub enum H264Profile {
 }
 
 /// Codec information trait for encoding parameters
+#[allow(dead_code)] // Methods kept for future WebRTC/RTP implementation
 pub trait CodecInfo {
     /// FourCC code for the codec (e.g., 'avc1' for H.264)
     fn fourcc(&self) -> u32;

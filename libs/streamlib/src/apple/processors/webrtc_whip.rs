@@ -24,6 +24,7 @@ use streamlib_macros::StreamProcessor;
 // VIDEO ENCODER TRAIT (WebRTC-specific interface)
 // ============================================================================
 
+#[allow(dead_code)] // Methods reserved for future bitrate/keyframe control
 trait VideoEncoderH264: Send {
     fn encode(&mut self, frame: &VideoFrame) -> Result<EncodedVideoFrame>;
     fn force_keyframe(&mut self);

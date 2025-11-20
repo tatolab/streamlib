@@ -3,6 +3,9 @@
 // Foreign function interface declarations for VideoToolbox, CoreMedia, and CoreFoundation.
 // These are the low-level C APIs used for hardware-accelerated video encoding.
 
+// Allow FFI naming conventions and unused code - these match Apple's C API exactly
+#![allow(dead_code, non_snake_case, non_upper_case_globals, clashing_extern_declarations)]
+
 use std::ffi::c_void;
 
 pub(super) type OSStatus = i32;

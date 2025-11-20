@@ -380,6 +380,7 @@ impl AppleDisplayProcessor {
     }
 
     /// Compute destination rectangle for scaled blit based on scaling mode
+#[allow(dead_code)]
     fn compute_destination_rect(
         &self,
         src_width: u32,

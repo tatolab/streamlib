@@ -80,6 +80,12 @@ pub struct StreamRuntime {
     bus: crate::core::Bus,
 }
 
+impl Default for StreamRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamRuntime {
     pub fn new() -> Self {
         Self {

@@ -1,3 +1,6 @@
+// Allow FFI naming conventions - these match CoreVideo's C API
+#![allow(non_snake_case, non_upper_case_globals)]
+
 use crate::core::{Result, StreamError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

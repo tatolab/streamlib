@@ -18,10 +18,12 @@ pub enum WebRtcSessionMode {
 
 /// Callback type for receiving RTP samples in WHEP mode
 /// Arguments: (mime_type, payload, timestamp_rtp)
+#[allow(dead_code)] // Used by WHEP mode (future implementation)
 pub type SampleCallback = Arc<dyn Fn(String, bytes::Bytes, u32) + Send + Sync>;
 
 pub struct WebRtcSession {
     /// Session mode (send-only for WHIP, receive-only for WHEP)
+    #[allow(dead_code)] // Used for mode validation (future WHEP implementation)
     mode: WebRtcSessionMode,
 
     /// RTCPeerConnection (handles ICE, DTLS, RTP/RTCP)
@@ -38,6 +40,7 @@ pub struct WebRtcSession {
     /// Flag indicating ICE connection is ready (tracks are bound with correct PT)
     /// CRITICAL: Must be true before calling write_sample() to ensure PT is set correctly
     /// Set to true when ICE connection state becomes Connected
+    #[allow(dead_code)] // Read by ICE callback handler
     ice_connected: Arc<std::sync::atomic::AtomicBool>,
 
     /// Tokio runtime for WebRTC background tasks
@@ -796,6 +799,7 @@ impl WebRtcSession {
     }
 
     /// Validate and log H.264 NAL unit format
+#[allow(dead_code)]
     fn validate_and_log_h264_nal(sample_data: &[u8], sample_idx: usize) {
         if sample_data.len() < 5 {
             tracing::error!(

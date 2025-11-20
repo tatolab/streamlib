@@ -6,6 +6,12 @@ pub struct StreamRuntime {
     inner: crate::core::StreamRuntime,
 }
 
+impl Default for StreamRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamRuntime {
     pub fn new() -> Self {
         let mut inner = crate::core::StreamRuntime::new();

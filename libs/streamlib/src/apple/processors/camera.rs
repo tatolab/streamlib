@@ -42,6 +42,7 @@ pub struct AppleCameraDevice {
 type CMSampleBufferRef = *mut c_void;
 
 #[link(name = "CoreMedia", kind = "framework")]
+#[allow(clashing_extern_declarations)]
 extern "C" {
     fn CMSampleBufferGetImageBuffer(sbuf: CMSampleBufferRef) -> *mut CVPixelBuffer;
     fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;

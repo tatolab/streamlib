@@ -141,6 +141,7 @@ pub struct PerformanceOverlayProcessor {
     video_out: Arc<StreamOutput<VideoFrame>>,
 
     #[config]
+    #[allow(dead_code)] // Config reserved for future customization options
     config: PerformanceOverlayConfig,
 
     // Runtime state fields - auto-detected (no attribute needed)

@@ -187,6 +187,7 @@ pub struct GetPackageStatusArgs {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields reserved for future processor creation API
 pub struct AddProcessorArgs {
     pub name: String,
     #[serde(default)]

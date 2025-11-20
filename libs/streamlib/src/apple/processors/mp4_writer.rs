@@ -21,6 +21,7 @@ use tracing::{debug, error, info, trace};
 // FFI bindings for CoreVideo functions
 #[link(name = "CoreVideo", kind = "framework")]
 extern "C" {
+#[allow(dead_code)]
     fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
 }
 
@@ -107,8 +108,11 @@ pub struct AppleMp4WriterProcessor {
 
     // Runtime state
     last_video_frame: Option<VideoFrame>,
+    #[allow(dead_code)] // Reserved for A/V sync (future implementation)
     last_audio_timestamp_ns: i64,
+    #[allow(dead_code)] // Reserved for A/V sync (future implementation)
     last_video_timestamp: f64,
+    #[allow(dead_code)] // Reserved for A/V sync (future implementation)
     start_time_set: bool,
     start_time_ns: i64,
     writer_failed: bool,
@@ -119,18 +123,21 @@ pub struct AppleMp4WriterProcessor {
     frames_duplicated: u64,
 
     // Latest frames for realtime streaming
+    #[allow(dead_code)] // Reserved for realtime streaming mode
     latest_video: Option<VideoFrame>,
 
     video_width: u32,
     video_height: u32,
 
     // Last written timestamp to ensure monotonic increasing
+    #[allow(dead_code)] // Reserved for timestamp validation
     last_written_timestamp_ns: i64,
 
     // Track last written video frame number to avoid duplicates
     last_written_video_frame_number: Option<u64>,
 
     // Track total audio samples written for timestamp calculation
+    #[allow(dead_code)] // Reserved for audio timestamp calculation
     total_audio_samples_written: u64,
 
     // GPU resources for texture conversion
@@ -1042,6 +1049,7 @@ impl AppleMp4WriterProcessor {
         };
 
         // Copy PCM data into the CMBlockBuffer
+        #[allow(non_snake_case, clashing_extern_declarations)]
         extern "C" {
             fn CMBlockBufferReplaceDataBytes(
                 sourceBytes: *const std::ffi::c_void,
@@ -1182,6 +1190,7 @@ impl AppleMp4WriterProcessor {
         }
 
         #[repr(C)]
+        #[allow(non_snake_case)] // Apple FFI struct - matches CoreAudio naming
         struct AudioStreamPacketDescription {
             mStartOffset: i64,
             mVariableFramesInPacket: u32,

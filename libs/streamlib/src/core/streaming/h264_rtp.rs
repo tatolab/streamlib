@@ -16,10 +16,15 @@ use std::collections::HashMap;
 /// H.264 NAL unit types (bits 0-4 of NAL header)
 #[allow(dead_code)]
 const NAL_TYPE_SLICE: u8 = 1; // Non-IDR coded slice
+#[allow(dead_code)]
 const NAL_TYPE_IDR: u8 = 5; // IDR (keyframe) coded slice
+#[allow(dead_code)]
 const NAL_TYPE_SEI: u8 = 6; // Supplemental Enhancement Information
+#[allow(dead_code)]
 const NAL_TYPE_SPS: u8 = 7; // Sequence Parameter Set
+#[allow(dead_code)]
 const NAL_TYPE_PPS: u8 = 8; // Picture Parameter Set
+#[allow(dead_code)]
 const NAL_TYPE_AUD: u8 = 9; // Access Unit Delimiter
 const NAL_TYPE_FU_A: u8 = 28; // Fragmentation Unit A
 const NAL_TYPE_STAP_A: u8 = 24; // Single-Time Aggregation Packet A

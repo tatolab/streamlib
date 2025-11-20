@@ -461,6 +461,7 @@ impl PyWgpuPipelineLayout {
 #[pyclass(name = "WgpuComputePipeline", module = "streamlib")]
 pub struct PyWgpuComputePipeline {
     pipeline: std::sync::Arc<wgpu::ComputePipeline>,
+    #[allow(dead_code)] // Reserved for bind group layout tracking
     bind_group_layout_handle: usize,
 }
 
@@ -494,6 +495,7 @@ impl PyWgpuBindGroup {
 #[pyclass(name = "WgpuCommandEncoder", module = "streamlib")]
 pub struct PyWgpuCommandEncoder {
     encoder: std::sync::Arc<std::sync::Mutex<Option<wgpu::CommandEncoder>>>,
+    #[allow(dead_code)] // Reserved for future GPU context operations
     context: GpuContext,
 }
 
