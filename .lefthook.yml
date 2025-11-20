@@ -1,0 +1,22 @@
+# Lefthook configuration for StreamLib
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  commands:
+    clippy:
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+    test:
+      run: cargo test --workspace --all-features
+
+# Skip hooks with LEFTHOOK=0 environment variable
+# Example: LEFTHOOK=0 git push
