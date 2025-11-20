@@ -175,16 +175,14 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
     let description = analysis
         .processor_attrs
         .description
-        .as_ref()
-        .map(|s| s.clone())
+        .clone()
         .unwrap_or_else(|| generate_description(analysis));
 
     // Usage context: use attribute or generate smart default
     let usage_context = analysis
         .processor_attrs
         .usage_context
-        .as_ref()
-        .map(|s| s.clone())
+        .clone()
         .unwrap_or_else(|| generate_usage_context(analysis));
 
     // Tags: use attribute or generate smart defaults
@@ -248,8 +246,7 @@ fn generate_port_descriptor(field: &PortField, method_name: &str) -> TokenStream
     let description = field
         .attributes
         .description
-        .as_ref()
-        .map(|s| s.clone())
+        .clone()
         .unwrap_or_else(|| humanize_field_name(&field.field_name));
 
     // Required flag (only for inputs)
@@ -1205,8 +1202,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
     let scheduling_mode = analysis
         .processor_attrs
         .scheduling_mode
-        .as_ref()
-        .map(|s| s.as_str())
+        .as_deref()
         .unwrap_or("Pull");
 
     let mode_variant = match scheduling_mode {
