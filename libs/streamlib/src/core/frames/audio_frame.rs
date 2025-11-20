@@ -164,9 +164,9 @@ where
         }
 
         let mut frame = [0.0; CHANNELS];
-        for i in 0..CHANNELS {
+        for (i, sample) in frame.iter_mut().enumerate().take(CHANNELS) {
             if self.position + i < self.samples.len() {
-                frame[i] = self.samples[self.position + i];
+                *sample = self.samples[self.position + i];
             }
         }
 

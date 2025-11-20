@@ -363,9 +363,11 @@ impl PyStreamRuntime {
             println!("   Wiring {} connections...", connections.len());
             for (source_port, dest_port) in connections.iter() {
                 println!(
-                    "      {} → {}",
-                    format!("{}.{}", source_port.processor_name, source_port.port_name),
-                    format!("{}.{}", dest_port.processor_name, dest_port.port_name)
+                    "      {}.{} → {}.{}",
+                    source_port.processor_name,
+                    source_port.port_name,
+                    dest_port.processor_name,
+                    dest_port.port_name
                 );
 
                 let source_handle = processor_handles

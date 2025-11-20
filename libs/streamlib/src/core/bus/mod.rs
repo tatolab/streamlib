@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)] // Common pattern: bus/bus.rs for Bus struct
 pub mod bus;
 pub mod connection;
 pub mod connection_manager;

@@ -194,8 +194,8 @@ impl AudioResampler {
         let mut interleaved_output = Vec::with_capacity(output_samples_per_channel * self.channels);
 
         for i in 0..output_samples_per_channel {
-            for ch_idx in 0..self.channels {
-                interleaved_output.push(planar_output[ch_idx][i]);
+            for channel in planar_output.iter().take(self.channels) {
+                interleaved_output.push(channel[i]);
             }
         }
 

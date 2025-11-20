@@ -822,6 +822,7 @@ impl AppleMp4WriterProcessor {
     /// This demonstrates the sync primitive usage:
     /// - Check sync_action() to determine what to do
     /// - Handle NoAction, DropVideoFrame, DuplicateVideoFrame
+    #[allow(dead_code)] // Reserved for future A/V sync implementation
     fn write_synced_frame(&mut self, audio: AudioFrame<2>, video: VideoFrame) -> Result<()> {
         // Initialize AVAssetWriter on first frame (lazy initialization)
         if self.writer.is_none() {

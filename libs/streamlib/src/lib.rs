@@ -1,3 +1,13 @@
+// Suppress pedantic clippy warnings that are intentional design choices
+#![allow(clippy::too_many_arguments)] // Some APIs need many parameters (e.g., video encoding config)
+#![allow(clippy::type_complexity)] // Complex types are clear in context
+#![allow(clippy::missing_safety_doc)] // Safety documented in implementation comments
+#![allow(clippy::arc_with_non_send_sync)] // Used intentionally for specific threading patterns
+#![allow(clippy::wrong_self_convention)] // to_* methods with Copy types are intentional
+#![allow(clippy::collapsible_match)] // Nested matches are clearer in some cases
+#![allow(clippy::manual_clamp)] // Manual clamp is sometimes clearer
+#![allow(clippy::should_implement_trait)] // Method names like `default` are contextually clear
+
 // Allow `::streamlib::` paths to work inside this crate (for proc macro generated code)
 extern crate self as streamlib;
 

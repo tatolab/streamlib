@@ -2,6 +2,8 @@
 //!
 //! Clippy false positive: useless_conversion warnings are from PyO3 macro expansion
 #![allow(clippy::useless_conversion)]
+// Port fields are used via Python bindings - not detected by dead code analysis
+#![allow(dead_code)]
 
 use super::PyVideoFrame;
 use crate::core::{AudioFrame, DataFrame, GpuContext, StreamInput, StreamOutput, VideoFrame};
