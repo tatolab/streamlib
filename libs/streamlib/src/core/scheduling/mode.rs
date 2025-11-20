@@ -1,18 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SchedulingMode {
     Loop,
 
+    #[default]
     Push,
 
     Pull,
-}
-
-impl Default for SchedulingMode {
-    fn default() -> Self {
-        SchedulingMode::Push
-    }
 }
 
 #[cfg(test)]

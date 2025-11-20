@@ -2,6 +2,9 @@
 //!
 //! Exposes the global EVENT_BUS to Python, allowing Python processors
 //! to publish events and subscribe to events from the event-driven architecture.
+//!
+//! Clippy false positive: useless_conversion warnings are from PyO3 macro expansion
+#![allow(clippy::useless_conversion)]
 
 use parking_lot::Mutex as ParkingLotMutex;
 use pyo3::prelude::*;

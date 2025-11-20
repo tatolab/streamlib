@@ -333,7 +333,7 @@ impl AppleDisplayProcessor {
                 color_attachment.set_store_action(metal::MTLStoreAction::Store);
 
                 let render_encoder =
-                    command_buffer.new_render_command_encoder(&render_pass_descriptor);
+                    command_buffer.new_render_command_encoder(render_pass_descriptor);
 
                 // Set pipeline and resources
                 render_encoder.set_render_pipeline_state(render_pipeline);
@@ -380,7 +380,7 @@ impl AppleDisplayProcessor {
     }
 
     /// Compute destination rectangle for scaled blit based on scaling mode
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn compute_destination_rect(
         &self,
         src_width: u32,

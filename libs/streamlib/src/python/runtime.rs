@@ -1,3 +1,8 @@
+//! Python runtime bindings
+//!
+//! Clippy false positive: useless_conversion warnings are from PyO3 macro expansion
+#![allow(clippy::useless_conversion)]
+
 use super::decorators::ProcessorProxy;
 use super::error::PyStreamError;
 use super::port::ProcessorPort;

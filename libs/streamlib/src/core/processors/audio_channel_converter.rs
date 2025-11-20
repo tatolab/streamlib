@@ -4,20 +4,15 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ChannelConversionMode {
     /// Duplicate mono signal to both left and right channels
+    #[default]
     Duplicate,
     /// Place mono signal only in left channel, silence right
     LeftOnly,
     /// Place mono signal only in right channel, silence left
     RightOnly,
-}
-
-impl Default for ChannelConversionMode {
-    fn default() -> Self {
-        ChannelConversionMode::Duplicate
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

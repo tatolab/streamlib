@@ -18,17 +18,12 @@ impl Default for AudioMixerConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum MixingStrategy {
     Sum,
+    #[default]
     SumNormalized,
     SumClipped,
-}
-
-impl Default for MixingStrategy {
-    fn default() -> Self {
-        MixingStrategy::SumNormalized
-    }
 }
 
 #[derive(StreamProcessor)]

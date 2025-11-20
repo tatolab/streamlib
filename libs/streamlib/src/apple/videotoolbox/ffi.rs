@@ -4,7 +4,12 @@
 // These are the low-level C APIs used for hardware-accelerated video encoding.
 
 // Allow FFI naming conventions and unused code - these match Apple's C API exactly
-#![allow(dead_code, non_snake_case, non_upper_case_globals, clashing_extern_declarations)]
+#![allow(
+    dead_code,
+    non_snake_case,
+    non_upper_case_globals,
+    clashing_extern_declarations
+)]
 
 use std::ffi::c_void;
 
@@ -362,16 +367,12 @@ pub(super) unsafe fn create_output_attributes_dict(
     );
 
     let keys = [
-        kCVPixelBufferPixelFormatTypeKey as *const c_void,
-        kCVPixelBufferWidthKey as *const c_void,
-        kCVPixelBufferHeightKey as *const c_void,
+        kCVPixelBufferPixelFormatTypeKey,
+        kCVPixelBufferWidthKey,
+        kCVPixelBufferHeightKey,
     ];
 
-    let values = [
-        pixel_format_num as *const c_void,
-        width_num as *const c_void,
-        height_num as *const c_void,
-    ];
+    let values = [pixel_format_num, width_num, height_num];
 
     let dict = CFDictionaryCreate(
         ptr::null(),
@@ -383,9 +384,9 @@ pub(super) unsafe fn create_output_attributes_dict(
     );
 
     // Release CFNumbers (dictionary retains them)
-    CFRelease(pixel_format_num as *const c_void);
-    CFRelease(width_num as *const c_void);
-    CFRelease(height_num as *const c_void);
+    CFRelease(pixel_format_num);
+    CFRelease(width_num);
+    CFRelease(height_num);
 
     dict
 }

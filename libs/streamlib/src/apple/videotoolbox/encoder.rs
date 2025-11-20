@@ -293,7 +293,7 @@ impl VideoToolboxEncoder {
             StreamError::Configuration("PixelTransferSession not initialized".into())
         })?;
 
-        return pixel_transfer.convert_to_nv12(&frame.texture, frame.width, frame.height);
+        pixel_transfer.convert_to_nv12(&frame.texture, frame.width, frame.height)
     }
 
     /// Encode a video frame
@@ -318,7 +318,9 @@ impl VideoToolboxEncoder {
         // Step 3: Determine if we should force a keyframe
         // Force keyframe on first frame and every keyframe_interval frames
         let should_force_keyframe = self.frame_count == 0
-            || (self.frame_count % self.config.keyframe_interval_frames as u64 == 0);
+            || self
+                .frame_count
+                .is_multiple_of(self.config.keyframe_interval_frames as u64);
 
         // Step 4: Encode the frame
         unsafe {
@@ -403,7 +405,7 @@ impl VideoToolboxEncoder {
         self.frame_count += 1;
 
         // Log encoding info
-        if self.frame_count % 30 == 0 {
+        if self.frame_count.is_multiple_of(30) {
             tracing::debug!(
                 "Encoded frame {}: {} bytes, keyframe={}",
                 encoded_frame.frame_number,
@@ -438,22 +440,20 @@ impl VideoToolboxEncoder {
     /// Caller must call CFRelease on the returned pointer
     unsafe fn create_force_keyframe_properties() -> *const std::ffi::c_void {
         // Create dictionary with key-value: {kVTEncodeFrameOptionKey_ForceKeyFrame: true}
-        let key = ffi::kVTEncodeFrameOptionKey_ForceKeyFrame as *const std::ffi::c_void;
-        let value = ffi::kCFBooleanTrue as *const std::ffi::c_void;
+        let key = ffi::kVTEncodeFrameOptionKey_ForceKeyFrame;
+        let value = ffi::kCFBooleanTrue;
 
         let keys = [key];
         let values = [value];
 
-        let dict = ffi::CFDictionaryCreate(
+        ffi::CFDictionaryCreate(
             std::ptr::null(), // allocator (default)
-            keys.as_ptr() as *const *const std::ffi::c_void,
-            values.as_ptr() as *const *const std::ffi::c_void,
+            keys.as_ptr(),
+            values.as_ptr(),
             1,                // count
             std::ptr::null(), // key callbacks (default)
             std::ptr::null(), // value callbacks (default)
-        );
-
-        dict as *const std::ffi::c_void
+        )
     }
 }
 
@@ -577,7 +577,7 @@ extern "C" fn compression_output_callback(
                     if !attachment.is_null() {
                         let not_sync = ffi::CFDictionaryGetValue(
                             attachment,
-                            ffi::kCMSampleAttachmentKey_NotSync as *const std::ffi::c_void,
+                            ffi::kCMSampleAttachmentKey_NotSync,
                         );
                         // If NotSync key is NULL (absent), this is a keyframe
                         not_sync.is_null()

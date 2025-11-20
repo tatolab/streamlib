@@ -507,7 +507,7 @@ pub fn parse_sps_dimensions(sps_data: &[u8]) -> Option<(u32, u32)> {
 
     tracing::info!("[SPS Parser] ✅ Parsed dimensions: {}x{}", width, height);
 
-    Some((width as u32, height as u32))
+    Some((width, height))
 }
 
 /// Simple bitstream reader for H.264 parsing
@@ -577,7 +577,7 @@ impl<'a> BitReader<'a> {
         let value = if code_num % 2 == 0 {
             -((code_num / 2) as i32)
         } else {
-            ((code_num + 1) / 2) as i32
+            code_num.div_ceil(2) as i32
         };
         Some(value)
     }

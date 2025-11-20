@@ -799,7 +799,7 @@ impl WebRtcSession {
     }
 
     /// Validate and log H.264 NAL unit format
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn validate_and_log_h264_nal(sample_data: &[u8], sample_idx: usize) {
         if sample_data.len() < 5 {
             tracing::error!(
@@ -915,7 +915,7 @@ impl WebRtcSession {
                 samples.len(),
                 samples.first().map(|s| s.data.len()).unwrap_or(0)
             );
-        } else if counter % 30 == 0 {
+        } else if counter.is_multiple_of(30) {
             tracing::debug!(
                 "[TELEMETRY:VIDEO_SAMPLE_WRITE] sample_num={}, nal_count={}, total_bytes={}",
                 counter,
@@ -986,7 +986,7 @@ impl WebRtcSession {
 
                 if counter == 0 && i == 0 {
                     tracing::info!("[WebRTC] ✅ Successfully wrote first video RTP packet (Single NAL, {} bytes)", sample.data.len());
-                } else if counter % 30 == 0 && i == 0 {
+                } else if counter.is_multiple_of(30) && i == 0 {
                     tracing::info!(
                         "[WebRTC] 📊 Video RTP packet #{} sent (Single NAL, {} bytes)",
                         counter,
@@ -1053,8 +1053,8 @@ impl WebRtcSession {
                     if counter == 0 && i == 0 && frag_count == 0 {
                         tracing::info!("[WebRTC] ✅ Successfully wrote first video RTP packet (FU-A mode, NAL size {} bytes, fragments ~{})",
                             sample.data.len(),
-                            (sample.data.len() + MAX_PAYLOAD_SIZE - 1) / MAX_PAYLOAD_SIZE);
-                    } else if counter % 30 == 0 && i == 0 && frag_count == 0 {
+                            sample.data.len().div_ceil(MAX_PAYLOAD_SIZE));
+                    } else if counter.is_multiple_of(30) && i == 0 && frag_count == 0 {
                         tracing::info!(
                             "[WebRTC] 📊 Video RTP packet #{} sent (FU-A mode, NAL size {} bytes)",
                             counter,
@@ -1096,7 +1096,7 @@ impl WebRtcSession {
                 sample.data.len(),
                 sample.duration
             );
-        } else if counter % 50 == 0 {
+        } else if counter.is_multiple_of(50) {
             tracing::debug!(
                 "[TELEMETRY:AUDIO_SAMPLE_WRITE] sample_num={}, bytes={}, duration_ms={:?}",
                 counter,
@@ -1138,7 +1138,7 @@ impl WebRtcSession {
             tracing::error!("[WebRTC] ❌ Failed to write audio RTP {}: {}", counter, e);
         } else if counter == 0 {
             tracing::info!("[WebRTC] ✅ Successfully wrote first audio RTP packet with PT=111");
-        } else if counter % 50 == 0 {
+        } else if counter.is_multiple_of(50) {
             tracing::info!(
                 "[WebRTC] 📊 Audio RTP packet #{} sent (PT=111, {} bytes)",
                 counter,

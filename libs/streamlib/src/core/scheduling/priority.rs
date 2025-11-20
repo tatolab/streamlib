@@ -1,18 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThreadPriority {
     RealTime,
 
     High,
 
+    #[default]
     Normal,
-}
-
-impl Default for ThreadPriority {
-    fn default() -> Self {
-        ThreadPriority::Normal
-    }
 }
 
 impl ThreadPriority {

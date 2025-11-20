@@ -7,15 +7,9 @@ use std::sync::{Arc, Mutex};
 use streamlib_macros::StreamProcessor;
 
 // Apple-specific configuration and device types
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct AppleAudioOutputConfig {
     pub device_id: Option<String>,
-}
-
-impl Default for AppleAudioOutputConfig {
-    fn default() -> Self {
-        Self { device_id: None }
-    }
 }
 
 #[derive(Debug, Clone)]

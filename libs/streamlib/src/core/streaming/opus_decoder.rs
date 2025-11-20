@@ -130,7 +130,7 @@ impl OpusDecoder {
                 decoded_samples,
                 decoded_samples * self.input_channels
             );
-        } else if decode_num % 100 == 0 {
+        } else if decode_num.is_multiple_of(100) {
             tracing::debug!(
                 "[Opus Decoder] Decode #{}: {} samples per channel, {} total samples",
                 decode_num,

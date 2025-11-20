@@ -6,16 +6,10 @@ use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 // Apple-specific configuration and device types
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct AppleAudioCaptureConfig {
     /// Optional device name or ID to capture from. If None, uses default input device.
     pub device_id: Option<String>,
-}
-
-impl Default for AppleAudioCaptureConfig {
-    fn default() -> Self {
-        Self { device_id: None }
-    }
 }
 
 #[derive(Debug, Clone)]

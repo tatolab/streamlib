@@ -80,7 +80,7 @@ fn install_macos_signal_handlers() -> std::io::Result<()> {
         tracing::info!("Ctrl+C received, triggering graceful shutdown");
         trigger_macos_termination();
     })
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    .map_err(|e| std::io::Error::other(e))?;
 
     // Still use signal-hook for SIGTERM (system shutdown, kill command)
     install_sigterm_handler_macos()?;

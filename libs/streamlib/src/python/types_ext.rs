@@ -1,3 +1,8 @@
+//! Python port and frame extension types
+//!
+//! Clippy false positive: useless_conversion warnings are from PyO3 macro expansion
+#![allow(clippy::useless_conversion)]
+
 use super::PyVideoFrame;
 use crate::core::{AudioFrame, DataFrame, GpuContext, StreamInput, StreamOutput, VideoFrame};
 use parking_lot::Mutex;

@@ -358,15 +358,13 @@ pub async fn execute_tool(
 
             Err(McpError::InvalidArguments {
                 tool: tool_name.to_string(),
-                message: format!(
-                    "add_processor requires Python code. Example:\n\
+                message: "add_processor requires Python code. Example:\n\
                     language: \"python\"\n\
                     code: \"\
                     @camera_processor(device_id='0x1424001bcf2284')\n\
                     def camera():\n\
                         pass\"\n\n\
-                    Check the processor registry for available decorators (@camera_processor, @display_processor, @processor)."
-                ),
+                    Check the processor registry for available decorators (@camera_processor, @display_processor, @processor).".to_string(),
             })
         }
 

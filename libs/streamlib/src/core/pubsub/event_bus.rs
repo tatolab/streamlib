@@ -18,7 +18,7 @@ const _: () = {
 };
 
 /// Global event bus singleton - accessible from anywhere
-pub static EVENT_BUS: LazyLock<EventBus> = LazyLock::new(|| EventBus::new());
+pub static EVENT_BUS: LazyLock<EventBus> = LazyLock::new(EventBus::new);
 
 /// Lock-free event bus with parallel dispatch
 ///
@@ -31,6 +31,12 @@ pub struct EventBus {
     /// DashMap provides lock-free concurrent HashMap
     /// Weak refs allow listeners to be dropped without explicit unsubscribe
     topics: DashMap<String, Vec<Weak<Mutex<dyn EventListener>>>>,
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EventBus {
@@ -52,7 +58,7 @@ impl EventBus {
         let weak_listener = Arc::downgrade(&listener);
         self.topics
             .entry(topic.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(weak_listener);
     }
 

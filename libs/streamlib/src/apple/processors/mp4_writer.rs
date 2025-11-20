@@ -21,7 +21,7 @@ use tracing::{debug, error, info, trace};
 // FFI bindings for CoreVideo functions
 #[link(name = "CoreVideo", kind = "framework")]
 extern "C" {
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
 }
 
@@ -963,7 +963,7 @@ impl AppleMp4WriterProcessor {
         // Step 3: Append pixel buffer to adaptor
         let success = unsafe {
             pixel_buffer_adaptor
-                .appendPixelBuffer_withPresentationTime(&*pixel_buffer, presentation_time)
+                .appendPixelBuffer_withPresentationTime(&pixel_buffer, presentation_time)
         };
 
         if !success {

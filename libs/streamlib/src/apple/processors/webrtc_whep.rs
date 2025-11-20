@@ -222,7 +222,7 @@ impl WebRtcWhepProcessor {
                 std::sync::atomic::AtomicU64::new(0);
             let count = RTP_PACKET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            if count % 30 == 0 {
+            if count.is_multiple_of(30) {
                 // Log every 30th packet to avoid spam
                 tracing::info!(
                     "[WHEP RTP CALLBACK] Packet #{}: media_type={}, size={}, timestamp={}",
@@ -286,7 +286,7 @@ impl WebRtcWhepProcessor {
                         timestamp
                     );
                     tracing::info!("[WHEP RTP] Audio codec from media_type: {}", media_type);
-                } else if audio_count % 50 == 0 {
+                } else if audio_count.is_multiple_of(50) {
                     // Log every 50th audio packet
                     tracing::info!(
                         "[WHEP RTP] Audio packet #{}: media_type={}, size={}, timestamp={}",
@@ -639,7 +639,7 @@ impl WebRtcWhepProcessor {
                             self.video_out.write(video_frame);
                             self.video_frame_count += 1;
 
-                            if self.video_frame_count % 30 == 0 {
+                            if self.video_frame_count.is_multiple_of(30) {
                                 // Log every 30th frame
                                 tracing::info!(
                                     "[WebRtcWhepProcessor] ✅ Decoded and output video frame #{}",
@@ -694,10 +694,10 @@ impl WebRtcWhepProcessor {
         let sps_raw = match H264NalFormat::detect(sps) {
             H264NalFormat::AnnexB => {
                 // Strip 4-byte or 3-byte start code
-                if sps.len() >= 4 && &sps[0..4] == &[0x00, 0x00, 0x00, 0x01] {
+                if sps.len() >= 4 && sps[0..4] == [0x00, 0x00, 0x00, 0x01] {
                     tracing::trace!("[WebRtcWhepProcessor] Stripping 4-byte start code from SPS");
                     &sps[4..]
-                } else if sps.len() >= 3 && &sps[0..3] == &[0x00, 0x00, 0x01] {
+                } else if sps.len() >= 3 && sps[0..3] == [0x00, 0x00, 0x01] {
                     tracing::trace!("[WebRtcWhepProcessor] Stripping 3-byte start code from SPS");
                     &sps[3..]
                 } else {
@@ -710,10 +710,10 @@ impl WebRtcWhepProcessor {
         let pps_raw = match H264NalFormat::detect(pps) {
             H264NalFormat::AnnexB => {
                 // Strip 4-byte or 3-byte start code
-                if pps.len() >= 4 && &pps[0..4] == &[0x00, 0x00, 0x00, 0x01] {
+                if pps.len() >= 4 && pps[0..4] == [0x00, 0x00, 0x00, 0x01] {
                     tracing::trace!("[WebRtcWhepProcessor] Stripping 4-byte start code from PPS");
                     &pps[4..]
-                } else if pps.len() >= 3 && &pps[0..3] == &[0x00, 0x00, 0x01] {
+                } else if pps.len() >= 3 && pps[0..3] == [0x00, 0x00, 0x01] {
                     tracing::trace!("[WebRtcWhepProcessor] Stripping 3-byte start code from PPS");
                     &pps[3..]
                 } else {
@@ -791,7 +791,7 @@ impl WebRtcWhepProcessor {
                 // Generate timestamp for audio frame
                 let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
-                match decoder.decode_to_audio_frame(&packet, timestamp_ns) {
+                match decoder.decode_to_audio_frame(packet, timestamp_ns) {
                     Ok(audio_frame) => {
                         // Enhanced logging for first frame
                         if self.audio_frame_count == 0 {
@@ -839,7 +839,7 @@ impl WebRtcWhepProcessor {
                             tracing::info!(
                                 "[WebRtcWhepProcessor] 🎵 ========================================"
                             );
-                        } else if self.audio_frame_count % 50 == 0 {
+                        } else if self.audio_frame_count.is_multiple_of(50) {
                             // Log every 50th frame
                             tracing::info!(
                                 "[WebRtcWhepProcessor] ✅ Decoded and output audio frame #{}",

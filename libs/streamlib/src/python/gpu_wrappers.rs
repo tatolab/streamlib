@@ -1,3 +1,8 @@
+//! Python wrappers for wgpu GPU context
+//!
+//! Clippy false positive: useless_conversion warnings are from PyO3 macro expansion
+#![allow(clippy::useless_conversion)]
+
 use crate::core::GpuContext;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
@@ -583,7 +588,7 @@ impl PyWgpuComputePass {
             pyo3::exceptions::PyRuntimeError::new_err("Compute pass already ended")
         })?;
 
-        let offsets_slice = offsets.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let offsets_slice = offsets.as_deref().unwrap_or(&[]);
         pass.set_bind_group(index, bind_group.bind_group.as_ref(), offsets_slice);
         Ok(())
     }

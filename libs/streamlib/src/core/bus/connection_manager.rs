@@ -78,10 +78,7 @@ impl ConnectionManager {
         self.metadata.insert(conn_id, metadata);
 
         // Update source index (one source can have multiple connections)
-        self.source_index
-            .entry(source)
-            .or_insert_with(Vec::new)
-            .push(conn_id);
+        self.source_index.entry(source).or_default().push(conn_id);
 
         // Update dest index (enforces 1-to-1)
         self.dest_index.insert(dest, conn_id);

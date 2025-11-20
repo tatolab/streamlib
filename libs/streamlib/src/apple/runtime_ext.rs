@@ -196,7 +196,7 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
                 app.nextEventMatchingMask_untilDate_inMode_dequeue(
                     NSEventMask::Any,
                     Some(&date),
-                    &NSDefaultRunLoopMode,
+                    NSDefaultRunLoopMode,
                     true,
                 )
             };

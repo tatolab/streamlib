@@ -164,8 +164,8 @@ impl VideoToolboxDecoder {
                         &bgra_format as *const _ as *const _,
                     );
 
-                    let keys = [ffi::kCVPixelBufferPixelFormatTypeKey as *const std::ffi::c_void];
-                    let values = [format_number as *const std::ffi::c_void];
+                    let keys = [ffi::kCVPixelBufferPixelFormatTypeKey];
+                    let values = [format_number];
 
                     let pixel_buffer_attrs = ffi::CFDictionaryCreate(
                         std::ptr::null(),
@@ -398,7 +398,7 @@ impl VideoToolboxDecoder {
 
         self.frame_count += 1;
 
-        if self.frame_count % 30 == 0 {
+        if self.frame_count.is_multiple_of(30) {
             tracing::debug!(
                 "[VideoToolbox Decoder] Decoded frame {} ({} bytes AVCC input)",
                 self.frame_count,

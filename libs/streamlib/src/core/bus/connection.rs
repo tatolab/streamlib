@@ -6,6 +6,12 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnectionId(pub u64);
 
+impl Default for ConnectionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConnectionId {
     pub fn new() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};

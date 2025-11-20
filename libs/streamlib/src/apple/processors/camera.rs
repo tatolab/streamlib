@@ -16,15 +16,9 @@ use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 // Apple-specific configuration and device types
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct AppleCameraConfig {
     pub device_id: Option<String>,
-}
-
-impl Default for AppleCameraConfig {
-    fn default() -> Self {
-        Self { device_id: None }
-    }
 }
 
 impl From<()> for AppleCameraConfig {
@@ -330,10 +324,7 @@ impl AppleCameraProcessor {
 
                 let init_result =
                     Self::initialize_capture_session_on_main_thread(mtm, &config, latest_frame);
-                let camera_name = match init_result {
-                    Ok(name) => Ok(name),
-                    Err(e) => Err(e),
-                };
+                let camera_name = init_result;
 
                 let (lock, cvar) = &*pair_clone;
                 let mut result = lock.lock().unwrap();

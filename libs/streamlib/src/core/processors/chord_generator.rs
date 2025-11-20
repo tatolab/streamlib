@@ -212,7 +212,7 @@ impl ChordGeneratorProcessor {
                     tracing::info!("ChordGenerator FIRST iteration: writing stereo chord frame");
                 }
 
-                if iteration_count % 100 == 0 {
+                if iteration_count.is_multiple_of(100) {
                     tracing::debug!(
                         "ChordGenerator iteration {}: Writing stereo chord frame",
                         iteration_count

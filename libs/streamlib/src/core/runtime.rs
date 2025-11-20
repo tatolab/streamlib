@@ -962,8 +962,7 @@ impl StreamRuntime {
             let listener = ShutdownListener {
                 running: running_clone,
             };
-            let _subscription =
-                EVENT_BUS.subscribe(topics::RUNTIME_GLOBAL, Arc::new(Mutex::new(listener)));
+            EVENT_BUS.subscribe(topics::RUNTIME_GLOBAL, Arc::new(Mutex::new(listener)));
 
             while running.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(100));
