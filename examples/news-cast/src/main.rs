@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
             width: 1920,
             height: 1080,
             title: Some("News Cast - StreamLib Demo".to_string()),
+            scaling_mode: Default::default(),  // Use default scaling (Stretch)
         }
     )?;
 

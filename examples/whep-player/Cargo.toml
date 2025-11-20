@@ -5,10 +5,6 @@ edition = "2021"
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib" }
-tokio = { version = "1.41", features = ["full"] }
-webrtc = "0.11.0"
-anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-reqwest = { version = "0.12", features = ["json"] }
-sdp = "0.6"
+ctrlc = "3.4"
