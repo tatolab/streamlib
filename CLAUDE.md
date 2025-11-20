@@ -80,8 +80,14 @@ lefthook install
 ```
 
 **Hooks**:
-- **pre-commit**: Runs `cargo fmt --check` to verify formatting
-- **pre-push**: Runs `cargo clippy` and `cargo test` before pushing
+- **pre-commit**:
+  - `cargo fmt --check` - Verify formatting
+  - `cargo check` - Fast compilation check
+- **pre-push** (runs sequentially):
+  1. `cargo check` - Ensure code compiles
+  2. `cargo clippy` - Linting with strict warnings
+  3. `cargo test --lib` - Run library tests
+  4. Example builds - Verify examples compile
 
 **Skip hooks** (when needed):
 ```bash
