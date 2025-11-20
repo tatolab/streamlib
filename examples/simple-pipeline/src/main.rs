@@ -1,7 +1,7 @@
 //! Simple Pipeline Example
 //!
 //! Demonstrates the simplest possible pipeline using streamlib:
-//! A test tone generator → audio output.
+//! A chord generator → audio output.
 //!
 //! This example shows:
 //! - Event-driven processing (no explicit tick/FPS parameters)
@@ -9,13 +9,17 @@
 //! - Handle-based type-safe connections
 //! - Runtime management
 //!
-//! You should hear a 440 Hz tone (musical note A4) for 2 seconds.
+//! You should hear a C major chord (C4, E4, G4) for 2 seconds.
 
-use streamlib::core::config::{AudioOutputConfig, TestToneConfig};
-use streamlib::{AudioFrame, AudioOutputProcessor, Result, StreamRuntime, TestToneGenerator};
+use streamlib::core::{AudioOutputConfig, ChordGeneratorConfig};
+use streamlib::{AudioFrame, AudioOutputProcessor, ChordGeneratorProcessor, Result, StreamRuntime};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     println!("=== Simple Pipeline Example ===\n");
     println!("This example demonstrates:");
     println!("  • Event-driven processing");
@@ -25,22 +29,23 @@ async fn main() -> Result<()> {
     // Create runtime (no FPS parameter - event-driven!)
     let mut runtime = StreamRuntime::new();
 
-    // Get global audio config from runtime
-    let audio_config = runtime.audio_config();
+    // Audio configuration
+    let sample_rate = 48000;
+    let buffer_size = 512;
     println!("Audio Config:");
-    println!("  Sample Rate: {} Hz", audio_config.sample_rate);
-    println!("  Channels: {}", audio_config.channels);
-    println!("  Buffer Size: {} samples\n", audio_config.buffer_size);
+    println!("  Sample Rate: {} Hz", sample_rate);
+    println!("  Channels: 2 (stereo)");
+    println!("  Buffer Size: {} samples\n", buffer_size);
 
-    // Create a test tone generator (440 Hz = musical note A4)
-    println!("🎵 Adding test tone generator (440 Hz)...");
-    let tone = runtime.add_processor_with_config::<TestToneGenerator>(TestToneConfig {
-        frequency: 440.0,
-        amplitude: 0.3, // 30% volume to avoid clipping
-        sample_rate: audio_config.sample_rate,
-        timer_group_id: None,
-    })?;
-    println!("✓ Test tone added\n");
+    // Create a chord generator (C major: C4 + E4 + G4)
+    println!("🎵 Adding chord generator (C major - C4, E4, G4)...");
+    let chord =
+        runtime.add_processor_with_config::<ChordGeneratorProcessor>(ChordGeneratorConfig {
+            amplitude: 0.15, // 15% volume to avoid clipping
+            sample_rate,
+            buffer_size,
+        })?;
+    println!("✓ Chord generator added\n");
 
     // Create audio output processor
     println!("🔊 Adding audio output processor...");
@@ -50,30 +55,30 @@ async fn main() -> Result<()> {
     println!("✓ Audio output added\n");
 
     // Connect processors using type-safe handles
-    // The compiler verifies that AudioFrame → AudioFrame types match!
-    println!("🔗 Connecting test tone → audio output...");
+    // The compiler verifies that AudioFrame<2> → AudioFrame<2> types match!
+    println!("🔗 Connecting chord generator → audio output...");
     runtime.connect(
-        tone.output_port::<AudioFrame>("audio"), // OutputPortRef<AudioFrame>
-        output.input_port::<AudioFrame>("audio"), // InputPortRef<AudioFrame>
+        chord.output_port::<AudioFrame<2>>("chord"), // OutputPortRef<AudioFrame<2>>
+        output.input_port::<AudioFrame<2>>("audio"), // InputPortRef<AudioFrame<2>>
     )?;
     println!("✓ Pipeline connected\n");
 
     // Run pipeline
-    println!("▶️  Starting pipeline (you should hear a 440 Hz tone)...");
-    runtime.start().await?;
+    println!("▶️  Starting pipeline (you should hear a C major chord)...");
+    runtime.start()?;
 
     // Play for 2 seconds
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Stop the pipeline
     println!("\n⏹️  Stopping pipeline...");
-    runtime.stop().await?;
+    runtime.stop()?;
 
     println!("\n✓ Pipeline complete");
     println!("✓ Demonstrated:");
     println!("  • Event-driven architecture (no FPS/tick parameters)");
-    println!("  • Config-based API (TestToneConfig, AudioOutputConfig)");
-    println!("  • Type-safe connections (AudioFrame → AudioFrame)");
+    println!("  • Config-based API (ChordGeneratorConfig, AudioOutputConfig)");
+    println!("  • Type-safe connections (AudioFrame<2> → AudioFrame<2>)");
     println!("  • Same code works on macOS, Linux, Windows!");
 
     Ok(())

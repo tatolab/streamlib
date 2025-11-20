@@ -3,8 +3,8 @@ use std::sync::{
     Arc, Mutex, OnceLock,
 };
 use std::time::Duration;
-use streamlib::core::{traits::processor, RuntimeContext};
-use streamlib::{Result, StreamRuntime};
+use streamlib::core::{DataFrame, RuntimeContext, StreamOutput};
+use streamlib::{Result, StreamProcessor, StreamRuntime};
 
 // Global state for test validation
 static ASYNC_EXECUTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
@@ -12,20 +12,29 @@ static BLOCKING_RESULT: OnceLock<Arc<Mutex<Option<u64>>>> = OnceLock::new();
 static PROCESS_COUNT: OnceLock<Arc<AtomicU64>> = OnceLock::new();
 
 /// Test processor that validates main thread dispatch functionality
-#[processor(
-    name = "MainThreadTestProcessor",
-    inputs = [],
-    outputs = []
-)]
-#[derive(Default)]
+#[derive(StreamProcessor)]
+#[processor(description = "Test processor for main thread dispatch")]
 struct MainThreadTestProcessor {
-    ctx: Option<RuntimeContext>,
+    // Dummy output to satisfy macro requirements (never used)
+    #[output(description = "Dummy output (unused)")]
+    _dummy: Arc<StreamOutput<DataFrame>>,
+
+    ctx: Option<Arc<RuntimeContext>>,
+}
+
+impl Default for MainThreadTestProcessor {
+    fn default() -> Self {
+        Self {
+            _dummy: Arc::new(StreamOutput::new("dummy")),
+            ctx: None,
+        }
+    }
 }
 
 impl MainThreadTestProcessor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         println!("✓ setup() called - storing RuntimeContext");
-        self.ctx = Some(ctx.clone());
+        self.ctx = Some(Arc::new(ctx.clone()));
 
         // Test async dispatch during setup
         println!("  Testing run_on_main_async() from setup()...");
@@ -37,6 +46,10 @@ impl MainThreadTestProcessor {
             });
         }
 
+        Ok(())
+    }
+
+    fn teardown(&mut self) -> Result<()> {
         Ok(())
     }
 
