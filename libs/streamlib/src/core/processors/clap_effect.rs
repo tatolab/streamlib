@@ -1,11 +1,11 @@
-use crate::core::{Result, StreamInput, StreamOutput};
-use crate::core::frames::AudioFrame;
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
+use crate::core::frames::AudioFrame;
+use crate::core::{Result, StreamInput, StreamOutput};
 use streamlib_macros::StreamProcessor;
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClapEffectConfig {
@@ -52,56 +52,64 @@ pub struct ClapEffectProcessor {
 impl ClapEffectProcessor {
     pub fn plugin_info(&self) -> Result<&PluginInfo> {
         use crate::core::StreamError;
-        self.host.as_ref()
+        self.host
+            .as_ref()
             .map(|h| h.plugin_info())
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
     }
 
     pub fn list_parameters(&self) -> Result<Vec<ParameterInfo>> {
         use crate::core::StreamError;
-        self.host.as_ref()
+        self.host
+            .as_ref()
             .map(|h| h.list_parameters())
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
     }
 
     pub fn get_parameter(&self, id: u32) -> Result<f64> {
         use crate::core::StreamError;
-        self.host.as_ref()
+        self.host
+            .as_ref()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
             .get_parameter(id)
     }
 
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
         use crate::core::StreamError;
-        self.host.as_mut()
+        self.host
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
             .set_parameter(id, value)
     }
 
     pub fn begin_edit(&mut self, id: u32) -> Result<()> {
         use crate::core::StreamError;
-        self.host.as_mut()
+        self.host
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
             .begin_edit(id)
     }
 
     pub fn end_edit(&mut self, id: u32) -> Result<()> {
         use crate::core::StreamError;
-        self.host.as_mut()
+        self.host
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
             .end_edit(id)
     }
 
     pub fn activate(&mut self, sample_rate: u32, max_frames: usize) -> Result<()> {
         use crate::core::StreamError;
-        self.host.as_mut()
+        self.host
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
             .activate(sample_rate, max_frames)
     }
 
     pub fn deactivate(&mut self) -> Result<()> {
         use crate::core::StreamError;
-        self.host.as_mut()
+        self.host
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
             .deactivate()
     }
@@ -109,7 +117,9 @@ impl ClapEffectProcessor {
     fn process_audio_through_clap(&mut self, input_frame: &AudioFrame<2>) -> Result<AudioFrame<2>> {
         use crate::core::StreamError;
 
-        let host = self.host.as_mut()
+        let host = self
+            .host
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
 
         let output_frame = host.process_audio(input_frame)?;
@@ -127,20 +137,20 @@ impl ClapEffectProcessor {
                 &self.config.plugin_path,
                 name,
                 self.config.sample_rate,
-                self.config.buffer_size
+                self.config.buffer_size,
             )?
         } else if let Some(index) = self.config.plugin_index {
             ClapPluginHost::load_by_index(
                 &self.config.plugin_path,
                 index,
                 self.config.sample_rate,
-                self.config.buffer_size
+                self.config.buffer_size,
             )?
         } else {
             ClapPluginHost::load(
                 &self.config.plugin_path,
                 self.config.sample_rate,
-                self.config.buffer_size
+                self.config.buffer_size,
             )?
         };
 
@@ -160,11 +170,16 @@ impl ClapEffectProcessor {
     fn teardown(&mut self) -> Result<()> {
         use crate::core::StreamError;
 
-        let host = self.host.as_mut()
+        let host = self
+            .host
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
 
         host.deactivate()?;
-        tracing::info!("[ClapEffect] Deactivated plugin '{}'", host.plugin_info().name);
+        tracing::info!(
+            "[ClapEffect] Deactivated plugin '{}'",
+            host.plugin_info().name
+        );
         Ok(())
     }
 
@@ -188,7 +203,6 @@ impl ClapEffectProcessor {
     }
 }
 
-
 impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
     fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
         self.set_parameter(id, value)
@@ -203,4 +217,4 @@ impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
     }
 }
 
-pub use crate::core::clap::{ClapScanner, ClapPluginInfo};
+pub use crate::core::clap::{ClapPluginInfo, ClapScanner};

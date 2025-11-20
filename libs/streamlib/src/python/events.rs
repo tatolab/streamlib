@@ -3,18 +3,17 @@
 //! Exposes the global EVENT_BUS to Python, allowing Python processors
 //! to publish events and subscribe to events from the event-driven architecture.
 
+use parking_lot::Mutex as ParkingLotMutex;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
-use parking_lot::Mutex as ParkingLotMutex;
 
-use crate::core::pubsub::{
-    Event, ProcessorEvent,
-    EventListener, EVENT_BUS,
-    KeyCode, KeyState, Modifiers, MouseButton, MouseState,
-};
-use crate::core::pubsub::topics as event_topics;
 use crate::core::error::{Result, StreamError};
+use crate::core::pubsub::topics as event_topics;
+use crate::core::pubsub::{
+    Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
+    EVENT_BUS,
+};
 
 /// Python wrapper for Event
 #[pyclass(name = "Event", module = "streamlib")]
@@ -85,10 +84,12 @@ impl PyEvent {
         let json_dumps = json_module.getattr("dumps")?;
         let json_str: String = json_dumps.call1((data,))?.extract()?;
 
-        let json_value: serde_json::Value = serde_json::from_str(&json_str)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Failed to serialize data: {}", e)
-            ))?;
+        let json_value: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Failed to serialize data: {}",
+                e
+            ))
+        })?;
 
         Ok(Self {
             inner: Event::custom(topic, json_value),
@@ -107,8 +108,17 @@ impl PyEvent {
         meta: bool,
     ) -> PyResult<Self> {
         let key_code = parse_key_code(&key)?;
-        let modifiers = Modifiers { shift, ctrl, alt, meta };
-        let state = if pressed { KeyState::Pressed } else { KeyState::Released };
+        let modifiers = Modifiers {
+            shift,
+            ctrl,
+            alt,
+            meta,
+        };
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
 
         Ok(Self {
             inner: Event::keyboard(key_code, modifiers, state),
@@ -122,12 +132,19 @@ impl PyEvent {
             "left" => MouseButton::Left,
             "right" => MouseButton::Right,
             "middle" => MouseButton::Middle,
-            _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Invalid mouse button: {}", button)
-            )),
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Invalid mouse button: {}",
+                    button
+                )))
+            }
         };
 
-        let state = if pressed { MouseState::Pressed } else { MouseState::Released };
+        let state = if pressed {
+            MouseState::Pressed
+        } else {
+            MouseState::Released
+        };
 
         Ok(Self {
             inner: Event::mouse(mouse_button, (x, y), state),
@@ -146,9 +163,12 @@ impl PyEvent {
             "stopped" => ProcessorEvent::Stopped,
             "paused" => ProcessorEvent::Paused,
             "resumed" => ProcessorEvent::Resumed,
-            _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Invalid processor event type: {}", event_type)
-            )),
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Invalid processor event type: {}",
+                    event_type
+                )))
+            }
         };
 
         Ok(Self {
@@ -201,9 +221,12 @@ fn parse_key_code(key: &str) -> PyResult<KeyCode> {
         "right" => KeyCode::Right,
         "up" => KeyCode::Up,
         "down" => KeyCode::Down,
-        _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Unknown key: {}", key)
-        )),
+        _ => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Unknown key: {}",
+                key
+            )))
+        }
     };
     Ok(code)
 }
@@ -215,19 +238,24 @@ struct PyEventListener {
 
 impl EventListener for PyEventListener {
     fn on_event(&mut self, event: &Event) -> Result<()> {
-        eprintln!("[RUST] PyEventListener::on_event called for topic: {}", event.topic());
-        tracing::info!("PyEventListener::on_event called for topic: {}", event.topic());
+        eprintln!(
+            "[RUST] PyEventListener::on_event called for topic: {}",
+            event.topic()
+        );
+        tracing::info!(
+            "PyEventListener::on_event called for topic: {}",
+            event.topic()
+        );
         Python::with_gil(|py| {
             eprintln!("[RUST]   - GIL acquired, calling Python callback");
             tracing::info!("GIL acquired, calling Python callback");
             let py_event = PyEvent::from_rust(event.clone());
 
-            self.callback.call1(py, (py_event,))
-                .map_err(|e| {
-                    eprintln!("[RUST]   - ERROR: Python callback error: {}", e);
-                    tracing::error!("Python callback error: {}", e);
-                    StreamError::Runtime(format!("Python event listener error: {}", e))
-                })?;
+            self.callback.call1(py, (py_event,)).map_err(|e| {
+                eprintln!("[RUST]   - ERROR: Python callback error: {}", e);
+                tracing::error!("Python callback error: {}", e);
+                StreamError::Runtime(format!("Python event listener error: {}", e))
+            })?;
 
             eprintln!("[RUST]   - Python callback completed successfully");
             tracing::info!("Python callback completed");
@@ -288,7 +316,7 @@ impl PyEventBus {
                 callback_bound.getattr("on_event")?.into()
             } else {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                    "Listener must be callable or have on_event method"
+                    "Listener must be callable or have on_event method",
                 ));
             };
 
@@ -335,7 +363,6 @@ impl PyEventBus {
         tracing::info!("  - Event published");
         Ok(())
     }
-
 }
 
 /// Helper function to create processor topic

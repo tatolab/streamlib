@@ -1,7 +1,7 @@
 //! Event types for pub/sub messaging
 
-use serde::{Deserialize, Serialize};
 use crate::core::error::Result;
+use serde::{Deserialize, Serialize};
 
 /// Common topic constants for system events
 pub mod topics {
@@ -64,12 +64,20 @@ impl Event {
 
     /// Create a keyboard input event
     pub fn keyboard(key: KeyCode, modifiers: Modifiers, state: KeyState) -> Self {
-        Event::RuntimeGlobal(RuntimeEvent::KeyboardInput { key, modifiers, state })
+        Event::RuntimeGlobal(RuntimeEvent::KeyboardInput {
+            key,
+            modifiers,
+            state,
+        })
     }
 
     /// Create a mouse input event
     pub fn mouse(button: MouseButton, position: (f64, f64), state: MouseState) -> Self {
-        Event::RuntimeGlobal(RuntimeEvent::MouseInput { button, position, state })
+        Event::RuntimeGlobal(RuntimeEvent::MouseInput {
+            button,
+            position,
+            state,
+        })
     }
 
     /// Create a window event
@@ -176,11 +184,44 @@ pub enum ProcessorState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KeyCode {
     // Letters
-    A, B, C, D, E, F, G, H, I, J, K, L, M,
-    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
 
     // Numbers
-    Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9,
+    Key0,
+    Key1,
+    Key2,
+    Key3,
+    Key4,
+    Key5,
+    Key6,
+    Key7,
+    Key8,
+    Key9,
 
     // Modifier keys (these are actual key presses)
     ShiftLeft,
@@ -189,8 +230,8 @@ pub enum KeyCode {
     ControlRight,
     AltLeft,
     AltRight,
-    MetaLeft,    // Command on macOS, Windows key on Windows
-    MetaRight,   // Right Command/Windows key
+    MetaLeft,  // Command on macOS, Windows key on Windows
+    MetaRight, // Right Command/Windows key
 
     // Common keys
     Space,
@@ -213,7 +254,18 @@ pub enum KeyCode {
     PageDown,
 
     // Function keys
-    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 
     Unknown,
 }
@@ -337,11 +389,7 @@ mod tests {
         bus.subscribe(topics::KEYBOARD, listener);
 
         // Create keyboard event
-        let event = Event::keyboard(
-            KeyCode::A,
-            Modifiers::default(),
-            KeyState::Pressed,
-        );
+        let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
 
         // Verify topic routing
         assert_eq!(event.topic(), topics::KEYBOARD);
@@ -363,11 +411,7 @@ mod tests {
         bus.subscribe(topics::MOUSE, listener);
 
         // Create mouse event
-        let event = Event::mouse(
-            MouseButton::Left,
-            (100.0, 200.0),
-            MouseState::Pressed,
-        );
+        let event = Event::mouse(MouseButton::Left, (100.0, 200.0), MouseState::Pressed);
 
         // Verify topic routing
         assert_eq!(event.topic(), topics::MOUSE);
@@ -546,7 +590,12 @@ mod tests {
         // Test pressing shift key itself
         let shift_event = Event::keyboard(
             KeyCode::ShiftLeft,
-            Modifiers { shift: false, ctrl: false, alt: false, meta: false },
+            Modifiers {
+                shift: false,
+                ctrl: false,
+                alt: false,
+                meta: false,
+            },
             KeyState::Pressed,
         );
         bus.publish(&shift_event.topic(), &shift_event);
@@ -554,7 +603,12 @@ mod tests {
         // Test pressing a key WITH shift held
         let a_with_shift = Event::keyboard(
             KeyCode::A,
-            Modifiers { shift: true, ctrl: false, alt: false, meta: false },
+            Modifiers {
+                shift: true,
+                ctrl: false,
+                alt: false,
+                meta: false,
+            },
             KeyState::Pressed,
         );
         bus.publish(&a_with_shift.topic(), &a_with_shift);
@@ -569,26 +623,51 @@ mod tests {
         let no_mods = Modifiers::default();
         assert!(!no_mods.any());
 
-        let with_shift = Modifiers { shift: true, ctrl: false, alt: false, meta: false };
+        let with_shift = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        };
         assert!(with_shift.any());
 
         // Test only_shift()
         assert!(with_shift.only_shift());
         assert!(!no_mods.only_shift());
 
-        let shift_and_ctrl = Modifiers { shift: true, ctrl: true, alt: false, meta: false };
+        let shift_and_ctrl = Modifiers {
+            shift: true,
+            ctrl: true,
+            alt: false,
+            meta: false,
+        };
         assert!(!shift_and_ctrl.only_shift());
 
         // Test only_ctrl()
-        let with_ctrl = Modifiers { shift: false, ctrl: true, alt: false, meta: false };
+        let with_ctrl = Modifiers {
+            shift: false,
+            ctrl: true,
+            alt: false,
+            meta: false,
+        };
         assert!(with_ctrl.only_ctrl());
 
         // Test only_alt()
-        let with_alt = Modifiers { shift: false, ctrl: false, alt: true, meta: false };
+        let with_alt = Modifiers {
+            shift: false,
+            ctrl: false,
+            alt: true,
+            meta: false,
+        };
         assert!(with_alt.only_alt());
 
         // Test only_meta()
-        let with_meta = Modifiers { shift: false, ctrl: false, alt: false, meta: true };
+        let with_meta = Modifiers {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: true,
+        };
         assert!(with_meta.only_meta());
     }
 
@@ -623,17 +702,26 @@ mod tests {
     fn test_event_helper_constructors() {
         // Test keyboard() helper
         let kb = Event::keyboard(KeyCode::Enter, Modifiers::default(), KeyState::Pressed);
-        assert!(matches!(kb, Event::RuntimeGlobal(RuntimeEvent::KeyboardInput { .. })));
+        assert!(matches!(
+            kb,
+            Event::RuntimeGlobal(RuntimeEvent::KeyboardInput { .. })
+        ));
         assert_eq!(kb.topic(), topics::KEYBOARD);
 
         // Test mouse() helper
         let mouse = Event::mouse(MouseButton::Middle, (0.0, 0.0), MouseState::Pressed);
-        assert!(matches!(mouse, Event::RuntimeGlobal(RuntimeEvent::MouseInput { .. })));
+        assert!(matches!(
+            mouse,
+            Event::RuntimeGlobal(RuntimeEvent::MouseInput { .. })
+        ));
         assert_eq!(mouse.topic(), topics::MOUSE);
 
         // Test window() helper
         let window = Event::window(WindowEventType::Closed);
-        assert!(matches!(window, Event::RuntimeGlobal(RuntimeEvent::WindowEvent { .. })));
+        assert!(matches!(
+            window,
+            Event::RuntimeGlobal(RuntimeEvent::WindowEvent { .. })
+        ));
         assert_eq!(window.topic(), topics::WINDOW);
 
         // Test processor() helper

@@ -12,11 +12,11 @@
 //
 // **Reference**: Encoder implementation (encoder.rs) - inverse operations
 
-use crate::core::{VideoFrame, StreamError, Result, GpuContext, RuntimeContext};
-use crate::apple::{WgpuBridge, MetalDevice};
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
 use super::{ffi, format};
+use crate::apple::{MetalDevice, WgpuBridge};
+use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoFrame};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 /// Decoded video frame configuration
 #[derive(Clone, Debug)]
@@ -132,97 +132,101 @@ impl VideoToolboxDecoder {
         let pps = pps.to_vec();
 
         // CRITICAL: Create format description and decompression session on main thread
-        let (format_desc_ptr, session_ptr, callback_context_ptr) = ctx.run_on_main_blocking(move || {
-            unsafe {
-                // Create CMVideoFormatDescription from SPS/PPS
-                let param_set_pointers = [sps.as_ptr(), pps.as_ptr()];
-                let param_set_sizes = [sps.len(), pps.len()];
-                let mut format_desc: ffi::CMFormatDescriptionRef = std::ptr::null_mut();
+        let (format_desc_ptr, session_ptr, callback_context_ptr) =
+            ctx.run_on_main_blocking(move || {
+                unsafe {
+                    // Create CMVideoFormatDescription from SPS/PPS
+                    let param_set_pointers = [sps.as_ptr(), pps.as_ptr()];
+                    let param_set_sizes = [sps.len(), pps.len()];
+                    let mut format_desc: ffi::CMFormatDescriptionRef = std::ptr::null_mut();
 
-                let status = ffi::CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                    std::ptr::null(), // allocator
-                    2, // parameter set count
-                    param_set_pointers.as_ptr(),
-                    param_set_sizes.as_ptr(),
-                    4, // NAL unit header length (AVCC uses 4-byte length prefixes)
-                    &mut format_desc,
-                );
+                    let status = ffi::CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                        std::ptr::null(), // allocator
+                        2,                // parameter set count
+                        param_set_pointers.as_ptr(),
+                        param_set_sizes.as_ptr(),
+                        4, // NAL unit header length (AVCC uses 4-byte length prefixes)
+                        &mut format_desc,
+                    );
 
-                if status != ffi::NO_ERR {
-                    return Err(StreamError::Runtime(format!(
-                        "CMVideoFormatDescriptionCreateFromH264ParameterSets failed: {}",
-                        status
-                    )));
+                    if status != ffi::NO_ERR {
+                        return Err(StreamError::Runtime(format!(
+                            "CMVideoFormatDescriptionCreateFromH264ParameterSets failed: {}",
+                            status
+                        )));
+                    }
+
+                    // Create destination pixel buffer attributes (request BGRA for easier wgpu import)
+                    let bgra_format: u32 = 0x42475241; // 'BGRA' - kCVPixelFormatType_32BGRA
+                    let format_number = ffi::CFNumberCreate(
+                        std::ptr::null(),
+                        ffi::K_CFNUMBER_SINT32_TYPE,
+                        &bgra_format as *const _ as *const _,
+                    );
+
+                    let keys = [ffi::kCVPixelBufferPixelFormatTypeKey as *const std::ffi::c_void];
+                    let values = [format_number as *const std::ffi::c_void];
+
+                    let pixel_buffer_attrs = ffi::CFDictionaryCreate(
+                        std::ptr::null(),
+                        keys.as_ptr(),
+                        values.as_ptr(),
+                        1,
+                        std::ptr::null(), // use default key callbacks
+                        std::ptr::null(), // use default value callbacks
+                    );
+
+                    ffi::CFRelease(format_number as *const _);
+
+                    // Prepare callback context
+                    let callback_context_arc =
+                        Arc::into_raw(decoded_frames) as *mut std::ffi::c_void;
+
+                    // Create output callback structure
+                    #[repr(C)]
+                    struct VTDecompressionOutputCallbackRecord {
+                        callback: ffi::VTDecompressionOutputCallback,
+                        context: *mut std::ffi::c_void,
+                    }
+
+                    let callback_record = VTDecompressionOutputCallbackRecord {
+                        callback: decompression_output_callback,
+                        context: callback_context_arc,
+                    };
+
+                    // Create decompression session
+                    let mut session: ffi::VTDecompressionSessionRef = std::ptr::null_mut();
+                    let status = ffi::VTDecompressionSessionCreate(
+                        std::ptr::null(), // allocator
+                        format_desc,
+                        std::ptr::null(), // video decoder specification
+                        pixel_buffer_attrs,
+                        &callback_record as *const _ as *const std::ffi::c_void,
+                        &mut session,
+                    );
+
+                    ffi::CFRelease(pixel_buffer_attrs as *const _);
+
+                    if status != ffi::NO_ERR {
+                        ffi::CFRelease(format_desc as *const _);
+                        // Restore Arc ownership before returning error
+                        let _ = Arc::from_raw(
+                            callback_context_arc as *const Mutex<VecDeque<DecodedFrame>>,
+                        );
+                        return Err(StreamError::Runtime(format!(
+                            "VTDecompressionSessionCreate failed: {}",
+                            status
+                        )));
+                    }
+
+                    // Return pointers as usize for Send compatibility
+                    Ok((
+                        format_desc as usize,
+                        session as usize,
+                        callback_context_arc as usize,
+                    ))
                 }
-
-                // Create destination pixel buffer attributes (request BGRA for easier wgpu import)
-                let bgra_format: u32 = 0x42475241; // 'BGRA' - kCVPixelFormatType_32BGRA
-                let format_number = ffi::CFNumberCreate(
-                    std::ptr::null(),
-                    ffi::K_CFNUMBER_SINT32_TYPE,
-                    &bgra_format as *const _ as *const _,
-                );
-
-                let keys = [ffi::kCVPixelBufferPixelFormatTypeKey as *const std::ffi::c_void];
-                let values = [format_number as *const std::ffi::c_void];
-
-                let pixel_buffer_attrs = ffi::CFDictionaryCreate(
-                    std::ptr::null(),
-                    keys.as_ptr(),
-                    values.as_ptr(),
-                    1,
-                    std::ptr::null(), // use default key callbacks
-                    std::ptr::null(), // use default value callbacks
-                );
-
-                ffi::CFRelease(format_number as *const _);
-
-                // Prepare callback context
-                let callback_context_arc = Arc::into_raw(decoded_frames) as *mut std::ffi::c_void;
-
-                // Create output callback structure
-                #[repr(C)]
-                struct VTDecompressionOutputCallbackRecord {
-                    callback: ffi::VTDecompressionOutputCallback,
-                    context: *mut std::ffi::c_void,
-                }
-
-                let callback_record = VTDecompressionOutputCallbackRecord {
-                    callback: decompression_output_callback,
-                    context: callback_context_arc,
-                };
-
-                // Create decompression session
-                let mut session: ffi::VTDecompressionSessionRef = std::ptr::null_mut();
-                let status = ffi::VTDecompressionSessionCreate(
-                    std::ptr::null(), // allocator
-                    format_desc,
-                    std::ptr::null(), // video decoder specification
-                    pixel_buffer_attrs,
-                    &callback_record as *const _ as *const std::ffi::c_void,
-                    &mut session,
-                );
-
-                ffi::CFRelease(pixel_buffer_attrs as *const _);
-
-                if status != ffi::NO_ERR {
-                    ffi::CFRelease(format_desc as *const _);
-                    // Restore Arc ownership before returning error
-                    let _ = Arc::from_raw(callback_context_arc as *const Mutex<VecDeque<DecodedFrame>>);
-                    return Err(StreamError::Runtime(format!(
-                        "VTDecompressionSessionCreate failed: {}",
-                        status
-                    )));
-                }
-
-                // Return pointers as usize for Send compatibility
-                Ok((
-                    format_desc as usize,
-                    session as usize,
-                    callback_context_arc as usize,
-                ))
-            }
-        })?;
+            })?;
 
         // Cast back to proper pointer types
         self.format_description = Some(format_desc_ptr as ffi::CMFormatDescriptionRef);
@@ -248,12 +252,15 @@ impl VideoToolboxDecoder {
         timestamp_ns: i64,
     ) -> Result<Option<VideoFrame>> {
         // Check if we have a decompression session
-        let session = self.decompression_session
-            .ok_or_else(|| StreamError::Configuration(
-                "Decompression session not initialized - call update_format() with SPS/PPS first".into()
-            ))?;
+        let session = self.decompression_session.ok_or_else(|| {
+            StreamError::Configuration(
+                "Decompression session not initialized - call update_format() with SPS/PPS first"
+                    .into(),
+            )
+        })?;
 
-        let format_desc = self.format_description
+        let format_desc = self
+            .format_description
             .ok_or_else(|| StreamError::Configuration("Format description not available".into()))?;
 
         // Step 1: Convert Annex B → AVCC format (required by VideoToolbox)
@@ -280,7 +287,7 @@ impl VideoToolboxDecoder {
                     avcc_len,
                     std::ptr::null(), // block allocator (null = use malloc/free)
                     std::ptr::null(), // custom block source
-                    0, // offset to data
+                    0,                // offset to data
                     avcc_len,
                     0, // flags
                     &mut block_buffer,
@@ -288,7 +295,10 @@ impl VideoToolboxDecoder {
 
                 if status != ffi::NO_ERR {
                     // Cleanup leaked data
-                    let _ = Box::from_raw(std::slice::from_raw_parts_mut(avcc_ptr as *mut u8, avcc_len));
+                    let _ = Box::from_raw(std::slice::from_raw_parts_mut(
+                        avcc_ptr as *mut u8,
+                        avcc_len,
+                    ));
                     return Err(StreamError::Runtime(format!(
                         "CMBlockBufferCreateWithMemoryBlock failed: {}",
                         status
@@ -302,14 +312,14 @@ impl VideoToolboxDecoder {
                 let status = ffi::CMSampleBufferCreate(
                     std::ptr::null(), // allocator
                     block_buffer,
-                    true, // data ready
-                    None, // make data ready callback
+                    true,                 // data ready
+                    None,                 // make data ready callback
                     std::ptr::null_mut(), // make data ready refcon
                     format_desc,
-                    1, // num samples
-                    0, // num sample timing entries
+                    1,                // num samples
+                    0,                // num sample timing entries
                     std::ptr::null(), // sample timing array
-                    1, // num sample size entries
+                    1,                // num sample size entries
                     &avcc_len,
                     &mut sample_buffer,
                 );
@@ -340,7 +350,7 @@ impl VideoToolboxDecoder {
             let status = ffi::VTDecompressionSessionDecodeFrame(
                 session,
                 sample_buffer,
-                0, // decode flags
+                0,                                     // decode flags
                 timestamp_ns as *mut std::ffi::c_void, // source frame refcon (pass timestamp)
                 &mut info_flags,
             );
@@ -369,8 +379,9 @@ impl VideoToolboxDecoder {
 
         // Step 6: Retrieve decoded frame from queue
         let decoded_frame = {
-            let mut queue = self.decoded_frames.lock()
-                .map_err(|e| StreamError::Runtime(format!("Failed to lock decoded frames: {}", e)))?;
+            let mut queue = self.decoded_frames.lock().map_err(|e| {
+                StreamError::Runtime(format!("Failed to lock decoded frames: {}", e))
+            })?;
             queue.pop_front()
         };
 
@@ -400,16 +411,22 @@ impl VideoToolboxDecoder {
 
     /// Convert CVPixelBuffer (BGRA) to VideoFrame with wgpu texture
     fn pixel_buffer_to_video_frame(&self, decoded_frame: DecodedFrame) -> Result<VideoFrame> {
-        let wgpu_bridge = self.wgpu_bridge.as_ref()
+        let wgpu_bridge = self
+            .wgpu_bridge
+            .as_ref()
             .ok_or_else(|| StreamError::Configuration("wgpu bridge not initialized".into()))?;
 
-        let gpu_ctx = self.gpu_context.as_ref()
+        let gpu_ctx = self
+            .gpu_context
+            .as_ref()
             .ok_or_else(|| StreamError::Configuration("GPU context not available".into()))?;
 
         // Query actual dimensions from CVPixelBuffer (ground truth from decoded frame)
         let (actual_width, actual_height) = unsafe {
-            let width = ffi::CVPixelBufferGetWidth(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
-            let height = ffi::CVPixelBufferGetHeight(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
+            let width =
+                ffi::CVPixelBufferGetWidth(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
+            let height =
+                ffi::CVPixelBufferGetHeight(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
             (width as u32, height as u32)
         };
 
@@ -426,11 +443,7 @@ impl VideoToolboxDecoder {
 
         // Import CVPixelBuffer as wgpu texture via IOSurface
         let texture = unsafe {
-            self.import_pixel_buffer_as_texture(
-                decoded_frame.pixel_buffer,
-                wgpu_bridge,
-                gpu_ctx,
-            )?
+            self.import_pixel_buffer_as_texture(decoded_frame.pixel_buffer, wgpu_bridge, gpu_ctx)?
         };
 
         // Release pixel buffer
@@ -444,8 +457,8 @@ impl VideoToolboxDecoder {
             wgpu::TextureFormat::Bgra8Unorm,
             decoded_frame.timestamp_ns,
             self.frame_count,
-            actual_width,   // Use actual dimensions from decoded buffer
-            actual_height,  // Use actual dimensions from decoded buffer
+            actual_width,  // Use actual dimensions from decoded buffer
+            actual_height, // Use actual dimensions from decoded buffer
         ))
     }
 
@@ -462,7 +475,9 @@ impl VideoToolboxDecoder {
         // Get IOSurface from CVPixelBuffer
         let iosurface_ptr = ffi::CVPixelBufferGetIOSurface(pixel_buffer as *const std::ffi::c_void);
         if iosurface_ptr.is_null() {
-            return Err(StreamError::GpuError("Failed to get IOSurface from CVPixelBuffer".into()));
+            return Err(StreamError::GpuError(
+                "Failed to get IOSurface from CVPixelBuffer".into(),
+            ));
         }
 
         let iosurface = &*iosurface_ptr;
@@ -545,7 +560,7 @@ extern "C" fn decompression_output_callback(
     // 3. Drop calls VTDecompressionSessionWaitForAsynchronousFrames() first, ensuring no callbacks are running
     let decoded_frames = unsafe {
         let ptr = decompress_ref as *const Mutex<VecDeque<DecodedFrame>>;
-        &*ptr  // Directly deref the raw pointer
+        &*ptr // Directly deref the raw pointer
     };
 
     // Retain the pixel buffer (will be released after conversion to wgpu texture)
@@ -570,7 +585,10 @@ extern "C" fn decompression_output_callback(
             );
         }
         Err(e) => {
-            tracing::error!("[VideoToolbox Decoder] Failed to lock decoded frames queue: {}", e);
+            tracing::error!(
+                "[VideoToolbox Decoder] Failed to lock decoded frames queue: {}",
+                e
+            );
             // Release the pixel buffer since we can't queue it
             unsafe {
                 use super::ffi;

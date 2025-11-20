@@ -94,9 +94,7 @@ extern "C" {
         complete_until_presentation_time_stamp: CMTime,
     ) -> OSStatus;
 
-    pub(super) fn VTCompressionSessionInvalidate(
-        session: VTCompressionSessionRef,
-    );
+    pub(super) fn VTCompressionSessionInvalidate(session: VTCompressionSessionRef);
 
     pub(super) fn VTSessionSetProperty(
         session: VTCompressionSessionRef,
@@ -116,18 +114,12 @@ extern "C" {
         destination_buffer: CVPixelBufferRef,
     ) -> OSStatus;
 
-    pub(super) fn VTPixelTransferSessionInvalidate(
-        session: VTPixelTransferSessionRef,
-    );
+    pub(super) fn VTPixelTransferSessionInvalidate(session: VTPixelTransferSessionRef);
 
     // For getting encoded data from CMSampleBuffer
-    pub(super) fn CMSampleBufferGetDataBuffer(
-        sbuf: CMSampleBufferRef,
-    ) -> CMBlockBufferRef;
+    pub(super) fn CMSampleBufferGetDataBuffer(sbuf: CMSampleBufferRef) -> CMBlockBufferRef;
 
-    pub(super) fn CMBlockBufferGetDataLength(
-        the_buffer: CMBlockBufferRef,
-    ) -> usize;
+    pub(super) fn CMBlockBufferGetDataLength(the_buffer: CMBlockBufferRef) -> usize;
 
     pub(super) fn CMBlockBufferCopyDataBytes(
         the_buffer: CMBlockBufferRef,
@@ -268,9 +260,7 @@ extern "C" {
         session: VTDecompressionSessionRef,
     ) -> OSStatus;
 
-    pub(super) fn VTDecompressionSessionInvalidate(
-        session: VTDecompressionSessionRef,
-    );
+    pub(super) fn VTDecompressionSessionInvalidate(session: VTDecompressionSessionRef);
 
     pub(super) fn CMVideoFormatDescriptionCreateFromH264ParameterSets(
         allocator: *const c_void,

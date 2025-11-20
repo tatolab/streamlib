@@ -1,8 +1,6 @@
-
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyBytes};
 use crate::core::GpuContext;
-
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict};
 
 #[pyclass(name = "BufferUsage", module = "streamlib")]
 #[derive(Clone)]
@@ -140,39 +138,60 @@ impl PyBufferBindingType {
     const READ_ONLY_STORAGE: &'static str = "read-only-storage";
 }
 
-
-fn parse_buffer_usage(py: Python<'_>, usage_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::BufferUsages> {
-    let usage_int: u32 = usage_obj.extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid BufferUsage value: must be an integer, got {}", e)
-        ))?;
-
-    wgpu::BufferUsages::from_bits(usage_int)
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid BufferUsage flags: 0x{:x}", usage_int)
+fn parse_buffer_usage(
+    py: Python<'_>,
+    usage_obj: &Bound<'_, PyAny>,
+) -> PyResult<wgpu::BufferUsages> {
+    let usage_int: u32 = usage_obj.extract().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid BufferUsage value: must be an integer, got {}",
+            e
         ))
+    })?;
+
+    wgpu::BufferUsages::from_bits(usage_int).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid BufferUsage flags: 0x{:x}",
+            usage_int
+        ))
+    })
 }
 
-fn parse_shader_stage(py: Python<'_>, stage_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::ShaderStages> {
-    let stage_int: u32 = stage_obj.extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid ShaderStage value: must be an integer, got {}", e)
-        ))?;
-
-    wgpu::ShaderStages::from_bits(stage_int)
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid ShaderStage flags: 0x{:x}", stage_int)
+fn parse_shader_stage(
+    py: Python<'_>,
+    stage_obj: &Bound<'_, PyAny>,
+) -> PyResult<wgpu::ShaderStages> {
+    let stage_int: u32 = stage_obj.extract().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid ShaderStage value: must be an integer, got {}",
+            e
         ))
+    })?;
+
+    wgpu::ShaderStages::from_bits(stage_int).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid ShaderStage flags: 0x{:x}",
+            stage_int
+        ))
+    })
 }
 
-fn parse_texture_sample_type(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<wgpu::TextureSampleType> {
+fn parse_texture_sample_type(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+) -> PyResult<wgpu::TextureSampleType> {
     let sample_type_str: String = dict
         .get_item("sample_type")?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'sample_type' in texture dict"))?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("Missing 'sample_type' in texture dict")
+        })?
         .extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid sample_type value: must be a string, got {}", e)
-        ))?;
+        .map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid sample_type value: must be a string, got {}",
+                e
+            ))
+        })?;
 
     match sample_type_str.as_str() {
         "float" => Ok(wgpu::TextureSampleType::Float { filterable: true }),
@@ -186,11 +205,16 @@ fn parse_texture_sample_type(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResu
     }
 }
 
-fn parse_texture_view_dimension(py: Python<'_>, dim_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::TextureViewDimension> {
-    let dim_str: String = dim_obj.extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid view_dimension value: must be a string, got {}", e)
-        ))?;
+fn parse_texture_view_dimension(
+    py: Python<'_>,
+    dim_obj: &Bound<'_, PyAny>,
+) -> PyResult<wgpu::TextureViewDimension> {
+    let dim_str: String = dim_obj.extract().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid view_dimension value: must be a string, got {}",
+            e
+        ))
+    })?;
 
     match dim_str.as_str() {
         "1d" => Ok(wgpu::TextureViewDimension::D1),
@@ -205,27 +229,38 @@ fn parse_texture_view_dimension(py: Python<'_>, dim_obj: &Bound<'_, PyAny>) -> P
     }
 }
 
-fn parse_storage_texture_access(py: Python<'_>, access_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::StorageTextureAccess> {
-    let access_str: String = access_obj.extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid access value: must be a string, got {}", e)
-        ))?;
+fn parse_storage_texture_access(
+    py: Python<'_>,
+    access_obj: &Bound<'_, PyAny>,
+) -> PyResult<wgpu::StorageTextureAccess> {
+    let access_str: String = access_obj.extract().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid access value: must be a string, got {}",
+            e
+        ))
+    })?;
 
     match access_str.as_str() {
         "write-only" => Ok(wgpu::StorageTextureAccess::WriteOnly),
         "read-only" => Ok(wgpu::StorageTextureAccess::ReadOnly),
         "read-write" => Ok(wgpu::StorageTextureAccess::ReadWrite),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            format!("Unknown StorageTextureAccess: '{}'. Valid values: write-only, read-only, read-write", access_str)
-        ))
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Unknown StorageTextureAccess: '{}'. Valid values: write-only, read-only, read-write",
+            access_str
+        ))),
     }
 }
 
-fn parse_texture_format(py: Python<'_>, format_obj: &Bound<'_, PyAny>) -> PyResult<wgpu::TextureFormat> {
-    let format_str: String = format_obj.extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid format value: must be a string, got {}", e)
-        ))?;
+fn parse_texture_format(
+    py: Python<'_>,
+    format_obj: &Bound<'_, PyAny>,
+) -> PyResult<wgpu::TextureFormat> {
+    let format_str: String = format_obj.extract().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid format value: must be a string, got {}",
+            e
+        ))
+    })?;
 
     match format_str.as_str() {
         "rgba8unorm" => Ok(wgpu::TextureFormat::Rgba8Unorm),
@@ -240,50 +275,66 @@ fn parse_texture_format(py: Python<'_>, format_obj: &Bound<'_, PyAny>) -> PyResu
     }
 }
 
-fn parse_buffer_binding_type(py: Python<'_>, buffer_dict: &Bound<'_, PyDict>) -> PyResult<wgpu::BufferBindingType> {
+fn parse_buffer_binding_type(
+    py: Python<'_>,
+    buffer_dict: &Bound<'_, PyDict>,
+) -> PyResult<wgpu::BufferBindingType> {
     let type_str: String = buffer_dict
         .get_item("type")?
         .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'type' in buffer dict"))?
         .extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid buffer type value: must be a string, got {}", e)
-        ))?;
+        .map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid buffer type value: must be a string, got {}",
+                e
+            ))
+        })?;
 
     match type_str.as_str() {
         "uniform" => Ok(wgpu::BufferBindingType::Uniform),
         "storage" => Ok(wgpu::BufferBindingType::Storage { read_only: false }),
         "read-only-storage" => Ok(wgpu::BufferBindingType::Storage { read_only: true }),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            format!("Unknown BufferBindingType: '{}'. Valid values: uniform, storage, read-only-storage", type_str)
-        ))
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Unknown BufferBindingType: '{}'. Valid values: uniform, storage, read-only-storage",
+            type_str
+        ))),
     }
 }
 
-fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>) -> PyResult<wgpu::BindGroupLayoutEntry> {
+fn parse_bind_group_layout_entry(
+    py: Python<'_>,
+    entry_dict: &Bound<'_, PyDict>,
+) -> PyResult<wgpu::BindGroupLayoutEntry> {
     let binding: u32 = entry_dict
         .get_item("binding")?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'binding' key in bind group layout entry"))?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err(
+                "Missing 'binding' key in bind group layout entry",
+            )
+        })?
         .extract()
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid 'binding' value: must be an integer, got {}", e)
-        ))?;
+        .map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid 'binding' value: must be an integer, got {}",
+                e
+            ))
+        })?;
 
-    let visibility_obj = entry_dict
-        .get_item("visibility")?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'visibility' key in bind group layout entry"))?;
+    let visibility_obj = entry_dict.get_item("visibility")?.ok_or_else(|| {
+        pyo3::exceptions::PyKeyError::new_err("Missing 'visibility' key in bind group layout entry")
+    })?;
     let visibility = parse_shader_stage(py, &visibility_obj)?;
 
     if let Some(texture_dict) = entry_dict.get_item("texture")? {
-        let texture_dict = texture_dict.downcast::<PyDict>()
-            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(
-                format!("'texture' must be a dict, got {}", e)
-            ))?;
+        let texture_dict = texture_dict.downcast::<PyDict>().map_err(|e| {
+            pyo3::exceptions::PyTypeError::new_err(format!("'texture' must be a dict, got {}", e))
+        })?;
 
         let sample_type = parse_texture_sample_type(py, texture_dict)?;
 
-        let view_dimension_obj = texture_dict
-            .get_item("view_dimension")?
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'view_dimension' in texture dict"))?;
+        let view_dimension_obj = texture_dict.get_item("view_dimension")?.ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("Missing 'view_dimension' in texture dict")
+        })?;
         let view_dimension = parse_texture_view_dimension(py, &view_dimension_obj)?;
 
         return Ok(wgpu::BindGroupLayoutEntry {
@@ -299,24 +350,28 @@ fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>)
     }
 
     if let Some(storage_dict) = entry_dict.get_item("storage_texture")? {
-        let storage_dict = storage_dict.downcast::<PyDict>()
-            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(
-                format!("'storage_texture' must be a dict, got {}", e)
-            ))?;
+        let storage_dict = storage_dict.downcast::<PyDict>().map_err(|e| {
+            pyo3::exceptions::PyTypeError::new_err(format!(
+                "'storage_texture' must be a dict, got {}",
+                e
+            ))
+        })?;
 
-        let access_obj = storage_dict
-            .get_item("access")?
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'access' in storage_texture dict"))?;
+        let access_obj = storage_dict.get_item("access")?.ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("Missing 'access' in storage_texture dict")
+        })?;
         let access = parse_storage_texture_access(py, &access_obj)?;
 
-        let format_obj = storage_dict
-            .get_item("format")?
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'format' in storage_texture dict"))?;
+        let format_obj = storage_dict.get_item("format")?.ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("Missing 'format' in storage_texture dict")
+        })?;
         let format = parse_texture_format(py, &format_obj)?;
 
-        let view_dimension_obj = storage_dict
-            .get_item("view_dimension")?
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'view_dimension' in storage_texture dict"))?;
+        let view_dimension_obj = storage_dict.get_item("view_dimension")?.ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err(
+                "Missing 'view_dimension' in storage_texture dict",
+            )
+        })?;
         let view_dimension = parse_texture_view_dimension(py, &view_dimension_obj)?;
 
         return Ok(wgpu::BindGroupLayoutEntry {
@@ -332,10 +387,9 @@ fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>)
     }
 
     if let Some(buffer_dict) = entry_dict.get_item("buffer")? {
-        let buffer_dict = buffer_dict.downcast::<PyDict>()
-            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(
-                format!("'buffer' must be a dict, got {}", e)
-            ))?;
+        let buffer_dict = buffer_dict.downcast::<PyDict>().map_err(|e| {
+            pyo3::exceptions::PyTypeError::new_err(format!("'buffer' must be a dict, got {}", e))
+        })?;
 
         let buffer_type = parse_buffer_binding_type(py, buffer_dict)?;
 
@@ -355,7 +409,6 @@ fn parse_bind_group_layout_entry(py: Python<'_>, entry_dict: &Bound<'_, PyDict>)
         "Unknown binding type: entry must have one of 'texture', 'storage_texture', or 'buffer' keys"
     ))
 }
-
 
 #[pyclass(name = "WgpuShaderModule", module = "streamlib")]
 pub struct PyWgpuShaderModule {
@@ -417,7 +470,7 @@ impl PyWgpuComputePipeline {
     fn _bind_group_layout(&self, py: Python<'_>) -> PyResult<Py<PyWgpuBindGroupLayout>> {
         // TODO: This is a placeholder - need to properly store bind group layout Arc
         Err(pyo3::exceptions::PyNotImplementedError::new_err(
-            "bind_group_layout getter not yet implemented for Arc-based wrappers"
+            "bind_group_layout getter not yet implemented for Arc-based wrappers",
         ))
     }
 
@@ -461,11 +514,15 @@ impl PyWgpuCommandEncoder {
         });
 
         // SAFETY: Transmute to 'static lifetime - safe because compute_pass lifetime is managed by Arc/Mutex
-        let compute_pass_static: wgpu::ComputePass<'static> = unsafe { std::mem::transmute(compute_pass) };
+        let compute_pass_static: wgpu::ComputePass<'static> =
+            unsafe { std::mem::transmute(compute_pass) };
 
-        Py::new(py, PyWgpuComputePass {
-            compute_pass: std::sync::Arc::new(std::sync::Mutex::new(Some(compute_pass_static)))
-        })
+        Py::new(
+            py,
+            PyWgpuComputePass {
+                compute_pass: std::sync::Arc::new(std::sync::Mutex::new(Some(compute_pass_static))),
+            },
+        )
     }
 
     fn finish(&self, py: Python<'_>) -> PyResult<usize> {
@@ -474,7 +531,9 @@ impl PyWgpuCommandEncoder {
         })?;
 
         let encoder = encoder_guard.take().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Encoder already consumed (finish() called twice)")
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "Encoder already consumed (finish() called twice)",
+            )
         })?;
 
         let command_buffer = encoder.finish();
@@ -576,15 +635,21 @@ pub struct PyWgpuTexture {
 #[pymethods]
 impl PyWgpuTexture {
     fn create_view(&self, py: Python<'_>) -> PyResult<Py<PyWgpuTextureView>> {
-        let view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Py::new(py, PyWgpuTextureView { view: std::sync::Arc::new(view) })
+        let view = self
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        Py::new(
+            py,
+            PyWgpuTextureView {
+                view: std::sync::Arc::new(view),
+            },
+        )
     }
 
     fn __repr__(&self) -> String {
         "WgpuTexture".to_string()
     }
 }
-
 
 #[pyclass(name = "WgpuDevice", module = "streamlib")]
 pub struct PyWgpuDevice {
@@ -593,17 +658,31 @@ pub struct PyWgpuDevice {
 
 #[pymethods]
 impl PyWgpuDevice {
-    fn create_shader_module(&self, py: Python<'_>, code: String) -> PyResult<Py<PyWgpuShaderModule>> {
+    fn create_shader_module(
+        &self,
+        py: Python<'_>,
+        code: String,
+    ) -> PyResult<Py<PyWgpuShaderModule>> {
         let device = self.context.device();
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(code.into()),
         });
 
-        Py::new(py, PyWgpuShaderModule { shader_module: std::sync::Arc::new(shader_module) })
+        Py::new(
+            py,
+            PyWgpuShaderModule {
+                shader_module: std::sync::Arc::new(shader_module),
+            },
+        )
     }
 
-    fn create_buffer(&self, py: Python<'_>, size: u64, usage: &Bound<'_, PyAny>) -> PyResult<Py<PyWgpuBuffer>> {
+    fn create_buffer(
+        &self,
+        py: Python<'_>,
+        size: u64,
+        usage: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyWgpuBuffer>> {
         let device = self.context.device();
         let usage_flags = parse_buffer_usage(py, usage)?;
 
@@ -614,7 +693,12 @@ impl PyWgpuDevice {
             mapped_at_creation: false,
         });
 
-        Py::new(py, PyWgpuBuffer { buffer: std::sync::Arc::new(buffer) })
+        Py::new(
+            py,
+            PyWgpuBuffer {
+                buffer: std::sync::Arc::new(buffer),
+            },
+        )
     }
 
     fn create_bind_group_layout(
@@ -639,7 +723,12 @@ impl PyWgpuDevice {
             entries: &parsed_entries,
         });
 
-        Py::new(py, PyWgpuBindGroupLayout { layout: std::sync::Arc::new(layout) })
+        Py::new(
+            py,
+            PyWgpuBindGroupLayout {
+                layout: std::sync::Arc::new(layout),
+            },
+        )
     }
 
     fn create_pipeline_layout(
@@ -665,7 +754,12 @@ impl PyWgpuDevice {
             push_constant_ranges: &[],
         });
 
-        Py::new(py, PyWgpuPipelineLayout { pipeline_layout: std::sync::Arc::new(pipeline_layout) })
+        Py::new(
+            py,
+            PyWgpuPipelineLayout {
+                pipeline_layout: std::sync::Arc::new(pipeline_layout),
+            },
+        )
     }
 
     fn create_compute_pipeline(
@@ -694,7 +788,13 @@ impl PyWgpuDevice {
 
         let bind_group_layout_handle = 0; // TODO: Get from pipeline
 
-        Py::new(py, PyWgpuComputePipeline { pipeline: std::sync::Arc::new(pipeline), bind_group_layout_handle })
+        Py::new(
+            py,
+            PyWgpuComputePipeline {
+                pipeline: std::sync::Arc::new(pipeline),
+                bind_group_layout_handle,
+            },
+        )
     }
 
     fn create_bind_group(
@@ -760,19 +860,26 @@ impl PyWgpuDevice {
             entries: &bind_entries,
         });
 
-        Py::new(py, PyWgpuBindGroup { bind_group: std::sync::Arc::new(bind_group) })
+        Py::new(
+            py,
+            PyWgpuBindGroup {
+                bind_group: std::sync::Arc::new(bind_group),
+            },
+        )
     }
 
     fn create_command_encoder(&self, py: Python<'_>) -> PyResult<Py<PyWgpuCommandEncoder>> {
         let device = self.context.device();
-        let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: None,
-        });
+        let encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        Py::new(py, PyWgpuCommandEncoder {
-            encoder: std::sync::Arc::new(std::sync::Mutex::new(Some(encoder))),
-            context: self.context.clone(),
-        })
+        Py::new(
+            py,
+            PyWgpuCommandEncoder {
+                encoder: std::sync::Arc::new(std::sync::Mutex::new(Some(encoder))),
+                context: self.context.clone(),
+            },
+        )
     }
 
     fn __repr__(&self) -> String {
@@ -810,9 +917,7 @@ impl PyWgpuQueue {
         // SAFETY: command_buffer handles must be valid pointers
         let cmd_bufs: Vec<wgpu::CommandBuffer> = command_buffers
             .into_iter()
-            .map(|handle| unsafe {
-                *Box::from_raw(handle as *mut wgpu::CommandBuffer)
-            })
+            .map(|handle| unsafe { *Box::from_raw(handle as *mut wgpu::CommandBuffer) })
             .collect();
 
         queue.submit(cmd_bufs);

@@ -1004,11 +1004,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
             let required = field.attributes.required.unwrap_or(true);
 
             quote! {
@@ -1034,11 +1030,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
 
             quote! {
                 ::streamlib::core::PortDescriptor {
@@ -1078,7 +1070,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
                     quote! {},
                     quote! {},
                 )
-            },
+            }
             (true, false) => {
                 // Sink
                 (
@@ -1097,7 +1089,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
                     quote! {},
                     quote! {},
                 )
-            },
+            }
             (true, true) => {
                 // Transform
                 (
@@ -1116,7 +1108,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
                         }
                     },
                 )
-            },
+            }
             (false, false) => {
                 // No ports - treat as transform
                 (
@@ -1524,7 +1516,8 @@ fn generate_from_config_impl(analysis: &AnalysisResult) -> TokenStream {
         .collect();
 
     // Combine all initializations
-    let has_config_init = analysis.config_field_type.is_some() || analysis.processor_attrs.config_type.is_some();
+    let has_config_init =
+        analysis.config_field_type.is_some() || analysis.processor_attrs.config_type.is_some();
 
     if has_config_init {
         quote! {
@@ -1572,11 +1565,7 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
             let required = field.attributes.required.unwrap_or(true);
 
             quote! {
@@ -1596,11 +1585,7 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
 
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {

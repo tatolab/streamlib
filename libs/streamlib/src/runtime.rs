@@ -1,4 +1,4 @@
-use crate::core::{Result, bus::PortMessage};
+use crate::core::{bus::PortMessage, Result};
 
 pub use crate::core::handles::ProcessorHandle;
 

@@ -6,17 +6,17 @@
 use streamlib::{Result, StreamRuntime};
 
 #[cfg(target_os = "macos")]
-use streamlib::{DisplayProcessor, AudioOutputProcessor};
+use streamlib::{AudioOutputProcessor, DisplayProcessor};
 
 #[cfg(target_os = "macos")]
-use streamlib::core::{DisplayConfig, VideoFrame, AudioFrame};
+use streamlib::core::{AudioFrame, DisplayConfig, VideoFrame};
 
 fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
 
@@ -36,7 +36,7 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn run_whep_player() -> Result<()> {
-    use streamlib::{WebRtcWhepProcessor, WebRtcWhepConfig, WhepConfig};
+    use streamlib::{WebRtcWhepConfig, WebRtcWhepProcessor, WhepConfig};
 
     // Get WHEP endpoint URL from environment or use Cloudflare Stream default
     let whep_url = std::env::var("WHEP_URL").unwrap_or_else(|_| {
@@ -65,19 +65,18 @@ fn run_whep_player() -> Result<()> {
 
     // Create display processor for video output
     tracing::info!("📺 Creating display processor...");
-    let display = runtime.add_processor_with_config::<DisplayProcessor>(
-        DisplayConfig {
-            width: 1920,
-            height: 1080,
-            title: Some("WHEP Player".to_string()),
-            scaling_mode: Default::default(),  // Use default scaling (Stretch)
-        }
-    )?;
+    let display = runtime.add_processor_with_config::<DisplayProcessor>(DisplayConfig {
+        width: 1920,
+        height: 1080,
+        title: Some("WHEP Player".to_string()),
+        scaling_mode: Default::default(), // Use default scaling (Stretch)
+    })?;
     tracing::info!("✅ Display processor created\n");
 
     // Create audio output processor
     tracing::info!("🔊 Creating audio output processor...");
-    let audio_output = runtime.add_processor_with_config::<AudioOutputProcessor>(Default::default())?;
+    let audio_output =
+        runtime.add_processor_with_config::<AudioOutputProcessor>(Default::default())?;
     tracing::info!("✅ Audio output processor created\n");
 
     // Connect processors

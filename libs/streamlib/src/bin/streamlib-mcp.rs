@@ -1,10 +1,9 @@
-
-use streamlib::{global_registry, mcp::McpServer};
-use streamlib::core::StreamRuntime;
-use streamlib::{request_camera_permission, request_display_permission, request_audio_permission};
 use clap::Parser;
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
+use streamlib::core::StreamRuntime;
+use streamlib::{global_registry, mcp::McpServer};
+use streamlib::{request_audio_permission, request_camera_permission, request_display_permission};
 
 #[derive(Parser, Debug)]
 #[command(name = "streamlib-mcp")]
@@ -43,7 +42,6 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     tracing::info!("Starting streamlib MCP server");
-
 
     let allow_camera = args.allow_all || args.allow_camera;
     let allow_display = args.allow_all || args.allow_display;
@@ -94,7 +92,7 @@ fn main() -> anyhow::Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
+        use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
         use std::time::Duration;
 
         loop {
@@ -114,7 +112,10 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn async_main(args: Args, permissions: std::collections::HashSet<String>) -> anyhow::Result<()> {
+async fn async_main(
+    args: Args,
+    permissions: std::collections::HashSet<String>,
+) -> anyhow::Result<()> {
     tracing::info!("Entered async runtime");
 
     let registry = global_registry();
@@ -149,8 +150,8 @@ async fn async_main(args: Args, permissions: std::collections::HashSet<String>) 
 
     tracing::info!("StreamRuntime started successfully on background thread");
 
-    let server = McpServer::with_runtime(registry.clone(), runtime.clone())
-        .with_permissions(permissions);
+    let server =
+        McpServer::with_runtime(registry.clone(), runtime.clone()).with_permissions(permissions);
 
     tracing::info!(
         "MCP server {} v{} ready (APPLICATION MODE - runtime control enabled)",
@@ -175,7 +176,9 @@ async fn async_main(args: Args, permissions: std::collections::HashSet<String>) 
     }
 
     // Wait for runtime thread to finish
-    runtime_handle.join().map_err(|_| anyhow::anyhow!("Failed to join runtime thread"))?;
+    runtime_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("Failed to join runtime thread"))?;
     tracing::info!("StreamRuntime thread joined");
 
     Ok(())

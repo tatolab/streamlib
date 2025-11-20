@@ -11,11 +11,8 @@
 //!
 //! You should hear a 440 Hz tone (musical note A4) for 2 seconds.
 
-use streamlib::{
-    StreamRuntime, Result,
-    TestToneGenerator, AudioOutputProcessor, AudioFrame,
-};
-use streamlib::core::config::{TestToneConfig, AudioOutputConfig};
+use streamlib::core::config::{AudioOutputConfig, TestToneConfig};
+use streamlib::{AudioFrame, AudioOutputProcessor, Result, StreamRuntime, TestToneGenerator};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,31 +34,27 @@ async fn main() -> Result<()> {
 
     // Create a test tone generator (440 Hz = musical note A4)
     println!("🎵 Adding test tone generator (440 Hz)...");
-    let tone = runtime.add_processor_with_config::<TestToneGenerator>(
-        TestToneConfig {
-            frequency: 440.0,
-            amplitude: 0.3,  // 30% volume to avoid clipping
-            sample_rate: audio_config.sample_rate,
-            timer_group_id: None,
-        }
-    )?;
+    let tone = runtime.add_processor_with_config::<TestToneGenerator>(TestToneConfig {
+        frequency: 440.0,
+        amplitude: 0.3, // 30% volume to avoid clipping
+        sample_rate: audio_config.sample_rate,
+        timer_group_id: None,
+    })?;
     println!("✓ Test tone added\n");
 
     // Create audio output processor
     println!("🔊 Adding audio output processor...");
-    let output = runtime.add_processor_with_config::<AudioOutputProcessor>(
-        AudioOutputConfig {
-            device_id: None,  // Use default audio device
-        }
-    )?;
+    let output = runtime.add_processor_with_config::<AudioOutputProcessor>(AudioOutputConfig {
+        device_id: None, // Use default audio device
+    })?;
     println!("✓ Audio output added\n");
 
     // Connect processors using type-safe handles
     // The compiler verifies that AudioFrame → AudioFrame types match!
     println!("🔗 Connecting test tone → audio output...");
     runtime.connect(
-        tone.output_port::<AudioFrame>("audio"),    // OutputPortRef<AudioFrame>
-        output.input_port::<AudioFrame>("audio"),   // InputPortRef<AudioFrame>
+        tone.output_port::<AudioFrame>("audio"), // OutputPortRef<AudioFrame>
+        output.input_port::<AudioFrame>("audio"), // InputPortRef<AudioFrame>
     )?;
     println!("✓ Pipeline connected\n");
 

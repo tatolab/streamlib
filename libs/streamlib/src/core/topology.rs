@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -43,18 +42,27 @@ impl ConnectionTopology {
         for (id, node) in &self.nodes {
             println!("  - {} ({})", id, node.handler_type);
             if !node.inputs.is_empty() {
-                println!("    Inputs: {:?}", node.inputs.iter().map(|p| &p.port_name).collect::<Vec<_>>());
+                println!(
+                    "    Inputs: {:?}",
+                    node.inputs.iter().map(|p| &p.port_name).collect::<Vec<_>>()
+                );
             }
             if !node.outputs.is_empty() {
-                println!("    Outputs: {:?}", node.outputs.iter().map(|p| &p.port_name).collect::<Vec<_>>());
+                println!(
+                    "    Outputs: {:?}",
+                    node.outputs
+                        .iter()
+                        .map(|p| &p.port_name)
+                        .collect::<Vec<_>>()
+                );
             }
         }
 
         println!("\nConnections ({}):", self.edges.len());
         for edge in &self.edges {
-            println!("  {} [{}] -> {} [{}]",
-                edge.from_handler, edge.from_port,
-                edge.to_handler, edge.to_port
+            println!(
+                "  {} [{}] -> {} [{}]",
+                edge.from_handler, edge.from_port, edge.to_handler, edge.to_port
             );
         }
     }
@@ -65,16 +73,18 @@ impl ConnectionTopology {
         dot.push_str("  node [shape=box];\n\n");
 
         for (id, node) in &self.nodes {
-            dot.push_str(&format!("  \"{}\" [label=\"{}\\n({})\"];\n",
-                id, id, node.handler_type));
+            dot.push_str(&format!(
+                "  \"{}\" [label=\"{}\\n({})\"];\n",
+                id, id, node.handler_type
+            ));
         }
 
         dot.push('\n');
 
         for edge in &self.edges {
-            dot.push_str(&format!("  \"{}\" -> \"{}\" [label=\"{}→{}\"];\n",
-                edge.from_handler, edge.to_handler,
-                edge.from_port, edge.to_port
+            dot.push_str(&format!(
+                "  \"{}\" -> \"{}\" [label=\"{}→{}\"];\n",
+                edge.from_handler, edge.to_handler, edge.from_port, edge.to_port
             ));
         }
 

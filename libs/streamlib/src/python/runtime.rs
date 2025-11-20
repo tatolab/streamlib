@@ -1,13 +1,12 @@
-
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use super::decorators::ProcessorProxy;
 use super::error::PyStreamError;
 use super::port::ProcessorPort;
-use super::decorators::ProcessorProxy;
-use std::sync::Arc;
-use parking_lot::Mutex;
-use crate::StreamRuntime;
 use crate::core::{ProcessorHandle, VideoFrame};
+use crate::StreamRuntime;
+use parking_lot::Mutex;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use std::sync::Arc;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::apple::{AppleCameraProcessor, AppleDisplayProcessor};
@@ -46,7 +45,6 @@ impl PyProcessorHandle {
         format!("ProcessorHandle(id={})", self.id)
     }
 }
-
 
 #[pyclass(name = "StreamRuntime", module = "streamlib")]
 pub struct PyStreamRuntime {
@@ -122,21 +120,27 @@ impl PyStreamRuntime {
                 ).into()),
             };
 
-            let proxy = Py::new(py, ProcessorProxy {
-                processor_name: id.clone(),
-                processor_type: proc_type_str.clone(),
-                config,
-                python_class: None,
-                input_port_names: input_ports,
-                output_port_names: output_ports,
-                description: None,
-                usage_context: None,
-                tags: Vec::new(),
-            })?;
+            let proxy = Py::new(
+                py,
+                ProcessorProxy {
+                    processor_name: id.clone(),
+                    processor_type: proc_type_str.clone(),
+                    config,
+                    python_class: None,
+                    input_port_names: input_ports,
+                    output_port_names: output_ports,
+                    description: None,
+                    usage_context: None,
+                    tags: Vec::new(),
+                },
+            )?;
 
             processors_lock.push(proxy);
-            tracing::info!("Added built-in processor '{}' with ID: {}", proc_type_str, id);
-
+            tracing::info!(
+                "Added built-in processor '{}' with ID: {}",
+                proc_type_str,
+                id
+            );
         } else if let Ok(proxy) = proc_arg.extract::<Py<ProcessorProxy>>(py) {
             // Custom Python processor (decorated)
             let mut processor_ref = proxy.borrow_mut(py);
@@ -149,8 +153,11 @@ impl PyStreamRuntime {
 
             drop(processor_ref);
             processors_lock.push(proxy.clone_ref(py));
-            tracing::info!("Added custom processor '{}' with ID: {}", processor_name, id);
-
+            tracing::info!(
+                "Added custom processor '{}' with ID: {}",
+                processor_name,
+                id
+            );
         } else {
             return Err(PyStreamError::Runtime(
                 "processor must be either a processor type string (e.g., CAMERA_PROCESSOR) or a decorated processor class".to_string()
@@ -160,9 +167,7 @@ impl PyStreamRuntime {
         drop(processors_lock);
 
         // Create and return handle with unique ID
-        let handle = Py::new(py, PyProcessorHandle {
-            id,
-        })?;
+        let handle = Py::new(py, PyProcessorHandle { id })?;
 
         Ok(handle)
     }
@@ -177,23 +182,21 @@ impl PyStreamRuntime {
     /// )
     /// ```
     #[pyo3(signature = (*, output, input))]
-    fn connect(
-        &self,
-        output: ProcessorPort,
-        input: ProcessorPort,
-    ) -> PyResult<()> {
+    fn connect(&self, output: ProcessorPort, input: ProcessorPort) -> PyResult<()> {
         let src = output;
         let dst = input;
 
         if src.is_input {
             return Err(PyStreamError::Connection(
-                "Source/output port must be an output port".to_string()
-            ).into());
+                "Source/output port must be an output port".to_string(),
+            )
+            .into());
         }
         if !dst.is_input {
             return Err(PyStreamError::Connection(
-                "Destination/input port must be an input port".to_string()
-            ).into());
+                "Destination/input port must be an input port".to_string(),
+            )
+            .into());
         }
 
         let mut connections = self.connections.lock();
@@ -211,9 +214,10 @@ impl PyStreamRuntime {
         let connections = self.connections.lock();
         println!("   Connections: {}", connections.len());
 
-        let mut runtime = self.runtime.take().ok_or_else(|| {
-            PyStreamError::Runtime("Runtime already started".to_string())
-        })?;
+        let mut runtime = self
+            .runtime
+            .take()
+            .ok_or_else(|| PyStreamError::Runtime("Runtime already started".to_string()))?;
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
@@ -232,16 +236,18 @@ impl PyStreamRuntime {
                     "CameraProcessor" => {
                         println!("   Creating CameraProcessor: {}", processor_name);
 
-                        let device_id = config.as_ref()
+                        let device_id = config
+                            .as_ref()
                             .and_then(|c| c.bind(py).get_item("device_id").ok().flatten())
                             .and_then(|v| v.extract::<String>().ok());
 
-                        let camera_config = AppleCameraConfig {
-                            device_id,
-                        };
+                        let camera_config = AppleCameraConfig { device_id };
 
-                        let handle = runtime.add_processor_with_config::<AppleCameraProcessor>(camera_config)
-                            .map_err(|e| PyStreamError::Runtime(format!("Failed to create camera: {}", e)))?;
+                        let handle = runtime
+                            .add_processor_with_config::<AppleCameraProcessor>(camera_config)
+                            .map_err(|e| {
+                                PyStreamError::Runtime(format!("Failed to create camera: {}", e))
+                            })?;
 
                         processor_handles.insert(processor_name.clone(), handle);
                     }
@@ -270,22 +276,33 @@ impl PyStreamRuntime {
                             title,
                         };
 
-                        let handle = runtime.add_processor_with_config::<AppleDisplayProcessor>(display_config)
-                            .map_err(|e| PyStreamError::Runtime(format!("Failed to create display: {}", e)))?;
+                        let handle = runtime
+                            .add_processor_with_config::<AppleDisplayProcessor>(display_config)
+                            .map_err(|e| {
+                                PyStreamError::Runtime(format!("Failed to create display: {}", e))
+                            })?;
 
                         processor_handles.insert(processor_name.clone(), handle);
                     }
                     "PythonProcessor" => {
                         println!("   Creating PythonProcessor: {}", processor_name);
 
-                        let python_class = proxy_ref.python_class.as_ref()
-                            .ok_or_else(|| PyStreamError::Runtime("PythonProcessor missing python_class".to_string()))?
+                        let python_class = proxy_ref
+                            .python_class
+                            .as_ref()
+                            .ok_or_else(|| {
+                                PyStreamError::Runtime(
+                                    "PythonProcessor missing python_class".to_string(),
+                                )
+                            })?
                             .clone_ref(py);
 
                         // TODO(@jonathan): ProcessorProxy should store PortMetadata from decorators
                         // For now, create basic metadata from port names (assume VideoFrame type)
-                        use super::processor::{PortMetadata, FrameType, PythonProcessorConfig};
-                        let input_metadata: Vec<PortMetadata> = proxy_ref.input_port_names.iter()
+                        use super::processor::{FrameType, PortMetadata, PythonProcessorConfig};
+                        let input_metadata: Vec<PortMetadata> = proxy_ref
+                            .input_port_names
+                            .iter()
                             .map(|name| PortMetadata {
                                 name: name.clone(),
                                 frame_type: FrameType::Video, // TODO: get from decorators
@@ -294,7 +311,9 @@ impl PyStreamRuntime {
                             })
                             .collect();
 
-                        let output_metadata: Vec<PortMetadata> = proxy_ref.output_port_names.iter()
+                        let output_metadata: Vec<PortMetadata> = proxy_ref
+                            .output_port_names
+                            .iter()
                             .map(|name| PortMetadata {
                                 name: name.clone(),
                                 frame_type: FrameType::Video, // TODO: get from decorators
@@ -314,42 +333,61 @@ impl PyStreamRuntime {
                         };
 
                         // Use the proper API - get a handle just like Camera/Display!
-                        let handle = runtime.add_processor_with_config::<super::processor::PythonProcessor>(config)
-                            .map_err(|e| PyStreamError::Runtime(format!("Failed to create Python processor: {}", e)))?;
+                        let handle = runtime
+                            .add_processor_with_config::<super::processor::PythonProcessor>(config)
+                            .map_err(|e| {
+                                PyStreamError::Runtime(format!(
+                                    "Failed to create Python processor: {}",
+                                    e
+                                ))
+                            })?;
 
                         processor_handles.insert(processor_name.clone(), handle);
                     }
                     _ => {
-                        return Err(PyStreamError::Runtime(
-                            format!("Unknown processor type: {}", processor_type)
-                        ).into());
+                        return Err(PyStreamError::Runtime(format!(
+                            "Unknown processor type: {}",
+                            processor_type
+                        ))
+                        .into());
                     }
                 }
             }
 
             println!("   Wiring {} connections...", connections.len());
             for (source_port, dest_port) in connections.iter() {
-                println!("      {} → {}",
+                println!(
+                    "      {} → {}",
                     format!("{}.{}", source_port.processor_name, source_port.port_name),
                     format!("{}.{}", dest_port.processor_name, dest_port.port_name)
                 );
 
-                let source_handle = processor_handles.get(&source_port.processor_name)
-                    .ok_or_else(|| PyStreamError::Connection(
-                        format!("Source processor '{}' not found", source_port.processor_name)
-                    ))?;
+                let source_handle = processor_handles
+                    .get(&source_port.processor_name)
+                    .ok_or_else(|| {
+                        PyStreamError::Connection(format!(
+                            "Source processor '{}' not found",
+                            source_port.processor_name
+                        ))
+                    })?;
 
-                let dest_handle = processor_handles.get(&dest_port.processor_name)
-                    .ok_or_else(|| PyStreamError::Connection(
-                        format!("Destination processor '{}' not found", dest_port.processor_name)
-                    ))?;
+                let dest_handle = processor_handles
+                    .get(&dest_port.processor_name)
+                    .ok_or_else(|| {
+                        PyStreamError::Connection(format!(
+                            "Destination processor '{}' not found",
+                            dest_port.processor_name
+                        ))
+                    })?;
 
                 // All connections now use the handle-based API!
                 // TODO: Support different frame types (currently assumes VideoFrame)
-                runtime.connect(
-                    source_handle.output_port::<VideoFrame>(&source_port.port_name),
-                    dest_handle.input_port::<VideoFrame>(&dest_port.port_name),
-                ).map_err(|e| PyStreamError::Connection(format!("Failed to connect: {}", e)))?;
+                runtime
+                    .connect(
+                        source_handle.output_port::<VideoFrame>(&source_port.port_name),
+                        dest_handle.input_port::<VideoFrame>(&dest_port.port_name),
+                    )
+                    .map_err(|e| PyStreamError::Connection(format!("Failed to connect: {}", e)))?;
             }
 
             drop(processors);
@@ -365,7 +403,8 @@ impl PyStreamRuntime {
 
         py.allow_threads(|| {
             // Runtime.run() is now synchronous and blocks until shutdown
-            runtime.run()
+            runtime
+                .run()
                 .map_err(|e| PyStreamError::Runtime(format!("Runtime error: {}", e)))?;
 
             Ok(())
@@ -377,7 +416,8 @@ impl PyStreamRuntime {
         let connections = self.connections.lock();
         format!(
             "StreamRuntime(processors={}, connections={})",
-            processors.len(), connections.len()
+            processors.len(),
+            connections.len()
         )
     }
 }

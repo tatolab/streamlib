@@ -1,8 +1,7 @@
-
 use super::{McpError, Result};
 use crate::core::ProcessorRegistry;
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Resource {
@@ -146,14 +145,20 @@ mod tests {
             .with_audio_requirements(AudioRequirements::required(2048, 48000, 2));
 
         let factory = StdArc::new(|| Err(crate::core::StreamError::Configuration("Test".into())));
-        registry.lock().unwrap().register(descriptor, factory).unwrap();
+        registry
+            .lock()
+            .unwrap()
+            .register(descriptor, factory)
+            .unwrap();
 
         let content = read_resource(registry, "processor://AudioProcessor").unwrap();
 
         let json: serde_json::Value = serde_json::from_str(&content.text).unwrap();
 
-        assert!(json.get("audio_requirements").is_some(),
-                "audio_requirements should be present in JSON");
+        assert!(
+            json.get("audio_requirements").is_some(),
+            "audio_requirements should be present in JSON"
+        );
 
         let audio_req = &json["audio_requirements"];
         assert_eq!(audio_req["required_buffer_size"], 2048);

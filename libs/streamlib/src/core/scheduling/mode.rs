@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,7 +44,11 @@ mod tests {
     #[test]
     fn test_scheduling_mode_serde() {
         // Test all variants
-        for mode in [SchedulingMode::Loop, SchedulingMode::Push, SchedulingMode::Pull] {
+        for mode in [
+            SchedulingMode::Loop,
+            SchedulingMode::Push,
+            SchedulingMode::Pull,
+        ] {
             let json = serde_json::to_string(&mode).unwrap();
             let deserialized: SchedulingMode = serde_json::from_str(&json).unwrap();
             assert_eq!(mode, deserialized);

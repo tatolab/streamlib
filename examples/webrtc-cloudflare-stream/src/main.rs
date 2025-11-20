@@ -1,17 +1,13 @@
-use streamlib::{Result, StreamRuntime};
-use streamlib::{
-    CameraProcessor, AudioCaptureProcessor, WebRtcWhipProcessor,
-    AudioResamplerProcessor, AudioChannelConverterProcessor, BufferRechunkerProcessor,
-    WebRtcWhipConfig, WhipConfig, VideoEncoderConfig, AudioEncoderConfig,
-    VideoCodec, H264Profile,
-};
 use streamlib::core::{
-    CameraConfig, AudioCaptureConfig,
-    AudioResamplerConfig, ResamplingQuality,
-    AudioChannelConverterConfig, ChannelConversionMode,
-    BufferRechunkerConfig,
-    VideoFrame, AudioFrame,
+    AudioCaptureConfig, AudioChannelConverterConfig, AudioFrame, AudioResamplerConfig,
+    BufferRechunkerConfig, CameraConfig, ChannelConversionMode, ResamplingQuality, VideoFrame,
 };
+use streamlib::{
+    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioEncoderConfig,
+    AudioResamplerProcessor, BufferRechunkerProcessor, CameraProcessor, H264Profile, VideoCodec,
+    VideoEncoderConfig, WebRtcWhipConfig, WebRtcWhipProcessor, WhipConfig,
+};
+use streamlib::{Result, StreamRuntime};
 
 fn main() -> Result<()> {
     // Initialize rustls crypto provider (required by webrtc crate)
@@ -49,74 +45,67 @@ fn main() -> Result<()> {
     let whip_url = "https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce/webRTC/publish";
 
     println!("📹 Adding camera processor...");
-    let camera = runtime.add_processor_with_config::<CameraProcessor>(
-        CameraConfig {
-            device_id: None, // Use default camera
-        }
-    )?;
+    let camera = runtime.add_processor_with_config::<CameraProcessor>(CameraConfig {
+        device_id: None, // Use default camera
+    })?;
     println!("✓ Camera added (capturing video @ 1280x720)\n");
 
     println!("🎤 Adding audio capture processor...");
-    let audio_capture = runtime.add_processor_with_config::<AudioCaptureProcessor>(
-        AudioCaptureConfig {
+    let audio_capture =
+        runtime.add_processor_with_config::<AudioCaptureProcessor>(AudioCaptureConfig {
             device_id: None, // Use default microphone
-        }
-    )?;
+        })?;
     println!("✓ Audio capture added (mono @ 24kHz)\n");
 
     println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
-    let resampler = runtime.add_processor_with_config::<AudioResamplerProcessor>(
-        AudioResamplerConfig {
+    let resampler =
+        runtime.add_processor_with_config::<AudioResamplerProcessor>(AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
-        }
-    )?;
+        })?;
     println!("✓ Resampler added\n");
 
     println!("🎛️  Adding channel converter (mono → stereo)...");
     let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
         AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
-        }
+        },
     )?;
     println!("✓ Channel converter added\n");
 
     println!("📦 Adding buffer rechunker (512 samples → 960 samples for Opus)...");
-    let rechunker = runtime.add_processor_with_config::<BufferRechunkerProcessor>(
-        BufferRechunkerConfig {
+    let rechunker =
+        runtime.add_processor_with_config::<BufferRechunkerProcessor>(BufferRechunkerConfig {
             target_buffer_size: 960, // 20ms @ 48kHz (Opus requirement)
-        }
-    )?;
+        })?;
     println!("✓ Buffer rechunker added\n");
 
     println!("🌐 Adding WebRTC WHIP streaming processor...");
-    let webrtc = runtime.add_processor_with_config::<WebRtcWhipProcessor>(
-        WebRtcWhipConfig {
-            whip: WhipConfig {
-                endpoint_url: whip_url.to_string(),
-                auth_token: None, // Cloudflare endpoint doesn't require authentication
-                timeout_ms: 10000,
-            },
-            video: VideoEncoderConfig {
-                width: 1280,
-                height: 720,
-                fps: 30,
-                bitrate_bps: 2_500_000, // 2.5 Mbps
-                keyframe_interval_frames: 30, // Every 1 second @ 30fps (for mid-stream join support)
-                codec: VideoCodec::H264(H264Profile::Baseline), // Cloudflare requires Baseline
-                low_latency: true,
-            },
-            audio: AudioEncoderConfig {
-                sample_rate: 48000,
-                channels: 2, // Stereo
-                bitrate_bps: 128_000, // 128 kbps
-                frame_duration_ms: 20, // 20ms frames (WebRTC standard)
-                complexity: 10, // Maximum quality
-                vbr: false, // Constant bitrate for consistent streaming
-            },
-        }
-    )?;
+    let webrtc = runtime.add_processor_with_config::<WebRtcWhipProcessor>(WebRtcWhipConfig {
+        whip: WhipConfig {
+            endpoint_url: whip_url.to_string(),
+            auth_token: None, // Cloudflare endpoint doesn't require authentication
+            timeout_ms: 10000,
+        },
+        video: VideoEncoderConfig {
+            width: 1280,
+            height: 720,
+            fps: 30,
+            bitrate_bps: 2_500_000,                         // 2.5 Mbps
+            keyframe_interval_frames: 30, // Every 1 second @ 30fps (for mid-stream join support)
+            codec: VideoCodec::H264(H264Profile::Baseline), // Cloudflare requires Baseline
+            low_latency: true,
+        },
+        audio: AudioEncoderConfig {
+            sample_rate: 48000,
+            channels: 2,           // Stereo
+            bitrate_bps: 128_000,  // 128 kbps
+            frame_duration_ms: 20, // 20ms frames (WebRTC standard)
+            complexity: 10,        // Maximum quality
+            vbr: false,            // Constant bitrate for consistent streaming
+        },
+    })?;
     println!("✓ WebRTC WHIP processor added\n");
 
     println!("🔗 Connecting pipeline:");

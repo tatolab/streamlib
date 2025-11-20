@@ -1,7 +1,10 @@
-use streamlib::{Result, StreamRuntime};
-use streamlib::core::{RuntimeContext, traits::processor};
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::time::Duration;
+use streamlib::core::{traits::processor, RuntimeContext};
+use streamlib::{Result, StreamRuntime};
 
 // Global state for test validation
 static ASYNC_EXECUTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
@@ -80,14 +83,18 @@ fn main() {
     println!("=== Main Thread Dispatch Test ===\n");
 
     // Initialize global state
-    ASYNC_EXECUTED.set(Arc::new(AtomicBool::new(false))).unwrap();
+    ASYNC_EXECUTED
+        .set(Arc::new(AtomicBool::new(false)))
+        .unwrap();
     BLOCKING_RESULT.set(Arc::new(Mutex::new(None))).unwrap();
     PROCESS_COUNT.set(Arc::new(AtomicU64::new(0))).unwrap();
 
     // Create runtime and add processor
     let mut runtime = StreamRuntime::new();
     println!("Adding test processor to runtime...");
-    runtime.add_processor::<MainThreadTestProcessor>().expect("Failed to add processor");
+    runtime
+        .add_processor::<MainThreadTestProcessor>()
+        .expect("Failed to add processor");
 
     // Start runtime (spawns worker threads, calls setup())
     println!("Starting runtime...\n");
@@ -115,7 +122,10 @@ fn main() {
         if *result == Some(50) {
             println!("✅ PASS: Blocking dispatch from process() returned correct value (50)");
         } else {
-            println!("❌ FAIL: Blocking dispatch returned {:?}, expected Some(50)", *result);
+            println!(
+                "❌ FAIL: Blocking dispatch returned {:?}, expected Some(50)",
+                *result
+            );
             std::process::exit(1);
         }
     }

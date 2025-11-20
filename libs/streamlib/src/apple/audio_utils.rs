@@ -26,7 +26,9 @@ where
     let device = if let Some(id) = device_id {
         let devices: Vec<_> = host
             .output_devices()
-            .map_err(|e| StreamError::Configuration(format!("Failed to enumerate audio devices: {}", e)))?
+            .map_err(|e| {
+                StreamError::Configuration(format!("Failed to enumerate audio devices: {}", e))
+            })?
             .collect();
         devices
             .get(id)

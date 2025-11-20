@@ -21,12 +21,8 @@ pub fn parse_nal_units_avcc(data: &[u8]) -> Vec<Vec<u8>> {
 
     while i + 4 <= data.len() {
         // Read 4-byte big-endian length
-        let nal_length = u32::from_be_bytes([
-            data[i],
-            data[i + 1],
-            data[i + 2],
-            data[i + 3],
-        ]) as usize;
+        let nal_length =
+            u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
 
         i += 4; // Skip length prefix
 
@@ -63,12 +59,13 @@ pub fn parse_nal_units_annex_b(data: &[u8]) -> Vec<Vec<u8>> {
     while i < data.len() {
         // Look for start code (4-byte or 3-byte)
         let start_code_len = if i + 3 < data.len()
-            && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1
         {
             4
-        } else if i + 2 < data.len()
-            && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1
-        {
+        } else if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
             3
         } else {
             i += 1;
@@ -135,7 +132,9 @@ pub fn parse_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
                 "❌ [NAL Parser] UNKNOWN H.264 FORMAT! First 4 bytes = {:02x} {:02x} {:02x} {:02x} (interpreted length={}, total data={})",
                 data[0], data[1], data[2], data[3], length, data.len()
             );
-            tracing::error!("❌ [NAL Parser] This will result in NO NAL units parsed - stream will fail!");
+            tracing::error!(
+                "❌ [NAL Parser] This will result in NO NAL units parsed - stream will fail!"
+            );
             Vec::new()
         }
     }
@@ -177,8 +176,11 @@ pub fn avcc_to_annex_b(avcc_data: &[u8]) -> Vec<u8> {
         pos += 4;
 
         if pos + nal_length > avcc_data.len() {
-            tracing::error!("Invalid AVCC data: NAL length {} exceeds remaining data {}",
-                nal_length, avcc_data.len() - pos);
+            tracing::error!(
+                "Invalid AVCC data: NAL length {} exceeds remaining data {}",
+                nal_length,
+                avcc_data.len() - pos
+            );
             break;
         }
 
@@ -216,13 +218,14 @@ pub fn annex_b_to_avcc(annex_b_data: &[u8]) -> crate::core::Result<Vec<u8>> {
             && annex_b_data[pos..pos + 4] == [0x00, 0x00, 0x00, 0x01]
         {
             4
-        } else if pos + 3 <= annex_b_data.len()
-            && annex_b_data[pos..pos + 3] == [0x00, 0x00, 0x01]
+        } else if pos + 3 <= annex_b_data.len() && annex_b_data[pos..pos + 3] == [0x00, 0x00, 0x01]
         {
             3
         } else if pos == 0 {
             // If we don't find a start code at the beginning, data might already be AVCC
-            tracing::warn!("[Annex B → AVCC] No start code found at position 0, data may already be AVCC");
+            tracing::warn!(
+                "[Annex B → AVCC] No start code found at position 0, data may already be AVCC"
+            );
             return Err(StreamError::Runtime(
                 "Invalid Annex B data: no start code at beginning".to_string(),
             ));
@@ -316,8 +319,11 @@ pub unsafe fn extract_h264_parameters(
         return frame_data;
     }
 
-    tracing::info!("[SPS/PPS] Found {} parameter sets (NAL header length: {})",
-        parameter_set_count, nal_unit_header_length);
+    tracing::info!(
+        "[SPS/PPS] Found {} parameter sets (NAL header length: {})",
+        parameter_set_count,
+        nal_unit_header_length
+    );
 
     // Extract each parameter set (typically SPS at index 0, PPS at index 1)
     for i in 0..parameter_set_count {
@@ -354,8 +360,13 @@ pub unsafe fn extract_h264_parameters(
             _ => "Unknown",
         };
 
-        tracing::info!("[SPS/PPS] Parameter set {}: {} ({} bytes, NAL type={})",
-            i, param_name, param_size, nal_type);
+        tracing::info!(
+            "[SPS/PPS] Parameter set {}: {} ({} bytes, NAL type={})",
+            i,
+            param_name,
+            param_size,
+            nal_type
+        );
 
         // Add start code + parameter set
         result.extend_from_slice(START_CODE);
@@ -365,8 +376,12 @@ pub unsafe fn extract_h264_parameters(
     // Append original frame data (already in Annex-B format after conversion)
     result.extend_from_slice(&frame_data);
 
-    tracing::info!("[SPS/PPS] Total Annex-B data: {} bytes (SPS/PPS: {}, frame: {})",
-        result.len(), result.len() - frame_data.len(), frame_data.len());
+    tracing::info!(
+        "[SPS/PPS] Total Annex-B data: {} bytes (SPS/PPS: {}, frame: {})",
+        result.len(),
+        result.len() - frame_data.len(),
+        frame_data.len()
+    );
 
     result
 }
@@ -411,7 +426,10 @@ pub fn parse_sps_dimensions(sps_data: &[u8]) -> Option<(u32, u32)> {
 
     // Parse chroma_format_idc for high profiles (conditional based on profile)
     let profile_idc = _profile_idc as u8;
-    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128) {
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128
+    ) {
         let chroma_format_idc = reader.read_ue()?;
 
         if chroma_format_idc == 3 {

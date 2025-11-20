@@ -1,4 +1,3 @@
-
 #[cfg(target_os = "macos")]
 pub use crate::apple::media_clock::MediaClock;
 

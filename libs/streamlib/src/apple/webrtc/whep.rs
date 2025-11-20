@@ -3,7 +3,7 @@
 // Implements IETF WHEP specification for WebRTC playback/egress.
 // Based on draft-ietf-wish-whep (mirrors WHIP design for receive-only streams).
 
-use crate::core::{StreamError, Result};
+use crate::core::{Result, StreamError};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -42,7 +42,10 @@ pub struct WhepClient {
     /// HTTP client with HTTPS support
     http_client: hyper_util::client::legacy::Client<
         hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
-        http_body_util::combinators::BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>,
+        http_body_util::combinators::BoxBody<
+            bytes::Bytes,
+            Box<dyn std::error::Error + Send + Sync>,
+        >,
     >,
 
     /// Session URL (from Location header after POST success)
@@ -67,17 +70,20 @@ impl WhepClient {
             tracing::debug!("[WhepClient] Installed rustls ring crypto provider");
         });
 
-        tracing::info!("[WhepClient] Creating WHEP client for endpoint: {}", config.endpoint_url);
+        tracing::info!(
+            "[WhepClient] Creating WHEP client for endpoint: {}",
+            config.endpoint_url
+        );
 
         // Build HTTPS connector using rustls with ring crypto provider and native CA roots
         tracing::debug!("[WhepClient] Building HTTPS connector with native roots...");
         let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()  // Use system CA store
+            .with_native_roots() // Use system CA store
             .map_err(|e| {
                 tracing::error!("[WhepClient] Failed to load CA roots: {}", e);
                 StreamError::Configuration(format!("Failed to load CA roots: {}", e))
             })?
-            .https_or_http()      // Allow http:// for local testing
+            .https_or_http() // Allow http:// for local testing
             .enable_http1()
             .enable_http2()
             .build();
@@ -85,11 +91,10 @@ impl WhepClient {
 
         // Create HTTP client
         tracing::debug!("[WhepClient] Creating HTTP client...");
-        let http_client = hyper_util::client::legacy::Client::builder(
-            hyper_util::rt::TokioExecutor::new()
-        )
-        .pool_idle_timeout(std::time::Duration::from_secs(30))
-        .build(https);
+        let http_client =
+            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .pool_idle_timeout(std::time::Duration::from_secs(30))
+                .build(https);
         tracing::info!("[WhepClient] HTTP client created successfully");
 
         // Create Tokio runtime for HTTP operations
@@ -97,7 +102,12 @@ impl WhepClient {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create Tokio runtime for WHEP client: {}", e)))?;
+            .map_err(|e| {
+                StreamError::Runtime(format!(
+                    "Failed to create Tokio runtime for WHEP client: {}",
+                    e
+                ))
+            })?;
         tracing::debug!("[WhepClient] Tokio runtime created successfully");
 
         Ok(Self {
@@ -130,8 +140,8 @@ impl WhepClient {
     /// - 401 Unauthorized: Invalid auth token
     /// - 503 Service Unavailable: Server overloaded (retry with backoff)
     pub fn post_offer(&mut self, sdp_offer: &str) -> Result<(String, bool)> {
-        use hyper::{Request, StatusCode, header};
         use http_body_util::Full;
+        use hyper::{header, Request, StatusCode};
 
         let endpoint_url = self.config.endpoint_url.clone();
         let auth_token = self.config.auth_token.clone();
@@ -151,11 +161,13 @@ impl WhepClient {
 
             // Add Authorization header if token provided
             if let Some(token) = &auth_token {
-                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+                req_builder =
+                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
             }
 
-            let req = req_builder.body(boxed_body)
-                .map_err(|e| StreamError::Runtime(format!("Failed to build WHEP POST request: {}", e)))?;
+            let req = req_builder.body(boxed_body).map_err(|e| {
+                StreamError::Runtime(format!("Failed to build WHEP POST request: {}", e))
+            })?;
 
             tracing::debug!("[WhepClient] POST to {}", endpoint_url);
 
@@ -165,7 +177,9 @@ impl WhepClient {
                 http_client.request(req),
             )
             .await
-            .map_err(|_| StreamError::Runtime(format!("WHEP POST timed out after {}ms", timeout_ms)))?
+            .map_err(|_| {
+                StreamError::Runtime(format!("WHEP POST timed out after {}ms", timeout_ms))
+            })?
             .map_err(|e| StreamError::Runtime(format!("WHEP POST request failed: {}", e)))?;
 
             let status = response.status();
@@ -174,7 +188,9 @@ impl WhepClient {
             // Read response body
             let body_bytes = http_body_util::BodyExt::collect(response.into_body())
                 .await
-                .map_err(|e| StreamError::Runtime(format!("Failed to read WHEP response body: {}", e)))?
+                .map_err(|e| {
+                    StreamError::Runtime(format!("Failed to read WHEP response body: {}", e))
+                })?
                 .to_bytes();
 
             Ok::<_, StreamError>((status, headers, body_bytes))
@@ -190,15 +206,20 @@ impl WhepClient {
                 let location = headers
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| StreamError::Runtime(
-                        format!("WHEP server returned {} without Location header", status)
-                    ))?;
+                    .ok_or_else(|| {
+                        StreamError::Runtime(format!(
+                            "WHEP server returned {} without Location header",
+                            status
+                        ))
+                    })?;
 
                 // Convert relative URLs to absolute URLs
                 self.session_url = if location.starts_with('/') {
-                    let base_url = self.config.endpoint_url
+                    let base_url = self
+                        .config
+                        .endpoint_url
                         .split('/')
-                        .take(3)  // "https:", "", "hostname"
+                        .take(3) // "https:", "", "hostname"
                         .collect::<Vec<_>>()
                         .join("/");
                     Some(format!("{}{}", base_url, location))
@@ -219,8 +240,9 @@ impl WhepClient {
                     .map(|s| s.to_owned());
 
                 // Parse SDP answer/counter-offer from body
-                let sdp_response = String::from_utf8(body_bytes.to_vec())
-                    .map_err(|e| StreamError::Runtime(format!("Invalid UTF-8 in SDP response: {}", e)))?;
+                let sdp_response = String::from_utf8(body_bytes.to_vec()).map_err(|e| {
+                    StreamError::Runtime(format!("Invalid UTF-8 in SDP response: {}", e))
+                })?;
 
                 if is_counter_offer {
                     tracing::info!(
@@ -257,8 +279,7 @@ impl WhepClient {
 
                 Err(StreamError::Runtime(format!(
                     "WHEP POST failed ({}): {}",
-                    status,
-                    error_body
+                    status, error_body
                 )))
             }
         }
@@ -281,14 +302,14 @@ impl WhepClient {
     ///
     /// Sends all buffered candidates in a single PATCH request, then clears the queue.
     pub fn send_ice_candidates(&self) -> Result<()> {
-        use hyper::{Request, StatusCode, header};
         use http_body_util::{BodyExt, Full};
+        use hyper::{header, Request, StatusCode};
 
         let session_url = match &self.session_url {
             Some(url) => url,
             None => {
                 return Err(StreamError::Configuration(
-                    "Cannot send ICE candidates: no WHEP session URL".into()
+                    "Cannot send ICE candidates: no WHEP session URL".into(),
                 ));
             }
         };
@@ -324,11 +345,13 @@ impl WhepClient {
                 .header(header::CONTENT_TYPE, "application/trickle-ice-sdpfrag");
 
             if let Some(token) = &self.config.auth_token {
-                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+                req_builder =
+                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
             }
 
-            let req = req_builder.body(boxed_body)
-                .map_err(|e| StreamError::Runtime(format!("Failed to build WHEP PATCH request: {}", e)))?;
+            let req = req_builder.body(boxed_body).map_err(|e| {
+                StreamError::Runtime(format!("Failed to build WHEP PATCH request: {}", e))
+            })?;
 
             tracing::debug!("[WhepClient] PATCH to {}", session_url);
 
@@ -337,7 +360,12 @@ impl WhepClient {
                 self.http_client.request(req),
             )
             .await
-            .map_err(|_| StreamError::Runtime(format!("WHEP PATCH timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|_| {
+                StreamError::Runtime(format!(
+                    "WHEP PATCH timed out after {}ms",
+                    self.config.timeout_ms
+                ))
+            })?
             .map_err(|e| StreamError::Runtime(format!("WHEP PATCH request failed: {}", e)))?;
 
             let status = response.status();
@@ -374,8 +402,8 @@ impl WhepClient {
     /// WHEP Spec: Client terminates session by DELETEing session URL.
     /// Server responds with 200 OK and closes ICE/DTLS sessions.
     pub fn terminate(&self) -> Result<()> {
-        use hyper::{Request, header};
         use http_body_util::Empty;
+        use hyper::{header, Request};
 
         let session_url = match &self.session_url {
             Some(url) => url,
@@ -390,16 +418,16 @@ impl WhepClient {
             let body = Empty::<bytes::Bytes>::new();
             let boxed_body = body.map_err(|never| match never {}).boxed();
 
-            let mut req_builder = Request::builder()
-                .method("DELETE")
-                .uri(session_url);
+            let mut req_builder = Request::builder().method("DELETE").uri(session_url);
 
             if let Some(token) = &self.config.auth_token {
-                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+                req_builder =
+                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
             }
 
-            let req = req_builder.body(boxed_body)
-                .map_err(|e| StreamError::Runtime(format!("Failed to build WHEP DELETE request: {}", e)))?;
+            let req = req_builder.body(boxed_body).map_err(|e| {
+                StreamError::Runtime(format!("Failed to build WHEP DELETE request: {}", e))
+            })?;
 
             tracing::debug!("[WhepClient] DELETE to {}", session_url);
 
@@ -408,7 +436,12 @@ impl WhepClient {
                 self.http_client.request(req),
             )
             .await
-            .map_err(|_| StreamError::Runtime(format!("WHEP DELETE timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|_| {
+                StreamError::Runtime(format!(
+                    "WHEP DELETE timed out after {}ms",
+                    self.config.timeout_ms
+                ))
+            })?
             .map_err(|e| StreamError::Runtime(format!("WHEP DELETE request failed: {}", e)))?;
 
             if response.status().is_success() {

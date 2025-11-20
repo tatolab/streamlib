@@ -1,4 +1,3 @@
-
 use crate::core::{Result, StreamError};
 use std::sync::Arc;
 use wgpu;
@@ -39,7 +38,7 @@ impl GpuContext {
             wgpu::Backends::DX12
         } else {
             return Err(StreamError::GpuError(
-                "Unsupported platform for GPU initialization".into()
+                "Unsupported platform for GPU initialization".into(),
             ));
         };
 

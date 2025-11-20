@@ -1,6 +1,5 @@
-
-use pyo3::prelude::*;
 use pyo3::exceptions::PyException;
+use pyo3::prelude::*;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, PyStreamError>;

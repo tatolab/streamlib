@@ -93,23 +93,21 @@ fn install_macos_signal_handlers() -> std::io::Result<()> {
 fn install_sigterm_handler_macos() -> std::io::Result<()> {
     use signal_hook::consts::signal::SIGTERM;
     use signal_hook::flag;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     // Use flag approach for SIGTERM - simpler than pipe
     let term_flag = Arc::new(AtomicBool::new(false));
     flag::register(SIGTERM, Arc::clone(&term_flag))?;
 
     // Monitor the flag in a background thread
-    std::thread::spawn(move || {
-        loop {
-            if term_flag.load(Ordering::Relaxed) {
-                tracing::info!("SIGTERM received, triggering graceful shutdown");
-                trigger_macos_termination();
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::spawn(move || loop {
+        if term_flag.load(Ordering::Relaxed) {
+            tracing::info!("SIGTERM received, triggering graceful shutdown");
+            trigger_macos_termination();
+            break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     });
 
     Ok(())
@@ -144,10 +142,14 @@ fn install_unix_signal_handlers() -> std::io::Result<()> {
                     Ok(n) => {
                         if n > 0 {
                             let signal = buf[0];
-                            tracing::info!("Signal handler: Received signal {}, publishing shutdown event", signal);
+                            tracing::info!(
+                                "Signal handler: Received signal {}, publishing shutdown event",
+                                signal
+                            );
 
                             // Publish shutdown event directly to event bus
-                            let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
+                            let shutdown_event =
+                                Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
                             EVENT_BUS.publish(&shutdown_event.topic(), &shutdown_event);
                         }
                     }
@@ -215,7 +217,9 @@ fn trigger_macos_termination() {
             tracing::info!("Signal handler: Calling NSApplication.terminate()");
             app.terminate(None);
         } else {
-            tracing::error!("Signal handler: Not on main thread, cannot call NSApplication.terminate()");
+            tracing::error!(
+                "Signal handler: Not on main thread, cannot call NSApplication.terminate()"
+            );
         }
     });
 }

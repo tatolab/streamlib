@@ -1,19 +1,19 @@
-use crate::core::{VideoFrame, StreamOutput, Result, StreamError};
-use streamlib_macros::StreamProcessor;
-use std::sync::Arc;
-use parking_lot::Mutex;
-use std::ffi::c_void;
+use crate::apple::{iosurface, MetalDevice, WgpuBridge};
+use crate::core::{Result, StreamError, StreamOutput, VideoFrame};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{msg_send, define_class};
-use objc2_foundation::{MainThreadMarker, NSString, NSObject, NSObjectProtocol};
+use objc2::{define_class, msg_send};
 use objc2_av_foundation::{
-    AVCaptureDevice, AVCaptureSession, AVCaptureDeviceInput, AVCaptureVideoDataOutput,
-    AVMediaTypeVideo, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureConnection,
+    AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceInput, AVCaptureSession,
+    AVCaptureVideoDataOutput, AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
 };
 use objc2_core_video::CVPixelBuffer;
+use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
 use objc2_io_surface::IOSurface;
-use crate::apple::{WgpuBridge, MetalDevice, iosurface};
+use parking_lot::Mutex;
+use std::ffi::c_void;
+use std::sync::Arc;
+use streamlib_macros::StreamProcessor;
 
 // Apple-specific configuration and device types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -49,7 +49,6 @@ extern "C" {
     fn CVPixelBufferGetHeight(pixelBuffer: *const CVPixelBuffer) -> usize;
 }
 
-
 struct FrameHolder {
     pixel_buffer: Retained<CVPixelBuffer>,
 }
@@ -57,9 +56,12 @@ struct FrameHolder {
 unsafe impl Send for FrameHolder {}
 unsafe impl Sync for FrameHolder {}
 
-static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> = std::sync::OnceLock::new();
+static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> =
+    std::sync::OnceLock::new();
 
-static WAKEUP_CHANNEL: std::sync::OnceLock<Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>> = std::sync::OnceLock::new();
+static WAKEUP_CHANNEL: std::sync::OnceLock<
+    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>,
+> = std::sync::OnceLock::new();
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -86,10 +88,11 @@ define_class!(
                 .expect("Failed to retain pixel buffer");
 
             if let Some(storage) = FRAME_STORAGE.get() {
-                let frame_holder = FrameHolder { pixel_buffer: pixel_buffer.clone() };
+                let frame_holder = FrameHolder {
+                    pixel_buffer: pixel_buffer.clone(),
+                };
                 let mut latest = storage.lock();
                 *latest = Some(frame_holder);
-
 
                 if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
                     if let Some(tx) = wakeup_storage.lock().as_ref() {
@@ -169,14 +172,12 @@ impl AppleCameraProcessor {
                 }
                 dev.unwrap()
             } else {
-                let media_type = AVMediaTypeVideo.ok_or_else(|| StreamError::Configuration(
-                    "AVMediaTypeVideo not available".into()
-                ))?;
+                let media_type = AVMediaTypeVideo.ok_or_else(|| {
+                    StreamError::Configuration("AVMediaTypeVideo not available".into())
+                })?;
 
                 AVCaptureDevice::defaultDeviceWithMediaType(media_type)
-                    .ok_or_else(|| StreamError::Configuration(
-                        "No camera found".into()
-                    ))?
+                    .ok_or_else(|| StreamError::Configuration("No camera found".into()))?
             }
         };
 
@@ -189,25 +190,26 @@ impl AppleCameraProcessor {
 
         unsafe {
             if let Err(e) = device.lockForConfiguration() {
-                return Err(StreamError::Configuration(
-                    format!("Failed to lock camera device: {:?}", e)
-                ));
+                return Err(StreamError::Configuration(format!(
+                    "Failed to lock camera device: {:?}",
+                    e
+                )));
             }
             device.unlockForConfiguration();
         }
 
         let input = unsafe {
-            AVCaptureDeviceInput::deviceInputWithDevice_error(&device)
-                .map_err(|e| StreamError::Configuration(
-                    format!("Failed to create camera input: {:?}", e)
-                ))?
+            AVCaptureDeviceInput::deviceInputWithDevice_error(&device).map_err(|e| {
+                StreamError::Configuration(format!("Failed to create camera input: {:?}", e))
+            })?
         };
 
         let can_add = unsafe { session.canAddInput(&input) };
 
         if !can_add {
             return Err(StreamError::Configuration(
-                "Session cannot add camera input. The camera may be in use by another application.".into()
+                "Session cannot add camera input. The camera may be in use by another application."
+                    .into(),
             ));
         }
 
@@ -217,29 +219,30 @@ impl AppleCameraProcessor {
 
         let _ = FRAME_STORAGE.set(latest_frame);
 
-        let wakeup_holder: Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>> =
-            Arc::new(Mutex::new(None));
+        let wakeup_holder: Arc<
+            Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>,
+        > = Arc::new(Mutex::new(None));
         let _ = WAKEUP_CHANNEL.set(wakeup_holder.clone());
 
         let output = unsafe { AVCaptureVideoDataOutput::new() };
 
         use objc2_foundation::NSNumber;
 
-        let pixel_format_key = unsafe {
-            objc2_core_video::kCVPixelBufferPixelFormatTypeKey
-        };
+        let pixel_format_key = unsafe { objc2_core_video::kCVPixelBufferPixelFormatTypeKey };
         let pixel_format_value = NSNumber::new_u32(0x42475241); // BGRA
 
-        use objc2::ClassType;
         use objc2::runtime::AnyClass;
-        let dict_cls: &AnyClass = objc2_foundation::NSDictionary::<objc2::runtime::AnyObject, objc2::runtime::AnyObject>::class();
+        use objc2::ClassType;
+        let dict_cls: &AnyClass = objc2_foundation::NSDictionary::<
+            objc2::runtime::AnyObject,
+            objc2::runtime::AnyObject,
+        >::class();
 
         let key_ptr = pixel_format_key as *const _ as *const objc2::runtime::AnyObject;
         let value_ptr = &*pixel_format_value as *const _ as *const objc2::runtime::AnyObject;
 
-        let video_settings_ptr: *mut objc2::runtime::AnyObject = unsafe {
-            msg_send![dict_cls, dictionaryWithObject: value_ptr, forKey: key_ptr]
-        };
+        let video_settings_ptr: *mut objc2::runtime::AnyObject =
+            unsafe { msg_send![dict_cls, dictionaryWithObject: value_ptr, forKey: key_ptr] };
 
         unsafe {
             let _: () = msg_send![&output, setVideoSettings: video_settings_ptr];
@@ -249,10 +252,7 @@ impl AppleCameraProcessor {
 
         unsafe {
             use dispatch2::{DispatchQueue, DispatchQueueAttr};
-            let queue = DispatchQueue::new(
-                "com.streamlib.camera.video",
-                DispatchQueueAttr::SERIAL,
-            );
+            let queue = DispatchQueue::new("com.streamlib.camera.video", DispatchQueueAttr::SERIAL);
 
             output.setSampleBufferDelegate_queue(
                 Some(ProtocolObject::from_ref(&*delegate)),
@@ -263,7 +263,9 @@ impl AppleCameraProcessor {
         let can_add_output = unsafe { session.canAddOutput(&output) };
 
         if !can_add_output {
-            return Err(StreamError::Configuration("Cannot add camera output".into()));
+            return Err(StreamError::Configuration(
+                "Cannot add camera output".into(),
+            ));
         }
 
         unsafe {
@@ -278,7 +280,9 @@ impl AppleCameraProcessor {
         let camera_name = unsafe { device.localizedName().to_string() };
 
         // Start the session
-        unsafe { session.startRunning(); }
+        unsafe {
+            session.startRunning();
+        }
 
         // NOTE: Cannot use tracing::info here - this runs in a dispatch queue callback
         // tracing::info!("Camera: Started AVFoundation session for device: {}", camera_name);
@@ -293,7 +297,11 @@ impl AppleCameraProcessor {
     }
 
     fn teardown(&mut self) -> Result<()> {
-        tracing::info!("Camera {}: Stopping (generated {} frames)", self.camera_name, self.frame_count);
+        tracing::info!(
+            "Camera {}: Stopping (generated {} frames)",
+            self.camera_name,
+            self.frame_count
+        );
         Ok(())
     }
 
@@ -307,7 +315,7 @@ impl AppleCameraProcessor {
             // AVFoundation requires main thread, so dispatch asynchronously to main thread
             // and wait for completion using a condvar
             use dispatch2::DispatchQueue;
-            use std::sync::{Mutex as StdMutex, Condvar};
+            use std::sync::{Condvar, Mutex as StdMutex};
 
             // Result holder with condvar for async wait
             let pair = Arc::new((StdMutex::new(None), Condvar::new()));
@@ -319,7 +327,8 @@ impl AppleCameraProcessor {
                 // SAFETY: This closure executes on the main thread via GCD
                 let mtm = unsafe { MainThreadMarker::new_unchecked() };
 
-                let init_result = Self::initialize_capture_session_on_main_thread(mtm, &config, latest_frame);
+                let init_result =
+                    Self::initialize_capture_session_on_main_thread(mtm, &config, latest_frame);
                 let camera_name = match init_result {
                     Ok(name) => Ok(name),
                     Err(e) => Err(e),
@@ -338,7 +347,8 @@ impl AppleCameraProcessor {
                 result = cvar.wait(result).unwrap();
             }
 
-            let init_result = result.take()
+            let init_result = result
+                .take()
                 .ok_or_else(|| StreamError::Runtime("Camera initialization failed".into()))?;
 
             self.camera_name = init_result?;
@@ -352,13 +362,13 @@ impl AppleCameraProcessor {
             let metal_command_queue = {
                 use metal::foreign_types::ForeignTypeRef;
                 let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-                let metal_device_ref = unsafe {
-                    metal::DeviceRef::from_ptr(device_ptr as *mut _)
-                };
+                let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
                 metal_device_ref.new_command_queue()
             };
 
-            let gpu_context = self.gpu_context.as_ref()
+            let gpu_context = self
+                .gpu_context
+                .as_ref()
                 .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
             // Create wgpu bridge from shared device
@@ -400,13 +410,15 @@ impl AppleCameraProcessor {
                     return Ok(LoopControl::Continue);
                 }
 
-                let iosurface = Retained::retain(iosurface_ref)
-                    .expect("Failed to retain IOSurface");
+                let iosurface =
+                    Retained::retain(iosurface_ref).expect("Failed to retain IOSurface");
 
                 let width = CVPixelBufferGetWidth(pixel_buffer_ref);
                 let height = CVPixelBufferGetHeight(pixel_buffer_ref);
 
-                let metal_device = self.metal_device.as_ref()
+                let metal_device = self
+                    .metal_device
+                    .as_ref()
                     .expect("Metal device should be initialized");
 
                 let metal_texture = match iosurface::create_metal_texture_from_iosurface(
@@ -416,12 +428,17 @@ impl AppleCameraProcessor {
                 ) {
                     Ok(tex) => tex,
                     Err(e) => {
-                        tracing::warn!("Camera: Failed to create metal texture: {}, skipping frame", e);
+                        tracing::warn!(
+                            "Camera: Failed to create metal texture: {}, skipping frame",
+                            e
+                        );
                         return Ok(LoopControl::Continue);
                     }
                 };
 
-                let wgpu_bridge = self.wgpu_bridge.as_ref()
+                let wgpu_bridge = self
+                    .wgpu_bridge
+                    .as_ref()
                     .expect("WebGPU bridge should be initialized");
 
                 let _iosurface_texture = match wgpu_bridge.wrap_metal_texture(
@@ -431,13 +448,18 @@ impl AppleCameraProcessor {
                 ) {
                     Ok(tex) => tex,
                     Err(e) => {
-                        tracing::warn!("Camera: Failed to wrap iosurface texture: {}, skipping frame", e);
+                        tracing::warn!(
+                            "Camera: Failed to wrap iosurface texture: {}, skipping frame",
+                            e
+                        );
                         return Ok(LoopControl::Continue);
                     }
                 };
 
                 let metal_rgba_texture = {
-                    use objc2_metal::{MTLTextureDescriptor, MTLPixelFormat, MTLTextureUsage, MTLDevice};
+                    use objc2_metal::{
+                        MTLDevice, MTLPixelFormat, MTLTextureDescriptor, MTLTextureUsage,
+                    };
 
                     let desc = MTLTextureDescriptor::new();
                     desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
@@ -454,7 +476,9 @@ impl AppleCameraProcessor {
                     }
                 };
 
-                let command_queue = self.metal_command_queue.as_ref()
+                let command_queue = self
+                    .metal_command_queue
+                    .as_ref()
                     .expect("Metal command queue should be initialized");
 
                 use metal::foreign_types::ForeignTypeRef;
@@ -501,7 +525,10 @@ impl AppleCameraProcessor {
                 ) {
                     Ok(tex) => tex,
                     Err(e) => {
-                        tracing::warn!("Camera: Failed to wrap output texture: {}, skipping frame", e);
+                        tracing::warn!(
+                            "Camera: Failed to wrap output texture: {}, skipping frame",
+                            e
+                        );
                         return Ok(LoopControl::Continue);
                     }
                 };
@@ -541,20 +568,22 @@ impl AppleCameraProcessor {
             use objc2_av_foundation::AVCaptureDeviceDiscoverySession;
             use objc2_foundation::NSArray;
 
-            let media_type = AVMediaTypeVideo.ok_or_else(|| StreamError::Configuration(
-                "AVMediaTypeVideo not available".into()
-            ))?;
+            let media_type = AVMediaTypeVideo.ok_or_else(|| {
+                StreamError::Configuration("AVMediaTypeVideo not available".into())
+            })?;
 
-            let builtin_wide = objc2_foundation::ns_string!("AVCaptureDeviceTypeBuiltInWideAngleCamera");
+            let builtin_wide =
+                objc2_foundation::ns_string!("AVCaptureDeviceTypeBuiltInWideAngleCamera");
             let continuity = objc2_foundation::ns_string!("AVCaptureDeviceTypeContinuityCamera");
 
             let device_types = NSArray::from_slice(&[builtin_wide, continuity]);
 
-            let session = AVCaptureDeviceDiscoverySession::discoverySessionWithDeviceTypes_mediaType_position(
-                &device_types,
-                Some(media_type),
-                objc2_av_foundation::AVCaptureDevicePosition::Unspecified,
-            );
+            let session =
+                AVCaptureDeviceDiscoverySession::discoverySessionWithDeviceTypes_mediaType_position(
+                    &device_types,
+                    Some(media_type),
+                    objc2_av_foundation::AVCaptureDevicePosition::Unspecified,
+                );
 
             let devices = session.devices();
             let mut result = Vec::new();
@@ -570,6 +599,5 @@ impl AppleCameraProcessor {
         }
     }
 }
-
 
 crate::register_processor_type!(AppleCameraProcessor);

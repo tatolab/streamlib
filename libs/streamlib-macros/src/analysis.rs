@@ -9,9 +9,7 @@
 
 use crate::attributes::{PortAttributes, ProcessorAttributes, StateAttributes};
 use proc_macro2::Ident;
-use syn::{
-    Data, DeriveInput, Error, Fields, GenericArgument, PathArguments, Result, Type,
-};
+use syn::{Data, DeriveInput, Error, Fields, GenericArgument, PathArguments, Result, Type};
 
 /// Direction of a port
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,9 +122,10 @@ impl AnalysisResult {
         let mut config_field_type: Option<Type> = None;
 
         for field in fields {
-            let field_name = field.ident.clone().ok_or_else(|| {
-                Error::new_spanned(field, "Field must have a name")
-            })?;
+            let field_name = field
+                .ident
+                .clone()
+                .ok_or_else(|| Error::new_spanned(field, "Field must have a name"))?;
 
             // Check for #[input] attribute
             if has_attribute(&field.attrs, "input") {
@@ -214,9 +213,9 @@ impl AnalysisResult {
 
     /// Check if processor has audio ports
     pub fn has_audio_ports(&self) -> bool {
-        self.port_fields.iter().any(|field| {
-            is_audio_frame_type(&field.message_type)
-        })
+        self.port_fields
+            .iter()
+            .any(|field| is_audio_frame_type(&field.message_type))
     }
 
     /// Get input ports
@@ -239,9 +238,11 @@ impl AnalysisResult {
 fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
     match ty {
         Type::Path(type_path) => {
-            let last_segment = type_path.path.segments.last().ok_or_else(|| {
-                Error::new_spanned(ty, "Expected type path")
-            })?;
+            let last_segment = type_path
+                .path
+                .segments
+                .last()
+                .ok_or_else(|| Error::new_spanned(ty, "Expected type path"))?;
 
             let ident = &last_segment.ident;
 
@@ -250,9 +251,10 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                 // Extract inner type from Arc<T>
                 match &last_segment.arguments {
                     PathArguments::AngleBracketed(args) => {
-                        let first_arg = args.args.first().ok_or_else(|| {
-                            Error::new_spanned(ty, "Arc requires type parameter")
-                        })?;
+                        let first_arg = args
+                            .args
+                            .first()
+                            .ok_or_else(|| Error::new_spanned(ty, "Arc requires type parameter"))?;
 
                         if let GenericArgument::Type(inner_type) = first_arg {
                             // Recursively extract from inner type (should be StreamInput/Output<T>)
@@ -272,8 +274,11 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
             }
 
             // Check if it's StreamInput, StreamOutput, or V2 variants
-            if ident != "StreamInput" && ident != "StreamOutput" &&
-               ident != "StreamInputV2" && ident != "StreamOutputV2" {
+            if ident != "StreamInput"
+                && ident != "StreamOutput"
+                && ident != "StreamInputV2"
+                && ident != "StreamOutputV2"
+            {
                 return Err(Error::new_spanned(
                     ty,
                     "Port fields must be StreamInput<T>, StreamOutput<T>, StreamInputV2<T>, StreamOutputV2<T>, or Arc<...>",
@@ -290,10 +295,7 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                     if let GenericArgument::Type(inner_type) = first_arg {
                         Ok((inner_type.clone(), false)) // Not Arc-wrapped
                     } else {
-                        Err(Error::new_spanned(
-                            ty,
-                            "Expected type parameter",
-                        ))
+                        Err(Error::new_spanned(ty, "Expected type parameter"))
                     }
                 }
                 _ => Err(Error::new_spanned(

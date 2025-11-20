@@ -1,12 +1,17 @@
-use crate::core::{StreamInput, VideoFrame, Result, StreamError};
-use crate::apple::{metal::MetalDevice, WgpuBridge, display_link::DisplayLink};
-use objc2::{rc::Retained, MainThreadMarker};
-use objc2_foundation::{NSString, NSPoint, NSSize, NSRect};
-use objc2_app_kit::{NSWindow, NSBackingStoreType, NSWindowStyleMask, NSApplication, NSApplicationActivationPolicy};
-use objc2_quartz_core::{CAMetalLayer, CAMetalDrawable};
-use objc2_metal::MTLPixelFormat;
-use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc};
+use crate::apple::{display_link::DisplayLink, metal::MetalDevice, WgpuBridge};
+use crate::core::{Result, StreamError, StreamInput, VideoFrame};
 use metal;
+use objc2::{rc::Retained, MainThreadMarker};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
+};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_metal::MTLPixelFormat;
+use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
+use std::sync::{
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    Arc,
+};
 use streamlib_macros::StreamProcessor;
 
 // Scaling mode for video content in the display window
@@ -99,7 +104,11 @@ impl AppleDisplayProcessor {
         self.window_id = AppleWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
         self.width = self.config.width;
         self.height = self.config.height;
-        self.window_title = self.config.title.clone().unwrap_or_else(|| "streamlib Display".to_string());
+        self.window_title = self
+            .config
+            .title
+            .clone()
+            .unwrap_or_else(|| "streamlib Display".to_string());
 
         let metal_device = MetalDevice::new()?;
 
@@ -107,9 +116,7 @@ impl AppleDisplayProcessor {
         let metal_command_queue = {
             use metal::foreign_types::ForeignTypeRef;
             let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-            let metal_device_ref = unsafe {
-                metal::DeviceRef::from_ptr(device_ptr as *mut _)
-            };
+            let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
             metal_device_ref.new_command_queue()
         };
 
@@ -128,7 +135,11 @@ impl AppleDisplayProcessor {
         display_link.start()?;
 
         if let Ok(period) = display_link.get_nominal_output_video_refresh_period() {
-            tracing::info!("Display {}: Vsync enabled (refresh period: {:?})", self.window_title, period);
+            tracing::info!(
+                "Display {}: Vsync enabled (refresh period: {:?})",
+                self.window_title,
+                period
+            );
         } else {
             tracing::info!("Display {}: Vsync enabled", self.window_title);
         }
@@ -138,31 +149,40 @@ impl AppleDisplayProcessor {
         // Create Metal render pipeline for scaling
         use metal::foreign_types::ForeignTypeRef;
         let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-        let metal_device_ref = unsafe {
-            metal::DeviceRef::from_ptr(device_ptr as *mut _)
-        };
+        let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
 
         // Compile Metal shader
         let shader_source = include_str!("shaders/fullscreen.metal");
-        let library = metal_device_ref.new_library_with_source(shader_source, &metal::CompileOptions::new())
-            .map_err(|e| StreamError::Configuration(format!("Failed to compile Metal shader: {}", e)))?;
+        let library = metal_device_ref
+            .new_library_with_source(shader_source, &metal::CompileOptions::new())
+            .map_err(|e| {
+                StreamError::Configuration(format!("Failed to compile Metal shader: {}", e))
+            })?;
 
-        let vertex_function = library.get_function("vertex_main", None)
-            .map_err(|e| StreamError::Configuration(format!("vertex_main function not found: {}", e)))?;
-        let fragment_function = library.get_function("fragment_main", None)
-            .map_err(|e| StreamError::Configuration(format!("fragment_main function not found: {}", e)))?;
+        let vertex_function = library.get_function("vertex_main", None).map_err(|e| {
+            StreamError::Configuration(format!("vertex_main function not found: {}", e))
+        })?;
+        let fragment_function = library.get_function("fragment_main", None).map_err(|e| {
+            StreamError::Configuration(format!("fragment_main function not found: {}", e))
+        })?;
 
         // Create render pipeline descriptor
         let pipeline_descriptor = metal::RenderPipelineDescriptor::new();
         pipeline_descriptor.set_vertex_function(Some(&vertex_function));
         pipeline_descriptor.set_fragment_function(Some(&fragment_function));
 
-        let color_attachment = pipeline_descriptor.color_attachments().object_at(0).unwrap();
+        let color_attachment = pipeline_descriptor
+            .color_attachments()
+            .object_at(0)
+            .unwrap();
         color_attachment.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
 
         // Create pipeline state
-        let pipeline_state = metal_device_ref.new_render_pipeline_state(&pipeline_descriptor)
-            .map_err(|e| StreamError::Configuration(format!("Failed to create render pipeline: {}", e)))?;
+        let pipeline_state = metal_device_ref
+            .new_render_pipeline_state(&pipeline_descriptor)
+            .map_err(|e| {
+                StreamError::Configuration(format!("Failed to create render pipeline: {}", e))
+            })?;
 
         // Create sampler for texture sampling with linear filtering
         let sampler_descriptor = metal::SamplerDescriptor::new();
@@ -198,7 +218,12 @@ impl AppleDisplayProcessor {
         self.format_buffer_bgra = Some(format_buffer_bgra);
         self.metal_device = Some(metal_device);
 
-        tracing::info!("Display {}: Initialized ({}x{}) with Metal render pipeline", self.window_title, self.width, self.height);
+        tracing::info!(
+            "Display {}: Initialized ({}x{}) with Metal render pipeline",
+            self.window_title,
+            self.width,
+            self.height
+        );
 
         // EAGER WINDOW CREATION: Create window immediately instead of waiting for first frame
         self.initialize_window()?;
@@ -207,7 +232,11 @@ impl AppleDisplayProcessor {
     }
 
     fn teardown(&mut self) -> Result<()> {
-        tracing::info!("Display {}: Stopping (rendered {} frames)", self.window_title, self.frames_rendered);
+        tracing::info!(
+            "Display {}: Stopping (rendered {} frames)",
+            self.window_title,
+            self.frames_rendered
+        );
         Ok(())
     }
 
@@ -258,16 +287,22 @@ impl AppleDisplayProcessor {
             &*ptr
         };
 
-        let metal_command_queue = self.metal_command_queue.as_ref()
-            .ok_or_else(|| StreamError::Configuration("Metal command queue not initialized".into()))?;
+        let metal_command_queue = self.metal_command_queue.as_ref().ok_or_else(|| {
+            StreamError::Configuration("Metal command queue not initialized".into())
+        })?;
 
-        let wgpu_bridge = self.wgpu_bridge.as_ref()
+        let wgpu_bridge = self
+            .wgpu_bridge
+            .as_ref()
             .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?;
 
-        let render_pipeline = self.metal_render_pipeline.as_ref()
-            .ok_or_else(|| StreamError::Configuration("Metal render pipeline not initialized".into()))?;
+        let render_pipeline = self.metal_render_pipeline.as_ref().ok_or_else(|| {
+            StreamError::Configuration("Metal render pipeline not initialized".into())
+        })?;
 
-        let sampler = self.metal_sampler.as_ref()
+        let sampler = self
+            .metal_sampler
+            .as_ref()
             .ok_or_else(|| StreamError::Configuration("Metal sampler not initialized".into()))?;
 
         unsafe {
@@ -281,19 +316,24 @@ impl AppleDisplayProcessor {
                 let command_buffer = metal_command_queue.new_command_buffer();
 
                 let render_pass_descriptor = metal::RenderPassDescriptor::new();
-                let color_attachment = render_pass_descriptor.color_attachments().object_at(0).unwrap();
+                let color_attachment = render_pass_descriptor
+                    .color_attachments()
+                    .object_at(0)
+                    .unwrap();
 
                 // Convert objc2 texture to metal-rs texture reference
                 use metal::foreign_types::ForeignTypeRef;
                 let drawable_texture_ptr = &*drawable_texture as *const _ as *mut std::ffi::c_void;
-                let drawable_texture_ref = metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
+                let drawable_texture_ref =
+                    metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
 
                 color_attachment.set_texture(Some(drawable_texture_ref));
                 color_attachment.set_load_action(metal::MTLLoadAction::Clear);
                 color_attachment.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
                 color_attachment.set_store_action(metal::MTLStoreAction::Store);
 
-                let render_encoder = command_buffer.new_render_command_encoder(&render_pass_descriptor);
+                let render_encoder =
+                    command_buffer.new_render_command_encoder(&render_pass_descriptor);
 
                 // Set pipeline and resources
                 render_encoder.set_render_pipeline_state(render_pipeline);
@@ -432,7 +472,9 @@ impl AppleDisplayProcessor {
         let width = self.width;
         let height = self.height;
         let window_title = self.window_title.clone();
-        let metal_device = self.metal_device.as_ref()
+        let metal_device = self
+            .metal_device
+            .as_ref()
             .ok_or_else(|| StreamError::Configuration("Metal device not initialized".into()))?
             .clone_device();
         let window_id = self.window_id;
@@ -482,7 +524,8 @@ impl AppleDisplayProcessor {
                 }
 
                 unsafe impl Encode for CGSize {
-                    const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+                    const ENCODING: Encoding =
+                        Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
                 }
 
                 let size = CGSize {
@@ -505,13 +548,16 @@ impl AppleDisplayProcessor {
             #[allow(deprecated)]
             app.activateIgnoringOtherApps(true);
 
-            let _ = Retained::into_raw(window);  // Leak window
+            let _ = Retained::into_raw(window); // Leak window
             let addr = Retained::into_raw(metal_layer) as usize;
             layer_addr.store(addr, Ordering::Release);
         });
 
         self.window_creation_dispatched = true;
-        tracing::info!("Display {}: Window creation dispatched, processor ready", self.window_id.0);
+        tracing::info!(
+            "Display {}: Window creation dispatched, processor ready",
+            self.window_id.0
+        );
 
         Ok(())
     }

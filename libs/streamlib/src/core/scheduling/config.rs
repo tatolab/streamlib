@@ -1,4 +1,3 @@
-
 use super::{SchedulingMode, ThreadPriority};
 use serde::{Deserialize, Serialize};
 

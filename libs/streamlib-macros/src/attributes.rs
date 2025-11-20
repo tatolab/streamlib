@@ -4,10 +4,7 @@
 //! into structured data for code generation.
 
 use proc_macro2::TokenStream;
-use syn::{
-    Attribute, Error, Expr, ExprLit, Lit, Result, Type,
-    punctuated::Punctuated, Token,
-};
+use syn::{punctuated::Punctuated, Attribute, Error, Expr, ExprLit, Lit, Result, Token, Type};
 
 /// Parsed attributes from #[processor(...)]
 #[derive(Debug, Default)]
@@ -294,9 +291,8 @@ mod tests {
 
     #[test]
     fn test_parse_processor_description() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(description = "Test processor")] }
-        ];
+        let attrs: Vec<Attribute> =
+            vec![parse_quote! { #[processor(description = "Test processor")] }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.description, Some("Test processor".to_string()));
@@ -304,9 +300,7 @@ mod tests {
 
     #[test]
     fn test_parse_processor_tags() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(tags = ["video", "effect"])] }
-        ];
+        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(tags = ["video", "effect"])] }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.tags, vec!["video", "effect"]);
@@ -314,9 +308,8 @@ mod tests {
 
     #[test]
     fn test_parse_port_attributes() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[input(name = "video_in", description = "Video input")] }
-        ];
+        let attrs: Vec<Attribute> =
+            vec![parse_quote! { #[input(name = "video_in", description = "Video input")] }];
 
         let result = PortAttributes::parse(&attrs, "input").unwrap();
         assert_eq!(result.custom_name, Some("video_in".to_string()));
@@ -325,9 +318,7 @@ mod tests {
 
     #[test]
     fn test_parse_process_method() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(process = "my_process")] }
-        ];
+        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(process = "my_process")] }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.process_method, Some("my_process".to_string()));
@@ -335,9 +326,8 @@ mod tests {
 
     #[test]
     fn test_parse_lifecycle_methods() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(on_start = "init", on_stop = "cleanup")] }
-        ];
+        let attrs: Vec<Attribute> =
+            vec![parse_quote! { #[processor(on_start = "init", on_stop = "cleanup")] }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.on_start_method, Some("init".to_string()));
@@ -346,9 +336,7 @@ mod tests {
 
     #[test]
     fn test_parse_processor_name() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(name = "CustomProcessor")] }
-        ];
+        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(name = "CustomProcessor")] }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.processor_name, Some("CustomProcessor".to_string()));
@@ -356,9 +344,7 @@ mod tests {
 
     #[test]
     fn test_parse_scheduling_mode_pull() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(mode = Pull)] }
-        ];
+        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(mode = Pull)] }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.scheduling_mode, Some("Pull".to_string()));
@@ -366,9 +352,7 @@ mod tests {
 
     #[test]
     fn test_parse_scheduling_mode_push() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(mode = Push)] }
-        ];
+        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(mode = Push)] }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.scheduling_mode, Some("Push".to_string()));
@@ -376,16 +360,14 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_processor_attributes() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! {
-                #[processor(
-                    name = "MyProcessor",
-                    process = "do_process",
-                    mode = Pull,
-                    description = "Test processor"
-                )]
-            }
-        ];
+        let attrs: Vec<Attribute> = vec![parse_quote! {
+            #[processor(
+                name = "MyProcessor",
+                process = "do_process",
+                mode = Pull,
+                description = "Test processor"
+            )]
+        }];
 
         let result = ProcessorAttributes::parse(&attrs).unwrap();
         assert_eq!(result.processor_name, Some("MyProcessor".to_string()));
@@ -396,12 +378,13 @@ mod tests {
 
     #[test]
     fn test_invalid_scheduling_mode() {
-        let attrs: Vec<Attribute> = vec![
-            parse_quote! { #[processor(mode = Invalid)] }
-        ];
+        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(mode = Invalid)] }];
 
         let result = ProcessorAttributes::parse(&attrs);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("mode must be either Pull or Push"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mode must be either Pull or Push"));
     }
 }

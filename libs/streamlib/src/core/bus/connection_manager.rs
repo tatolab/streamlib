@@ -1,4 +1,4 @@
-use super::connection::{ConnectionId, OwnedProducer, OwnedConsumer, create_owned_connection};
+use super::connection::{create_owned_connection, ConnectionId, OwnedConsumer, OwnedProducer};
 use super::ports::{PortAddress, PortMessage};
 use crate::core::{Result, StreamError};
 use std::any::TypeId;
@@ -205,7 +205,9 @@ mod tests {
         let source = PortAddress::new("proc1", "out");
         let dest = PortAddress::new("proc2", "in");
 
-        manager.create_connection::<DataFrame>(source, dest, 4).unwrap();
+        manager
+            .create_connection::<DataFrame>(source, dest, 4)
+            .unwrap();
         assert_eq!(manager.connection_count(), 1);
     }
 }

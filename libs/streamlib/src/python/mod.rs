@@ -1,26 +1,24 @@
-
+mod decorators;
+mod error;
+mod events;
+mod gpu_wrappers;
+mod port;
+mod processor;
 mod runtime;
 mod types;
 mod types_ext;
-mod decorators;
-mod error;
-mod port;
-mod processor;
-mod gpu_wrappers;
-mod events;
 
 use pyo3::prelude::*;
 
-pub use error::{PyStreamError, Result};
-pub use runtime::{PyStreamRuntime, PyProcessorHandle};
-pub use port::ProcessorPort;
-pub use types::{
-    PyVideoFrame,
-    PyAudioFrame1, PyAudioFrame2, PyAudioFrame4, PyAudioFrame6, PyAudioFrame8,
-    PyDataFrame
-};
 pub use decorators::{processor as processor_decorator, ProcessorProxy};
+pub use error::{PyStreamError, Result};
+pub use port::ProcessorPort;
 pub use processor::PythonProcessor;
+pub use runtime::{PyProcessorHandle, PyStreamRuntime};
+pub use types::{
+    PyAudioFrame1, PyAudioFrame2, PyAudioFrame4, PyAudioFrame6, PyAudioFrame8, PyDataFrame,
+    PyVideoFrame,
+};
 
 pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize tracing if RUST_LOG is set
@@ -91,7 +89,10 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decorators::processor, m)?)?;
 
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("__doc__", "Real-time streaming infrastructure for AI agents")?;
+    m.add(
+        "__doc__",
+        "Real-time streaming infrastructure for AI agents",
+    )?;
 
     // Built-in processor type constants
     m.add("CAMERA_PROCESSOR", "CameraProcessor")?;
@@ -101,16 +102,14 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let type_fn = py.eval_bound("type", None, None)?;
 
     let stream_input_dict = pyo3::types::PyDict::new_bound(py);
-    stream_input_dict.set_item("__init__", py.eval_bound(
-        "lambda self, type_hint=None: None",
-        None,
-        None
-    )?)?;
-    stream_input_dict.set_item("__repr__", py.eval_bound(
-        "lambda self: 'StreamInput(VideoFrame)'",
-        None,
-        None
-    )?)?;
+    stream_input_dict.set_item(
+        "__init__",
+        py.eval_bound("lambda self, type_hint=None: None", None, None)?,
+    )?;
+    stream_input_dict.set_item(
+        "__repr__",
+        py.eval_bound("lambda self: 'StreamInput(VideoFrame)'", None, None)?,
+    )?;
 
     let stream_input = type_fn.call1((
         "StreamInput",
@@ -121,16 +120,14 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("StreamInput", stream_input)?;
 
     let stream_output_dict = pyo3::types::PyDict::new_bound(py);
-    stream_output_dict.set_item("__init__", py.eval_bound(
-        "lambda self, type_hint=None: None",
-        None,
-        None
-    )?)?;
-    stream_output_dict.set_item("__repr__", py.eval_bound(
-        "lambda self: 'StreamOutput(VideoFrame)'",
-        None,
-        None
-    )?)?;
+    stream_output_dict.set_item(
+        "__init__",
+        py.eval_bound("lambda self, type_hint=None: None", None, None)?,
+    )?;
+    stream_output_dict.set_item(
+        "__repr__",
+        py.eval_bound("lambda self: 'StreamOutput(VideoFrame)'", None, None)?,
+    )?;
 
     let stream_output = type_fn.call1((
         "StreamOutput",
@@ -141,11 +138,10 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("StreamOutput", stream_output)?;
 
     let video_frame_dict = pyo3::types::PyDict::new_bound(py);
-    video_frame_dict.set_item("__repr__", py.eval_bound(
-        "lambda self: 'VideoFrame'",
-        None,
-        None
-    )?)?;
+    video_frame_dict.set_item(
+        "__repr__",
+        py.eval_bound("lambda self: 'VideoFrame'", None, None)?,
+    )?;
 
     let video_frame = type_fn.call1((
         "VideoFrame",
@@ -156,11 +152,10 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("VideoFrame", video_frame)?;
 
     let audio_frame_dict = pyo3::types::PyDict::new_bound(py);
-    audio_frame_dict.set_item("__repr__", py.eval_bound(
-        "lambda self: 'AudioFrame'",
-        None,
-        None
-    )?)?;
+    audio_frame_dict.set_item(
+        "__repr__",
+        py.eval_bound("lambda self: 'AudioFrame'", None, None)?,
+    )?;
 
     let audio_frame = type_fn.call1((
         "AudioFrame",

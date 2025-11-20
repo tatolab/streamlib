@@ -6,17 +6,19 @@
 // - WHIP signaling (RFC 9725)
 // - WebRTC session management (webrtc-rs)
 
-use crate::core::{
-    VideoFrame, AudioFrame, StreamError, Result,
-    media_clock::MediaClock, GpuContext,
-    StreamInput, RuntimeContext,
+use crate::apple::videotoolbox::{EncodedVideoFrame, VideoEncoderConfig, VideoToolboxEncoder};
+use crate::apple::webrtc::{WebRtcSession, WhipClient, WhipConfig};
+use crate::core::streaming::{
+    convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
+    EncodedAudioFrame, OpusEncoder, RtpTimestampCalculator,
 };
-use streamlib_macros::StreamProcessor;
-use crate::apple::videotoolbox::{VideoToolboxEncoder, VideoEncoderConfig, EncodedVideoFrame};
-use crate::apple::webrtc::{WhipClient, WhipConfig, WebRtcSession};
-use crate::core::streaming::{OpusEncoder, AudioEncoderOpus, AudioEncoderConfig, EncodedAudioFrame, convert_video_to_samples, convert_audio_to_sample, RtpTimestampCalculator};
-use std::sync::{Arc, Mutex};
+use crate::core::{
+    media_clock::MediaClock, AudioFrame, GpuContext, Result, RuntimeContext, StreamError,
+    StreamInput, VideoFrame,
+};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+use streamlib_macros::StreamProcessor;
 
 // ============================================================================
 // VIDEO ENCODER TRAIT (WebRTC-specific interface)
@@ -39,7 +41,11 @@ struct VideoToolboxH264Encoder {
 }
 
 impl VideoToolboxH264Encoder {
-    fn new(config: VideoEncoderConfig, gpu_context: Option<GpuContext>, ctx: &RuntimeContext) -> Result<Self> {
+    fn new(
+        config: VideoEncoderConfig,
+        gpu_context: Option<GpuContext>,
+        ctx: &RuntimeContext,
+    ) -> Result<Self> {
         Ok(Self {
             encoder: VideoToolboxEncoder::new(config, gpu_context, ctx)?,
         })
@@ -114,7 +120,7 @@ pub struct WebRtcWhipProcessor {
     // Session state
     session_started: bool,
     start_time_ns: Option<i64>,
-    gpu_context: Option<GpuContext>,  // Store for lazy encoder init
+    gpu_context: Option<GpuContext>, // Store for lazy encoder init
 
     // Encoders (will be Box<dyn Trait> when implemented)
     #[cfg(target_os = "macos")]
@@ -146,7 +152,9 @@ impl WebRtcWhipProcessor {
         // Initialize audio encoder (doesn't require main thread)
         self.audio_encoder = Some(OpusEncoder::new(self.config.audio.clone())?);
 
-        tracing::info!("WebRtcWhipProcessor initialized (will create video encoder on first frames)");
+        tracing::info!(
+            "WebRtcWhipProcessor initialized (will create video encoder on first frames)"
+        );
         Ok(())
     }
 
@@ -216,13 +224,14 @@ impl WebRtcWhipProcessor {
         // Initialize VideoToolbox encoder lazily
         if self.video_encoder.is_none() {
             let gpu_context = self.gpu_context.clone();
-            let ctx = self.ctx.as_ref().ok_or_else(|| {
-                StreamError::Runtime("RuntimeContext not available".into())
-            })?;
+            let ctx = self
+                .ctx
+                .as_ref()
+                .ok_or_else(|| StreamError::Runtime("RuntimeContext not available".into()))?;
             self.video_encoder = Some(VideoToolboxH264Encoder::new(
                 self.config.video.clone(),
                 gpu_context,
-                ctx
+                ctx,
             )?);
             tracing::info!("VideoToolbox H.264 encoder initialized");
         }
@@ -233,18 +242,23 @@ impl WebRtcWhipProcessor {
         // 3. Initialize RTP timestamp calculators
         self.video_rtp_calc = Some(RtpTimestampCalculator::new(
             self.start_time_ns.unwrap(),
-            90000 // 90kHz for video
+            90000, // 90kHz for video
         ));
         self.audio_rtp_calc = Some(RtpTimestampCalculator::new(
             self.start_time_ns.unwrap(),
-            48000 // 48kHz for Opus
+            48000, // 48kHz for Opus
         ));
 
         // Install rustls crypto provider if needed
         if rustls::crypto::CryptoProvider::get_default().is_none() {
             rustls::crypto::ring::default_provider()
                 .install_default()
-                .map_err(|e| StreamError::Runtime(format!("Failed to install rustls crypto provider: {:?}", e)))?;
+                .map_err(|e| {
+                    StreamError::Runtime(format!(
+                        "Failed to install rustls crypto provider: {:?}",
+                        e
+                    ))
+                })?;
         }
 
         // Create WHIP client
@@ -274,7 +288,10 @@ impl WebRtcWhipProcessor {
         tracing::info!("[WebRTC] ================================");
 
         // POST offer to WHIP endpoint
-        let answer = whip_client.lock().unwrap().post_offer(&offer_with_bandwidth)?;
+        let answer = whip_client
+            .lock()
+            .unwrap()
+            .post_offer(&offer_with_bandwidth)?;
         tracing::info!("[WebRTC] ========== SDP ANSWER ==========");
         for (i, line) in answer.lines().enumerate() {
             tracing::info!("[WebRTC] SDP ANSWER [{}]: {}", i, line);
@@ -306,11 +323,16 @@ impl WebRtcWhipProcessor {
             return Ok(());
         }
 
-        let encoder = self.video_encoder.as_mut()
+        let encoder = self
+            .video_encoder
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Video encoder not initialized".into()))?;
         let encoded = encoder.encode(frame)?;
         let samples = convert_video_to_samples(&encoded, self.config.video.fps)?;
-        self.webrtc_session.as_mut().unwrap().write_video_samples(samples)?;
+        self.webrtc_session
+            .as_mut()
+            .unwrap()
+            .write_video_samples(samples)?;
 
         Ok(())
     }
@@ -320,11 +342,16 @@ impl WebRtcWhipProcessor {
             return Ok(());
         }
 
-        let encoder = self.audio_encoder.as_mut()
+        let encoder = self
+            .audio_encoder
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Audio encoder not initialized".into()))?;
         let encoded = encoder.encode(frame)?;
         let sample = convert_audio_to_sample(&encoded, self.config.audio.sample_rate)?;
-        self.webrtc_session.as_mut().unwrap().write_audio_sample(sample)?;
+        self.webrtc_session
+            .as_mut()
+            .unwrap()
+            .write_audio_sample(sample)?;
 
         Ok(())
     }
@@ -332,7 +359,9 @@ impl WebRtcWhipProcessor {
     /// Collects and logs RTCP statistics from the WebRTC peer connection.
     /// Calculates bitrates from delta of bytes sent since last measurement.
     fn log_rtcp_stats(&mut self) -> Result<()> {
-        let webrtc_session = self.webrtc_session.as_ref()
+        let webrtc_session = self
+            .webrtc_session
+            .as_ref()
             .ok_or_else(|| StreamError::Runtime("WebRTC session not initialized".into()))?;
 
         // Get stats from peer connection (async operation, run in Tokio runtime)
@@ -391,8 +420,10 @@ impl WebRtcWhipProcessor {
             let video_bytes_delta = video_bytes_sent.saturating_sub(self.last_video_bytes_sent);
             let audio_bytes_delta = audio_bytes_sent.saturating_sub(self.last_audio_bytes_sent);
 
-            let video_packets_delta = video_packets_sent.saturating_sub(self.last_video_packets_sent);
-            let audio_packets_delta = audio_packets_sent.saturating_sub(self.last_audio_packets_sent);
+            let video_packets_delta =
+                video_packets_sent.saturating_sub(self.last_video_packets_sent);
+            let audio_packets_delta =
+                audio_packets_sent.saturating_sub(self.last_audio_packets_sent);
 
             // Calculate bitrates (bits per second)
             let video_bitrate_bps = (video_bytes_delta as f64 * 8.0) / delta_time_s;
@@ -456,9 +487,9 @@ mod tests {
     fn test_convert_video_to_samples() {
         let encoded = EncodedVideoFrame {
             data: vec![
-                0, 0, 0, 1, 0x67, 0x42,  // SPS
-                0, 0, 0, 1, 0x68, 0x43,  // PPS
-                0, 0, 0, 1, 0x65, 0xAA,  // IDR
+                0, 0, 0, 1, 0x67, 0x42, // SPS
+                0, 0, 0, 1, 0x68, 0x43, // PPS
+                0, 0, 0, 1, 0x65, 0xAA, // IDR
             ],
             timestamp_ns: 1_000_000_000,
             is_keyframe: true,
@@ -485,7 +516,7 @@ mod tests {
     #[test]
     fn test_convert_video_no_nal_units() {
         let encoded = EncodedVideoFrame {
-            data: vec![0xAA, 0xBB, 0xCC],  // No start codes
+            data: vec![0xAA, 0xBB, 0xCC], // No start codes
             timestamp_ns: 0,
             is_keyframe: false,
             frame_number: 0,
@@ -501,7 +532,7 @@ mod tests {
         let encoded = EncodedAudioFrame {
             data: vec![0xAA, 0xBB, 0xCC, 0xDD],
             timestamp_ns: 1_000_000_000,
-            sample_count: 960,  // 20ms @ 48kHz
+            sample_count: 960, // 20ms @ 48kHz
         };
 
         let sample = convert_audio_to_sample(&encoded, 48000).unwrap();
@@ -518,9 +549,9 @@ mod tests {
     fn test_convert_audio_duration_calculation() {
         // Test various sample counts
         let test_cases = vec![
-            (480, 48000, 10.0),    // 10ms
-            (960, 48000, 20.0),    // 20ms
-            (1920, 48000, 40.0),   // 40ms
+            (480, 48000, 10.0),  // 10ms
+            (960, 48000, 20.0),  // 20ms
+            (1920, 48000, 40.0), // 40ms
         ];
 
         for (sample_count, sample_rate, expected_ms) in test_cases {
@@ -533,9 +564,14 @@ mod tests {
             let sample = convert_audio_to_sample(&encoded, sample_rate).unwrap();
             let actual_ms = sample.duration.as_secs_f64() * 1000.0;
 
-            assert!((actual_ms - expected_ms).abs() < 0.01,
+            assert!(
+                (actual_ms - expected_ms).abs() < 0.01,
                 "Expected ~{}ms, got {}ms for {} samples @ {}Hz",
-                expected_ms, actual_ms, sample_count, sample_rate);
+                expected_ms,
+                actual_ms,
+                sample_count,
+                sample_rate
+            );
         }
     }
 
@@ -562,9 +598,9 @@ mod tests {
     #[test]
     fn test_parse_nal_units_multiple() {
         let data = vec![
-            0, 0, 0, 1, 0x67, 0x42,  // SPS (4-byte start code)
-            0, 0, 0, 1, 0x68, 0x43,  // PPS (4-byte start code)
-            0, 0, 1, 0x65, 0xAA,     // IDR (3-byte start code)
+            0, 0, 0, 1, 0x67, 0x42, // SPS (4-byte start code)
+            0, 0, 0, 1, 0x68, 0x43, // PPS (4-byte start code)
+            0, 0, 1, 0x65, 0xAA, // IDR (3-byte start code)
         ];
         let nals = parse_nal_units(&data);
         assert_eq!(nals.len(), 3);
@@ -576,9 +612,9 @@ mod tests {
     #[test]
     fn test_parse_nal_units_mixed_start_codes() {
         let data = vec![
-            0, 0, 0, 1, 0x67, 0x11,  // 4-byte start code
-            0, 0, 1, 0x68, 0x22,     // 3-byte start code
-            0, 0, 0, 1, 0x65, 0x33,  // 4-byte start code
+            0, 0, 0, 1, 0x67, 0x11, // 4-byte start code
+            0, 0, 1, 0x68, 0x22, // 3-byte start code
+            0, 0, 0, 1, 0x65, 0x33, // 4-byte start code
         ];
         let nals = parse_nal_units(&data);
         assert_eq!(nals.len(), 3);
@@ -608,23 +644,23 @@ mod tests {
 
         // SPS
         data.extend_from_slice(&[0, 0, 0, 1]);
-        data.extend_from_slice(&[0x67, 0x42, 0xC0, 0x1E]);  // Fake SPS
+        data.extend_from_slice(&[0x67, 0x42, 0xC0, 0x1E]); // Fake SPS
 
         // PPS
         data.extend_from_slice(&[0, 0, 0, 1]);
-        data.extend_from_slice(&[0x68, 0xCE, 0x3C, 0x80]);  // Fake PPS
+        data.extend_from_slice(&[0x68, 0xCE, 0x3C, 0x80]); // Fake PPS
 
         // IDR slice
         data.extend_from_slice(&[0, 0, 0, 1]);
-        data.extend_from_slice(&[0x65, 0x88, 0x84, 0x00, 0x10]);  // Fake IDR
+        data.extend_from_slice(&[0x65, 0x88, 0x84, 0x00, 0x10]); // Fake IDR
 
         let nals = parse_nal_units(&data);
         assert_eq!(nals.len(), 3);
 
         // Verify NAL unit types (first byte & 0x1F)
-        assert_eq!(nals[0][0] & 0x1F, 0x07);  // SPS
-        assert_eq!(nals[1][0] & 0x1F, 0x08);  // PPS
-        assert_eq!(nals[2][0] & 0x1F, 0x05);  // IDR
+        assert_eq!(nals[0][0] & 0x1F, 0x07); // SPS
+        assert_eq!(nals[1][0] & 0x1F, 0x08); // PPS
+        assert_eq!(nals[2][0] & 0x1F, 0x05); // IDR
     }
 
     // ========================================================================
@@ -654,8 +690,10 @@ mod tests {
         let calc2 = RtpTimestampCalculator::new(0, 90000);
 
         // Different calculators should have different bases
-        assert_ne!(calc1.rtp_base, calc2.rtp_base,
-            "RTP base should be random, not deterministic");
+        assert_ne!(
+            calc1.rtp_base, calc2.rtp_base,
+            "RTP base should be random, not deterministic"
+        );
     }
 
     #[test]
@@ -707,7 +745,11 @@ mod tests {
 
         // Should increment by ~3000 ticks (33.33ms × 90kHz)
         let diff = rtp_ts2.wrapping_sub(rtp_ts1);
-        assert!((diff as i32 - 3000).abs() < 2, "Expected ~3000 ticks, got {}", diff);
+        assert!(
+            (diff as i32 - 3000).abs() < 2,
+            "Expected ~3000 ticks, got {}",
+            diff
+        );
     }
 
     #[test]
@@ -751,7 +793,7 @@ mod tests {
     #[test]
     fn test_opus_encoder_invalid_sample_rate() {
         let mut config = AudioEncoderConfig::default();
-        config.sample_rate = 44100;  // Not supported
+        config.sample_rate = 44100; // Not supported
         let encoder = OpusEncoder::new(config);
         assert!(encoder.is_err());
         let err = encoder.unwrap_err().to_string();
@@ -761,7 +803,7 @@ mod tests {
     #[test]
     fn test_opus_encoder_invalid_channels() {
         let mut config = AudioEncoderConfig::default();
-        config.channels = 1;  // Mono not supported
+        config.channels = 1; // Mono not supported
         let encoder = OpusEncoder::new(config);
         assert!(encoder.is_err());
         let err = encoder.unwrap_err().to_string();
@@ -776,10 +818,9 @@ mod tests {
         // Create 20ms frame @ 48kHz stereo = 960 samples * 2 channels = 1920 f32
         let samples = vec![0.0f32; 1920];
         let frame = AudioFrame::<2>::new(
-            samples,
-            0,      // timestamp_ns
-            0,      // frame_number
-            48000   // sample_rate
+            samples, 0,     // timestamp_ns
+            0,     // frame_number
+            48000, // sample_rate
         );
 
         let result = encoder.encode(&frame);
@@ -798,12 +839,7 @@ mod tests {
 
         // Wrong size: 512 samples instead of 960
         let samples = vec![0.0f32; 512 * 2];
-        let frame = AudioFrame::<2>::new(
-            samples,
-            0,
-            0,
-            48000
-        );
+        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 
         let result = encoder.encode(&frame);
         assert!(result.is_err());
@@ -819,10 +855,7 @@ mod tests {
         // Wrong sample rate
         let samples = vec![0.0f32; 1920];
         let frame = AudioFrame::<2>::new(
-            samples,
-            0,
-            0,
-            44100  // Wrong sample rate
+            samples, 0, 0, 44100, // Wrong sample rate
         );
 
         let result = encoder.encode(&frame);
@@ -838,12 +871,7 @@ mod tests {
 
         let timestamp_ns = 123456789i64;
         let samples = vec![0.0f32; 1920];
-        let frame = AudioFrame::<2>::new(
-            samples,
-            timestamp_ns,
-            42,
-            48000
-        );
+        let frame = AudioFrame::<2>::new(samples, timestamp_ns, 42, 48000);
 
         let encoded = encoder.encode(&frame).unwrap();
         assert_eq!(encoded.timestamp_ns, timestamp_ns);
@@ -871,21 +899,16 @@ mod tests {
         for i in 0..960 {
             let t = i as f32 / 48000.0;
             let sample = (2.0 * PI * 440.0 * t).sin() * 0.5;
-            samples.push(sample);  // Left
-            samples.push(sample);  // Right
+            samples.push(sample); // Left
+            samples.push(sample); // Right
         }
 
-        let frame = AudioFrame::<2>::new(
-            samples,
-            0,
-            0,
-            48000
-        );
+        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
         let encoded = encoder.encode(&frame).unwrap();
 
         // Encoded size should be reasonable (< 4KB for 20ms)
-        assert!(encoded.data.len() > 10);  // At least some bytes
-        assert!(encoded.data.len() < 4000);  // Not too large
+        assert!(encoded.data.len() > 10); // At least some bytes
+        assert!(encoded.data.len() < 4000); // Not too large
     }
 
     #[test]
@@ -895,14 +918,9 @@ mod tests {
 
         // Simulate encoding 10 frames (200ms of audio)
         for frame_num in 0..10 {
-            let timestamp_ns = frame_num * 20_000_000;  // 20ms increments
+            let timestamp_ns = frame_num * 20_000_000; // 20ms increments
             let samples = vec![0.1f32; 1920];
-            let frame = AudioFrame::<2>::new(
-                samples,
-                timestamp_ns,
-                frame_num as u64,
-                48000
-            );
+            let frame = AudioFrame::<2>::new(samples, timestamp_ns, frame_num as u64, 48000);
 
             let encoded = encoder.encode(&frame).unwrap();
             assert!(encoded.data.len() > 0);

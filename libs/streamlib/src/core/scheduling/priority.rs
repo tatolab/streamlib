@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,7 +28,7 @@ impl ThreadPriority {
         match self {
             ThreadPriority::RealTime => Some(10.0),
             ThreadPriority::High => Some(33.0),
-            ThreadPriority::Normal => None,  // No strict budget
+            ThreadPriority::Normal => None, // No strict budget
         }
     }
 

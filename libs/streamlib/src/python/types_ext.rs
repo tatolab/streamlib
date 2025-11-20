@@ -1,11 +1,10 @@
-
-use pyo3::prelude::*;
-use pyo3::exceptions::PyAttributeError;
-use crate::core::{StreamInput, StreamOutput, VideoFrame, AudioFrame, DataFrame, GpuContext};
 use super::PyVideoFrame;
-use std::sync::Arc;
+use crate::core::{AudioFrame, DataFrame, GpuContext, StreamInput, StreamOutput, VideoFrame};
 use parking_lot::Mutex;
+use pyo3::exceptions::PyAttributeError;
+use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[pyclass(name = "StreamInput", module = "streamlib")]
 #[derive(Clone)]
@@ -297,7 +296,13 @@ impl PyGpuContext {
             view_formats: &[],
         });
 
-        Ok(Py::new(py, PyWgpuTexture { texture: std::sync::Arc::new(texture) })?.into_py(py))
+        Ok(Py::new(
+            py,
+            PyWgpuTexture {
+                texture: std::sync::Arc::new(texture),
+            },
+        )?
+        .into_py(py))
     }
 
     fn __repr__(&self) -> String {

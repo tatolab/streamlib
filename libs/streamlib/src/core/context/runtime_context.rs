@@ -1,4 +1,3 @@
-
 use super::GpuContext;
 
 #[derive(Clone)]
@@ -8,9 +7,7 @@ pub struct RuntimeContext {
 
 impl RuntimeContext {
     pub fn new(gpu: GpuContext) -> Self {
-        Self {
-            gpu,
-        }
+        Self { gpu }
     }
 
     /// Dispatch a closure to execute on the main thread asynchronously.
@@ -85,7 +82,8 @@ impl RuntimeContext {
             let _ = tx.send(result);
         });
 
-        rx.recv().expect("Failed to receive result from main thread")
+        rx.recv()
+            .expect("Failed to receive result from main thread")
     }
 
     /// No-op implementation for non-macOS platforms

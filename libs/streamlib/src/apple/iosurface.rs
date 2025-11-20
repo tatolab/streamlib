@@ -68,12 +68,12 @@
 //! - DisplayProcessor (libs/streamlib/src/apple/processors/display.rs:164-244) for similar blitting to CAMetalDrawable
 //! - WgpuBridge::unwrap_to_metal_texture() (libs/streamlib/src/apple/wgpu_bridge.rs) for wgpu → Metal conversion
 
+use crate::core::{Result, StreamError};
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::msg_send;
 use objc2_io_surface::IOSurface;
 use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureUsage};
-use crate::core::{Result, StreamError};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -130,8 +130,8 @@ pub fn create_iosurface(
     height: usize,
     pixel_format: PixelFormat,
 ) -> Result<Retained<IOSurface>> {
-    use objc2_foundation::{ns_string, NSNumber, NSString};
     use objc2::runtime::AnyObject;
+    use objc2_foundation::{ns_string, NSNumber, NSString};
 
     let ios_format = pixel_format_to_iosurface(pixel_format)?;
 
@@ -166,21 +166,16 @@ pub fn create_iosurface(
 
     let properties = NSDictionary::from_slices(&keys, &values);
 
-    use objc2::ClassType;
     use objc2::runtime::AnyClass;
+    use objc2::ClassType;
 
     let cls: &AnyClass = IOSurface::class();
-    let allocated_ptr: *mut IOSurface = unsafe {
-        msg_send![cls, alloc]
-    };
+    let allocated_ptr: *mut IOSurface = unsafe { msg_send![cls, alloc] };
 
-    let surface_ptr: *mut IOSurface = unsafe {
-        msg_send![allocated_ptr, initWithProperties: &*properties]
-    };
+    let surface_ptr: *mut IOSurface =
+        unsafe { msg_send![allocated_ptr, initWithProperties: &*properties] };
 
-    let surface = unsafe {
-        Retained::from_raw(surface_ptr)
-    }.ok_or_else(|| {
+    let surface = unsafe { Retained::from_raw(surface_ptr) }.ok_or_else(|| {
         StreamError::TextureError(format!(
             "Failed to create IOSurface with dimensions {}x{}, format={:?}",
             width, height, pixel_format

@@ -21,7 +21,7 @@
 //! - Atomic flag check (per iteration): ~2ns
 //! - Total overhead: <0.01% (negligible)
 
-use crate::core::pubsub::{Event, EventListener, RuntimeEvent, EVENT_BUS, topics};
+use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, EVENT_BUS};
 use crate::core::Result;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -96,12 +96,12 @@ where
     // IMPORTANT: We must keep the Arc alive for the duration of the loop!
     // The event bus stores only weak references, so if we drop the Arc, the listener is lost.
     let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    EVENT_BUS.subscribe(
-        topics::RUNTIME_GLOBAL,
-        Arc::clone(&listener_arc),
-    );
+    EVENT_BUS.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
 
-    tracing::info!("Shutdown-aware loop started, subscribed to {}", topics::RUNTIME_GLOBAL);
+    tracing::info!(
+        "Shutdown-aware loop started, subscribed to {}",
+        topics::RUNTIME_GLOBAL
+    );
 
     // Main loop
     loop {
@@ -147,8 +147,8 @@ mod tests {
 
     #[test]
     fn test_shutdown_event_exits_loop() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
 
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
@@ -176,14 +176,15 @@ mod tests {
         // Loop should have run at least once but stopped after shutdown
         let final_count = counter.load(Ordering::Relaxed);
         assert!(final_count > 0, "Loop should have run at least once");
-        assert!(final_count < 100, "Loop should have stopped after shutdown event");
+        assert!(
+            final_count < 100,
+            "Loop should have stopped after shutdown event"
+        );
     }
 
     #[test]
     fn test_error_propagation() {
-        let result = shutdown_aware_loop(|| {
-            Err::<LoopControl, &str>("test error")
-        });
+        let result = shutdown_aware_loop(|| Err::<LoopControl, &str>("test error"));
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "test error");

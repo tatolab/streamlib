@@ -32,9 +32,7 @@ pub fn mach_now_ns() -> i64 {
 }
 
 pub fn system_time_to_ns(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as i64
+    time.duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64
 }
 
 #[cfg(test)]

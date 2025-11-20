@@ -1,10 +1,10 @@
-use super::traits::{StreamProcessor, DynStreamElement};
-use super::handles::{ProcessorHandle, PendingConnection};
-use super::{Result, StreamError};
 use super::bus::PortType;
+use super::handles::{PendingConnection, ProcessorHandle};
+use super::traits::{DynStreamElement, StreamProcessor};
+use super::{Result, StreamError};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::thread::JoinHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -160,7 +160,10 @@ impl StreamRuntime {
         if self.running {
             // Runtime is running - spawn thread immediately
             self.spawn_processor_thread(id.clone(), processor)?;
-            tracing::info!("Added processor with ID: {} (runtime running, thread spawned)", id);
+            tracing::info!(
+                "Added processor with ID: {} (runtime running, thread spawned)",
+                id
+            );
         } else {
             // Runtime not running - add to pending processors
             let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
@@ -181,7 +184,8 @@ impl StreamRuntime {
                 processors.insert(id.clone(), handle);
             }
 
-            self.pending_processors.push((id.clone(), processor, shutdown_rx));
+            self.pending_processors
+                .push((id.clone(), processor, shutdown_rx));
             tracing::info!("Added processor with ID: {} (pending)", id);
         }
 
@@ -207,11 +211,14 @@ impl StreamRuntime {
     ) -> Result<()> {
         if !self.running {
             return Err(StreamError::Runtime(
-                "Cannot spawn processor thread - runtime is not running".into()
+                "Cannot spawn processor thread - runtime is not running".into(),
             ));
         }
 
-        tracing::info!("[{}] Spawning processor thread in running runtime...", processor_id);
+        tracing::info!(
+            "[{}] Spawning processor thread in running runtime...",
+            processor_id
+        );
 
         let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
 
@@ -240,12 +247,19 @@ impl StreamRuntime {
         };
 
         let handle = std::thread::spawn(move || {
-            tracing::info!("[{}] Thread started (mode: {:?}, priority: {:?})", id_for_thread, sched_config.mode, sched_config.priority);
+            tracing::info!(
+                "[{}] Thread started (mode: {:?}, priority: {:?})",
+                id_for_thread,
+                sched_config.mode,
+                sched_config.priority
+            );
 
             // Apply thread priority
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             {
-                if let Err(e) = crate::apple::thread_priority::apply_thread_priority(sched_config.priority) {
+                if let Err(e) =
+                    crate::apple::thread_priority::apply_thread_priority(sched_config.priority)
+                {
                     tracing::warn!("[{}] Failed to apply thread priority: {}", id_for_thread, e);
                 }
             }
@@ -268,78 +282,80 @@ impl StreamRuntime {
 
             match sched_config.mode {
                 crate::core::scheduling::SchedulingMode::Pull => {
-                    tracing::info!("[{}] Pull mode - processor manages own callback, waiting for shutdown", id_for_thread);
+                    tracing::info!(
+                        "[{}] Pull mode - processor manages own callback, waiting for shutdown",
+                        id_for_thread
+                    );
 
                     let _ = shutdown_rx.recv();
                     tracing::info!("[{}] Shutdown signal received (pull mode)", id_for_thread);
                 }
 
-                crate::core::scheduling::SchedulingMode::Loop => {
-                    loop {
-                        match shutdown_rx.try_recv() {
-                            Ok(_) => {
-                                tracing::info!("[{}] Shutdown signal received", id_for_thread);
-                                break;
-                            }
-                            Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                                tracing::warn!("[{}] Shutdown channel closed", id_for_thread);
-                                break;
-                            }
-                            Err(crossbeam_channel::TryRecvError::Empty) => {
-                            }
+                crate::core::scheduling::SchedulingMode::Loop => loop {
+                    match shutdown_rx.try_recv() {
+                        Ok(_) => {
+                            tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                            break;
                         }
-
-                        {
-                            let mut processor = processor_for_thread.lock();
-                            if let Err(e) = processor.process() {
-                                tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
-                            }
+                        Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                            tracing::warn!("[{}] Shutdown channel closed", id_for_thread);
+                            break;
                         }
-
-                        std::thread::sleep(std::time::Duration::from_micros(10));
+                        Err(crossbeam_channel::TryRecvError::Empty) => {}
                     }
-                }
 
-                crate::core::scheduling::SchedulingMode::Push => {
-                    loop {
-                        crossbeam_channel::select! {
-                            recv(wakeup_rx) -> result => {
-                                match result {
-                                    Ok(WakeupEvent::DataAvailable) => {
-                                        tracing::debug!("[{}] Received DataAvailable wakeup", id_for_thread);
-                                        let mut processor = processor_for_thread.lock();
-                                        if let Err(e) = processor.process() {
-                                            tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
-                                        }
-                                    }
-                                    Ok(WakeupEvent::TimerTick) => {
-                                        tracing::debug!("[{}] Received TimerTick wakeup", id_for_thread);
-                                        let mut processor = processor_for_thread.lock();
-                                        if let Err(e) = processor.process() {
-                                            tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
-                                        }
-                                    }
-                                    Ok(WakeupEvent::Shutdown) => {
-                                        tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
-                                        break;
-                                    }
-                                    Err(_) => {
-                                        tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
-                                        break;
+                    {
+                        let mut processor = processor_for_thread.lock();
+                        if let Err(e) = processor.process() {
+                            tracing::error!(
+                                "[{}] process() error (loop mode): {}",
+                                id_for_thread,
+                                e
+                            );
+                        }
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_micros(10));
+                },
+
+                crate::core::scheduling::SchedulingMode::Push => loop {
+                    crossbeam_channel::select! {
+                        recv(wakeup_rx) -> result => {
+                            match result {
+                                Ok(WakeupEvent::DataAvailable) => {
+                                    tracing::debug!("[{}] Received DataAvailable wakeup", id_for_thread);
+                                    let mut processor = processor_for_thread.lock();
+                                    if let Err(e) = processor.process() {
+                                        tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                     }
                                 }
-                            }
-                            recv(shutdown_rx) -> result => {
-                                match result {
-                                    Ok(_) | Err(_) => {
-                                        tracing::info!("[{}] Shutdown signal received", id_for_thread);
-                                        break;
+                                Ok(WakeupEvent::TimerTick) => {
+                                    tracing::debug!("[{}] Received TimerTick wakeup", id_for_thread);
+                                    let mut processor = processor_for_thread.lock();
+                                    if let Err(e) = processor.process() {
+                                        tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
                                     }
+                                }
+                                Ok(WakeupEvent::Shutdown) => {
+                                    tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
+                                    break;
+                                }
+                                Err(_) => {
+                                    tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
+                                    break;
                                 }
                             }
                         }
+                        recv(shutdown_rx) -> result => {
+                            match result {
+                                Ok(_) | Err(_) => {
+                                    tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                                    break;
+                                }
+                            }
+                        }
                     }
-                }
+                },
             }
 
             {
@@ -410,18 +426,16 @@ impl StreamRuntime {
         tracing::debug!(
             "Registered pending connection: {} ({}.{} → {}.{})",
             connection_id,
-            output.processor_id(), output.port_name(),
-            input.processor_id(), input.port_name()
+            output.processor_id(),
+            output.port_name(),
+            input.processor_id(),
+            input.port_name()
         );
 
         Ok(())
     }
 
-    pub fn connect_at_runtime(
-        &mut self,
-        source: &str,
-        destination: &str,
-    ) -> Result<ConnectionId> {
+    pub fn connect_at_runtime(&mut self, source: &str, destination: &str) -> Result<ConnectionId> {
         let (source_proc_id, source_port) = source.split_once('.').ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Invalid source format '{}'. Expected 'processor_id.port_name'",
@@ -449,7 +463,10 @@ impl StreamRuntime {
             let processors = self.processors.lock();
 
             let source_handle = processors.get(source_proc_id).ok_or_else(|| {
-                StreamError::Configuration(format!("Source processor '{}' not found", source_proc_id))
+                StreamError::Configuration(format!(
+                    "Source processor '{}' not found",
+                    source_proc_id
+                ))
             })?;
 
             let dest_handle = processors.get(dest_proc_id).ok_or_else(|| {
@@ -484,9 +501,10 @@ impl StreamRuntime {
             let dest_descriptor = dest_guard.descriptor_instance();
 
             if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
-                if let (Some(source_audio), Some(dest_audio)) =
-                    (&source_desc.audio_requirements, &dest_desc.audio_requirements)
-                {
+                if let (Some(source_audio), Some(dest_audio)) = (
+                    &source_desc.audio_requirements,
+                    &dest_desc.audio_requirements,
+                ) {
                     if !source_audio.compatible_with(dest_audio) {
                         let error_msg = source_audio.compatibility_error(dest_audio);
                         return Err(StreamError::Configuration(format!(
@@ -497,7 +515,8 @@ impl StreamRuntime {
 
                     tracing::debug!(
                         "Audio requirements validated: {} → {} (compatible)",
-                        source_proc_id, dest_proc_id
+                        source_proc_id,
+                        dest_proc_id
                     );
                 }
             }
@@ -507,7 +526,8 @@ impl StreamRuntime {
             let source_guard = source_processor.lock();
             let dest_guard = dest_processor.lock();
 
-            let src_type = source_guard.get_output_port_type(source_port)
+            let src_type = source_guard
+                .get_output_port_type(source_port)
                 .ok_or_else(|| {
                     StreamError::Configuration(format!(
                         "Source processor '{}' does not have output port '{}'",
@@ -515,13 +535,12 @@ impl StreamRuntime {
                     ))
                 })?;
 
-            let dst_type = dest_guard.get_input_port_type(dest_port)
-                .ok_or_else(|| {
-                    StreamError::Configuration(format!(
-                        "Destination processor '{}' does not have input port '{}'",
-                        dest_proc_id, dest_port
-                    ))
-                })?;
+            let dst_type = dest_guard.get_input_port_type(dest_port).ok_or_else(|| {
+                StreamError::Configuration(format!(
+                    "Destination processor '{}' does not have input port '{}'",
+                    dest_proc_id, dest_port
+                ))
+            })?;
 
             if !src_type.compatible_with(&dst_type) {
                 return Err(StreamError::Configuration(format!(
@@ -571,7 +590,7 @@ impl StreamRuntime {
                         dest_port, dest_proc_id
                     )));
                 }
-            },
+            }
             PortType::Audio2 => {
                 use crate::core::frames::AudioFrame;
                 let (producer, consumer) = self.bus.create_connection::<AudioFrame<2>>(
@@ -601,7 +620,7 @@ impl StreamRuntime {
                         dest_port, dest_proc_id
                     )));
                 }
-            },
+            }
             PortType::Audio4 => {
                 use crate::core::frames::AudioFrame;
                 let (producer, consumer) = self.bus.create_connection::<AudioFrame<4>>(
@@ -631,7 +650,7 @@ impl StreamRuntime {
                         dest_port, dest_proc_id
                     )));
                 }
-            },
+            }
             PortType::Audio6 => {
                 use crate::core::frames::AudioFrame;
                 let (producer, consumer) = self.bus.create_connection::<AudioFrame<6>>(
@@ -661,7 +680,7 @@ impl StreamRuntime {
                         dest_port, dest_proc_id
                     )));
                 }
-            },
+            }
             PortType::Audio8 => {
                 use crate::core::frames::AudioFrame;
                 let (producer, consumer) = self.bus.create_connection::<AudioFrame<8>>(
@@ -691,7 +710,7 @@ impl StreamRuntime {
                         dest_port, dest_proc_id
                     )));
                 }
-            },
+            }
             PortType::Video => {
                 use crate::core::frames::VideoFrame;
                 let (producer, consumer) = self.bus.create_connection::<VideoFrame>(
@@ -721,7 +740,7 @@ impl StreamRuntime {
                         dest_port, dest_proc_id
                     )));
                 }
-            },
+            }
             PortType::Data => {
                 use crate::core::frames::DataFrame;
                 let (producer, consumer) = self.bus.create_connection::<DataFrame>(
@@ -765,7 +784,11 @@ impl StreamRuntime {
         let connection_id = format!("connection_{}", self.next_connection_id);
         self.next_connection_id += 1;
 
-        let connection = Connection::new(connection_id.clone(), source.to_string(), destination.to_string());
+        let connection = Connection::new(
+            connection_id.clone(),
+            source.to_string(),
+            destination.to_string(),
+        );
 
         {
             let mut connections = self.connections.lock();
@@ -782,12 +805,18 @@ impl StreamRuntime {
             return Ok(());
         }
 
-        tracing::info!("Wiring {} pending connections...", self.pending_connections.len());
+        tracing::info!(
+            "Wiring {} pending connections...",
+            self.pending_connections.len()
+        );
 
         let connections_to_wire = std::mem::take(&mut self.pending_connections);
 
         for pending in connections_to_wire {
-            let source = format!("{}.{}", pending.source_processor_id, pending.source_port_name);
+            let source = format!(
+                "{}.{}",
+                pending.source_processor_id, pending.source_port_name
+            );
             let destination = format!("{}.{}", pending.dest_processor_id, pending.dest_port_name);
 
             tracing::info!("Wiring connection: {} → {}", source, destination);
@@ -802,7 +831,8 @@ impl StreamRuntime {
                 if let (Some(src), Some(dst)) = (source_handle, dest_handle) {
                     if let Some(src_proc) = src.processor.as_ref() {
                         let mut source_guard = src_proc.lock();
-                        source_guard.set_output_wakeup(&pending.source_port_name, dst.wakeup_tx.clone());
+                        source_guard
+                            .set_output_wakeup(&pending.source_port_name, dst.wakeup_tx.clone());
 
                         tracing::debug!(
                             "Wired wakeup notification: {} ({}) → {} ({})",
@@ -824,9 +854,16 @@ impl StreamRuntime {
             for (proc_id, handle) in processors.iter() {
                 if let Some(proc_ref) = &handle.processor {
                     let sched_config = proc_ref.lock().scheduling_config();
-                    if matches!(sched_config.mode, crate::core::scheduling::SchedulingMode::Pull) {
+                    if matches!(
+                        sched_config.mode,
+                        crate::core::scheduling::SchedulingMode::Pull
+                    ) {
                         if let Err(e) = handle.wakeup_tx.send(WakeupEvent::DataAvailable) {
-                            tracing::warn!("[{}] Failed to send Pull mode initialization wakeup: {}", proc_id, e);
+                            tracing::warn!(
+                                "[{}] Failed to send Pull mode initialization wakeup: {}",
+                                proc_id,
+                                e
+                            );
                         } else {
                             tracing::debug!("[{}] Sent Pull mode initialization wakeup", proc_id);
                         }
@@ -845,10 +882,7 @@ impl StreamRuntime {
 
         let handler_count = self.pending_processors.len();
 
-        tracing::info!(
-            "Starting runtime with {} processors",
-            handler_count
-        );
+        tracing::info!("Starting runtime with {} processors", handler_count);
 
         let core_count = std::thread::available_parallelism()
             .map(|n| n.get())
@@ -885,10 +919,9 @@ impl StreamRuntime {
         }
 
         // Install native signal handlers (SIGTERM, SIGINT)
-        crate::core::signals::install_signal_handlers()
-            .map_err(|e| StreamError::Configuration(
-                format!("Failed to install signal handlers: {}", e)
-            ))?;
+        crate::core::signals::install_signal_handlers().map_err(|e| {
+            StreamError::Configuration(format!("Failed to install signal handlers: {}", e))
+        })?;
 
         tracing::info!("Runtime running (press Ctrl+C to stop)");
 
@@ -897,10 +930,10 @@ impl StreamRuntime {
             event_loop()?;
         } else {
             // Default: wait for shutdown event via event bus
-            use std::sync::Arc;
-            use std::sync::atomic::{AtomicBool, Ordering};
-            use crate::core::pubsub::{Event, EventListener, RuntimeEvent, EVENT_BUS, topics};
+            use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, EVENT_BUS};
             use parking_lot::Mutex;
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::Arc;
 
             let running = Arc::new(AtomicBool::new(true));
             let running_clone = Arc::clone(&running);
@@ -920,11 +953,11 @@ impl StreamRuntime {
                 }
             }
 
-            let listener = ShutdownListener { running: running_clone };
-            let _subscription = EVENT_BUS.subscribe(
-                topics::RUNTIME_GLOBAL,
-                Arc::new(Mutex::new(listener)),
-            );
+            let listener = ShutdownListener {
+                running: running_clone,
+            };
+            let _subscription =
+                EVENT_BUS.subscribe(topics::RUNTIME_GLOBAL, Arc::new(Mutex::new(listener)));
 
             while running.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -978,7 +1011,12 @@ impl StreamRuntime {
             if let Some(handle) = thread_handle {
                 match handle.join() {
                     Ok(_) => {
-                        tracing::debug!("[{}] Thread joined ({}/{})", processor_id, i + 1, thread_count);
+                        tracing::debug!(
+                            "[{}] Thread joined ({}/{})",
+                            processor_id,
+                            i + 1,
+                            thread_count
+                        );
                         let mut processors = self.processors.lock();
                         if let Some(proc) = processors.get_mut(processor_id) {
                             *proc.status.lock() = ProcessorStatus::Stopped;
@@ -1008,7 +1046,9 @@ impl StreamRuntime {
             })?;
 
             let current_status = *processor.status.lock();
-            if current_status == ProcessorStatus::Stopped || current_status == ProcessorStatus::Stopping {
+            if current_status == ProcessorStatus::Stopped
+                || current_status == ProcessorStatus::Stopping
+            {
                 return Err(StreamError::Runtime(format!(
                     "Processor '{}' is already {:?}",
                     processor_id, current_status
@@ -1049,7 +1089,11 @@ impl StreamRuntime {
                     }
                 }
                 Err(panic_err) => {
-                    tracing::error!("[{}] Processor thread panicked: {:?}", processor_id, panic_err);
+                    tracing::error!(
+                        "[{}] Processor thread panicked: {:?}",
+                        processor_id,
+                        panic_err
+                    );
 
                     let mut processors = self.processors.lock();
                     if let Some(proc) = processors.get_mut(processor_id) {
@@ -1063,7 +1107,10 @@ impl StreamRuntime {
                 }
             }
         } else {
-            tracing::warn!("[{}] No thread handle found (processor may not have started)", processor_id);
+            tracing::warn!(
+                "[{}] No thread handle found (processor may not have started)",
+                processor_id
+            );
         }
 
         // Publish ProcessorRemoved event
@@ -1073,7 +1120,10 @@ impl StreamRuntime {
                 processor_id: processor_id.to_string(),
             });
             EVENT_BUS.publish(&removed_event.topic(), &removed_event);
-            tracing::debug!("[{}] Published RuntimeEvent::ProcessorRemoved", processor_id);
+            tracing::debug!(
+                "[{}] Published RuntimeEvent::ProcessorRemoved",
+                processor_id
+            );
         }
 
         tracing::info!("[{}] Processor removed", processor_id);
@@ -1121,13 +1171,24 @@ impl StreamRuntime {
             };
 
             let handle = std::thread::spawn(move || {
-                tracing::info!("[{}] Thread started (mode: {:?}, priority: {:?})", id_for_thread, sched_config.mode, sched_config.priority);
+                tracing::info!(
+                    "[{}] Thread started (mode: {:?}, priority: {:?})",
+                    id_for_thread,
+                    sched_config.mode,
+                    sched_config.priority
+                );
 
                 // Apply thread priority
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 {
-                    if let Err(e) = crate::apple::thread_priority::apply_thread_priority(sched_config.priority) {
-                        tracing::warn!("[{}] Failed to apply thread priority: {}", id_for_thread, e);
+                    if let Err(e) =
+                        crate::apple::thread_priority::apply_thread_priority(sched_config.priority)
+                    {
+                        tracing::warn!(
+                            "[{}] Failed to apply thread priority: {}",
+                            id_for_thread,
+                            e
+                        );
                     }
                 }
 
@@ -1149,7 +1210,10 @@ impl StreamRuntime {
 
                 match sched_config.mode {
                     crate::core::scheduling::SchedulingMode::Pull => {
-                        tracing::info!("[{}] Pull mode - waiting for connections to be wired", id_for_thread);
+                        tracing::info!(
+                            "[{}] Pull mode - waiting for connections to be wired",
+                            id_for_thread
+                        );
 
                         let init_result = crossbeam_channel::select! {
                             recv(wakeup_rx) -> result => {
@@ -1172,7 +1236,11 @@ impl StreamRuntime {
                         };
 
                         if let Err(e) = init_result {
-                            tracing::error!("[{}] Pull mode process() initialization failed: {}", id_for_thread, e);
+                            tracing::error!(
+                                "[{}] Pull mode process() initialization failed: {}",
+                                id_for_thread,
+                                e
+                            );
                             return;
                         }
 
@@ -1182,70 +1250,69 @@ impl StreamRuntime {
                         tracing::info!("[{}] Shutdown signal received (pull mode)", id_for_thread);
                     }
 
-                    crate::core::scheduling::SchedulingMode::Loop => {
-                        loop {
-                            match shutdown_rx.try_recv() {
-                                Ok(_) => {
-                                    tracing::info!("[{}] Shutdown signal received", id_for_thread);
-                                    break;
-                                }
-                                Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                                    tracing::warn!("[{}] Shutdown channel closed", id_for_thread);
-                                    break;
-                                }
-                                Err(crossbeam_channel::TryRecvError::Empty) => {
-                                }
+                    crate::core::scheduling::SchedulingMode::Loop => loop {
+                        match shutdown_rx.try_recv() {
+                            Ok(_) => {
+                                tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                                break;
                             }
-
-                            {
-                                let mut processor = processor_for_thread.lock();
-                                if let Err(e) = processor.process() {
-                                    tracing::error!("[{}] process() error (loop mode): {}", id_for_thread, e);
-                                }
+                            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                                tracing::warn!("[{}] Shutdown channel closed", id_for_thread);
+                                break;
                             }
-
-                            std::thread::sleep(std::time::Duration::from_micros(10));
+                            Err(crossbeam_channel::TryRecvError::Empty) => {}
                         }
-                    }
 
-                    crate::core::scheduling::SchedulingMode::Push => {
-                        loop {
-                            crossbeam_channel::select! {
-                                recv(wakeup_rx) -> result => {
-                                    match result {
-                                        Ok(WakeupEvent::DataAvailable) => {
-                                            let mut processor = processor_for_thread.lock();
-                                            if let Err(e) = processor.process() {
-                                                tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
-                                            }
-                                        }
-                                        Ok(WakeupEvent::TimerTick) => {
-                                            let mut processor = processor_for_thread.lock();
-                                            if let Err(e) = processor.process() {
-                                                tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
-                                            }
-                                        }
-                                        Ok(WakeupEvent::Shutdown) => {
-                                            tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
-                                            break;
-                                        }
-                                        Err(_) => {
-                                            tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
-                                            break;
+                        {
+                            let mut processor = processor_for_thread.lock();
+                            if let Err(e) = processor.process() {
+                                tracing::error!(
+                                    "[{}] process() error (loop mode): {}",
+                                    id_for_thread,
+                                    e
+                                );
+                            }
+                        }
+
+                        std::thread::sleep(std::time::Duration::from_micros(10));
+                    },
+
+                    crate::core::scheduling::SchedulingMode::Push => loop {
+                        crossbeam_channel::select! {
+                            recv(wakeup_rx) -> result => {
+                                match result {
+                                    Ok(WakeupEvent::DataAvailable) => {
+                                        let mut processor = processor_for_thread.lock();
+                                        if let Err(e) = processor.process() {
+                                            tracing::error!("[{}] process() error (data wakeup): {}", id_for_thread, e);
                                         }
                                     }
-                                }
-                                recv(shutdown_rx) -> result => {
-                                    match result {
-                                        Ok(_) | Err(_) => {
-                                            tracing::info!("[{}] Shutdown signal received", id_for_thread);
-                                            break;
+                                    Ok(WakeupEvent::TimerTick) => {
+                                        let mut processor = processor_for_thread.lock();
+                                        if let Err(e) = processor.process() {
+                                            tracing::error!("[{}] process() error (timer tick): {}", id_for_thread, e);
                                         }
+                                    }
+                                    Ok(WakeupEvent::Shutdown) => {
+                                        tracing::info!("[{}] Shutdown wakeup received", id_for_thread);
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        tracing::warn!("[{}] Wakeup channel closed unexpectedly", id_for_thread);
+                                        break;
                                     }
                                 }
                             }
+                            recv(shutdown_rx) -> result => {
+                                match result {
+                                    Ok(_) | Err(_) => {
+                                        tracing::info!("[{}] Shutdown signal received", id_for_thread);
+                                        break;
+                                    }
+                                }
+                            }
                         }
-                    }
+                    },
                 }
 
                 {
@@ -1292,10 +1359,10 @@ pub struct RuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::traits::{StreamProcessor, StreamElement, ElementType};
+    use crate::core::traits::{ElementType, StreamElement, StreamProcessor};
     use crate::core::ProcessorDescriptor;
+    use serde::{Deserialize, Serialize};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use serde::{Serialize, Deserialize};
 
     #[derive(Clone, Serialize, Deserialize)]
     struct CounterConfig {
@@ -1326,12 +1393,10 @@ mod tests {
         }
 
         fn descriptor(&self) -> Option<ProcessorDescriptor> {
-            Some(
-                ProcessorDescriptor::new(
-                    "CounterProcessor",
-                    "Test processor that increments a counter"
-                )
-            )
+            Some(ProcessorDescriptor::new(
+                "CounterProcessor",
+                "Test processor that increments a counter",
+            ))
         }
     }
 
@@ -1351,12 +1416,10 @@ mod tests {
         }
 
         fn descriptor() -> Option<ProcessorDescriptor> {
-            Some(
-                ProcessorDescriptor::new(
-                    "CounterProcessor",
-                    "Test processor that increments a counter"
-                )
-            )
+            Some(ProcessorDescriptor::new(
+                "CounterProcessor",
+                "Test processor that increments a counter",
+            ))
         }
     }
 
@@ -1374,7 +1437,9 @@ mod tests {
         let count = Arc::new(AtomicU64::new(0));
         let config = CounterConfig { count };
 
-        let _handle = runtime.add_processor_with_config::<CounterProcessor>(config).unwrap();
+        let _handle = runtime
+            .add_processor_with_config::<CounterProcessor>(config)
+            .unwrap();
         assert_eq!(runtime.pending_processors.len(), 1);
     }
 
@@ -1386,11 +1451,19 @@ mod tests {
         let count1 = Arc::new(AtomicU64::new(0));
         let count2 = Arc::new(AtomicU64::new(0));
 
-        let config1 = CounterConfig { count: Arc::clone(&count1) };
-        let config2 = CounterConfig { count: Arc::clone(&count2) };
+        let config1 = CounterConfig {
+            count: Arc::clone(&count1),
+        };
+        let config2 = CounterConfig {
+            count: Arc::clone(&count2),
+        };
 
-        runtime.add_processor_with_config::<CounterProcessor>(config1).unwrap();
-        runtime.add_processor_with_config::<CounterProcessor>(config2).unwrap();
+        runtime
+            .add_processor_with_config::<CounterProcessor>(config1)
+            .unwrap();
+        runtime
+            .add_processor_with_config::<CounterProcessor>(config2)
+            .unwrap();
 
         runtime.start().unwrap();
         assert!(runtime.running);
@@ -1450,12 +1523,10 @@ mod tests {
             }
 
             fn descriptor(&self) -> Option<ProcessorDescriptor> {
-                Some(
-                    ProcessorDescriptor::new(
-                        "WorkProcessor",
-                        "Test processor that performs CPU work"
-                    )
-                )
+                Some(ProcessorDescriptor::new(
+                    "WorkProcessor",
+                    "Test processor that performs CPU work",
+                ))
             }
         }
 
@@ -1489,12 +1560,10 @@ mod tests {
             }
 
             fn descriptor() -> Option<ProcessorDescriptor> {
-                Some(
-                    ProcessorDescriptor::new(
-                        "WorkProcessor",
-                        "Test processor that performs CPU work"
-                    )
-                )
+                Some(ProcessorDescriptor::new(
+                    "WorkProcessor",
+                    "Test processor that performs CPU work",
+                ))
             }
         }
 
@@ -1513,8 +1582,12 @@ mod tests {
             start_times: Arc::clone(&start_times2),
         };
 
-        runtime.add_processor_with_config::<WorkProcessor>(config1).unwrap();
-        runtime.add_processor_with_config::<WorkProcessor>(config2).unwrap();
+        runtime
+            .add_processor_with_config::<WorkProcessor>(config1)
+            .unwrap();
+        runtime
+            .add_processor_with_config::<WorkProcessor>(config2)
+            .unwrap();
 
         runtime.start().unwrap();
 

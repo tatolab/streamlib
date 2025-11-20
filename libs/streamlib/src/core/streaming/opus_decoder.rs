@@ -2,7 +2,7 @@
 //
 // Provides Opus decoding for real-time audio streaming from WebRTC.
 
-use crate::core::{AudioFrame, StreamError, Result};
+use crate::core::{AudioFrame, Result, StreamError};
 
 // ============================================================================
 // OPUS DECODER IMPLEMENTATION
@@ -25,8 +25,8 @@ use crate::core::{AudioFrame, StreamError, Result};
 pub struct OpusDecoder {
     decoder: opus::Decoder,
     sample_rate: u32,
-    input_channels: usize,  // Channels in the input stream (1 or 2)
-    frame_size: usize,      // Expected frame size in samples per channel
+    input_channels: usize, // Channels in the input stream (1 or 2)
+    frame_size: usize,     // Expected frame size in samples per channel
 }
 
 impl OpusDecoder {
@@ -42,15 +42,17 @@ impl OpusDecoder {
         // Opus supports: 8000, 12000, 16000, 24000, 48000 Hz
         // WebRTC typically uses 48000 Hz
         if ![8000, 12000, 16000, 24000, 48000].contains(&sample_rate) {
-            return Err(StreamError::Configuration(
-                format!("Opus decoder requires sample rate of 8/12/16/24/48 kHz, got {}Hz", sample_rate)
-            ));
+            return Err(StreamError::Configuration(format!(
+                "Opus decoder requires sample rate of 8/12/16/24/48 kHz, got {}Hz",
+                sample_rate
+            )));
         }
 
         if input_channels != 1 && input_channels != 2 {
-            return Err(StreamError::Configuration(
-                format!("Opus decoder supports 1 (mono) or 2 (stereo) channels, got {}", input_channels)
-            ));
+            return Err(StreamError::Configuration(format!(
+                "Opus decoder supports 1 (mono) or 2 (stereo) channels, got {}",
+                input_channels
+            )));
         }
 
         // Create opus decoder with the stream's channel count
@@ -150,10 +152,7 @@ impl OpusDecoder {
                 );
             }
             // Duplicate mono to both channels
-            let stereo = output
-                .iter()
-                .flat_map(|&sample| [sample, sample])
-                .collect();
+            let stereo = output.iter().flat_map(|&sample| [sample, sample]).collect();
             Ok(stereo)
         } else {
             if decode_num == 0 {
@@ -175,7 +174,11 @@ impl OpusDecoder {
     ///
     /// # Returns
     /// Stereo audio frame ready to be sent to audio output
-    pub fn decode_to_audio_frame(&mut self, packet: &[u8], timestamp_ns: i64) -> Result<AudioFrame<2>> {
+    pub fn decode_to_audio_frame(
+        &mut self,
+        packet: &[u8],
+        timestamp_ns: i64,
+    ) -> Result<AudioFrame<2>> {
         let samples = self.decode(packet)?;
 
         // Samples are already interleaved stereo [L,R,L,R,...]

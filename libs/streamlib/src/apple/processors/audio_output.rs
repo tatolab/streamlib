@@ -1,10 +1,10 @@
-use crate::core::{StreamInput, Result, StreamError};
+use crate::core::audio_resample_utils::{ResamplingQuality, StereoResampler};
 use crate::core::frames::AudioFrame;
-use crate::core::audio_resample_utils::{StereoResampler, ResamplingQuality};
-use streamlib_macros::StreamProcessor;
-use cpal::Stream;
+use crate::core::{Result, StreamError, StreamInput};
 use cpal::traits::StreamTrait;
+use cpal::Stream;
 use std::sync::{Arc, Mutex};
+use streamlib_macros::StreamProcessor;
 
 // Apple-specific configuration and device types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -97,8 +97,14 @@ pub struct AppleAudioOutputProcessor {
 impl AppleAudioOutputProcessor {
     // Lifecycle - auto-detected by macro
     fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
-        self.device_id = self.config.device_id.as_ref().and_then(|s| s.parse::<usize>().ok());
-        tracing::info!("AudioOutput: start() called (Pull mode - will query device for native config)");
+        self.device_id = self
+            .config
+            .device_id
+            .as_ref()
+            .and_then(|s| s.parse::<usize>().ok());
+        tracing::info!(
+            "AudioOutput: start() called (Pull mode - will query device for native config)"
+        );
         Ok(())
     }
 
@@ -114,7 +120,9 @@ impl AppleAudioOutputProcessor {
             return Ok(());
         }
 
-        tracing::info!("AudioOutput: process() called - setting up stream now that connections are wired");
+        tracing::info!(
+            "AudioOutput: process() called - setting up stream now that connections are wired"
+        );
 
         // Query hardware device for native sample_rate and buffer_size
         use cpal::traits::{DeviceTrait, HostTrait};
@@ -123,20 +131,25 @@ impl AppleAudioOutputProcessor {
         let device = if let Some(id) = self.device_id {
             let devices: Vec<_> = host
                 .output_devices()
-                .map_err(|e| StreamError::Configuration(format!("Failed to enumerate audio devices: {}", e)))?
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Failed to enumerate audio devices: {}", e))
+                })?
                 .collect();
             devices
                 .get(id)
-                .ok_or_else(|| StreamError::Configuration(format!("Audio device {} not found", id)))?
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!("Audio device {} not found", id))
+                })?
                 .clone()
         } else {
-            host.default_output_device()
-                .ok_or_else(|| StreamError::Configuration("No default audio output device".into()))?
+            host.default_output_device().ok_or_else(|| {
+                StreamError::Configuration("No default audio output device".into())
+            })?
         };
 
-        let device_config = device
-            .default_output_config()
-            .map_err(|e| StreamError::Configuration(format!("Failed to get audio config: {}", e)))?;
+        let device_config = device.default_output_config().map_err(|e| {
+            StreamError::Configuration(format!("Failed to get audio config: {}", e))
+        })?;
 
         let device_sample_rate = device_config.sample_rate().0;
         let device_channels = device_config.channels() as u32;
@@ -229,7 +242,10 @@ impl AppleAudioOutputProcessor {
                                         frame_buffer.extend_from_slice(&resampled);
                                     }
                                     Err(e) => {
-                                        tracing::error!("[AudioOutput Adaptive] Resampling failed: {}", e);
+                                        tracing::error!(
+                                            "[AudioOutput Adaptive] Resampling failed: {}",
+                                            e
+                                        );
                                         // Fallback: use original samples (wrong speed)
                                         frame_buffer.extend_from_slice(&audio_frame.samples);
                                     }
@@ -269,11 +285,13 @@ impl AppleAudioOutputProcessor {
                     // No data at all - output silence
                     data.fill(0.0);
                 }
-            }
+            },
         )?;
 
         tracing::info!("AudioOutput: Starting cpal stream playback");
-        setup.stream.play()
+        setup
+            .stream
+            .play()
             .map_err(|e| StreamError::Configuration(format!("Failed to start stream: {}", e)))?;
 
         tracing::info!("AudioOutput: cpal stream.play() succeeded");
@@ -297,4 +315,3 @@ impl AppleAudioOutputProcessor {
         Ok(())
     }
 }
-

@@ -2,9 +2,9 @@
 //
 // Provides RTP timestamp calculation and sample conversion for WebRTC streaming.
 
-use crate::core::{StreamError, Result};
-use crate::apple::videotoolbox::{EncodedVideoFrame, parse_nal_units};
+use crate::apple::videotoolbox::{parse_nal_units, EncodedVideoFrame};
 use crate::core::streaming::opus::EncodedAudioFrame;
+use crate::core::{Result, StreamError};
 use bytes::Bytes;
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ pub fn convert_video_to_samples(
 
     if nal_units.is_empty() {
         return Err(StreamError::Runtime(
-            "No NAL units found in H.264 frame".into()
+            "No NAL units found in H.264 frame".into(),
         ));
     }
 

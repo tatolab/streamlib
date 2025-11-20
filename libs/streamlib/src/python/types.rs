@@ -1,6 +1,5 @@
-
+use crate::core::{AudioFrame, DataFrame, VideoFrame};
 use pyo3::prelude::*;
-use crate::core::{VideoFrame, AudioFrame, DataFrame};
 use std::collections::HashMap;
 
 #[pyclass(name = "VideoFrame")]
@@ -40,12 +39,16 @@ impl PyVideoFrame {
     fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use super::gpu_wrappers::PyWgpuTexture;
         let texture_wrapper = PyWgpuTexture {
-            texture: self.inner.texture.clone()
+            texture: self.inner.texture.clone(),
         };
         Ok(Py::new(py, texture_wrapper)?.into_py(py))
     }
 
-    fn clone_with_texture(&self, py: Python<'_>, new_texture: &Bound<'_, PyAny>) -> PyResult<PyVideoFrame> {
+    fn clone_with_texture(
+        &self,
+        py: Python<'_>,
+        new_texture: &Bound<'_, PyAny>,
+    ) -> PyResult<PyVideoFrame> {
         use super::gpu_wrappers::PyWgpuTexture;
 
         let texture_wrapper: Py<PyWgpuTexture> = new_texture.extract()?;
@@ -66,7 +69,9 @@ impl PyVideoFrame {
 
     #[getter]
     fn metadata(&self) -> HashMap<String, String> {
-        self.inner.metadata.as_ref()
+        self.inner
+            .metadata
+            .as_ref()
             .map(|m| {
                 m.iter()
                     .map(|(k, v)| (k.clone(), format!("{:?}", v)))
@@ -147,9 +152,11 @@ macro_rules! impl_py_audio_frame {
             /// Get samples for a specific channel (0-indexed)
             fn get_channel(&self, channel: usize) -> PyResult<Vec<f32>> {
                 if channel >= $channels {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        format!("Channel {} out of range (0-{})", channel, $channels - 1)
-                    ));
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Channel {} out of range (0-{})",
+                        channel,
+                        $channels - 1
+                    )));
                 }
 
                 let sample_count = self.inner.sample_count();
@@ -164,7 +171,9 @@ macro_rules! impl_py_audio_frame {
 
             #[getter]
             fn metadata(&self) -> HashMap<String, String> {
-                self.inner.metadata.as_ref()
+                self.inner
+                    .metadata
+                    .as_ref()
                     .map(|m| {
                         m.iter()
                             .map(|(k, v)| (k.clone(), format!("{:?}", v)))
@@ -233,14 +242,16 @@ impl PyDataFrame {
     fn buffer(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use super::gpu_wrappers::PyWgpuBuffer;
         let buffer_wrapper = PyWgpuBuffer {
-            buffer: self.inner.buffer.clone()
+            buffer: self.inner.buffer.clone(),
         };
         Ok(Py::new(py, buffer_wrapper)?.into_py(py))
     }
 
     #[getter]
     fn metadata(&self) -> HashMap<String, String> {
-        self.inner.metadata.as_ref()
+        self.inner
+            .metadata
+            .as_ref()
             .map(|m| {
                 m.iter()
                     .map(|(k, v)| (k.clone(), format!("{:?}", v)))
@@ -250,10 +261,7 @@ impl PyDataFrame {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "DataFrame(timestamp={:.6}s)",
-            self.inner.timestamp
-        )
+        format!("DataFrame(timestamp={:.6}s)", self.inner.timestamp)
     }
 
     fn __str__(&self) -> String {

@@ -1,5 +1,4 @@
-
-use crate::core::{VideoFrame, AudioFrame};
+use crate::core::{AudioFrame, VideoFrame};
 
 pub const DEFAULT_SYNC_TOLERANCE_MS: f64 = 16.6;
 
@@ -26,13 +25,23 @@ pub fn are_synchronized(timestamp_a_ns: i64, timestamp_b_ns: i64, tolerance_ms: 
 }
 
 #[inline]
-pub fn video_audio_delta_ms<const CHANNELS: usize>(video: &VideoFrame, audio: &AudioFrame<CHANNELS>) -> f64 {
+pub fn video_audio_delta_ms<const CHANNELS: usize>(
+    video: &VideoFrame,
+    audio: &AudioFrame<CHANNELS>,
+) -> f64 {
     timestamp_delta_ms(video.timestamp_ns, audio.timestamp_ns)
 }
 
 #[inline]
-pub fn video_audio_synchronized<const CHANNELS: usize>(video: &VideoFrame, audio: &AudioFrame<CHANNELS>) -> bool {
-    are_synchronized(video.timestamp_ns, audio.timestamp_ns, DEFAULT_SYNC_TOLERANCE_MS)
+pub fn video_audio_synchronized<const CHANNELS: usize>(
+    video: &VideoFrame,
+    audio: &AudioFrame<CHANNELS>,
+) -> bool {
+    are_synchronized(
+        video.timestamp_ns,
+        audio.timestamp_ns,
+        DEFAULT_SYNC_TOLERANCE_MS,
+    )
 }
 
 #[inline]

@@ -1,4 +1,3 @@
-
 use clack_host::bundle::PluginBundle;
 
 use crate::core::{Result, StreamError};
@@ -82,9 +81,9 @@ impl ClapScanner {
 
         let mut plugins = Vec::new();
 
-        for entry in std::fs::read_dir(path)
-            .map_err(|e| StreamError::Configuration(format!("Failed to read directory {:?}: {}", path, e)))?
-        {
+        for entry in std::fs::read_dir(path).map_err(|e| {
+            StreamError::Configuration(format!("Failed to read directory {:?}: {}", path, e))
+        })? {
             let entry = entry
                 .map_err(|e| StreamError::Configuration(format!("Failed to read entry: {}", e)))?;
             let entry_path = entry.path();
@@ -111,11 +110,13 @@ impl ClapScanner {
 
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         let bundle = unsafe {
-            PluginBundle::load(&binary_path)
-                .map_err(|e| StreamError::Configuration(format!("Failed to load bundle {:?}: {:?}", path, e)))?
+            PluginBundle::load(&binary_path).map_err(|e| {
+                StreamError::Configuration(format!("Failed to load bundle {:?}: {:?}", path, e))
+            })?
         };
 
-        let factory = bundle.get_plugin_factory()
+        let factory = bundle
+            .get_plugin_factory()
             .ok_or_else(|| StreamError::Configuration("Plugin has no factory".into()))?;
 
         let mut plugins = Vec::new();
@@ -123,23 +124,28 @@ impl ClapScanner {
         for desc in factory.plugin_descriptors() {
             plugins.push(ClapPluginInfo {
                 path: path.to_path_buf(),
-                id: desc.id()
+                id: desc
+                    .id()
                     .and_then(|id| id.to_str().ok())
                     .unwrap_or("unknown")
                     .to_string(),
-                name: desc.name()
+                name: desc
+                    .name()
                     .and_then(|n| n.to_str().ok())
                     .unwrap_or("Unknown")
                     .to_string(),
-                vendor: desc.vendor()
+                vendor: desc
+                    .vendor()
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("Unknown")
                     .to_string(),
-                version: desc.version()
+                version: desc
+                    .version()
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("Unknown")
                     .to_string(),
-                description: desc.description()
+                description: desc
+                    .description()
                     .and_then(|d| d.to_str().ok())
                     .unwrap_or("")
                     .to_string(),
@@ -166,17 +172,15 @@ impl ClapScanner {
                 .file_stem()
                 .ok_or_else(|| StreamError::Configuration("Invalid bundle path".into()))?;
 
-            let binary_path = bundle_path
-                .join("Contents")
-                .join("MacOS")
-                .join(binary_name);
+            let binary_path = bundle_path.join("Contents").join("MacOS").join(binary_name);
 
             if binary_path.exists() {
                 Ok(binary_path)
             } else {
-                Err(StreamError::Configuration(
-                    format!("Binary not found in bundle: {:?}", binary_path)
-                ))
+                Err(StreamError::Configuration(format!(
+                    "Binary not found in bundle: {:?}",
+                    binary_path
+                )))
             }
         }
 

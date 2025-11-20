@@ -2,9 +2,8 @@
 // Users import these common names and get the appropriate platform implementation
 #[cfg(target_os = "macos")]
 pub use crate::apple::processors::audio_capture::{
-    AppleAudioCaptureProcessor as AudioCaptureProcessor,
     AppleAudioCaptureConfig as AudioCaptureConfig,
-    AppleAudioInputDevice as AudioInputDevice,
+    AppleAudioCaptureProcessor as AudioCaptureProcessor, AppleAudioInputDevice as AudioInputDevice,
 };
 
 // Future platform implementations

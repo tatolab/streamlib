@@ -1,8 +1,8 @@
 use super::metadata::MetadataValue;
 use crate::core::bus::{PortMessage, PortType};
-use std::sync::Arc;
-use std::collections::HashMap;
 use dasp::Frame;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 // Implement sealed trait for all AudioFrame variants
 impl<const CHANNELS: usize> crate::core::bus::ports::sealed::Sealed for AudioFrame<CHANNELS> {}
@@ -24,12 +24,7 @@ pub struct AudioFrame<const CHANNELS: usize> {
 }
 
 impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
-    pub fn new(
-        samples: Vec<f32>,
-        timestamp_ns: i64,
-        frame_number: u64,
-        sample_rate: u32,
-    ) -> Self {
+    pub fn new(samples: Vec<f32>, timestamp_ns: i64, frame_number: u64, sample_rate: u32) -> Self {
         assert_eq!(
             samples.len() % CHANNELS,
             0,
@@ -83,9 +78,13 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
         F: Frame<Sample = f32>,
         for<'a> &'a [F]: FromSampleSlice<'a, f32>,
     {
-        assert_eq!(F::CHANNELS, CHANNELS,
+        assert_eq!(
+            F::CHANNELS,
+            CHANNELS,
             "Frame type has {} channels but AudioFrame has {} channels",
-            F::CHANNELS, CHANNELS);
+            F::CHANNELS,
+            CHANNELS
+        );
 
         FromSampleSlice::from_sample_slice(&self.samples)
             .expect("Sample count must be divisible by channel count")
@@ -101,15 +100,18 @@ impl<const CHANNELS: usize> AudioFrame<CHANNELS> {
         F: Frame<Sample = f32>,
         for<'a> &'a [F]: ToSampleSlice<'a, f32>,
     {
-        assert_eq!(F::CHANNELS, CHANNELS,
+        assert_eq!(
+            F::CHANNELS,
+            CHANNELS,
             "Frame type has {} channels but AudioFrame has {} channels",
-            F::CHANNELS, CHANNELS);
+            F::CHANNELS,
+            CHANNELS
+        );
 
         let sample_slice: &[f32] = frames.to_sample_slice();
         let samples = sample_slice.to_vec();
         Self::new(samples, timestamp_ns, frame_number, sample_rate)
     }
-
 }
 
 impl<const CHANNELS: usize> PortMessage for AudioFrame<CHANNELS> {
@@ -120,7 +122,10 @@ impl<const CHANNELS: usize> PortMessage for AudioFrame<CHANNELS> {
             4 => PortType::Audio4,
             6 => PortType::Audio6,
             8 => PortType::Audio8,
-            _ => panic!("Unsupported channel count: {}. Use 1, 2, 4, 6, or 8 channels.", CHANNELS),
+            _ => panic!(
+                "Unsupported channel count: {}. Use 1, 2, 4, 6, or 8 channels.",
+                CHANNELS
+            ),
         }
     }
 
@@ -129,15 +134,16 @@ impl<const CHANNELS: usize> PortMessage for AudioFrame<CHANNELS> {
     }
 
     fn examples() -> Vec<(&'static str, serde_json::Value)> {
-        vec![
-            ("AudioFrame", serde_json::json!({
+        vec![(
+            "AudioFrame",
+            serde_json::json!({
                 "sample_count": 2048,
                 "channels": CHANNELS,
                 "timestamp_ns": 0,
                 "frame_number": 1,
                 "metadata": {}
-            })),
-        ]
+            }),
+        )]
     }
 
     fn consumption_strategy() -> crate::core::bus::ports::ConsumptionStrategy {
@@ -194,11 +200,7 @@ mod tests {
 
     #[test]
     fn test_audioframe_stereo_dasp() {
-        let samples = vec![
-            1.0, -1.0,
-            2.0, -2.0,
-            3.0, -3.0,
-        ];
+        let samples = vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0];
         let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 
         let frames = frame.as_frames::<[f32; 2]>();
@@ -226,11 +228,7 @@ mod tests {
 
     #[test]
     fn test_audioframe_from_frames() {
-        let dasp_frames: &[[f32; 2]] = &[
-            [1.0, -1.0],
-            [2.0, -2.0],
-            [3.0, -3.0],
-        ];
+        let dasp_frames: &[[f32; 2]] = &[[1.0, -1.0], [2.0, -2.0], [3.0, -3.0]];
 
         let frame = AudioFrame::<2>::from_frames(dasp_frames, 0, 0, 48000);
 
@@ -269,9 +267,9 @@ mod tests {
     #[test]
     fn test_audioframe_read_signal() {
         let samples = vec![
-            1.0, 2.0,  // Frame 0
-            3.0, 4.0,  // Frame 1
-            5.0, 6.0,  // Frame 2
+            1.0, 2.0, // Frame 0
+            3.0, 4.0, // Frame 1
+            5.0, 6.0, // Frame 2
         ];
         let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
 

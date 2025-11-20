@@ -1,6 +1,6 @@
-use crate::core::{Result, StreamInput, StreamOutput, RuntimeContext};
 use crate::core::frames::AudioFrame;
-use serde::{Serialize, Deserialize};
+use crate::core::{Result, RuntimeContext, StreamInput, StreamOutput};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
@@ -68,7 +68,7 @@ impl BufferRechunkerProcessor {
         if let Some(input_frame) = self.audio_in.read() {
             let input_samples = &*input_frame.samples;
             let input_sample_count = input_samples.len() / CHANNELS;
-            let sample_rate = input_frame.sample_rate;  // Read from input frame!
+            let sample_rate = input_frame.sample_rate; // Read from input frame!
 
             // Initialize next_timestamp_ns on first frame
             if self.frame_counter == 0 && self.next_timestamp_ns == 0 {
@@ -97,11 +97,12 @@ impl BufferRechunkerProcessor {
                     output_samples,
                     self.next_timestamp_ns,
                     self.frame_counter,
-                    sample_rate,  // Use sample_rate from input frame
+                    sample_rate, // Use sample_rate from input frame
                 );
 
                 // Calculate next timestamp based on the number of samples we're outputting
-                let duration_ns = (self.target_buffer_size as i64 * 1_000_000_000) / sample_rate as i64;
+                let duration_ns =
+                    (self.target_buffer_size as i64 * 1_000_000_000) / sample_rate as i64;
                 self.next_timestamp_ns += duration_ns;
 
                 self.audio_out.write(output_frame);

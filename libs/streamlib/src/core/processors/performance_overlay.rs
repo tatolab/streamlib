@@ -1,15 +1,11 @@
-use crate::core::{
-    GpuContext, Result, StreamError, StreamInput,
-    StreamOutput, VideoFrame,
-};
+use crate::core::{GpuContext, Result, StreamError, StreamInput, StreamOutput, VideoFrame};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct PerformanceOverlayConfig {
-}
+pub struct PerformanceOverlayConfig {}
 
 #[cfg(feature = "debug-overlay")]
 use vello::{

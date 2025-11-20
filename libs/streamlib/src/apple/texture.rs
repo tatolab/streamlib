@@ -2,11 +2,11 @@
 // Review if this texture creation utility is needed or can be removed
 #![allow(dead_code)]
 
+use crate::core::{Result, StreamError};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureUsage};
 use objc2_metal::MTLTextureType;
-use crate::core::{Result, StreamError};
+use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureUsage};
 
 pub fn create_metal_texture(
     device: &ProtocolObject<dyn MTLDevice>,
@@ -25,10 +25,14 @@ pub fn create_metal_texture(
         descriptor.setUsage(usage);
     }
 
-    let texture = device.newTextureWithDescriptor(&descriptor)
-        .ok_or_else(|| StreamError::TextureError(
-            format!("Failed to create Metal texture ({}x{}, format={:?})", width, height, format)
-        ))?;
+    let texture = device
+        .newTextureWithDescriptor(&descriptor)
+        .ok_or_else(|| {
+            StreamError::TextureError(format!(
+                "Failed to create Metal texture ({}x{}, format={:?})",
+                width, height, format
+            ))
+        })?;
 
     Ok(texture)
 }

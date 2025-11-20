@@ -1,11 +1,10 @@
-
 use super::{McpError, Result};
-use crate::core::{StreamRuntime, ProcessorRegistry};
+use crate::core::{ProcessorRegistry, StreamRuntime};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::sync::Arc;
-use parking_lot::Mutex;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Tool {
@@ -217,26 +216,24 @@ pub async fn execute_tool(
     permissions: Arc<HashSet<String>>,
 ) -> Result<ToolResult> {
     match tool_name {
-        "list_supported_languages" => {
-            Ok(ToolResult {
-                success: true,
-                message: "Supported languages for dynamic processor creation".to_string(),
-                data: Some(serde_json::json!({
-                    "languages": [
-                        {
-                            "name": "python",
-                            "version": "3.11+",
-                            "status": "ready",
-                            "description": "Python via PyO3 embedded interpreter - create custom processors with @processor decorator"
-                        }
-                    ]
-                })),
-            })
-        }
+        "list_supported_languages" => Ok(ToolResult {
+            success: true,
+            message: "Supported languages for dynamic processor creation".to_string(),
+            data: Some(serde_json::json!({
+                "languages": [
+                    {
+                        "name": "python",
+                        "version": "3.11+",
+                        "status": "ready",
+                        "description": "Python via PyO3 embedded interpreter - create custom processors with @processor decorator"
+                    }
+                ]
+            })),
+        }),
 
         "list_packages" => {
-            let args: ListPackagesArgs = serde_json::from_value(arguments)
-                .map_err(|e| McpError::InvalidArguments {
+            let args: ListPackagesArgs =
+                serde_json::from_value(arguments).map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
@@ -244,7 +241,10 @@ pub async fn execute_tool(
             if args.language != "python" {
                 return Err(McpError::InvalidArguments {
                     tool: tool_name.to_string(),
-                    message: format!("Unsupported language: {}. Currently only 'python' is supported.", args.language),
+                    message: format!(
+                        "Unsupported language: {}. Currently only 'python' is supported.",
+                        args.language
+                    ),
                 });
             }
 
@@ -261,8 +261,8 @@ pub async fn execute_tool(
         }
 
         "request_package" => {
-            let args: RequestPackageArgs = serde_json::from_value(arguments)
-                .map_err(|e| McpError::InvalidArguments {
+            let args: RequestPackageArgs =
+                serde_json::from_value(arguments).map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
@@ -270,7 +270,10 @@ pub async fn execute_tool(
             if args.language != "python" {
                 return Err(McpError::InvalidArguments {
                     tool: tool_name.to_string(),
-                    message: format!("Unsupported language: {}. Currently only 'python' is supported.", args.language),
+                    message: format!(
+                        "Unsupported language: {}. Currently only 'python' is supported.",
+                        args.language
+                    ),
                 });
             }
 
@@ -281,7 +284,8 @@ pub async fn execute_tool(
                     "{} package '{}' request received{}",
                     args.language,
                     args.package,
-                    args.reason.as_ref()
+                    args.reason
+                        .as_ref()
                         .map(|r| format!(" (reason: {})", r))
                         .unwrap_or_default()
                 ),
@@ -295,8 +299,8 @@ pub async fn execute_tool(
         }
 
         "get_package_status" => {
-            let args: GetPackageStatusArgs = serde_json::from_value(arguments)
-                .map_err(|e| McpError::InvalidArguments {
+            let args: GetPackageStatusArgs =
+                serde_json::from_value(arguments).map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
@@ -304,7 +308,10 @@ pub async fn execute_tool(
             if args.language != "python" {
                 return Err(McpError::InvalidArguments {
                     tool: tool_name.to_string(),
-                    message: format!("Unsupported language: {}. Currently only 'python' is supported.", args.language),
+                    message: format!(
+                        "Unsupported language: {}. Currently only 'python' is supported.",
+                        args.language
+                    ),
                 });
             }
 
@@ -323,8 +330,8 @@ pub async fn execute_tool(
 
         "add_processor" => {
             tracing::info!("add_processor tool called");
-            let args: AddProcessorArgs = serde_json::from_value(arguments)
-                .map_err(|e| McpError::InvalidArguments {
+            let args: AddProcessorArgs =
+                serde_json::from_value(arguments).map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
@@ -345,7 +352,10 @@ pub async fn execute_tool(
                 if language != "python" {
                     return Err(McpError::InvalidArguments {
                         tool: tool_name.to_string(),
-                        message: format!("Only 'python' language is currently supported, got '{}'", language),
+                        message: format!(
+                            "Only 'python' language is currently supported, got '{}'",
+                            language
+                        ),
                     });
                 }
 
@@ -370,7 +380,9 @@ pub async fn execute_tool(
                     let result = tokio::task::spawn_blocking(move || {
                         let mut rt = runtime_clone.lock();
                         rt.add_boxed_processor(processor)
-                    }).await.map_err(|e| {
+                    })
+                    .await
+                    .map_err(|e| {
                         McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
                     })?;
 
@@ -410,8 +422,8 @@ pub async fn execute_tool(
         }
 
         "remove_processor" => {
-            let args: RemoveProcessorArgs = serde_json::from_value(arguments)
-                .map_err(|e| McpError::InvalidArguments {
+            let args: RemoveProcessorArgs =
+                serde_json::from_value(arguments).map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
@@ -428,33 +440,29 @@ pub async fn execute_tool(
             let result = tokio::task::spawn_blocking(move || {
                 let mut rt = runtime_clone.lock();
                 rt.remove_processor(&name)
-            }).await.map_err(|e| {
-                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
-            })?;
+            })
+            .await
+            .map_err(|e| McpError::Runtime(format!("Failed to spawn blocking task: {}", e)))?;
 
             match result {
-                Ok(_) => {
-                    Ok(ToolResult {
-                        success: true,
-                        message: format!("Successfully removed processor '{}'", args.name),
-                        data: Some(serde_json::json!({
-                            "processor_id": args.name
-                        })),
-                    })
-                }
-                Err(e) => {
-                    Ok(ToolResult {
-                        success: false,
-                        message: format!("Failed to remove processor '{}': {}", args.name, e),
-                        data: None,
-                    })
-                }
+                Ok(_) => Ok(ToolResult {
+                    success: true,
+                    message: format!("Successfully removed processor '{}'", args.name),
+                    data: Some(serde_json::json!({
+                        "processor_id": args.name
+                    })),
+                }),
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    message: format!("Failed to remove processor '{}': {}", args.name, e),
+                    data: None,
+                }),
             }
         }
 
         "connect_processors" => {
-            let args: ConnectProcessorsArgs = serde_json::from_value(arguments)
-                .map_err(|e| McpError::InvalidArguments {
+            let args: ConnectProcessorsArgs =
+                serde_json::from_value(arguments).map_err(|e| McpError::InvalidArguments {
                     tool: tool_name.to_string(),
                     message: e.to_string(),
                 })?;
@@ -472,35 +480,31 @@ pub async fn execute_tool(
             let result = tokio::task::spawn_blocking(move || {
                 let mut rt = runtime_clone.lock();
                 rt.connect_at_runtime(&source, &destination)
-            }).await.map_err(|e| {
-                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
-            })?;
+            })
+            .await
+            .map_err(|e| McpError::Runtime(format!("Failed to spawn blocking task: {}", e)))?;
 
             match result {
-                Ok(connection_id) => {
-                    Ok(ToolResult {
-                        success: true,
-                        message: format!(
-                            "Successfully connected {} → {}",
-                            args.source, args.destination
-                        ),
-                        data: Some(serde_json::json!({
-                            "connection_id": connection_id,
-                            "source": args.source,
-                            "destination": args.destination
-                        })),
-                    })
-                }
-                Err(e) => {
-                    Ok(ToolResult {
-                        success: false,
-                        message: format!(
-                            "Failed to connect {} → {}: {}",
-                            args.source, args.destination, e
-                        ),
-                        data: None,
-                    })
-                }
+                Ok(connection_id) => Ok(ToolResult {
+                    success: true,
+                    message: format!(
+                        "Successfully connected {} → {}",
+                        args.source, args.destination
+                    ),
+                    data: Some(serde_json::json!({
+                        "connection_id": connection_id,
+                        "source": args.source,
+                        "destination": args.destination
+                    })),
+                }),
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    message: format!(
+                        "Failed to connect {} → {}: {}",
+                        args.source, args.destination, e
+                    ),
+                    data: None,
+                }),
             }
         }
 
@@ -528,9 +532,9 @@ pub async fn execute_tool(
                         })
                     })
                     .collect::<Vec<_>>()
-            }).await.map_err(|e| {
-                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
-            })?;
+            })
+            .await
+            .map_err(|e| McpError::Runtime(format!("Failed to spawn blocking task: {}", e)))?;
 
             Ok(ToolResult {
                 success: true,
@@ -566,9 +570,9 @@ pub async fn execute_tool(
                         })
                     })
                     .collect::<Vec<_>>()
-            }).await.map_err(|e| {
-                McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
-            })?;
+            })
+            .await
+            .map_err(|e| McpError::Runtime(format!("Failed to spawn blocking task: {}", e)))?;
 
             Ok(ToolResult {
                 success: true,

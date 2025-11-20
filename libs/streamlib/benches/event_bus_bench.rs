@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use streamlib::core::pubsub::{EventBus, Event, EventListener};
+use streamlib::core::pubsub::{Event, EventBus, EventListener};
 use streamlib::core::{KeyCode, KeyState};
 
 // Simple test listener that counts events
@@ -23,7 +23,8 @@ impl CountingListener {
 
 impl EventListener for CountingListener {
     fn on_event(&mut self, _event: &Event) -> streamlib::core::error::Result<()> {
-        self.count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 }
@@ -310,9 +311,7 @@ fn bench_keyboard_event_burst(c: &mut Criterion) {
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
                 bus.subscribe("input:keyboard", listener);
 
-                let keys = vec![
-                    KeyCode::H, KeyCode::E, KeyCode::L, KeyCode::L, KeyCode::O,
-                ];
+                let keys = vec![KeyCode::H, KeyCode::E, KeyCode::L, KeyCode::L, KeyCode::O];
 
                 b.iter(|| {
                     // Simulate burst of keypresses
@@ -408,18 +407,17 @@ fn bench_realistic_video_processing(c: &mut Criterion) {
 
                 // Add realistic video effect listeners
                 let effects = vec![
-                    ("gaussian_blur", 80),      // ~80µs for 3x3 convolution
-                    ("color_correction", 15),   // ~15µs for RGB matrix + gamma
-                    ("edge_detection", 120),    // ~120µs for Sobel filter
-                    ("frame_analysis", 40),     // ~40µs for histogram
+                    ("gaussian_blur", 80),    // ~80µs for 3x3 convolution
+                    ("color_correction", 15), // ~15µs for RGB matrix + gamma
+                    ("edge_detection", 120),  // ~120µs for Sobel filter
+                    ("frame_analysis", 40),   // ~40µs for histogram
                 ];
 
                 let _listeners: Vec<_> = effects
                     .into_iter()
                     .map(|(name, time_us)| {
-                        let listener_concrete = Arc::new(Mutex::new(
-                            VideoEffectListener::new(name, time_us)
-                        ));
+                        let listener_concrete =
+                            Arc::new(Mutex::new(VideoEffectListener::new(name, time_us)));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
                         bus.subscribe("video:frame", listener);
                         listener_concrete
@@ -459,18 +457,17 @@ fn bench_realistic_audio_processing(c: &mut Criterion) {
 
                 // Add realistic audio DSP listeners
                 let dsp_effects = vec![
-                    ("3band_eq", 8),        // ~8µs for biquad filters
-                    ("compressor", 5),      // ~5µs for envelope + gain
-                    ("delay_line", 3),      // ~3µs for ring buffer
-                    ("fft_analyzer", 50),   // ~50µs for 512-point FFT
+                    ("3band_eq", 8),      // ~8µs for biquad filters
+                    ("compressor", 5),    // ~5µs for envelope + gain
+                    ("delay_line", 3),    // ~3µs for ring buffer
+                    ("fft_analyzer", 50), // ~50µs for 512-point FFT
                 ];
 
                 let _listeners: Vec<_> = dsp_effects
                     .into_iter()
                     .map(|(name, time_us)| {
-                        let listener_concrete = Arc::new(Mutex::new(
-                            AudioDSPListener::new(name, time_us)
-                        ));
+                        let listener_concrete =
+                            Arc::new(Mutex::new(AudioDSPListener::new(name, time_us)));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
                         bus.subscribe("audio:buffer", listener);
                         listener_concrete
@@ -541,10 +538,7 @@ fn bench_mixed_realtime_workload(c: &mut Criterion) {
             topic: "audio:buffer".to_string(),
             data: serde_json::json!({"buffer": 0}),
         };
-        let mouse_event = Event::custom(
-            "input:mouse",
-            serde_json::json!({"x": 100.0, "y": 100.0}),
-        );
+        let mouse_event = Event::custom("input:mouse", serde_json::json!({"x": 100.0, "y": 100.0}));
 
         b.iter(|| {
             // Simulate 1 second of events

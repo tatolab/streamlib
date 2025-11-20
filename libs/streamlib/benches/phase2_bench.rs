@@ -1,7 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, BenchmarkGroup};
-use streamlib::core::bus::connection::{ProcessorConnection, create_owned_connection};
+use criterion::{
+    black_box, criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion,
+};
 use std::sync::Arc;
 use std::thread;
+use streamlib::core::bus::connection::{create_owned_connection, ProcessorConnection};
 
 /// Phase 2 Benchmark: Compare lock-based (Phase 1) vs lock-free (Phase 2) connections
 

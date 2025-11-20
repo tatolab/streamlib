@@ -1,9 +1,11 @@
 use crate::core::StreamRuntime;
-use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSMenu, NSMenuItem};
-use objc2_foundation::{NSObject, NSObjectProtocol, NSString, NSProcessInfo};
+use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSMenu, NSMenuItem,
+};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSProcessInfo, NSString};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -62,11 +64,17 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
                     tracing::warn!("[{}] Failed to send shutdown signal: {}", processor_id, e);
                 }
                 // Also send via wakeup channel for Push mode processors
-                if let Err(e) = proc_handle.wakeup_tx.send(crate::core::runtime::WakeupEvent::Shutdown) {
+                if let Err(e) = proc_handle
+                    .wakeup_tx
+                    .send(crate::core::runtime::WakeupEvent::Shutdown)
+                {
                     tracing::warn!("[{}] Failed to send shutdown wakeup: {}", processor_id, e);
                 }
             }
-            tracing::info!("Shutdown callback: Sent shutdown signals to {} processors", procs.len());
+            tracing::info!(
+                "Shutdown callback: Sent shutdown signals to {} processors",
+                procs.len()
+            );
         }
 
         // Step 3: Join all processor threads to wait for teardown (with timeout)
@@ -82,7 +90,9 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
         for processor_id in processor_ids.iter() {
             let thread_handle = {
                 let mut procs = processors.lock();
-                procs.get_mut(processor_id).and_then(|proc| proc.thread.take())
+                procs
+                    .get_mut(processor_id)
+                    .and_then(|proc| proc.thread.take())
             };
 
             if let Some(handle) = thread_handle {
@@ -104,10 +114,18 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
                         }
                     }
                     Ok(Err(e)) => {
-                        tracing::error!("[{}] Thread panicked during shutdown: {:?}", processor_id, e);
+                        tracing::error!(
+                            "[{}] Thread panicked during shutdown: {:?}",
+                            processor_id,
+                            e
+                        );
                     }
                     Err(_) => {
-                        tracing::error!("[{}] Timeout waiting for thread to stop ({}s)", processor_id, SHUTDOWN_TIMEOUT_SECS);
+                        tracing::error!(
+                            "[{}] Timeout waiting for thread to stop ({}s)",
+                            processor_id,
+                            SHUTDOWN_TIMEOUT_SECS
+                        );
                         // Thread will be forcefully terminated when process exits
                     }
                 }
@@ -120,7 +138,6 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
     *SHUTDOWN_CALLBACK.lock() = Some(shutdown_callback);
 
     let event_loop = Box::new(move || {
-
         let mtm = MainThreadMarker::new().expect("Must be on main thread");
         let app = NSApplication::sharedApplication(mtm);
 
@@ -152,10 +169,10 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
         app_menu_item.setSubmenu(Some(&app_menu));
 
         // Create and set our custom delegate
-        let delegate: Retained<StreamlibAppDelegate> = unsafe {
-            msg_send![StreamlibAppDelegate::alloc(mtm), init]
-        };
-        let delegate_protocol: &ProtocolObject<dyn NSApplicationDelegate> = ProtocolObject::from_ref(&*delegate);
+        let delegate: Retained<StreamlibAppDelegate> =
+            unsafe { msg_send![StreamlibAppDelegate::alloc(mtm), init] };
+        let delegate_protocol: &ProtocolObject<dyn NSApplicationDelegate> =
+            ProtocolObject::from_ref(&*delegate);
         app.setDelegate(Some(delegate_protocol));
 
         tracing::info!("macOS: NSApplicationDelegate installed");
@@ -165,8 +182,8 @@ pub fn configure_macos_event_loop(runtime: &mut StreamRuntime) {
         // Use polling event loop instead of app.run() to allow signal handlers (ctrlc)
         // to execute between iterations. The ctrlc crate handles Ctrl+C, but needs
         // periodic breaks in the event loop to deliver the signal.
-        use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
         use objc2_app_kit::NSEventMask;
+        use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
 
         app.finishLaunching();
 

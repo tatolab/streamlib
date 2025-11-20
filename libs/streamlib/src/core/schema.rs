@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -12,7 +11,11 @@ pub struct SemanticVersion {
 
 impl SemanticVersion {
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 
     pub fn compatible_with(&self, other: &SemanticVersion) -> bool {
@@ -360,15 +363,18 @@ impl AudioRequirements {
 
     pub fn compatible_with(&self, downstream: &AudioRequirements) -> bool {
         if let (Some(our_size), Some(their_size)) =
-            (self.required_buffer_size, downstream.required_buffer_size) {
+            (self.required_buffer_size, downstream.required_buffer_size)
+        {
             if our_size != their_size {
                 return false;
             }
         }
 
-        if !downstream.supported_sample_rates.is_empty()
-            && !self.supported_sample_rates.is_empty() {
-            let has_common_rate = downstream.supported_sample_rates.iter()
+        if !downstream.supported_sample_rates.is_empty() && !self.supported_sample_rates.is_empty()
+        {
+            let has_common_rate = downstream
+                .supported_sample_rates
+                .iter()
                 .any(|rate| self.supported_sample_rates.contains(rate));
             if !has_common_rate {
                 return false;
@@ -376,7 +382,8 @@ impl AudioRequirements {
         }
 
         if let (Some(our_channels), Some(their_channels)) =
-            (self.required_channels, downstream.required_channels) {
+            (self.required_channels, downstream.required_channels)
+        {
             if our_channels != their_channels {
                 return false;
             }
@@ -387,7 +394,8 @@ impl AudioRequirements {
 
     pub fn compatibility_error(&self, downstream: &AudioRequirements) -> String {
         if let (Some(our_size), Some(their_size)) =
-            (self.required_buffer_size, downstream.required_buffer_size) {
+            (self.required_buffer_size, downstream.required_buffer_size)
+        {
             if our_size != their_size {
                 return format!(
                     "Buffer size mismatch: upstream outputs {} samples, downstream requires {}",
@@ -396,9 +404,11 @@ impl AudioRequirements {
             }
         }
 
-        if !downstream.supported_sample_rates.is_empty()
-            && !self.supported_sample_rates.is_empty() {
-            let has_common_rate = downstream.supported_sample_rates.iter()
+        if !downstream.supported_sample_rates.is_empty() && !self.supported_sample_rates.is_empty()
+        {
+            let has_common_rate = downstream
+                .supported_sample_rates
+                .iter()
                 .any(|rate| self.supported_sample_rates.contains(rate));
             if !has_common_rate {
                 return format!(
@@ -409,7 +419,8 @@ impl AudioRequirements {
         }
 
         if let (Some(our_channels), Some(their_channels)) =
-            (self.required_channels, downstream.required_channels) {
+            (self.required_channels, downstream.required_channels)
+        {
             if our_channels != their_channels {
                 return format!(
                     "Channel count mismatch: upstream outputs {} channels, downstream requires {}",
@@ -421,7 +432,6 @@ impl AudioRequirements {
         "Audio requirements are compatible".to_string()
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
@@ -450,10 +460,7 @@ pub struct ProcessorDescriptor {
 }
 
 impl ProcessorDescriptor {
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -569,14 +576,8 @@ mod tests {
         assert!(Schema::types_compatible(&Int32, &Int32));
         assert!(!Schema::types_compatible(&Int32, &Int64));
 
-        assert!(Schema::types_compatible(
-            &Optional(Box::new(Int32)),
-            &Int32
-        ));
-        assert!(Schema::types_compatible(
-            &Int32,
-            &Optional(Box::new(Int32))
-        ));
+        assert!(Schema::types_compatible(&Optional(Box::new(Int32)), &Int32));
+        assert!(Schema::types_compatible(&Int32, &Optional(Box::new(Int32))));
 
         assert!(Schema::types_compatible(
             &Array(Box::new(Int32)),
@@ -622,7 +623,6 @@ mod tests {
         assert!(yaml.contains("TestSchema"));
     }
 }
-
 
 pub static SCHEMA_VIDEO_FRAME: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     Arc::new(
@@ -727,7 +727,9 @@ pub static SCHEMA_BOUNDING_BOX: LazyLock<Arc<Schema>> = LazyLock::new(|| {
             ],
             SerializationFormat::Json,
         )
-        .with_description("A rectangular bounding box, commonly used in object detection and tracking."),
+        .with_description(
+            "A rectangular bounding box, commonly used in object detection and tracking.",
+        ),
     )
 });
 
