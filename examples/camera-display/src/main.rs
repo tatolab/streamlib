@@ -23,9 +23,10 @@ fn main() -> Result<()> {
     println!("🖥️  Adding display processor...");
     let display = runtime.add_processor_with_config::<DisplayProcessor>(
         DisplayConfig {
-            width: 1280,
-            height: 720,
+            width: 3840,
+            height: 2160,
             title: Some("streamlib Camera Display".to_string()),
+            scaling_mode: Default::default(),  // Use default scaling (Stretch)
         }
     )?;
     println!("✓ Display added\n");

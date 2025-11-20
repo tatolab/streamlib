@@ -333,6 +333,10 @@ extern "C" {
     pub(super) static kCVPixelBufferPixelFormatTypeKey: CFStringRef;
     pub(super) static kCVPixelBufferWidthKey: CFStringRef;
     pub(super) static kCVPixelBufferHeightKey: CFStringRef;
+
+    // Query CVPixelBuffer dimensions
+    pub(super) fn CVPixelBufferGetWidth(pixel_buffer: CVPixelBufferRef) -> usize;
+    pub(super) fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
 }
 
 // Helper function to create output attributes dictionary for decompression

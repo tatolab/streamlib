@@ -494,6 +494,16 @@ impl WebRtcWhepProcessor {
                 tracing::info!("[WebRtcWhepProcessor] Received SPS NAL ({} bytes)", nal.len());
                 self.sps_nal = Some(nal.clone());
 
+                // Try to parse dimensions from SPS (early resolution detection)
+                use crate::apple::videotoolbox::format::parse_sps_dimensions;
+                if let Some((width, height)) = parse_sps_dimensions(&nal) {
+                    tracing::info!(
+                        "[WebRtcWhepProcessor] 🎥 SPS indicates resolution: {}x{}",
+                        width,
+                        height
+                    );
+                }
+
                 // If we have both SPS and PPS, initialize decoder
                 if let (Some(sps), Some(pps)) = (self.sps_nal.as_ref(), self.pps_nal.as_ref()) {
                     let sps = sps.clone();

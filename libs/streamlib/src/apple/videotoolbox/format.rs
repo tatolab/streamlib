@@ -370,3 +370,197 @@ pub unsafe fn extract_h264_parameters(
 
     result
 }
+
+// ============================================================================
+// H.264 SPS (SEQUENCE PARAMETER SET) PARSING
+// ============================================================================
+
+/// Parse H.264 SPS NAL unit to extract video dimensions
+///
+/// This is a simplified parser that extracts width and height from SPS.
+/// Reference: ITU-T H.264 Specification Section 7.3.2.1.1
+///
+/// Returns (width, height) or None if parsing fails.
+pub fn parse_sps_dimensions(sps_data: &[u8]) -> Option<(u32, u32)> {
+    if sps_data.is_empty() {
+        return None;
+    }
+
+    // SPS NAL unit type should be 7 (0x67 with forbidden_zero_bit=0)
+    let nal_header = sps_data[0];
+    let nal_type = nal_header & 0x1F;
+    if nal_type != 7 {
+        tracing::warn!("[SPS Parser] Not an SPS NAL unit (type={})", nal_type);
+        return None;
+    }
+
+    // Use a simple bitstream reader
+    let mut reader = BitReader::new(&sps_data[1..]); // Skip NAL header
+
+    // Parse profile_idc (8 bits)
+    let _profile_idc = reader.read_bits(8)?;
+
+    // Parse constraint flags (8 bits)
+    let _constraint_flags = reader.read_bits(8)?;
+
+    // Parse level_idc (8 bits)
+    let _level_idc = reader.read_bits(8)?;
+
+    // Parse seq_parameter_set_id (ue(v) - Exp-Golomb coded)
+    let _seq_parameter_set_id = reader.read_ue()?;
+
+    // Parse chroma_format_idc for high profiles (conditional based on profile)
+    let profile_idc = _profile_idc as u8;
+    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128) {
+        let chroma_format_idc = reader.read_ue()?;
+
+        if chroma_format_idc == 3 {
+            // separate_colour_plane_flag
+            let _separate_colour_plane_flag = reader.read_bits(1)?;
+        }
+
+        // bit_depth_luma_minus8
+        let _bit_depth_luma = reader.read_ue()?;
+        // bit_depth_chroma_minus8
+        let _bit_depth_chroma = reader.read_ue()?;
+        // qpprime_y_zero_transform_bypass_flag
+        let _qpprime_bypass = reader.read_bits(1)?;
+
+        // seq_scaling_matrix_present_flag
+        let seq_scaling_matrix_present = reader.read_bits(1)?;
+        if seq_scaling_matrix_present == 1 {
+            // Skip scaling lists (complex parsing, not needed for dimensions)
+            // For simplicity, we'll skip a fixed number of bits (this is a heuristic)
+            // In a full parser, you'd need to parse each scaling list properly
+            tracing::trace!("[SPS Parser] Skipping scaling matrices");
+            // This is a simplified skip - in practice, scaling lists are variable length
+            // For now, return None if scaling matrices are present (rare case)
+            return None;
+        }
+    }
+
+    // Parse log2_max_frame_num_minus4
+    let _log2_max_frame_num = reader.read_ue()?;
+
+    // Parse pic_order_cnt_type
+    let pic_order_cnt_type = reader.read_ue()?;
+
+    if pic_order_cnt_type == 0 {
+        // log2_max_pic_order_cnt_lsb_minus4
+        let _log2_max_poc = reader.read_ue()?;
+    } else if pic_order_cnt_type == 1 {
+        // delta_pic_order_always_zero_flag
+        let _delta_always_zero = reader.read_bits(1)?;
+        // offset_for_non_ref_pic
+        let _offset_non_ref = reader.read_se()?;
+        // offset_for_top_to_bottom_field
+        let _offset_top_bottom = reader.read_se()?;
+        // num_ref_frames_in_pic_order_cnt_cycle
+        let num_ref_frames = reader.read_ue()?;
+        // Skip offset_for_ref_frame array
+        for _ in 0..num_ref_frames {
+            let _offset = reader.read_se()?;
+        }
+    }
+
+    // Parse max_num_ref_frames
+    let _max_num_ref_frames = reader.read_ue()?;
+
+    // Parse gaps_in_frame_num_value_allowed_flag
+    let _gaps_allowed = reader.read_bits(1)?;
+
+    // Parse pic_width_in_mbs_minus1 (KEY VALUE!)
+    let pic_width_in_mbs_minus1 = reader.read_ue()?;
+
+    // Parse pic_height_in_map_units_minus1 (KEY VALUE!)
+    let pic_height_in_map_units_minus1 = reader.read_ue()?;
+
+    // Parse frame_mbs_only_flag
+    let frame_mbs_only_flag = reader.read_bits(1)?;
+
+    // Calculate actual dimensions
+    let width = (pic_width_in_mbs_minus1 + 1) * 16;
+    let mut height = (pic_height_in_map_units_minus1 + 1) * 16;
+
+    // If not frame_mbs_only (interlaced), height is doubled
+    if frame_mbs_only_flag == 0 {
+        height *= 2;
+    }
+
+    tracing::info!("[SPS Parser] ✅ Parsed dimensions: {}x{}", width, height);
+
+    Some((width as u32, height as u32))
+}
+
+/// Simple bitstream reader for H.264 parsing
+struct BitReader<'a> {
+    data: &'a [u8],
+    byte_pos: usize,
+    bit_pos: u8, // 0-7, where 0 is MSB of current byte
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            byte_pos: 0,
+            bit_pos: 0,
+        }
+    }
+
+    /// Read n bits (1-32)
+    fn read_bits(&mut self, n: u8) -> Option<u32> {
+        if n == 0 || n > 32 {
+            return None;
+        }
+
+        let mut result: u32 = 0;
+        for _ in 0..n {
+            if self.byte_pos >= self.data.len() {
+                return None;
+            }
+
+            let bit = (self.data[self.byte_pos] >> (7 - self.bit_pos)) & 1;
+            result = (result << 1) | (bit as u32);
+
+            self.bit_pos += 1;
+            if self.bit_pos == 8 {
+                self.bit_pos = 0;
+                self.byte_pos += 1;
+            }
+        }
+
+        Some(result)
+    }
+
+    /// Read unsigned Exp-Golomb code
+    fn read_ue(&mut self) -> Option<u32> {
+        // Count leading zeros
+        let mut leading_zeros = 0;
+        while self.read_bits(1)? == 0 {
+            leading_zeros += 1;
+            if leading_zeros > 31 {
+                return None; // Prevent infinite loop
+            }
+        }
+
+        if leading_zeros == 0 {
+            return Some(0);
+        }
+
+        // Read remaining bits
+        let value = self.read_bits(leading_zeros)?;
+        Some((1 << leading_zeros) - 1 + value)
+    }
+
+    /// Read signed Exp-Golomb code
+    fn read_se(&mut self) -> Option<i32> {
+        let code_num = self.read_ue()?;
+        let value = if code_num % 2 == 0 {
+            -((code_num / 2) as i32)
+        } else {
+            ((code_num + 1) / 2) as i32
+        };
+        Some(value)
+    }
+}

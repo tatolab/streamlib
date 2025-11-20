@@ -9,12 +9,30 @@ use std::sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc};
 use metal;
 use streamlib_macros::StreamProcessor;
 
+// Scaling mode for video content in the display window
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ScalingMode {
+    /// Stretch video to fill window (ignores aspect ratio)
+    Stretch,
+    /// Scale video to fit window while maintaining aspect ratio (letterbox/pillarbox)
+    Letterbox,
+    /// Scale video to fill window while maintaining aspect ratio (crops edges)
+    Crop,
+}
+
+impl Default for ScalingMode {
+    fn default() -> Self {
+        Self::Stretch
+    }
+}
+
 // Apple-specific configuration and types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AppleDisplayConfig {
     pub width: u32,
     pub height: u32,
     pub title: Option<String>,
+    pub scaling_mode: ScalingMode,
 }
 
 impl Default for AppleDisplayConfig {
@@ -23,6 +41,7 @@ impl Default for AppleDisplayConfig {
             width: 1920,
             height: 1080,
             title: None,
+            scaling_mode: ScalingMode::default(),
         }
     }
 }
@@ -62,6 +81,10 @@ pub struct AppleDisplayProcessor {
     frames_rendered: u64,
     window_creation_dispatched: bool,
     display_link: Option<DisplayLink>,
+    metal_render_pipeline: Option<metal::RenderPipelineState>,
+    metal_sampler: Option<metal::SamplerState>,
+    format_buffer_rgba: Option<metal::Buffer>,
+    format_buffer_bgra: Option<metal::Buffer>,
 }
 
 // SAFETY: NSWindow, CAMetalLayer, and Metal objects are Objective-C objects that can be sent between threads
@@ -99,7 +122,6 @@ impl AppleDisplayProcessor {
 
         self.wgpu_bridge = Some(wgpu_bridge);
         self.metal_command_queue = Some(metal_command_queue);
-        self.metal_device = Some(metal_device);
 
         // Initialize CVDisplayLink for vsync
         let display_link = DisplayLink::new()?;
@@ -113,7 +135,70 @@ impl AppleDisplayProcessor {
 
         self.display_link = Some(display_link);
 
-        tracing::info!("Display {}: Initialized ({}x{})", self.window_title, self.width, self.height);
+        // Create Metal render pipeline for scaling
+        use metal::foreign_types::ForeignTypeRef;
+        let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+        let metal_device_ref = unsafe {
+            metal::DeviceRef::from_ptr(device_ptr as *mut _)
+        };
+
+        // Compile Metal shader
+        let shader_source = include_str!("shaders/fullscreen.metal");
+        let library = metal_device_ref.new_library_with_source(shader_source, &metal::CompileOptions::new())
+            .map_err(|e| StreamError::Configuration(format!("Failed to compile Metal shader: {}", e)))?;
+
+        let vertex_function = library.get_function("vertex_main", None)
+            .map_err(|e| StreamError::Configuration(format!("vertex_main function not found: {}", e)))?;
+        let fragment_function = library.get_function("fragment_main", None)
+            .map_err(|e| StreamError::Configuration(format!("fragment_main function not found: {}", e)))?;
+
+        // Create render pipeline descriptor
+        let pipeline_descriptor = metal::RenderPipelineDescriptor::new();
+        pipeline_descriptor.set_vertex_function(Some(&vertex_function));
+        pipeline_descriptor.set_fragment_function(Some(&fragment_function));
+
+        let color_attachment = pipeline_descriptor.color_attachments().object_at(0).unwrap();
+        color_attachment.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+
+        // Create pipeline state
+        let pipeline_state = metal_device_ref.new_render_pipeline_state(&pipeline_descriptor)
+            .map_err(|e| StreamError::Configuration(format!("Failed to create render pipeline: {}", e)))?;
+
+        // Create sampler for texture sampling with linear filtering
+        let sampler_descriptor = metal::SamplerDescriptor::new();
+        sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
+        sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
+        sampler_descriptor.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
+        sampler_descriptor.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
+
+        let sampler_state = metal_device_ref.new_sampler(&sampler_descriptor);
+
+        // Create format flag buffers (0 = BGRA, 1 = RGBA)
+        let format_buffer_rgba = metal_device_ref.new_buffer(
+            std::mem::size_of::<i32>() as u64,
+            metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+        );
+        unsafe {
+            let ptr = format_buffer_rgba.contents() as *mut i32;
+            *ptr = 1; // RGBA flag
+        }
+
+        let format_buffer_bgra = metal_device_ref.new_buffer(
+            std::mem::size_of::<i32>() as u64,
+            metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+        );
+        unsafe {
+            let ptr = format_buffer_bgra.contents() as *mut i32;
+            *ptr = 0; // BGRA flag
+        }
+
+        self.metal_render_pipeline = Some(pipeline_state);
+        self.metal_sampler = Some(sampler_state);
+        self.format_buffer_rgba = Some(format_buffer_rgba);
+        self.format_buffer_bgra = Some(format_buffer_bgra);
+        self.metal_device = Some(metal_device);
+
+        tracing::info!("Display {}: Initialized ({}x{}) with Metal render pipeline", self.window_title, self.width, self.height);
 
         // EAGER WINDOW CREATION: Create window immediately instead of waiting for first frame
         self.initialize_window()?;
@@ -162,15 +247,6 @@ impl AppleDisplayProcessor {
     }
 
     fn render_frame(&mut self, frame: VideoFrame) -> Result<()> {
-        let wgpu_texture = &frame.texture;
-
-        let wgpu_bridge = self.wgpu_bridge.as_ref()
-            .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?;
-
-        let source_metal = unsafe {
-            wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)
-        }?;
-
         let layer_addr = self.layer_addr.load(Ordering::Acquire);
         if layer_addr == 0 {
             return Ok(());
@@ -185,43 +261,61 @@ impl AppleDisplayProcessor {
         let metal_command_queue = self.metal_command_queue.as_ref()
             .ok_or_else(|| StreamError::Configuration("Metal command queue not initialized".into()))?;
 
+        let wgpu_bridge = self.wgpu_bridge.as_ref()
+            .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?;
+
+        let render_pipeline = self.metal_render_pipeline.as_ref()
+            .ok_or_else(|| StreamError::Configuration("Metal render pipeline not initialized".into()))?;
+
+        let sampler = self.metal_sampler.as_ref()
+            .ok_or_else(|| StreamError::Configuration("Metal sampler not initialized".into()))?;
+
         unsafe {
             if let Some(drawable) = metal_layer.nextDrawable() {
-                let drawable_metal = drawable.texture();
+                let drawable_texture = drawable.texture();
 
+                // Get Metal texture from wgpu VideoFrame
+                let source_metal = wgpu_bridge.unwrap_to_metal_texture(&frame.texture)?;
+
+                // Create command buffer and render pass
+                let command_buffer = metal_command_queue.new_command_buffer();
+
+                let render_pass_descriptor = metal::RenderPassDescriptor::new();
+                let color_attachment = render_pass_descriptor.color_attachments().object_at(0).unwrap();
+
+                // Convert objc2 texture to metal-rs texture reference
                 use metal::foreign_types::ForeignTypeRef;
-                let drawable_texture_ptr = &*drawable_metal as *const _ as *mut std::ffi::c_void;
-                let drawable_metal_ref = metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
+                let drawable_texture_ptr = &*drawable_texture as *const _ as *mut std::ffi::c_void;
+                let drawable_texture_ref = metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
 
+                color_attachment.set_texture(Some(drawable_texture_ref));
+                color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                color_attachment.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
+                color_attachment.set_store_action(metal::MTLStoreAction::Store);
+
+                let render_encoder = command_buffer.new_render_command_encoder(&render_pass_descriptor);
+
+                // Set pipeline and resources
+                render_encoder.set_render_pipeline_state(render_pipeline);
+                render_encoder.set_fragment_texture(0, Some(&source_metal));
+                render_encoder.set_fragment_sampler_state(0, Some(sampler));
+
+                // Set format buffer based on VideoFrame format
+                let format_buffer = if frame.format == wgpu::TextureFormat::Rgba8Unorm {
+                    self.format_buffer_rgba.as_ref().unwrap()
+                } else {
+                    self.format_buffer_bgra.as_ref().unwrap()
+                };
+                render_encoder.set_fragment_buffer(0, Some(format_buffer), 0);
+
+                // Draw fullscreen triangle (3 vertices, no vertex buffer needed)
+                render_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+
+                render_encoder.end_encoding();
+
+                // Present and commit
                 let drawable_ptr = &*drawable as *const _ as *mut std::ffi::c_void;
                 let drawable_ref = metal::DrawableRef::from_ptr(drawable_ptr as *mut _);
-
-                let command_buffer = metal_command_queue.new_command_buffer();
-                let blit_encoder = command_buffer.new_blit_command_encoder();
-
-                use metal::MTLOrigin;
-                use metal::MTLSize;
-
-                let origin = MTLOrigin { x: 0, y: 0, z: 0 };
-                let size = MTLSize {
-                    width: frame.width as u64,
-                    height: frame.height as u64,
-                    depth: 1,
-                };
-
-                blit_encoder.copy_from_texture(
-                    &source_metal,
-                    0,
-                    0,
-                    origin,
-                    size,
-                    drawable_metal_ref,
-                    0,
-                    0,
-                    origin,
-                );
-
-                blit_encoder.end_encoding();
 
                 command_buffer.present_drawable(drawable_ref);
                 command_buffer.commit();
@@ -230,17 +324,108 @@ impl AppleDisplayProcessor {
 
                 if self.frames_rendered.is_multiple_of(60) {
                     tracing::info!(
-                        "Display {}: Rendered frame {} ({}x{}) via Metal blit",
+                        "Display {}: Rendered frame {} ({}x{} → {}x{}) via Metal scaled render",
                         self.window_id.0,
                         frame.frame_number,
                         frame.width,
-                        frame.height
+                        frame.height,
+                        self.width,
+                        self.height,
                     );
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Compute destination rectangle for scaled blit based on scaling mode
+    fn compute_destination_rect(
+        &self,
+        src_width: u32,
+        src_height: u32,
+        dst_width: u32,
+        dst_height: u32,
+    ) -> (metal::MTLOrigin, metal::MTLSize) {
+        use metal::{MTLOrigin, MTLSize};
+
+        match self.config.scaling_mode {
+            ScalingMode::Stretch => {
+                // Stretch to fill entire window (ignore aspect ratio)
+                (
+                    MTLOrigin { x: 0, y: 0, z: 0 },
+                    MTLSize {
+                        width: dst_width as u64,
+                        height: dst_height as u64,
+                        depth: 1,
+                    },
+                )
+            }
+            ScalingMode::Letterbox => {
+                // Maintain aspect ratio, add letterbox/pillarbox bars
+                let src_aspect = src_width as f64 / src_height as f64;
+                let dst_aspect = dst_width as f64 / dst_height as f64;
+
+                let (scaled_width, scaled_height) = if src_aspect > dst_aspect {
+                    // Source is wider - fit to width, add letterbox bars (top/bottom)
+                    let scaled_height = (dst_width as f64 / src_aspect) as u64;
+                    (dst_width as u64, scaled_height)
+                } else {
+                    // Source is taller - fit to height, add pillarbox bars (left/right)
+                    let scaled_width = (dst_height as f64 * src_aspect) as u64;
+                    (scaled_width, dst_height as u64)
+                };
+
+                // Center in window
+                let x_offset = (dst_width as u64 - scaled_width) / 2;
+                let y_offset = (dst_height as u64 - scaled_height) / 2;
+
+                (
+                    MTLOrigin {
+                        x: x_offset,
+                        y: y_offset,
+                        z: 0,
+                    },
+                    MTLSize {
+                        width: scaled_width,
+                        height: scaled_height,
+                        depth: 1,
+                    },
+                )
+            }
+            ScalingMode::Crop => {
+                // Maintain aspect ratio, crop edges to fill window
+                let src_aspect = src_width as f64 / src_height as f64;
+                let dst_aspect = dst_width as f64 / dst_height as f64;
+
+                let (scaled_width, scaled_height) = if src_aspect > dst_aspect {
+                    // Source is wider - fit to height, crop left/right
+                    let scaled_width = (dst_height as f64 * src_aspect) as u64;
+                    (scaled_width, dst_height as u64)
+                } else {
+                    // Source is taller - fit to width, crop top/bottom
+                    let scaled_height = (dst_width as f64 / src_aspect) as u64;
+                    (dst_width as u64, scaled_height)
+                };
+
+                // Center (will be clipped)
+                let x_offset = (dst_width as u64).saturating_sub(scaled_width) / 2;
+                let y_offset = (dst_height as u64).saturating_sub(scaled_height) / 2;
+
+                (
+                    MTLOrigin {
+                        x: x_offset,
+                        y: y_offset,
+                        z: 0,
+                    },
+                    MTLSize {
+                        width: scaled_width,
+                        height: scaled_height,
+                        depth: 1,
+                    },
+                )
+            }
+        }
     }
 
     fn initialize_window(&mut self) -> Result<()> {

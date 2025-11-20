@@ -406,6 +406,24 @@ impl VideoToolboxDecoder {
         let gpu_ctx = self.gpu_context.as_ref()
             .ok_or_else(|| StreamError::Configuration("GPU context not available".into()))?;
 
+        // Query actual dimensions from CVPixelBuffer (ground truth from decoded frame)
+        let (actual_width, actual_height) = unsafe {
+            let width = ffi::CVPixelBufferGetWidth(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
+            let height = ffi::CVPixelBufferGetHeight(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
+            (width as u32, height as u32)
+        };
+
+        // Log resolution discovery on first frame or if resolution changes
+        if actual_width != self.config.width || actual_height != self.config.height {
+            tracing::info!(
+                "[VideoToolbox Decoder] 🎥 Actual decoded resolution: {}x{} (config was {}x{})",
+                actual_width,
+                actual_height,
+                self.config.width,
+                self.config.height
+            );
+        }
+
         // Import CVPixelBuffer as wgpu texture via IOSurface
         let texture = unsafe {
             self.import_pixel_buffer_as_texture(
@@ -426,8 +444,8 @@ impl VideoToolboxDecoder {
             wgpu::TextureFormat::Bgra8Unorm,
             decoded_frame.timestamp_ns,
             self.frame_count,
-            self.config.width,
-            self.config.height,
+            actual_width,   // Use actual dimensions from decoded buffer
+            actual_height,  // Use actual dimensions from decoded buffer
         ))
     }
 

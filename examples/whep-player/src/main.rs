@@ -70,6 +70,7 @@ fn run_whep_player() -> Result<()> {
             width: 1920,
             height: 1080,
             title: Some("WHEP Player".to_string()),
+            scaling_mode: Default::default(),  // Use default scaling (Stretch)
         }
     )?;
     tracing::info!("✅ Display processor created\n");
