@@ -62,8 +62,13 @@ pub use apple::{
     WebRtcWhipProcessor,
     WebRtcWhipConfig,
     WhipConfig,
+    // WebRTC WHEP processor and config types:
+    WebRtcWhepProcessor,
+    WebRtcWhepConfig,
+    WhepConfig,
     WebRtcSession,
     WhipClient,
+    WhepClient,
     // VideoToolbox encoder and config types:
     VideoToolboxEncoder,
     VideoEncoderConfig,

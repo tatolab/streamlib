@@ -41,10 +41,13 @@ pub use processors::{
     // WebRTC WHIP processor:
     WebRtcWhipProcessor,
     WebRtcWhipConfig,
+    // WebRTC WHEP processor:
+    WebRtcWhepProcessor,
+    WebRtcWhepConfig,
 };
 
 // Re-export webrtc types
-pub use webrtc::{WhipClient, WhipConfig, WebRtcSession};
+pub use webrtc::{WhipClient, WhipConfig, WhepClient, WhepConfig, WebRtcSession};
 
 // Re-export videotoolbox types (VideoEncoderConfig and H264Profile now come from videotoolbox module)
 pub use videotoolbox::{VideoCodec, H264Profile, VideoEncoderConfig, VideoToolboxEncoder};

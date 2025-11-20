@@ -1,9 +1,10 @@
 use crate::core::{StreamInput, Result, StreamError};
 use crate::core::frames::AudioFrame;
+use crate::core::audio_resample_utils::{StereoResampler, ResamplingQuality};
 use streamlib_macros::StreamProcessor;
 use cpal::Stream;
 use cpal::traits::StreamTrait;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 // Apple-specific configuration and device types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -24,6 +25,40 @@ pub struct AppleAudioDevice {
     pub sample_rate: u32,
     pub channels: u32,
     pub is_default: bool,
+}
+
+/// Internal state for adaptive resampling (wraps shared StereoResampler)
+struct ResamplerState {
+    resampler: StereoResampler,
+}
+
+impl ResamplerState {
+    /// Create a new resampler for stereo audio (2 channels)
+    fn new(source_rate: u32, target_rate: u32, chunk_size: usize) -> Result<Self> {
+        tracing::info!(
+            "[AudioOutput Adaptive] Creating resampler: {}Hz → {}Hz (chunk_size={})",
+            source_rate,
+            target_rate,
+            chunk_size
+        );
+
+        // Use high-quality resampling for audio output (user-facing)
+        let resampler = StereoResampler::new(
+            source_rate,
+            target_rate,
+            chunk_size,
+            ResamplingQuality::High,
+        )?;
+
+        Ok(Self { resampler })
+    }
+
+    /// Resample stereo audio from source rate to target rate
+    /// Input: interleaved stereo [L,R,L,R,...]
+    /// Output: interleaved stereo [L,R,L,R,...] at target rate
+    fn resample(&mut self, input: &[f32]) -> Result<Vec<f32>> {
+        self.resampler.resample(input)
+    }
 }
 
 #[derive(StreamProcessor)]
@@ -48,6 +83,10 @@ pub struct AppleAudioOutputProcessor {
     sample_rate: u32,
     channels: u32,
     buffer_size: usize,
+
+    // Adaptive resampling state (shared with audio callback thread)
+    // Mutex is necessary because cpal callback runs on separate thread
+    resampler_state: Arc<Mutex<Option<ResamplerState>>>,
 }
 
 // SAFETY: cpal::Stream is not Send, but AppleAudioOutputProcessor is safe to send between threads
@@ -118,23 +157,98 @@ impl AppleAudioOutputProcessor {
         // Clone the Arc-wrapped port for the audio callback thread
         let audio_port = Arc::clone(&self.audio);
 
-        tracing::info!("AudioOutput: Cloned audio port for callback thread");
+        // Clone resampler state for the audio callback thread
+        let resampler_state = Arc::clone(&self.resampler_state);
 
-        tracing::info!("AudioOutput: Setting up audio output with cpal");
+        tracing::info!("AudioOutput: Cloned audio port and resampler state for callback thread");
+
+        tracing::info!("AudioOutput: Setting up adaptive audio output with cpal");
 
         // Buffer for accumulating frames when device wants larger buffers than we provide
         let mut frame_buffer: Vec<f32> = Vec::new();
+
+        // Track first frame for logging
+        let mut first_frame_logged = false;
 
         let setup = crate::apple::audio_utils::setup_audio_output(
             self.device_id,
             device_buffer_size,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                // Device may request more data than our frame size (e.g., 1920 samples when we provide 1024)
-                // Accumulate frames until we have enough to fill the device buffer
+                // Adaptive audio output: handle sample rate conversion on-the-fly
+                // This ensures audio plays at correct speed regardless of device sample rate
 
                 while frame_buffer.len() < data.len() {
                     if let Some(audio_frame) = audio_port.read() {
-                        frame_buffer.extend_from_slice(&audio_frame.samples);
+                        // Check if resampling is needed
+                        if audio_frame.sample_rate != device_sample_rate {
+                            // Sample rate mismatch - need to resample
+                            let mut resampler = resampler_state.lock().unwrap();
+
+                            // Lazy initialize resampler on first frame with mismatched rate
+                            if resampler.is_none() {
+                                // Calculate chunk size based on audio frame size
+                                let chunk_size = audio_frame.samples.len() / 2; // samples per channel
+
+                                match ResamplerState::new(
+                                    audio_frame.sample_rate,
+                                    device_sample_rate,
+                                    chunk_size,
+                                ) {
+                                    Ok(state) => {
+                                        tracing::info!(
+                                            "[AudioOutput Adaptive] 🔄 Resampler initialized: {}Hz → {}Hz",
+                                            audio_frame.sample_rate,
+                                            device_sample_rate
+                                        );
+                                        *resampler = Some(state);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "[AudioOutput Adaptive] ❌ Failed to create resampler: {}",
+                                            e
+                                        );
+                                        // Fall through to direct copy (will play at wrong speed)
+                                    }
+                                }
+                            }
+
+                            // Resample if we have a resampler
+                            if let Some(ref mut state) = *resampler {
+                                match state.resample(&audio_frame.samples) {
+                                    Ok(resampled) => {
+                                        if !first_frame_logged {
+                                            tracing::info!(
+                                                "[AudioOutput Adaptive] 🔄 First frame resampled: {} input samples → {} output samples ({}Hz → {}Hz)",
+                                                audio_frame.samples.len(),
+                                                resampled.len(),
+                                                audio_frame.sample_rate,
+                                                device_sample_rate
+                                            );
+                                            first_frame_logged = true;
+                                        }
+                                        frame_buffer.extend_from_slice(&resampled);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("[AudioOutput Adaptive] Resampling failed: {}", e);
+                                        // Fallback: use original samples (wrong speed)
+                                        frame_buffer.extend_from_slice(&audio_frame.samples);
+                                    }
+                                }
+                            } else {
+                                // No resampler available - use samples directly (wrong speed)
+                                frame_buffer.extend_from_slice(&audio_frame.samples);
+                            }
+                        } else {
+                            // Sample rates match - direct copy (no resampling needed)
+                            if !first_frame_logged {
+                                tracing::info!(
+                                    "[AudioOutput Adaptive] ✅ Sample rates match ({}Hz) - no resampling needed",
+                                    audio_frame.sample_rate
+                                );
+                                first_frame_logged = true;
+                            }
+                            frame_buffer.extend_from_slice(&audio_frame.samples);
+                        }
                     } else {
                         // No more frames available - break and use what we have
                         break;

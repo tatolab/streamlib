@@ -60,6 +60,13 @@ pub struct WhepClient {
 
 impl WhepClient {
     pub fn new(config: WhepConfig) -> Result<Self> {
+        // Install rustls crypto provider (ring) globally - only done once per process
+        static CRYPTO_PROVIDER_INIT: std::sync::Once = std::sync::Once::new();
+        CRYPTO_PROVIDER_INIT.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            tracing::debug!("[WhepClient] Installed rustls ring crypto provider");
+        });
+
         tracing::info!("[WhepClient] Creating WHEP client for endpoint: {}", config.endpoint_url);
 
         // Build HTTPS connector using rustls with ring crypto provider and native CA roots

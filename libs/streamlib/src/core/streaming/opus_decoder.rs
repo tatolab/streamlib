@@ -33,15 +33,17 @@ impl OpusDecoder {
     /// Create a new Opus decoder
     ///
     /// # Arguments
-    /// * `sample_rate` - Sample rate in Hz (must be 48000 for WebRTC)
+    /// * `sample_rate` - Sample rate in Hz (8000, 12000, 16000, 24000, or 48000)
     /// * `input_channels` - Number of channels in the Opus stream (1=mono, 2=stereo)
     ///
     /// # Returns
     /// Configured Opus decoder that outputs stereo frames
     pub fn new(sample_rate: u32, input_channels: usize) -> Result<Self> {
-        if sample_rate != 48000 {
+        // Opus supports: 8000, 12000, 16000, 24000, 48000 Hz
+        // WebRTC typically uses 48000 Hz
+        if ![8000, 12000, 16000, 24000, 48000].contains(&sample_rate) {
             return Err(StreamError::Configuration(
-                format!("Opus decoder requires 48kHz sample rate, got {}Hz", sample_rate)
+                format!("Opus decoder requires sample rate of 8/12/16/24/48 kHz, got {}Hz", sample_rate)
             ));
         }
 
@@ -61,8 +63,9 @@ impl OpusDecoder {
         let decoder = opus::Decoder::new(sample_rate, channels)
             .map_err(|e| StreamError::Runtime(format!("Failed to create Opus decoder: {}", e)))?;
 
-        // WebRTC typically uses 20ms frames (960 samples @ 48kHz)
-        let frame_size = 960;
+        // Calculate frame size based on sample rate
+        // WebRTC typically uses 20ms frames: (sample_rate * 20) / 1000
+        let frame_size = (sample_rate * 20 / 1000) as usize;
 
         tracing::info!(
             "[Opus Decoder] Created decoder: {}Hz, {} input channels → stereo output, {} samples/frame",
@@ -87,20 +90,65 @@ impl OpusDecoder {
     /// # Returns
     /// Vec of f32 samples (interleaved stereo: [L, R, L, R, ...])
     pub fn decode(&mut self, packet: &[u8]) -> Result<Vec<f32>> {
+        // Track decode calls for debugging
+        static DECODE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let decode_num = DECODE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         // Allocate output buffer
         // If input is mono, we'll decode to mono then convert to stereo
         let mut output = vec![0.0f32; self.frame_size * self.input_channels];
 
+        if decode_num == 0 {
+            tracing::info!(
+                "[Opus Decoder] 🎵 FIRST DECODE: packet_size={} bytes, expected_frame_size={} samples, input_channels={}, output_buffer_size={} floats",
+                packet.len(),
+                self.frame_size,
+                self.input_channels,
+                output.len()
+            );
+        }
+
         // Decode to PCM
         let decoded_samples = self.decoder
             .decode_float(packet, &mut output, false)
-            .map_err(|e| StreamError::Runtime(format!("Opus decode failed: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!(
+                    "[Opus Decoder] ❌ Decode failed (packet #{}): {} (packet_size={} bytes, input_channels={})",
+                    decode_num,
+                    e,
+                    packet.len(),
+                    self.input_channels
+                );
+                StreamError::Runtime(format!("Opus decode failed: {}", e))
+            })?;
+
+        if decode_num == 0 {
+            tracing::info!(
+                "[Opus Decoder] 🎵 FIRST DECODE RESULT: decoded_samples={} (per channel), total_output_samples={}",
+                decoded_samples,
+                decoded_samples * self.input_channels
+            );
+        } else if decode_num % 100 == 0 {
+            tracing::debug!(
+                "[Opus Decoder] Decode #{}: {} samples per channel, {} total samples",
+                decode_num,
+                decoded_samples,
+                decoded_samples * self.input_channels
+            );
+        }
 
         // Trim to actual decoded length
         output.truncate(decoded_samples * self.input_channels);
 
         // Convert mono to stereo if needed
         if self.input_channels == 1 {
+            if decode_num == 0 {
+                tracing::info!(
+                    "[Opus Decoder] 🎵 Converting MONO to STEREO: {} mono samples → {} stereo samples",
+                    output.len(),
+                    output.len() * 2
+                );
+            }
             // Duplicate mono to both channels
             let stereo = output
                 .iter()
@@ -108,6 +156,12 @@ impl OpusDecoder {
                 .collect();
             Ok(stereo)
         } else {
+            if decode_num == 0 {
+                tracing::info!(
+                    "[Opus Decoder] 🎵 Already STEREO: {} samples (interleaved L,R,L,R...)",
+                    output.len()
+                );
+            }
             // Already stereo
             Ok(output)
         }

@@ -162,12 +162,17 @@ impl H264RtpDepacketizer {
             Ok(vec![])
         } else if end_bit {
             // Last fragment - assemble complete NAL unit
-            let buffer = self.fu_buffers.remove(&timestamp).ok_or_else(|| {
-                StreamError::Runtime(format!(
-                    "FU-A END without START (ts={}, seq={})",
-                    timestamp, seq_num
-                ))
-            })?;
+            let buffer = match self.fu_buffers.remove(&timestamp) {
+                Some(buf) => buf,
+                None => {
+                    // END without START - we joined mid-stream, discard silently
+                    tracing::trace!(
+                        "[H264 RTP] FU-A END without START (ts={}, seq={}) - mid-stream join, discarding",
+                        timestamp, seq_num
+                    );
+                    return Ok(vec![]);
+                }
+            };
 
             // Check sequence number continuity
             if let Some(expected_seq) = buffer.next_seq {
@@ -202,12 +207,17 @@ impl H264RtpDepacketizer {
             Ok(vec![Bytes::from(complete_nal)])
         } else {
             // Middle fragment - append to buffer
-            let buffer = self.fu_buffers.get_mut(&timestamp).ok_or_else(|| {
-                StreamError::Runtime(format!(
-                    "FU-A MIDDLE without START (ts={}, seq={})",
-                    timestamp, seq_num
-                ))
-            })?;
+            let buffer = match self.fu_buffers.get_mut(&timestamp) {
+                Some(buf) => buf,
+                None => {
+                    // MIDDLE without START - we joined mid-stream, discard silently
+                    tracing::trace!(
+                        "[H264 RTP] FU-A MIDDLE without START (ts={}, seq={}) - mid-stream join, discarding",
+                        timestamp, seq_num
+                    );
+                    return Ok(vec![]);
+                }
+            };
 
             // Check sequence number continuity
             if let Some(expected_seq) = buffer.next_seq {

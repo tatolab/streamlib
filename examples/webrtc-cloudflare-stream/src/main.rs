@@ -103,7 +103,7 @@ fn main() -> Result<()> {
                 height: 720,
                 fps: 30,
                 bitrate_bps: 2_500_000, // 2.5 Mbps
-                keyframe_interval_frames: 60, // Every 2 seconds @ 30fps
+                keyframe_interval_frames: 30, // Every 1 second @ 30fps (for mid-stream join support)
                 codec: VideoCodec::H264(H264Profile::Baseline), // Cloudflare requires Baseline
                 low_latency: true,
             },

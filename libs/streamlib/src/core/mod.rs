@@ -1,4 +1,5 @@
 
+pub mod audio_resample_utils;
 pub mod bus;
 pub mod clap;
 pub mod context;
