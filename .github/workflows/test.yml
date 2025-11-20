@@ -81,7 +81,7 @@ jobs:
         run: maturin develop --features python
 
       - name: Test Python import
-        run: python -c "import streamlib; print(f'StreamLib version: {streamlib.__version__}')"
+        run: python -c "import streamlib; print('StreamLib version:', streamlib.__version__)"
 
       - name: Run Python tests (if they exist)
         run: |
