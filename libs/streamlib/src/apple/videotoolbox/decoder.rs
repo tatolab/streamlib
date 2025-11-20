@@ -295,7 +295,7 @@ impl VideoToolboxDecoder {
 
                 if status != ffi::NO_ERR {
                     // Cleanup leaked data
-                    let _ = Box::from_raw(std::slice::from_raw_parts_mut(
+                    let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
                         avcc_ptr as *mut u8,
                         avcc_len,
                     ));

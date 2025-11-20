@@ -15,20 +15,15 @@ use std::sync::{
 use streamlib_macros::StreamProcessor;
 
 // Scaling mode for video content in the display window
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum ScalingMode {
     /// Stretch video to fill window (ignores aspect ratio)
+    #[default]
     Stretch,
     /// Scale video to fit window while maintaining aspect ratio (letterbox/pillarbox)
     Letterbox,
     /// Scale video to fill window while maintaining aspect ratio (crops edges)
     Crop,
-}
-
-impl Default for ScalingMode {
-    fn default() -> Self {
-        Self::Stretch
-    }
 }
 
 // Apple-specific configuration and types
