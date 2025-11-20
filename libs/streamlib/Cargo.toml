@@ -109,7 +109,7 @@ axum = { workspace = true, optional = true }
 # Optional: Python dependencies
 # Note: Use "extension-module" for building .so/.dylib (maturin build)
 #       Use "auto-initialize" for embedding Python in binaries (MCP server)
-pyo3 = { version = "0.22", features = ["abi3-py311"], optional = true }
+pyo3 = { version = "0.22", features = ["abi3-py310"], optional = true }
 unindent = { version = "0.2", optional = true }
 
 # Platform-specific: macOS/iOS
