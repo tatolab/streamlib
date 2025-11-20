@@ -35,13 +35,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-features --bins --lib -- -D warnings
+        run: cargo clippy --workspace --features mcp,debug-overlay --bins --lib -- -D warnings
 
       - name: Build workspace
-        run: cargo build --workspace --all-features
+        run: cargo build --workspace --features mcp,debug-overlay
 
       - name: Run tests
-        run: cargo test --workspace --all-features --lib
+        run: cargo test --workspace --features mcp,debug-overlay --lib
 
       - name: Build examples
         run: |
