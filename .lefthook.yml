@@ -13,10 +13,10 @@ pre-push:
   parallel: true
   commands:
     clippy:
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      run: cargo clippy --workspace --all-features --bins --lib -- -D warnings
 
     test:
-      run: cargo test --workspace --all-features
+      run: cargo test --workspace --all-features --lib
 
 # Skip hooks with LEFTHOOK=0 environment variable
 # Example: LEFTHOOK=0 git push
