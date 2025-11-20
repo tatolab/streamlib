@@ -78,7 +78,9 @@ jobs:
 
       - name: Build Python package
         working-directory: libs/streamlib
-        run: maturin develop --features python
+        run: |
+          maturin build --features python --out ../../dist
+          pip install --force-reinstall ../../dist/*.whl
 
       - name: Test Python import
         run: python -c "import streamlib; print('StreamLib version:', streamlib.__version__)"
