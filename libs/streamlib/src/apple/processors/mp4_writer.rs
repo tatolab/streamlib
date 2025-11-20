@@ -1,7 +1,6 @@
 use crate::apple::{metal::MetalDevice, WgpuBridge};
 use crate::core::{
-    sync::{sync_action, SyncAction, DEFAULT_SYNC_TOLERANCE_MS},
-    AudioFrame, Result, StreamError, StreamInput, VideoFrame,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, Result, StreamError, StreamInput, VideoFrame,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -10,14 +9,14 @@ use objc2_av_foundation::{
     AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
 };
 use objc2_core_media::CMTime;
-use objc2_core_video::{CVPixelBuffer, CVPixelBufferLockFlags};
+use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{NSDictionary, NSNumber};
 use objc2_foundation::{NSString, NSURL};
 use objc2_io_surface::IOSurface;
 use std::path::PathBuf;
 use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 // FFI bindings for CoreVideo functions
 #[link(name = "CoreVideo", kind = "framework")]
@@ -575,7 +574,7 @@ impl AppleMp4WriterProcessor {
         width: u32,
         height: u32,
         video_codec: &str,
-        video_bitrate: u32,
+        _video_bitrate: u32,
     ) -> Result<(
         Retained<AVAssetWriter>,
         Retained<AVAssetWriterInput>,
@@ -1072,7 +1071,7 @@ impl AppleMp4WriterProcessor {
         use objc2_core_media::CMTime;
         let presentation_time = unsafe { CMTime::new(frame.timestamp_ns, 1_000_000_000) };
 
-        let duration = unsafe {
+        let _duration = unsafe {
             CMTime::new(
                 num_samples_per_channel as i64 * 1_000_000_000 / frame.sample_rate as i64,
                 1_000_000_000,
@@ -1083,7 +1082,7 @@ impl AppleMp4WriterProcessor {
         use objc2_core_media::CMSampleBuffer;
 
         let mut sample_buffer_ptr: *mut CMSampleBuffer = std::ptr::null_mut();
-        let sample_buffer_out =
+        let _sample_buffer_out =
             NonNull::new(&mut sample_buffer_ptr as *mut _).ok_or_else(|| {
                 StreamError::GpuError("Failed to create NonNull for sample buffer".into())
             })?;

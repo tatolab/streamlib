@@ -274,6 +274,7 @@ impl PyStreamRuntime {
                             width,
                             height,
                             title,
+                            scaling_mode: Default::default(),
                         };
 
                         let handle = runtime

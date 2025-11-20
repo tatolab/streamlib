@@ -211,9 +211,9 @@ pub struct ConnectProcessorsArgs {
 pub async fn execute_tool(
     tool_name: &str,
     arguments: JsonValue,
-    registry: Arc<Mutex<ProcessorRegistry>>,
+    _registry: Arc<Mutex<ProcessorRegistry>>,
     runtime: Option<Arc<Mutex<StreamRuntime>>>,
-    permissions: Arc<HashSet<String>>,
+    _permissions: Arc<HashSet<String>>,
 ) -> Result<ToolResult> {
     match tool_name {
         "list_supported_languages" => Ok(ToolResult {
@@ -338,7 +338,7 @@ pub async fn execute_tool(
 
             tracing::info!("add_processor args parsed: {:?}", args);
 
-            let runtime = runtime.ok_or_else(|| {
+            let _runtime = runtime.ok_or_else(|| {
                 tracing::error!("add_processor called without runtime");
                 McpError::Runtime(
                     "add_processor requires runtime access. MCP server is in discovery mode (registry only). \
@@ -348,63 +348,11 @@ pub async fn execute_tool(
 
             tracing::info!("Runtime available, checking permissions...");
 
-            if let (Some(language), Some(code)) = (&args.language, &args.code) {
-                if language != "python" {
-                    return Err(McpError::InvalidArguments {
-                        tool: tool_name.to_string(),
-                        message: format!(
-                            "Only 'python' language is currently supported, got '{}'",
-                            language
-                        ),
-                    });
-                }
-
-                #[cfg(not(feature = "python-embed"))]
-                {
-                    return Err(McpError::Runtime(
-                        "Python processors require the 'python-embed' feature to be enabled. Rebuild MCP server with --features python-embed.".to_string()
-                    ));
-                }
-
-                #[cfg(feature = "python-embed")]
-                {
-                    use crate::python::create_processor_from_code;
-
-                    let processor = create_processor_from_code(code).map_err(|e| {
-                        tracing::error!("Failed to create Python processor: {}", e);
-                        McpError::Runtime(format!("Failed to create Python processor: {}", e))
-                    })?;
-
-                    // Use spawn_blocking to call sync runtime from async context
-                    let runtime_clone = Arc::clone(&runtime);
-                    let result = tokio::task::spawn_blocking(move || {
-                        let mut rt = runtime_clone.lock();
-                        rt.add_boxed_processor(processor)
-                    })
-                    .await
-                    .map_err(|e| {
-                        McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
-                    })?;
-
-                    match result {
-                        Ok(handle) => {
-                            return Ok(ToolResult {
-                                success: true,
-                                message: format!("Successfully added Python processor"),
-                                data: Some(serde_json::json!({
-                                    "processor_id": handle.id(),
-                                })),
-                            });
-                        }
-                        Err(e) => {
-                            return Ok(ToolResult {
-                                success: false,
-                                message: format!("Failed to add Python processor: {}", e),
-                                data: None,
-                            });
-                        }
-                    }
-                }
+            if let (Some(_language), Some(_code)) = (&args.language, &args.code) {
+                // Python processor creation from code is not yet implemented
+                return Err(McpError::Runtime(
+                    "Python processors from code are not yet implemented. Use the processor registry to add built-in processors.".to_string()
+                ));
             }
 
             Err(McpError::InvalidArguments {

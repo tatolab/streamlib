@@ -1,9 +1,7 @@
 use super::PyVideoFrame;
 use crate::core::{AudioFrame, DataFrame, GpuContext, StreamInput, StreamOutput, VideoFrame};
 use parking_lot::Mutex;
-use pyo3::exceptions::PyAttributeError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[pyclass(name = "StreamInput", module = "streamlib")]

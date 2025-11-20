@@ -181,12 +181,12 @@ impl AppleCameraProcessor {
             }
         };
 
-        let device_name = unsafe { device.localizedName().to_string() };
-        let device_model = unsafe { device.modelID().to_string() };
+        let _device_name = unsafe { device.localizedName().to_string() };
+        let _device_model = unsafe { device.modelID().to_string() };
 
         // NOTE: Cannot use tracing::info here - this runs in a dispatch queue callback
         // where stdout/stderr might not be available, causing panics
-        // tracing::info!("Camera: Found device: {} ({})", device_name, device_model);
+        // tracing::info!("Camera: Found device: {} ({})", _device_name, _device_model);
 
         unsafe {
             if let Err(e) = device.lockForConfiguration() {

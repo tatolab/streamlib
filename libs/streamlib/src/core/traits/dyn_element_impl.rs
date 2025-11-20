@@ -14,12 +14,10 @@ where
     T: StreamProcessor,
 {
     fn __generated_setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        use crate::core::traits::StreamElement;
         self.__generated_setup(ctx)
     }
 
     fn __generated_teardown(&mut self) -> Result<()> {
-        use crate::core::traits::StreamElement;
         self.__generated_teardown()
     }
 

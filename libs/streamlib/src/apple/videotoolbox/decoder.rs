@@ -275,7 +275,7 @@ impl VideoToolboxDecoder {
         let avcc_ptr_usize = avcc_ptr as usize; // Convert to usize for Send
         let format_desc_usize = format_desc as usize; // Convert format_desc for Send
 
-        let (block_buffer_ptr, sample_buffer_ptr) = ctx.run_on_main_blocking(move || {
+        let (_block_buffer_ptr, sample_buffer_ptr) = ctx.run_on_main_blocking(move || {
             unsafe {
                 let avcc_ptr = avcc_ptr_usize as *mut std::ffi::c_void; // Convert back
                 let format_desc = format_desc_usize as ffi::CMFormatDescriptionRef; // Convert back
@@ -467,7 +467,7 @@ impl VideoToolboxDecoder {
         &self,
         pixel_buffer: *mut objc2_core_video::CVPixelBuffer,
         wgpu_bridge: &WgpuBridge,
-        gpu_ctx: &GpuContext,
+        _gpu_ctx: &GpuContext,
     ) -> Result<wgpu::Texture> {
         use super::ffi;
         use crate::apple::iosurface;

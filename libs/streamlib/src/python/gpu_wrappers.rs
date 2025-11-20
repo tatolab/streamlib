@@ -139,7 +139,7 @@ impl PyBufferBindingType {
 }
 
 fn parse_buffer_usage(
-    py: Python<'_>,
+    _py: Python<'_>,
     usage_obj: &Bound<'_, PyAny>,
 ) -> PyResult<wgpu::BufferUsages> {
     let usage_int: u32 = usage_obj.extract().map_err(|e| {
@@ -158,7 +158,7 @@ fn parse_buffer_usage(
 }
 
 fn parse_shader_stage(
-    py: Python<'_>,
+    _py: Python<'_>,
     stage_obj: &Bound<'_, PyAny>,
 ) -> PyResult<wgpu::ShaderStages> {
     let stage_int: u32 = stage_obj.extract().map_err(|e| {
@@ -177,7 +177,7 @@ fn parse_shader_stage(
 }
 
 fn parse_texture_sample_type(
-    py: Python<'_>,
+    _py: Python<'_>,
     dict: &Bound<'_, PyDict>,
 ) -> PyResult<wgpu::TextureSampleType> {
     let sample_type_str: String = dict
@@ -206,7 +206,7 @@ fn parse_texture_sample_type(
 }
 
 fn parse_texture_view_dimension(
-    py: Python<'_>,
+    _py: Python<'_>,
     dim_obj: &Bound<'_, PyAny>,
 ) -> PyResult<wgpu::TextureViewDimension> {
     let dim_str: String = dim_obj.extract().map_err(|e| {
@@ -230,7 +230,7 @@ fn parse_texture_view_dimension(
 }
 
 fn parse_storage_texture_access(
-    py: Python<'_>,
+    _py: Python<'_>,
     access_obj: &Bound<'_, PyAny>,
 ) -> PyResult<wgpu::StorageTextureAccess> {
     let access_str: String = access_obj.extract().map_err(|e| {
@@ -252,7 +252,7 @@ fn parse_storage_texture_access(
 }
 
 fn parse_texture_format(
-    py: Python<'_>,
+    _py: Python<'_>,
     format_obj: &Bound<'_, PyAny>,
 ) -> PyResult<wgpu::TextureFormat> {
     let format_str: String = format_obj.extract().map_err(|e| {
@@ -276,7 +276,7 @@ fn parse_texture_format(
 }
 
 fn parse_buffer_binding_type(
-    py: Python<'_>,
+    _py: Python<'_>,
     buffer_dict: &Bound<'_, PyDict>,
 ) -> PyResult<wgpu::BufferBindingType> {
     let type_str: String = buffer_dict
@@ -467,7 +467,7 @@ pub struct PyWgpuComputePipeline {
 #[pymethods]
 impl PyWgpuComputePipeline {
     #[getter]
-    fn _bind_group_layout(&self, py: Python<'_>) -> PyResult<Py<PyWgpuBindGroupLayout>> {
+    fn _bind_group_layout(&self, _py: Python<'_>) -> PyResult<Py<PyWgpuBindGroupLayout>> {
         // TODO: This is a placeholder - need to properly store bind group layout Arc
         Err(pyo3::exceptions::PyNotImplementedError::new_err(
             "bind_group_layout getter not yet implemented for Arc-based wrappers",
@@ -525,7 +525,7 @@ impl PyWgpuCommandEncoder {
         )
     }
 
-    fn finish(&self, py: Python<'_>) -> PyResult<usize> {
+    fn finish(&self, _py: Python<'_>) -> PyResult<usize> {
         let mut encoder_guard = self.encoder.lock().map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to lock encoder: {}", e))
         })?;
@@ -566,6 +566,7 @@ impl PyWgpuComputePass {
         Ok(())
     }
 
+    #[pyo3(signature = (index, bind_group, offsets=None))]
     fn set_bind_group(
         &self,
         index: u32,

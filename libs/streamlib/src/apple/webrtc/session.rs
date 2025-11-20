@@ -3,8 +3,6 @@
 // Manages WebRTC PeerConnection, tracks, and RTP packetization using webrtc-rs.
 // Supports both send (WHIP) and receive (WHEP) modes.
 
-use crate::apple::videotoolbox::EncodedVideoFrame;
-use crate::core::streaming::opus::EncodedAudioFrame;
 use crate::core::{Result, StreamError};
 use std::sync::Arc;
 use webrtc::track::track_local::TrackLocalWriter;
@@ -244,8 +242,6 @@ impl WebRtcSession {
                         tracing::warn!("[WebRTC] ❌ ICE connection lost: {:?}", connection_state);
                         flag.store(false, std::sync::atomic::Ordering::Release);
                     }
-
-                    ()
                 })
             }));
 

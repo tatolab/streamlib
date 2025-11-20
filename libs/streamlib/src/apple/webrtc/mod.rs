@@ -6,6 +6,6 @@ pub mod session;
 pub mod whep;
 pub mod whip;
 
-pub use session::{SampleCallback, WebRtcSession, WebRtcSessionMode};
+pub use session::WebRtcSession;
 pub use whep::{WhepClient, WhepConfig};
 pub use whip::{WhipClient, WhipConfig};

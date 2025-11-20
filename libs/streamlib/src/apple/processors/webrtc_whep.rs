@@ -192,7 +192,7 @@ impl WebRtcWhepProcessor {
     }
 
     fn start_session(&mut self) -> Result<()> {
-        let ctx = self
+        let _ctx = self
             .ctx
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("RuntimeContext not available".into()))?;

@@ -5,7 +5,6 @@
 
 use parking_lot::Mutex as ParkingLotMutex;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use std::sync::Arc;
 
 use crate::core::error::{Result, StreamError};

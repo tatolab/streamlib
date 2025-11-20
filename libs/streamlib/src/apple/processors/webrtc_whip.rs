@@ -10,7 +10,7 @@ use crate::apple::videotoolbox::{EncodedVideoFrame, VideoEncoderConfig, VideoToo
 use crate::apple::webrtc::{WebRtcSession, WhipClient, WhipConfig};
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
-    EncodedAudioFrame, OpusEncoder, RtpTimestampCalculator,
+    OpusEncoder, RtpTimestampCalculator,
 };
 use crate::core::{
     media_clock::MediaClock, AudioFrame, GpuContext, Result, RuntimeContext, StreamError,

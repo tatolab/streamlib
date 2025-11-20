@@ -48,7 +48,7 @@ impl Default for PerformanceMetrics {
 impl PerformanceMetrics {
     fn update(&mut self, frame: &VideoFrame) {
         let now = Instant::now();
-        let frame_timestamp_secs = frame.timestamp;
+        let _frame_timestamp_secs = frame.timestamp_ns;
 
         if let Some(last_time) = self.last_frame_time {
             // TODO: Use frame timestamps when we have stable monotonic camera timestamps
@@ -138,7 +138,7 @@ pub struct PerformanceOverlayProcessor {
     video: StreamInput<VideoFrame>,
 
     #[output(description = "Output video frames with performance overlay composited")]
-    video_out: StreamOutput<VideoFrame>,
+    video_out: Arc<StreamOutput<VideoFrame>>,
 
     #[config]
     config: PerformanceOverlayConfig,
@@ -171,7 +171,7 @@ impl PerformanceOverlayProcessor {
         Ok(Self {
             // Ports
             video: StreamInput::new("video"),
-            video_out: StreamOutput::new("video"),
+            video_out: StreamOutput::new("video").into(),
 
             // Config
             config: PerformanceOverlayConfig::default(),
@@ -742,7 +742,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             width: input.width,
             height: input.height,
             frame_number: input.frame_number,
-            timestamp: input.timestamp,
+            timestamp_ns: input.timestamp_ns,
             metadata: input.metadata.clone(),
         })
     }

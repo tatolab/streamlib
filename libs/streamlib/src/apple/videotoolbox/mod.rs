@@ -47,10 +47,7 @@ mod ffi;
 pub mod format; // Public for SPS parsing utilities
 
 // Public API exports
-pub use codec::{CodecInfo, H264Profile, VideoCodec};
-pub use decoder::{VideoDecoderConfig, VideoToolboxDecoder};
+pub use codec::{H264Profile, VideoCodec};
+pub use decoder::VideoToolboxDecoder;
 pub use encoder::{EncodedVideoFrame, VideoEncoderConfig, VideoToolboxEncoder};
-pub use format::{
-    annex_b_to_avcc, parse_nal_units, parse_nal_units_annex_b, parse_nal_units_avcc,
-    parse_sps_dimensions,
-};
+pub use format::parse_nal_units;

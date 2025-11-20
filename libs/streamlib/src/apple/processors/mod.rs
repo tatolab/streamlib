@@ -17,7 +17,7 @@ pub use webrtc_whep::{WebRtcWhepConfig, WebRtcWhepProcessor};
 // Sink exports
 pub use audio_output::AppleAudioOutputProcessor;
 pub use display::AppleDisplayProcessor;
-pub use mp4_writer::{AppleMp4WriterConfig, AppleMp4WriterProcessor};
+pub use mp4_writer::AppleMp4WriterProcessor;
 pub use webrtc_whip::{WebRtcWhipConfig, WebRtcWhipProcessor};
 // str0m version (experimental, not working):
 // pub use webrtc_whip::{WebRtcWhipProcessor, WebRtcWhipConfig, WhipConfig, VideoEncoderConfig, AudioEncoderConfig, H264Profile};

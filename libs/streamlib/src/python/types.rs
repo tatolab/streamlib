@@ -27,7 +27,7 @@ impl PyVideoFrame {
 
     #[getter]
     fn timestamp(&self) -> f64 {
-        self.inner.timestamp
+        self.inner.timestamp_ns as f64 / 1_000_000_000.0
     }
 
     #[getter]
@@ -59,7 +59,7 @@ impl PyVideoFrame {
             format: self.inner.format,
             width: self.inner.width,
             height: self.inner.height,
-            timestamp: self.inner.timestamp,
+            timestamp_ns: self.inner.timestamp_ns,
             frame_number: self.inner.frame_number,
             metadata: self.inner.metadata.clone(),
         };
