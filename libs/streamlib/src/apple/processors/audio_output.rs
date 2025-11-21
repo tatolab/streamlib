@@ -63,7 +63,7 @@ impl ResamplerState {
 )]
 pub struct AppleAudioOutputProcessor {
     #[input(description = "Stereo audio frame to play through speakers")]
-    audio: Arc<StreamInput<AudioFrame<2>>>,
+    audio: Arc<StreamInput<AudioFrame>>,
 
     #[config]
     config: AppleAudioOutputConfig,

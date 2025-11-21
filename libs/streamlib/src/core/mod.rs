@@ -1,3 +1,4 @@
+pub mod audio_frame_utils;
 pub mod audio_resample_utils;
 pub mod bus;
 pub mod clap;
@@ -20,6 +21,10 @@ pub mod texture;
 pub mod topology;
 pub mod traits;
 
+pub use audio_frame_utils::{
+    convert_audio_frame, convert_channels, resample_frame, AudioRechunker,
+};
+pub use audio_resample_utils::ResamplingQuality;
 pub use bus::{
     create_owned_connection, Bus, ConnectionId, ConnectionManager, OwnedConsumer, OwnedProducer,
     PortAddress, PortMessage, PortType, StreamInput, StreamOutput,
@@ -30,7 +35,9 @@ pub use clap::{
 };
 pub use context::{GpuContext, RuntimeContext};
 pub use error::{Result, StreamError};
-pub use frames::{AudioFrame, DataFrame, MetadataValue, VideoFrame};
+pub use frames::{
+    AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
+};
 pub use handles::{InputPortRef, OutputPortRef, ProcessorHandle, ProcessorId};
 pub use pubsub::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
@@ -72,7 +79,6 @@ pub use processors::{
     MixingStrategy,
     Mp4WriterConfig,
     Mp4WriterProcessor,
-    ResamplingQuality,
     WindowId,
 };
 

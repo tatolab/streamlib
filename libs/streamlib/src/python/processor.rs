@@ -23,7 +23,7 @@ pub struct PortMetadata {
     pub required: bool,
 }
 
-/// Frame type parsed from Python decorator (e.g., "VideoFrame", "AudioFrame<2>", "DataFrame")
+/// Frame type parsed from Python decorator (e.g., "VideoFrame", "AudioFrame", "DataFrame")
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrameType {
     Video,
@@ -41,7 +41,7 @@ impl FrameType {
         } else if s == "DataFrame" {
             Ok(FrameType::Data)
         } else if s.starts_with("AudioFrame<") && s.ends_with(">") {
-            // Parse "AudioFrame<2>" -> 2
+            // Parse "AudioFrame" -> 2
             let channels_str = &s[11..s.len() - 1];
             let channels = channels_str.parse::<usize>().map_err(|_| {
                 StreamError::Configuration(format!("Invalid audio channels: {}", channels_str))
@@ -586,12 +586,7 @@ impl StreamProcessor for PythonProcessor {
             .find(|m| m.name == port_name)
             .map(|m| match &m.frame_type {
                 FrameType::Video => crate::core::bus::PortType::Video,
-                FrameType::Audio(1) => crate::core::bus::PortType::Audio1,
-                FrameType::Audio(2) => crate::core::bus::PortType::Audio2,
-                FrameType::Audio(4) => crate::core::bus::PortType::Audio4,
-                FrameType::Audio(6) => crate::core::bus::PortType::Audio6,
-                FrameType::Audio(8) => crate::core::bus::PortType::Audio8,
-                FrameType::Audio(_) => crate::core::bus::PortType::Video, // fallback
+                FrameType::Audio(_) => crate::core::bus::PortType::Audio,
                 FrameType::Data => crate::core::bus::PortType::Data,
             })
     }
@@ -603,12 +598,7 @@ impl StreamProcessor for PythonProcessor {
             .find(|m| m.name == port_name)
             .map(|m| match &m.frame_type {
                 FrameType::Video => crate::core::bus::PortType::Video,
-                FrameType::Audio(1) => crate::core::bus::PortType::Audio1,
-                FrameType::Audio(2) => crate::core::bus::PortType::Audio2,
-                FrameType::Audio(4) => crate::core::bus::PortType::Audio4,
-                FrameType::Audio(6) => crate::core::bus::PortType::Audio6,
-                FrameType::Audio(8) => crate::core::bus::PortType::Audio8,
-                FrameType::Audio(_) => crate::core::bus::PortType::Video, // fallback
+                FrameType::Audio(_) => crate::core::bus::PortType::Audio,
                 FrameType::Data => crate::core::bus::PortType::Data,
             })
     }
@@ -683,7 +673,7 @@ impl StreamProcessor for PythonProcessor {
                 match channels {
                     1 => {
                         if let Ok(typed_consumer) =
-                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<1>>>()
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame>>()
                         {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
@@ -693,18 +683,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamInputAudio1::from_port(stream_input);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<1> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<1> consumer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame consumer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     2 => {
                         if let Ok(typed_consumer) =
-                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<2>>>()
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame>>()
                         {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
@@ -714,18 +704,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamInputAudio2::from_port(stream_input);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<2> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<2> consumer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame consumer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     4 => {
                         if let Ok(typed_consumer) =
-                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<4>>>()
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame>>()
                         {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
@@ -735,18 +725,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamInputAudio4::from_port(stream_input);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<4> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<4> consumer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame consumer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     6 => {
                         if let Ok(typed_consumer) =
-                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<6>>>()
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame>>()
                         {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
@@ -756,18 +746,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamInputAudio6::from_port(stream_input);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<6> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<6> consumer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame consumer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     8 => {
                         if let Ok(typed_consumer) =
-                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<8>>>()
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame>>()
                         {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
@@ -777,12 +767,12 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamInputAudio8::from_port(stream_input);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<8> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<8> consumer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame consumer for port '{}'", self.name, port_name);
                             false
                         }
                     }
@@ -888,7 +878,7 @@ impl StreamProcessor for PythonProcessor {
                 match channels {
                     1 => {
                         if let Ok(typed_producer) =
-                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<1>>>()
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame>>()
                         {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
@@ -898,18 +888,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamOutputAudio1::from_port(stream_output);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<1> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<1> producer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame producer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     2 => {
                         if let Ok(typed_producer) =
-                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<2>>>()
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame>>()
                         {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
@@ -919,18 +909,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamOutputAudio2::from_port(stream_output);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<2> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<2> producer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame producer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     4 => {
                         if let Ok(typed_producer) =
-                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<4>>>()
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame>>()
                         {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
@@ -940,18 +930,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamOutputAudio4::from_port(stream_output);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<4> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<4> producer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame producer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     6 => {
                         if let Ok(typed_producer) =
-                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<6>>>()
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame>>()
                         {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
@@ -961,18 +951,18 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamOutputAudio6::from_port(stream_output);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<6> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<6> producer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame producer for port '{}'", self.name, port_name);
                             false
                         }
                     }
                     8 => {
                         if let Ok(typed_producer) =
-                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<8>>>()
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame>>()
                         {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
@@ -982,12 +972,12 @@ impl StreamProcessor for PythonProcessor {
                                     let py_wrapper = PyStreamOutputAudio8::from_port(stream_output);
                                     instance.setattr(py, port_name, py_wrapper).is_ok()
                                 } else {
-                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame<8> before instance created", self.name);
+                                    tracing::warn!("[PythonProcessor:{}] Cannot wire AudioFrame before instance created", self.name);
                                     false
                                 }
                             })
                         } else {
-                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame<8> producer for port '{}'", self.name, port_name);
+                            tracing::warn!("[PythonProcessor:{}] Failed to downcast AudioFrame producer for port '{}'", self.name, port_name);
                             false
                         }
                     }

@@ -2,7 +2,7 @@
 //
 // Provides Opus decoding for real-time audio streaming from WebRTC.
 
-use crate::core::{AudioFrame, Result, StreamError};
+use crate::core::{AudioChannelCount, AudioFrame, Result, StreamError};
 
 // ============================================================================
 // OPUS DECODER IMPLEMENTATION
@@ -13,7 +13,7 @@ use crate::core::{AudioFrame, Result, StreamError};
 /// # Features
 /// - Decodes Opus packets to PCM audio
 /// - Supports mono and stereo input
-/// - Always outputs stereo `AudioFrame<2>` (mono input is duplicated to both channels)
+/// - Always outputs stereo `AudioFrame` (mono input is duplicated to both channels)
 /// - Sample rate: 48kHz (WebRTC standard)
 ///
 /// # Usage
@@ -166,7 +166,7 @@ impl OpusDecoder {
         }
     }
 
-    /// Decode Opus packet directly to `AudioFrame<2>`
+    /// Decode Opus packet directly to `AudioFrame`
     ///
     /// # Arguments
     /// * `packet` - Compressed Opus packet data
@@ -178,13 +178,14 @@ impl OpusDecoder {
         &mut self,
         packet: &[u8],
         timestamp_ns: i64,
-    ) -> Result<AudioFrame<2>> {
+    ) -> Result<AudioFrame> {
         let samples = self.decode(packet)?;
 
         // Samples are already interleaved stereo [L,R,L,R,...]
         // AudioFrame expects Arc<Vec<f32>> with interleaved samples
         Ok(AudioFrame::new(
             samples,
+            AudioChannelCount::Two,
             timestamp_ns,
             0, // frame_number (will be set by caller if needed)
             self.sample_rate,

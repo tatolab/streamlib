@@ -110,7 +110,7 @@ pub struct WebRtcWhepProcessor {
     video_out: Arc<StreamOutput<VideoFrame>>,
 
     #[output(description = "Output audio frames (decoded Opus, stereo)")]
-    audio_out: Arc<StreamOutput<AudioFrame<2>>>,
+    audio_out: Arc<StreamOutput<AudioFrame>>,
 
     #[config]
     config: WebRtcWhepConfig,

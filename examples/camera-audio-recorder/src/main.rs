@@ -97,22 +97,22 @@ fn main() -> Result<()> {
 
     println!("   audio_capture.audio → resampler.audio_in");
     runtime.connect(
-        audio_capture.output_port::<AudioFrame<1>>("audio"),
-        resampler.input_port::<AudioFrame<1>>("audio_in"),
+        audio_capture.output_port::<AudioFrame>("audio"),
+        resampler.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ Audio capture → resampler");
 
     println!("   resampler.audio_out → channel_converter.audio_in");
     runtime.connect(
-        resampler.output_port::<AudioFrame<1>>("audio_out"),
-        channel_converter.input_port::<AudioFrame<1>>("audio_in"),
+        resampler.output_port::<AudioFrame>("audio_out"),
+        channel_converter.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ Resampler → channel converter");
 
     println!("   channel_converter.audio_out → mp4_writer.audio");
     runtime.connect(
-        channel_converter.output_port::<AudioFrame<2>>("audio_out"),
-        mp4_writer.input_port::<AudioFrame<2>>("audio"),
+        channel_converter.output_port::<AudioFrame>("audio_out"),
+        mp4_writer.input_port::<AudioFrame>("audio"),
     )?;
     println!("   ✓ Channel converter → MP4 writer\n");
 

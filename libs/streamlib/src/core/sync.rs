@@ -25,18 +25,12 @@ pub fn are_synchronized(timestamp_a_ns: i64, timestamp_b_ns: i64, tolerance_ms: 
 }
 
 #[inline]
-pub fn video_audio_delta_ms<const CHANNELS: usize>(
-    video: &VideoFrame,
-    audio: &AudioFrame<CHANNELS>,
-) -> f64 {
+pub fn video_audio_delta_ms(video: &VideoFrame, audio: &AudioFrame) -> f64 {
     timestamp_delta_ms(video.timestamp_ns, audio.timestamp_ns)
 }
 
 #[inline]
-pub fn video_audio_synchronized<const CHANNELS: usize>(
-    video: &VideoFrame,
-    audio: &AudioFrame<CHANNELS>,
-) -> bool {
+pub fn video_audio_synchronized(video: &VideoFrame, audio: &AudioFrame) -> bool {
     are_synchronized(
         video.timestamp_ns,
         audio.timestamp_ns,
@@ -45,9 +39,9 @@ pub fn video_audio_synchronized<const CHANNELS: usize>(
 }
 
 #[inline]
-pub fn video_audio_synchronized_with_tolerance<const CHANNELS: usize>(
+pub fn video_audio_synchronized_with_tolerance(
     video: &VideoFrame,
-    audio: &AudioFrame<CHANNELS>,
+    audio: &AudioFrame,
     tolerance_ms: f64,
 ) -> bool {
     are_synchronized(video.timestamp_ns, audio.timestamp_ns, tolerance_ms)
@@ -68,11 +62,7 @@ pub fn video_audio_synchronized_with_tolerance<const CHANNELS: usize>(
 /// * `DropVideoFrame` - Video is ahead, skip this frame
 /// * `DuplicateVideoFrame` - Video is behind, reuse last frame
 #[inline]
-pub fn sync_action<const CHANNELS: usize>(
-    video: &VideoFrame,
-    audio: &AudioFrame<CHANNELS>,
-    tolerance_ms: f64,
-) -> SyncAction {
+pub fn sync_action(video: &VideoFrame, audio: &AudioFrame, tolerance_ms: f64) -> SyncAction {
     let drift_ns = video.timestamp_ns - audio.timestamp_ns;
     let drift_ms = drift_ns as f64 / 1_000_000.0;
 
@@ -92,11 +82,7 @@ pub fn sync_action<const CHANNELS: usize>(
 /// Returns drift in milliseconds (positive means video ahead, negative means audio ahead)
 /// and whether the streams are synchronized within tolerance.
 #[inline]
-pub fn sync_statistics<const CHANNELS: usize>(
-    video: &VideoFrame,
-    audio: &AudioFrame<CHANNELS>,
-    tolerance_ms: f64,
-) -> (f64, bool) {
+pub fn sync_statistics(video: &VideoFrame, audio: &AudioFrame, tolerance_ms: f64) -> (f64, bool) {
     let drift_ns = video.timestamp_ns - audio.timestamp_ns;
     let drift_ms = drift_ns as f64 / 1_000_000.0;
     let is_synced = drift_ms.abs() <= tolerance_ms;

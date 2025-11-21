@@ -1,3 +1,4 @@
+use crate::core::frames::AudioChannelCount;
 use crate::core::{AudioFrame, Result, StreamError, StreamOutput};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -31,7 +32,7 @@ pub struct AppleAudioCaptureProcessor {
     #[output(
         description = "Captured mono audio frames in device-native sample rate and buffer size"
     )]
-    audio: Arc<StreamOutput<AudioFrame<1>>>,
+    audio: Arc<StreamOutput<AudioFrame>>,
 
     #[config]
     config: AppleAudioCaptureConfig,
@@ -205,8 +206,9 @@ impl AppleAudioCaptureProcessor {
                     let timestamp_ns =
                         crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
-                    let frame = AudioFrame::<1>::new(
+                    let frame = AudioFrame::new(
                         data.to_vec(),
+                        AudioChannelCount::One,
                         timestamp_ns,
                         frame_number,
                         sample_rate_clone,

@@ -15,10 +15,7 @@ pub use error::{PyStreamError, Result};
 pub use port::ProcessorPort;
 pub use processor::PythonProcessor;
 pub use runtime::{PyProcessorHandle, PyStreamRuntime};
-pub use types::{
-    PyAudioFrame1, PyAudioFrame2, PyAudioFrame4, PyAudioFrame6, PyAudioFrame8, PyDataFrame,
-    PyVideoFrame,
-};
+pub use types::{PyAudioFrame, PyDataFrame, PyVideoFrame};
 
 pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize tracing if RUST_LOG is set
@@ -32,11 +29,7 @@ pub fn register_python_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Frame types
     m.add_class::<types::PyVideoFrame>()?;
-    m.add_class::<types::PyAudioFrame1>()?;
-    m.add_class::<types::PyAudioFrame2>()?;
-    m.add_class::<types::PyAudioFrame4>()?;
-    m.add_class::<types::PyAudioFrame6>()?;
-    m.add_class::<types::PyAudioFrame8>()?;
+    m.add_class::<types::PyAudioFrame>()?;
     m.add_class::<types::PyDataFrame>()?;
 
     // Runtime and processors

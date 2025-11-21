@@ -486,7 +486,7 @@ impl ClapPluginHost {
         Ok(())
     }
 
-    pub fn process_audio(&mut self, input: &AudioFrame<2>) -> Result<AudioFrame<2>> {
+    pub fn process_audio(&mut self, input: &AudioFrame) -> Result<AudioFrame> {
         let num_samples = input.sample_count();
 
         for i in 0..num_samples {
@@ -506,6 +506,7 @@ impl ClapPluginHost {
 
         Ok(AudioFrame::new(
             output_samples,
+            input.channels,
             input.timestamp_ns,
             input.frame_number,
             input.sample_rate,

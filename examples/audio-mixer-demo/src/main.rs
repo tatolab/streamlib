@@ -100,58 +100,58 @@ fn main() -> Result<()> {
     // Connect chord generator's pre-mixed stereo output directly to effects
     // NOTE: Old mixer connections commented out
     // runtime.connect(
-    //     chord_gen.output_port::<AudioFrame<1>>("tone_c4"),
-    //     mixer.input_port::<AudioFrame<1>>("input_0"),
+    //     chord_gen.output_port::<AudioFrame>("tone_c4"),
+    //     mixer.input_port::<AudioFrame>("input_0"),
     // )?;
     // println!("   ✅ Chord Generator (C4 mono) → Mixer Input 0");
     //
     // runtime.connect(
-    //     chord_gen.output_port::<AudioFrame<1>>("tone_e4"),
-    //     mixer.input_port::<AudioFrame<1>>("input_1"),
+    //     chord_gen.output_port::<AudioFrame>("tone_e4"),
+    //     mixer.input_port::<AudioFrame>("input_1"),
     // )?;
     // println!("   ✅ Chord Generator (E4 mono) → Mixer Input 1");
     //
     // runtime.connect(
-    //     chord_gen.output_port::<AudioFrame<1>>("tone_g4"),
-    //     mixer.input_port::<AudioFrame<1>>("input_2"),
+    //     chord_gen.output_port::<AudioFrame>("tone_g4"),
+    //     mixer.input_port::<AudioFrame>("input_2"),
     // )?;
     // println!("   ✅ Chord Generator (G4 mono) → Mixer Input 2");
 
     // Connect ChordGenerator directly to Speaker (bypassing effects)
     runtime.connect(
-        chord_gen.output_port::<AudioFrame<2>>("chord"),
-        speaker.input_port::<AudioFrame<2>>("audio"),
+        chord_gen.output_port::<AudioFrame>("chord"),
+        speaker.input_port::<AudioFrame>("audio"),
     )?;
     println!("   ✅ Chord Generator (stereo) → Speaker\n");
 
     // Old effect chain connections (commented out)
     // runtime.connect(
-    //     chord_gen.output_port::<AudioFrame<2>>("chord"),
-    //     effect1.input_port::<AudioFrame<2>>("audio"),
+    //     chord_gen.output_port::<AudioFrame>("chord"),
+    //     effect1.input_port::<AudioFrame>("audio"),
     // )?;
     // println!("   ✅ Chord Generator (stereo) → Effect1");
     //
     // runtime.connect(
-    //     effect1.output_port::<AudioFrame<2>>("audio"),
-    //     effect2.input_port::<AudioFrame<2>>("audio"),
+    //     effect1.output_port::<AudioFrame>("audio"),
+    //     effect2.input_port::<AudioFrame>("audio"),
     // )?;
     // println!("   ✅ Effect1 → Effect2");
     //
     // runtime.connect(
-    //     effect2.output_port::<AudioFrame<2>>("audio"),
-    //     effect3.input_port::<AudioFrame<2>>("audio"),
+    //     effect2.output_port::<AudioFrame>("audio"),
+    //     effect3.input_port::<AudioFrame>("audio"),
     // )?;
     // println!("   ✅ Effect2 → Effect3");
     //
     // runtime.connect(
-    //     effect3.output_port::<AudioFrame<2>>("audio"),
-    //     effect4.input_port::<AudioFrame<2>>("audio"),
+    //     effect3.output_port::<AudioFrame>("audio"),
+    //     effect4.input_port::<AudioFrame>("audio"),
     // )?;
     // println!("   ✅ Effect3 → Effect4");
     //
     // runtime.connect(
-    //     effect4.output_port::<AudioFrame<2>>("audio"),
-    //     speaker.input_port::<AudioFrame<2>>("audio"),
+    //     effect4.output_port::<AudioFrame>("audio"),
+    //     speaker.input_port::<AudioFrame>("audio"),
     // )?;
     // println!("   ✅ Effect4 → Speaker\n");
 

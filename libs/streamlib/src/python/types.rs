@@ -111,122 +111,118 @@ impl PyVideoFrame {
     }
 }
 
-// ========== AudioFrame Wrappers ==========
+// ========== AudioFrame Wrapper ==========
 
-macro_rules! impl_py_audio_frame {
-    ($name:ident, $py_name:literal, $channels:expr) => {
-        #[pyclass(name = $py_name)]
-        #[derive(Clone)]
-        pub struct $name {
-            pub(crate) inner: AudioFrame<$channels>,
-        }
-
-        #[pymethods]
-        impl $name {
-            #[getter]
-            fn channels(&self) -> usize {
-                $channels
-            }
-
-            #[getter]
-            fn sample_count(&self) -> usize {
-                self.inner.sample_count()
-            }
-
-            #[getter]
-            fn timestamp_ns(&self) -> i64 {
-                self.inner.timestamp_ns
-            }
-
-            #[getter]
-            fn timestamp(&self) -> f64 {
-                self.inner.timestamp_ns as f64 / 1_000_000_000.0
-            }
-
-            #[getter]
-            fn frame_number(&self) -> u64 {
-                self.inner.frame_number
-            }
-
-            /// Get interleaved sample data as a flat list of f32 values
-            #[getter]
-            fn samples(&self) -> Vec<f32> {
-                (*self.inner.samples).clone()
-            }
-
-            /// Get samples for a specific channel (0-indexed)
-            fn get_channel(&self, channel: usize) -> PyResult<Vec<f32>> {
-                if channel >= $channels {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "Channel {} out of range (0-{})",
-                        channel,
-                        $channels - 1
-                    )));
-                }
-
-                let sample_count = self.inner.sample_count();
-                let mut channel_samples = Vec::with_capacity(sample_count);
-
-                for i in 0..sample_count {
-                    channel_samples.push(self.inner.samples[i * $channels + channel]);
-                }
-
-                Ok(channel_samples)
-            }
-
-            #[getter]
-            fn metadata(&self) -> HashMap<String, String> {
-                self.inner
-                    .metadata
-                    .as_ref()
-                    .map(|m| {
-                        m.iter()
-                            .map(|(k, v)| (k.clone(), format!("{:?}", v)))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            }
-
-            fn __repr__(&self) -> String {
-                format!(
-                    "AudioFrame<{}>({} samples, frame={})",
-                    $channels,
-                    self.inner.sample_count(),
-                    self.inner.frame_number
-                )
-            }
-
-            fn __str__(&self) -> String {
-                self.__repr__()
-            }
-
-            fn __len__(&self) -> usize {
-                self.inner.sample_count()
-            }
-        }
-
-        impl $name {
-            pub fn from_rust(frame: AudioFrame<$channels>) -> Self {
-                Self { inner: frame }
-            }
-
-            pub fn as_rust(&self) -> &AudioFrame<$channels> {
-                &self.inner
-            }
-
-            pub fn into_rust(self) -> AudioFrame<$channels> {
-                self.inner
-            }
-        }
-    };
+#[pyclass(name = "AudioFrame")]
+#[derive(Clone)]
+pub struct PyAudioFrame {
+    pub(crate) inner: AudioFrame,
 }
 
-// Generate wrappers for all supported channel counts
-impl_py_audio_frame!(PyAudioFrame1, "AudioFrame1", 1);
-impl_py_audio_frame!(PyAudioFrame2, "AudioFrame2", 2);
-impl_py_audio_frame!(PyAudioFrame4, "AudioFrame4", 4);
-impl_py_audio_frame!(PyAudioFrame6, "AudioFrame6", 6);
-impl_py_audio_frame!(PyAudioFrame8, "AudioFrame8", 8);
+#[pymethods]
+impl PyAudioFrame {
+    #[getter]
+    fn channels(&self) -> usize {
+        self.inner.channels.as_usize()
+    }
+
+    #[getter]
+    fn sample_count(&self) -> usize {
+        self.inner.sample_count()
+    }
+
+    #[getter]
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate
+    }
+
+    #[getter]
+    fn timestamp_ns(&self) -> i64 {
+        self.inner.timestamp_ns
+    }
+
+    #[getter]
+    fn timestamp(&self) -> f64 {
+        self.inner.timestamp_ns as f64 / 1_000_000_000.0
+    }
+
+    #[getter]
+    fn frame_number(&self) -> u64 {
+        self.inner.frame_number
+    }
+
+    /// Get interleaved sample data as a flat list of f32 values
+    #[getter]
+    fn samples(&self) -> Vec<f32> {
+        (*self.inner.samples).clone()
+    }
+
+    /// Get samples for a specific channel (0-indexed)
+    fn get_channel(&self, channel: usize) -> PyResult<Vec<f32>> {
+        let channels = self.inner.channels.as_usize();
+        if channel >= channels {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Channel {} out of range (0-{})",
+                channel,
+                channels - 1
+            )));
+        }
+
+        let sample_count = self.inner.sample_count();
+        let mut channel_samples = Vec::with_capacity(sample_count);
+
+        for i in 0..sample_count {
+            channel_samples.push(self.inner.samples[i * channels + channel]);
+        }
+
+        Ok(channel_samples)
+    }
+
+    #[getter]
+    fn metadata(&self) -> HashMap<String, String> {
+        self.inner
+            .metadata
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), format!("{:?}", v)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AudioFrame<{}>({} samples @ {}Hz, frame={})",
+            self.inner.channels.as_usize(),
+            self.inner.sample_count(),
+            self.inner.sample_rate,
+            self.inner.frame_number
+        )
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.sample_count()
+    }
+}
+
+impl PyAudioFrame {
+    pub fn from_rust(frame: AudioFrame) -> Self {
+        Self { inner: frame }
+    }
+
+    pub fn as_rust(&self) -> &AudioFrame {
+        &self.inner
+    }
+
+    pub fn into_rust(self) -> AudioFrame {
+        self.inner
+    }
+}
 
 // ========== DataFrame Wrapper ==========
 
