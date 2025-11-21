@@ -1,8 +1,7 @@
-
-pub mod element;
-pub mod processor;
 pub mod dyn_element;
 mod dyn_element_impl;
+pub mod element;
+pub mod processor;
 
 mod sealed {
     pub trait Sealed {}
@@ -10,10 +9,7 @@ mod sealed {
 
 pub use sealed::Sealed;
 
-pub use element::{
-    StreamElement,
-    ElementType,
-};
+pub use element::{ElementType, StreamElement};
 
 pub use processor::StreamProcessor;
 

@@ -1,23 +1,15 @@
 use crate::core::{AudioFrame, Result, StreamError, StreamOutput};
-use streamlib_macros::StreamProcessor;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use streamlib_macros::StreamProcessor;
 
 // Apple-specific configuration and device types
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct AppleAudioCaptureConfig {
     /// Optional device name or ID to capture from. If None, uses default input device.
     pub device_id: Option<String>,
-}
-
-impl Default for AppleAudioCaptureConfig {
-    fn default() -> Self {
-        Self {
-            device_id: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +28,9 @@ pub struct AppleAudioInputDevice {
     unsafe_send
 )]
 pub struct AppleAudioCaptureProcessor {
-    #[output(description = "Captured mono audio frames in device-native sample rate and buffer size")]
+    #[output(
+        description = "Captured mono audio frames in device-native sample rate and buffer size"
+    )]
     audio: Arc<StreamOutput<AudioFrame<1>>>,
 
     #[config]
@@ -65,8 +59,16 @@ impl AppleAudioCaptureProcessor {
     }
 
     fn teardown(&mut self) -> Result<()> {
-        let device_name = self.device_info.as_ref().map(|d| d.name.as_str()).unwrap_or("Unknown");
-        tracing::info!("AudioCapture {}: Stopping (captured {} frames)", device_name, self.frame_counter.load(Ordering::Relaxed));
+        let device_name = self
+            .device_info
+            .as_ref()
+            .map(|d| d.name.as_str())
+            .unwrap_or("Unknown");
+        tracing::info!(
+            "AudioCapture {}: Stopping (captured {} frames)",
+            device_name,
+            self.frame_counter.load(Ordering::Relaxed)
+        );
 
         // Signal the callback to stop processing
         self.is_capturing.store(false, Ordering::Relaxed);
@@ -84,7 +86,9 @@ impl AppleAudioCaptureProcessor {
             tracing::info!("[AudioCapture] process() called - setting up cpal stream");
             self.setup_stream()?;
             self.stream_setup_done = true;
-            tracing::info!("[AudioCapture] Stream setup complete, cpal callback will now drive audio capture");
+            tracing::info!(
+                "[AudioCapture] Stream setup complete, cpal callback will now drive audio capture"
+            );
             return Ok(());
         }
 
@@ -102,7 +106,12 @@ impl AppleAudioCaptureProcessor {
             // Enumerate all input devices
             let devices: Vec<Device> = host
                 .input_devices()
-                .map_err(|e| StreamError::Configuration(format!("Failed to enumerate audio input devices: {}", e)))?
+                .map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "Failed to enumerate audio input devices: {}",
+                        e
+                    ))
+                })?
                 .collect();
 
             // Try to find device by name
@@ -115,7 +124,12 @@ impl AppleAudioCaptureProcessor {
                         false
                     }
                 })
-                .ok_or_else(|| StreamError::Configuration(format!("Audio input device '{}' not found", device_name_str)))?
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Audio input device '{}' not found",
+                        device_name_str
+                    ))
+                })?
         } else {
             // Use default input device when None
             host.default_input_device()
@@ -127,9 +141,9 @@ impl AppleAudioCaptureProcessor {
             .unwrap_or_else(|_| "Unknown Device".to_string());
 
         // Get device's native configuration
-        let default_config = device
-            .default_input_config()
-            .map_err(|e| StreamError::Configuration(format!("Failed to get audio config: {}", e)))?;
+        let default_config = device.default_input_config().map_err(|e| {
+            StreamError::Configuration(format!("Failed to get audio config: {}", e))
+        })?;
 
         let device_sample_rate = default_config.sample_rate().0;
         let device_channels = default_config.channels();
@@ -181,46 +195,61 @@ impl AppleAudioCaptureProcessor {
                         return;
                     }
 
-                    tracing::debug!("[AudioCapture Callback] Received {} mono samples", data.len());
+                    tracing::debug!(
+                        "[AudioCapture Callback] Received {} mono samples",
+                        data.len()
+                    );
 
                     // Create mono audio frame directly (no conversion needed)
                     let frame_number = frame_counter_clone.fetch_add(1, Ordering::Relaxed);
-                    let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
+                    let timestamp_ns =
+                        crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
                     let frame = AudioFrame::<1>::new(
                         data.to_vec(),
                         timestamp_ns,
                         frame_number,
-                        sample_rate_clone
+                        sample_rate_clone,
                     );
 
                     audio_output_clone.write(frame);
 
-                    tracing::debug!("[AudioCapture Callback] Wrote mono frame {} with {} samples",
-                        frame_number, data.len());
+                    tracing::debug!(
+                        "[AudioCapture Callback] Wrote mono frame {} with {} samples",
+                        frame_number,
+                        data.len()
+                    );
                 },
                 move |err| {
                     tracing::error!("Audio capture error: {}", err);
                 },
                 None,
             )
-            .map_err(|e| StreamError::Configuration(format!("Failed to build audio stream: {}", e)))?;
+            .map_err(|e| {
+                StreamError::Configuration(format!("Failed to build audio stream: {}", e))
+            })?;
 
         tracing::info!("[AudioCapture] Starting stream...");
 
-        stream
-            .play()
-            .map_err(|e| StreamError::Configuration(format!("Failed to start audio stream: {}", e)))?;
+        stream.play().map_err(|e| {
+            StreamError::Configuration(format!("Failed to start audio stream: {}", e))
+        })?;
 
         // Set is_capturing flag to true now that stream is active
         self.is_capturing.store(true, Ordering::Relaxed);
-        tracing::info!("[AudioCapture] Stream active - capturing mono audio at {}Hz", device_sample_rate);
+        tracing::info!(
+            "[AudioCapture] Stream active - capturing mono audio at {}Hz",
+            device_sample_rate
+        );
 
         self.device_info = Some(device_info);
         self._device = Some(device);
         self._stream = Some(stream);
 
-        tracing::info!("[AudioCapture] {} Started - outputting device-native mono frames", device_name);
+        tracing::info!(
+            "[AudioCapture] {} Started - outputting device-native mono frames",
+            device_name
+        );
         Ok(())
     }
 
@@ -229,7 +258,12 @@ impl AppleAudioCaptureProcessor {
         let host = cpal::default_host();
         let devices: Result<Vec<AppleAudioInputDevice>> = host
             .input_devices()
-            .map_err(|e| StreamError::Configuration(format!("Failed to enumerate audio input devices: {}", e)))?
+            .map_err(|e| {
+                StreamError::Configuration(format!(
+                    "Failed to enumerate audio input devices: {}",
+                    e
+                ))
+            })?
             .enumerate()
             .filter_map(|(id, device)| {
                 let name = device.name().ok()?;
@@ -267,13 +301,13 @@ impl AppleAudioCaptureProcessor {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::traits::StreamProcessor;
 
     #[test]
+    #[ignore] // Requires real audio hardware - not available in CI
     fn test_list_devices() {
         let devices = AppleAudioCaptureProcessor::list_devices();
 
@@ -292,15 +326,16 @@ mod tests {
                 );
             }
 
-            assert!(devices.len() > 0, "Expected at least one audio input device");
+            assert!(
+                devices.len() > 0,
+                "Expected at least one audio input device"
+            );
         }
     }
 
     #[test]
     fn test_create_default_device() {
-        let config = AppleAudioCaptureConfig {
-            device_id: None,
-        };
+        let config = AppleAudioCaptureConfig { device_id: None };
 
         let result = AppleAudioCaptureProcessor::from_config(config);
 
@@ -309,7 +344,10 @@ mod tests {
                 println!("Successfully created audio capture processor from config");
             }
             Err(e) => {
-                println!("Note: Could not create audio capture (may require permissions): {}", e);
+                println!(
+                    "Note: Could not create audio capture (may require permissions): {}",
+                    e
+                );
             }
         }
     }

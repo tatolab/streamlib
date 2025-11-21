@@ -1,10 +1,7 @@
-
+use crate::core::{Result, StreamError};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLCommandBuffer, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice,
-};
-use crate::core::{Result, StreamError};
+use objc2_metal::{MTLCommandBuffer, MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice};
 
 pub struct MetalDevice {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
@@ -13,12 +10,16 @@ pub struct MetalDevice {
 
 impl MetalDevice {
     pub fn new() -> Result<Self> {
-        let device =
-            MTLCreateSystemDefaultDevice().ok_or_else(|| StreamError::GpuError("No Metal device available on this system. Metal requires macOS 10.11+ or iOS 8+.".into()))?;
-
-        let command_queue = device.newCommandQueue().ok_or_else(|| {
-            StreamError::GpuError("Failed to create Metal command queue".into())
+        let device = MTLCreateSystemDefaultDevice().ok_or_else(|| {
+            StreamError::GpuError(
+                "No Metal device available on this system. Metal requires macOS 10.11+ or iOS 8+."
+                    .into(),
+            )
         })?;
+
+        let command_queue = device
+            .newCommandQueue()
+            .ok_or_else(|| StreamError::GpuError("Failed to create Metal command queue".into()))?;
 
         Ok(Self {
             device,
@@ -43,9 +44,9 @@ impl MetalDevice {
     }
 
     pub fn create_command_buffer(&self) -> Result<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
-        self.command_queue.commandBuffer().ok_or_else(|| {
-            StreamError::GpuError("Failed to create Metal command buffer".into())
-        })
+        self.command_queue
+            .commandBuffer()
+            .ok_or_else(|| StreamError::GpuError("Failed to create Metal command buffer".into()))
     }
 
     pub fn name(&self) -> String {
@@ -81,6 +82,9 @@ mod tests {
     fn test_command_buffer_creation() {
         let device = MetalDevice::new().expect("Metal device");
         let cmd_buffer = device.create_command_buffer();
-        assert!(cmd_buffer.is_ok(), "Should be able to create command buffer");
+        assert!(
+            cmd_buffer.is_ok(),
+            "Should be able to create command buffer"
+        );
     }
 }

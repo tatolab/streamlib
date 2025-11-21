@@ -22,7 +22,10 @@ fn test_python_executor_returns_error_without_embed_feature() {
     let code = "any code";
     let result = create_processor_from_code(code);
 
-    assert!(result.is_err(), "Should return error without python-embed feature");
+    assert!(
+        result.is_err(),
+        "Should return error without python-embed feature"
+    );
 
     let err = result.unwrap_err();
     let err_msg = format!("{:?}", err);

@@ -3,6 +3,14 @@
 // Foreign function interface declarations for VideoToolbox, CoreMedia, and CoreFoundation.
 // These are the low-level C APIs used for hardware-accelerated video encoding.
 
+// Allow FFI naming conventions and unused code - these match Apple's C API exactly
+#![allow(
+    dead_code,
+    non_snake_case,
+    non_upper_case_globals,
+    clashing_extern_declarations
+)]
+
 use std::ffi::c_void;
 
 pub(super) type OSStatus = i32;
@@ -94,9 +102,7 @@ extern "C" {
         complete_until_presentation_time_stamp: CMTime,
     ) -> OSStatus;
 
-    pub(super) fn VTCompressionSessionInvalidate(
-        session: VTCompressionSessionRef,
-    );
+    pub(super) fn VTCompressionSessionInvalidate(session: VTCompressionSessionRef);
 
     pub(super) fn VTSessionSetProperty(
         session: VTCompressionSessionRef,
@@ -116,18 +122,12 @@ extern "C" {
         destination_buffer: CVPixelBufferRef,
     ) -> OSStatus;
 
-    pub(super) fn VTPixelTransferSessionInvalidate(
-        session: VTPixelTransferSessionRef,
-    );
+    pub(super) fn VTPixelTransferSessionInvalidate(session: VTPixelTransferSessionRef);
 
     // For getting encoded data from CMSampleBuffer
-    pub(super) fn CMSampleBufferGetDataBuffer(
-        sbuf: CMSampleBufferRef,
-    ) -> CMBlockBufferRef;
+    pub(super) fn CMSampleBufferGetDataBuffer(sbuf: CMSampleBufferRef) -> CMBlockBufferRef;
 
-    pub(super) fn CMBlockBufferGetDataLength(
-        the_buffer: CMBlockBufferRef,
-    ) -> usize;
+    pub(super) fn CMBlockBufferGetDataLength(the_buffer: CMBlockBufferRef) -> usize;
 
     pub(super) fn CMBlockBufferCopyDataBytes(
         the_buffer: CMBlockBufferRef,
@@ -268,9 +268,7 @@ extern "C" {
         session: VTDecompressionSessionRef,
     ) -> OSStatus;
 
-    pub(super) fn VTDecompressionSessionInvalidate(
-        session: VTDecompressionSessionRef,
-    );
+    pub(super) fn VTDecompressionSessionInvalidate(session: VTDecompressionSessionRef);
 
     pub(super) fn CMVideoFormatDescriptionCreateFromH264ParameterSets(
         allocator: *const c_void,
@@ -369,16 +367,12 @@ pub(super) unsafe fn create_output_attributes_dict(
     );
 
     let keys = [
-        kCVPixelBufferPixelFormatTypeKey as *const c_void,
-        kCVPixelBufferWidthKey as *const c_void,
-        kCVPixelBufferHeightKey as *const c_void,
+        kCVPixelBufferPixelFormatTypeKey,
+        kCVPixelBufferWidthKey,
+        kCVPixelBufferHeightKey,
     ];
 
-    let values = [
-        pixel_format_num as *const c_void,
-        width_num as *const c_void,
-        height_num as *const c_void,
-    ];
+    let values = [pixel_format_num, width_num, height_num];
 
     let dict = CFDictionaryCreate(
         ptr::null(),
@@ -390,9 +384,9 @@ pub(super) unsafe fn create_output_attributes_dict(
     );
 
     // Release CFNumbers (dictionary retains them)
-    CFRelease(pixel_format_num as *const c_void);
-    CFRelease(width_num as *const c_void);
-    CFRelease(height_num as *const c_void);
+    CFRelease(pixel_format_num);
+    CFRelease(width_num);
+    CFRelease(height_num);
 
     dict
 }

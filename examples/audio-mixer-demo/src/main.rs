@@ -3,13 +3,8 @@
 //! Demonstrates mixing multiple audio streams using AudioMixerProcessor.
 //! Creates three test tones at different frequencies and mixes them into a chord.
 
-use streamlib::{
-    StreamRuntime,
-    ChordGeneratorProcessor, AudioOutputProcessor,
-    Result, AudioFrame,
-};
-use streamlib::core::{ChordGeneratorConfig, AudioOutputConfig};
-
+use streamlib::core::{AudioOutputConfig, ChordGeneratorConfig};
+use streamlib::{AudioFrame, AudioOutputProcessor, ChordGeneratorProcessor, Result, StreamRuntime};
 
 fn main() -> Result<()> {
     // Initialize logging - use DEBUG level for diagnostics
@@ -23,14 +18,12 @@ fn main() -> Result<()> {
     println!("🎛️  Creating audio runtime...");
     let mut runtime = StreamRuntime::new();
 
-
     // Step 2: Add chord generator (now outputs pre-mixed stereo)
     println!("🎹 Adding chord generator (C major chord)...");
     println!("   Generates stereo output with C4 + E4 + G4 pre-mixed");
 
-    let chord_gen = runtime.add_processor_with_config::<ChordGeneratorProcessor>(
-        ChordGeneratorConfig::default()
-    )?;
+    let chord_gen = runtime
+        .add_processor_with_config::<ChordGeneratorProcessor>(ChordGeneratorConfig::default())?;
     println!("   ✅ C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)");
     println!("   ✅ Pre-mixed stereo output on port 'chord'");
     println!("   All 3 tones generated from single synchronized source\n");
@@ -96,11 +89,9 @@ fn main() -> Result<()> {
 
     // Step 5: Add speaker output
     println!("🔊 Adding speaker output...");
-    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
-        AudioOutputConfig {
-            device_id: None, // Use default speaker
-        }
-    )?;
+    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(AudioOutputConfig {
+        device_id: None, // Use default speaker
+    })?;
     println!("   Using default audio device\n");
 
     // Step 6: Connect the audio pipeline using type-safe handles
@@ -173,7 +164,7 @@ fn main() -> Result<()> {
     println!("     └─ Output 'chord' (stereo with all 3 tones mixed)");
     println!("   • ChordGen → Speaker (direct connection, no effects)\n");
     println!("⏰ Clock Synchronization:");
-    
+
     println!("   • All 3 tones generated and mixed in single callback");
     println!("   • Zero mixing overhead - pre-mixed stereo output");
     println!("   • Demonstrates single-output source pattern\n");
@@ -184,10 +175,9 @@ fn main() -> Result<()> {
 
     runtime.start()?;
     runtime.run()?;
-    
 
     println!("\n\n⏹️  Stopping...");
-    
+
     println!("✅ Stopped\n");
 
     Ok(())

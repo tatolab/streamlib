@@ -2,9 +2,9 @@
 //
 // Provides RTP timestamp calculation and sample conversion for WebRTC streaming.
 
-use crate::core::{StreamError, Result};
-use crate::apple::videotoolbox::{EncodedVideoFrame, parse_nal_units};
+use crate::apple::videotoolbox::{parse_nal_units, EncodedVideoFrame};
 use crate::core::streaming::opus::EncodedAudioFrame;
+use crate::core::{Result, StreamError};
 use bytes::Bytes;
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ pub fn convert_video_to_samples(
 
     if nal_units.is_empty() {
         return Err(StreamError::Runtime(
-            "No NAL units found in H.264 frame".into()
+            "No NAL units found in H.264 frame".into(),
         ));
     }
 
@@ -146,5 +146,14 @@ impl RtpTimestampCalculator {
         let elapsed_ns = timestamp_ns - self.start_time_ns;
         let elapsed_ticks = (elapsed_ns as i128 * self.clock_rate as i128) / 1_000_000_000;
         self.rtp_base.wrapping_add(elapsed_ticks as u32)
+    }
+
+    /// Returns the random RTP base timestamp for this calculator.
+    ///
+    /// This is mainly useful for testing to verify that different calculators
+    /// have different random bases (RFC 3550 compliance).
+    #[cfg(test)]
+    pub fn rtp_base(&self) -> u32 {
+        self.rtp_base
     }
 }

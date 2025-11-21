@@ -2,9 +2,8 @@
 // Users import these common names and get the appropriate platform implementation
 #[cfg(target_os = "macos")]
 pub use crate::apple::processors::audio_output::{
+    AppleAudioDevice as AudioDevice, AppleAudioOutputConfig as AudioOutputConfig,
     AppleAudioOutputProcessor as AudioOutputProcessor,
-    AppleAudioOutputConfig as AudioOutputConfig,
-    AppleAudioDevice as AudioDevice,
 };
 
 // Future platform implementations

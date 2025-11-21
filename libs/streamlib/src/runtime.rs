@@ -1,9 +1,15 @@
-use crate::core::{Result, bus::PortMessage};
+use crate::core::{bus::PortMessage, Result};
 
 pub use crate::core::handles::ProcessorHandle;
 
 pub struct StreamRuntime {
     inner: crate::core::StreamRuntime,
+}
+
+impl Default for StreamRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StreamRuntime {

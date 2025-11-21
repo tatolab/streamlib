@@ -183,7 +183,10 @@ struct SimpleVideoProcessor {
 fn test_simple_processor_compiles() {
     // This test verifies that the macro generates valid code
     // In real usage, we'd create an instance: SimpleVideoProcessor::from_config(config)
-    assert!(true, "SimpleVideoProcessor macro expansion compiled successfully");
+    assert!(
+        true,
+        "SimpleVideoProcessor macro expansion compiled successfully"
+    );
 }
 
 // === Test Case 2: Processor with Config Fields ===
@@ -204,7 +207,10 @@ struct ProcessorWithConfig {
 #[test]
 fn test_processor_with_config_compiles() {
     // Macro should auto-generate Config struct with threshold and enabled fields
-    assert!(true, "ProcessorWithConfig macro expansion compiled successfully");
+    assert!(
+        true,
+        "ProcessorWithConfig macro expansion compiled successfully"
+    );
 }
 
 // === Test Case 3: Custom Config Type ===
@@ -228,7 +234,10 @@ struct BlurProcessorWithCustomConfig {
 #[test]
 fn test_custom_config_type_compiles() {
     // Macro should use CustomBlurConfig instead of generating one
-    assert!(true, "BlurProcessorWithCustomConfig macro expansion compiled successfully");
+    assert!(
+        true,
+        "BlurProcessorWithCustomConfig macro expansion compiled successfully"
+    );
 }
 
 // === Test Case 4: Custom Port Names and Descriptions ===
@@ -239,7 +248,11 @@ fn test_custom_config_type_compiles() {
     usage = "Connect video input, adjust settings, connect output"
 )]
 struct CustomizedProcessor {
-    #[input(name = "main_input", description = "Primary video input", required = true)]
+    #[input(
+        name = "main_input",
+        description = "Primary video input",
+        required = true
+    )]
     video_in: StreamInput<VideoFrame>,
 
     #[output(name = "main_output", description = "Processed video output")]
@@ -251,7 +264,10 @@ struct CustomizedProcessor {
 #[test]
 fn test_customized_ports_compiles() {
     // Macro should use custom names and descriptions
-    assert!(true, "CustomizedProcessor macro expansion compiled successfully");
+    assert!(
+        true,
+        "CustomizedProcessor macro expansion compiled successfully"
+    );
 }
 
 // === Test Case 5: Audio Processor (Auto-Detect Audio Requirements) ===
@@ -271,7 +287,10 @@ struct AudioMixerProcessor {
 #[test]
 fn test_audio_processor_compiles() {
     // Macro should auto-detect audio ports and add AudioRequirements::default()
-    assert!(true, "AudioMixerProcessor macro expansion compiled successfully");
+    assert!(
+        true,
+        "AudioMixerProcessor macro expansion compiled successfully"
+    );
 }
 
 // === Test Case 6: Full Control (All Attributes) ===
@@ -314,7 +333,10 @@ struct AdvancedProcessor {
 #[test]
 fn test_advanced_processor_compiles() {
     // This tests the most complex case with all features
-    assert!(true, "AdvancedProcessor macro expansion compiled successfully");
+    assert!(
+        true,
+        "AdvancedProcessor macro expansion compiled successfully"
+    );
 }
 
 // === Test Case 7: Data Processor (Non-Video/Audio) ===
@@ -350,7 +372,10 @@ struct SourceProcessor {
 fn test_source_processor_compiles() {
     // Macro should detect source processor (no inputs)
     // Auto-generated description should include "source"
-    assert!(true, "SourceProcessor macro expansion compiled successfully");
+    assert!(
+        true,
+        "SourceProcessor macro expansion compiled successfully"
+    );
 }
 
 // === Test Case 9: Sink Processor (Input Only) ===

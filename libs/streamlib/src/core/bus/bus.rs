@@ -1,10 +1,9 @@
-
+use super::connection::{OwnedConsumer, OwnedProducer};
 use super::connection_manager::ConnectionManager;
-use super::connection::{OwnedProducer, OwnedConsumer};
 use super::ports::{PortAddress, PortMessage};
 use crate::core::Result;
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 pub struct Bus {
     manager: Arc<RwLock<ConnectionManager>>,
@@ -25,7 +24,9 @@ impl Bus {
         dest: PortAddress,
         capacity: usize,
     ) -> Result<(OwnedProducer<T>, OwnedConsumer<T>)> {
-        self.manager.write().create_connection(source, dest, capacity)
+        self.manager
+            .write()
+            .create_connection(source, dest, capacity)
     }
 
     /// Disconnect a connection by ID

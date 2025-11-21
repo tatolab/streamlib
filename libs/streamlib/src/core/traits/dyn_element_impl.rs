@@ -1,8 +1,8 @@
 use super::{DynStreamElement, StreamProcessor};
-use crate::core::Result;
-use crate::core::schema::ProcessorDescriptor;
 use crate::core::runtime::WakeupEvent;
+use crate::core::schema::ProcessorDescriptor;
 use crate::core::traits::ElementType;
+use crate::core::Result;
 use std::sync::Arc;
 
 /// Blanket implementation of DynStreamElement for all StreamProcessor types.
@@ -14,12 +14,10 @@ where
     T: StreamProcessor,
 {
     fn __generated_setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        use crate::core::traits::StreamElement;
         self.__generated_setup(ctx)
     }
 
     fn __generated_teardown(&mut self) -> Result<()> {
-        use crate::core::traits::StreamElement;
         self.__generated_teardown()
     }
 
@@ -31,7 +29,11 @@ where
         self.process()
     }
 
-    fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<WakeupEvent>) {
+    fn set_output_wakeup(
+        &mut self,
+        port_name: &str,
+        wakeup_tx: crossbeam_channel::Sender<WakeupEvent>,
+    ) {
         self.set_output_wakeup(port_name, wakeup_tx)
     }
 
@@ -71,19 +73,35 @@ where
         self.get_input_port_type(port_name)
     }
 
-    fn wire_output_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+    fn wire_output_connection(
+        &mut self,
+        port_name: &str,
+        connection: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> bool {
         self.wire_output_connection(port_name, connection)
     }
 
-    fn wire_input_connection(&mut self, port_name: &str, connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+    fn wire_input_connection(
+        &mut self,
+        port_name: &str,
+        connection: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> bool {
         self.wire_input_connection(port_name, connection)
     }
 
-    fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
+    fn wire_output_producer(
+        &mut self,
+        port_name: &str,
+        producer: Box<dyn std::any::Any + Send>,
+    ) -> bool {
         self.wire_output_producer(port_name, producer)
     }
 
-    fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
+    fn wire_input_consumer(
+        &mut self,
+        port_name: &str,
+        consumer: Box<dyn std::any::Any + Send>,
+    ) -> bool {
         self.wire_input_consumer(port_name, consumer)
     }
 }

@@ -1,4 +1,3 @@
-
 use std::f64::consts::PI;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -290,10 +289,10 @@ mod tests {
     #[test]
     fn test_envelope_adsr() {
         let mut env = ParameterModulator::envelope(
-            0.1,  // attack
-            0.2,  // decay
-            0.7,  // sustain
-            0.3,  // release
+            0.1, // attack
+            0.2, // decay
+            0.7, // sustain
+            0.3, // release
         );
 
         assert_eq!(env.sample(0.0), 0.0);

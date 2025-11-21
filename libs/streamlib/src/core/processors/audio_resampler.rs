@@ -1,9 +1,11 @@
-use crate::core::{Result, StreamError, StreamInput, StreamOutput};
 use crate::core::frames::AudioFrame;
-use serde::{Serialize, Deserialize};
+use crate::core::{Result, StreamError, StreamInput, StreamOutput};
+use rubato::{
+    Resampler, SincFixedOut, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
-use rubato::{Resampler, SincFixedOut, SincInterpolationType, SincInterpolationParameters, WindowFunction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResamplingQuality {
@@ -134,7 +136,10 @@ impl AudioResamplerProcessor {
                         params,
                         output_chunk_size,
                         1, // mono channel
-                    ).map_err(|e| StreamError::Configuration(format!("Failed to create resampler: {}", e)))?;
+                    )
+                    .map_err(|e| {
+                        StreamError::Configuration(format!("Failed to create resampler: {}", e))
+                    })?;
 
                     self.resampler = Some(resampler);
                 } else {
@@ -174,7 +179,10 @@ impl AudioResamplerProcessor {
                     Ok(waves_out) => waves_out[0].clone(),
                     Err(e) => {
                         tracing::error!("[AudioResampler] Resampling failed: {}", e);
-                        return Err(StreamError::Configuration(format!("Resampling failed: {}", e)));
+                        return Err(StreamError::Configuration(format!(
+                            "Resampling failed: {}",
+                            e
+                        )));
                     }
                 }
             } else {
@@ -187,7 +195,7 @@ impl AudioResamplerProcessor {
                 output_samples,
                 input_frame.timestamp_ns,
                 self.frame_counter,
-                self.output_sample_rate
+                self.output_sample_rate,
             );
 
             self.audio_out.write(output_frame);

@@ -1,5 +1,5 @@
 use crate::core::{Result, StreamInput, StreamOutput, VideoFrame};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 

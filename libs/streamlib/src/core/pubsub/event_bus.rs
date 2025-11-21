@@ -18,7 +18,7 @@ const _: () = {
 };
 
 /// Global event bus singleton - accessible from anywhere
-pub static EVENT_BUS: LazyLock<EventBus> = LazyLock::new(|| EventBus::new());
+pub static EVENT_BUS: LazyLock<EventBus> = LazyLock::new(EventBus::new);
 
 /// Lock-free event bus with parallel dispatch
 ///
@@ -31,6 +31,12 @@ pub struct EventBus {
     /// DashMap provides lock-free concurrent HashMap
     /// Weak refs allow listeners to be dropped without explicit unsubscribe
     topics: DashMap<String, Vec<Weak<Mutex<dyn EventListener>>>>,
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EventBus {
@@ -52,7 +58,7 @@ impl EventBus {
         let weak_listener = Arc::downgrade(&listener);
         self.topics
             .entry(topic.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(weak_listener);
     }
 
@@ -72,8 +78,16 @@ impl EventBus {
     /// ```
     pub fn publish(&self, topic: &str, event: &Event) {
         if let Some(subscribers) = self.topics.get(topic) {
-            eprintln!("[EVENT_BUS] Publishing to topic '{}', {} subscribers registered", topic, subscribers.len());
-            tracing::info!("EVENT_BUS: Publishing to topic '{}', {} subscribers registered", topic, subscribers.len());
+            eprintln!(
+                "[EVENT_BUS] Publishing to topic '{}', {} subscribers registered",
+                topic,
+                subscribers.len()
+            );
+            tracing::info!(
+                "EVENT_BUS: Publishing to topic '{}', {} subscribers registered",
+                topic,
+                subscribers.len()
+            );
 
             // Share event via Arc to avoid cloning for each listener
             let event = Arc::new(event.clone());
@@ -88,8 +102,14 @@ impl EventBus {
                 }
             }
 
-            eprintln!("[EVENT_BUS]   - {} live listeners (weak refs upgraded successfully)", live_listeners.len());
-            tracing::info!("EVENT_BUS: {} live listeners (weak refs upgraded successfully)", live_listeners.len());
+            eprintln!(
+                "[EVENT_BUS]   - {} live listeners (weak refs upgraded successfully)",
+                live_listeners.len()
+            );
+            tracing::info!(
+                "EVENT_BUS: {} live listeners (weak refs upgraded successfully)",
+                live_listeners.len()
+            );
 
             // Dispatch in parallel to all listeners
             // Each listener gets its own rayon task
@@ -104,8 +124,12 @@ impl EventBus {
                             tracing::info!("EVENT_BUS: Calling on_event for listener");
                             let _ = guard.on_event(&event);
                         } else {
-                            eprintln!("[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)");
-                            tracing::warn!("EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)");
+                            eprintln!(
+                                "[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)"
+                            );
+                            tracing::warn!(
+                                "EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)"
+                            );
                         }
                     });
                 }
@@ -178,10 +202,13 @@ mod tests {
         bus.subscribe("processor:video", video_listener);
 
         // Publish to audio topic
-        bus.publish("processor:audio", &Event::ProcessorEvent {
-            processor_id: "audio".to_string(),
-            event: super::super::events::ProcessorEvent::Started,
-        });
+        bus.publish(
+            "processor:audio",
+            &Event::ProcessorEvent {
+                processor_id: "audio".to_string(),
+                event: super::super::events::ProcessorEvent::Started,
+            },
+        );
 
         // Rayon scope ensures all tasks complete before returning
         // Only audio subscriber receives
@@ -204,9 +231,10 @@ mod tests {
         bus.subscribe("runtime:global", listener2);
 
         // Publish to runtime:global
-        bus.publish("runtime:global", &Event::RuntimeGlobal(
-            super::super::events::RuntimeEvent::RuntimeStart
-        ));
+        bus.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(super::super::events::RuntimeEvent::RuntimeStart),
+        );
 
         // Both subscribers receive (rayon scope ensures completion)
         assert_eq!(listener1_concrete.lock().count(), 1);
@@ -219,10 +247,13 @@ mod tests {
 
         // Publish to a topic that has never been subscribed to
         // Should not panic, should not error, just fire-and-forget
-        bus.publish("foo", &Event::Custom {
-            topic: "foo".to_string(),
-            data: serde_json::json!({"test": "data"}),
-        });
+        bus.publish(
+            "foo",
+            &Event::Custom {
+                topic: "foo".to_string(),
+                data: serde_json::json!({"test": "data"}),
+            },
+        );
 
         // If we get here without panicking, test passes
     }
@@ -232,10 +263,13 @@ mod tests {
         let bus = EventBus::new();
 
         // Publish first message with no subscribers
-        bus.publish("bar", &Event::Custom {
-            topic: "bar".to_string(),
-            data: serde_json::json!({"message": "first"}),
-        });
+        bus.publish(
+            "bar",
+            &Event::Custom {
+                topic: "bar".to_string(),
+                data: serde_json::json!({"message": "first"}),
+            },
+        );
 
         // Now subscribe
         let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
@@ -246,10 +280,13 @@ mod tests {
         assert_eq!(listener_concrete.lock().count(), 0);
 
         // Publish second message
-        bus.publish("bar", &Event::Custom {
-            topic: "bar".to_string(),
-            data: serde_json::json!({"message": "second"}),
-        });
+        bus.publish(
+            "bar",
+            &Event::Custom {
+                topic: "bar".to_string(),
+                data: serde_json::json!({"message": "second"}),
+            },
+        );
 
         // Subscriber should receive second message only
         assert_eq!(listener_concrete.lock().count(), 1);
@@ -279,10 +316,13 @@ mod tests {
         bus.subscribe("broadcast", listener5);
 
         // Publish one message
-        bus.publish("broadcast", &Event::Custom {
-            topic: "broadcast".to_string(),
-            data: serde_json::json!({"value": 42}),
-        });
+        bus.publish(
+            "broadcast",
+            &Event::Custom {
+                topic: "broadcast".to_string(),
+                data: serde_json::json!({"value": 42}),
+            },
+        );
 
         // All 5 subscribers should receive the message (parallel dispatch)
         assert_eq!(listener1_concrete.lock().count(), 1);
@@ -304,10 +344,13 @@ mod tests {
         drop(listener_concrete);
 
         // Publishing should not panic and should clean up the dead listener
-        bus.publish("test", &Event::Custom {
-            topic: "test".to_string(),
-            data: serde_json::json!({"value": 1}),
-        });
+        bus.publish(
+            "test",
+            &Event::Custom {
+                topic: "test".to_string(),
+                data: serde_json::json!({"value": 1}),
+            },
+        );
 
         // If we get here without panicking, test passes
     }

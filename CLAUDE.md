@@ -63,6 +63,40 @@ Examples are **standalone applications** demonstrating StreamLib usage:
 
 Examples also serve as **integration tests** - they must compile and run successfully.
 
+## Development Setup
+
+### Git Hooks (Lefthook)
+
+The project uses [lefthook](https://github.com/evilmartians/lefthook) for automated code quality checks:
+
+**Installation**:
+```bash
+# Install lefthook (if not already installed)
+brew install lefthook  # macOS
+# or: cargo install lefthook
+
+# Install git hooks
+lefthook install
+```
+
+**Hooks**:
+- **pre-commit**:
+  - `cargo fmt --check` - Verify formatting
+  - `cargo check` - Fast compilation check
+- **pre-push** (runs sequentially):
+  1. `cargo check` - Ensure code compiles
+  2. `cargo clippy` - Linting with strict warnings
+  3. `cargo test --lib` - Run library tests
+  4. Example builds - Verify examples compile
+
+**Skip hooks** (when needed):
+```bash
+LEFTHOOK=0 git commit  # Skip pre-commit
+LEFTHOOK=0 git push    # Skip pre-push
+```
+
+Configuration: `.lefthook.yml`
+
 ## Quick Start Commands
 
 ### Building

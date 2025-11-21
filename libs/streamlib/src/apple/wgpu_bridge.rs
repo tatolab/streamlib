@@ -1,12 +1,11 @@
-
 use crate::{Result, StreamError};
+use metal;
+use metal::foreign_types::ForeignTypeRef;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLTexture};
 use wgpu;
 use wgpu::hal;
-use metal;
-use metal::foreign_types::ForeignTypeRef;
 
 pub struct WgpuBridge {
     metal_device: Retained<ProtocolObject<dyn MTLDevice>>,
@@ -39,16 +38,15 @@ impl WgpuBridge {
         let height = metal_texture.height();
 
         let metal_texture_ptr = metal_texture as *const _ as *mut std::ffi::c_void;
-        let metal_crate_texture = unsafe {
-            metal::TextureRef::from_ptr(metal_texture_ptr as *mut _)
-        }.to_owned();
+        let metal_crate_texture =
+            unsafe { metal::TextureRef::from_ptr(metal_texture_ptr as *mut _) }.to_owned();
 
         let hal_texture = hal::metal::Device::texture_from_raw(
             metal_crate_texture,
             format,
             metal::MTLTextureType::D2,
-            1,  // array_layers
-            1,  // mip_levels
+            1, // array_layers
+            1, // mip_levels
             hal::CopyExtent {
                 width: width as u32,
                 height: height as u32,
@@ -99,9 +97,7 @@ impl WgpuBridge {
     ) -> Result<metal::Texture> {
         let metal_texture = wgpu_texture.as_hal::<hal::api::Metal, _, _>(|hal_texture_opt| {
             hal_texture_opt
-                .map(|hal_texture| {
-                    hal_texture.raw_handle().to_owned()
-                })
+                .map(|hal_texture| hal_texture.raw_handle().to_owned())
                 .ok_or_else(|| {
                     StreamError::GpuError("Failed to get HAL texture from WebGPU texture".into())
                 })
@@ -117,9 +113,6 @@ impl WgpuBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::apple::iosurface::{create_iosurface, PixelFormat, create_metal_texture_from_iosurface};
-
     // Note: WgpuBridge tests have been removed because they relied on an old `new()` API
     // that no longer exists. The current API uses `from_shared_device()` which requires
     // a wgpu::Device and wgpu::Queue that are complex to set up in unit tests.

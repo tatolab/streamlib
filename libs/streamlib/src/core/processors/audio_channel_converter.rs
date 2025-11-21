@@ -1,23 +1,18 @@
-use crate::core::{Result, StreamInput, StreamOutput};
 use crate::core::frames::AudioFrame;
-use serde::{Serialize, Deserialize};
+use crate::core::{Result, StreamInput, StreamOutput};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ChannelConversionMode {
     /// Duplicate mono signal to both left and right channels
+    #[default]
     Duplicate,
     /// Place mono signal only in left channel, silence right
     LeftOnly,
     /// Place mono signal only in right channel, silence left
     RightOnly,
-}
-
-impl Default for ChannelConversionMode {
-    fn default() -> Self {
-        ChannelConversionMode::Duplicate
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,19 +71,25 @@ impl AudioChannelConverterProcessor {
             let stereo_samples: Vec<f32> = match self.config.mode {
                 ChannelConversionMode::Duplicate => {
                     // Duplicate each mono sample to both L and R channels
-                    input_frame.samples.iter()
+                    input_frame
+                        .samples
+                        .iter()
                         .flat_map(|&sample| [sample, sample])
                         .collect()
                 }
                 ChannelConversionMode::LeftOnly => {
                     // Place mono signal in left channel, silence in right
-                    input_frame.samples.iter()
+                    input_frame
+                        .samples
+                        .iter()
                         .flat_map(|&sample| [sample, 0.0])
                         .collect()
                 }
                 ChannelConversionMode::RightOnly => {
                     // Silence in left channel, mono signal in right
-                    input_frame.samples.iter()
+                    input_frame
+                        .samples
+                        .iter()
                         .flat_map(|&sample| [0.0, sample])
                         .collect()
                 }
@@ -99,13 +100,16 @@ impl AudioChannelConverterProcessor {
                 stereo_samples,
                 input_frame.timestamp_ns,
                 self.frame_counter,
-                input_frame.sample_rate
+                input_frame.sample_rate,
             );
 
             self.audio_out.write(output_frame);
             self.frame_counter += 1;
 
-            tracing::debug!("[AudioChannelConverter] Processed frame {}", self.frame_counter);
+            tracing::debug!(
+                "[AudioChannelConverter] Processed frame {}",
+                self.frame_counter
+            );
         }
 
         Ok(())

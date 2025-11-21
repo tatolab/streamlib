@@ -1,3 +1,7 @@
+//! Python decorators for StreamLib processors
+//!
+//! Clippy false positive: useless_conversion warnings are from PyO3 macro expansion
+#![allow(clippy::useless_conversion)]
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -30,18 +34,16 @@ pub struct ProcessorProxy {
 
 impl Clone for ProcessorProxy {
     fn clone(&self) -> Self {
-        Python::with_gil(|py| {
-            Self {
-                processor_name: self.processor_name.clone(),
-                processor_type: self.processor_type.clone(),
-                config: self.config.as_ref().map(|c| c.clone_ref(py)),
-                python_class: self.python_class.as_ref().map(|c| c.clone_ref(py)),
-                input_port_names: self.input_port_names.clone(),
-                output_port_names: self.output_port_names.clone(),
-                description: self.description.clone(),
-                usage_context: self.usage_context.clone(),
-                tags: self.tags.clone(),
-            }
+        Python::with_gil(|py| Self {
+            processor_name: self.processor_name.clone(),
+            processor_type: self.processor_type.clone(),
+            config: self.config.as_ref().map(|c| c.clone_ref(py)),
+            python_class: self.python_class.as_ref().map(|c| c.clone_ref(py)),
+            input_port_names: self.input_port_names.clone(),
+            output_port_names: self.output_port_names.clone(),
+            description: self.description.clone(),
+            usage_context: self.usage_context.clone(),
+            tags: self.tags.clone(),
         })
     }
 }
@@ -150,12 +152,10 @@ def _make_decorator(description, usage_context, tags, ProcessorProxy):
     locals.set_item("ProcessorProxy", &proxy_class)?;
 
     py.run_bound(decorator_code, None, Some(&locals))?;
-    let decorator = locals.get_item("_make_decorator")?.unwrap().call((
-        description,
-        usage_context,
-        tags,
-        &proxy_class,
-    ), None)?;
+    let decorator = locals
+        .get_item("_make_decorator")?
+        .unwrap()
+        .call((description, usage_context, tags, &proxy_class), None)?;
 
     Ok(decorator.into())
 }

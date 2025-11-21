@@ -1,14 +1,13 @@
-
 pub mod arkit;
 pub mod audio_utils;
 pub mod iosurface;
-pub mod pixel_transfer;
 pub mod media_clock;
 pub mod metal;
+pub mod pixel_transfer;
 pub mod texture;
-pub mod wgpu_bridge;
 pub mod videotoolbox;
 pub mod webrtc;
+pub mod wgpu_bridge;
 
 pub mod processors;
 
@@ -25,32 +24,31 @@ pub mod thread_priority;
 
 pub mod display_link;
 
-
 pub use metal::MetalDevice;
-pub use wgpu_bridge::WgpuBridge;
 pub use pixel_transfer::PixelTransferSession;
+pub use wgpu_bridge::WgpuBridge;
 
 pub use processors::{
+    AppleAudioCaptureProcessor,
+    AppleAudioOutputProcessor,
     // Sources
     AppleCameraProcessor,
-    AppleAudioCaptureProcessor,
     // Sinks
     AppleDisplayProcessor,
-    AppleAudioOutputProcessor,
     AppleMp4WriterProcessor,
-    // WebRTC WHIP processor:
-    WebRtcWhipProcessor,
-    WebRtcWhipConfig,
+    WebRtcWhepConfig,
     // WebRTC WHEP processor:
     WebRtcWhepProcessor,
-    WebRtcWhepConfig,
+    WebRtcWhipConfig,
+    // WebRTC WHIP processor:
+    WebRtcWhipProcessor,
 };
 
 // Re-export webrtc types
-pub use webrtc::{WhipClient, WhipConfig, WhepClient, WhepConfig, WebRtcSession};
+pub use webrtc::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
 // Re-export videotoolbox types (VideoEncoderConfig and H264Profile now come from videotoolbox module)
-pub use videotoolbox::{VideoCodec, H264Profile, VideoEncoderConfig, VideoToolboxEncoder};
+pub use videotoolbox::{H264Profile, VideoCodec, VideoEncoderConfig, VideoToolboxEncoder};
 
 #[cfg(test)]
 mod tests {

@@ -1,22 +1,17 @@
-
-use pyo3::prelude::*;
-use crate::core::{
-    StreamProcessor, StreamElement, ElementType, Result,
-    StreamInput, StreamOutput, VideoFrame, AudioFrame, DataFrame, GpuContext, RuntimeContext,
-    ProcessorDescriptor, PortDescriptor, SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
-};
 use super::types_ext::{
-    PyStreamInput, PyStreamOutput,
-    PyStreamInputAudio1, PyStreamOutputAudio1,
-    PyStreamInputAudio2, PyStreamOutputAudio2,
-    PyStreamInputAudio4, PyStreamOutputAudio4,
-    PyStreamInputAudio6, PyStreamOutputAudio6,
-    PyStreamInputAudio8, PyStreamOutputAudio8,
-    PyStreamInputData, PyStreamOutputData,
-    PyGpuContext, PyRuntimeContext
+    PyGpuContext, PyRuntimeContext, PyStreamInput, PyStreamInputAudio1, PyStreamInputAudio2,
+    PyStreamInputAudio4, PyStreamInputAudio6, PyStreamInputAudio8, PyStreamInputData,
+    PyStreamOutput, PyStreamOutputAudio1, PyStreamOutputAudio2, PyStreamOutputAudio4,
+    PyStreamOutputAudio6, PyStreamOutputAudio8, PyStreamOutputData,
 };
-use std::sync::Arc;
+use crate::core::{
+    AudioFrame, DataFrame, ElementType, GpuContext, PortDescriptor, ProcessorDescriptor, Result,
+    RuntimeContext, StreamElement, StreamInput, StreamOutput, StreamProcessor, VideoFrame,
+    SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE, SCHEMA_VIDEO_FRAME,
+};
+use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Metadata about a port - tells us what type of port the Python processor expects.
 /// We don't store actual Rust ports here - those are created on-demand during wiring.
@@ -32,7 +27,7 @@ pub struct PortMetadata {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrameType {
     Video,
-    Audio(usize),  // number of channels
+    Audio(usize), // number of channels
     Data,
 }
 
@@ -47,19 +42,24 @@ impl FrameType {
             Ok(FrameType::Data)
         } else if s.starts_with("AudioFrame<") && s.ends_with(">") {
             // Parse "AudioFrame<2>" -> 2
-            let channels_str = &s[11..s.len()-1];
-            let channels = channels_str.parse::<usize>()
-                .map_err(|_| StreamError::Configuration(format!("Invalid audio channels: {}", channels_str)))?;
+            let channels_str = &s[11..s.len() - 1];
+            let channels = channels_str.parse::<usize>().map_err(|_| {
+                StreamError::Configuration(format!("Invalid audio channels: {}", channels_str))
+            })?;
 
             // Validate supported channel counts (1, 2, 4, 6, 8)
             match channels {
                 1 | 2 | 4 | 6 | 8 => Ok(FrameType::Audio(channels)),
                 _ => Err(StreamError::Configuration(format!(
-                    "Unsupported audio channel count: {}. Supported: 1, 2, 4, 6, 8", channels
-                )))
+                    "Unsupported audio channel count: {}. Supported: 1, 2, 4, 6, 8",
+                    channels
+                ))),
             }
         } else {
-            Err(StreamError::Configuration(format!("Unknown frame type: {}", s)))
+            Err(StreamError::Configuration(format!(
+                "Unknown frame type: {}",
+                s
+            )))
         }
     }
 
@@ -105,7 +105,9 @@ impl Clone for PythonProcessorConfig {
 // This is fine - they're dynamically created from decorators, not loaded from config files
 impl Serialize for PythonProcessorConfig {
     fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         Err(serde::ser::Error::custom(
             "PythonProcessorConfig cannot be serialized - Python processors are created dynamically"
         ))
@@ -114,7 +116,9 @@ impl Serialize for PythonProcessorConfig {
 
 impl<'de> Deserialize<'de> for PythonProcessorConfig {
     fn deserialize<D>(_deserializer: D) -> std::result::Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
+    where
+        D: serde::Deserializer<'de>,
+    {
         Err(serde::de::Error::custom(
             "PythonProcessorConfig cannot be deserialized - Python processors are created dynamically"
         ))
@@ -123,16 +127,14 @@ impl<'de> Deserialize<'de> for PythonProcessorConfig {
 
 impl Default for PythonProcessorConfig {
     fn default() -> Self {
-        Python::with_gil(|py| {
-            Self {
-                python_class: py.None(),
-                name: String::new(),
-                input_metadata: Vec::new(),
-                output_metadata: Vec::new(),
-                description: None,
-                usage_context: None,
-                tags: Vec::new(),
-            }
+        Python::with_gil(|py| Self {
+            python_class: py.None(),
+            name: String::new(),
+            input_metadata: Vec::new(),
+            output_metadata: Vec::new(),
+            description: None,
+            usage_context: None,
+            tags: Vec::new(),
         })
     }
 }
@@ -170,7 +172,10 @@ impl PythonProcessor {
     }
 
     /// Discover input ports from Python class decorated with @video_input, @audio_input, etc.
-    fn discover_input_ports<'py>(_py: Python<'py>, python_class: &pyo3::Bound<'py, PyAny>) -> Result<Vec<PortMetadata>> {
+    fn discover_input_ports<'py>(
+        _py: Python<'py>,
+        python_class: &pyo3::Bound<'py, PyAny>,
+    ) -> Result<Vec<PortMetadata>> {
         use crate::core::StreamError;
 
         match python_class.getattr("__streamlib_inputs__") {
@@ -180,19 +185,28 @@ impl PythonProcessor {
 
                 if let Ok(dict) = inputs_dict.downcast::<pyo3::types::PyDict>() {
                     for (name, metadata) in dict.iter() {
-                        let port_name = name.extract::<String>()
-                            .map_err(|e| StreamError::Configuration(format!("Invalid port name: {}", e)))?;
+                        let port_name = name.extract::<String>().map_err(|e| {
+                            StreamError::Configuration(format!("Invalid port name: {}", e))
+                        })?;
 
                         // Extract metadata fields
-                        let frame_type_str = metadata.getattr("frame_type")
+                        let frame_type_str = metadata
+                            .getattr("frame_type")
                             .and_then(|v| v.extract::<String>())
-                            .map_err(|e| StreamError::Configuration(format!("Missing or invalid frame_type for port '{}': {}", port_name, e)))?;
+                            .map_err(|e| {
+                                StreamError::Configuration(format!(
+                                    "Missing or invalid frame_type for port '{}': {}",
+                                    port_name, e
+                                ))
+                            })?;
 
-                        let description = metadata.getattr("description")
+                        let description = metadata
+                            .getattr("description")
                             .and_then(|v| v.extract::<String>())
                             .unwrap_or_else(|_| format!("Input port '{}'", port_name));
 
-                        let required = metadata.getattr("required")
+                        let required = metadata
+                            .getattr("required")
                             .and_then(|v| v.extract::<bool>())
                             .unwrap_or(true);
 
@@ -218,7 +232,10 @@ impl PythonProcessor {
     }
 
     /// Discover output ports from Python class decorated with @video_output, @audio_output, etc.
-    fn discover_output_ports<'py>(_py: Python<'py>, python_class: &pyo3::Bound<'py, PyAny>) -> Result<Vec<PortMetadata>> {
+    fn discover_output_ports<'py>(
+        _py: Python<'py>,
+        python_class: &pyo3::Bound<'py, PyAny>,
+    ) -> Result<Vec<PortMetadata>> {
         use crate::core::StreamError;
 
         match python_class.getattr("__streamlib_outputs__") {
@@ -228,19 +245,28 @@ impl PythonProcessor {
 
                 if let Ok(dict) = outputs_dict.downcast::<pyo3::types::PyDict>() {
                     for (name, metadata) in dict.iter() {
-                        let port_name = name.extract::<String>()
-                            .map_err(|e| StreamError::Configuration(format!("Invalid port name: {}", e)))?;
+                        let port_name = name.extract::<String>().map_err(|e| {
+                            StreamError::Configuration(format!("Invalid port name: {}", e))
+                        })?;
 
                         // Extract metadata fields
-                        let frame_type_str = metadata.getattr("frame_type")
+                        let frame_type_str = metadata
+                            .getattr("frame_type")
                             .and_then(|v| v.extract::<String>())
-                            .map_err(|e| StreamError::Configuration(format!("Missing or invalid frame_type for port '{}': {}", port_name, e)))?;
+                            .map_err(|e| {
+                                StreamError::Configuration(format!(
+                                    "Missing or invalid frame_type for port '{}': {}",
+                                    port_name, e
+                                ))
+                            })?;
 
-                        let description = metadata.getattr("description")
+                        let description = metadata
+                            .getattr("description")
                             .and_then(|v| v.extract::<String>())
                             .unwrap_or_else(|_| format!("Output port '{}'", port_name));
 
-                        let required = metadata.getattr("required")
+                        let required = metadata
+                            .getattr("required")
                             .and_then(|v| v.extract::<bool>())
                             .unwrap_or(false);
 
@@ -306,7 +332,9 @@ impl PythonProcessor {
     pub fn get_descriptor(&self) -> ProcessorDescriptor {
         let mut descriptor = ProcessorDescriptor::new(
             &self.name,
-            self.description.as_deref().unwrap_or("Custom Python processor")
+            self.description
+                .as_deref()
+                .unwrap_or("Custom Python processor"),
         );
 
         if let Some(usage) = &self.usage_context {
@@ -347,7 +375,10 @@ impl StreamElement for PythonProcessor {
 
     fn element_type(&self) -> ElementType {
         // Determine from metadata
-        match (self.input_metadata.is_empty(), self.output_metadata.is_empty()) {
+        match (
+            self.input_metadata.is_empty(),
+            self.output_metadata.is_empty(),
+        ) {
             (false, true) => ElementType::Sink,
             (true, false) => ElementType::Source,
             _ => ElementType::Transform,
@@ -366,71 +397,98 @@ impl StreamElement for PythonProcessor {
 
         Python::with_gil(|py| -> Result<()> {
             // Instantiate Python class
-            self.python_instance = Some(
-                self.python_class.call0(py)
-                    .map_err(|e| StreamError::Configuration(format!("Failed to instantiate Python processor: {}", e)))?
-            );
+            self.python_instance = Some(self.python_class.call0(py).map_err(|e| {
+                StreamError::Configuration(format!("Failed to instantiate Python processor: {}", e))
+            })?);
 
             let instance = self.python_instance.as_ref().unwrap();
 
             // Inject GPU context
-            let py_gpu_context = Py::new(py, PyGpuContext::from_rust(gpu_context))
-                .map_err(|e| StreamError::Configuration(format!("Failed to create GPU context wrapper: {}", e)))?;
-            instance.setattr(py, "_gpu_context", &py_gpu_context)
-                .map_err(|e| StreamError::Configuration(format!("Failed to inject GPU context: {}", e)))?;
+            let py_gpu_context =
+                Py::new(py, PyGpuContext::from_rust(gpu_context)).map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "Failed to create GPU context wrapper: {}",
+                        e
+                    ))
+                })?;
+            instance
+                .setattr(py, "_gpu_context", &py_gpu_context)
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Failed to inject GPU context: {}", e))
+                })?;
 
             // Inject gpu_context() accessor method
             let setup_code = r#"
 def gpu_context(self):
     return self._gpu_context
 "#;
-            let module = py.import_bound("types")
-                .map_err(|e| StreamError::Configuration(format!("Failed to import types module: {}", e)))?;
-            let method_type = module.getattr("MethodType")
-                .map_err(|e| StreamError::Configuration(format!("Failed to get MethodType: {}", e)))?;
+            let module = py.import_bound("types").map_err(|e| {
+                StreamError::Configuration(format!("Failed to import types module: {}", e))
+            })?;
+            let method_type = module.getattr("MethodType").map_err(|e| {
+                StreamError::Configuration(format!("Failed to get MethodType: {}", e))
+            })?;
 
             let locals = pyo3::types::PyDict::new_bound(py);
-            py.run_bound(setup_code, None, Some(&locals))
-                .map_err(|e| StreamError::Configuration(format!("Failed to define gpu_context method: {}", e)))?;
+            py.run_bound(setup_code, None, Some(&locals)).map_err(|e| {
+                StreamError::Configuration(format!("Failed to define gpu_context method: {}", e))
+            })?;
 
-            let func = locals.get_item("gpu_context")
-                .map_err(|e| StreamError::Configuration(format!("Failed to get gpu_context: {}", e)))?
-                .ok_or_else(|| StreamError::Configuration("gpu_context not found in locals".to_string()))?;
+            let func = locals
+                .get_item("gpu_context")
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Failed to get gpu_context: {}", e))
+                })?
+                .ok_or_else(|| {
+                    StreamError::Configuration("gpu_context not found in locals".to_string())
+                })?;
 
-            let bound_method = method_type.call1((func, instance))
-                .map_err(|e| StreamError::Configuration(format!("Failed to bind gpu_context: {}", e)))?;
+            let bound_method = method_type.call1((func, instance)).map_err(|e| {
+                StreamError::Configuration(format!("Failed to bind gpu_context: {}", e))
+            })?;
 
-            instance.setattr(py, "gpu_context", bound_method)
-                .map_err(|e| StreamError::Configuration(format!("Failed to set gpu_context: {}", e)))?;
+            instance
+                .setattr(py, "gpu_context", bound_method)
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Failed to set gpu_context: {}", e))
+                })?;
 
             // Call Python's setup(ctx) if it exists
             let instance_bound = instance.bind(py);
-            let has_setup = instance_bound.hasattr("setup")
+            let has_setup = instance_bound
+                .hasattr("setup")
                 .map_err(|e| StreamError::Configuration(format!("hasattr error: {}", e)))?;
 
             if has_setup {
                 tracing::info!("[PythonProcessor:{}] Calling Python setup(ctx)", self.name);
-                let py_ctx = Py::new(py, PyRuntimeContext::from_rust(runtime_context))
-                    .map_err(|e| StreamError::Configuration(format!("Failed to create runtime context wrapper: {}", e)))?;
-
-                instance.call_method1(py, "setup", (py_ctx,))
-                    .map_err(|e| {
-                        let traceback = if let Some(traceback) = e.traceback_bound(py) {
-                            match traceback.format() {
-                                Ok(tb) => format!("\n{}", tb),
-                                Err(_) => String::new(),
-                            }
-                        } else {
-                            String::new()
-                        };
-                        StreamError::Configuration(format!("Python setup() failed: {}{}", e, traceback))
+                let py_ctx =
+                    Py::new(py, PyRuntimeContext::from_rust(runtime_context)).map_err(|e| {
+                        StreamError::Configuration(format!(
+                            "Failed to create runtime context wrapper: {}",
+                            e
+                        ))
                     })?;
+
+                instance.call_method1(py, "setup", (py_ctx,)).map_err(|e| {
+                    let traceback = if let Some(traceback) = e.traceback_bound(py) {
+                        match traceback.format() {
+                            Ok(tb) => format!("\n{}", tb),
+                            Err(_) => String::new(),
+                        }
+                    } else {
+                        String::new()
+                    };
+                    StreamError::Configuration(format!("Python setup() failed: {}{}", e, traceback))
+                })?;
             }
 
             Ok(())
         })?;
 
-        tracing::info!("[PythonProcessor:{}] Setup complete and instantiated", self.name);
+        tracing::info!(
+            "[PythonProcessor:{}] Setup complete and instantiated",
+            self.name
+        );
         Ok(())
     }
 
@@ -441,24 +499,27 @@ def gpu_context(self):
         if let Some(instance) = &self.python_instance {
             Python::with_gil(|py| -> Result<()> {
                 let instance_bound = instance.bind(py);
-                let has_teardown = instance_bound.hasattr("teardown")
+                let has_teardown = instance_bound
+                    .hasattr("teardown")
                     .map_err(|e| StreamError::Configuration(format!("hasattr error: {}", e)))?;
 
                 if has_teardown {
                     tracing::info!("[PythonProcessor:{}] Calling Python teardown()", self.name);
 
-                    instance.call_method0(py, "teardown")
-                        .map_err(|e| {
-                            let traceback = if let Some(traceback) = e.traceback_bound(py) {
-                                match traceback.format() {
-                                    Ok(tb) => format!("\n{}", tb),
-                                    Err(_) => String::new(),
-                                }
-                            } else {
-                                String::new()
-                            };
-                            StreamError::Configuration(format!("Python teardown() failed: {}{}", e, traceback))
-                        })?;
+                    instance.call_method0(py, "teardown").map_err(|e| {
+                        let traceback = if let Some(traceback) = e.traceback_bound(py) {
+                            match traceback.format() {
+                                Ok(tb) => format!("\n{}", tb),
+                                Err(_) => String::new(),
+                            }
+                        } else {
+                            String::new()
+                        };
+                        StreamError::Configuration(format!(
+                            "Python teardown() failed: {}{}",
+                            e, traceback
+                        ))
+                    })?;
                 }
                 Ok(())
             })?;
@@ -467,7 +528,6 @@ def gpu_context(self):
         tracing::info!("[PythonProcessor:{}] Teardown complete", self.name);
         Ok(())
     }
-
 }
 
 impl StreamProcessor for PythonProcessor {
@@ -497,18 +557,20 @@ impl StreamProcessor for PythonProcessor {
 
         if let Some(instance) = &self.python_instance {
             Python::with_gil(|py| -> Result<()> {
-                instance.call_method0(py, "process")
-                    .map_err(|e| {
-                        let traceback = if let Some(traceback) = e.traceback_bound(py) {
-                            match traceback.format() {
-                                Ok(tb) => format!("\n{}", tb),
-                                Err(_) => String::new(),
-                            }
-                        } else {
-                            String::new()
-                        };
-                        StreamError::Configuration(format!("Python process() failed: {}{}", e, traceback))
-                    })?;
+                instance.call_method0(py, "process").map_err(|e| {
+                    let traceback = if let Some(traceback) = e.traceback_bound(py) {
+                        match traceback.format() {
+                            Ok(tb) => format!("\n{}", tb),
+                            Err(_) => String::new(),
+                        }
+                    } else {
+                        String::new()
+                    };
+                    StreamError::Configuration(format!(
+                        "Python process() failed: {}{}",
+                        e, traceback
+                    ))
+                })?;
 
                 Ok(())
             })
@@ -551,23 +613,38 @@ impl StreamProcessor for PythonProcessor {
             })
     }
 
-    fn wire_input_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+    fn wire_input_connection(
+        &mut self,
+        _port_name: &str,
+        _connection: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> bool {
         // Phase 1 not supported - use wire_input_consumer
         false
     }
 
-    fn wire_output_connection(&mut self, _port_name: &str, _connection: Arc<dyn std::any::Any + Send + Sync>) -> bool {
+    fn wire_output_connection(
+        &mut self,
+        _port_name: &str,
+        _connection: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> bool {
         // Phase 1 not supported - use wire_output_producer
         false
     }
 
-    fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> bool {
-
+    fn wire_input_consumer(
+        &mut self,
+        port_name: &str,
+        consumer: Box<dyn std::any::Any + Send>,
+    ) -> bool {
         // Find port metadata
         let port_meta = match self.input_metadata.iter().find(|m| m.name == port_name) {
             Some(meta) => meta,
             None => {
-                tracing::warn!("[PythonProcessor:{}] No metadata found for input port '{}'", self.name, port_name);
+                tracing::warn!(
+                    "[PythonProcessor:{}] No metadata found for input port '{}'",
+                    self.name,
+                    port_name
+                );
                 return false;
             }
         };
@@ -575,7 +652,9 @@ impl StreamProcessor for PythonProcessor {
         // Downcast consumer based on frame type and create FFI wrapper
         let result = match &port_meta.frame_type {
             FrameType::Video => {
-                if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<VideoFrame>>() {
+                if let Ok(typed_consumer) =
+                    consumer.downcast::<crate::core::OwnedConsumer<VideoFrame>>()
+                {
                     // Create StreamInput and wrap in PyStreamInput
                     let stream_input = StreamInput::new(port_name);
                     stream_input.set_consumer(*typed_consumer);
@@ -591,7 +670,11 @@ impl StreamProcessor for PythonProcessor {
                         }
                     })
                 } else {
-                    tracing::warn!("[PythonProcessor:{}] Failed to downcast VideoFrame consumer for port '{}'", self.name, port_name);
+                    tracing::warn!(
+                        "[PythonProcessor:{}] Failed to downcast VideoFrame consumer for port '{}'",
+                        self.name,
+                        port_name
+                    );
                     false
                 }
             }
@@ -599,7 +682,9 @@ impl StreamProcessor for PythonProcessor {
                 // Handle all supported audio channel counts
                 match channels {
                     1 => {
-                        if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<1>>>() {
+                        if let Ok(typed_consumer) =
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<1>>>()
+                        {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
 
@@ -618,7 +703,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     2 => {
-                        if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<2>>>() {
+                        if let Ok(typed_consumer) =
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<2>>>()
+                        {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
 
@@ -637,7 +724,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     4 => {
-                        if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<4>>>() {
+                        if let Ok(typed_consumer) =
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<4>>>()
+                        {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
 
@@ -656,7 +745,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     6 => {
-                        if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<6>>>() {
+                        if let Ok(typed_consumer) =
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<6>>>()
+                        {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
 
@@ -675,7 +766,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     8 => {
-                        if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<8>>>() {
+                        if let Ok(typed_consumer) =
+                            consumer.downcast::<crate::core::OwnedConsumer<AudioFrame<8>>>()
+                        {
                             let stream_input = StreamInput::new(port_name);
                             stream_input.set_consumer(*typed_consumer);
 
@@ -694,13 +787,20 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     _ => {
-                        tracing::warn!("[PythonProcessor:{}] Unsupported audio channel count {} for port '{}'", self.name, channels, port_name);
+                        tracing::warn!(
+                            "[PythonProcessor:{}] Unsupported audio channel count {} for port '{}'",
+                            self.name,
+                            channels,
+                            port_name
+                        );
                         false
                     }
                 }
             }
             FrameType::Data => {
-                if let Ok(typed_consumer) = consumer.downcast::<crate::core::OwnedConsumer<DataFrame>>() {
+                if let Ok(typed_consumer) =
+                    consumer.downcast::<crate::core::OwnedConsumer<DataFrame>>()
+                {
                     let stream_input = StreamInput::new(port_name);
                     stream_input.set_consumer(*typed_consumer);
 
@@ -714,26 +814,42 @@ impl StreamProcessor for PythonProcessor {
                         }
                     })
                 } else {
-                    tracing::warn!("[PythonProcessor:{}] Failed to downcast DataFrame consumer for port '{}'", self.name, port_name);
+                    tracing::warn!(
+                        "[PythonProcessor:{}] Failed to downcast DataFrame consumer for port '{}'",
+                        self.name,
+                        port_name
+                    );
                     false
                 }
             }
         };
 
         if result {
-            tracing::info!("[PythonProcessor:{}] Successfully wired input port '{}' (type: {:?})", self.name, port_name, port_meta.frame_type);
+            tracing::info!(
+                "[PythonProcessor:{}] Successfully wired input port '{}' (type: {:?})",
+                self.name,
+                port_name,
+                port_meta.frame_type
+            );
         }
 
         result
     }
 
-    fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> bool {
-
+    fn wire_output_producer(
+        &mut self,
+        port_name: &str,
+        producer: Box<dyn std::any::Any + Send>,
+    ) -> bool {
         // Find port metadata
         let port_meta = match self.output_metadata.iter().find(|m| m.name == port_name) {
             Some(meta) => meta,
             None => {
-                tracing::warn!("[PythonProcessor:{}] No metadata found for output port '{}'", self.name, port_name);
+                tracing::warn!(
+                    "[PythonProcessor:{}] No metadata found for output port '{}'",
+                    self.name,
+                    port_name
+                );
                 return false;
             }
         };
@@ -741,7 +857,9 @@ impl StreamProcessor for PythonProcessor {
         // Downcast producer based on frame type and create FFI wrapper
         let result = match &port_meta.frame_type {
             FrameType::Video => {
-                if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<VideoFrame>>() {
+                if let Ok(typed_producer) =
+                    producer.downcast::<crate::core::OwnedProducer<VideoFrame>>()
+                {
                     // Create StreamOutput and wrap in PyStreamOutput
                     let stream_output = StreamOutput::new(port_name);
                     stream_output.add_producer(*typed_producer);
@@ -757,7 +875,11 @@ impl StreamProcessor for PythonProcessor {
                         }
                     })
                 } else {
-                    tracing::warn!("[PythonProcessor:{}] Failed to downcast VideoFrame producer for port '{}'", self.name, port_name);
+                    tracing::warn!(
+                        "[PythonProcessor:{}] Failed to downcast VideoFrame producer for port '{}'",
+                        self.name,
+                        port_name
+                    );
                     false
                 }
             }
@@ -765,7 +887,9 @@ impl StreamProcessor for PythonProcessor {
                 // Handle all supported audio channel counts
                 match channels {
                     1 => {
-                        if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<AudioFrame<1>>>() {
+                        if let Ok(typed_producer) =
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<1>>>()
+                        {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
 
@@ -784,7 +908,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     2 => {
-                        if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<AudioFrame<2>>>() {
+                        if let Ok(typed_producer) =
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<2>>>()
+                        {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
 
@@ -803,7 +929,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     4 => {
-                        if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<AudioFrame<4>>>() {
+                        if let Ok(typed_producer) =
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<4>>>()
+                        {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
 
@@ -822,7 +950,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     6 => {
-                        if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<AudioFrame<6>>>() {
+                        if let Ok(typed_producer) =
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<6>>>()
+                        {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
 
@@ -841,7 +971,9 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     8 => {
-                        if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<AudioFrame<8>>>() {
+                        if let Ok(typed_producer) =
+                            producer.downcast::<crate::core::OwnedProducer<AudioFrame<8>>>()
+                        {
                             let stream_output = StreamOutput::new(port_name);
                             stream_output.add_producer(*typed_producer);
 
@@ -860,13 +992,20 @@ impl StreamProcessor for PythonProcessor {
                         }
                     }
                     _ => {
-                        tracing::warn!("[PythonProcessor:{}] Unsupported audio channel count {} for port '{}'", self.name, channels, port_name);
+                        tracing::warn!(
+                            "[PythonProcessor:{}] Unsupported audio channel count {} for port '{}'",
+                            self.name,
+                            channels,
+                            port_name
+                        );
                         false
                     }
                 }
             }
             FrameType::Data => {
-                if let Ok(typed_producer) = producer.downcast::<crate::core::OwnedProducer<DataFrame>>() {
+                if let Ok(typed_producer) =
+                    producer.downcast::<crate::core::OwnedProducer<DataFrame>>()
+                {
                     let stream_output = StreamOutput::new(port_name);
                     stream_output.add_producer(*typed_producer);
 
@@ -880,14 +1019,23 @@ impl StreamProcessor for PythonProcessor {
                         }
                     })
                 } else {
-                    tracing::warn!("[PythonProcessor:{}] Failed to downcast DataFrame producer for port '{}'", self.name, port_name);
+                    tracing::warn!(
+                        "[PythonProcessor:{}] Failed to downcast DataFrame producer for port '{}'",
+                        self.name,
+                        port_name
+                    );
                     false
                 }
             }
         };
 
         if result {
-            tracing::info!("[PythonProcessor:{}] Successfully wired output port '{}' (type: {:?})", self.name, port_name, port_meta.frame_type);
+            tracing::info!(
+                "[PythonProcessor:{}] Successfully wired output port '{}' (type: {:?})",
+                self.name,
+                port_name,
+                port_meta.frame_type
+            );
         }
 
         result

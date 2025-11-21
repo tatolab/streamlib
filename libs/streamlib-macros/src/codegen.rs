@@ -175,16 +175,14 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
     let description = analysis
         .processor_attrs
         .description
-        .as_ref()
-        .map(|s| s.clone())
+        .clone()
         .unwrap_or_else(|| generate_description(analysis));
 
     // Usage context: use attribute or generate smart default
     let usage_context = analysis
         .processor_attrs
         .usage_context
-        .as_ref()
-        .map(|s| s.clone())
+        .clone()
         .unwrap_or_else(|| generate_usage_context(analysis));
 
     // Tags: use attribute or generate smart defaults
@@ -248,8 +246,7 @@ fn generate_port_descriptor(field: &PortField, method_name: &str) -> TokenStream
     let description = field
         .attributes
         .description
-        .as_ref()
-        .map(|s| s.clone())
+        .clone()
         .unwrap_or_else(|| humanize_field_name(&field.field_name));
 
     // Required flag (only for inputs)
@@ -1004,11 +1001,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
             let required = field.attributes.required.unwrap_or(true);
 
             quote! {
@@ -1034,11 +1027,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
 
             quote! {
                 ::streamlib::core::PortDescriptor {
@@ -1078,7 +1067,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
                     quote! {},
                     quote! {},
                 )
-            },
+            }
             (true, false) => {
                 // Sink
                 (
@@ -1097,7 +1086,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
                     quote! {},
                     quote! {},
                 )
-            },
+            }
             (true, true) => {
                 // Transform
                 (
@@ -1116,7 +1105,7 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
                         }
                     },
                 )
-            },
+            }
             (false, false) => {
                 // No ports - treat as transform
                 (
@@ -1213,8 +1202,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
     let scheduling_mode = analysis
         .processor_attrs
         .scheduling_mode
-        .as_ref()
-        .map(|s| s.as_str())
+        .as_deref()
         .unwrap_or("Pull");
 
     let mode_variant = match scheduling_mode {
@@ -1524,7 +1512,8 @@ fn generate_from_config_impl(analysis: &AnalysisResult) -> TokenStream {
         .collect();
 
     // Combine all initializations
-    let has_config_init = analysis.config_field_type.is_some() || analysis.processor_attrs.config_type.is_some();
+    let has_config_init =
+        analysis.config_field_type.is_some() || analysis.processor_attrs.config_type.is_some();
 
     if has_config_init {
         quote! {
@@ -1566,17 +1555,27 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
         .as_deref()
         .unwrap_or("Generated processor");
 
+    // Usage context: use attribute or generate smart default
+    let usage_context = analysis
+        .processor_attrs
+        .usage_context
+        .clone()
+        .unwrap_or_else(|| generate_usage_context(analysis));
+
+    // Tags: use attribute or generate smart defaults
+    let tags = if analysis.processor_attrs.tags.is_empty() {
+        generate_tags(analysis)
+    } else {
+        analysis.processor_attrs.tags.clone()
+    };
+
     // Generate input port descriptors
     let input_ports: Vec<TokenStream> = analysis
         .input_ports()
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
             let required = field.attributes.required.unwrap_or(true);
 
             quote! {
@@ -1596,11 +1595,7 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
         .map(|field| {
             let port_name = &field.port_name;
             let message_type = &field.message_type;
-            let description = field
-                .attributes
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let description = field.attributes.description.as_deref().unwrap_or("");
 
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
@@ -1617,6 +1612,8 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
         fn descriptor() -> Option<::streamlib::core::ProcessorDescriptor> {
             Some(
                 ::streamlib::core::ProcessorDescriptor::new(#processor_name, #description)
+                    .with_usage_context(#usage_context)
+                    .with_tags(vec![#(#tags.to_string()),*])
                     #(#input_ports)*
                     #(#output_ports)*
             )

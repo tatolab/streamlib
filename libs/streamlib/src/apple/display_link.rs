@@ -1,6 +1,9 @@
+// Allow FFI naming conventions - these match CoreVideo's C API
+#![allow(non_snake_case, non_upper_case_globals)]
+
 use crate::core::{Result, StreamError};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 // Opaque CVDisplayLink type
 #[repr(C)]
@@ -41,7 +44,7 @@ struct DisplayLinkContext {
 pub struct DisplayLink {
     display_link: CVDisplayLinkRef,
     frame_ready: Arc<AtomicBool>,
-    context_ptr: *mut std::ffi::c_void,  // Track context for cleanup
+    context_ptr: *mut std::ffi::c_void, // Track context for cleanup
 }
 
 unsafe impl Send for DisplayLink {}
@@ -59,7 +62,8 @@ impl DisplayLink {
 
             if result != kCVReturnSuccess {
                 return Err(StreamError::Runtime(format!(
-                    "Failed to create CVDisplayLink: error code {}", result
+                    "Failed to create CVDisplayLink: error code {}",
+                    result
                 )));
             }
 
@@ -72,18 +76,16 @@ impl DisplayLink {
             let context_ptr = Box::into_raw(context) as *mut std::ffi::c_void;
 
             // Set callback
-            let result = CVDisplayLinkSetOutputCallback(
-                display_link,
-                display_link_callback,
-                context_ptr,
-            );
+            let result =
+                CVDisplayLinkSetOutputCallback(display_link, display_link_callback, context_ptr);
 
             if result != kCVReturnSuccess {
                 // Clean up
                 CVDisplayLinkRelease(display_link);
                 let _ = Box::from_raw(context_ptr as *mut DisplayLinkContext);
                 return Err(StreamError::Runtime(format!(
-                    "Failed to set CVDisplayLink callback: error code {}", result
+                    "Failed to set CVDisplayLink callback: error code {}",
+                    result
                 )));
             }
 
@@ -101,7 +103,8 @@ impl DisplayLink {
             let result = CVDisplayLinkStart(self.display_link);
             if result != kCVReturnSuccess {
                 return Err(StreamError::Runtime(format!(
-                    "Failed to start CVDisplayLink: error code {}", result
+                    "Failed to start CVDisplayLink: error code {}",
+                    result
                 )));
             }
         }
@@ -114,7 +117,8 @@ impl DisplayLink {
             let result = CVDisplayLinkStop(self.display_link);
             if result != kCVReturnSuccess {
                 return Err(StreamError::Runtime(format!(
-                    "Failed to stop CVDisplayLink: error code {}", result
+                    "Failed to stop CVDisplayLink: error code {}",
+                    result
                 )));
             }
         }
@@ -136,9 +140,7 @@ impl DisplayLink {
 
     /// Check if running
     pub fn is_running(&self) -> bool {
-        unsafe {
-            CVDisplayLinkIsRunning(self.display_link)
-        }
+        unsafe { CVDisplayLinkIsRunning(self.display_link) }
     }
 
     /// Get the nominal output video refresh period
@@ -260,8 +262,11 @@ mod tests {
 
             // At 60Hz, 5 frames should take ~83ms (16.67ms per frame)
             // Allow some margin: 60-100ms
-            assert!(elapsed.as_millis() >= 60 && elapsed.as_millis() <= 100,
-                "5 frames took {:?}, expected ~83ms", elapsed);
+            assert!(
+                elapsed.as_millis() >= 60 && elapsed.as_millis() <= 100,
+                "5 frames took {:?}, expected ~83ms",
+                elapsed
+            );
 
             dl.stop().unwrap();
         }

@@ -2,8 +2,8 @@ use parking_lot::Mutex;
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 
-use crate::core::runtime::{WakeupEvent, ProcessorId};
-use super::connection::{OwnedProducer, OwnedConsumer};
+use super::connection::{OwnedConsumer, OwnedProducer};
+use crate::core::runtime::{ProcessorId, WakeupEvent};
 
 /// Strongly-typed port address combining processor ID and port name
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -82,7 +82,11 @@ impl PortType {
     pub fn default_capacity(&self) -> usize {
         match self {
             PortType::Video => 3,
-            PortType::Audio1 | PortType::Audio2 | PortType::Audio4 | PortType::Audio6 | PortType::Audio8 => 32,
+            PortType::Audio1
+            | PortType::Audio2
+            | PortType::Audio4
+            | PortType::Audio6
+            | PortType::Audio8 => 32,
             PortType::Data => 16,
         }
     }
@@ -153,14 +157,19 @@ impl<T: PortMessage> StreamOutput<T> {
             if !producers.is_empty() {
                 let wakeups = &*self.downstream_wakeups.get();
                 if !wakeups.is_empty() {
-                    tracing::trace!("[StreamOutput] Sending {} wakeup events to downstream processors", wakeups.len());
+                    tracing::trace!(
+                        "[StreamOutput] Sending {} wakeup events to downstream processors",
+                        wakeups.len()
+                    );
                     for wakeup_tx in wakeups.iter() {
                         if let Err(e) = wakeup_tx.send(WakeupEvent::DataAvailable) {
                             tracing::error!("[StreamOutput] Failed to send wakeup: {}", e);
                         }
                     }
                 } else {
-                    tracing::warn!("[StreamOutput] Producers exist but no wakeup channels configured!");
+                    tracing::warn!(
+                        "[StreamOutput] Producers exist but no wakeup channels configured!"
+                    );
                 }
             }
         }
@@ -215,7 +224,9 @@ impl<T: PortMessage> Clone for StreamOutput<T> {
             name: self.name.clone(),
             port_type: self.port_type,
             producers: UnsafeCell::new(Vec::new()), // Cannot clone producers (owned)
-            downstream_wakeups: unsafe { UnsafeCell::new((*self.downstream_wakeups.get()).clone()) },
+            downstream_wakeups: unsafe {
+                UnsafeCell::new((*self.downstream_wakeups.get()).clone())
+            },
             setup_lock: Mutex::new(()),
         }
     }
@@ -285,9 +296,7 @@ impl<T: PortMessage> StreamInput<T> {
     /// SAFETY: This is safe because the processor thread has exclusive access
     /// to its own input ports during process().
     pub fn read_latest(&self) -> Option<T> {
-        unsafe {
-            (*self.consumer.get()).as_mut()?.read_latest()
-        }
+        unsafe { (*self.consumer.get()).as_mut()?.read_latest() }
     }
 
     /// Read all available data (truly lock-free hot path)
@@ -326,11 +335,7 @@ impl<T: PortMessage> StreamInput<T> {
     /// SAFETY: This is safe because the processor thread has exclusive access
     /// to its own input ports during process().
     pub fn peek(&self) -> Option<T> {
-        unsafe {
-            (*self.consumer.get())
-                .as_mut()
-                .and_then(|c| c.peek())
-        }
+        unsafe { (*self.consumer.get()).as_mut().and_then(|c| c.peek()) }
     }
 
     /// Read item using type-appropriate strategy (truly lock-free hot path)
@@ -343,12 +348,12 @@ impl<T: PortMessage> StreamInput<T> {
     /// to its own input ports during process().
     pub fn read(&self) -> Option<T> {
         unsafe {
-            (*self.consumer.get()).as_mut().and_then(|c| {
-                match T::consumption_strategy() {
+            (*self.consumer.get())
+                .as_mut()
+                .and_then(|c| match T::consumption_strategy() {
                     ConsumptionStrategy::Latest => c.read_latest(),
                     ConsumptionStrategy::Sequential => c.read(),
-                }
-            })
+                })
         }
     }
 
@@ -387,7 +392,6 @@ impl<T: PortMessage> std::fmt::Debug for StreamInput<T> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,22 +404,21 @@ mod tests {
         }
 
         fn schema() -> std::sync::Arc<crate::core::Schema> {
-            use crate::core::{Schema, Field, FieldType, SemanticVersion, SerializationFormat};
-            std::sync::Arc::new(
-                Schema::new(
-                    "i32",
-                    SemanticVersion::new(1, 0, 0),
-                    vec![Field::new("value", FieldType::Int32)],
-                    SerializationFormat::Bincode,
-                )
-            )
+            use crate::core::{Field, FieldType, Schema, SemanticVersion, SerializationFormat};
+            std::sync::Arc::new(Schema::new(
+                "i32",
+                SemanticVersion::new(1, 0, 0),
+                vec![Field::new("value", FieldType::Int32)],
+                SerializationFormat::Bincode,
+            ))
         }
     }
 
     #[test]
     fn test_port_type_defaults() {
         assert_eq!(PortType::Video.default_capacity(), 3);
-        assert_eq!(PortType::Audio1.default_capacity(), 4);
+        assert_eq!(PortType::Audio1.default_capacity(), 32);
+        assert_eq!(PortType::Audio2.default_capacity(), 32);
         assert_eq!(PortType::Data.default_capacity(), 16);
     }
 

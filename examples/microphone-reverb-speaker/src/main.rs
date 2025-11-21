@@ -3,18 +3,14 @@
 //! Demonstrates streamlib's audio processing pipeline using CLAP as the "shader language for audio".
 //! Just as video shaders transform pixels on GPU, CLAP plugins transform audio in real-time.
 
-use streamlib::{
-    StreamRuntime, ClapEffectProcessor, ClapScanner,
-    AudioCaptureProcessor, AudioOutputProcessor,
-    AudioChannelConverterProcessor, AudioResamplerProcessor,
-    BufferRechunkerProcessor,
-    AudioFrame, Result,
-};
 use streamlib::core::{
-    AudioCaptureConfig, AudioOutputConfig, ClapEffectConfig,
-    AudioChannelConverterConfig, ChannelConversionMode,
-    AudioResamplerConfig, ResamplingQuality,
-    BufferRechunkerConfig,
+    AudioCaptureConfig, AudioChannelConverterConfig, AudioOutputConfig, AudioResamplerConfig,
+    BufferRechunkerConfig, ChannelConversionMode, ClapEffectConfig, ResamplingQuality,
+};
+use streamlib::{
+    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioFrame, AudioOutputProcessor,
+    AudioResamplerProcessor, BufferRechunkerProcessor, ClapEffectProcessor, ClapScanner, Result,
+    StreamRuntime,
 };
 
 fn main() -> Result<()> {
@@ -61,18 +57,17 @@ fn main() -> Result<()> {
 
     // Step 2: Find an effects plugin (reverb, delay, etc.)
     println!("\n🔍 Looking for audio effects plugin...");
-    let effects_plugin = plugins.iter()
-        .find(|p| {
-            let name_lower = p.name.to_lowercase();
-            name_lower.contains("reverb") ||
-            name_lower.contains("verb") ||
-            name_lower.contains("effects") ||
-            name_lower.contains("fx") ||
-            p.features.iter().any(|f| {
+    let effects_plugin = plugins.iter().find(|p| {
+        let name_lower = p.name.to_lowercase();
+        name_lower.contains("reverb")
+            || name_lower.contains("verb")
+            || name_lower.contains("effects")
+            || name_lower.contains("fx")
+            || p.features.iter().any(|f| {
                 let f_lower = f.to_lowercase();
                 f_lower.contains("reverb") || f_lower.contains("effect")
             })
-        });
+    });
 
     let plugin_path = match effects_plugin {
         Some(plugin) => {
@@ -90,22 +85,19 @@ fn main() -> Result<()> {
 
     // Step 3: Add microphone input processor using config-based API
     println!("\n🎤 Adding microphone input...");
-    let mic = runtime.add_processor_with_config::<AudioCaptureProcessor>(
-        AudioCaptureConfig {
-            device_id: None
-        }
-    )?;
+    let mic = runtime.add_processor_with_config::<AudioCaptureProcessor>(AudioCaptureConfig {
+        device_id: None,
+    })?;
     println!("✅ Microphone processor added (mono output at 24kHz)");
 
     // Step 4: Add resampler (24kHz → 48kHz)
     println!("\n🔄 Adding resampler (24kHz → 48kHz)...");
-    let resampler = runtime.add_processor_with_config::<AudioResamplerProcessor>(
-        AudioResamplerConfig {
+    let resampler =
+        runtime.add_processor_with_config::<AudioResamplerProcessor>(AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
-        }
-    )?;
+        })?;
     println!("✅ Resampler added (upsamples to 48kHz)");
 
     // Step 5: Add channel converter (mono → stereo)
@@ -113,41 +105,36 @@ fn main() -> Result<()> {
     let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
         AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
-        }
+        },
     )?;
     println!("✅ Channel converter added (duplicates mono to L+R)");
 
     // Step 6: Add buffer rechunker (variable → fixed size)
     println!("\n🔧 Adding buffer rechunker (normalizes buffer sizes)...");
-    let rechunker = runtime.add_processor_with_config::<BufferRechunkerProcessor>(
-        BufferRechunkerConfig {
-            target_buffer_size: 512,  // Fixed buffer size for CLAP plugin
-        }
-    )?;
+    let rechunker =
+        runtime.add_processor_with_config::<BufferRechunkerProcessor>(BufferRechunkerConfig {
+            target_buffer_size: 512, // Fixed buffer size for CLAP plugin
+        })?;
     println!("✅ Buffer rechunker added (ensures fixed 512 sample chunks)");
 
     // Step 7: Add CLAP reverb plugin using config-based API
     println!("\n🎛️  Adding CLAP plugin...");
-    let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(
-        ClapEffectConfig {
-            plugin_path,
-            plugin_name: None, // Use first plugin in bundle
-            plugin_index: None,
-            sample_rate: 48000,   // Explicit sample rate for CLAP activation
-            buffer_size: 512,     // Explicit buffer size for CLAP activation
-        }
-    )?;
+    let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(ClapEffectConfig {
+        plugin_path,
+        plugin_name: None, // Use first plugin in bundle
+        plugin_index: None,
+        sample_rate: 48000, // Explicit sample rate for CLAP activation
+        buffer_size: 512,   // Explicit buffer size for CLAP activation
+    })?;
     println!("✅ CLAP effect processor added");
     println!("   Note: Plugin activated with explicit 48kHz/512 samples config");
     println!("   Note: Use parameter automation API for runtime parameter changes");
 
     // Step 8: Add speaker output processor using config-based API
     println!("\n🔊 Adding speaker output...");
-    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(
-        AudioOutputConfig {
-            device_id: None, // Use default speaker
-        }
-    )?;
+    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(AudioOutputConfig {
+        device_id: None, // Use default speaker
+    })?;
     println!("✅ Speaker processor added (will query hardware for native config)");
 
     // Step 9: Connect the pipeline using type-safe handles
@@ -184,7 +171,9 @@ fn main() -> Result<()> {
     )?;
     println!("   ✓ reverb (stereo) → speaker");
 
-    println!("✅ Pipeline connected: mic → resampler → channel_converter → rechunker → reverb → speaker");
+    println!(
+        "✅ Pipeline connected: mic → resampler → channel_converter → rechunker → reverb → speaker"
+    );
 
     // Step 10: Start the runtime
     println!("\n▶️  Starting audio processing...");

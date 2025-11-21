@@ -1,104 +1,102 @@
-
 pub mod audio_resample_utils;
 pub mod bus;
 pub mod clap;
 pub mod context;
 pub mod error;
-pub mod loop_utils;
-pub mod pubsub;
-pub mod signals;
 pub mod frames;
 pub mod handles;
+pub mod loop_utils;
 pub mod media_clock;
+pub mod processors;
+pub mod pubsub;
 pub mod registry;
 pub mod runtime;
-pub mod schema;
 pub mod scheduling;
-pub mod processors;
+pub mod schema;
+pub mod signals;
 pub mod streaming;
 pub mod sync;
 pub mod texture;
 pub mod topology;
 pub mod traits;
 
-pub use clap::{
-    ParameterInfo, PluginInfo,
-    ParameterModulator, LfoWaveform,
-    ParameterAutomation, ClapParameterControl,
-};
 pub use bus::{
-    Bus, ConnectionId, ConnectionManager,
-    PortAddress, PortType, PortMessage,
-    StreamOutput, StreamInput,
-    OwnedProducer, OwnedConsumer, create_owned_connection,
+    create_owned_connection, Bus, ConnectionId, ConnectionManager, OwnedConsumer, OwnedProducer,
+    PortAddress, PortMessage, PortType, StreamInput, StreamOutput,
+};
+pub use clap::{
+    ClapParameterControl, LfoWaveform, ParameterAutomation, ParameterInfo, ParameterModulator,
+    PluginInfo,
 };
 pub use context::{GpuContext, RuntimeContext};
-pub use error::{StreamError, Result};
+pub use error::{Result, StreamError};
+pub use frames::{AudioFrame, DataFrame, MetadataValue, VideoFrame};
+pub use handles::{InputPortRef, OutputPortRef, ProcessorHandle, ProcessorId};
 pub use pubsub::{
-    EVENT_BUS, Event, RuntimeEvent, ProcessorEvent, ProcessorState,
-    KeyCode, KeyState, Modifiers,
-    MouseButton, MouseState,
-    WindowEventType,
-    EventListener,
+    Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
+    ProcessorState, RuntimeEvent, WindowEventType, EVENT_BUS,
 };
-pub use runtime::{StreamRuntime, WakeupEvent, ShaderId};
-pub use handles::{ProcessorHandle, ProcessorId, OutputPortRef, InputPortRef};
-pub use frames::{
-    VideoFrame, AudioFrame, DataFrame, MetadataValue,
-};
-pub use traits::{StreamElement, ElementType, DynStreamElement, StreamProcessor, EmptyConfig};
+pub use runtime::{ShaderId, StreamRuntime, WakeupEvent};
+pub use traits::{DynStreamElement, ElementType, EmptyConfig, StreamElement, StreamProcessor};
 
 pub use processors::{
+    AudioCaptureConfig,
+    AudioCaptureProcessor,
+    AudioChannelConverterConfig,
+    AudioChannelConverterProcessor,
+    AudioDevice,
+    AudioInputDevice,
+    AudioMixerConfig,
+    AudioMixerProcessor,
+    AudioOutputConfig,
+    AudioOutputProcessor,
+    AudioResamplerConfig,
+    AudioResamplerProcessor,
+    BufferRechunkerConfig,
+    BufferRechunkerProcessor,
+    CameraConfig,
+    CameraDevice,
     // Sources
-    CameraProcessor, CameraDevice, CameraConfig,
-    AudioCaptureProcessor, AudioInputDevice, AudioCaptureConfig,
-    ChordGeneratorProcessor, ChordGeneratorConfig,
-    // Sinks
-    DisplayProcessor, WindowId, DisplayConfig,
-    AudioOutputProcessor, AudioDevice, AudioOutputConfig,
-    Mp4WriterProcessor, Mp4WriterConfig,
+    CameraProcessor,
+    ChannelConversionMode,
+    ChordGeneratorConfig,
+    ChordGeneratorProcessor,
+    ClapEffectConfig,
     // Transformers
-    ClapEffectProcessor, ClapScanner, ClapPluginInfo, ClapEffectConfig,
-    AudioMixerProcessor, MixingStrategy, AudioMixerConfig,
-    AudioResamplerProcessor, AudioResamplerConfig, ResamplingQuality,
-    AudioChannelConverterProcessor, AudioChannelConverterConfig, ChannelConversionMode,
-    BufferRechunkerProcessor, BufferRechunkerConfig,
+    ClapEffectProcessor,
+    ClapPluginInfo,
+    ClapScanner,
+    DisplayConfig,
+    // Sinks
+    DisplayProcessor,
+    MixingStrategy,
+    Mp4WriterConfig,
+    Mp4WriterProcessor,
+    ResamplingQuality,
+    WindowId,
 };
 
+pub use loop_utils::{shutdown_aware_loop, LoopControl};
 #[cfg(feature = "debug-overlay")]
-pub use processors::{
-    PerformanceOverlayProcessor,
-    PerformanceOverlayConfig,
-};
-pub use schema::{
-    Schema, Field, FieldType, SemanticVersion, SerializationFormat,
-    ProcessorDescriptor, PortDescriptor, ProcessorExample,
-    AudioRequirements,
-    SCHEMA_VIDEO_FRAME, SCHEMA_AUDIO_FRAME, SCHEMA_DATA_MESSAGE,
-    SCHEMA_BOUNDING_BOX, SCHEMA_OBJECT_DETECTIONS,
-};
-pub use sync::{
-    timestamp_delta_ms, video_audio_delta_ms,
-    are_synchronized, video_audio_synchronized, video_audio_synchronized_with_tolerance,
-    DEFAULT_SYNC_TOLERANCE_MS,
-};
+pub use processors::{PerformanceOverlayConfig, PerformanceOverlayProcessor};
 pub use registry::{
-    ProcessorRegistry, ProcessorRegistration,
-    DescriptorProvider,
-    global_registry,
-    register_processor,
-    list_processors, list_processors_by_tag,
-    is_processor_registered, unregister_processor,
+    global_registry, is_processor_registered, list_processors, list_processors_by_tag,
+    register_processor, unregister_processor, DescriptorProvider, ProcessorRegistration,
+    ProcessorRegistry,
 };
-pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
-pub use topology::{ConnectionTopology, TopologyAnalyzer, NodeInfo, PortInfo, Edge};
-pub use scheduling::{
-    SchedulingConfig, SchedulingMode, ThreadPriority,
-};
-pub use loop_utils::{
-    shutdown_aware_loop, LoopControl,
+pub use scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
+pub use schema::{
+    AudioRequirements, Field, FieldType, PortDescriptor, ProcessorDescriptor, ProcessorExample,
+    Schema, SemanticVersion, SerializationFormat, SCHEMA_AUDIO_FRAME, SCHEMA_BOUNDING_BOX,
+    SCHEMA_DATA_MESSAGE, SCHEMA_OBJECT_DETECTIONS, SCHEMA_VIDEO_FRAME,
 };
 pub use streaming::{
-    OpusEncoder, AudioEncoderOpus, AudioEncoderConfig, EncodedAudioFrame,
-    convert_video_to_samples, convert_audio_to_sample, RtpTimestampCalculator,
+    convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
+    EncodedAudioFrame, OpusEncoder, RtpTimestampCalculator,
 };
+pub use sync::{
+    are_synchronized, timestamp_delta_ms, video_audio_delta_ms, video_audio_synchronized,
+    video_audio_synchronized_with_tolerance, DEFAULT_SYNC_TOLERANCE_MS,
+};
+pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
+pub use topology::{ConnectionTopology, Edge, NodeInfo, PortInfo, TopologyAnalyzer};

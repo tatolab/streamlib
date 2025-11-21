@@ -74,8 +74,8 @@
 //! }
 //! ```
 
-mod attributes;
 mod analysis;
+mod attributes;
 mod codegen;
 
 use proc_macro::TokenStream;
@@ -218,4 +218,3 @@ pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
 
     TokenStream::from(generated)
 }
-

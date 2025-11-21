@@ -2,8 +2,7 @@
 // Users import these common names and get the appropriate platform implementation
 #[cfg(target_os = "macos")]
 pub use crate::apple::processors::display::{
-    AppleDisplayProcessor as DisplayProcessor,
-    AppleDisplayConfig as DisplayConfig,
+    AppleDisplayConfig as DisplayConfig, AppleDisplayProcessor as DisplayProcessor,
     AppleWindowId as WindowId,
 };
 
@@ -21,4 +20,3 @@ pub use crate::apple::processors::display::{
 //     WindowsDisplayConfig as DisplayConfig,
 //     WindowsWindowId as WindowId,
 // };
-

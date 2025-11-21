@@ -47,19 +47,19 @@
 //! VTCompressionSessionEncodeFrame(session, nv12_buffer, ...);
 //! ```
 
-use std::sync::Arc;
-use objc2_core_video::CVPixelBuffer;
-use objc2_io_surface::IOSurface;
+use crate::apple::iosurface;
+use crate::apple::WgpuBridge;
+use crate::core::{Result, StreamError};
 use metal;
 use metal::foreign_types::ForeignTypeRef;
-use crate::core::{Result, StreamError};
-use crate::apple::WgpuBridge;
-use crate::apple::iosurface;
+use objc2_core_video::CVPixelBuffer;
+use objc2_io_surface::IOSurface;
+use std::sync::Arc;
 
 // Local FFI declarations for functions not in objc2_core_video
 mod ffi {
-    use std::ffi::c_void;
     use super::*;
+    use std::ffi::c_void;
 
     #[link(name = "CoreVideo", kind = "framework")]
     extern "C" {
@@ -91,9 +91,7 @@ mod ffi {
             destination_buffer: CVPixelBufferRef,
         ) -> OSStatus;
 
-        pub fn VTPixelTransferSessionInvalidate(
-            session: VTPixelTransferSessionRef,
-        );
+        pub fn VTPixelTransferSessionInvalidate(session: VTPixelTransferSessionRef);
     }
 }
 
@@ -144,9 +142,8 @@ impl PixelTransferSession {
         // Get metal device reference and convert to metal crate type
         let metal_device_ref = wgpu_bridge.metal_device();
         let metal_device_ptr = metal_device_ref as *const _ as *mut std::ffi::c_void;
-        let metal_crate_device = unsafe {
-            metal::DeviceRef::from_ptr(metal_device_ptr as *mut _)
-        }.to_owned();
+        let metal_crate_device =
+            unsafe { metal::DeviceRef::from_ptr(metal_device_ptr as *mut _) }.to_owned();
 
         let command_queue = metal_crate_device.new_command_queue();
 
@@ -204,30 +201,27 @@ impl PixelTransferSession {
         height: u32,
     ) -> Result<*mut CVPixelBuffer> {
         // Get Metal texture from wgpu texture
-        let source_metal = unsafe {
-            self.wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)?
-        };
+        let source_metal = unsafe { self.wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)? };
 
         // Create destination CVPixelBuffer in BGRA format (32BGRA is standard for Metal/CoreVideo interop)
         let mut pixel_buffer: *mut CVPixelBuffer = std::ptr::null_mut();
         let bgra_format: u32 = 0x42475241; // 'BGRA' fourCC (kCVPixelFormatType_32BGRA)
 
         unsafe {
-            use core_foundation::dictionary::CFMutableDictionary;
             use core_foundation::base::TCFType;
+            use core_foundation::dictionary::CFMutableDictionary;
             use core_foundation::string::CFString;
 
             // Create attributes dictionary to request IOSurface-backed CVPixelBuffer
             // This is required for Metal texture interop
             use core_foundation::base::CFTypeRef;
-            let io_surface_props: CFMutableDictionary<CFString, CFTypeRef> = CFMutableDictionary::new();
-            let mut pixel_buffer_attrs_mut: CFMutableDictionary<CFString, CFTypeRef> = CFMutableDictionary::new();
+            let io_surface_props: CFMutableDictionary<CFString, CFTypeRef> =
+                CFMutableDictionary::new();
+            let mut pixel_buffer_attrs_mut: CFMutableDictionary<CFString, CFTypeRef> =
+                CFMutableDictionary::new();
 
             let io_surface_key = CFString::from_static_string("IOSurfaceProperties");
-            pixel_buffer_attrs_mut.set(
-                io_surface_key,
-                io_surface_props.as_CFTypeRef(),
-            );
+            pixel_buffer_attrs_mut.set(io_surface_key, io_surface_props.as_CFTypeRef());
 
             // Convert to immutable CFDictionary for CVPixelBufferCreate
             let pixel_buffer_attrs = pixel_buffer_attrs_mut.to_immutable();
@@ -258,12 +252,12 @@ impl PixelTransferSession {
         }
 
         // Get IOSurface from CVPixelBuffer
-        let iosurface_ptr = unsafe {
-            ffi::CVPixelBufferGetIOSurface(pixel_buffer)
-        };
+        let iosurface_ptr = unsafe { ffi::CVPixelBufferGetIOSurface(pixel_buffer) };
 
         if iosurface_ptr.is_null() {
-            return Err(StreamError::GpuError("Failed to get IOSurface from CVPixelBuffer".into()));
+            return Err(StreamError::GpuError(
+                "Failed to get IOSurface from CVPixelBuffer".into(),
+            ));
         }
 
         let iosurface = unsafe { &*iosurface_ptr };
@@ -288,9 +282,7 @@ impl PixelTransferSession {
 
         // Convert objc2 Metal texture to metal crate texture for blitting
         let dest_metal_ptr = &*dest_metal as *const _ as *mut std::ffi::c_void;
-        let dest_metal_ref = unsafe {
-            metal::TextureRef::from_ptr(dest_metal_ptr as *mut _)
-        };
+        let dest_metal_ref = unsafe { metal::TextureRef::from_ptr(dest_metal_ptr as *mut _) };
 
         blit_encoder.copy_from_texture(
             &source_metal,

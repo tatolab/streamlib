@@ -2,7 +2,7 @@
 //
 // Implements RFC 9725 WHIP signaling for WebRTC streaming.
 
-use crate::core::{StreamError, Result};
+use crate::core::{Result, StreamError};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -38,7 +38,10 @@ pub struct WhipClient {
     /// Body type: http_body_util::combinators::BoxBody for flexibility
     http_client: hyper_util::client::legacy::Client<
         hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
-        http_body_util::combinators::BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>,
+        http_body_util::combinators::BoxBody<
+            bytes::Bytes,
+            Box<dyn std::error::Error + Send + Sync>,
+        >,
     >,
 
     /// Session URL (from Location header after POST success)
@@ -56,17 +59,20 @@ pub struct WhipClient {
 
 impl WhipClient {
     pub fn new(config: WhipConfig) -> Result<Self> {
-        tracing::info!("[WhipClient] Creating WHIP client for endpoint: {}", config.endpoint_url);
+        tracing::info!(
+            "[WhipClient] Creating WHIP client for endpoint: {}",
+            config.endpoint_url
+        );
 
         // Build HTTPS connector using rustls with ring crypto provider and native CA roots
         tracing::debug!("[WhipClient] Building HTTPS connector with native roots...");
         let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()  // Use system CA store (includes ring provider via feature flag)
+            .with_native_roots() // Use system CA store (includes ring provider via feature flag)
             .map_err(|e| {
                 tracing::error!("[WhipClient] Failed to load CA roots: {}", e);
                 StreamError::Configuration(format!("Failed to load CA roots: {}", e))
             })?
-            .https_or_http()      // Allow http:// for local testing
+            .https_or_http() // Allow http:// for local testing
             .enable_http1()
             .enable_http2()
             .build();
@@ -74,11 +80,10 @@ impl WhipClient {
 
         // Create HTTP client
         tracing::debug!("[WhipClient] Creating HTTP client...");
-        let http_client = hyper_util::client::legacy::Client::builder(
-            hyper_util::rt::TokioExecutor::new()
-        )
-        .pool_idle_timeout(std::time::Duration::from_secs(30))
-        .build(https);
+        let http_client =
+            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .pool_idle_timeout(std::time::Duration::from_secs(30))
+                .build(https);
         tracing::info!("[WhipClient] HTTP client created successfully");
 
         // Create Tokio runtime for HTTP operations (tokio::time::timeout needs it)
@@ -86,7 +91,12 @@ impl WhipClient {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create Tokio runtime for WHIP client: {}", e)))?;
+            .map_err(|e| {
+                StreamError::Runtime(format!(
+                    "Failed to create Tokio runtime for WHIP client: {}",
+                    e
+                ))
+            })?;
         tracing::debug!("[WhipClient] Tokio runtime created successfully");
 
         Ok(Self {
@@ -117,8 +127,8 @@ impl WhipClient {
     /// - 503 Service Unavailable: Server overloaded (should retry with backoff)
     /// - 307 Temporary Redirect: Load balancing (automatically followed)
     pub fn post_offer(&mut self, sdp_offer: &str) -> Result<String> {
-        use hyper::{Request, StatusCode, header};
         use http_body_util::Full;
+        use hyper::{header, Request, StatusCode};
 
         // Clone what we need to avoid borrow issues
         let endpoint_url = self.config.endpoint_url.clone();
@@ -142,11 +152,13 @@ impl WhipClient {
 
             // Add Authorization header only if token is provided
             if let Some(token) = &auth_token {
-                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+                req_builder =
+                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
             }
 
-            let req = req_builder.body(boxed_body)
-                .map_err(|e| StreamError::Runtime(format!("Failed to build WHIP POST request: {}", e)))?;
+            let req = req_builder.body(boxed_body).map_err(|e| {
+                StreamError::Runtime(format!("Failed to build WHIP POST request: {}", e))
+            })?;
 
             tracing::debug!("WHIP POST to {}", endpoint_url);
 
@@ -156,7 +168,9 @@ impl WhipClient {
                 http_client.request(req),
             )
             .await
-            .map_err(|_| StreamError::Runtime(format!("WHIP POST timed out after {}ms", timeout_ms)))?
+            .map_err(|_| {
+                StreamError::Runtime(format!("WHIP POST timed out after {}ms", timeout_ms))
+            })?
             .map_err(|e| StreamError::Runtime(format!("WHIP POST request failed: {}", e)))?;
 
             let status = response.status();
@@ -165,7 +179,9 @@ impl WhipClient {
             // Read response body
             let body_bytes = http_body_util::BodyExt::collect(response.into_body())
                 .await
-                .map_err(|e| StreamError::Runtime(format!("Failed to read WHIP response body: {}", e)))?
+                .map_err(|e| {
+                    StreamError::Runtime(format!("Failed to read WHIP response body: {}", e))
+                })?
                 .to_bytes();
 
             // Return status, headers, and body for processing outside async block
@@ -181,17 +197,21 @@ impl WhipClient {
                 let location = headers
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| StreamError::Runtime(
-                        "WHIP server returned 201 Created without Location header".into()
-                    ))?;
+                    .ok_or_else(|| {
+                        StreamError::Runtime(
+                            "WHIP server returned 201 Created without Location header".into(),
+                        )
+                    })?;
 
                 // Convert relative URLs to absolute URLs
                 // Cloudflare returns relative paths like "/stream-id/webRTC/publish/session-id"
                 self.session_url = if location.starts_with('/') {
                     // Parse endpoint URL to get base
-                    let base_url = self.config.endpoint_url
+                    let base_url = self
+                        .config
+                        .endpoint_url
                         .split('/')
-                        .take(3)  // Take "https:", "", "hostname"
+                        .take(3) // Take "https:", "", "hostname"
                         .collect::<Vec<_>>()
                         .join("/");
                     Some(format!("{}{}", base_url, location))
@@ -205,65 +225,65 @@ impl WhipClient {
                     self.session_url.as_ref().unwrap()
                 );
 
-                    // Extract ETag header (optional, used for ICE restart)
-                    self.session_etag = headers
-                        .get(header::ETAG)
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_owned());
+                // Extract ETag header (optional, used for ICE restart)
+                self.session_etag = headers
+                    .get(header::ETAG)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_owned());
 
-                    // Parse SDP answer from body
-                    let sdp_answer = String::from_utf8(body_bytes.to_vec())
-                        .map_err(|e| StreamError::Runtime(format!("Invalid UTF-8 in SDP answer: {}", e)))?;
+                // Parse SDP answer from body
+                let sdp_answer = String::from_utf8(body_bytes.to_vec()).map_err(|e| {
+                    StreamError::Runtime(format!("Invalid UTF-8 in SDP answer: {}", e))
+                })?;
 
-                    tracing::info!(
-                        "WHIP session created: {} (ETag: {})",
-                        self.session_url.as_ref().unwrap(),
-                        self.session_etag.as_deref().unwrap_or("none")
-                    );
+                tracing::info!(
+                    "WHIP session created: {} (ETag: {})",
+                    self.session_url.as_ref().unwrap(),
+                    self.session_etag.as_deref().unwrap_or("none")
+                );
 
-                    Ok(sdp_answer)
-                }
+                Ok(sdp_answer)
+            }
 
-                StatusCode::TEMPORARY_REDIRECT => {
-                    // Handle redirect per RFC 9725 Section 4.5
-                    let location = headers
-                        .get(header::LOCATION)
-                        .and_then(|v| v.to_str().ok())
-                        .ok_or_else(|| StreamError::Runtime(
-                            "WHIP 307 redirect without Location header".into()
-                        ))?;
+            StatusCode::TEMPORARY_REDIRECT => {
+                // Handle redirect per RFC 9725 Section 4.5
+                let location = headers
+                    .get(header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| {
+                        StreamError::Runtime("WHIP 307 redirect without Location header".into())
+                    })?;
 
-                    tracing::info!("WHIP redirecting to: {}", location);
+                tracing::info!("WHIP redirecting to: {}", location);
 
-                    // Update endpoint and retry (recursive, but 307 should be rare)
-                    self.config.endpoint_url = location.to_owned();
-                    self.post_offer(sdp_offer)
-                }
+                // Update endpoint and retry (recursive, but 307 should be rare)
+                self.config.endpoint_url = location.to_owned();
+                self.post_offer(sdp_offer)
+            }
 
-                StatusCode::SERVICE_UNAVAILABLE => {
-                    // Server overloaded - caller should retry with backoff
-                    let retry_after = headers
-                        .get(header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown");
+            StatusCode::SERVICE_UNAVAILABLE => {
+                // Server overloaded - caller should retry with backoff
+                let retry_after = headers
+                    .get(header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("unknown");
 
-                    Err(StreamError::Runtime(format!(
-                        "WHIP server overloaded (503), retry after: {}",
-                        retry_after
-                    )))
-                }
+                Err(StreamError::Runtime(format!(
+                    "WHIP server overloaded (503), retry after: {}",
+                    retry_after
+                )))
+            }
 
-                _ => {
-                    // Other error (400, 401, 422, etc.)
-                    let error_body = String::from_utf8(body_bytes.to_vec())
-                        .unwrap_or_else(|_| format!("HTTP {}", status));
+            _ => {
+                // Other error (400, 401, 422, etc.)
+                let error_body = String::from_utf8(body_bytes.to_vec())
+                    .unwrap_or_else(|_| format!("HTTP {}", status));
 
-                    Err(StreamError::Runtime(format!(
-                        "WHIP POST failed ({}): {}",
-                        status,
-                        error_body
-                    )))
-                }
+                Err(StreamError::Runtime(format!(
+                    "WHIP POST failed ({}): {}",
+                    status, error_body
+                )))
+            }
         }
     }
 
@@ -284,14 +304,14 @@ impl WhipClient {
     ///
     /// Sends all buffered candidates in a single PATCH request, then clears the queue.
     pub fn send_ice_candidates(&self) -> Result<()> {
-        use hyper::{Request, StatusCode, header};
         use http_body_util::{BodyExt, Full};
+        use hyper::{header, Request, StatusCode};
 
         let session_url = match &self.session_url {
             Some(url) => url,
             None => {
                 return Err(StreamError::Configuration(
-                    "Cannot send ICE candidates: no WHIP session URL".into()
+                    "Cannot send ICE candidates: no WHIP session URL".into(),
                 ));
             }
         };
@@ -321,20 +341,31 @@ impl WhipClient {
 
             // Add Authorization header only if token is provided
             if let Some(token) = &self.config.auth_token {
-                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+                req_builder =
+                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
             }
 
-            let req = req_builder.body(boxed_body)
-                .map_err(|e| StreamError::Runtime(format!("Failed to build WHIP PATCH request: {}", e)))?;
+            let req = req_builder.body(boxed_body).map_err(|e| {
+                StreamError::Runtime(format!("Failed to build WHIP PATCH request: {}", e))
+            })?;
 
-            tracing::debug!("WHIP PATCH to {} ({} candidates)", session_url, candidates.len());
+            tracing::debug!(
+                "WHIP PATCH to {} ({} candidates)",
+                session_url,
+                candidates.len()
+            );
 
             let response = tokio::time::timeout(
                 std::time::Duration::from_millis(self.config.timeout_ms),
                 self.http_client.request(req),
             )
             .await
-            .map_err(|_| StreamError::Runtime(format!("WHIP PATCH timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|_| {
+                StreamError::Runtime(format!(
+                    "WHIP PATCH timed out after {}ms",
+                    self.config.timeout_ms
+                ))
+            })?
             .map_err(|e| StreamError::Runtime(format!("WHIP PATCH request failed: {}", e)))?;
 
             let status = response.status();
@@ -371,8 +402,8 @@ impl WhipClient {
     /// RFC 9725 Section 4.4: Client terminates session by DELETEing session URL.
     /// Server responds with 200 OK.
     pub fn terminate(&self) -> Result<()> {
-        use hyper::{Request, header};
         use http_body_util::Empty;
+        use hyper::{header, Request};
 
         let session_url = match &self.session_url {
             Some(url) => url,
@@ -388,17 +419,17 @@ impl WhipClient {
             let body = Empty::<bytes::Bytes>::new();
             let boxed_body = body.map_err(|never| match never {}).boxed();
 
-            let mut req_builder = Request::builder()
-                .method("DELETE")
-                .uri(session_url);
+            let mut req_builder = Request::builder().method("DELETE").uri(session_url);
 
             // Add Authorization header only if token is provided
             if let Some(token) = &self.config.auth_token {
-                req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+                req_builder =
+                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
             }
 
-            let req = req_builder.body(boxed_body)
-                .map_err(|e| StreamError::Runtime(format!("Failed to build WHIP DELETE request: {}", e)))?;
+            let req = req_builder.body(boxed_body).map_err(|e| {
+                StreamError::Runtime(format!("Failed to build WHIP DELETE request: {}", e))
+            })?;
 
             tracing::debug!("WHIP DELETE to {}", session_url);
 
@@ -407,7 +438,12 @@ impl WhipClient {
                 self.http_client.request(req),
             )
             .await
-            .map_err(|_| StreamError::Runtime(format!("WHIP DELETE timed out after {}ms", self.config.timeout_ms)))?
+            .map_err(|_| {
+                StreamError::Runtime(format!(
+                    "WHIP DELETE timed out after {}ms",
+                    self.config.timeout_ms
+                ))
+            })?
             .map_err(|e| StreamError::Runtime(format!("WHIP DELETE request failed: {}", e)))?;
 
             if response.status().is_success() {

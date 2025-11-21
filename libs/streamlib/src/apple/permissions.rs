@@ -1,4 +1,3 @@
-
 use crate::core::Result;
 use objc2::MainThreadMarker;
 
@@ -21,7 +20,6 @@ pub fn request_camera_permission() -> Result<bool> {
 
     let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
 
-
     match status.0 {
         3 => {
             tracing::info!("Camera permission already granted");
@@ -32,7 +30,10 @@ pub fn request_camera_permission() -> Result<bool> {
             Ok(true)
         }
         1 | 2 => {
-            tracing::error!("Camera permission denied or restricted (status={})", status.0);
+            tracing::error!(
+                "Camera permission denied or restricted (status={})",
+                status.0
+            );
             Ok(false)
         }
         _ => {
@@ -66,7 +67,6 @@ pub fn request_audio_permission() -> Result<bool> {
 
     let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
 
-
     match status.0 {
         3 => {
             tracing::info!("Audio permission already granted");
@@ -77,7 +77,10 @@ pub fn request_audio_permission() -> Result<bool> {
             Ok(true)
         }
         1 | 2 => {
-            tracing::error!("Audio permission denied or restricted (status={})", status.0);
+            tracing::error!(
+                "Audio permission denied or restricted (status={})",
+                status.0
+            );
             Ok(false)
         }
         _ => {

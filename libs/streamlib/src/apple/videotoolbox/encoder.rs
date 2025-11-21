@@ -3,14 +3,17 @@
 // Hardware-accelerated H.264 encoding using Apple's VideoToolbox framework.
 // Supports GPU-accelerated texture conversion (wgpu → NV12) and real-time encoding.
 
-use crate::core::{VideoFrame, StreamError, Result, GpuContext, RuntimeContext};
 use crate::apple::{PixelTransferSession, WgpuBridge};
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
+use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoFrame};
 use objc2_core_video::CVPixelBuffer;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
-use super::{ffi, codec::{VideoCodec, CodecInfo}, format};
+use super::{
+    codec::{CodecInfo, VideoCodec},
+    ffi, format,
+};
 
 // ============================================================================
 // PUBLIC TYPES
@@ -84,7 +87,11 @@ impl VideoToolboxEncoder {
     /// * `config` - Encoder configuration (resolution, bitrate, codec, etc.)
     /// * `gpu_context` - GPU context for texture conversion (required)
     /// * `ctx` - Runtime context for main thread dispatch
-    pub fn new(config: VideoEncoderConfig, gpu_context: Option<GpuContext>, ctx: &RuntimeContext) -> Result<Self> {
+    pub fn new(
+        config: VideoEncoderConfig,
+        gpu_context: Option<GpuContext>,
+        ctx: &RuntimeContext,
+    ) -> Result<Self> {
         let mut encoder = Self {
             config,
             compression_session: None,
@@ -136,8 +143,13 @@ impl VideoToolboxEncoder {
 
                 if status != ffi::NO_ERR {
                     // Clean up callback context on error - reconstruct Arc to decrement ref count
-                    let _ = Arc::from_raw(callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>);
-                    return Err(StreamError::Runtime(format!("VTCompressionSessionCreate failed: {}", status)));
+                    let _ = Arc::from_raw(
+                        callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>,
+                    );
+                    return Err(StreamError::Runtime(format!(
+                        "VTCompressionSessionCreate failed: {}",
+                        status
+                    )));
                 }
 
                 // Configure encoder properties for real-time streaming
@@ -237,8 +249,12 @@ impl VideoToolboxEncoder {
         self.compression_session = Some(session);
         self.callback_context = Some(callback_context);
 
-        tracing::info!("VideoToolbox compression session created: {}x{} @ {}fps, H.264 Baseline 3.1",
-            self.config.width, self.config.height, self.config.fps);
+        tracing::info!(
+            "VideoToolbox compression session created: {}x{} @ {}fps, H.264 Baseline 3.1",
+            self.config.width,
+            self.config.height,
+            self.config.fps
+        );
 
         // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
         if let Some(ref gpu_ctx) = self.gpu_context {
@@ -262,7 +278,9 @@ impl VideoToolboxEncoder {
 
             tracing::info!("GPU-accelerated pixel transfer (RGBA → NV12) initialized");
         } else {
-            tracing::warn!("No GPU context available, cannot initialize GPU-accelerated pixel transfer");
+            tracing::warn!(
+                "No GPU context available, cannot initialize GPU-accelerated pixel transfer"
+            );
         }
 
         Ok(())
@@ -271,14 +289,11 @@ impl VideoToolboxEncoder {
     /// Convert wgpu texture to CVPixelBuffer using GPU-accelerated VTPixelTransferSession
     fn convert_texture_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
-        let pixel_transfer = self.pixel_transfer.as_ref()
-            .ok_or_else(|| StreamError::Configuration("PixelTransferSession not initialized".into()))?;
+        let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
+            StreamError::Configuration("PixelTransferSession not initialized".into())
+        })?;
 
-        return pixel_transfer.convert_to_nv12(
-            &frame.texture,
-            frame.width,
-            frame.height,
-        );
+        pixel_transfer.convert_to_nv12(&frame.texture, frame.width, frame.height)
     }
 
     /// Encode a video frame
@@ -289,8 +304,9 @@ impl VideoToolboxEncoder {
     /// # Returns
     /// EncodedVideoFrame with compressed data (Annex B format for H.264)
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<EncodedVideoFrame> {
-        let session = self.compression_session
-            .ok_or_else(|| StreamError::Configuration("Compression session not initialized".into()))?;
+        let session = self.compression_session.ok_or_else(|| {
+            StreamError::Configuration("Compression session not initialized".into())
+        })?;
 
         // Step 1: Convert VideoFrame texture to CVPixelBuffer
         let pixel_buffer = self.convert_texture_to_pixel_buffer(frame)?;
@@ -301,18 +317,26 @@ impl VideoToolboxEncoder {
 
         // Step 3: Determine if we should force a keyframe
         // Force keyframe on first frame and every keyframe_interval frames
-        let should_force_keyframe = self.frame_count == 0 ||
-            (self.frame_count % self.config.keyframe_interval_frames as u64 == 0);
+        let should_force_keyframe = self.frame_count == 0
+            || self
+                .frame_count
+                .is_multiple_of(self.config.keyframe_interval_frames as u64);
 
         // Step 4: Encode the frame
         unsafe {
             let frame_properties = if should_force_keyframe {
-                tracing::info!("[VideoToolbox] 🔑 Forcing keyframe at frame {}", self.frame_count);
+                tracing::info!(
+                    "[VideoToolbox] 🔑 Forcing keyframe at frame {}",
+                    self.frame_count
+                );
                 let dict = Self::create_force_keyframe_properties();
                 if dict.is_null() {
                     tracing::error!("[VideoToolbox] ❌ CFDictionary creation FAILED!");
                 } else {
-                    tracing::debug!("[VideoToolbox] CFDictionary created successfully at {:p}", dict);
+                    tracing::debug!(
+                        "[VideoToolbox] CFDictionary created successfully at {:p}",
+                        dict
+                    );
                 }
                 dict
             } else {
@@ -324,7 +348,7 @@ impl VideoToolboxEncoder {
                 pixel_buffer as ffi::CVPixelBufferRef,
                 presentation_time,
                 duration,
-                frame_properties, // Pass keyframe properties
+                frame_properties,     // Pass keyframe properties
                 std::ptr::null_mut(), // source frame ref con
                 std::ptr::null_mut(), // info flags out
             );
@@ -340,7 +364,10 @@ impl VideoToolboxEncoder {
             });
 
             if status != ffi::NO_ERR {
-                return Err(StreamError::Runtime(format!("VTCompressionSessionEncodeFrame failed: {}", status)));
+                return Err(StreamError::Runtime(format!(
+                    "VTCompressionSessionEncodeFrame failed: {}",
+                    status
+                )));
             }
         }
 
@@ -352,15 +379,24 @@ impl VideoToolboxEncoder {
             );
 
             if complete_status != ffi::NO_ERR {
-                tracing::warn!("VTCompressionSessionCompleteFrames returned: {}", complete_status);
+                tracing::warn!(
+                    "VTCompressionSessionCompleteFrames returned: {}",
+                    complete_status
+                );
             }
         }
 
         // Step 6: Retrieve encoded frame from queue (populated by callback)
-        let mut encoded_frame = self.encoded_frames.lock()
-            .map_err(|e| StreamError::Runtime(format!("Failed to lock encoded frames queue: {}", e)))?
+        let mut encoded_frame = self
+            .encoded_frames
+            .lock()
+            .map_err(|e| {
+                StreamError::Runtime(format!("Failed to lock encoded frames queue: {}", e))
+            })?
             .pop_front()
-            .ok_or_else(|| StreamError::Runtime("No encoded frame available after encoding".into()))?;
+            .ok_or_else(|| {
+                StreamError::Runtime("No encoded frame available after encoding".into())
+            })?;
 
         // Step 7: Update frame metadata
         encoded_frame.timestamp_ns = frame.timestamp_ns;
@@ -369,7 +405,7 @@ impl VideoToolboxEncoder {
         self.frame_count += 1;
 
         // Log encoding info
-        if self.frame_count % 30 == 0 {
+        if self.frame_count.is_multiple_of(30) {
             tracing::debug!(
                 "Encoded frame {}: {} bytes, keyframe={}",
                 encoded_frame.frame_number,
@@ -404,22 +440,20 @@ impl VideoToolboxEncoder {
     /// Caller must call CFRelease on the returned pointer
     unsafe fn create_force_keyframe_properties() -> *const std::ffi::c_void {
         // Create dictionary with key-value: {kVTEncodeFrameOptionKey_ForceKeyFrame: true}
-        let key = ffi::kVTEncodeFrameOptionKey_ForceKeyFrame as *const std::ffi::c_void;
-        let value = ffi::kCFBooleanTrue as *const std::ffi::c_void;
+        let key = ffi::kVTEncodeFrameOptionKey_ForceKeyFrame;
+        let value = ffi::kCFBooleanTrue;
 
         let keys = [key];
         let values = [value];
 
-        let dict = ffi::CFDictionaryCreate(
+        ffi::CFDictionaryCreate(
             std::ptr::null(), // allocator (default)
-            keys.as_ptr() as *const *const std::ffi::c_void,
-            values.as_ptr() as *const *const std::ffi::c_void,
-            1, // count
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,                // count
             std::ptr::null(), // key callbacks (default)
             std::ptr::null(), // value callbacks (default)
-        );
-
-        dict as *const std::ffi::c_void
+        )
     }
 }
 
@@ -441,7 +475,10 @@ impl Drop for VideoToolboxEncoder {
                     ffi::CMTime::invalid(), // kCMTimeInvalid = flush all pending frames
                 );
                 if status != ffi::NO_ERR {
-                    tracing::warn!("[VideoToolbox] VTCompressionSessionCompleteFrames failed: {}", status);
+                    tracing::warn!(
+                        "[VideoToolbox] VTCompressionSessionCompleteFrames failed: {}",
+                        status
+                    );
                 }
                 tracing::debug!("[VideoToolbox] All pending frames completed");
 
@@ -495,7 +532,7 @@ extern "C" fn compression_output_callback(
     // 3. Drop calls VTCompressionSessionCompleteFrames() first, ensuring no callbacks are running
     let encoded_frames = unsafe {
         let ptr = output_callback_ref_con as *const Mutex<VecDeque<EncodedVideoFrame>>;
-        &*ptr  // Directly deref the raw pointer
+        &*ptr // Directly deref the raw pointer
     };
 
     // Extract encoded data from sample buffer and convert to AVCC format
@@ -509,12 +546,8 @@ extern "C" fn compression_output_callback(
         let data_length = ffi::CMBlockBufferGetDataLength(block_buffer);
         let mut raw_data = vec![0u8; data_length];
 
-        let copy_status = ffi::CMBlockBufferCopyDataBytes(
-            block_buffer,
-            0,
-            data_length,
-            raw_data.as_mut_ptr(),
-        );
+        let copy_status =
+            ffi::CMBlockBufferCopyDataBytes(block_buffer, 0, data_length, raw_data.as_mut_ptr());
 
         if copy_status != ffi::NO_ERR {
             tracing::error!("CMBlockBufferCopyDataBytes failed: {}", copy_status);
@@ -526,8 +559,11 @@ extern "C" fn compression_output_callback(
         // Convert AVCC → Annex B
         let annex_b_data = format::avcc_to_annex_b(&raw_data);
 
-        tracing::trace!("[VideoToolbox] Converted {} bytes AVCC → {} bytes Annex B",
-            data_length, annex_b_data.len());
+        tracing::trace!(
+            "[VideoToolbox] Converted {} bytes AVCC → {} bytes Annex B",
+            data_length,
+            annex_b_data.len()
+        );
 
         // Check if this is a keyframe using CMSampleBuffer attachments (Apple's official method)
         // The kCMSampleAttachmentKey_NotSync key is ONLY present for non-sync frames (P/B frames)
@@ -541,7 +577,7 @@ extern "C" fn compression_output_callback(
                     if !attachment.is_null() {
                         let not_sync = ffi::CFDictionaryGetValue(
                             attachment,
-                            ffi::kCMSampleAttachmentKey_NotSync as *const std::ffi::c_void,
+                            ffi::kCMSampleAttachmentKey_NotSync,
                         );
                         // If NotSync key is NULL (absent), this is a keyframe
                         not_sync.is_null()
@@ -559,11 +595,16 @@ extern "C" fn compression_output_callback(
         // For keyframes, prepend SPS/PPS parameter sets from CMFormatDescription
         // This is critical - without SPS/PPS, H.264 decoder cannot decode any frames
         let final_data = if is_keyframe {
-            tracing::info!("[VideoToolbox] 🔑 KEYFRAME detected: {} bytes Annex B data, extracting SPS/PPS...",
-                annex_b_data.len());
+            tracing::info!(
+                "[VideoToolbox] 🔑 KEYFRAME detected: {} bytes Annex B data, extracting SPS/PPS...",
+                annex_b_data.len()
+            );
             format::extract_h264_parameters(sample_buffer, annex_b_data)
         } else {
-            tracing::trace!("[VideoToolbox] P-frame: {} bytes Annex B data", annex_b_data.len());
+            tracing::trace!(
+                "[VideoToolbox] P-frame: {} bytes Annex B data",
+                annex_b_data.len()
+            );
             annex_b_data
         };
 

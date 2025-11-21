@@ -1,8 +1,7 @@
-
 use super::metadata::MetadataValue;
 use crate::core::bus::{PortMessage, PortType};
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // Implement sealed trait
 impl crate::core::bus::ports::sealed::Sealed for VideoFrame {}

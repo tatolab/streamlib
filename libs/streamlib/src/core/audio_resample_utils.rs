@@ -4,8 +4,10 @@
 //! and AppleAudioOutputProcessor to ensure consistent behavior and reduce code duplication.
 
 use crate::core::{Result, StreamError};
-use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
-use serde::{Serialize, Deserialize};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
+use serde::{Deserialize, Serialize};
 
 /// Quality presets for audio resampling
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,9 +97,10 @@ impl AudioResampler {
     ) -> Result<Self> {
         // Validate channel count
         if ![1, 2, 4, 6, 8].contains(&channels) {
-            return Err(StreamError::Configuration(
-                format!("Unsupported channel count: {} (supported: 1, 2, 4, 6, 8)", channels)
-            ));
+            return Err(StreamError::Configuration(format!(
+                "Unsupported channel count: {} (supported: 1, 2, 4, 6, 8)",
+                channels
+            )));
         }
 
         let ratio = target_rate as f64 / source_rate as f64;
@@ -106,53 +109,38 @@ impl AudioResampler {
         // Create channel-specific resampler
         let inner = match channels {
             1 => {
-                let resampler = SincFixedIn::<f32>::new(
-                    ratio,
-                    2.0,
-                    params,
-                    chunk_size,
-                    1,
-                ).map_err(|e| StreamError::Runtime(format!("Failed to create mono resampler: {:?}", e)))?;
+                let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1)
+                    .map_err(|e| {
+                        StreamError::Runtime(format!("Failed to create mono resampler: {:?}", e))
+                    })?;
                 ResamplerInner::Mono(resampler)
             }
             2 => {
-                let resampler = SincFixedIn::<f32>::new(
-                    ratio,
-                    2.0,
-                    params,
-                    chunk_size,
-                    2,
-                ).map_err(|e| StreamError::Runtime(format!("Failed to create stereo resampler: {:?}", e)))?;
+                let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 2)
+                    .map_err(|e| {
+                        StreamError::Runtime(format!("Failed to create stereo resampler: {:?}", e))
+                    })?;
                 ResamplerInner::Stereo(resampler)
             }
             4 => {
-                let resampler = SincFixedIn::<f32>::new(
-                    ratio,
-                    2.0,
-                    params,
-                    chunk_size,
-                    4,
-                ).map_err(|e| StreamError::Runtime(format!("Failed to create quad resampler: {:?}", e)))?;
+                let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 4)
+                    .map_err(|e| {
+                        StreamError::Runtime(format!("Failed to create quad resampler: {:?}", e))
+                    })?;
                 ResamplerInner::Surround4(resampler)
             }
             6 => {
-                let resampler = SincFixedIn::<f32>::new(
-                    ratio,
-                    2.0,
-                    params,
-                    chunk_size,
-                    6,
-                ).map_err(|e| StreamError::Runtime(format!("Failed to create 5.1 resampler: {:?}", e)))?;
+                let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 6)
+                    .map_err(|e| {
+                        StreamError::Runtime(format!("Failed to create 5.1 resampler: {:?}", e))
+                    })?;
                 ResamplerInner::Surround5_1(resampler)
             }
             8 => {
-                let resampler = SincFixedIn::<f32>::new(
-                    ratio,
-                    2.0,
-                    params,
-                    chunk_size,
-                    8,
-                ).map_err(|e| StreamError::Runtime(format!("Failed to create 7.1 resampler: {:?}", e)))?;
+                let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 8)
+                    .map_err(|e| {
+                        StreamError::Runtime(format!("Failed to create 7.1 resampler: {:?}", e))
+                    })?;
                 ResamplerInner::Surround7_1(resampler)
             }
             _ => unreachable!("Validated above"),
@@ -182,7 +170,8 @@ impl AudioResampler {
     pub fn resample(&mut self, input: &[f32]) -> Result<Vec<f32>> {
         // Convert interleaved to planar (separate channels)
         let samples_per_channel = input.len() / self.channels;
-        let mut planar_input: Vec<Vec<f32>> = vec![Vec::with_capacity(samples_per_channel); self.channels];
+        let mut planar_input: Vec<Vec<f32>> =
+            vec![Vec::with_capacity(samples_per_channel); self.channels];
 
         for chunk in input.chunks_exact(self.channels) {
             for (ch_idx, &sample) in chunk.iter().enumerate() {
@@ -197,15 +186,16 @@ impl AudioResampler {
             ResamplerInner::Surround4(r) => r.process(&planar_input, None),
             ResamplerInner::Surround5_1(r) => r.process(&planar_input, None),
             ResamplerInner::Surround7_1(r) => r.process(&planar_input, None),
-        }.map_err(|e| StreamError::Runtime(format!("Resampling failed: {:?}", e)))?;
+        }
+        .map_err(|e| StreamError::Runtime(format!("Resampling failed: {:?}", e)))?;
 
         // Convert back to interleaved
         let output_samples_per_channel = planar_output[0].len();
         let mut interleaved_output = Vec::with_capacity(output_samples_per_channel * self.channels);
 
         for i in 0..output_samples_per_channel {
-            for ch_idx in 0..self.channels {
-                interleaved_output.push(planar_output[ch_idx][i]);
+            for channel in planar_output.iter().take(self.channels) {
+                interleaved_output.push(channel[i]);
             }
         }
 
@@ -294,7 +284,11 @@ mod tests {
         let output = resampler.resample(&input).expect("Resampling failed");
 
         // Output should be ~half the length (2:1 downsampling)
-        assert!(output.len() > 400 && output.len() < 600, "Output length: {}", output.len());
+        assert!(
+            output.len() > 400 && output.len() < 600,
+            "Output length: {}",
+            output.len()
+        );
     }
 
     #[test]
@@ -314,7 +308,11 @@ mod tests {
         let output = resampler.resample(&input).expect("Resampling failed");
 
         // Output should be ~half the length (2:1 downsampling)
-        assert!(output.len() > 800 && output.len() < 1200, "Output length: {}", output.len());
+        assert!(
+            output.len() > 800 && output.len() < 1200,
+            "Output length: {}",
+            output.len()
+        );
 
         // Output should still be interleaved stereo
         assert_eq!(output.len() % 2, 0);
@@ -329,15 +327,17 @@ mod tests {
         assert_eq!(resampler.channels(), 4);
 
         // Create test input: 960 samples per channel = 3840 total samples (interleaved)
-        let input: Vec<f32> = (0..3840)
-            .map(|i| (i % 4) as f32 / 4.0)
-            .collect();
+        let input: Vec<f32> = (0..3840).map(|i| (i % 4) as f32 / 4.0).collect();
 
         // Resample
         let output = resampler.resample(&input).expect("Resampling failed");
 
         // Output should be ~half the length (2:1 downsampling)
-        assert!(output.len() > 1600 && output.len() < 2400, "Output length: {}", output.len());
+        assert!(
+            output.len() > 1600 && output.len() < 2400,
+            "Output length: {}",
+            output.len()
+        );
 
         // Output should still be interleaved quad
         assert_eq!(output.len() % 4, 0);
@@ -352,15 +352,17 @@ mod tests {
         assert_eq!(resampler.channels(), 6);
 
         // Create test input: 960 samples per channel = 5760 total samples (interleaved)
-        let input: Vec<f32> = (0..5760)
-            .map(|i| (i % 6) as f32 / 6.0)
-            .collect();
+        let input: Vec<f32> = (0..5760).map(|i| (i % 6) as f32 / 6.0).collect();
 
         // Resample
         let output = resampler.resample(&input).expect("Resampling failed");
 
         // Output should be ~half the length (2:1 downsampling)
-        assert!(output.len() > 2400 && output.len() < 3600, "Output length: {}", output.len());
+        assert!(
+            output.len() > 2400 && output.len() < 3600,
+            "Output length: {}",
+            output.len()
+        );
 
         // Output should still be interleaved 5.1
         assert_eq!(output.len() % 6, 0);
@@ -375,15 +377,17 @@ mod tests {
         assert_eq!(resampler.channels(), 8);
 
         // Create test input: 960 samples per channel = 7680 total samples (interleaved)
-        let input: Vec<f32> = (0..7680)
-            .map(|i| (i % 8) as f32 / 8.0)
-            .collect();
+        let input: Vec<f32> = (0..7680).map(|i| (i % 8) as f32 / 8.0).collect();
 
         // Resample
         let output = resampler.resample(&input).expect("Resampling failed");
 
         // Output should be ~half the length (2:1 downsampling)
-        assert!(output.len() > 3200 && output.len() < 4800, "Output length: {}", output.len());
+        assert!(
+            output.len() > 3200 && output.len() < 4800,
+            "Output length: {}",
+            output.len()
+        );
 
         // Output should still be interleaved 7.1
         assert_eq!(output.len() % 8, 0);
@@ -404,7 +408,11 @@ mod tests {
         let output = resampler.resample(&input).expect("Resampling failed");
 
         // Output should be ~double the length (1:2 upsampling)
-        assert!(output.len() > 1600 && output.len() < 2400, "Output length: {}", output.len());
+        assert!(
+            output.len() > 1600 && output.len() < 2400,
+            "Output length: {}",
+            output.len()
+        );
 
         // Output should still be interleaved stereo
         assert_eq!(output.len() % 2, 0);
@@ -438,7 +446,11 @@ mod tests {
         let output = resampler.resample(&input).expect("Resampling failed");
 
         // Output should be ~half the length (2:1 downsampling)
-        assert!(output.len() > 800 && output.len() < 1200, "Output length: {}", output.len());
+        assert!(
+            output.len() > 800 && output.len() < 1200,
+            "Output length: {}",
+            output.len()
+        );
         assert_eq!(output.len() % 2, 0);
     }
 }

@@ -1,8 +1,7 @@
-
 use super::{ProcessorDescriptor, StreamError};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use parking_lot::Mutex;
 
 pub trait DescriptorProvider: Sync {
     fn descriptor(&self) -> ProcessorDescriptor;
@@ -18,10 +17,9 @@ macro_rules! register_processor_type {
 
             impl $crate::DescriptorProvider for __DescriptorProvider {
                 fn descriptor(&self) -> $crate::ProcessorDescriptor {
-                    <$processor_type as $crate::core::traits::StreamProcessor>::descriptor().expect(concat!(
-                        stringify!($processor_type),
-                        " must provide a descriptor"
-                    ))
+                    <$processor_type as $crate::core::traits::StreamProcessor>::descriptor().expect(
+                        concat!(stringify!($processor_type), " must provide a descriptor"),
+                    )
                 }
             }
 
@@ -88,7 +86,6 @@ impl ProcessorRegistry {
             .map(|reg| reg.descriptor.clone())
             .collect()
     }
-
 
     pub fn contains(&self, name: &str) -> bool {
         self.processors.contains_key(name)
@@ -282,7 +279,6 @@ mod tests {
 
     #[test]
     fn test_global_registry() {
-
         let descriptor = create_test_descriptor("GlobalTestProcessor");
 
         register_processor(descriptor).unwrap();

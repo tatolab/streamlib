@@ -17,11 +17,14 @@
 #[cfg(target_os = "macos")]
 #[cfg(test)]
 mod whip_client_tests {
-    use streamlib::core::error::Result;
     use http_body_util::BodyExt;
+    use streamlib::core::error::Result;
 
     /// Type alias for boxed body used by hyper client
-    type BoxBody = http_body_util::combinators::BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>;
+    type BoxBody = http_body_util::combinators::BoxBody<
+        bytes::Bytes,
+        Box<dyn std::error::Error + Send + Sync>,
+    >;
 
     /// Test configuration for Cloudflare Stream endpoint
     const CLOUDFLARE_WHIP_URL: &str = "https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce/webRTC/publish";
@@ -84,8 +87,8 @@ mod whip_client_tests {
     #[test]
     #[ignore] // Run with: cargo test -- --ignored
     fn test_whip_post_offer() -> Result<()> {
-        use hyper::{Request, StatusCode, header};
         use http_body_util::{BodyExt, Full};
+        use hyper::{header, Request, StatusCode};
         use hyper_rustls::HttpsConnectorBuilder;
         use hyper_util::client::legacy::Client;
 
@@ -96,7 +99,7 @@ mod whip_client_tests {
 
         // Create HTTPS client
         let https = HttpsConnectorBuilder::new()
-            .with_native_roots()?  // Use system root certificates
+            .with_native_roots()? // Use system root certificates
             .https_or_http()
             .enable_http1()
             .enable_http2()
@@ -126,17 +129,21 @@ mod whip_client_tests {
 
         // Send request (use tokio runtime)
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let response = runtime.block_on(async {
-            client.request(req).await
-        }).expect("HTTP request failed");
+        let response = runtime
+            .block_on(async { client.request(req).await })
+            .expect("HTTP request failed");
 
         let status = response.status();
         println!("Response status: {}", status);
 
         // Extract and clone headers before consuming response
-        let location = response.headers().get(header::LOCATION)
+        let location = response
+            .headers()
+            .get(header::LOCATION)
             .map(|v| v.to_str().unwrap_or("").to_string());
-        let etag = response.headers().get(header::ETAG)
+        let etag = response
+            .headers()
+            .get(header::ETAG)
             .map(|v| v.to_str().unwrap_or("").to_string());
 
         if let Some(ref loc) = location {
@@ -147,9 +154,9 @@ mod whip_client_tests {
         }
 
         // Read response body
-        let body_bytes = runtime.block_on(async {
-            response.into_body().collect().await
-        }).expect("Failed to read body");
+        let body_bytes = runtime
+            .block_on(async { response.into_body().collect().await })
+            .expect("Failed to read body");
 
         let sdp_answer = String::from_utf8_lossy(&body_bytes.to_bytes()).to_string();
 
@@ -161,9 +168,14 @@ mod whip_client_tests {
         assert_eq!(status, StatusCode::CREATED, "Expected 201 Created");
         assert!(location.is_some(), "Expected Location header");
         assert!(!sdp_answer.is_empty(), "Expected SDP answer in body");
-        assert!(sdp_answer.contains("v=0"), "SDP answer should start with version");
-        assert!(sdp_answer.contains("m=video") || sdp_answer.contains("m=audio"),
-                "SDP answer should contain media sections");
+        assert!(
+            sdp_answer.contains("v=0"),
+            "SDP answer should start with version"
+        );
+        assert!(
+            sdp_answer.contains("m=video") || sdp_answer.contains("m=audio"),
+            "SDP answer should contain media sections"
+        );
 
         println!("\n✅ WHIP POST test passed!");
         println!("   - Cloudflare accepted our SDP offer");
@@ -182,8 +194,8 @@ mod whip_client_tests {
     #[test]
     #[ignore] // Run with: cargo test -- --ignored
     fn test_whip_full_flow() -> Result<()> {
-        use hyper::{Request, StatusCode, header};
-        use http_body_util::{BodyExt, Full, Empty};
+        use http_body_util::{BodyExt, Empty, Full};
+        use hyper::{header, Request, StatusCode};
         use hyper_rustls::HttpsConnectorBuilder;
         use hyper_util::client::legacy::Client;
 
@@ -194,7 +206,7 @@ mod whip_client_tests {
 
         // Create HTTPS client
         let https = HttpsConnectorBuilder::new()
-            .with_native_roots()?  // Use system root certificates
+            .with_native_roots()? // Use system root certificates
             .https_or_http()
             .enable_http1()
             .enable_http2()
@@ -219,13 +231,14 @@ mod whip_client_tests {
             .body(boxed_body)
             .expect("Failed to build POST request");
 
-        let response = runtime.block_on(async {
-            client.request(req).await
-        }).expect("POST failed");
+        let response = runtime
+            .block_on(async { client.request(req).await })
+            .expect("POST failed");
 
         assert_eq!(response.status(), StatusCode::CREATED);
 
-        let session_url = response.headers()
+        let session_url = response
+            .headers()
             .get(header::LOCATION)
             .expect("No Location header")
             .to_str()
@@ -235,9 +248,9 @@ mod whip_client_tests {
         println!("   ✓ Session created: {}\n", session_url);
 
         // Consume the POST response body
-        runtime.block_on(async {
-            response.into_body().collect().await
-        }).expect("Failed to read POST body");
+        runtime
+            .block_on(async { response.into_body().collect().await })
+            .expect("Failed to read POST body");
 
         // Step 2: PATCH ICE candidates
         println!("Step 2: PATCH ICE candidates");
@@ -259,22 +272,23 @@ mod whip_client_tests {
             .body(boxed_body)
             .expect("Failed to build PATCH request");
 
-        let response = runtime.block_on(async {
-            client.request(req).await
-        }).expect("PATCH failed");
+        let response = runtime
+            .block_on(async { client.request(req).await })
+            .expect("PATCH failed");
 
         let patch_status = response.status();
         println!("   Response: {}", patch_status);
 
         // Consume PATCH response body
-        runtime.block_on(async {
-            response.into_body().collect().await
-        }).expect("Failed to read PATCH body");
+        runtime
+            .block_on(async { response.into_body().collect().await })
+            .expect("Failed to read PATCH body");
 
         // PATCH should return 204 No Content or 200 OK
         assert!(
             patch_status == StatusCode::NO_CONTENT || patch_status == StatusCode::OK,
-            "PATCH should return 204 or 200, got: {}", patch_status
+            "PATCH should return 204 or 200, got: {}",
+            patch_status
         );
         println!("   ✓ ICE candidates sent\n");
 
@@ -290,17 +304,17 @@ mod whip_client_tests {
             .body(boxed_body)
             .expect("Failed to build DELETE request");
 
-        let response = runtime.block_on(async {
-            client.request(req).await
-        }).expect("DELETE failed");
+        let response = runtime
+            .block_on(async { client.request(req).await })
+            .expect("DELETE failed");
 
         let delete_status = response.status();
         println!("   Response: {}", delete_status);
 
         // Consume DELETE response body
-        runtime.block_on(async {
-            response.into_body().collect().await
-        }).expect("Failed to read DELETE body");
+        runtime
+            .block_on(async { response.into_body().collect().await })
+            .expect("Failed to read DELETE body");
 
         // DELETE typically returns 200 or 204
         assert!(

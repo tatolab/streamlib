@@ -4,14 +4,17 @@
 //! to dispatch work to the main thread, validating that the mechanism
 //! works in a real runtime environment.
 
-use streamlib::{Result, StreamRuntime};
-use streamlib::core::{
-    RuntimeContext, AudioFrame, ProcessMode,
-    traits::{Processor, StreamElement},
-    bus::{InputPort, OutputPort},
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}, Mutex};
 use std::time::Duration;
+use streamlib::core::{
+    bus::{InputPort, OutputPort},
+    traits::{Processor, StreamElement},
+    AudioFrame, ProcessMode, RuntimeContext,
+};
+use streamlib::{Result, StreamRuntime};
 
 /// Test processor that dispatches work to main thread during processing
 struct MainThreadTestProcessor {
@@ -109,7 +112,9 @@ fn test_context_main_thread_dispatch_integration() {
 
     // Create runtime and add processor
     let mut runtime = StreamRuntime::new();
-    runtime.add_processor(processor).expect("Failed to add processor");
+    runtime
+        .add_processor(processor)
+        .expect("Failed to add processor");
 
     // Start runtime (spawns worker threads, calls setup())
     runtime.start().expect("Failed to start runtime");
@@ -174,16 +179,26 @@ fn test_multiple_processors_can_use_main_thread_dispatch() {
     );
 
     let mut runtime = StreamRuntime::new();
-    runtime.add_processor(processor1).expect("Failed to add processor 1");
-    runtime.add_processor(processor2).expect("Failed to add processor 2");
+    runtime
+        .add_processor(processor1)
+        .expect("Failed to add processor 1");
+    runtime
+        .add_processor(processor2)
+        .expect("Failed to add processor 2");
 
     runtime.start().expect("Failed to start runtime");
 
     std::thread::sleep(Duration::from_millis(500));
 
     // Both processors should have executed async dispatch
-    assert!(async_flag1.load(Ordering::SeqCst), "Processor 1 async should execute");
-    assert!(async_flag2.load(Ordering::SeqCst), "Processor 2 async should execute");
+    assert!(
+        async_flag1.load(Ordering::SeqCst),
+        "Processor 1 async should execute"
+    );
+    assert!(
+        async_flag2.load(Ordering::SeqCst),
+        "Processor 2 async should execute"
+    );
 
     // Both should have computed blocking results
     assert_eq!(*blocking_result1.lock().unwrap(), Some(50));

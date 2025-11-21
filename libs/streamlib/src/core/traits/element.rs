@@ -1,6 +1,5 @@
-
-use crate::core::schema::{ProcessorDescriptor, PortDescriptor};
 use crate::core::error::Result;
+use crate::core::schema::{PortDescriptor, ProcessorDescriptor};
 use crate::core::RuntimeContext;
 use serde::{Deserialize, Serialize};
 
@@ -25,19 +24,17 @@ pub trait StreamElement: Send + 'static {
 
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
 
-
     fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())  // Default: no-op
+        Ok(()) // Default: no-op
     }
 
     fn __generated_teardown(&mut self) -> Result<()> {
-        Ok(())  // Default: no-op
+        Ok(()) // Default: no-op
     }
 
     fn shutdown(&mut self) -> Result<()> {
         self.__generated_teardown()
     }
-
 
     fn input_ports(&self) -> Vec<PortDescriptor> {
         Vec::new()
@@ -46,7 +43,6 @@ pub trait StreamElement: Send + 'static {
     fn output_ports(&self) -> Vec<PortDescriptor> {
         Vec::new()
     }
-
 
     fn as_source(&self) -> Option<&dyn std::any::Any> {
         None
@@ -71,7 +67,6 @@ pub trait StreamElement: Send + 'static {
     fn as_transform_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         None
     }
-
 }
 
 #[cfg(test)]
@@ -113,7 +108,6 @@ mod tests {
             Some(self)
         }
     }
-
 
     #[test]
     fn test_element_type() {

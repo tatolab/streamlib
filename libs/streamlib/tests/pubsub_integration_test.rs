@@ -1,8 +1,11 @@
 // Integration test for pubsub module - runs independently of broken unit tests
-use streamlib::core::pubsub::{EventBus, EventListener, Event, ProcessorEvent, topics, KeyCode, Modifiers, KeyState, MouseButton, MouseState};
 use parking_lot::Mutex;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use streamlib::core::pubsub::{
+    topics, Event, EventBus, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState,
+    ProcessorEvent,
+};
 
 struct CountingListener {
     count: Arc<AtomicUsize>,
@@ -35,11 +38,7 @@ fn test_keyboard_event_routing() {
 
     bus.subscribe(topics::KEYBOARD, listener);
 
-    let event = Event::keyboard(
-        KeyCode::A,
-        Modifiers::default(),
-        KeyState::Pressed,
-    );
+    let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
 
     assert_eq!(event.topic(), topics::KEYBOARD);
     bus.publish(&event.topic(), &event);
@@ -55,11 +54,7 @@ fn test_mouse_event_routing() {
 
     bus.subscribe(topics::MOUSE, listener);
 
-    let event = Event::mouse(
-        MouseButton::Left,
-        (100.0, 200.0),
-        MouseState::Pressed,
-    );
+    let event = Event::mouse(MouseButton::Left, (100.0, 200.0), MouseState::Pressed);
 
     assert_eq!(event.topic(), topics::MOUSE);
     bus.publish(&event.topic(), &event);
@@ -102,10 +97,7 @@ fn test_multiple_subscribers_all_receive() {
     bus.subscribe("broadcast", listener2);
     bus.subscribe("broadcast", listener3);
 
-    let event = Event::custom(
-        "broadcast",
-        serde_json::json!({"value": 42}),
-    );
+    let event = Event::custom("broadcast", serde_json::json!({"value": 42}));
     bus.publish(&event.topic(), &event);
 
     assert_eq!(concrete1.lock().count(), 1);

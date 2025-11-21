@@ -4,8 +4,8 @@
 // Currently only H.264 is implemented, but the structure is designed
 // to support future codecs (H.265/HEVC, AV1, VP9).
 
-use serde::{Deserialize, Serialize};
 use super::ffi;
+use serde::{Deserialize, Serialize};
 
 /// Video codec type with profile configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +30,7 @@ pub enum H264Profile {
 }
 
 /// Codec information trait for encoding parameters
+#[allow(dead_code)] // Methods kept for future WebRTC/RTP implementation
 pub trait CodecInfo {
     /// FourCC code for the codec (e.g., 'avc1' for H.264)
     fn fourcc(&self) -> u32;
@@ -85,8 +86,10 @@ impl CodecInfo for VideoCodec {
                     H264Profile::High => "001f",     // no constraints, Level 3.1
                 };
 
-                format!("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={}{}",
-                    profile_idc, constraint_level)
+                format!(
+                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={}{}",
+                    profile_idc, constraint_level
+                )
             }
         }
     }

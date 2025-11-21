@@ -3,31 +3,28 @@
 #![allow(dead_code)]
 
 use clack_host::{
-    prelude::*,
-    host::HostInfo,
     bundle::PluginBundle,
+    events::{event_types::ParamValueEvent, io::EventBuffer},
+    host::HostInfo,
     plugin::PluginInstance,
+    prelude::*,
     process::StartedPluginAudioProcessor,
-    events::{
-        event_types::ParamValueEvent,
-        io::EventBuffer,
-    },
     utils::{ClapId, Cookie},
 };
 
-use clack_extensions::params::{PluginParams, ParamInfoBuffer};
+use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 
-use crate::core::{Result, StreamError, AudioFrame};
-use crate::core::clap::{ParameterInfo, PluginInfo};
 use super::scanner::ClapScanner;
+use crate::core::clap::{ParameterInfo, PluginInfo};
+use crate::core::{AudioFrame, Result, StreamError};
 
 use parking_lot::Mutex as ParkingLotMutex;
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 
 struct SharedState {
     parameters: std::collections::HashMap<u32, f64>,
-    parameter_generation: usize,  // Incremented whenever parameters change
+    parameter_generation: usize, // Incremented whenever parameters change
 
     parameter_info: Vec<ParameterInfo>,
 
@@ -102,7 +99,7 @@ impl ClapPluginHost {
         path: P,
         plugin_name: &str,
         sample_rate: u32,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> Result<Self> {
         Self::load_internal(path, Some(plugin_name), sample_rate, buffer_size)
     }
@@ -111,20 +108,16 @@ impl ClapPluginHost {
         path: P,
         index: usize,
         sample_rate: u32,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> Result<Self> {
         Self::load_internal_with_filter(path, sample_rate, buffer_size, |mut descriptors| {
-            descriptors.nth(index).ok_or_else(|| StreamError::Configuration(
-                format!("Plugin index {} not found in bundle", index)
-            ))
+            descriptors.nth(index).ok_or_else(|| {
+                StreamError::Configuration(format!("Plugin index {} not found in bundle", index))
+            })
         })
     }
 
-    pub fn load<P: AsRef<Path>>(
-        path: P,
-        sample_rate: u32,
-        buffer_size: usize
-    ) -> Result<Self> {
+    pub fn load<P: AsRef<Path>>(path: P, sample_rate: u32, buffer_size: usize) -> Result<Self> {
         Self::load_internal(path, None, sample_rate, buffer_size)
     }
 
@@ -132,7 +125,7 @@ impl ClapPluginHost {
         path: P,
         plugin_name: Option<&str>,
         sample_rate: u32,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> Result<Self> {
         if let Some(name) = plugin_name {
             let name = name.to_string();
@@ -141,15 +134,21 @@ impl ClapPluginHost {
             Self::load_internal_with_filter(path, sample_rate, buffer_size, |descriptors| {
                 let all_descs: Vec<_> = descriptors.collect();
 
-                let all_names: Vec<String> = all_descs.iter()
-                    .filter_map(|desc| desc.name().and_then(|n| n.to_str().ok()).map(|s| s.to_string()))
+                let all_names: Vec<String> = all_descs
+                    .iter()
+                    .filter_map(|desc| {
+                        desc.name()
+                            .and_then(|n| n.to_str().ok())
+                            .map(|s| s.to_string())
+                    })
                     .collect();
 
                 for plugin_name in &all_names {
                     tracing::debug!("Found plugin in bundle: '{}'", plugin_name);
                 }
 
-                all_descs.into_iter()
+                all_descs
+                    .into_iter()
                     .find(|desc| {
                         desc.name()
                             .and_then(|n| n.to_str().ok())
@@ -163,20 +162,17 @@ impl ClapPluginHost {
                             all_names.join(", ")
                         };
 
-                        StreamError::Configuration(
-                            format!(
-                                "Plugin '{}' not found in bundle {}. Available plugins: [{}]",
-                                name, path_str, available
-                            )
-                        )
+                        StreamError::Configuration(format!(
+                            "Plugin '{}' not found in bundle {}. Available plugins: [{}]",
+                            name, path_str, available
+                        ))
                     })
             })
         } else {
             Self::load_internal_with_filter(path, sample_rate, buffer_size, |mut descriptors| {
-                descriptors.next()
-                    .ok_or_else(|| StreamError::Configuration(
-                        "CLAP plugin bundle contains no plugins".into()
-                    ))
+                descriptors.next().ok_or_else(|| {
+                    StreamError::Configuration("CLAP plugin bundle contains no plugins".into())
+                })
             })
         }
     }
@@ -185,11 +181,13 @@ impl ClapPluginHost {
         path: P,
         sample_rate: u32,
         buffer_size: usize,
-        filter: F
+        filter: F,
     ) -> Result<Self>
     where
         P: AsRef<Path>,
-        F: for<'a> FnOnce(clack_host::factory::PluginDescriptorsIter<'a>) -> Result<clack_host::factory::PluginDescriptor<'a>>,
+        F: for<'a> FnOnce(
+            clack_host::factory::PluginDescriptorsIter<'a>,
+        ) -> Result<clack_host::factory::PluginDescriptor<'a>>,
     {
         let path = path.as_ref();
 
@@ -197,44 +195,47 @@ impl ClapPluginHost {
 
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         let bundle = unsafe {
-            PluginBundle::load(&binary_path)
-                .map_err(|e| StreamError::Configuration(
-                    format!("Failed to load CLAP plugin from {:?}: {:?}", path, e)
-                ))?
+            PluginBundle::load(&binary_path).map_err(|e| {
+                StreamError::Configuration(format!(
+                    "Failed to load CLAP plugin from {:?}: {:?}",
+                    path, e
+                ))
+            })?
         };
 
-        let factory = bundle.get_plugin_factory()
-            .ok_or_else(|| StreamError::Configuration(
-                "CLAP plugin has no plugin factory".into()
-            ))?;
+        let factory = bundle.get_plugin_factory().ok_or_else(|| {
+            StreamError::Configuration("CLAP plugin has no plugin factory".into())
+        })?;
 
         let descriptor = filter(factory.plugin_descriptors())?;
 
-        let plugin_id = descriptor.id()
-            .ok_or_else(|| StreamError::Configuration(
-                "Plugin descriptor has no ID".into()
-            ))?;
+        let plugin_id = descriptor
+            .id()
+            .ok_or_else(|| StreamError::Configuration("Plugin descriptor has no ID".into()))?;
 
-        let plugin_id_str = plugin_id.to_str()
+        let plugin_id_str = plugin_id
+            .to_str()
             .ok()
             .ok_or_else(|| StreamError::Configuration("Invalid plugin ID".into()))?
             .to_string();
 
-        let plugin_id_cstring = std::ffi::CString::new(plugin_id_str.clone())
-            .map_err(|e| StreamError::Configuration(
-                format!("Failed to create CString from plugin ID: {}", e)
-            ))?;
+        let plugin_id_cstring = std::ffi::CString::new(plugin_id_str.clone()).map_err(|e| {
+            StreamError::Configuration(format!("Failed to create CString from plugin ID: {}", e))
+        })?;
 
         let plugin_info = PluginInfo {
-            name: descriptor.name()
+            name: descriptor
+                .name()
                 .and_then(|s| s.to_str().ok())
                 .unwrap_or("Unknown")
                 .to_string(),
-            vendor: descriptor.vendor()
+            vendor: descriptor
+                .vendor()
                 .and_then(|s| s.to_str().ok())
                 .unwrap_or("Unknown")
                 .to_string(),
-            version: descriptor.version()
+            version: descriptor
+                .version()
                 .and_then(|s| s.to_str().ok())
                 .unwrap_or("Unknown")
                 .to_string(),
@@ -279,11 +280,11 @@ impl ClapPluginHost {
 
     pub fn get_parameter(&self, id: u32) -> Result<f64> {
         let state = self.shared_state.lock();
-        state.parameters.get(&id)
+        state
+            .parameters
+            .get(&id)
             .copied()
-            .ok_or_else(|| StreamError::Configuration(
-                format!("Parameter ID {} not found", id)
-            ))
+            .ok_or_else(|| StreamError::Configuration(format!("Parameter ID {} not found", id)))
     }
 
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
@@ -291,7 +292,11 @@ impl ClapPluginHost {
         state.parameters.insert(id, value);
         state.parameter_generation = state.parameter_generation.wrapping_add(1);
 
-        tracing::info!("Parameter {} set to {} (will be sent during next process)", id, value);
+        tracing::info!(
+            "Parameter {} set to {} (will be sent during next process)",
+            id,
+            value
+        );
 
         Ok(())
     }
@@ -322,26 +327,24 @@ impl ClapPluginHost {
             "streamlib",
             "Tato Lab",
             "https://github.com/tatolab/streamlib",
-            "0.1.0"
-        ).map_err(|e| StreamError::Configuration(
-            format!("Failed to create host info: {:?}", e)
-        ))?;
+            "0.1.0",
+        )
+        .map_err(|e| StreamError::Configuration(format!("Failed to create host info: {:?}", e)))?;
 
         let shared_state_clone = Arc::clone(&self.shared_state);
 
         let mut instance = PluginInstance::<HostData>::new(
-            |_| {
-                HostShared {
-                    state: Arc::clone(&shared_state_clone),
-                }
+            |_| HostShared {
+                state: Arc::clone(&shared_state_clone),
             },
-            |_shared| (),  // Main thread handler factory
+            |_shared| (), // Main thread handler factory
             &self.bundle,
             &self.plugin_id,
             &host_info,
-        ).map_err(|e| StreamError::Configuration(
-            format!("Failed to create plugin instance: {:?}", e)
-        ))?;
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!("Failed to create plugin instance: {:?}", e))
+        })?;
 
         {
             let mut main_thread_handle = instance.plugin_handle();
@@ -356,45 +359,44 @@ impl ClapPluginHost {
                 let mut parameter_infos = Vec::new();
 
                 for i in 0..param_count {
-                    if let Some(param_info) = params_ext.get_info(&mut main_thread_handle, i, &mut param_buffer) {
+                    if let Some(param_info) =
+                        params_ext.get_info(&mut main_thread_handle, i, &mut param_buffer)
+                    {
                         let name = std::str::from_utf8(param_info.name)
                             .unwrap_or("Unknown")
                             .trim_end_matches('\0')
                             .to_string();
 
-                        let value = params_ext.get_value(&mut main_thread_handle, param_info.id)
+                        let value = params_ext
+                            .get_value(&mut main_thread_handle, param_info.id)
                             .unwrap_or(param_info.default_value);
 
                         let flags = param_info.flags;
-                        let is_automatable = flags.contains(
-                            clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE
-                        );
-                        let is_stepped = flags.contains(
-                            clack_extensions::params::ParamInfoFlags::IS_STEPPED
-                        );
-                        let is_periodic = flags.contains(
-                            clack_extensions::params::ParamInfoFlags::IS_PERIODIC
-                        );
-                        let is_hidden = flags.contains(
-                            clack_extensions::params::ParamInfoFlags::IS_HIDDEN
-                        );
-                        let is_readonly = flags.contains(
-                            clack_extensions::params::ParamInfoFlags::IS_READONLY
-                        );
-                        let is_bypass = flags.contains(
-                            clack_extensions::params::ParamInfoFlags::IS_BYPASS
-                        );
+                        let is_automatable = flags
+                            .contains(clack_extensions::params::ParamInfoFlags::IS_AUTOMATABLE);
+                        let is_stepped =
+                            flags.contains(clack_extensions::params::ParamInfoFlags::IS_STEPPED);
+                        let is_periodic =
+                            flags.contains(clack_extensions::params::ParamInfoFlags::IS_PERIODIC);
+                        let is_hidden =
+                            flags.contains(clack_extensions::params::ParamInfoFlags::IS_HIDDEN);
+                        let is_readonly =
+                            flags.contains(clack_extensions::params::ParamInfoFlags::IS_READONLY);
+                        let is_bypass =
+                            flags.contains(clack_extensions::params::ParamInfoFlags::IS_BYPASS);
 
                         let mut display_buf = vec![std::mem::MaybeUninit::new(0u8); 256];
-                        let display = params_ext.value_to_text(
-                            &mut main_thread_handle,
-                            param_info.id,
-                            value,
-                            &mut display_buf
-                        ).ok()
-                        .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                        .unwrap_or("")
-                        .to_string();
+                        let display = params_ext
+                            .value_to_text(
+                                &mut main_thread_handle,
+                                param_info.id,
+                                value,
+                                &mut display_buf,
+                            )
+                            .ok()
+                            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                            .unwrap_or("")
+                            .to_string();
 
                         parameter_infos.push(ParameterInfo {
                             id: param_info.id.get(),
@@ -414,8 +416,12 @@ impl ClapPluginHost {
 
                         tracing::debug!(
                             "Parameter {}: {} [ID={}] = {:.2} (range {:.2} to {:.2})",
-                            i, name, param_info.id.get(), value,
-                            param_info.min_value, param_info.max_value
+                            i,
+                            name,
+                            param_info.id.get(),
+                            value,
+                            param_info.min_value,
+                            param_info.max_value
                         );
                     }
                 }
@@ -432,15 +438,13 @@ impl ClapPluginHost {
             max_frames_count: max_frames as u32,
         };
 
-        let activated = instance.activate(|_, _| (), audio_config)
-            .map_err(|e| StreamError::Configuration(
-                format!("Failed to activate plugin: {:?}", e)
-            ))?;
+        let activated = instance.activate(|_, _| (), audio_config).map_err(|e| {
+            StreamError::Configuration(format!("Failed to activate plugin: {:?}", e))
+        })?;
 
-        let audio_processor = activated.start_processing()
-            .map_err(|e| StreamError::Configuration(
-                format!("Failed to start audio processing: {:?}", e)
-            ))?;
+        let audio_processor = activated.start_processing().map_err(|e| {
+            StreamError::Configuration(format!("Failed to start audio processing: {:?}", e))
+        })?;
 
         *self.instance.lock() = Some(instance);
         *self.audio_processor.lock() = Some(audio_processor);
@@ -486,7 +490,7 @@ impl ClapPluginHost {
         let num_samples = input.sample_count();
 
         for i in 0..num_samples {
-            let base_idx = i * 2;  // 2 channels (stereo)
+            let base_idx = i * 2; // 2 channels (stereo)
             self.deinterleave_buffers[0][i] = input.samples[base_idx];
             self.deinterleave_buffers[1][i] = input.samples[base_idx + 1];
         }
@@ -504,38 +508,40 @@ impl ClapPluginHost {
             output_samples,
             input.timestamp_ns,
             input.frame_number,
-            input.sample_rate
+            input.sample_rate,
         ))
     }
 
     fn process_audio_channels_inplace(&mut self, num_samples: usize) -> Result<()> {
         let mut processor_guard = self.audio_processor.lock();
-        let processor = processor_guard.as_mut()
+        let processor = processor_guard
+            .as_mut()
             .ok_or_else(|| StreamError::Configuration("Audio processor not started".into()))?;
 
         let mut input_ports_base = AudioPorts::with_capacity(2, 1);
         let mut output_ports_base = AudioPorts::with_capacity(2, 1);
 
-        let input_ports = input_ports_base.with_input_buffers(
-            std::iter::once(AudioPortBuffer {
-                latency: 0,
-                channels: AudioPortBufferType::f32_input_only(
-                    self.deinterleave_buffers.iter_mut().map(|buf| InputChannel {
+        let input_ports = input_ports_base.with_input_buffers(std::iter::once(AudioPortBuffer {
+            latency: 0,
+            channels: AudioPortBufferType::f32_input_only(
+                self.deinterleave_buffers
+                    .iter_mut()
+                    .map(|buf| InputChannel {
                         buffer: &mut buf[0..num_samples],
                         is_constant: false,
-                    })
-                ),
-            })
-        );
+                    }),
+            ),
+        }));
 
-        let mut output_ports = output_ports_base.with_output_buffers(
-            std::iter::once(AudioPortBuffer {
+        let mut output_ports =
+            output_ports_base.with_output_buffers(std::iter::once(AudioPortBuffer {
                 latency: 0,
                 channels: AudioPortBufferType::f32_output_only(
-                    self.output_buffers.iter_mut().map(|buf| &mut buf[0..num_samples])
+                    self.output_buffers
+                        .iter_mut()
+                        .map(|buf| &mut buf[0..num_samples]),
                 ),
-            })
-        );
+            }));
 
         let state = self.shared_state.lock();
         let current_gen = state.parameter_generation;
@@ -553,24 +559,26 @@ impl ClapPluginHost {
                 );
                 event_buffer.push(&event);
             }
-            drop(state);  // Release lock ASAP
+            drop(state); // Release lock ASAP
             self.last_parameter_generation = current_gen;
             event_buffer
         } else {
-            drop(state);  // Release lock ASAP
+            drop(state); // Release lock ASAP
             EventBuffer::with_capacity(0)
         };
 
         let input_events_ref = input_events.as_input();
 
-        processor.process(
-            &input_ports,
-            &mut output_ports,
-            &input_events_ref,
-            &mut OutputEvents::void(),
-            None,
-            None,
-        ).map_err(|e| StreamError::Runtime(format!("Plugin processing failed: {:?}", e)))?;
+        processor
+            .process(
+                &input_ports,
+                &mut output_ports,
+                &input_events_ref,
+                &mut OutputEvents::void(),
+                None,
+                None,
+            )
+            .map_err(|e| StreamError::Runtime(format!("Plugin processing failed: {:?}", e)))?;
 
         Ok(())
     }

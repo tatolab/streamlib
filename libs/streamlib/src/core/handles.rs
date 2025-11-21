@@ -1,6 +1,5 @@
-
-use std::marker::PhantomData;
 use super::PortMessage;
+use std::marker::PhantomData;
 
 pub type ProcessorId = String;
 

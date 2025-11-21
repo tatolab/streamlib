@@ -1,30 +1,27 @@
-
 mod error;
+mod package_manager;
 mod resources;
 mod tools;
-mod package_manager;
 
 pub use error::{McpError, Result};
-pub use package_manager::{PackageManager, PackageInfo, PackageStatus, ApprovalPolicy};
+pub use package_manager::{ApprovalPolicy, PackageInfo, PackageManager, PackageStatus};
 
 use crate::core::{ProcessorRegistry, StreamRuntime};
-use std::sync::Arc;
 use parking_lot::Mutex;
-use std::future::Future;
 use std::collections::HashSet;
+use std::future::Future;
+use std::sync::Arc;
 
 use rmcp::{
     model::*,
-    ServerHandler, ServiceExt, RoleServer,
     service::RequestContext,
     transport::{
         stdio,
         streamable_http_server::{
-            StreamableHttpService, StreamableHttpServerConfig,
-            session::local::LocalSessionManager,
+            session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
         },
     },
-    ErrorData as RmcpError,
+    ErrorData as RmcpError, RoleServer, ServerHandler, ServiceExt,
 };
 
 pub struct McpServer {
@@ -93,12 +90,16 @@ impl McpServer {
             version: self.version.clone(),
         };
 
-        let service = handler.serve(stdio()).await
+        let service = handler
+            .serve(stdio())
+            .await
             .map_err(|e| McpError::Protocol(format!("Failed to start stdio server: {}", e)))?;
 
         tracing::info!("MCP server running on stdio, awaiting requests");
 
-        service.waiting().await
+        service
+            .waiting()
+            .await
             .map_err(|e| McpError::Protocol(format!("Server error: {}", e)))?;
 
         Ok(())
@@ -149,7 +150,9 @@ impl McpServer {
 
         let listener = tokio::net::TcpListener::bind(&actual_bind_addr)
             .await
-            .map_err(|e| McpError::Protocol(format!("Failed to bind to {}: {}", actual_bind_addr, e)))?;
+            .map_err(|e| {
+                McpError::Protocol(format!("Failed to bind to {}: {}", actual_bind_addr, e))
+            })?;
 
         tracing::info!("MCP server running on HTTP at {}", actual_bind_addr);
         tracing::info!("Access the MCP server at http://{}/mcp", actual_bind_addr);
@@ -164,15 +167,15 @@ impl McpServer {
     fn parse_bind_addr(bind_addr: &str) -> Result<(String, u16)> {
         let parts: Vec<&str> = bind_addr.rsplitn(2, ':').collect();
         if parts.len() != 2 {
-            return Err(McpError::Configuration(
-                format!("Invalid bind address: {}. Expected format: host:port", bind_addr)
-            ));
+            return Err(McpError::Configuration(format!(
+                "Invalid bind address: {}. Expected format: host:port",
+                bind_addr
+            )));
         }
 
-        let port = parts[0].parse::<u16>()
-            .map_err(|_| McpError::Configuration(
-                format!("Invalid port number: {}", parts[0])
-            ))?;
+        let port = parts[0]
+            .parse::<u16>()
+            .map_err(|_| McpError::Configuration(format!("Invalid port number: {}", parts[0])))?;
 
         Ok((parts[1].to_string(), port))
     }
@@ -194,13 +197,11 @@ impl McpServer {
             }
         }
 
-        Err(McpError::Configuration(
-            format!(
-                "Could not find available port in range {}-{}",
-                start_port,
-                start_port.saturating_add(MAX_ATTEMPTS - 1)
-            )
-        ))
+        Err(McpError::Configuration(format!(
+            "Could not find available port in range {}-{}",
+            start_port,
+            start_port.saturating_add(MAX_ATTEMPTS - 1)
+        )))
     }
 
     pub fn name(&self) -> &str {
@@ -241,7 +242,8 @@ impl ServerHandler for StreamlibMcpHandler {
                 website_url: None,
             },
             instructions: Some(
-                "streamlib MCP server - discover and interact with streaming processors".to_string()
+                "streamlib MCP server - discover and interact with streaming processors"
+                    .to_string(),
             ),
         }
     }
@@ -256,11 +258,12 @@ impl ServerHandler for StreamlibMcpHandler {
         async move {
             tracing::debug!("MCP: list_resources called");
 
-            let resources = resources::list_resources(registry)
-                .map_err(|e| RmcpError::internal_error(
+            let resources = resources::list_resources(registry).map_err(|e| {
+                RmcpError::internal_error(
                     "list_resources_error",
-                    Some(serde_json::json!({"error": e.to_string()}))
-                ))?;
+                    Some(serde_json::json!({"error": e.to_string()})),
+                )
+            })?;
 
             let resources: Vec<Resource> = resources
                 .into_iter()
@@ -295,11 +298,12 @@ impl ServerHandler for StreamlibMcpHandler {
         async move {
             tracing::debug!("MCP: read_resource called for URI: {}", params.uri);
 
-            let content = resources::read_resource(registry, &params.uri)
-                .map_err(|e| RmcpError::internal_error(
+            let content = resources::read_resource(registry, &params.uri).map_err(|e| {
+                RmcpError::internal_error(
                     "resource_read_error",
-                    Some(serde_json::json!({"error": e.to_string(), "uri": params.uri}))
-                ))?;
+                    Some(serde_json::json!({"error": e.to_string(), "uri": params.uri})),
+                )
+            })?;
 
             Ok(ReadResourceResult {
                 contents: vec![ResourceContents::TextResourceContents {
@@ -330,11 +334,7 @@ impl ServerHandler for StreamlibMcpHandler {
                     Arc::new(serde_json::Map::new())
                 };
 
-                Tool::new(
-                    t.name,
-                    t.description,
-                    input_schema,
-                )
+                Tool::new(t.name, t.description, input_schema)
             })
             .collect();
 
@@ -349,7 +349,11 @@ impl ServerHandler for StreamlibMcpHandler {
         params: CallToolRequestParam,
         _ctx: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, RmcpError> {
-        tracing::info!("MCP: call_tool called: {} with args: {:?}", params.name, params.arguments);
+        tracing::info!(
+            "MCP: call_tool called: {} with args: {:?}",
+            params.name,
+            params.arguments
+        );
 
         let arguments = serde_json::Value::Object(params.arguments.unwrap_or_default());
 
@@ -358,12 +362,15 @@ impl ServerHandler for StreamlibMcpHandler {
             arguments,
             self.registry.clone(),
             self.runtime.as_ref().map(Arc::clone),
-            self.permissions.clone()
-        ).await
-            .map_err(|e| RmcpError::internal_error(
+            self.permissions.clone(),
+        )
+        .await
+        .map_err(|e| {
+            RmcpError::internal_error(
                 "tool_execution_error",
-                Some(serde_json::json!({"error": e.to_string()}))
-            ))?;
+                Some(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
         let mut contents = vec![Content::text(result.message)];
         if let Some(data) = result.data {
@@ -396,11 +403,7 @@ mod tests {
     #[test]
     fn test_custom_info() {
         let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
-        let server = McpServer::with_info(
-            registry,
-            "my-custom-server",
-            "1.2.3",
-        );
+        let server = McpServer::with_info(registry, "my-custom-server", "1.2.3");
 
         assert_eq!(server.name(), "my-custom-server");
         assert_eq!(server.version(), "1.2.3");

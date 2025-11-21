@@ -2,9 +2,8 @@
 // Users import these common names and get the appropriate platform implementation
 #[cfg(target_os = "macos")]
 pub use crate::apple::processors::camera::{
+    AppleCameraConfig as CameraConfig, AppleCameraDevice as CameraDevice,
     AppleCameraProcessor as CameraProcessor,
-    AppleCameraConfig as CameraConfig,
-    AppleCameraDevice as CameraDevice,
 };
 
 // Future platform implementations

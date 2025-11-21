@@ -1,0 +1,39 @@
+# Lefthook configuration for StreamLib
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+      stage_fixed: true
+
+    cargo-check:
+      glob: "*.rs"
+      run: cargo check --workspace --all-features
+
+pre-push:
+  parallel: false  # Run sequentially to see errors in order
+  commands:
+    # 1. Fast check - ensure code compiles
+    check:
+      run: cargo check --workspace --all-features
+
+    # 2. Linting - catch code quality issues
+    clippy:
+      run: cargo clippy --workspace --all-features --bins --lib -- -D warnings
+
+    # 3. Tests - ensure functionality works
+    test-lib:
+      run: cargo test --workspace --all-features --lib
+
+    # 4. Example builds - ensure examples still compile
+    test-examples:
+      run: |
+        cargo build -p camera-display
+        cargo build -p whep-player
+        cargo build -p microphone-reverb-speaker
+
+# Skip hooks with LEFTHOOK=0 environment variable
+# Example: LEFTHOOK=0 git push

@@ -1,11 +1,15 @@
+//! Python port and frame extension types
+//!
+//! Clippy false positive: useless_conversion warnings are from PyO3 macro expansion
+#![allow(clippy::useless_conversion)]
+// Port fields are used via Python bindings - not detected by dead code analysis
+#![allow(dead_code)]
 
-use pyo3::prelude::*;
-use pyo3::exceptions::PyAttributeError;
-use crate::core::{StreamInput, StreamOutput, VideoFrame, AudioFrame, DataFrame, GpuContext};
 use super::PyVideoFrame;
-use std::sync::Arc;
+use crate::core::{AudioFrame, DataFrame, GpuContext, StreamInput, StreamOutput, VideoFrame};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use pyo3::prelude::*;
+use std::sync::Arc;
 
 #[pyclass(name = "StreamInput", module = "streamlib")]
 #[derive(Clone)]
@@ -297,7 +301,13 @@ impl PyGpuContext {
             view_formats: &[],
         });
 
-        Ok(Py::new(py, PyWgpuTexture { texture: std::sync::Arc::new(texture) })?.into_py(py))
+        Ok(Py::new(
+            py,
+            PyWgpuTexture {
+                texture: std::sync::Arc::new(texture),
+            },
+        )?
+        .into_py(py))
     }
 
     fn __repr__(&self) -> String {

@@ -1,4 +1,4 @@
-use super::connection::{ConnectionId, OwnedProducer, OwnedConsumer, create_owned_connection};
+use super::connection::{create_owned_connection, ConnectionId, OwnedConsumer, OwnedProducer};
 use super::ports::{PortAddress, PortMessage};
 use crate::core::{Result, StreamError};
 use std::any::TypeId;
@@ -78,10 +78,7 @@ impl ConnectionManager {
         self.metadata.insert(conn_id, metadata);
 
         // Update source index (one source can have multiple connections)
-        self.source_index
-            .entry(source)
-            .or_insert_with(Vec::new)
-            .push(conn_id);
+        self.source_index.entry(source).or_default().push(conn_id);
 
         // Update dest index (enforces 1-to-1)
         self.dest_index.insert(dest, conn_id);
@@ -205,7 +202,9 @@ mod tests {
         let source = PortAddress::new("proc1", "out");
         let dest = PortAddress::new("proc2", "in");
 
-        manager.create_connection::<DataFrame>(source, dest, 4).unwrap();
+        manager
+            .create_connection::<DataFrame>(source, dest, 4)
+            .unwrap();
         assert_eq!(manager.connection_count(), 1);
     }
 }

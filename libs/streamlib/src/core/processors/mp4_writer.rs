@@ -2,8 +2,7 @@
 // Users import these common names and get the appropriate platform implementation
 #[cfg(target_os = "macos")]
 pub use crate::apple::processors::mp4_writer::{
-    AppleMp4WriterProcessor as Mp4WriterProcessor,
-    AppleMp4WriterConfig as Mp4WriterConfig,
+    AppleMp4WriterConfig as Mp4WriterConfig, AppleMp4WriterProcessor as Mp4WriterProcessor,
 };
 
 // Future platform implementations

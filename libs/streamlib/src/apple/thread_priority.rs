@@ -1,4 +1,4 @@
-use crate::core::{Result, StreamError, scheduling::ThreadPriority};
+use crate::core::{scheduling::ThreadPriority, Result, StreamError};
 
 /// Apply thread priority to the current thread on macOS/iOS
 pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
@@ -11,10 +11,10 @@ pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn set_realtime_priority() -> Result<()> {
+    use mach2::kern_return::KERN_SUCCESS;
     use mach2::thread_policy::{
         thread_time_constraint_policy_data_t, THREAD_TIME_CONSTRAINT_POLICY,
     };
-    use mach2::kern_return::KERN_SUCCESS;
 
     extern "C" {
         fn mach_thread_self() -> u32;
@@ -34,16 +34,14 @@ fn set_realtime_priority() -> Result<()> {
 
     // Convert nanoseconds to Mach absolute time units
     // On Apple Silicon, the timebase is 1:1 with nanoseconds
-    let mut timebase_info = mach2::mach_time::mach_timebase_info_data_t {
-        numer: 0,
-        denom: 0,
-    };
+    let mut timebase_info = mach2::mach_time::mach_timebase_info_data_t { numer: 0, denom: 0 };
 
     unsafe {
         mach2::mach_time::mach_timebase_info(&mut timebase_info as *mut _);
 
         let period = (period_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
-        let computation = (computation_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
+        let computation =
+            (computation_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
         let constraint = (constraint_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
 
         let policy = thread_time_constraint_policy_data_t {
@@ -62,22 +60,25 @@ fn set_realtime_priority() -> Result<()> {
 
         if result != KERN_SUCCESS {
             return Err(StreamError::Runtime(format!(
-                "Failed to set real-time thread priority: mach error {}", result
+                "Failed to set real-time thread priority: mach error {}",
+                result
             )));
         }
     }
 
-    tracing::info!("Applied real-time thread priority (10ms period, 5ms computation, 7ms constraint)");
+    tracing::info!(
+        "Applied real-time thread priority (10ms period, 5ms computation, 7ms constraint)"
+    );
     Ok(())
 }
 
 #[cfg(target_os = "ios")]
 fn set_realtime_priority() -> Result<()> {
     // iOS uses same Mach APIs as macOS
+    use mach2::kern_return::KERN_SUCCESS;
     use mach2::thread_policy::{
         thread_time_constraint_policy_data_t, THREAD_TIME_CONSTRAINT_POLICY,
     };
-    use mach2::kern_return::KERN_SUCCESS;
 
     extern "C" {
         fn mach_thread_self() -> u32;
@@ -93,16 +94,14 @@ fn set_realtime_priority() -> Result<()> {
     let computation_ns = 5_000_000u64;
     let constraint_ns = 7_000_000u64;
 
-    let mut timebase_info = mach2::mach_time::mach_timebase_info_data_t {
-        numer: 0,
-        denom: 0,
-    };
+    let mut timebase_info = mach2::mach_time::mach_timebase_info_data_t { numer: 0, denom: 0 };
 
     unsafe {
         mach2::mach_time::mach_timebase_info(&mut timebase_info as *mut _);
 
         let period = (period_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
-        let computation = (computation_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
+        let computation =
+            (computation_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
         let constraint = (constraint_ns * timebase_info.denom as u64) / timebase_info.numer as u64;
 
         let policy = thread_time_constraint_policy_data_t {
@@ -121,7 +120,8 @@ fn set_realtime_priority() -> Result<()> {
 
         if result != KERN_SUCCESS {
             return Err(StreamError::Runtime(format!(
-                "Failed to set real-time thread priority: mach error {}", result
+                "Failed to set real-time thread priority: mach error {}",
+                result
             )));
         }
     }

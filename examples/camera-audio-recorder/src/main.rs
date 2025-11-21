@@ -1,15 +1,13 @@
-use streamlib::{Result, StreamRuntime};
-use streamlib::{
-    CameraProcessor, AudioCaptureProcessor, Mp4WriterProcessor,
-    AudioResamplerProcessor, AudioChannelConverterProcessor,
-};
-use streamlib::core::{
-    CameraConfig, AudioCaptureConfig, Mp4WriterConfig,
-    AudioResamplerConfig, ResamplingQuality,
-    AudioChannelConverterConfig, ChannelConversionMode,
-    VideoFrame, AudioFrame,
-};
 use std::path::PathBuf;
+use streamlib::core::{
+    AudioCaptureConfig, AudioChannelConverterConfig, AudioFrame, AudioResamplerConfig,
+    CameraConfig, ChannelConversionMode, Mp4WriterConfig, ResamplingQuality, VideoFrame,
+};
+use streamlib::{
+    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioResamplerProcessor,
+    CameraProcessor, Mp4WriterProcessor,
+};
+use streamlib::{Result, StreamRuntime};
 
 fn main() -> Result<()> {
     // Initialize tracing
@@ -40,61 +38,53 @@ fn main() -> Result<()> {
     println!("✅ Microphone permission granted\n");
 
     // Determine output path - save in example folder by default
-    let output_path = std::env::var("OUTPUT_PATH")
-        .unwrap_or_else(|_| {
-            // Get example directory (parent of Cargo.toml)
-            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-                .unwrap_or_else(|_| ".".to_string());
-            format!("{}/recording.mp4", manifest_dir)
-        });
+    let output_path = std::env::var("OUTPUT_PATH").unwrap_or_else(|_| {
+        // Get example directory (parent of Cargo.toml)
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        format!("{}/recording.mp4", manifest_dir)
+    });
 
     println!("📹 Output file: {}\n", output_path);
 
     println!("📷 Adding camera processor...");
-    let camera = runtime.add_processor_with_config::<CameraProcessor>(
-        CameraConfig {
-            device_id: Some("0x1424001bcf2284".to_string()), // Use default camera
-        }
-    )?;
+    let camera = runtime.add_processor_with_config::<CameraProcessor>(CameraConfig {
+        device_id: Some("0x1424001bcf2284".to_string()), // Use default camera
+    })?;
     println!("✓ Camera added (capturing video)\n");
 
     println!("🎤 Adding audio capture processor...");
-    let audio_capture = runtime.add_processor_with_config::<AudioCaptureProcessor>(
-        AudioCaptureConfig {
+    let audio_capture =
+        runtime.add_processor_with_config::<AudioCaptureProcessor>(AudioCaptureConfig {
             device_id: None, // Use default microphone
-        }
-    )?;
+        })?;
     println!("✓ Audio capture added (mono @ 24kHz)\n");
 
     println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
-    let resampler = runtime.add_processor_with_config::<AudioResamplerProcessor>(
-        AudioResamplerConfig {
+    let resampler =
+        runtime.add_processor_with_config::<AudioResamplerProcessor>(AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
-        }
-    )?;
+        })?;
     println!("✓ Resampler added\n");
 
     println!("🎛️  Adding channel converter (mono → stereo)...");
     let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
         AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
-        }
+        },
     )?;
     println!("✓ Channel converter added\n");
 
     println!("💾 Adding MP4 writer processor...");
-    let mp4_writer = runtime.add_processor_with_config::<Mp4WriterProcessor>(
-        Mp4WriterConfig {
-            output_path: PathBuf::from(&output_path),
-            sync_tolerance_ms: Some(16.6), // ~1 frame at 60fps
-            video_codec: Some("avc1".to_string()), // H.264
-            video_bitrate: Some(5_000_000), // 5 Mbps
-            audio_codec: Some("aac".to_string()), // AAC (note: currently using LPCM)
-            audio_bitrate: Some(128_000), // 128 kbps
-        }
-    )?;
+    let mp4_writer = runtime.add_processor_with_config::<Mp4WriterProcessor>(Mp4WriterConfig {
+        output_path: PathBuf::from(&output_path),
+        sync_tolerance_ms: Some(16.6),         // ~1 frame at 60fps
+        video_codec: Some("avc1".to_string()), // H.264
+        video_bitrate: Some(5_000_000),        // 5 Mbps
+        audio_codec: Some("aac".to_string()),  // AAC (note: currently using LPCM)
+        audio_bitrate: Some(128_000),          // 128 kbps
+    })?;
     println!("✓ MP4 writer added (H.264 video + stereo LPCM audio @ 48kHz)\n");
 
     println!("🔗 Connecting pipeline:");

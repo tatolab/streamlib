@@ -9,20 +9,25 @@
 //
 // This implementation handles modes 1 and 2, which are most common for streaming.
 
-use crate::core::{StreamError, Result};
+use crate::core::{Result, StreamError};
 use bytes::Bytes;
 use std::collections::HashMap;
 
 /// H.264 NAL unit types (bits 0-4 of NAL header)
 #[allow(dead_code)]
-const NAL_TYPE_SLICE: u8 = 1;           // Non-IDR coded slice
-const NAL_TYPE_IDR: u8 = 5;             // IDR (keyframe) coded slice
-const NAL_TYPE_SEI: u8 = 6;             // Supplemental Enhancement Information
-const NAL_TYPE_SPS: u8 = 7;             // Sequence Parameter Set
-const NAL_TYPE_PPS: u8 = 8;             // Picture Parameter Set
-const NAL_TYPE_AUD: u8 = 9;             // Access Unit Delimiter
-const NAL_TYPE_FU_A: u8 = 28;           // Fragmentation Unit A
-const NAL_TYPE_STAP_A: u8 = 24;         // Single-Time Aggregation Packet A
+const NAL_TYPE_SLICE: u8 = 1; // Non-IDR coded slice
+#[allow(dead_code)]
+const NAL_TYPE_IDR: u8 = 5; // IDR (keyframe) coded slice
+#[allow(dead_code)]
+const NAL_TYPE_SEI: u8 = 6; // Supplemental Enhancement Information
+#[allow(dead_code)]
+const NAL_TYPE_SPS: u8 = 7; // Sequence Parameter Set
+#[allow(dead_code)]
+const NAL_TYPE_PPS: u8 = 8; // Picture Parameter Set
+#[allow(dead_code)]
+const NAL_TYPE_AUD: u8 = 9; // Access Unit Delimiter
+const NAL_TYPE_FU_A: u8 = 28; // Fragmentation Unit A
+const NAL_TYPE_STAP_A: u8 = 24; // Single-Time Aggregation Packet A
 
 /// H.264 RTP depacketizer with FU-A reassembly
 ///
@@ -113,12 +118,7 @@ impl H264RtpDepacketizer {
     ///
     /// FU indicator: F=0 | NRI (2 bits) | Type=28
     /// FU header: S (start) | E (end) | R=0 | NAL type (5 bits)
-    fn process_fu_a(
-        &mut self,
-        payload: Bytes,
-        timestamp: u32,
-        seq_num: u16,
-    ) -> Result<Vec<Bytes>> {
+    fn process_fu_a(&mut self, payload: Bytes, timestamp: u32, seq_num: u16) -> Result<Vec<Bytes>> {
         if payload.len() < 2 {
             return Err(StreamError::Runtime("FU-A packet too small".into()));
         }
@@ -321,7 +321,9 @@ mod tests {
         let nal_header = 0x65; // F=0, NRI=3, Type=5 (IDR)
         let payload = Bytes::from(vec![nal_header, 0x01, 0x02, 0x03]);
 
-        let result = depacketizer.process_packet(payload.clone(), 1000, 1).unwrap();
+        let result = depacketizer
+            .process_packet(payload.clone(), 1000, 1)
+            .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], payload);

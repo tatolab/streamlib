@@ -1,8 +1,8 @@
-use crate::core::{Result, StreamInput, StreamOutput};
 use crate::core::frames::AudioFrame;
-use serde::{Serialize, Deserialize};
-use std::sync::Arc;
+use crate::core::{Result, StreamInput, StreamOutput};
 use dasp::Signal;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,17 +18,12 @@ impl Default for AudioMixerConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum MixingStrategy {
     Sum,
+    #[default]
     SumNormalized,
     SumClipped,
-}
-
-impl Default for MixingStrategy {
-    fn default() -> Self {
-        MixingStrategy::SumNormalized
-    }
 }
 
 #[derive(StreamProcessor)]
@@ -59,8 +54,8 @@ pub struct AudioMixerProcessor {
 impl AudioMixerProcessor {
     // Lifecycle - auto-detected by macro
     fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
-        self.sample_rate = 0;  // Will be inferred from first frame
-        self.buffer_size = 0;  // Will be inferred from first frame
+        self.sample_rate = 0; // Will be inferred from first frame
+        self.buffer_size = 0; // Will be inferred from first frame
         self.frame_counter = 0;
 
         tracing::info!(
@@ -100,7 +95,7 @@ impl AudioMixerProcessor {
         // Initialize from first frame
         if self.sample_rate == 0 {
             self.sample_rate = left_frame.sample_rate;
-            self.buffer_size = left_frame.samples.len();  // Mono samples
+            self.buffer_size = left_frame.samples.len(); // Mono samples
             tracing::info!(
                 "[AudioMixer] Inferred config from first frame: {}Hz, {} samples",
                 self.sample_rate,
@@ -162,17 +157,21 @@ impl AudioMixerProcessor {
             let (final_left, final_right) = match self.config.strategy {
                 MixingStrategy::Sum => (left_sample, right_sample),
                 MixingStrategy::SumNormalized => (left_sample, right_sample),
-                MixingStrategy::SumClipped => (
-                    left_sample.clamp(-1.0, 1.0),
-                    right_sample.clamp(-1.0, 1.0),
-                ),
+                MixingStrategy::SumClipped => {
+                    (left_sample.clamp(-1.0, 1.0), right_sample.clamp(-1.0, 1.0))
+                }
             };
 
-            stereo_samples.push(final_left);   // Left channel
-            stereo_samples.push(final_right);  // Right channel
+            stereo_samples.push(final_left); // Left channel
+            stereo_samples.push(final_right); // Right channel
         }
 
-        let output_frame = AudioFrame::<2>::new(stereo_samples, timestamp_ns, self.frame_counter, self.sample_rate);
+        let output_frame = AudioFrame::<2>::new(
+            stereo_samples,
+            timestamp_ns,
+            self.frame_counter,
+            self.sample_rate,
+        );
         self.audio.write(output_frame);
 
         tracing::debug!("[AudioMixer] Wrote mixed stereo frame");

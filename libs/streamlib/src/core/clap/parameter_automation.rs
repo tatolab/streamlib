@@ -1,6 +1,5 @@
-
-use crate::core::Result;
 use super::parameter_modulation::ParameterModulator;
+use crate::core::Result;
 use std::collections::HashMap;
 
 pub trait ClapParameterControl {
@@ -58,7 +57,9 @@ impl ParameterAutomation {
         });
 
         self.scheduled_changes.sort_by(|a, b| {
-            a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal)
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
 
@@ -80,11 +81,7 @@ impl ParameterAutomation {
         });
     }
 
-    pub fn update<P>(
-        &mut self,
-        time: f64,
-        processor: &mut P,
-    ) -> Result<usize>
+    pub fn update<P>(&mut self, time: f64, processor: &mut P) -> Result<usize>
     where
         P: ClapParameterControl,
     {
@@ -168,13 +165,15 @@ impl Default for ParameterAutomation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::parameter_modulation::LfoWaveform;
+    use super::*;
 
+    #[allow(dead_code)]
     struct MockProcessor {
         parameters: HashMap<u32, f64>,
     }
 
+    #[allow(dead_code)]
     impl MockProcessor {
         fn new() -> Self {
             Self {
@@ -186,7 +185,6 @@ mod tests {
             self.parameters.get(&id).copied()
         }
     }
-
 
     #[test]
     fn test_schedule_ordering() {

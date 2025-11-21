@@ -2,7 +2,7 @@
 //
 // Provides Opus encoding for real-time audio streaming.
 
-use crate::core::{AudioFrame, StreamError, Result};
+use crate::core::{AudioFrame, Result, StreamError};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -77,21 +77,23 @@ pub trait AudioEncoderOpus: Send {
 pub struct OpusEncoder {
     config: AudioEncoderConfig,
     encoder: opus::Encoder,
-    frame_size: usize,  // 960 samples per channel @ 48kHz (20ms)
+    frame_size: usize, // 960 samples per channel @ 48kHz (20ms)
 }
 
 impl OpusEncoder {
     pub fn new(config: AudioEncoderConfig) -> Result<Self> {
         // Validate config
         if config.sample_rate != 48000 {
-            return Err(StreamError::Configuration(
-                format!("Opus encoder only supports 48kHz sample rate, got {}Hz", config.sample_rate)
-            ));
+            return Err(StreamError::Configuration(format!(
+                "Opus encoder only supports 48kHz sample rate, got {}Hz",
+                config.sample_rate
+            )));
         }
         if config.channels != 2 {
-            return Err(StreamError::Configuration(
-                format!("Opus encoder only supports stereo (2 channels), got {}", config.channels)
-            ));
+            return Err(StreamError::Configuration(format!(
+                "Opus encoder only supports stereo (2 channels), got {}",
+                config.channels
+            )));
         }
 
         // Calculate frame size (20ms @ 48kHz = 960 samples per channel)
@@ -101,18 +103,24 @@ impl OpusEncoder {
         let mut encoder = opus::Encoder::new(
             config.sample_rate,
             opus::Channels::Stereo,
-            opus::Application::Audio,  // Use Audio for best quality (music/broadcast)
-        ).map_err(|e| StreamError::Configuration(format!("Failed to create Opus encoder: {:?}", e)))?;
+            opus::Application::Audio, // Use Audio for best quality (music/broadcast)
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!("Failed to create Opus encoder: {:?}", e))
+        })?;
 
         // Configure encoder
-        encoder.set_bitrate(opus::Bitrate::Bits(config.bitrate_bps as i32))
+        encoder
+            .set_bitrate(opus::Bitrate::Bits(config.bitrate_bps as i32))
             .map_err(|e| StreamError::Configuration(format!("Failed to set bitrate: {:?}", e)))?;
 
-        encoder.set_vbr(config.vbr)
+        encoder
+            .set_vbr(config.vbr)
             .map_err(|e| StreamError::Configuration(format!("Failed to set VBR: {:?}", e)))?;
 
         // Enable FEC (Forward Error Correction) for better packet loss resilience
-        encoder.set_inband_fec(true)
+        encoder
+            .set_inband_fec(true)
             .map_err(|e| StreamError::Configuration(format!("Failed to set FEC: {:?}", e)))?;
 
         tracing::info!(
@@ -145,7 +153,7 @@ impl AudioEncoderOpus for OpusEncoder {
         }
 
         // Validate frame size (should be exactly 960 samples per channel for 20ms @ 48kHz)
-        let expected_samples = self.frame_size;  // 960
+        let expected_samples = self.frame_size; // 960
         let actual_samples = frame.sample_count();
 
         if actual_samples != expected_samples {
@@ -159,20 +167,21 @@ impl AudioEncoderOpus for OpusEncoder {
 
         // Encode (opus expects interleaved f32, which is what AudioFrame uses)
         // Max packet size ~4KB is enough for worst case Opus output
-        let encoded_data = self.encoder
+        let encoded_data = self
+            .encoder
             .encode_vec_float(&frame.samples, 4000)
             .map_err(|e| StreamError::Runtime(format!("Opus encoding failed: {:?}", e)))?;
 
         tracing::trace!(
             "Encoded audio frame: {} samples → {} bytes (compression: {:.2}x)",
-            actual_samples * 2,  // Total samples (stereo)
+            actual_samples * 2, // Total samples (stereo)
             encoded_data.len(),
-            (actual_samples * 2 * 4) as f32 / encoded_data.len() as f32  // f32 = 4 bytes per sample
+            (actual_samples * 2 * 4) as f32 / encoded_data.len() as f32 // f32 = 4 bytes per sample
         );
 
         Ok(EncodedAudioFrame {
             data: encoded_data,
-            timestamp_ns: frame.timestamp_ns,  // Preserve timestamp exactly
+            timestamp_ns: frame.timestamp_ns, // Preserve timestamp exactly
             sample_count: actual_samples,
         })
     }

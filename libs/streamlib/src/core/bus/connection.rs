@@ -1,10 +1,16 @@
-use rtrb::{Producer, Consumer, RingBuffer};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::Mutex;
+use rtrb::{Consumer, Producer, RingBuffer};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnectionId(pub u64);
+
+impl Default for ConnectionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ConnectionId {
     pub fn new() -> Self {

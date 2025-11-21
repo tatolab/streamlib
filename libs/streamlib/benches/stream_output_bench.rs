@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::sync::Arc;
 use streamlib::core::bus::ports::StreamOutput;
 use streamlib::core::frames::AudioFrame;
-use std::sync::Arc;
 
 /// Benchmark: Arc-wrapped vs bare StreamOutput operations
 ///
@@ -44,12 +44,7 @@ fn bench_arc_deref_write(c: &mut Criterion) {
 
         let mut counter = 0u64;
         b.iter(|| {
-            let frame = AudioFrame::<2>::new(
-                vec![0.0; 2048],
-                counter as i64,
-                counter,
-                48000
-            );
+            let frame = AudioFrame::<2>::new(vec![0.0; 2048], counter as i64, counter, 48000);
             output_clone.write(black_box(frame));
             counter += 1;
         });
@@ -61,12 +56,7 @@ fn bench_arc_deref_write(c: &mut Criterion) {
 
         let mut counter = 0u64;
         b.iter(|| {
-            let frame = AudioFrame::<2>::new(
-                vec![0.0; 2048],
-                counter as i64,
-                counter,
-                48000
-            );
+            let frame = AudioFrame::<2>::new(vec![0.0; 2048], counter as i64, counter, 48000);
             output.write(black_box(frame));
             counter += 1;
         });
@@ -89,12 +79,7 @@ fn bench_arc_overhead_in_callback(c: &mut Criterion) {
         let mut counter = 0u64;
         b.iter(|| {
             // Inside callback: just deref and write
-            let frame = AudioFrame::<1>::new(
-                vec![0.0; 512],
-                counter as i64,
-                counter,
-                48000
-            );
+            let frame = AudioFrame::<1>::new(vec![0.0; 512], counter as i64, counter, 48000);
             output_for_callback.write(black_box(frame));
             counter += 1;
         });
@@ -110,12 +95,7 @@ fn bench_arc_overhead_in_callback(c: &mut Criterion) {
         // Simulate callback being invoked many times
         let mut counter = 0u64;
         b.iter(|| {
-            let frame = AudioFrame::<1>::new(
-                vec![0.0; 512],
-                counter as i64,
-                counter,
-                48000
-            );
+            let frame = AudioFrame::<1>::new(vec![0.0; 512], counter as i64, counter, 48000);
             output_for_callback.write(black_box(frame));
             counter += 1;
         });

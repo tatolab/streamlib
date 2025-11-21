@@ -1,6 +1,6 @@
-use streamlib::{Result, StreamRuntime};
-use streamlib::{CameraProcessor, DisplayProcessor};
 use streamlib::core::{CameraConfig, DisplayConfig, VideoFrame};
+use streamlib::{CameraProcessor, DisplayProcessor};
+use streamlib::{Result, StreamRuntime};
 
 fn main() -> Result<()> {
     // Initialize tracing
@@ -13,22 +13,18 @@ fn main() -> Result<()> {
     let mut runtime = StreamRuntime::new();
 
     println!("📷 Adding camera processor...");
-    let camera = runtime.add_processor_with_config::<CameraProcessor>(
-        CameraConfig {
-            device_id: None, // Use default camera
-        }
-    )?;
+    let camera = runtime.add_processor_with_config::<CameraProcessor>(CameraConfig {
+        device_id: None, // Use default camera
+    })?;
     println!("✓ Camera added\n");
 
     println!("🖥️  Adding display processor...");
-    let display = runtime.add_processor_with_config::<DisplayProcessor>(
-        DisplayConfig {
-            width: 3840,
-            height: 2160,
-            title: Some("streamlib Camera Display".to_string()),
-            scaling_mode: Default::default(),  // Use default scaling (Stretch)
-        }
-    )?;
+    let display = runtime.add_processor_with_config::<DisplayProcessor>(DisplayConfig {
+        width: 3840,
+        height: 2160,
+        title: Some("streamlib Camera Display".to_string()),
+        scaling_mode: Default::default(), // Use default scaling (Stretch)
+    })?;
     println!("✓ Display added\n");
 
     println!("🔗 Connecting camera → display (type-safe handles)...");
