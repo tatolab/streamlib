@@ -384,9 +384,9 @@ mod tests {
 
         let result = ProcessorAttributes::parse(&attrs);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("mode must be either Pull or Push"));
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("mode must be"));
+        assert!(error_msg.contains("Pull"));
+        assert!(error_msg.contains("Push"));
     }
 }

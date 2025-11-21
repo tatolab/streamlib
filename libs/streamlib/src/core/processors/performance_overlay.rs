@@ -835,7 +835,7 @@ mod tests {
         assert!(descriptor.inputs[0].required);
 
         assert_eq!(descriptor.outputs.len(), 1);
-        assert_eq!(descriptor.outputs[0].name, "video");
+        assert_eq!(descriptor.outputs[0].name, "video_out");
         assert_eq!(descriptor.outputs[0].schema.name, "VideoFrame");
         assert!(descriptor.outputs[0].required);
 

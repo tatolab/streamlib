@@ -1555,6 +1555,20 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
         .as_deref()
         .unwrap_or("Generated processor");
 
+    // Usage context: use attribute or generate smart default
+    let usage_context = analysis
+        .processor_attrs
+        .usage_context
+        .clone()
+        .unwrap_or_else(|| generate_usage_context(analysis));
+
+    // Tags: use attribute or generate smart defaults
+    let tags = if analysis.processor_attrs.tags.is_empty() {
+        generate_tags(analysis)
+    } else {
+        analysis.processor_attrs.tags.clone()
+    };
+
     // Generate input port descriptors
     let input_ports: Vec<TokenStream> = analysis
         .input_ports()
@@ -1598,6 +1612,8 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
         fn descriptor() -> Option<::streamlib::core::ProcessorDescriptor> {
             Some(
                 ::streamlib::core::ProcessorDescriptor::new(#processor_name, #description)
+                    .with_usage_context(#usage_context)
+                    .with_tags(vec![#(#tags.to_string()),*])
                     #(#input_ports)*
                     #(#output_ports)*
             )
