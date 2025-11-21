@@ -129,7 +129,6 @@ mod tests {
     #[test]
     fn test_audio_requirements_in_descriptor() {
         use crate::core::AudioRequirements;
-        use std::sync::Arc as StdArc;
 
         let registry = create_test_registry();
 

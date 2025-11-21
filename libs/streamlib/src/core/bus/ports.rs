@@ -417,7 +417,8 @@ mod tests {
     #[test]
     fn test_port_type_defaults() {
         assert_eq!(PortType::Video.default_capacity(), 3);
-        assert_eq!(PortType::Audio1.default_capacity(), 4);
+        assert_eq!(PortType::Audio1.default_capacity(), 32);
+        assert_eq!(PortType::Audio2.default_capacity(), 32);
         assert_eq!(PortType::Data.default_capacity(), 16);
     }
 

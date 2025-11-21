@@ -104,6 +104,8 @@ impl ProcessorAttributes {
 
                 // tags = ["tag1", "tag2"]
                 if meta.path.is_ident("tags") {
+                    // Parse the `= [...]` part
+                    meta.value()?;  // Consume the `=` sign
                     let content;
                     syn::bracketed!(content in meta.input);
                     let tags: Punctuated<Expr, Token![,]> =

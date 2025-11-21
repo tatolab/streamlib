@@ -168,10 +168,12 @@ mod tests {
     use super::super::parameter_modulation::LfoWaveform;
     use super::*;
 
+    #[allow(dead_code)]
     struct MockProcessor {
         parameters: HashMap<u32, f64>,
     }
 
+    #[allow(dead_code)]
     impl MockProcessor {
         fn new() -> Self {
             Self {

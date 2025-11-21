@@ -113,11 +113,6 @@ impl WgpuBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::apple::iosurface::{
-        create_iosurface, create_metal_texture_from_iosurface, PixelFormat,
-    };
-
     // Note: WgpuBridge tests have been removed because they relied on an old `new()` API
     // that no longer exists. The current API uses `from_shared_device()` which requires
     // a wgpu::Device and wgpu::Queue that are complex to set up in unit tests.
