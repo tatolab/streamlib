@@ -307,6 +307,7 @@ mod tests {
     use crate::core::traits::StreamProcessor;
 
     #[test]
+    #[ignore] // Requires real audio hardware - not available in CI
     fn test_list_devices() {
         let devices = AppleAudioCaptureProcessor::list_devices();
 
