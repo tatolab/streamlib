@@ -142,32 +142,32 @@ fn main() -> Result<()> {
 
     // Pipeline: mic (mono 24kHz) → resampler (mono 48kHz) → channel_converter (stereo) → rechunker (fixed 512) → reverb → speaker
     runtime.connect(
-        mic.output_port::<AudioFrame<1>>("audio"),
-        resampler.input_port::<AudioFrame<1>>("audio_in"),
+        mic.output_port::<AudioFrame>("audio"),
+        resampler.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ mic (mono 24kHz) → resampler");
 
     runtime.connect(
-        resampler.output_port::<AudioFrame<1>>("audio_out"),
-        channel_converter.input_port::<AudioFrame<1>>("audio_in"),
+        resampler.output_port::<AudioFrame>("audio_out"),
+        channel_converter.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ resampler (mono 48kHz) → channel_converter");
 
     runtime.connect(
-        channel_converter.output_port::<AudioFrame<2>>("audio_out"),
-        rechunker.input_port::<AudioFrame<2>>("audio_in"),
+        channel_converter.output_port::<AudioFrame>("audio_out"),
+        rechunker.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ channel_converter (stereo) → rechunker");
 
     runtime.connect(
-        rechunker.output_port::<AudioFrame<2>>("audio_out"),
-        reverb.input_port::<AudioFrame<2>>("audio_in"),
+        rechunker.output_port::<AudioFrame>("audio_out"),
+        reverb.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ rechunker (fixed-size stereo) → reverb");
 
     runtime.connect(
-        reverb.output_port::<AudioFrame<2>>("audio_out"),
-        speaker.input_port::<AudioFrame<2>>("audio"),
+        reverb.output_port::<AudioFrame>("audio_out"),
+        speaker.input_port::<AudioFrame>("audio"),
     )?;
     println!("   ✓ reverb (stereo) → speaker");
 

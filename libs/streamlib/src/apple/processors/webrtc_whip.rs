@@ -116,7 +116,7 @@ pub struct WebRtcWhipProcessor {
     video_in: StreamInput<VideoFrame>,
 
     #[input(description = "Input audio frames to encode and stream")]
-    audio_in: StreamInput<AudioFrame<2>>,
+    audio_in: StreamInput<AudioFrame>,
 
     #[config]
     config: WebRtcWhipConfig,
@@ -344,7 +344,7 @@ impl WebRtcWhipProcessor {
         Ok(())
     }
 
-    fn process_audio_frame(&mut self, frame: &AudioFrame<2>) -> Result<()> {
+    fn process_audio_frame(&mut self, frame: &AudioFrame) -> Result<()> {
         if !self.session_started {
             return Ok(());
         }
@@ -820,13 +820,17 @@ mod tests {
 
     #[test]
     fn test_opus_encode_correct_frame_size() {
+        use crate::core::frames::AudioChannelCount;
+
         let config = AudioEncoderConfig::default();
         let mut encoder = OpusEncoder::new(config).unwrap();
 
         // Create 20ms frame @ 48kHz stereo = 960 samples * 2 channels = 1920 f32
         let samples = vec![0.0f32; 1920];
-        let frame = AudioFrame::<2>::new(
-            samples, 0,     // timestamp_ns
+        let frame = AudioFrame::new(
+            samples,
+            AudioChannelCount::Two,
+            0,     // timestamp_ns
             0,     // frame_number
             48000, // sample_rate
         );
@@ -842,12 +846,14 @@ mod tests {
 
     #[test]
     fn test_opus_encode_wrong_frame_size() {
+        use crate::core::frames::AudioChannelCount;
+
         let config = AudioEncoderConfig::default();
         let mut encoder = OpusEncoder::new(config).unwrap();
 
         // Wrong size: 512 samples instead of 960
         let samples = vec![0.0f32; 512 * 2];
-        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
+        let frame = AudioFrame::new(samples, AudioChannelCount::Two, 0, 0, 48000);
 
         let result = encoder.encode(&frame);
         assert!(result.is_err());
@@ -857,13 +863,19 @@ mod tests {
 
     #[test]
     fn test_opus_encode_wrong_sample_rate() {
+        use crate::core::frames::AudioChannelCount;
+
         let config = AudioEncoderConfig::default();
         let mut encoder = OpusEncoder::new(config).unwrap();
 
         // Wrong sample rate
         let samples = vec![0.0f32; 1920];
-        let frame = AudioFrame::<2>::new(
-            samples, 0, 0, 44100, // Wrong sample rate
+        let frame = AudioFrame::new(
+            samples,
+            AudioChannelCount::Two,
+            0,
+            0,
+            44100, // Wrong sample rate
         );
 
         let result = encoder.encode(&frame);
@@ -874,12 +886,14 @@ mod tests {
 
     #[test]
     fn test_opus_timestamp_preservation() {
+        use crate::core::frames::AudioChannelCount;
+
         let config = AudioEncoderConfig::default();
         let mut encoder = OpusEncoder::new(config).unwrap();
 
         let timestamp_ns = 123456789i64;
         let samples = vec![0.0f32; 1920];
-        let frame = AudioFrame::<2>::new(samples, timestamp_ns, 42, 48000);
+        let frame = AudioFrame::new(samples, AudioChannelCount::Two, timestamp_ns, 42, 48000);
 
         let encoded = encoder.encode(&frame).unwrap();
         assert_eq!(encoded.timestamp_ns, timestamp_ns);
@@ -897,6 +911,7 @@ mod tests {
 
     #[test]
     fn test_opus_encode_sine_wave() {
+        use crate::core::frames::AudioChannelCount;
         use std::f32::consts::PI;
 
         let config = AudioEncoderConfig::default();
@@ -911,7 +926,7 @@ mod tests {
             samples.push(sample); // Right
         }
 
-        let frame = AudioFrame::<2>::new(samples, 0, 0, 48000);
+        let frame = AudioFrame::new(samples, AudioChannelCount::Two, 0, 0, 48000);
         let encoded = encoder.encode(&frame).unwrap();
 
         // Encoded size should be reasonable (< 4KB for 20ms)
@@ -921,6 +936,8 @@ mod tests {
 
     #[test]
     fn test_opus_encode_multiple_frames() {
+        use crate::core::frames::AudioChannelCount;
+
         let config = AudioEncoderConfig::default();
         let mut encoder = OpusEncoder::new(config).unwrap();
 
@@ -928,7 +945,13 @@ mod tests {
         for frame_num in 0..10 {
             let timestamp_ns = frame_num * 20_000_000; // 20ms increments
             let samples = vec![0.1f32; 1920];
-            let frame = AudioFrame::<2>::new(samples, timestamp_ns, frame_num as u64, 48000);
+            let frame = AudioFrame::new(
+                samples,
+                AudioChannelCount::Two,
+                timestamp_ns,
+                frame_num as u64,
+                48000,
+            );
 
             let encoded = encoder.encode(&frame).unwrap();
             assert!(encoded.data.len() > 0);

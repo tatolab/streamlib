@@ -89,7 +89,7 @@ impl Default for AppleMp4WriterConfig {
 )]
 pub struct AppleMp4WriterProcessor {
     #[input(description = "Stereo audio frames to write to MP4")]
-    audio: StreamInput<AudioFrame<2>>,
+    audio: StreamInput<AudioFrame>,
 
     #[input(description = "Video frames to write to MP4")]
     video: StreamInput<VideoFrame>,
@@ -823,7 +823,7 @@ impl AppleMp4WriterProcessor {
     /// - Check sync_action() to determine what to do
     /// - Handle NoAction, DropVideoFrame, DuplicateVideoFrame
     #[allow(dead_code)] // Reserved for future A/V sync implementation
-    fn write_synced_frame(&mut self, audio: AudioFrame<2>, video: VideoFrame) -> Result<()> {
+    fn write_synced_frame(&mut self, audio: AudioFrame, video: VideoFrame) -> Result<()> {
         // Initialize AVAssetWriter on first frame (lazy initialization)
         if self.writer.is_none() {
             self.initialize_writer()?;
@@ -980,7 +980,7 @@ impl AppleMp4WriterProcessor {
     /// Write an audio frame to the MP4 file
     ///
     /// Creates CMSampleBuffer from PCM samples and appends to audio input
-    fn write_audio_frame(&self, frame: &AudioFrame<2>) -> Result<()> {
+    fn write_audio_frame(&self, frame: &AudioFrame) -> Result<()> {
         let audio_input = self
             .audio_input
             .as_ref()
@@ -993,7 +993,7 @@ impl AppleMp4WriterProcessor {
             return Ok(());
         }
 
-        // AudioFrame<2> stores samples as Vec<f32> with interleaved channels
+        // AudioFrame stores samples as Vec<f32> with interleaved channels
         // We need to convert f32 → i16 PCM for LPCM format
         let total_samples = frame.samples.len();
         let num_channels = frame.channels();

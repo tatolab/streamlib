@@ -1,4 +1,4 @@
-use crate::core::frames::AudioFrame;
+use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::{Result, StreamOutput};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,7 +69,7 @@ impl SineOscillator {
 pub struct ChordGeneratorProcessor {
     // Lock-free port (Arc-wrapped for thread sharing)
     #[output(description = "Stereo C Major chord (C4 + E4 + G4 mixed to both channels)")]
-    chord: Arc<StreamOutput<AudioFrame<2>>>,
+    chord: Arc<StreamOutput<AudioFrame>>,
 
     // Config field - macro extracts type and uses it as Config type
     #[config]
@@ -205,8 +205,13 @@ impl ChordGeneratorProcessor {
                     val
                 };
 
-                let chord_frame =
-                    AudioFrame::<2>::new(stereo_samples, timestamp_ns, counter, sample_rate);
+                let chord_frame = AudioFrame::new(
+                    stereo_samples,
+                    AudioChannelCount::Two,
+                    timestamp_ns,
+                    counter,
+                    sample_rate,
+                );
 
                 if iteration_count == 1 {
                     tracing::info!("ChordGenerator FIRST iteration: writing stereo chord frame");

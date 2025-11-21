@@ -34,7 +34,7 @@ pub use audio_channel_converter::{
     AudioChannelConverterConfig, AudioChannelConverterProcessor, ChannelConversionMode,
 };
 pub use audio_mixer::{AudioMixerConfig, AudioMixerProcessor, MixingStrategy};
-pub use audio_resampler::{AudioResamplerConfig, AudioResamplerProcessor, ResamplingQuality};
+pub use audio_resampler::{AudioResamplerConfig, AudioResamplerProcessor};
 pub use buffer_rechunker::{BufferRechunkerConfig, BufferRechunkerProcessor};
 pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;

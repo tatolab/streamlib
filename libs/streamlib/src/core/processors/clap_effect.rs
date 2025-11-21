@@ -35,10 +35,10 @@ impl Default for ClapEffectConfig {
 )]
 pub struct ClapEffectProcessor {
     #[input(description = "Stereo audio frame to process through CLAP plugin")]
-    audio_in: StreamInput<AudioFrame<2>>,
+    audio_in: StreamInput<AudioFrame>,
 
     #[output(description = "Processed stereo audio frame from CLAP plugin")]
-    audio_out: Arc<StreamOutput<AudioFrame<2>>>,
+    audio_out: Arc<StreamOutput<AudioFrame>>,
 
     #[config]
     config: ClapEffectConfig,
@@ -114,7 +114,7 @@ impl ClapEffectProcessor {
             .deactivate()
     }
 
-    fn process_audio_through_clap(&mut self, input_frame: &AudioFrame<2>) -> Result<AudioFrame<2>> {
+    fn process_audio_through_clap(&mut self, input_frame: &AudioFrame) -> Result<AudioFrame> {
         use crate::core::StreamError;
 
         let host = self

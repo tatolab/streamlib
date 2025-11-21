@@ -49,7 +49,7 @@ impl Default for AudioEncoderConfig {
 // ============================================================================
 
 pub trait AudioEncoderOpus: Send {
-    fn encode(&mut self, frame: &AudioFrame<2>) -> Result<EncodedAudioFrame>;
+    fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame>;
     fn config(&self) -> &AudioEncoderConfig;
     fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()>;
 }
@@ -61,7 +61,7 @@ pub trait AudioEncoderOpus: Send {
 /// Opus audio encoder for real-time WebRTC streaming.
 ///
 /// # Requirements
-/// - Input must be stereo (`AudioFrame<2>`)
+/// - Input must be stereo (`AudioFrame`)
 /// - Sample rate must be 48kHz
 /// - Frame size must be exactly 960 samples (20ms @ 48kHz)
 ///
@@ -141,7 +141,7 @@ impl OpusEncoder {
 }
 
 impl AudioEncoderOpus for OpusEncoder {
-    fn encode(&mut self, frame: &AudioFrame<2>) -> Result<EncodedAudioFrame> {
+    fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame> {
         // Validate sample rate
         if frame.sample_rate != 48000 {
             return Err(StreamError::Configuration(

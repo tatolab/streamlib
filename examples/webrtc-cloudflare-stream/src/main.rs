@@ -118,29 +118,29 @@ fn main() -> Result<()> {
 
     println!("   audio_capture.audio → resampler.audio_in");
     runtime.connect(
-        audio_capture.output_port::<AudioFrame<1>>("audio"),
-        resampler.input_port::<AudioFrame<1>>("audio_in"),
+        audio_capture.output_port::<AudioFrame>("audio"),
+        resampler.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ Audio capture → resampler");
 
     println!("   resampler.audio_out → channel_converter.audio_in");
     runtime.connect(
-        resampler.output_port::<AudioFrame<1>>("audio_out"),
-        channel_converter.input_port::<AudioFrame<1>>("audio_in"),
+        resampler.output_port::<AudioFrame>("audio_out"),
+        channel_converter.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ Resampler → channel converter");
 
     println!("   channel_converter.audio_out → rechunker.audio_in");
     runtime.connect(
-        channel_converter.output_port::<AudioFrame<2>>("audio_out"),
-        rechunker.input_port::<AudioFrame<2>>("audio_in"),
+        channel_converter.output_port::<AudioFrame>("audio_out"),
+        rechunker.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ Channel converter → rechunker");
 
     println!("   rechunker.audio_out → webrtc.audio_in");
     runtime.connect(
-        rechunker.output_port::<AudioFrame<2>>("audio_out"),
-        webrtc.input_port::<AudioFrame<2>>("audio_in"),
+        rechunker.output_port::<AudioFrame>("audio_out"),
+        webrtc.input_port::<AudioFrame>("audio_in"),
     )?;
     println!("   ✓ Rechunker → WebRTC\n");
 

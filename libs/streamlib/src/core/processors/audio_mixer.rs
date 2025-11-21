@@ -1,4 +1,4 @@
-use crate::core::frames::AudioFrame;
+use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::{Result, StreamInput, StreamOutput};
 use dasp::Signal;
 use serde::{Deserialize, Serialize};
@@ -33,13 +33,13 @@ pub enum MixingStrategy {
 )]
 pub struct AudioMixerProcessor {
     #[input(description = "Left channel mono audio input")]
-    left: StreamInput<AudioFrame<1>>,
+    left: StreamInput<AudioFrame>,
 
     #[input(description = "Right channel mono audio input")]
-    right: StreamInput<AudioFrame<1>>,
+    right: StreamInput<AudioFrame>,
 
     #[output(description = "Mixed stereo audio output")]
-    audio: Arc<StreamOutput<AudioFrame<2>>>,
+    audio: Arc<StreamOutput<AudioFrame>>,
 
     #[config]
     config: AudioMixerConfig,
@@ -150,8 +150,8 @@ impl AudioMixerProcessor {
         let mut stereo_samples = Vec::with_capacity(self.buffer_size * 2);
 
         for _ in 0..self.buffer_size {
-            let left_sample = left_signal.next()[0];
-            let right_sample = right_signal.next()[0];
+            let left_sample = left_signal.next().as_slice()[0];
+            let right_sample = right_signal.next().as_slice()[0];
 
             // Apply mixing strategy (in case inputs need combining)
             let (final_left, final_right) = match self.config.strategy {
@@ -166,8 +166,9 @@ impl AudioMixerProcessor {
             stereo_samples.push(final_right); // Right channel
         }
 
-        let output_frame = AudioFrame::<2>::new(
+        let output_frame = AudioFrame::new(
             stereo_samples,
+            AudioChannelCount::Two,
             timestamp_ns,
             self.frame_counter,
             self.sample_rate,

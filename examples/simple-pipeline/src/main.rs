@@ -55,11 +55,11 @@ fn main() -> Result<()> {
     println!("✓ Audio output added\n");
 
     // Connect processors using type-safe handles
-    // The compiler verifies that AudioFrame<2> → AudioFrame<2> types match!
+    // The compiler verifies that AudioFrame → AudioFrame types match!
     println!("🔗 Connecting chord generator → audio output...");
     runtime.connect(
-        chord.output_port::<AudioFrame<2>>("chord"), // OutputPortRef<AudioFrame<2>>
-        output.input_port::<AudioFrame<2>>("audio"), // InputPortRef<AudioFrame<2>>
+        chord.output_port::<AudioFrame>("chord"), // OutputPortRef<AudioFrame>
+        output.input_port::<AudioFrame>("audio"), // InputPortRef<AudioFrame>
     )?;
     println!("✓ Pipeline connected\n");
 
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
     println!("✓ Demonstrated:");
     println!("  • Event-driven architecture (no FPS/tick parameters)");
     println!("  • Config-based API (ChordGeneratorConfig, AudioOutputConfig)");
-    println!("  • Type-safe connections (AudioFrame<2> → AudioFrame<2>)");
+    println!("  • Type-safe connections (AudioFrame → AudioFrame)");
     println!("  • Same code works on macOS, Linux, Windows!");
 
     Ok(())

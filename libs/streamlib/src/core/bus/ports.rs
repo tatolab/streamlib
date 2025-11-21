@@ -38,11 +38,7 @@ impl PortAddress {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortType {
     Video,
-    Audio1,
-    Audio2,
-    Audio4,
-    Audio6,
-    Audio8,
+    Audio,
     Data,
 }
 
@@ -82,11 +78,7 @@ impl PortType {
     pub fn default_capacity(&self) -> usize {
         match self {
             PortType::Video => 3,
-            PortType::Audio1
-            | PortType::Audio2
-            | PortType::Audio4
-            | PortType::Audio6
-            | PortType::Audio8 => 32,
+            PortType::Audio => 32,
             PortType::Data => 16,
         }
     }
@@ -417,8 +409,7 @@ mod tests {
     #[test]
     fn test_port_type_defaults() {
         assert_eq!(PortType::Video.default_capacity(), 3);
-        assert_eq!(PortType::Audio1.default_capacity(), 32);
-        assert_eq!(PortType::Audio2.default_capacity(), 32);
+        assert_eq!(PortType::Audio.default_capacity(), 32);
         assert_eq!(PortType::Data.default_capacity(), 16);
     }
 

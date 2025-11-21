@@ -87,8 +87,8 @@ fn run_whep_player() -> Result<()> {
     )?;
 
     runtime.connect(
-        whep_processor.output_port::<AudioFrame<2>>("audio_out"),
-        audio_output.input_port::<AudioFrame<2>>("audio"),
+        whep_processor.output_port::<AudioFrame>("audio_out"),
+        audio_output.input_port::<AudioFrame>("audio"),
     )?;
     tracing::info!("✅ Processors connected\n");
 

@@ -1,4 +1,4 @@
-use crate::core::frames::AudioFrame;
+use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::{Result, StreamInput, StreamOutput};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -35,10 +35,10 @@ impl Default for AudioChannelConverterConfig {
 )]
 pub struct AudioChannelConverterProcessor {
     #[input(description = "Mono audio input")]
-    audio_in: StreamInput<AudioFrame<1>>,
+    audio_in: StreamInput<AudioFrame>,
 
     #[output(description = "Stereo audio output")]
-    audio_out: Arc<StreamOutput<AudioFrame<2>>>,
+    audio_out: Arc<StreamOutput<AudioFrame>>,
 
     #[config]
     config: AudioChannelConverterConfig,
@@ -96,8 +96,9 @@ impl AudioChannelConverterProcessor {
             };
 
             // Create stereo output frame
-            let output_frame = AudioFrame::<2>::new(
+            let output_frame = AudioFrame::new(
                 stereo_samples,
+                AudioChannelCount::Two,
                 input_frame.timestamp_ns,
                 self.frame_counter,
                 input_frame.sample_rate,
