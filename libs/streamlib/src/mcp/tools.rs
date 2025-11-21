@@ -572,7 +572,15 @@ mod tests {
     async fn test_execute_unknown_tool() {
         use crate::core::ProcessorRegistry;
         let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
-        let result = execute_tool("unknown_tool", serde_json::json!({}), registry, None).await;
+        let permissions = Arc::new(HashSet::new());
+        let result = execute_tool(
+            "unknown_tool",
+            serde_json::json!({}),
+            registry,
+            None,
+            permissions,
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -580,6 +588,7 @@ mod tests {
     async fn test_execute_add_processor_placeholder() {
         use crate::core::ProcessorRegistry;
         let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
+        let permissions = Arc::new(HashSet::new());
         let result = execute_tool(
             "add_processor",
             serde_json::json!({
@@ -587,6 +596,7 @@ mod tests {
             }),
             registry,
             None, // Discovery mode
+            permissions,
         )
         .await;
 
@@ -597,6 +607,7 @@ mod tests {
     async fn test_execute_invalid_arguments() {
         use crate::core::ProcessorRegistry;
         let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
+        let permissions = Arc::new(HashSet::new());
         let result = execute_tool(
             "add_processor",
             serde_json::json!({
@@ -604,6 +615,7 @@ mod tests {
             }),
             registry,
             None, // Discovery mode
+            permissions,
         )
         .await;
 
@@ -614,7 +626,15 @@ mod tests {
     async fn test_list_processors_requires_runtime() {
         use crate::core::ProcessorRegistry;
         let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
-        let result = execute_tool("list_processors", serde_json::json!({}), registry, None).await;
+        let permissions = Arc::new(HashSet::new());
+        let result = execute_tool(
+            "list_processors",
+            serde_json::json!({}),
+            registry,
+            None,
+            permissions,
+        )
+        .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, McpError::Runtime(_)));
@@ -624,7 +644,15 @@ mod tests {
     async fn test_list_connections_requires_runtime() {
         use crate::core::ProcessorRegistry;
         let registry = Arc::new(Mutex::new(ProcessorRegistry::new()));
-        let result = execute_tool("list_connections", serde_json::json!({}), registry, None).await;
+        let permissions = Arc::new(HashSet::new());
+        let result = execute_tool(
+            "list_connections",
+            serde_json::json!({}),
+            registry,
+            None,
+            permissions,
+        )
+        .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, McpError::Runtime(_)));

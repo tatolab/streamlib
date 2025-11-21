@@ -811,7 +811,8 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_descriptor() {
-        let descriptor = PerformanceOverlayProcessor::descriptor()
+        let processor = PerformanceOverlayProcessor::from_config(Default::default()).unwrap();
+        let descriptor = StreamElement::descriptor(&processor)
             .expect("PerformanceOverlayProcessor should have descriptor");
 
         assert_eq!(descriptor.name, "PerformanceOverlayProcessor");
@@ -837,7 +838,8 @@ mod tests {
 
     #[test]
     fn test_performance_overlay_descriptor_serialization() {
-        let descriptor = PerformanceOverlayProcessor::descriptor()
+        let processor = PerformanceOverlayProcessor::from_config(Default::default()).unwrap();
+        let descriptor = StreamElement::descriptor(&processor)
             .expect("PerformanceOverlayProcessor should have descriptor");
 
         let json = descriptor.to_json().expect("Failed to serialize to JSON");

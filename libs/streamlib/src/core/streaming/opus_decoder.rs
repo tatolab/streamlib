@@ -231,7 +231,7 @@ mod tests {
         let decoder = OpusDecoder::new(48000, 1);
         assert!(decoder.is_ok());
 
-        let mut decoder = decoder.unwrap();
+        let decoder = decoder.unwrap();
         assert_eq!(decoder.input_channels(), 1);
         assert_eq!(decoder.sample_rate(), 48000);
     }
@@ -241,7 +241,7 @@ mod tests {
         let decoder = OpusDecoder::new(48000, 2);
         assert!(decoder.is_ok());
 
-        let mut decoder = decoder.unwrap();
+        let decoder = decoder.unwrap();
         assert_eq!(decoder.input_channels(), 2);
         assert_eq!(decoder.sample_rate(), 48000);
     }

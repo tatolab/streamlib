@@ -6,8 +6,12 @@
 // - WHIP signaling (RFC 9725)
 // - WebRTC session management (webrtc-rs)
 
+#[cfg(test)]
+use crate::apple::videotoolbox::parse_nal_units;
 use crate::apple::videotoolbox::{EncodedVideoFrame, VideoEncoderConfig, VideoToolboxEncoder};
 use crate::apple::webrtc::{WebRtcSession, WhipClient, WhipConfig};
+#[cfg(test)]
+use crate::core::streaming::EncodedAudioFrame;
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
     OpusEncoder, RtpTimestampCalculator,
@@ -18,6 +22,8 @@ use crate::core::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::time::Duration;
 use streamlib_macros::StreamProcessor;
 
 // ============================================================================
@@ -692,7 +698,8 @@ mod tests {
 
         // Different calculators should have different bases
         assert_ne!(
-            calc1.rtp_base, calc2.rtp_base,
+            calc1.rtp_base(),
+            calc2.rtp_base(),
             "RTP base should be random, not deterministic"
         );
     }
@@ -711,7 +718,7 @@ mod tests {
         // Check that calculation doesn't panic
         // Verify wrapping math is correct
         let expected_ticks = (50_000_000_000i128 * 90000) / 1_000_000_000;
-        let expected = calc.rtp_base.wrapping_add(expected_ticks as u32);
+        let expected = calc.rtp_base().wrapping_add(expected_ticks as u32);
         assert_eq!(rtp_ts, expected);
     }
 
@@ -764,7 +771,7 @@ mod tests {
 
         // Should handle large elapsed times without overflow
         let expected_ticks = (one_hour_ns as i128 * 90000) / 1_000_000_000;
-        let expected = calc.rtp_base.wrapping_add(expected_ticks as u32);
+        let expected = calc.rtp_base().wrapping_add(expected_ticks as u32);
         assert_eq!(rtp_ts, expected);
     }
 

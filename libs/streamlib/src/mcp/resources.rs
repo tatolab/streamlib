@@ -76,16 +76,8 @@ mod tests {
     }
 
     fn register_test_processor(registry: &Arc<Mutex<ProcessorRegistry>>) {
-        use std::sync::Arc as StdArc;
-
         let descriptor = ProcessorDescriptor::new("TestProcessor", "A test processor");
-        let factory = StdArc::new(|| Err(crate::core::StreamError::Configuration("Test".into())));
-
-        registry
-            .lock()
-            .unwrap()
-            .register(descriptor, factory)
-            .unwrap();
+        registry.lock().register(descriptor).unwrap();
     }
 
     #[test]
@@ -144,12 +136,7 @@ mod tests {
         let descriptor = ProcessorDescriptor::new("AudioProcessor", "Test audio processor")
             .with_audio_requirements(AudioRequirements::required(2048, 48000, 2));
 
-        let factory = StdArc::new(|| Err(crate::core::StreamError::Configuration("Test".into())));
-        registry
-            .lock()
-            .unwrap()
-            .register(descriptor, factory)
-            .unwrap();
+        registry.lock().register(descriptor).unwrap();
 
         let content = read_resource(registry, "processor://AudioProcessor").unwrap();
 

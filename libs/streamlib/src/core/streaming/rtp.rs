@@ -147,4 +147,13 @@ impl RtpTimestampCalculator {
         let elapsed_ticks = (elapsed_ns as i128 * self.clock_rate as i128) / 1_000_000_000;
         self.rtp_base.wrapping_add(elapsed_ticks as u32)
     }
+
+    /// Returns the random RTP base timestamp for this calculator.
+    ///
+    /// This is mainly useful for testing to verify that different calculators
+    /// have different random bases (RFC 3550 compliance).
+    #[cfg(test)]
+    pub fn rtp_base(&self) -> u32 {
+        self.rtp_base
+    }
 }
