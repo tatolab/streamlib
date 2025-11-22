@@ -113,6 +113,8 @@ pub struct StreamRuntime {
     /// Index for fast connection lookup by processor ID
     /// Maps processor ID to list of connection IDs involving that processor
     processor_connections: HashMap<ProcessorId, Vec<ConnectionId>>,
+    /// Graph optimizer for topology analysis and execution plan generation
+    graph_optimizer: crate::core::graph_optimizer::GraphOptimizer,
 }
 
 impl Default for StreamRuntime {
@@ -136,6 +138,7 @@ impl StreamRuntime {
             bus: crate::core::Bus::new(),
             pending_connections: Vec::new(),
             processor_connections: HashMap::new(),
+            graph_optimizer: crate::core::graph_optimizer::GraphOptimizer::new(),
         }
     }
 
@@ -175,6 +178,24 @@ impl StreamRuntime {
 
     pub fn gpu_context(&self) -> Option<&crate::core::context::GpuContext> {
         self.gpu_context.as_ref()
+    }
+
+    /// Get a reference to the graph optimizer for querying graph topology.
+    ///
+    /// The optimizer provides query APIs for visualization and analysis:
+    /// - `to_dot()` / `to_json()` - Export graph structure
+    /// - `find_sources()` / `find_sinks()` - Find entry/exit processors
+    /// - `find_upstream()` / `find_downstream()` - Traverse dependencies
+    /// - `topological_order()` - Get processors in dependency order
+    pub fn graph_optimizer(&self) -> &crate::core::graph_optimizer::GraphOptimizer {
+        &self.graph_optimizer
+    }
+
+    /// Get a mutable reference to the graph optimizer.
+    ///
+    /// Useful for advanced use cases like clearing the execution plan cache.
+    pub fn graph_optimizer_mut(&mut self) -> &mut crate::core::graph_optimizer::GraphOptimizer {
+        &mut self.graph_optimizer
     }
 
     pub fn add_processor<P: StreamProcessor>(&mut self) -> Result<ProcessorHandle> {
@@ -241,6 +262,14 @@ impl StreamRuntime {
             EVENT_BUS.publish(&added_event.topic(), &added_event);
             tracing::debug!("[{}] Published RuntimeEvent::ProcessorAdded", id);
         }
+
+        // Update graph optimizer
+        self.graph_optimizer.add_processor(
+            &id,
+            processor_type.clone(),
+            None, // No config checksum for boxed processors
+        );
+        tracing::debug!("[{}] Added to graph optimizer", id);
 
         // Return handle with metadata (no config checksum for boxed processors)
         Ok(ProcessorHandle::with_metadata(
@@ -807,6 +836,18 @@ impl StreamRuntime {
             );
         }
 
+        // Update graph optimizer
+        self.graph_optimizer.add_connection(
+            &connection_id.to_string(),
+            &connection.source_processor,
+            &connection.dest_processor,
+            source_port.to_string(),
+            dest_port.to_string(),
+            format!("{:?}", source_port_type),
+            capacity,
+        );
+        tracing::debug!("[{}] Added connection to graph optimizer", connection_id);
+
         tracing::info!("Registered runtime connection: {}", connection_id);
         Ok(connection_id)
     }
@@ -1045,6 +1086,13 @@ impl StreamRuntime {
             );
         }
 
+        // Update graph optimizer
+        self.graph_optimizer.remove_connection(connection_id);
+        tracing::debug!(
+            "[{}] Removed connection from graph optimizer",
+            connection_id
+        );
+
         tracing::info!("Successfully disconnected connection: {}", connection_id);
         Ok(())
     }
@@ -1154,6 +1202,12 @@ impl StreamRuntime {
         self.gpu_context = Some(gpu_context);
 
         self.running = true;
+
+        // Generate execution plan (Phase 0: Legacy plan, used for logging only)
+        tracing::info!("Generating execution plan...");
+        let plan = self.graph_optimizer.optimize();
+        tracing::info!("Execution plan generated: {:?}", plan);
+        tracing::debug!("Optimizer stats: {:?}", self.graph_optimizer.stats());
 
         self.spawn_handler_threads()?;
 
@@ -1374,6 +1428,10 @@ impl StreamRuntime {
                 processor_id
             );
         }
+
+        // Update graph optimizer
+        self.graph_optimizer.remove_processor(processor_id);
+        tracing::debug!("[{}] Removed from graph optimizer", processor_id);
 
         // Clean up connection index for this processor
         self.processor_connections.remove(processor_id);

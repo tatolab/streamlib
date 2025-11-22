@@ -62,6 +62,7 @@ signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
 ctrlc = "3.4"  # Cross-platform Ctrl+C handler (works with GUI apps)
 dashmap = "6.1"  # Lock-free concurrent HashMap for event bus topic routing
 rayon = "1.10"  # Parallel task execution for event bus dispatch
+petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
 
 # Serialization
 serde.workspace = true
@@ -160,6 +161,10 @@ harness = false
 
 [[bench]]
 name = "stream_output_bench"
+harness = false
+
+[[bench]]
+name = "graph_optimizer_bench"
 harness = false
 
 [package.metadata.docs.rs]
