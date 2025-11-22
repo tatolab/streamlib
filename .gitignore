@@ -38,6 +38,9 @@ uv.lock
 
 __internal__/
 
+# Internal documentation (secret sauce)
+docs/internal/
+
 # Rust
 target/
 Cargo.lock
