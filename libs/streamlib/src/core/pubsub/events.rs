@@ -137,6 +137,24 @@ pub enum RuntimeEvent {
     ProcessorRemoved {
         processor_id: String,
     },
+
+    // ===== Connection Lifecycle Events =====
+    ConnectionCreated {
+        connection_id: String,
+        from_port: String, // "processor_id.port_name"
+        to_port: String,
+    },
+    ConnectionRemoved {
+        connection_id: String,
+        from_port: String,
+        to_port: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PortType {
+    Input,
+    Output,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +174,28 @@ pub enum ProcessorEvent {
     StateChanged {
         old_state: ProcessorState,
         new_state: ProcessorState,
+    },
+
+    // ===== Connection Lifecycle Events =====
+    WillConnect {
+        connection_id: String,
+        port_name: String,
+        port_type: PortType,
+    },
+    Connected {
+        connection_id: String,
+        port_name: String,
+        port_type: PortType,
+    },
+    WillDisconnect {
+        connection_id: String,
+        port_name: String,
+        port_type: PortType,
+    },
+    Disconnected {
+        connection_id: String,
+        port_name: String,
+        port_type: PortType,
     },
 
     // ===== Generic Commands =====

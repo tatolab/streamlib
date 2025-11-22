@@ -42,8 +42,20 @@ impl StreamRuntime {
         &mut self,
         output: crate::core::handles::OutputPortRef<T>,
         input: crate::core::handles::InputPortRef<T>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.inner.connect(output, input)
+    }
+
+    pub fn disconnect<T: PortMessage>(
+        &mut self,
+        output: crate::core::handles::OutputPortRef<T>,
+        input: crate::core::handles::InputPortRef<T>,
+    ) -> Result<()> {
+        self.inner.disconnect(output, input)
+    }
+
+    pub fn disconnect_by_id(&mut self, connection_id: &str) -> Result<()> {
+        self.inner.disconnect_by_id(&connection_id.to_string())
     }
 
     pub fn start(&mut self) -> Result<()> {

@@ -1,9 +1,12 @@
 name: Test
 
+# DISABLED: Temporarily disabled to reduce GitHub Actions costs
+# To re-enable, uncomment the triggers below
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:  # Manual trigger only
+  # pull_request:
+  # push:
+  #   branches: [main]
 
 env:
   CARGO_TERM_COLOR: always

@@ -1,9 +1,11 @@
 name: Release
 
+# DISABLED: Temporarily disabled to reduce GitHub Actions costs
+# To re-enable, uncomment the push trigger below
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Manual trigger only
+  # push:
+  #   branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
