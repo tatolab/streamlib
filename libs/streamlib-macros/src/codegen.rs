@@ -411,36 +411,6 @@ fn type_name(ty: &Type) -> String {
     "Unknown".to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_humanize_field_name() {
-        let ident: Ident = syn::parse_str("video_input").unwrap();
-        assert_eq!(humanize_field_name(&ident), "Video Input");
-
-        let ident: Ident = syn::parse_str("audio").unwrap();
-        assert_eq!(humanize_field_name(&ident), "Audio");
-    }
-
-    #[test]
-    fn test_humanize_struct_name() {
-        assert_eq!(humanize_struct_name("CameraProcessor"), "camera");
-        assert_eq!(humanize_struct_name("AudioMixerProcessor"), "audio mixer");
-        assert_eq!(humanize_struct_name("Display"), "display");
-    }
-
-    #[test]
-    fn test_type_name() {
-        let ty: Type = syn::parse_quote! { VideoFrame };
-        assert_eq!(type_name(&ty), "VideoFrame");
-
-        let ty: Type = syn::parse_quote! { streamlib::AudioFrame };
-        assert_eq!(type_name(&ty), "AudioFrame");
-    }
-}
-
 /// Generate port connection methods (take_output_consumer, connect_input_consumer, set_output_wakeup)
 fn generate_port_methods(analysis: &AnalysisResult) -> TokenStream {
     let output_ports: Vec<_> = analysis.output_ports().collect();
@@ -1618,5 +1588,35 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
                     #(#output_ports)*
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_humanize_field_name() {
+        let ident: Ident = syn::parse_str("video_input").unwrap();
+        assert_eq!(humanize_field_name(&ident), "Video Input");
+
+        let ident: Ident = syn::parse_str("audio").unwrap();
+        assert_eq!(humanize_field_name(&ident), "Audio");
+    }
+
+    #[test]
+    fn test_humanize_struct_name() {
+        assert_eq!(humanize_struct_name("CameraProcessor"), "camera");
+        assert_eq!(humanize_struct_name("AudioMixerProcessor"), "audio mixer");
+        assert_eq!(humanize_struct_name("Display"), "display");
+    }
+
+    #[test]
+    fn test_type_name() {
+        let ty: Type = syn::parse_quote! { VideoFrame };
+        assert_eq!(type_name(&ty), "VideoFrame");
+
+        let ty: Type = syn::parse_quote! { streamlib::AudioFrame };
+        assert_eq!(type_name(&ty), "AudioFrame");
     }
 }
