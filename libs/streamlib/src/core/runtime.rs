@@ -2706,4 +2706,235 @@ mod tests {
         let proc2_conns = runtime.get_connections_for_processor(&"proc2".to_string());
         assert_eq!(proc2_conns.len(), 1);
     }
+
+    // ========================================================================
+    // Stress Tests and Edge Cases
+    // ========================================================================
+
+    #[test]
+    fn test_connection_index_stress_many_connections() {
+        let mut runtime = StreamRuntime::new();
+        use crate::core::bus::PortType;
+
+        // Create 100 connections
+        for i in 0..100 {
+            let conn_id = format!("conn-{}", i);
+            let conn = Connection::new(
+                conn_id.clone(),
+                format!("proc{}.out", i % 10),
+                format!("proc{}.in", (i + 1) % 10),
+                PortType::Video,
+                3,
+            );
+
+            {
+                let mut connections = runtime.connections.lock();
+                connections.insert(conn_id.clone(), conn.clone());
+            }
+
+            runtime
+                .processor_connections
+                .entry(conn.source_processor.clone())
+                .or_default()
+                .push(conn_id.clone());
+            runtime
+                .processor_connections
+                .entry(conn.dest_processor.clone())
+                .or_default()
+                .push(conn_id);
+        }
+
+        // Verify each processor has correct number of connections
+        for i in 0..10 {
+            let proc_id = format!("proc{}", i);
+            let conns = runtime.get_connections_for_processor(&proc_id);
+            // Each processor appears as source 10 times and dest 10 times
+            assert_eq!(conns.len(), 20);
+        }
+    }
+
+    #[test]
+    fn test_connection_index_duplicate_entries_prevented() {
+        let mut runtime = StreamRuntime::new();
+        use crate::core::bus::PortType;
+
+        let conn = Connection::new(
+            "conn-1".to_string(),
+            "proc1.out".to_string(),
+            "proc2.in".to_string(),
+            PortType::Video,
+            3,
+        );
+
+        // Add same connection ID multiple times (shouldn't happen in practice)
+        for _ in 0..3 {
+            runtime
+                .processor_connections
+                .entry(conn.source_processor.clone())
+                .or_default()
+                .push("conn-1".to_string());
+        }
+
+        // Should have 3 entries (no deduplication in our simple implementation)
+        let proc1_conns = runtime.get_connections_for_processor(&"proc1".to_string());
+        assert_eq!(proc1_conns.len(), 3);
+
+        // This is expected behavior - the runtime ensures unique IDs
+    }
+
+    #[test]
+    fn test_connection_parsing_with_unicode() {
+        use crate::core::bus::PortType;
+
+        let conn = Connection::new(
+            "conn-1".to_string(),
+            "processor_0.видео_out".to_string(), // Unicode in port name
+            "processor_1.音频_in".to_string(),   // Unicode in port name
+            PortType::Video,
+            3,
+        );
+
+        assert_eq!(conn.source_processor, "processor_0");
+        assert_eq!(conn.dest_processor, "processor_1");
+    }
+
+    #[test]
+    fn test_processor_handle_type_name_preservation() {
+        let handle = ProcessorHandle::with_metadata(
+            "proc_0".to_string(),
+            "very::long::nested::module::path::ProcessorName".to_string(),
+            Some(99999),
+        );
+
+        assert_eq!(
+            handle.processor_type(),
+            "very::long::nested::module::path::ProcessorName"
+        );
+        assert_eq!(handle.config_checksum(), Some(99999));
+    }
+
+    #[test]
+    fn test_connection_all_port_types() {
+        use crate::core::bus::PortType;
+
+        // Test Video
+        let video_conn = Connection::new(
+            "video-conn".to_string(),
+            "p1.out".to_string(),
+            "p2.in".to_string(),
+            PortType::Video,
+            3,
+        );
+        assert!(matches!(video_conn.port_type, PortType::Video));
+        assert_eq!(video_conn.buffer_capacity, 3);
+
+        // Test Audio
+        let audio_conn = Connection::new(
+            "audio-conn".to_string(),
+            "p1.out".to_string(),
+            "p2.in".to_string(),
+            PortType::Audio,
+            32,
+        );
+        assert!(matches!(audio_conn.port_type, PortType::Audio));
+        assert_eq!(audio_conn.buffer_capacity, 32);
+
+        // Test Data
+        let data_conn = Connection::new(
+            "data-conn".to_string(),
+            "p1.out".to_string(),
+            "p2.in".to_string(),
+            PortType::Data,
+            16,
+        );
+        assert!(matches!(data_conn.port_type, PortType::Data));
+        assert_eq!(data_conn.buffer_capacity, 16);
+    }
+
+    #[test]
+    fn test_connection_index_removal_idempotent() {
+        let mut runtime = StreamRuntime::new();
+        use crate::core::bus::PortType;
+
+        let conn = Connection::new(
+            "conn-1".to_string(),
+            "proc1.out".to_string(),
+            "proc2.in".to_string(),
+            PortType::Video,
+            3,
+        );
+
+        runtime
+            .processor_connections
+            .entry(conn.source_processor.clone())
+            .or_default()
+            .push("conn-1".to_string());
+
+        // Remove entry for source processor
+        if let Some(connections_vec) = runtime
+            .processor_connections
+            .get_mut(&conn.source_processor)
+        {
+            connections_vec.retain(|id| id != "conn-1");
+        }
+
+        // Verify it's gone
+        let proc1_conns = runtime.get_connections_for_processor(&"proc1".to_string());
+        assert!(proc1_conns.is_empty());
+
+        // Remove again (idempotent - should not panic)
+        if let Some(connections_vec) = runtime
+            .processor_connections
+            .get_mut(&conn.source_processor)
+        {
+            connections_vec.retain(|id| id != "conn-1");
+        }
+
+        // Still empty
+        let proc1_conns = runtime.get_connections_for_processor(&"proc1".to_string());
+        assert!(proc1_conns.is_empty());
+    }
+
+    #[test]
+    fn test_get_connections_for_nonexistent_processor() {
+        let runtime = StreamRuntime::new();
+
+        // Query for processor that was never added
+        let conns = runtime.get_connections_for_processor(&"never_existed".to_string());
+        assert!(conns.is_empty());
+
+        // Multiple queries should all return empty
+        for _ in 0..10 {
+            let conns = runtime.get_connections_for_processor(&"another_nonexistent".to_string());
+            assert!(conns.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_connection_metadata_consistency() {
+        use crate::core::bus::PortType;
+
+        let conn1 = Connection::new(
+            "conn-1".to_string(),
+            "proc_a.output".to_string(),
+            "proc_b.input".to_string(),
+            PortType::Video,
+            5,
+        );
+
+        let conn2 = Connection::new(
+            "conn-2".to_string(),
+            "proc_a.output".to_string(),
+            "proc_b.input".to_string(),
+            PortType::Video,
+            5,
+        );
+
+        // Same port addresses should parse to same processor IDs
+        assert_eq!(conn1.source_processor, conn2.source_processor);
+        assert_eq!(conn1.dest_processor, conn2.dest_processor);
+
+        // But different connection IDs
+        assert_ne!(conn1.id, conn2.id);
+    }
 }

@@ -17,6 +17,8 @@ pub struct ProcessorHandle {
 }
 
 impl ProcessorHandle {
+    /// Create a basic ProcessorHandle (used in tests)
+    #[allow(dead_code)]
     pub(crate) fn new(id: ProcessorId) -> Self {
         Self {
             id,
