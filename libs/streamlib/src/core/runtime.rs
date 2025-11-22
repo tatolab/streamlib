@@ -44,20 +44,52 @@ pub(crate) struct RuntimeProcessorHandle {
 
 pub type ConnectionId = String;
 
+/// Connection between two processors
+///
+/// Stores both high-level port addresses (e.g., "processor_0.video") and
+/// decomposed processor IDs for efficient graph traversal and optimization.
 #[derive(Debug, Clone)]
 pub struct Connection {
     pub id: ConnectionId,
+    /// Full source port address (e.g., "processor_0.video")
     pub from_port: String,
+    /// Full destination port address (e.g., "processor_1.video")
     pub to_port: String,
+    /// Source processor ID (parsed from from_port)
+    pub source_processor: ProcessorId,
+    /// Destination processor ID (parsed from to_port)
+    pub dest_processor: ProcessorId,
+    /// Type of data flowing through this connection
+    pub port_type: crate::core::bus::PortType,
+    /// Current buffer capacity (number of frames/samples)
+    pub buffer_capacity: usize,
     pub created_at: std::time::Instant,
 }
 
 impl Connection {
-    pub fn new(id: ConnectionId, from_port: String, to_port: String) -> Self {
+    /// Create a new connection with metadata
+    ///
+    /// Parses processor IDs from the port addresses (format: "processor_id.port_name")
+    pub fn new(
+        id: ConnectionId,
+        from_port: String,
+        to_port: String,
+        port_type: crate::core::bus::PortType,
+        buffer_capacity: usize,
+    ) -> Self {
+        // Parse processor IDs from port addresses (format: "processor_0.video")
+        let source_processor = from_port.split('.').next().unwrap_or("").to_string();
+
+        let dest_processor = to_port.split('.').next().unwrap_or("").to_string();
+
         Self {
             id,
             from_port,
             to_port,
+            source_processor,
+            dest_processor,
+            port_type,
+            buffer_capacity,
             created_at: std::time::Instant::now(),
         }
     }
@@ -78,6 +110,9 @@ pub struct StreamRuntime {
     next_connection_id: usize,
     pending_connections: Vec<PendingConnection>,
     bus: crate::core::Bus,
+    /// Index for fast connection lookup by processor ID
+    /// Maps processor ID to list of connection IDs involving that processor
+    processor_connections: HashMap<ProcessorId, Vec<ConnectionId>>,
 }
 
 impl Default for StreamRuntime {
@@ -100,6 +135,7 @@ impl StreamRuntime {
             next_connection_id: 0,
             bus: crate::core::Bus::new(),
             pending_connections: Vec::new(),
+            processor_connections: HashMap::new(),
         }
     }
 
@@ -200,13 +236,18 @@ impl StreamRuntime {
             use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
             let added_event = Event::RuntimeGlobal(RuntimeEvent::ProcessorAdded {
                 processor_id: id.clone(),
-                processor_type,
+                processor_type: processor_type.clone(),
             });
             EVENT_BUS.publish(&added_event.topic(), &added_event);
             tracing::debug!("[{}] Published RuntimeEvent::ProcessorAdded", id);
         }
 
-        Ok(ProcessorHandle::new(id))
+        // Return handle with metadata (no config checksum for boxed processors)
+        Ok(ProcessorHandle::with_metadata(
+            id,
+            processor_type,
+            None, // No checksum available for boxed processors
+        ))
     }
 
     /// Internal helper: Spawn a processor thread immediately (runtime must be running)
@@ -698,17 +739,30 @@ impl StreamRuntime {
             dest_port_type
         );
 
-        // Store connection
+        // Store connection with metadata
         let connection = Connection::new(
             connection_id.clone(),
             source.to_string(),
             destination.to_string(),
+            source_port_type,
+            capacity,
         );
 
         {
             let mut connections = self.connections.lock();
-            connections.insert(connection_id.clone(), connection);
+            connections.insert(connection_id.clone(), connection.clone());
         }
+
+        // Update connection index for both source and dest processors
+        self.processor_connections
+            .entry(connection.source_processor.clone())
+            .or_default()
+            .push(connection_id.clone());
+
+        self.processor_connections
+            .entry(connection.dest_processor.clone())
+            .or_default()
+            .push(connection_id.clone());
 
         // Send Connected events AFTER wiring complete
         {
@@ -934,6 +988,20 @@ impl StreamRuntime {
         {
             let mut connections = self.connections.lock();
             connections.remove(connection_id);
+        }
+
+        // Remove from connection index for both source and dest processors
+        if let Some(connections_vec) = self
+            .processor_connections
+            .get_mut(&connection.source_processor)
+        {
+            connections_vec.retain(|id| id != connection_id);
+        }
+        if let Some(connections_vec) = self
+            .processor_connections
+            .get_mut(&connection.dest_processor)
+        {
+            connections_vec.retain(|id| id != connection_id);
         }
 
         // Send Disconnected events to both processors
@@ -1307,8 +1375,22 @@ impl StreamRuntime {
             );
         }
 
+        // Clean up connection index for this processor
+        self.processor_connections.remove(processor_id);
+
         tracing::info!("[{}] Processor removed", processor_id);
         Ok(())
+    }
+
+    /// Get all connection IDs involving a specific processor
+    ///
+    /// Returns connection IDs where the processor is either the source or destination.
+    /// Useful for graph analysis and optimization.
+    pub fn get_connections_for_processor(&self, processor_id: &ProcessorId) -> Vec<ConnectionId> {
+        self.processor_connections
+            .get(processor_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn status(&self) -> RuntimeStatus {
@@ -1888,11 +1970,14 @@ mod tests {
 
         // Manually create a connection entry for testing
         use super::Connection;
+        use crate::core::bus::PortType;
         let connection_id = "test-conn-123".to_string();
         let conn = Connection::new(
             connection_id.clone(),
             "proc1.output".to_string(),
             "proc2.input".to_string(),
+            PortType::Video,
+            3,
         );
 
         runtime
@@ -2063,6 +2148,8 @@ mod tests {
             connection_id.clone(),
             "proc1.output".to_string(),
             "proc2.input".to_string(),
+            PortType::Video,
+            3,
         );
 
         runtime
@@ -2195,6 +2282,8 @@ mod tests {
             connection_id.clone(),
             "proc1.output".to_string(),
             "proc2.input".to_string(),
+            PortType::Video,
+            3,
         );
 
         runtime
@@ -2290,6 +2379,8 @@ mod tests {
             connection_id.clone(),
             "proc1.video_out".to_string(),
             "proc2.video_in".to_string(),
+            PortType::Video,
+            3,
         );
 
         runtime
@@ -2361,5 +2452,258 @@ mod tests {
             "Should have Input port event for proc2. Events: {:?}",
             processor_events
         );
+    }
+
+    // ========================================================================
+    // Connection Metadata Tests
+    // ========================================================================
+
+    #[test]
+    fn test_connection_parses_processor_ids() {
+        use crate::core::bus::PortType;
+
+        let conn = Connection::new(
+            "conn-1".to_string(),
+            "processor_0.video_out".to_string(),
+            "processor_1.video_in".to_string(),
+            PortType::Video,
+            3,
+        );
+
+        assert_eq!(conn.source_processor, "processor_0");
+        assert_eq!(conn.dest_processor, "processor_1");
+        assert_eq!(conn.from_port, "processor_0.video_out");
+        assert_eq!(conn.to_port, "processor_1.video_in");
+    }
+
+    #[test]
+    fn test_connection_stores_port_type_and_capacity() {
+        use crate::core::bus::PortType;
+
+        let conn = Connection::new(
+            "conn-1".to_string(),
+            "proc1.audio".to_string(),
+            "proc2.audio".to_string(),
+            PortType::Audio,
+            32,
+        );
+
+        assert_eq!(conn.buffer_capacity, 32);
+        assert!(matches!(conn.port_type, PortType::Audio));
+    }
+
+    #[test]
+    fn test_connection_handles_edge_cases() {
+        use crate::core::bus::PortType;
+
+        // No dot in port address - should handle gracefully
+        let conn1 = Connection::new(
+            "conn-1".to_string(),
+            "invalid".to_string(),
+            "proc1.port".to_string(),
+            PortType::Data,
+            16,
+        );
+        assert_eq!(conn1.source_processor, "invalid");
+        assert_eq!(conn1.dest_processor, "proc1");
+
+        // Multiple dots - should take first part
+        let conn2 = Connection::new(
+            "conn-2".to_string(),
+            "proc.a.b.port".to_string(),
+            "proc.x.y.port".to_string(),
+            PortType::Data,
+            16,
+        );
+        assert_eq!(conn2.source_processor, "proc");
+        assert_eq!(conn2.dest_processor, "proc");
+
+        // Empty string - should handle gracefully
+        let conn3 = Connection::new(
+            "conn-3".to_string(),
+            ".port".to_string(),
+            "proc.".to_string(),
+            PortType::Data,
+            16,
+        );
+        assert_eq!(conn3.source_processor, "");
+        assert_eq!(conn3.dest_processor, "proc");
+    }
+
+    // ========================================================================
+    // ProcessorHandle Metadata Tests
+    // ========================================================================
+
+    #[test]
+    fn test_processor_handle_with_metadata() {
+        let handle = ProcessorHandle::with_metadata(
+            "proc_0".to_string(),
+            "streamlib::core::processors::TestProcessor".to_string(),
+            Some(12345),
+        );
+
+        assert_eq!(handle.id(), "proc_0");
+        assert_eq!(
+            handle.processor_type(),
+            "streamlib::core::processors::TestProcessor"
+        );
+        assert_eq!(handle.config_checksum(), Some(12345));
+    }
+
+    #[test]
+    fn test_processor_handle_without_checksum() {
+        let handle = ProcessorHandle::with_metadata(
+            "proc_1".to_string(),
+            "streamlib::core::processors::AnotherProcessor".to_string(),
+            None,
+        );
+
+        assert_eq!(handle.id(), "proc_1");
+        assert_eq!(
+            handle.processor_type(),
+            "streamlib::core::processors::AnotherProcessor"
+        );
+        assert_eq!(handle.config_checksum(), None);
+    }
+
+    // ========================================================================
+    // Connection Index Tests
+    // ========================================================================
+
+    #[test]
+    fn test_connection_index_empty_on_new_runtime() {
+        let runtime = StreamRuntime::new();
+
+        let connections = runtime.get_connections_for_processor(&"nonexistent".to_string());
+        assert!(connections.is_empty());
+    }
+
+    #[test]
+    fn test_connection_index_updated_on_connect() {
+        // This test would require actual processors to be added
+        // For now, we test the index directly via the internal state
+        let mut runtime = StreamRuntime::new();
+
+        // Manually insert a connection to test index
+        use crate::core::bus::PortType;
+        let conn = Connection::new(
+            "test-conn".to_string(),
+            "proc1.out".to_string(),
+            "proc2.in".to_string(),
+            PortType::Video,
+            3,
+        );
+
+        {
+            let mut connections = runtime.connections.lock();
+            connections.insert("test-conn".to_string(), conn.clone());
+        }
+
+        // Manually update index as connect_at_runtime would
+        runtime
+            .processor_connections
+            .entry(conn.source_processor.clone())
+            .or_insert_with(Vec::new)
+            .push("test-conn".to_string());
+        runtime
+            .processor_connections
+            .entry(conn.dest_processor.clone())
+            .or_insert_with(Vec::new)
+            .push("test-conn".to_string());
+
+        // Verify index
+        let proc1_conns = runtime.get_connections_for_processor(&"proc1".to_string());
+        let proc2_conns = runtime.get_connections_for_processor(&"proc2".to_string());
+
+        assert_eq!(proc1_conns.len(), 1);
+        assert_eq!(proc2_conns.len(), 1);
+        assert_eq!(proc1_conns[0], "test-conn");
+        assert_eq!(proc2_conns[0], "test-conn");
+    }
+
+    #[test]
+    fn test_connection_index_handles_multiple_connections() {
+        let mut runtime = StreamRuntime::new();
+        use crate::core::bus::PortType;
+
+        // Add multiple connections
+        for i in 0..3 {
+            let conn_id = format!("conn-{}", i);
+            let conn = Connection::new(
+                conn_id.clone(),
+                "proc1.out".to_string(),
+                format!("proc{}.in", i + 2),
+                PortType::Video,
+                3,
+            );
+
+            {
+                let mut connections = runtime.connections.lock();
+                connections.insert(conn_id.clone(), conn.clone());
+            }
+
+            runtime
+                .processor_connections
+                .entry(conn.source_processor.clone())
+                .or_insert_with(Vec::new)
+                .push(conn_id.clone());
+            runtime
+                .processor_connections
+                .entry(conn.dest_processor.clone())
+                .or_insert_with(Vec::new)
+                .push(conn_id);
+        }
+
+        // proc1 should have 3 connections (source for all)
+        let proc1_conns = runtime.get_connections_for_processor(&"proc1".to_string());
+        assert_eq!(proc1_conns.len(), 3);
+
+        // Each destination processor should have 1
+        for i in 0..3 {
+            let proc_conns = runtime.get_connections_for_processor(&format!("proc{}", i + 2));
+            assert_eq!(proc_conns.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_connection_index_cleanup() {
+        let mut runtime = StreamRuntime::new();
+        use crate::core::bus::PortType;
+
+        // Add a connection
+        let conn = Connection::new(
+            "test-conn".to_string(),
+            "proc1.out".to_string(),
+            "proc2.in".to_string(),
+            PortType::Video,
+            3,
+        );
+
+        {
+            let mut connections = runtime.connections.lock();
+            connections.insert("test-conn".to_string(), conn.clone());
+        }
+
+        runtime
+            .processor_connections
+            .entry("proc1".to_string())
+            .or_insert_with(Vec::new)
+            .push("test-conn".to_string());
+        runtime
+            .processor_connections
+            .entry("proc2".to_string())
+            .or_insert_with(Vec::new)
+            .push("test-conn".to_string());
+
+        // Simulate removing proc1
+        runtime.processor_connections.remove(&"proc1".to_string());
+
+        // proc1 should have no connections
+        let proc1_conns = runtime.get_connections_for_processor(&"proc1".to_string());
+        assert!(proc1_conns.is_empty());
+
+        // proc2 should still have the connection (until it's disconnected)
+        let proc2_conns = runtime.get_connections_for_processor(&"proc2".to_string());
+        assert_eq!(proc2_conns.len(), 1);
     }
 }
