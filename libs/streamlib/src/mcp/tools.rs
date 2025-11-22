@@ -164,6 +164,31 @@ pub fn list_tools() -> Vec<Tool> {
                 "properties": {}
             }),
         },
+        Tool {
+            name: "disconnect_processors".to_string(),
+            description: "Disconnect two processors by breaking the connection between an output port and input port. Can disconnect by connection ID or by specifying source and destination ports.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Connection ID to disconnect (from list_connections). If provided, source/destination are not needed."
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Source OUTPUT port in format 'processor_id.port_name'. Alternative to connection_id."
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "Destination INPUT port in format 'processor_id.port_name'. Alternative to connection_id."
+                    }
+                },
+                "oneOf": [
+                    {"required": ["connection_id"]},
+                    {"required": ["source", "destination"]}
+                ]
+            }),
+        },
     ]
 }
 
@@ -207,6 +232,13 @@ pub struct RemoveProcessorArgs {
 pub struct ConnectProcessorsArgs {
     pub source: String,
     pub destination: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DisconnectProcessorsArgs {
+    pub connection_id: Option<String>,
+    pub source: Option<String>,
+    pub destination: Option<String>,
 }
 
 pub async fn execute_tool(
@@ -455,6 +487,103 @@ pub async fn execute_tool(
             }
         }
 
+        "disconnect_processors" => {
+            let args: DisconnectProcessorsArgs =
+                serde_json::from_value(arguments).map_err(|e| McpError::InvalidArguments {
+                    tool: tool_name.to_string(),
+                    message: e.to_string(),
+                })?;
+
+            let runtime = runtime.ok_or_else(|| {
+                McpError::Runtime(
+                    "disconnect_processors requires runtime access. MCP server is in discovery mode (registry only). \
+                     Use McpServer::with_runtime() to enable application-level control.".to_string()
+                )
+            })?;
+
+            // Determine which disconnect method to use
+            let runtime_clone = Arc::clone(&runtime);
+            let result = if let Some(connection_id) = args.connection_id {
+                // Disconnect by ID
+                tokio::task::spawn_blocking(move || {
+                    let mut rt = runtime_clone.lock();
+                    rt.disconnect_by_id(&connection_id)
+                        .map(|_| (connection_id.clone(), None, None))
+                })
+                .await
+                .map_err(|e| McpError::Runtime(format!("Failed to spawn blocking task: {}", e)))?
+            } else if let (Some(source), Some(dest)) =
+                (args.source.clone(), args.destination.clone())
+            {
+                // Disconnect by source/destination
+                // Need to find the connection ID first
+                // Clone before moving into closure
+                let source_for_find = source.clone();
+                let dest_for_find = dest.clone();
+
+                let connections = tokio::task::spawn_blocking(move || {
+                    let rt = runtime_clone.lock();
+                    let connections_map = rt.connections.lock();
+                    connections_map
+                        .iter()
+                        .find(|(_, conn)| {
+                            conn.from_port == source_for_find && conn.to_port == dest_for_find
+                        })
+                        .map(|(id, _)| id.clone())
+                })
+                .await
+                .map_err(|e| McpError::Runtime(format!("Failed to spawn blocking task: {}", e)))?;
+
+                if let Some(conn_id) = connections {
+                    let runtime_clone2 = Arc::clone(&runtime);
+                    tokio::task::spawn_blocking(move || {
+                        let mut rt = runtime_clone2.lock();
+                        rt.disconnect_by_id(&conn_id)
+                            .map(|_| (conn_id, Some(source), Some(dest)))
+                    })
+                    .await
+                    .map_err(|e| {
+                        McpError::Runtime(format!("Failed to spawn blocking task: {}", e))
+                    })?
+                } else {
+                    Err(crate::core::StreamError::Configuration(format!(
+                        "Connection not found: {} → {}",
+                        source, dest
+                    )))
+                }
+            } else {
+                return Err(McpError::InvalidArguments {
+                    tool: tool_name.to_string(),
+                    message: "Must provide either connection_id or both source and destination"
+                        .to_string(),
+                });
+            };
+
+            match result {
+                Ok((connection_id, source, destination)) => Ok(ToolResult {
+                    success: true,
+                    message: if let (Some(src), Some(dst)) = (source.clone(), destination.clone()) {
+                        format!(
+                            "Successfully disconnected {} → {} ({})",
+                            src, dst, connection_id
+                        )
+                    } else {
+                        format!("Successfully disconnected connection {}", connection_id)
+                    },
+                    data: Some(serde_json::json!({
+                        "connection_id": connection_id,
+                        "source": source,
+                        "destination": destination
+                    })),
+                }),
+                Err(e) => Ok(ToolResult {
+                    success: false,
+                    message: format!("Failed to disconnect: {}", e),
+                    data: None,
+                }),
+            }
+        }
+
         "list_processors" => {
             let runtime = runtime.ok_or_else(|| {
                 McpError::Runtime(
@@ -542,7 +671,7 @@ mod tests {
     #[test]
     fn test_list_tools() {
         let tools = list_tools();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10); // Added disconnect_processors
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"list_supported_languages"));

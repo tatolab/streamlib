@@ -30,7 +30,12 @@ impl Bus {
     }
 
     /// Disconnect a connection by ID
-    pub fn disconnect(&self, id: super::connection::ConnectionId) -> Result<()> {
+    ///
+    /// Returns the source and destination PortAddress if found, None if not found.
+    pub fn disconnect(
+        &self,
+        id: super::connection::ConnectionId,
+    ) -> Option<(PortAddress, PortAddress)> {
         self.manager.write().disconnect(id)
     }
 

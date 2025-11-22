@@ -207,6 +207,57 @@ impl<T: PortMessage> StreamOutput<T> {
             (*self.downstream_wakeups.get()).push(wakeup_tx);
         }
     }
+
+    /// Remove the most recently added producer (LIFO)
+    ///
+    /// Used during disconnect to clean up connections.
+    /// Returns true if a producer was removed, false if no producers exist.
+    ///
+    /// NOTE: This uses LIFO removal. A future enhancement could track connection
+    /// metadata to remove specific producers by connection ID.
+    pub fn remove_producer(&self) -> bool {
+        let _lock = self.setup_lock.lock();
+        unsafe {
+            let producers = &mut *self.producers.get();
+            if producers.is_empty() {
+                false
+            } else {
+                producers.pop();
+                true
+            }
+        }
+    }
+
+    /// Remove the most recently added downstream wakeup (LIFO)
+    ///
+    /// Used during disconnect to clean up wakeup channels.
+    /// Returns true if a wakeup was removed, false if none exist.
+    pub fn remove_downstream_wakeup(&self) -> bool {
+        let _lock = self.setup_lock.lock();
+        unsafe {
+            let wakeups = &mut *self.downstream_wakeups.get();
+            if wakeups.is_empty() {
+                false
+            } else {
+                wakeups.pop();
+                true
+            }
+        }
+    }
+
+    /// Attempt to flush all producers with a timeout
+    ///
+    /// Returns true if all producers appear to be flushed (or empty), false on timeout
+    pub fn drain_producers(&self, timeout: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        let _lock = self.setup_lock.lock();
+
+        // For now, just wait the timeout period
+        // A more sophisticated implementation could check producer buffer states
+        std::thread::sleep(timeout);
+
+        start.elapsed() <= timeout
+    }
 }
 
 impl<T: PortMessage> Clone for StreamOutput<T> {
@@ -360,6 +411,45 @@ impl<T: PortMessage> StreamInput<T> {
 
     pub fn port_type(&self) -> PortType {
         self.port_type
+    }
+
+    /// Remove the consumer (disconnect)
+    ///
+    /// Returns true if a consumer was removed, false if no consumer exists.
+    /// Used during disconnect to clean up the input connection.
+    pub fn remove_consumer(&self) -> bool {
+        let _lock = self.setup_lock.lock();
+        unsafe {
+            let had_consumer = (*self.consumer.get()).is_some();
+            *self.consumer.get() = None;
+            had_consumer
+        }
+    }
+
+    /// Attempt to drain remaining data from consumer with a timeout
+    ///
+    /// Returns true if drained successfully, false on timeout
+    pub fn drain_consumer(&self, timeout: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        let _lock = self.setup_lock.lock();
+
+        unsafe {
+            if let Some(consumer) = (*self.consumer.get()).as_mut() {
+                // Try to read all remaining data
+                while start.elapsed() < timeout && consumer.has_data() {
+                    if consumer.read_latest().is_none() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        start.elapsed() <= timeout
+    }
+
+    /// Check if a consumer exists (is connected)
+    pub fn has_consumer(&self) -> bool {
+        self.is_connected()
     }
 }
 

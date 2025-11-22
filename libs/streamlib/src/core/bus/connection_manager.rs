@@ -87,9 +87,15 @@ impl ConnectionManager {
     }
 
     /// Disconnect and remove a connection
-    pub fn disconnect(&mut self, id: ConnectionId) -> Result<()> {
+    ///
+    /// Returns the source and destination PortAddress if found, so the runtime
+    /// can clean up processor ports. Returns None if connection doesn't exist.
+    pub fn disconnect(&mut self, id: ConnectionId) -> Option<(PortAddress, PortAddress)> {
         // Check if connection exists in metadata
-        if self.metadata.remove(&id).is_some() {
+        if let Some(metadata) = self.metadata.remove(&id) {
+            let source = metadata.source.clone();
+            let dest = metadata.dest.clone();
+
             // Clean up indices
             // Remove from source index
             for (_, ids) in self.source_index.iter_mut() {
@@ -99,12 +105,9 @@ impl ConnectionManager {
             // Remove from dest index
             self.dest_index.retain(|_, &mut cid| cid != id);
 
-            Ok(())
+            Some((source, dest))
         } else {
-            Err(StreamError::Connection(format!(
-                "Connection {} not found",
-                id.0
-            )))
+            None
         }
     }
 

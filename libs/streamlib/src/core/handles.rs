@@ -70,6 +70,7 @@ impl<T: PortMessage> InputPortRef<T> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PendingConnection {
+    pub id: String,
     pub source_processor_id: ProcessorId,
     pub source_port_name: String,
     pub dest_processor_id: ProcessorId,
@@ -78,12 +79,14 @@ pub(crate) struct PendingConnection {
 
 impl PendingConnection {
     pub fn new(
+        id: String,
         source_processor_id: ProcessorId,
         source_port_name: String,
         dest_processor_id: ProcessorId,
         dest_port_name: String,
     ) -> Self {
         Self {
+            id,
             source_processor_id,
             source_port_name,
             dest_processor_id,

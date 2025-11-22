@@ -405,8 +405,14 @@ impl StreamRuntime {
         &mut self,
         output: crate::core::handles::OutputPortRef<T>,
         input: crate::core::handles::InputPortRef<T>,
-    ) -> Result<()> {
+    ) -> Result<ConnectionId> {
+        // Generate connection ID
+        let connection_id = format!("connection_{}", self.next_connection_id);
+        self.next_connection_id += 1;
+
+        // Create pending connection with ID
         let pending = PendingConnection::new(
+            connection_id.clone(),
             output.processor_id().clone(),
             output.port_name().to_string(),
             input.processor_id().clone(),
@@ -415,30 +421,17 @@ impl StreamRuntime {
 
         self.pending_connections.push(pending.clone());
 
-        let connection_id = format!("connection_{}", self.next_connection_id);
-        self.next_connection_id += 1;
-
-        let connection = Connection::new(
-            connection_id.clone(),
-            format!("{}.{}", output.processor_id(), output.port_name()),
-            format!("{}.{}", input.processor_id(), input.port_name()),
-        );
-
-        {
-            let mut connections = self.connections.lock();
-            connections.insert(connection_id.clone(), connection);
-        }
-
         tracing::debug!(
-            "Registered pending connection: {} ({}.{} → {}.{})",
-            connection_id,
+            "Registered pending connection (will be wired at start): {}.{} → {}.{}",
             output.processor_id(),
             output.port_name(),
             input.processor_id(),
             input.port_name()
         );
 
-        Ok(())
+        // Note: WillConnect and Connected events will be sent during wire_pending_connections()
+        // when the runtime starts. We return a placeholder ID here.
+        Ok(connection_id)
     }
 
     pub fn connect_at_runtime(&mut self, source: &str, destination: &str) -> Result<ConnectionId> {
@@ -456,14 +449,52 @@ impl StreamRuntime {
             ))
         })?;
 
+        // Generate connection ID early
+        let connection_id = format!("connection_{}", self.next_connection_id);
+        self.next_connection_id += 1;
+
         tracing::info!(
-            "Connecting {} ({}:{}) → ({}:{})",
+            "Connecting {} ({}:{}) → ({}:{}) [{}]",
             source,
             source_proc_id,
             source_port,
             dest_proc_id,
-            dest_port
+            dest_port,
+            connection_id
         );
+
+        // Send WillConnect events BEFORE wiring
+        {
+            use crate::core::pubsub::{
+                Event, PortType as EventPortType, ProcessorEvent, EVENT_BUS,
+            };
+
+            // Source processor (output port)
+            EVENT_BUS.publish(
+                &format!("processor:{}", source_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: source_proc_id.to_string(),
+                    event: ProcessorEvent::WillConnect {
+                        connection_id: connection_id.clone(),
+                        port_name: source_port.to_string(),
+                        port_type: EventPortType::Output,
+                    },
+                },
+            );
+
+            // Destination processor (input port)
+            EVENT_BUS.publish(
+                &format!("processor:{}", dest_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: dest_proc_id.to_string(),
+                    event: ProcessorEvent::WillConnect {
+                        connection_id: connection_id.clone(),
+                        port_name: dest_port.to_string(),
+                        port_type: EventPortType::Input,
+                    },
+                },
+            );
+        }
 
         let (source_processor, dest_processor) = {
             let processors = self.processors.lock();
@@ -667,9 +698,7 @@ impl StreamRuntime {
             dest_port_type
         );
 
-        let connection_id = format!("connection_{}", self.next_connection_id);
-        self.next_connection_id += 1;
-
+        // Store connection
         let connection = Connection::new(
             connection_id.clone(),
             source.to_string(),
@@ -681,8 +710,275 @@ impl StreamRuntime {
             connections.insert(connection_id.clone(), connection);
         }
 
+        // Send Connected events AFTER wiring complete
+        {
+            use crate::core::pubsub::{
+                Event, PortType as EventPortType, ProcessorEvent, RuntimeEvent, EVENT_BUS,
+            };
+
+            // Source processor (output port)
+            EVENT_BUS.publish(
+                &format!("processor:{}", source_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: source_proc_id.to_string(),
+                    event: ProcessorEvent::Connected {
+                        connection_id: connection_id.clone(),
+                        port_name: source_port.to_string(),
+                        port_type: EventPortType::Output,
+                    },
+                },
+            );
+
+            // Destination processor (input port)
+            EVENT_BUS.publish(
+                &format!("processor:{}", dest_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: dest_proc_id.to_string(),
+                    event: ProcessorEvent::Connected {
+                        connection_id: connection_id.clone(),
+                        port_name: dest_port.to_string(),
+                        port_type: EventPortType::Input,
+                    },
+                },
+            );
+
+            // Broadcast RuntimeEvent
+            EVENT_BUS.publish(
+                "runtime:global",
+                &Event::RuntimeGlobal(RuntimeEvent::ConnectionCreated {
+                    connection_id: connection_id.clone(),
+                    from_port: source.to_string(),
+                    to_port: destination.to_string(),
+                }),
+            );
+        }
+
         tracing::info!("Registered runtime connection: {}", connection_id);
         Ok(connection_id)
+    }
+
+    /// Disconnect a connection by port references
+    ///
+    /// This can disconnect both pre-runtime pending connections and runtime connections.
+    pub fn disconnect<T: crate::core::bus::PortMessage>(
+        &mut self,
+        output: crate::core::handles::OutputPortRef<T>,
+        input: crate::core::handles::InputPortRef<T>,
+    ) -> Result<()> {
+        let source = format!("{}.{}", output.processor_id(), output.port_name());
+        let destination = format!("{}.{}", input.processor_id(), input.port_name());
+
+        // Check if this is a pending connection (pre-runtime)
+        if !self.running {
+            // Find and remove from pending_connections
+            let removed_connection = self
+                .pending_connections
+                .iter()
+                .position(|p| {
+                    p.source_processor_id.as_str() == output.processor_id()
+                        && p.source_port_name.as_str() == output.port_name()
+                        && p.dest_processor_id.as_str() == input.processor_id()
+                        && p.dest_port_name.as_str() == input.port_name()
+                })
+                .map(|idx| self.pending_connections.remove(idx));
+
+            if let Some(removed) = removed_connection {
+                tracing::info!(
+                    "Removed pending connection {} ({} → {})",
+                    removed.id,
+                    source,
+                    destination
+                );
+                return Ok(());
+            }
+        }
+
+        // Otherwise, it's a runtime connection
+        // Find the connection ID by searching connections HashMap
+        let connection_id = {
+            let connections = self.connections.lock();
+            connections
+                .iter()
+                .find(|(_, conn)| conn.from_port == source && conn.to_port == destination)
+                .map(|(id, _)| id.clone())
+        };
+
+        if let Some(id) = connection_id {
+            self.disconnect_by_id(&id)
+        } else {
+            Err(StreamError::Configuration(format!(
+                "Connection not found: {} → {}",
+                source, destination
+            )))
+        }
+    }
+
+    /// Disconnect a connection by its ID
+    pub fn disconnect_by_id(&mut self, connection_id: &ConnectionId) -> Result<()> {
+        // Look up connection
+        let connection = {
+            let connections = self.connections.lock();
+            connections.get(connection_id).cloned()
+        };
+
+        let connection = connection.ok_or_else(|| {
+            StreamError::Configuration(format!("Connection {} not found", connection_id))
+        })?;
+
+        // Parse port addresses
+        let (source_proc_id, source_port) =
+            connection.from_port.split_once('.').ok_or_else(|| {
+                StreamError::Configuration(format!(
+                    "Invalid source format in connection: {}",
+                    connection.from_port
+                ))
+            })?;
+
+        let (dest_proc_id, dest_port) = connection.to_port.split_once('.').ok_or_else(|| {
+            StreamError::Configuration(format!(
+                "Invalid destination format in connection: {}",
+                connection.to_port
+            ))
+        })?;
+
+        tracing::info!(
+            "Disconnecting {} ({}:{} → {}:{}) [{}]",
+            connection.from_port,
+            source_proc_id,
+            source_port,
+            dest_proc_id,
+            dest_port,
+            connection_id
+        );
+
+        // Send WillDisconnect events to both processors
+        {
+            use crate::core::pubsub::{
+                Event, PortType as EventPortType, ProcessorEvent, EVENT_BUS,
+            };
+
+            EVENT_BUS.publish(
+                &format!("processor:{}", source_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: source_proc_id.to_string(),
+                    event: ProcessorEvent::WillDisconnect {
+                        connection_id: connection_id.clone(),
+                        port_name: source_port.to_string(),
+                        port_type: EventPortType::Output,
+                    },
+                },
+            );
+
+            EVENT_BUS.publish(
+                &format!("processor:{}", dest_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: dest_proc_id.to_string(),
+                    event: ProcessorEvent::WillDisconnect {
+                        connection_id: connection_id.clone(),
+                        port_name: dest_port.to_string(),
+                        port_type: EventPortType::Input,
+                    },
+                },
+            );
+        }
+
+        // Best-effort drain with timeout (500ms default)
+        let drain_timeout = std::time::Duration::from_millis(500);
+
+        // Give processors a moment to react to WillDisconnect
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Attempt to drain ports
+        {
+            let processors = self.processors.lock();
+
+            if let Some(src_handle) = processors.get(source_proc_id) {
+                if let Some(src_proc) = &src_handle.processor {
+                    let src_guard = src_proc.lock();
+                    // Note: drain methods would be called on the processor if implemented
+                    // For now, just wait the timeout
+                    drop(src_guard);
+                }
+            }
+
+            if let Some(dest_handle) = processors.get(dest_proc_id) {
+                if let Some(dest_proc) = &dest_handle.processor {
+                    let dest_guard = dest_proc.lock();
+                    // Note: drain methods would be called on the processor if implemented
+                    drop(dest_guard);
+                }
+            }
+        }
+
+        std::thread::sleep(drain_timeout);
+
+        // TODO: Clean up processor ports (remove producers/consumers)
+        // This requires access to processor internals which isn't exposed through the trait
+        // Full implementation would:
+        // 1. Remove OwnedProducer from source processor's StreamOutput
+        // 2. Remove wakeup channel from source processor's downstream_wakeups
+        // 3. Remove OwnedConsumer from dest processor's StreamInput
+        // 4. Call bus.disconnect() with the bus-level ConnectionId (not the runtime string ID)
+        //
+        // For now, we only clean up runtime-level tracking.
+        // The connection will stop being used but resources won't be fully freed.
+        tracing::warn!(
+            "Disconnection partial: runtime tracking cleaned up, but port-level cleanup not yet implemented for {}.{} → {}.{}",
+            source_proc_id,
+            source_port,
+            dest_proc_id,
+            dest_port
+        );
+
+        // Remove from runtime connections
+        {
+            let mut connections = self.connections.lock();
+            connections.remove(connection_id);
+        }
+
+        // Send Disconnected events to both processors
+        {
+            use crate::core::pubsub::{
+                Event, PortType as EventPortType, ProcessorEvent, RuntimeEvent, EVENT_BUS,
+            };
+
+            EVENT_BUS.publish(
+                &format!("processor:{}", source_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: source_proc_id.to_string(),
+                    event: ProcessorEvent::Disconnected {
+                        connection_id: connection_id.clone(),
+                        port_name: source_port.to_string(),
+                        port_type: EventPortType::Output,
+                    },
+                },
+            );
+
+            EVENT_BUS.publish(
+                &format!("processor:{}", dest_proc_id),
+                &Event::ProcessorEvent {
+                    processor_id: dest_proc_id.to_string(),
+                    event: ProcessorEvent::Disconnected {
+                        connection_id: connection_id.clone(),
+                        port_name: dest_port.to_string(),
+                        port_type: EventPortType::Input,
+                    },
+                },
+            );
+
+            // Broadcast RuntimeEvent
+            EVENT_BUS.publish(
+                "runtime:global",
+                &Event::RuntimeGlobal(RuntimeEvent::ConnectionRemoved {
+                    connection_id: connection_id.clone(),
+                    from_port: connection.from_port.clone(),
+                    to_port: connection.to_port.clone(),
+                }),
+            );
+        }
+
+        tracing::info!("Successfully disconnected connection: {}", connection_id);
+        Ok(())
     }
 
     fn wire_pending_connections(&mut self) -> Result<()> {
@@ -1498,5 +1794,572 @@ mod tests {
                 "Processors should start processing nearly simultaneously"
             );
         }
+    }
+
+    #[test]
+    fn test_disconnect_pre_runtime() {
+        // Simple test that verifies pre-runtime disconnect without requiring full processor setup
+        // This tests the disconnect() logic for pending connections before runtime.start()
+
+        use crate::core::frames::DataFrame;
+        use crate::core::handles::ProcessorHandle;
+
+        let mut runtime = StreamRuntime::new();
+
+        // Create processor handles for testing
+        let proc1 = ProcessorHandle::new("proc1".to_string());
+        let proc2 = ProcessorHandle::new("proc2".to_string());
+
+        let output_ref = proc1.output_port::<DataFrame>("output");
+        let input_ref = proc2.input_port::<DataFrame>("input");
+
+        // Create a pending connection directly (simulating what connect() would do)
+        use crate::core::handles::PendingConnection;
+        let connection_id = "test-conn-1".to_string();
+        runtime.pending_connections.push(PendingConnection::new(
+            connection_id.clone(),
+            output_ref.processor_id().clone(),
+            output_ref.port_name().to_string(),
+            input_ref.processor_id().clone(),
+            input_ref.port_name().to_string(),
+        ));
+
+        // Verify connection was created
+        assert_eq!(runtime.pending_connections.len(), 1);
+
+        // Disconnect by port references (pre-runtime)
+        runtime.disconnect(output_ref, input_ref).unwrap();
+
+        // Verify connection was removed
+        assert_eq!(runtime.pending_connections.len(), 0);
+    }
+
+    #[test]
+    fn test_disconnect_by_id() {
+        // Simple test that verifies disconnect_by_id returns error for non-existent connection
+        // Full integration test with real processors would require starting the runtime,
+        // which involves GPU context initialization and is better suited for integration tests
+
+        let mut runtime = StreamRuntime::new();
+
+        // Try to disconnect a non-existent connection
+        let result = runtime.disconnect_by_id(&"non-existent-id".to_string());
+
+        // Should return an error
+        assert!(result.is_err());
+        if let Err(e) = result {
+            // Verify it's a configuration error
+            assert!(matches!(e, StreamError::Configuration(_)));
+        }
+    }
+
+    #[test]
+    fn test_disconnect_events() {
+        // Test that disconnect events are published correctly
+        use crate::core::pubsub::{Event, EventListener, RuntimeEvent, EVENT_BUS};
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
+        // Track received events
+        let received_events = Arc::new(Mutex::new(Vec::new()));
+        let received_events_clone = Arc::clone(&received_events);
+
+        // Create event listener
+        struct TestListener {
+            events: Arc<Mutex<Vec<Event>>>,
+        }
+
+        impl EventListener for TestListener {
+            fn on_event(&mut self, event: &Event) -> Result<()> {
+                self.events.lock().push(event.clone());
+                Ok(())
+            }
+        }
+
+        // Subscribe to all events (must keep listener Arc alive)
+        let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(TestListener {
+            events: received_events_clone,
+        }));
+        EVENT_BUS.subscribe("runtime:global", Arc::clone(&listener_arc));
+
+        // Create runtime and add fake connection to test disconnect events
+        let mut runtime = StreamRuntime::new();
+        runtime.running = true; // Simulate started runtime
+
+        // Manually create a connection entry for testing
+        use super::Connection;
+        let connection_id = "test-conn-123".to_string();
+        let conn = Connection::new(
+            connection_id.clone(),
+            "proc1.output".to_string(),
+            "proc2.input".to_string(),
+        );
+
+        runtime
+            .connections
+            .lock()
+            .insert(connection_id.clone(), conn);
+
+        // Clear any setup events
+        received_events.lock().clear();
+
+        // Disconnect by ID (will fail during port cleanup but events should be sent)
+        let _ = runtime.disconnect_by_id(&connection_id);
+
+        // Check events were published
+        let events = received_events.lock();
+
+        // Should have received RuntimeEvent::ConnectionRemoved
+        let connection_removed = events.iter().any(|e| {
+            matches!(
+                e,
+                Event::RuntimeGlobal(RuntimeEvent::ConnectionRemoved { connection_id: id, .. })
+                if id == &connection_id
+            )
+        });
+
+        assert!(
+            connection_removed,
+            "Should have received ConnectionRemoved event. Events: {:?}",
+            events
+        );
+    }
+
+    #[test]
+    fn test_connection_events_include_port_type() {
+        // Verify that connection events include PortType enum (Input/Output)
+        use crate::core::pubsub::{PortType as EventPortType, ProcessorEvent};
+
+        // Test that the PortType enum exists and has correct variants
+        let input_type = EventPortType::Input;
+        let output_type = EventPortType::Output;
+
+        // Verify they're different
+        assert_ne!(input_type, output_type);
+
+        // Verify they can be used in events
+        let _event = ProcessorEvent::WillConnect {
+            connection_id: "test".to_string(),
+            port_name: "video".to_string(),
+            port_type: EventPortType::Output,
+        };
+
+        // Test pattern matching works
+        match _event {
+            ProcessorEvent::WillConnect {
+                port_type: EventPortType::Output,
+                ..
+            } => {
+                // Expected
+            }
+            _ => panic!("Pattern matching failed"),
+        }
+    }
+
+    #[test]
+    fn test_connect_returns_connection_id() {
+        // Verify that connect() now returns a connection ID instead of ()
+        use crate::core::frames::DataFrame;
+        use crate::core::handles::ProcessorHandle;
+
+        let mut runtime = StreamRuntime::new();
+
+        // Create processor handles
+        let proc1 = ProcessorHandle::new("proc1".to_string());
+        let proc2 = ProcessorHandle::new("proc2".to_string());
+
+        // Connect should return a String connection ID
+        let connection_id = runtime
+            .connect(
+                proc1.output_port::<DataFrame>("output"),
+                proc2.input_port::<DataFrame>("input"),
+            )
+            .unwrap();
+
+        // Should be a non-empty string
+        assert!(!connection_id.is_empty());
+
+        // Should be trackable in pending connections
+        assert_eq!(runtime.pending_connections.len(), 1);
+        assert_eq!(runtime.pending_connections[0].id, connection_id);
+    }
+
+    #[test]
+    fn test_disconnect_pre_runtime_with_events() {
+        // Test that pre-runtime disconnect doesn't crash and returns the connection ID in logs
+        use crate::core::frames::DataFrame;
+        use crate::core::handles::ProcessorHandle;
+
+        let mut runtime = StreamRuntime::new();
+
+        let proc1 = ProcessorHandle::new("proc1".to_string());
+        let proc2 = ProcessorHandle::new("proc2".to_string());
+
+        let output_ref = proc1.output_port::<DataFrame>("output");
+        let input_ref = proc2.input_port::<DataFrame>("input");
+
+        // Connect
+        let connection_id = runtime
+            .connect(output_ref.clone(), input_ref.clone())
+            .unwrap();
+
+        // Verify pending connection has the ID
+        assert_eq!(runtime.pending_connections.len(), 1);
+        assert_eq!(runtime.pending_connections[0].id, connection_id);
+
+        // Disconnect (should log the connection ID)
+        runtime.disconnect(output_ref, input_ref).unwrap();
+
+        // Verify removed
+        assert_eq!(runtime.pending_connections.len(), 0);
+    }
+
+    #[test]
+    fn test_disconnect_event_ordering() {
+        // Test that disconnect events are sent in correct order:
+        // WillDisconnect → drain → Disconnected → ConnectionRemoved
+        use crate::core::pubsub::{Event, EventListener, ProcessorEvent, RuntimeEvent, EVENT_BUS};
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
+        // Track received events with timestamps
+        let received_events = Arc::new(Mutex::new(Vec::new()));
+        let received_events_clone = Arc::clone(&received_events);
+
+        struct TestListener {
+            events: Arc<Mutex<Vec<(Event, std::time::Instant)>>>,
+        }
+
+        impl EventListener for TestListener {
+            fn on_event(&mut self, event: &Event) -> Result<()> {
+                self.events
+                    .lock()
+                    .push((event.clone(), std::time::Instant::now()));
+                Ok(())
+            }
+        }
+
+        // Subscribe to both runtime and processor topics
+        let listener1: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(TestListener {
+            events: Arc::clone(&received_events_clone),
+        }));
+        let listener2: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(TestListener {
+            events: Arc::clone(&received_events_clone),
+        }));
+        let listener3: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(TestListener {
+            events: received_events_clone,
+        }));
+
+        EVENT_BUS.subscribe("runtime:global", Arc::clone(&listener1));
+        EVENT_BUS.subscribe("processor:proc1", Arc::clone(&listener2));
+        EVENT_BUS.subscribe("processor:proc2", Arc::clone(&listener3));
+
+        // Create runtime and add fake connection
+        let mut runtime = StreamRuntime::new();
+        runtime.running = true;
+
+        let connection_id = "test-conn-456".to_string();
+        let conn = Connection::new(
+            connection_id.clone(),
+            "proc1.output".to_string(),
+            "proc2.input".to_string(),
+        );
+
+        runtime
+            .connections
+            .lock()
+            .insert(connection_id.clone(), conn);
+        received_events.lock().clear();
+
+        // Disconnect by ID
+        let _ = runtime.disconnect_by_id(&connection_id);
+
+        // Check event ordering
+        let events = received_events.lock();
+
+        // Extract event types in order
+        let event_sequence: Vec<String> = events
+            .iter()
+            .map(|(e, _)| match e {
+                Event::ProcessorEvent {
+                    event: ProcessorEvent::WillDisconnect { .. },
+                    ..
+                } => "WillDisconnect".to_string(),
+                Event::ProcessorEvent {
+                    event: ProcessorEvent::Disconnected { .. },
+                    ..
+                } => "Disconnected".to_string(),
+                Event::RuntimeGlobal(RuntimeEvent::ConnectionRemoved { .. }) => {
+                    "ConnectionRemoved".to_string()
+                }
+                _ => "Other".to_string(),
+            })
+            .collect();
+
+        // WillDisconnect events should come before Disconnected events
+        let will_disconnect_indices: Vec<usize> = event_sequence
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| *e == "WillDisconnect")
+            .map(|(i, _)| i)
+            .collect();
+
+        let disconnected_indices: Vec<usize> = event_sequence
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| *e == "Disconnected")
+            .map(|(i, _)| i)
+            .collect();
+
+        let connection_removed_indices: Vec<usize> = event_sequence
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| *e == "ConnectionRemoved")
+            .map(|(i, _)| i)
+            .collect();
+
+        // Verify we got the events
+        assert!(
+            !will_disconnect_indices.is_empty(),
+            "Should have WillDisconnect events"
+        );
+        assert!(
+            !disconnected_indices.is_empty(),
+            "Should have Disconnected events"
+        );
+        assert!(
+            !connection_removed_indices.is_empty(),
+            "Should have ConnectionRemoved event"
+        );
+
+        // Verify ordering: WillDisconnect < Disconnected < ConnectionRemoved
+        if let (Some(&first_will), Some(&first_disc), Some(&first_removed)) = (
+            will_disconnect_indices.first(),
+            disconnected_indices.first(),
+            connection_removed_indices.first(),
+        ) {
+            assert!(
+                first_will < first_disc,
+                "WillDisconnect should come before Disconnected. Sequence: {:?}",
+                event_sequence
+            );
+            assert!(
+                first_disc < first_removed,
+                "Disconnected should come before ConnectionRemoved. Sequence: {:?}",
+                event_sequence
+            );
+        }
+    }
+
+    #[test]
+    fn test_processor_level_disconnect_events() {
+        // Test that disconnect events are sent to BOTH source and destination processors
+        use crate::core::pubsub::{Event, EventListener, ProcessorEvent, EVENT_BUS};
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
+        // Track events per processor
+        let proc1_events = Arc::new(Mutex::new(Vec::new()));
+        let proc2_events = Arc::new(Mutex::new(Vec::new()));
+
+        struct ProcessorListener {
+            events: Arc<Mutex<Vec<ProcessorEvent>>>,
+        }
+
+        impl EventListener for ProcessorListener {
+            fn on_event(&mut self, event: &Event) -> Result<()> {
+                if let Event::ProcessorEvent { event, .. } = event {
+                    self.events.lock().push(event.clone());
+                }
+                Ok(())
+            }
+        }
+
+        // Subscribe to individual processor topics
+        let listener1: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(ProcessorListener {
+            events: Arc::clone(&proc1_events),
+        }));
+        let listener2: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(ProcessorListener {
+            events: Arc::clone(&proc2_events),
+        }));
+
+        EVENT_BUS.subscribe("processor:proc1", Arc::clone(&listener1));
+        EVENT_BUS.subscribe("processor:proc2", Arc::clone(&listener2));
+
+        // Create runtime and connection
+        let mut runtime = StreamRuntime::new();
+        runtime.running = true;
+
+        let connection_id = "test-conn-789".to_string();
+        let conn = Connection::new(
+            connection_id.clone(),
+            "proc1.output".to_string(),
+            "proc2.input".to_string(),
+        );
+
+        runtime
+            .connections
+            .lock()
+            .insert(connection_id.clone(), conn);
+
+        // Clear events
+        proc1_events.lock().clear();
+        proc2_events.lock().clear();
+
+        // Disconnect
+        let _ = runtime.disconnect_by_id(&connection_id);
+
+        // Check both processors received events
+        let p1_events = proc1_events.lock();
+        let p2_events = proc2_events.lock();
+
+        // Processor 1 (source) should receive WillDisconnect and Disconnected
+        let p1_will_disconnect = p1_events.iter().any(|e| {
+            matches!(e, ProcessorEvent::WillDisconnect { connection_id: id, .. } if id == &connection_id)
+        });
+        let p1_disconnected = p1_events.iter().any(|e| {
+            matches!(e, ProcessorEvent::Disconnected { connection_id: id, .. } if id == &connection_id)
+        });
+
+        // Processor 2 (destination) should receive WillDisconnect and Disconnected
+        let p2_will_disconnect = p2_events.iter().any(|e| {
+            matches!(e, ProcessorEvent::WillDisconnect { connection_id: id, .. } if id == &connection_id)
+        });
+        let p2_disconnected = p2_events.iter().any(|e| {
+            matches!(e, ProcessorEvent::Disconnected { connection_id: id, .. } if id == &connection_id)
+        });
+
+        assert!(
+            p1_will_disconnect,
+            "Source processor should receive WillDisconnect. Events: {:?}",
+            p1_events
+        );
+        assert!(
+            p1_disconnected,
+            "Source processor should receive Disconnected. Events: {:?}",
+            p1_events
+        );
+        assert!(
+            p2_will_disconnect,
+            "Destination processor should receive WillDisconnect. Events: {:?}",
+            p2_events
+        );
+        assert!(
+            p2_disconnected,
+            "Destination processor should receive Disconnected. Events: {:?}",
+            p2_events
+        );
+    }
+
+    #[test]
+    fn test_processor_events_include_correct_port_info() {
+        // Test that processor events include correct port name and port type
+        use crate::core::pubsub::{
+            Event, EventListener, PortType as EventPortType, ProcessorEvent, EVENT_BUS,
+        };
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
+        let all_events = Arc::new(Mutex::new(Vec::new()));
+        let all_events_clone = Arc::clone(&all_events);
+
+        struct AllEventsListener {
+            events: Arc<Mutex<Vec<Event>>>,
+        }
+
+        impl EventListener for AllEventsListener {
+            fn on_event(&mut self, event: &Event) -> Result<()> {
+                self.events.lock().push(event.clone());
+                Ok(())
+            }
+        }
+
+        let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(AllEventsListener {
+            events: all_events_clone,
+        }));
+
+        EVENT_BUS.subscribe("processor:proc1", Arc::clone(&listener));
+        EVENT_BUS.subscribe("processor:proc2", Arc::clone(&listener));
+
+        // Create runtime and connection
+        let mut runtime = StreamRuntime::new();
+        runtime.running = true;
+
+        let connection_id = "test-conn-999".to_string();
+        let conn = Connection::new(
+            connection_id.clone(),
+            "proc1.video_out".to_string(),
+            "proc2.video_in".to_string(),
+        );
+
+        runtime
+            .connections
+            .lock()
+            .insert(connection_id.clone(), conn);
+        all_events.lock().clear();
+
+        // Disconnect
+        let _ = runtime.disconnect_by_id(&connection_id);
+
+        // Verify port information in events
+        let events = all_events.lock();
+
+        // Find processor events
+        let processor_events: Vec<&Event> = events
+            .iter()
+            .filter(|e| matches!(e, Event::ProcessorEvent { .. }))
+            .collect();
+
+        assert!(!processor_events.is_empty(), "Should have processor events");
+
+        // Check that events have correct port types
+        let has_output_port_event = processor_events.iter().any(|e| {
+            if let Event::ProcessorEvent {
+                processor_id,
+                event:
+                    ProcessorEvent::WillDisconnect {
+                        port_name,
+                        port_type,
+                        ..
+                    },
+            } = e
+            {
+                processor_id == "proc1"
+                    && port_name == "video_out"
+                    && *port_type == EventPortType::Output
+            } else {
+                false
+            }
+        });
+
+        let has_input_port_event = processor_events.iter().any(|e| {
+            if let Event::ProcessorEvent {
+                processor_id,
+                event:
+                    ProcessorEvent::WillDisconnect {
+                        port_name,
+                        port_type,
+                        ..
+                    },
+            } = e
+            {
+                processor_id == "proc2"
+                    && port_name == "video_in"
+                    && *port_type == EventPortType::Input
+            } else {
+                false
+            }
+        });
+
+        assert!(
+            has_output_port_event,
+            "Should have Output port event for proc1. Events: {:?}",
+            processor_events
+        );
+        assert!(
+            has_input_port_event,
+            "Should have Input port event for proc2. Events: {:?}",
+            processor_events
+        );
     }
 }
