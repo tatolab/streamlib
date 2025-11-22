@@ -243,6 +243,18 @@ Examples serve as integration tests and usage documentation.
 
 ## Project Conventions
 
+### Dependency Management
+**IMPORTANT**: Before suggesting any dependency versions:
+1. Check [crates.io](https://crates.io) to find the latest stable version
+2. Verify compatibility with project's Rust version and existing dependencies
+3. Use the latest compatible version, not outdated versions
+
+Example:
+```bash
+# Check latest version on crates.io
+# For petgraph: https://crates.io/crates/petgraph shows 0.8.3 (not 0.6)
+```
+
 ### Commit Messages
 Use conventional commits with Claude Code attribution:
 ```

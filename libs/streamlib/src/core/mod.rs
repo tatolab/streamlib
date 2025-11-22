@@ -5,6 +5,7 @@ pub mod clap;
 pub mod context;
 pub mod error;
 pub mod frames;
+pub mod graph_optimizer;
 pub mod handles;
 pub mod loop_utils;
 pub mod media_clock;
@@ -37,6 +38,9 @@ pub use context::{GpuContext, RuntimeContext};
 pub use error::{Result, StreamError};
 pub use frames::{
     AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
+};
+pub use graph_optimizer::{
+    ConnectionEdge, ExecutionPlan, GraphOptimizer, GraphStats, ProcessorNode,
 };
 pub use handles::{InputPortRef, OutputPortRef, ProcessorHandle, ProcessorId};
 pub use pubsub::{
