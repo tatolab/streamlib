@@ -140,65 +140,76 @@ fn bench_phase1_vs_phase2_concurrent(c: &mut Criterion) {
 
     // Phase 1: Lock-based concurrent write/read
     group.bench_function("phase1_lock_based", |b| {
-        b.iter(|| {
-            let conn = Arc::new(ProcessorConnection::<i32>::new(
-                "source".to_string(),
-                "out".to_string(),
-                "dest".to_string(),
-                "in".to_string(),
-                256,
-            ));
+        b.iter_batched(
+            || {
+                // Setup: Create connection once per sample
+                Arc::new(ProcessorConnection::<i32>::new(
+                    "source".to_string(),
+                    "out".to_string(),
+                    "dest".to_string(),
+                    "in".to_string(),
+                    256,
+                ))
+            },
+            |conn| {
+                // Benchmark: Spawn threads and measure the actual concurrent work
+                let conn_writer = Arc::clone(&conn);
+                let conn_reader = Arc::clone(&conn);
 
-            let conn_writer = Arc::clone(&conn);
-            let conn_reader = Arc::clone(&conn);
-
-            let writer = thread::spawn(move || {
-                for i in 0..1000 {
-                    conn_writer.write(i);
-                }
-            });
-
-            let reader = thread::spawn(move || {
-                let mut count = 0;
-                while count < 1000 {
-                    if conn_reader.has_data() {
-                        conn_reader.read_latest();
-                        count += 1;
+                let writer = thread::spawn(move || {
+                    for i in 0..1000 {
+                        conn_writer.write(i);
                     }
-                }
-            });
+                });
 
-            writer.join().unwrap();
-            reader.join().unwrap();
-        });
+                let reader = thread::spawn(move || {
+                    let mut count = 0;
+                    while count < 1000 {
+                        if conn_reader.has_data() {
+                            conn_reader.read_latest();
+                            count += 1;
+                        }
+                    }
+                });
+
+                writer.join().unwrap();
+                reader.join().unwrap();
+            },
+            criterion::BatchSize::SmallInput,
+        )
     });
 
     // Phase 2: Lock-free concurrent write/read
     // Note: Can't use Arc with owned types, need different approach
     group.bench_function("phase2_lock_free", |b| {
-        b.iter(|| {
-            let (mut producer, mut consumer) = create_owned_connection::<i32>(256);
-
-            // Move owned halves into threads
-            let writer = thread::spawn(move || {
-                for i in 0..1000 {
-                    producer.write(i);
-                }
-            });
-
-            let reader = thread::spawn(move || {
-                let mut count = 0;
-                while count < 1000 {
-                    if consumer.has_data() {
-                        consumer.read_latest();
-                        count += 1;
+        b.iter_batched(
+            || {
+                // Setup: Create owned connection once per sample
+                create_owned_connection::<i32>(256)
+            },
+            |(mut producer, mut consumer)| {
+                // Benchmark: Move owned halves into threads and measure concurrent work
+                let writer = thread::spawn(move || {
+                    for i in 0..1000 {
+                        producer.write(i);
                     }
-                }
-            });
+                });
 
-            writer.join().unwrap();
-            reader.join().unwrap();
-        });
+                let reader = thread::spawn(move || {
+                    let mut count = 0;
+                    while count < 1000 {
+                        if consumer.has_data() {
+                            consumer.read_latest();
+                            count += 1;
+                        }
+                    }
+                });
+
+                writer.join().unwrap();
+                reader.join().unwrap();
+            },
+            criterion::BatchSize::SmallInput,
+        )
     });
 
     group.finish();

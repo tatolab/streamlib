@@ -140,37 +140,43 @@ fn bench_concurrent_write_read(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_write_read");
 
     group.bench_function("single_producer_consumer", |b| {
-        b.iter(|| {
-            let conn = Arc::new(ProcessorConnection::<i32>::new(
-                "source".to_string(),
-                "out".to_string(),
-                "dest".to_string(),
-                "in".to_string(),
-                256,
-            ));
+        b.iter_batched(
+            || {
+                // Setup: Create connection once per sample
+                Arc::new(ProcessorConnection::<i32>::new(
+                    "source".to_string(),
+                    "out".to_string(),
+                    "dest".to_string(),
+                    "in".to_string(),
+                    256,
+                ))
+            },
+            |conn| {
+                // Benchmark: Spawn threads and measure the actual concurrent work
+                let conn_writer = Arc::clone(&conn);
+                let conn_reader = Arc::clone(&conn);
 
-            let conn_writer = Arc::clone(&conn);
-            let conn_reader = Arc::clone(&conn);
-
-            let writer = thread::spawn(move || {
-                for i in 0..1000 {
-                    conn_writer.write(i);
-                }
-            });
-
-            let reader = thread::spawn(move || {
-                let mut count = 0;
-                while count < 1000 {
-                    if conn_reader.has_data() {
-                        conn_reader.read_latest();
-                        count += 1;
+                let writer = thread::spawn(move || {
+                    for i in 0..1000 {
+                        conn_writer.write(i);
                     }
-                }
-            });
+                });
 
-            writer.join().unwrap();
-            reader.join().unwrap();
-        });
+                let reader = thread::spawn(move || {
+                    let mut count = 0;
+                    while count < 1000 {
+                        if conn_reader.has_data() {
+                            conn_reader.read_latest();
+                            count += 1;
+                        }
+                    }
+                });
+
+                writer.join().unwrap();
+                reader.join().unwrap();
+            },
+            criterion::BatchSize::SmallInput,
+        )
     });
 
     group.finish();
