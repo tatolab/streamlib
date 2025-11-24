@@ -88,7 +88,9 @@ pub mod __private {
 /// }
 /// # Ok::<(), streamlib::core::ConnectionIdError>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ConnectionId(String);
 
 /// Errors that can occur when parsing a ConnectionId

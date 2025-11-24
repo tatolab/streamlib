@@ -649,9 +649,15 @@ impl StreamProcessor for PythonProcessor {
                     let stream_input = StreamInput::new(port_name);
 
                     // Generate temporary connection ID for backwards compatibility
-                    let temp_id = crate::core::bus::connection_id::__private::new_unchecked(
-                        format!("{}.wire_compat_{}", port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
-                    );
+                    let temp_id =
+                        crate::core::bus::connection_id::__private::new_unchecked(format!(
+                            "{}.wire_compat_{}",
+                            port_name,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_nanos()
+                        ));
                     let (tx, _rx) = crossbeam_channel::bounded(1);
                     let source_addr = crate::core::PortAddress::new("unknown", port_name);
                     let _ = stream_input.add_connection(temp_id, *typed_consumer, source_addr, tx);
