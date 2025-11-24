@@ -458,7 +458,7 @@ pub async fn execute_tool(
             let destination = args.destination.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let mut rt = runtime_clone.lock();
-                rt.connect_at_runtime(&source, &destination)
+                rt.connect_by_id(&source, &destination)
             })
             .await
             .map_err(|e| McpError::Runtime(format!("Failed to spawn blocking task: {}", e)))?;
