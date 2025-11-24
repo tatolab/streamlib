@@ -35,6 +35,15 @@ This document is a **complete implementation specification**. You MUST follow it
 ### When in Doubt:
 **STOP. ASK. WAIT FOR APPROVAL.**
 
+### Prohibited Patterns - Never Use These:
+1. ❌ `unimplemented!()` or `todo!()` in library code (tests/examples are OK)
+2. ❌ "Temporary" hacks or workarounds
+3. ❌ Methods that do nothing: `fn foo() { /* no-op */ }`
+4. ❌ Compatibility shims for "old code" in new implementations
+5. ❌ Bypassing type safety "just to make it compile"
+
+**Instead**: Stop, explain the problem, present options, and wait for guidance.
+
 ---
 
 ## Project Overview

@@ -1,309 +1,16 @@
-use parking_lot::Mutex;
+//! Phase 2: Lock-Free Connection Architecture
+//!
+//! This module provides true lock-free connections using rtrb's lock-free ring buffer.
+//! NO Arc<Mutex> - just atomic operations for maximum performance.
+
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConnectionId(pub u64);
-
-impl Default for ConnectionId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConnectionId {
-    pub fn new() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl std::fmt::Display for ConnectionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "conn_{}", self.0)
-    }
-}
-
-pub struct ProcessorConnection<T: Clone + Send + 'static> {
-    pub id: ConnectionId,
-    pub source_processor: String,
-    pub source_port: String,
-    pub dest_processor: String,
-    pub dest_port: String,
-    pub producer: Arc<Mutex<Producer<T>>>,
-    pub consumer: Arc<Mutex<Consumer<T>>>,
-    pub created_at: std::time::Instant,
-
-    /// Cached queue size for lock-free has_data() checks
-    /// Updated atomically on write/read operations
-    cached_size: Arc<AtomicUsize>,
-}
-
-impl<T: Clone + Send + 'static> ProcessorConnection<T> {
-    pub fn new(
-        source_processor: String,
-        source_port: String,
-        dest_processor: String,
-        dest_port: String,
-        capacity: usize,
-    ) -> Self {
-        let (producer, consumer) = RingBuffer::new(capacity);
-
-        Self {
-            id: ConnectionId::new(),
-            source_processor,
-            source_port,
-            dest_processor,
-            dest_port,
-            producer: Arc::new(Mutex::new(producer)),
-            consumer: Arc::new(Mutex::new(consumer)),
-            created_at: std::time::Instant::now(),
-            cached_size: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    /// Write data to the connection with roll-off semantics
-    /// Always succeeds by dropping oldest data when buffer is full
-    ///
-    /// Optimizations:
-    /// - Avoids cloning data on happy path (when buffer has space)
-    /// - Releases producer lock before acquiring consumer lock to prevent deadlock
-    /// - Updates atomic cached_size for lock-free has_data() checks
-    pub fn write(&self, data: T) {
-        let mut producer = self.producer.lock();
-
-        // Try to push WITHOUT cloning first (happy path optimization)
-        match producer.push(data) {
-            Ok(()) => {
-                // Success - update cached size
-                self.cached_size.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(rtrb::PushError::Full(data)) => {
-                // Buffer full - need to make space via roll-off
-                // IMPORTANT: Drop producer lock before acquiring consumer lock
-                drop(producer);
-
-                // Pop oldest item from consumer side
-                {
-                    let mut consumer = self.consumer.lock();
-                    if let Ok(_dropped) = consumer.pop() {
-                        self.cached_size.fetch_sub(1, Ordering::Relaxed);
-                    }
-                }
-
-                // Re-acquire producer lock and retry
-                let mut producer = self.producer.lock();
-                match producer.push(data) {
-                    Ok(()) => {
-                        self.cached_size.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        // This should never happen after making space
-                        tracing::error!(
-                            "Failed to write to connection {} even after roll-off: {:?}",
-                            self.id,
-                            e
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Legacy write method that returns errors (deprecated)
-    #[deprecated(note = "Use write() instead - it now always succeeds with roll-off semantics")]
-    pub fn try_write(&self, data: T) -> Result<(), T> {
-        let mut producer = self.producer.lock();
-        match producer.push(data) {
-            Ok(()) => Ok(()),
-            Err(rtrb::PushError::Full(data)) => Err(data),
-        }
-    }
-
-    /// Read and return the most recent item, discarding all older items
-    ///
-    /// Optimization: Uses chunk-based reading to avoid N clones when
-    /// discarding N-1 items. Only the latest item is cloned.
-    pub fn read_latest(&self) -> Option<T> {
-        let mut consumer = self.consumer.lock();
-
-        // Fast path: Check if empty using slots()
-        let available = consumer.slots();
-        if available == 0 {
-            return None;
-        }
-
-        // Optimized path: Read all items as a chunk and only clone the last
-        match consumer.read_chunk(available) {
-            Ok(chunk) => {
-                // Get slices of all available items (rtrb may split into two slices)
-                let (first, second) = chunk.as_slices();
-
-                // Find the last item (check second slice first, then first)
-                let latest = if !second.is_empty() {
-                    second.last().cloned()
-                } else {
-                    first.last().cloned()
-                };
-
-                // Commit all items (discard them from buffer)
-                chunk.commit_all();
-
-                // Update cached size
-                self.cached_size.fetch_sub(available, Ordering::Relaxed);
-
-                latest
-            }
-            Err(_) => {
-                // Fallback to old method if chunk API fails
-                // This shouldn't happen but defensive programming
-                let mut latest = None;
-                let mut count = 0;
-                while let Ok(data) = consumer.pop() {
-                    latest = Some(data);
-                    count += 1;
-                }
-                if count > 0 {
-                    self.cached_size.fetch_sub(count, Ordering::Relaxed);
-                }
-                latest
-            }
-        }
-    }
-
-    /// Check if data is available without locking
-    ///
-    /// Optimization: Lock-free check using atomic cached_size
-    /// ~40x faster than the old lock-based approach (~5ns vs ~200ns)
-    pub fn has_data(&self) -> bool {
-        self.cached_size.load(Ordering::Relaxed) > 0
-    }
-
-    /// Peek at the next item without consuming it
-    /// Returns None if buffer is empty
-    pub fn peek(&self) -> Option<T> {
-        let consumer = self.consumer.lock();
-        consumer.peek().ok().cloned()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_write_roll_off() {
-        let conn = ProcessorConnection::<i32>::new(
-            "proc1".to_string(),
-            "out".to_string(),
-            "proc2".to_string(),
-            "in".to_string(),
-            3, // Small buffer for testing
-        );
-
-        // Fill the buffer
-        conn.write(1);
-        conn.write(2);
-        conn.write(3);
-
-        // This should cause roll-off (oldest data drops)
-        conn.write(4);
-
-        // Read all data - should get 2, 3, 4 (1 was dropped)
-        let mut consumer = conn.consumer.lock();
-        assert_eq!(consumer.pop(), Ok(2));
-        assert_eq!(consumer.pop(), Ok(3));
-        assert_eq!(consumer.pop(), Ok(4));
-        assert!(consumer.pop().is_err()); // Buffer empty
-    }
-
-    #[test]
-    fn test_write_never_blocks() {
-        let conn = ProcessorConnection::<i32>::new(
-            "proc1".to_string(),
-            "out".to_string(),
-            "proc2".to_string(),
-            "in".to_string(),
-            2,
-        );
-
-        // Write many items - should never panic or block
-        for i in 0..100 {
-            conn.write(i); // Always succeeds
-        }
-
-        // Should have latest 2 items
-        assert_eq!(conn.read_latest(), Some(99));
-    }
-
-    #[test]
-    fn test_read_latest_gets_newest() {
-        let conn = ProcessorConnection::<i32>::new(
-            "proc1".to_string(),
-            "out".to_string(),
-            "proc2".to_string(),
-            "in".to_string(),
-            5,
-        );
-
-        conn.write(10);
-        conn.write(20);
-        conn.write(30);
-
-        // read_latest should drain all and return newest
-        assert_eq!(conn.read_latest(), Some(30));
-
-        // Buffer should be empty now
-        assert_eq!(conn.read_latest(), None);
-    }
-
-    #[test]
-    fn test_has_data() {
-        let conn = ProcessorConnection::<i32>::new(
-            "proc1".to_string(),
-            "out".to_string(),
-            "proc2".to_string(),
-            "in".to_string(),
-            3,
-        );
-
-        assert!(!conn.has_data());
-
-        conn.write(42);
-        assert!(conn.has_data());
-
-        conn.read_latest();
-        assert!(!conn.has_data());
-    }
-
-    #[test]
-    fn test_connection_id_unique() {
-        let conn1 = ProcessorConnection::<i32>::new(
-            "proc1".to_string(),
-            "out".to_string(),
-            "proc2".to_string(),
-            "in".to_string(),
-            3,
-        );
-
-        let conn2 = ProcessorConnection::<i32>::new(
-            "proc1".to_string(),
-            "out".to_string(),
-            "proc2".to_string(),
-            "in".to_string(),
-            3,
-        );
-
-        assert_ne!(conn1.id, conn2.id);
-    }
-}
-
-/// Phase 2: Lock-Free Connection Architecture
+/// Lock-free producer for writing data to a connection
 ///
-/// Owned producer that wraps rtrb::Producer directly without Arc<Mutex>.
-/// Provides true lock-free writes using rtrb's internal atomic operations.
+/// Wraps rtrb::Producer directly (no Arc<Mutex>) for true lock-free writes
+/// using only atomic operations.
 pub struct OwnedProducer<T: Clone + Send + 'static> {
     inner: Producer<T>,
     cached_size: Arc<AtomicUsize>,
@@ -317,10 +24,11 @@ impl<T: Clone + Send + 'static> OwnedProducer<T> {
         }
     }
 
-    /// Write data to the connection with roll-off semantics (lock-free)
+    /// Write data to the connection with drop-on-full semantics (lock-free)
     ///
-    /// Note: Roll-off is NOT possible in owned mode because we can't access
-    /// the consumer from the producer thread. Data is dropped if buffer is full.
+    /// If the buffer is full, the data is dropped (acceptable for real-time streaming).
+    /// This is necessary because we can't access the consumer from the producer side
+    /// in the lock-free architecture.
     pub fn write(&mut self, data: T) {
         match self.inner.push(data) {
             Ok(()) => {
@@ -345,14 +53,16 @@ impl<T: Clone + Send + 'static> OwnedProducer<T> {
         }
     }
 
-    /// Check if data is available (lock-free, atomic read)
-    pub fn has_data(&self) -> bool {
-        self.cached_size.load(Ordering::Relaxed) > 0
+    /// Check if buffer has space (lock-free, atomic read)
+    pub fn has_space(&self) -> bool {
+        self.inner.slots() > 0
     }
 }
 
-/// Owned consumer that wraps rtrb::Consumer directly without Arc<Mutex>.
-/// Provides true lock-free reads using rtrb's internal atomic operations.
+/// Lock-free consumer for reading data from a connection
+///
+/// Wraps rtrb::Consumer directly (no Arc<Mutex>) for true lock-free reads
+/// using only atomic operations.
 pub struct OwnedConsumer<T: Clone + Send + 'static> {
     inner: Consumer<T>,
     cached_size: Arc<AtomicUsize>,
@@ -367,53 +77,27 @@ impl<T: Clone + Send + 'static> OwnedConsumer<T> {
     }
 
     /// Read and return the most recent item, discarding all older items (lock-free)
+    ///
+    /// Optimal for video frames where you want the latest frame and don't care about
+    /// missed intermediate frames.
     pub fn read_latest(&mut self) -> Option<T> {
-        let available = self.inner.slots();
-        if available == 0 {
-            return None;
+        let mut latest = None;
+        while let Ok(item) = self.inner.pop() {
+            self.cached_size.fetch_sub(1, Ordering::Relaxed);
+            latest = Some(item);
         }
-
-        // Use chunk API for zero-copy discard of N-1 items
-        match self.inner.read_chunk(available) {
-            Ok(chunk) => {
-                let (first, second) = chunk.as_slices();
-                let latest = if !second.is_empty() {
-                    second.last().cloned()
-                } else {
-                    first.last().cloned()
-                };
-
-                chunk.commit_all();
-                self.cached_size.fetch_sub(available, Ordering::Relaxed);
-                latest
-            }
-            Err(_) => {
-                // Fallback: pop all items one by one
-                let mut latest = None;
-                let mut count = 0;
-                while let Ok(data) = self.inner.pop() {
-                    latest = Some(data);
-                    count += 1;
-                }
-                if count > 0 {
-                    self.cached_size.fetch_sub(count, Ordering::Relaxed);
-                }
-                latest
-            }
-        }
+        latest
     }
 
-    /// Read next item without consuming it (lock-free)
-    pub fn peek(&mut self) -> Option<T> {
-        self.inner.peek().ok().cloned()
-    }
-
-    /// Read a single item (lock-free)
+    /// Read the next item sequentially (lock-free)
+    ///
+    /// Returns None if buffer is empty. Use this for audio or data where you need
+    /// every item in order.
     pub fn read(&mut self) -> Option<T> {
         match self.inner.pop() {
-            Ok(data) => {
+            Ok(item) => {
                 self.cached_size.fetch_sub(1, Ordering::Relaxed);
-                Some(data)
+                Some(item)
             }
             Err(_) => None,
         }
@@ -424,13 +108,29 @@ impl<T: Clone + Send + 'static> OwnedConsumer<T> {
         self.cached_size.load(Ordering::Relaxed) > 0
     }
 
-    /// Get number of available items (lock-free)
-    pub fn available(&self) -> usize {
-        self.inner.slots()
+    /// Peek at the next item without consuming it (lock-free)
+    pub fn peek(&self) -> Option<T> {
+        self.inner.peek().ok().cloned()
     }
 }
 
-/// Factory function to create a lock-free producer/consumer pair
+/// Create a pair of owned producer/consumer for lock-free communication
+///
+/// This is the primary way to create connections in Phase 2.
+///
+/// # Example
+///
+/// ```
+/// use streamlib::core::bus::create_owned_connection;
+///
+/// let (mut producer, mut consumer) = create_owned_connection::<i32>(32);
+///
+/// // Lock-free write
+/// producer.write(42);
+///
+/// // Lock-free read
+/// assert_eq!(consumer.read(), Some(42));
+/// ```
 pub fn create_owned_connection<T: Clone + Send + 'static>(
     capacity: usize,
 ) -> (OwnedProducer<T>, OwnedConsumer<T>) {
@@ -438,13 +138,13 @@ pub fn create_owned_connection<T: Clone + Send + 'static>(
     let cached_size = Arc::new(AtomicUsize::new(0));
 
     (
-        OwnedProducer::new(producer, Arc::clone(&cached_size)),
+        OwnedProducer::new(producer, cached_size.clone()),
         OwnedConsumer::new(consumer, cached_size),
     )
 }
 
 #[cfg(test)]
-mod phase2_tests {
+mod tests {
     use super::*;
 
     #[test]
@@ -464,8 +164,9 @@ mod phase2_tests {
         producer.write(2);
         producer.write(3);
 
+        // read_latest should skip 1 and 2, return only 3
         assert_eq!(consumer.read_latest(), Some(3));
-        assert_eq!(consumer.read(), None);
+        assert_eq!(consumer.read_latest(), None);
     }
 
     #[test]
@@ -473,26 +174,40 @@ mod phase2_tests {
         let (mut producer, consumer) = create_owned_connection::<i32>(10);
 
         assert!(!consumer.has_data());
+
         producer.write(42);
         assert!(consumer.has_data());
     }
 
     #[test]
-    fn test_owned_overflow_drops() {
-        let (mut producer, mut consumer) = create_owned_connection::<i32>(3);
+    fn test_owned_try_write() {
+        let (mut producer, mut consumer) = create_owned_connection::<i32>(2);
 
-        // Fill buffer
-        producer.write(1);
-        producer.write(2);
-        producer.write(3);
+        assert!(producer.try_write(1).is_ok());
+        assert!(producer.try_write(2).is_ok());
 
-        // This should drop silently (no roll-off in owned mode)
-        producer.write(4);
+        // Buffer full
+        assert!(producer.try_write(3).is_err());
 
-        // Should still have original 3 items
-        assert_eq!(consumer.read(), Some(1));
-        assert_eq!(consumer.read(), Some(2));
-        assert_eq!(consumer.read(), Some(3));
-        assert_eq!(consumer.read(), None);
+        // Make space
+        consumer.read();
+
+        // Should work now
+        assert!(producer.try_write(3).is_ok());
+    }
+
+    #[test]
+    fn test_owned_peek() {
+        let (mut producer, consumer) = create_owned_connection::<i32>(10);
+
+        producer.write(42);
+
+        // Peek doesn't consume
+        assert_eq!(consumer.peek(), Some(42));
+        assert_eq!(consumer.peek(), Some(42));
+
+        // Still there for read
+        let mut consumer = consumer;
+        assert_eq!(consumer.read(), Some(42));
     }
 }

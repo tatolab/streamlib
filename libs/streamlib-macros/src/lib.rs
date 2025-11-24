@@ -186,32 +186,8 @@ pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    // Phase 1.5: Validate output ports are Arc-wrapped (required for Push mode wakeups)
-    for port in analysis.output_ports() {
-        if !port.is_arc_wrapped {
-            let error = syn::Error::new_spanned(
-                &port.field_name,
-                format!(
-                    "Output port '{}' must be Arc-wrapped to support Push mode wakeups.\n\
-                    \n\
-                    Change:\n\
-                    {}: StreamOutput<{}>\n\
-                    \n\
-                    To:\n\
-                    {}: Arc<StreamOutput<{}>>\n\
-                    \n\
-                    This ensures downstream Push mode processors receive wakeup events when frames are written.\n\
-                    Without Arc wrapping, cloned ports (e.g., in callbacks) won't have wakeup channels configured.",
-                    port.port_name,
-                    port.field_name,
-                    format!("{:?}", port.message_type).replace("\"", ""),
-                    port.field_name,
-                    format!("{:?}", port.message_type).replace("\"", "")
-                )
-            );
-            return error.to_compile_error().into();
-        }
-    }
+    // Phase 0.5: StreamOutput now handles Arc internally, no longer need external Arc-wrapping
+    // Arc-wrapping enforcement removed - StreamOutput is Arc-wrapped internally by design
 
     // Phase 2: Generate code
     let generated = codegen::generate_processor_impl(&analysis);

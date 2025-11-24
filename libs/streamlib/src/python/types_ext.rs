@@ -7,14 +7,12 @@
 
 use super::PyVideoFrame;
 use crate::core::{AudioFrame, DataFrame, GpuContext, StreamInput, StreamOutput, VideoFrame};
-use parking_lot::Mutex;
 use pyo3::prelude::*;
-use std::sync::Arc;
 
 #[pyclass(name = "StreamInput", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamInput {
-    pub(crate) port: Arc<Mutex<StreamInput<VideoFrame>>>,
+    pub(crate) port: StreamInput<VideoFrame>,
 }
 
 #[pymethods]
@@ -24,18 +22,16 @@ impl PyStreamInput {
     fn new(_type_hint: Option<PyObject>) -> Self {
         use crate::core::StreamInput;
         Self {
-            port: Arc::new(Mutex::new(StreamInput::new("placeholder"))),
+            port: StreamInput::new("placeholder"),
         }
     }
 
     fn read_latest(&self) -> Option<PyVideoFrame> {
-        let port = self.port.lock();
-        port.read_latest().map(PyVideoFrame::from_rust)
+        self.port.read().map(PyVideoFrame::from_rust)
     }
 
     fn has_data(&self) -> bool {
-        let port = self.port.lock();
-        port.read_latest().is_some()
+        self.port.read().is_some()
     }
 
     fn __repr__(&self) -> String {
@@ -45,16 +41,14 @@ impl PyStreamInput {
 
 impl PyStreamInput {
     pub fn from_port(port: StreamInput<VideoFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamOutput", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamOutput {
-    pub(crate) port: Arc<Mutex<StreamOutput<VideoFrame>>>,
+    pub(crate) port: StreamOutput<VideoFrame>,
 }
 
 #[pymethods]
@@ -64,13 +58,12 @@ impl PyStreamOutput {
     fn new(_type_hint: Option<PyObject>) -> Self {
         use crate::core::StreamOutput;
         Self {
-            port: Arc::new(Mutex::new(StreamOutput::new("placeholder"))),
+            port: StreamOutput::new("placeholder"),
         }
     }
 
     fn write(&self, frame: PyVideoFrame) {
-        let port = self.port.lock();
-        port.write(frame.into_rust());
+        self.port.write(frame.into_rust());
     }
 
     fn __repr__(&self) -> String {
@@ -80,9 +73,7 @@ impl PyStreamOutput {
 
 impl PyStreamOutput {
     pub fn from_port(port: StreamOutput<VideoFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
@@ -91,140 +82,120 @@ impl PyStreamOutput {
 #[pyclass(name = "StreamInputAudio1", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamInputAudio1 {
-    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame>>>,
+    pub(crate) port: StreamInput<AudioFrame>,
 }
 
 impl PyStreamInputAudio1 {
     pub fn from_port(port: StreamInput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamOutputAudio1", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamOutputAudio1 {
-    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame>>>,
+    pub(crate) port: StreamOutput<AudioFrame>,
 }
 
 impl PyStreamOutputAudio1 {
     pub fn from_port(port: StreamOutput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamInputAudio2", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamInputAudio2 {
-    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame>>>,
+    pub(crate) port: StreamInput<AudioFrame>,
 }
 
 impl PyStreamInputAudio2 {
     pub fn from_port(port: StreamInput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamOutputAudio2", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamOutputAudio2 {
-    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame>>>,
+    pub(crate) port: StreamOutput<AudioFrame>,
 }
 
 impl PyStreamOutputAudio2 {
     pub fn from_port(port: StreamOutput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamInputAudio4", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamInputAudio4 {
-    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame>>>,
+    pub(crate) port: StreamInput<AudioFrame>,
 }
 
 impl PyStreamInputAudio4 {
     pub fn from_port(port: StreamInput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamOutputAudio4", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamOutputAudio4 {
-    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame>>>,
+    pub(crate) port: StreamOutput<AudioFrame>,
 }
 
 impl PyStreamOutputAudio4 {
     pub fn from_port(port: StreamOutput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamInputAudio6", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamInputAudio6 {
-    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame>>>,
+    pub(crate) port: StreamInput<AudioFrame>,
 }
 
 impl PyStreamInputAudio6 {
     pub fn from_port(port: StreamInput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamOutputAudio6", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamOutputAudio6 {
-    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame>>>,
+    pub(crate) port: StreamOutput<AudioFrame>,
 }
 
 impl PyStreamOutputAudio6 {
     pub fn from_port(port: StreamOutput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamInputAudio8", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamInputAudio8 {
-    pub(crate) port: Arc<Mutex<StreamInput<AudioFrame>>>,
+    pub(crate) port: StreamInput<AudioFrame>,
 }
 
 impl PyStreamInputAudio8 {
     pub fn from_port(port: StreamInput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamOutputAudio8", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamOutputAudio8 {
-    pub(crate) port: Arc<Mutex<StreamOutput<AudioFrame>>>,
+    pub(crate) port: StreamOutput<AudioFrame>,
 }
 
 impl PyStreamOutputAudio8 {
     pub fn from_port(port: StreamOutput<AudioFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
@@ -233,28 +204,24 @@ impl PyStreamOutputAudio8 {
 #[pyclass(name = "StreamInputData", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamInputData {
-    pub(crate) port: Arc<Mutex<StreamInput<DataFrame>>>,
+    pub(crate) port: StreamInput<DataFrame>,
 }
 
 impl PyStreamInputData {
     pub fn from_port(port: StreamInput<DataFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 
 #[pyclass(name = "StreamOutputData", module = "streamlib")]
 #[derive(Clone)]
 pub struct PyStreamOutputData {
-    pub(crate) port: Arc<Mutex<StreamOutput<DataFrame>>>,
+    pub(crate) port: StreamOutput<DataFrame>,
 }
 
 impl PyStreamOutputData {
     pub fn from_port(port: StreamOutput<DataFrame>) -> Self {
-        Self {
-            port: Arc::new(Mutex::new(port)),
-        }
+        Self { port }
     }
 }
 

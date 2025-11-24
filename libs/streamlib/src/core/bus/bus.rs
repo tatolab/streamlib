@@ -1,4 +1,5 @@
 use super::connection::{OwnedConsumer, OwnedProducer};
+use super::connection_id::ConnectionId;
 use super::connection_manager::ConnectionManager;
 use super::ports::{PortAddress, PortMessage};
 use crate::core::Result;
@@ -32,10 +33,7 @@ impl Bus {
     /// Disconnect a connection by ID
     ///
     /// Returns the source and destination PortAddress if found, None if not found.
-    pub fn disconnect(
-        &self,
-        id: super::connection::ConnectionId,
-    ) -> Option<(PortAddress, PortAddress)> {
+    pub fn disconnect(&self, id: ConnectionId) -> Option<(PortAddress, PortAddress)> {
         self.manager.write().disconnect(id)
     }
 

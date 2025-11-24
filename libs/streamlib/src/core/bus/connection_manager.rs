@@ -1,4 +1,5 @@
-use super::connection::{create_owned_connection, ConnectionId, OwnedConsumer, OwnedProducer};
+use super::connection::{create_owned_connection, OwnedConsumer, OwnedProducer};
+use super::connection_id::{self, ConnectionId};
 use super::ports::{PortAddress, PortMessage};
 use crate::core::{Result, StreamError};
 use std::any::TypeId;
@@ -61,13 +62,17 @@ impl ConnectionManager {
         // Create lock-free owned connection
         let (producer, consumer) = create_owned_connection::<T>(capacity);
 
-        // Generate connection ID
-        let conn_id = ConnectionId::new();
+        // Generate connection ID (format: "source->dest")
+        let conn_id = connection_id::__private::new_unchecked(format!(
+            "{}->{}",
+            source.full_address(),
+            dest.full_address()
+        ));
         let type_id = TypeId::of::<T>();
 
         // Store metadata only (not the actual connection)
         let metadata = ConnectionMetadata {
-            id: conn_id,
+            id: conn_id.clone(),
             source: source.clone(),
             dest: dest.clone(),
             type_id,
@@ -75,10 +80,13 @@ impl ConnectionManager {
             capacity,
         };
 
-        self.metadata.insert(conn_id, metadata);
+        self.metadata.insert(conn_id.clone(), metadata);
 
         // Update source index (one source can have multiple connections)
-        self.source_index.entry(source).or_default().push(conn_id);
+        self.source_index
+            .entry(source)
+            .or_default()
+            .push(conn_id.clone());
 
         // Update dest index (enforces 1-to-1)
         self.dest_index.insert(dest, conn_id);
@@ -99,11 +107,11 @@ impl ConnectionManager {
             // Clean up indices
             // Remove from source index
             for (_, ids) in self.source_index.iter_mut() {
-                ids.retain(|&cid| cid != id);
+                ids.retain(|cid| cid != &id);
             }
 
             // Remove from dest index
-            self.dest_index.retain(|_, &mut cid| cid != id);
+            self.dest_index.retain(|_, cid| cid != &id);
 
             Some((source, dest))
         } else {
@@ -123,7 +131,7 @@ impl ConnectionManager {
 
     /// Get all connection IDs
     pub fn all_connections(&self) -> Vec<ConnectionId> {
-        self.metadata.keys().copied().collect()
+        self.metadata.keys().cloned().collect()
     }
 }
 

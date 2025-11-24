@@ -32,7 +32,7 @@ pub struct AppleAudioCaptureProcessor {
     #[output(
         description = "Captured mono audio frames in device-native sample rate and buffer size"
     )]
-    audio: Arc<StreamOutput<AudioFrame>>,
+    audio: StreamOutput<AudioFrame>,
 
     #[config]
     config: AppleAudioCaptureConfig,
@@ -172,7 +172,7 @@ impl AppleAudioCaptureProcessor {
             )));
         }
 
-        let audio_output_clone = Arc::clone(&self.audio);
+        let audio_output_clone = self.audio.clone(); // Phase 0.5: Clone StreamOutput (internally clones Arc)
         let frame_counter_clone = self.frame_counter.clone();
         let is_capturing_clone = Arc::clone(&self.is_capturing);
         let sample_rate_clone = device_sample_rate;

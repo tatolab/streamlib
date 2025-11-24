@@ -63,7 +63,7 @@ impl ResamplerState {
 )]
 pub struct AppleAudioOutputProcessor {
     #[input(description = "Stereo audio frame to play through speakers")]
-    audio: Arc<StreamInput<AudioFrame>>,
+    audio: StreamInput<AudioFrame>,
 
     #[config]
     config: AppleAudioOutputConfig,
@@ -161,8 +161,8 @@ impl AppleAudioOutputProcessor {
             device_buffer_size
         );
 
-        // Clone the Arc-wrapped port for the audio callback thread
-        let audio_port = Arc::clone(&self.audio);
+        // Clone the port for the audio callback thread (Phase 0.5: StreamInput clones internally via Arc)
+        let audio_port = self.audio.clone();
 
         // Clone resampler state for the audio callback thread
         let resampler_state = Arc::clone(&self.resampler_state);
@@ -185,6 +185,7 @@ impl AppleAudioOutputProcessor {
                 // This ensures audio plays at correct speed regardless of device sample rate
 
                 while frame_buffer.len() < data.len() {
+                    // Phase 0.5: StreamInput uses interior mutability, no lock needed
                     if let Some(audio_frame) = audio_port.read() {
                         // Check if resampling is needed
                         if audio_frame.sample_rate != device_sample_rate {

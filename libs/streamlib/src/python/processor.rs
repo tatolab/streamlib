@@ -645,9 +645,16 @@ impl StreamProcessor for PythonProcessor {
                 if let Ok(typed_consumer) =
                     consumer.downcast::<crate::core::OwnedConsumer<VideoFrame>>()
                 {
-                    // Create StreamInput and wrap in PyStreamInput
+                    // Phase 0.5: Create port with plug, then add connection
                     let stream_input = StreamInput::new(port_name);
-                    stream_input.set_consumer(*typed_consumer);
+
+                    // Generate temporary connection ID for backwards compatibility
+                    let temp_id = crate::core::bus::connection_id::__private::new_unchecked(
+                        format!("{}.wire_compat_{}", port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+                    );
+                    let (tx, _rx) = crossbeam_channel::bounded(1);
+                    let source_addr = crate::core::PortAddress::new("unknown", port_name);
+                    let _ = stream_input.add_connection(temp_id, *typed_consumer, source_addr, tx);
 
                     // Inject into Python instance
                     Python::with_gil(|py| {

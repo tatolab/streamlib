@@ -191,8 +191,9 @@ impl WebRtcWhipProcessor {
 
     /// Main processing loop: reads video and audio frames, encodes them, and streams via WebRTC
     fn process(&mut self) -> Result<()> {
-        let video_frame = self.video_in.read_latest();
-        let audio_frame = self.audio_in.read_latest();
+        // Phase 0.5: read() automatically uses correct strategy (Latest for video, Sequential for audio)
+        let video_frame = self.video_in.read();
+        let audio_frame = self.audio_in.read();
 
         // Start session on first frame
         if !self.session_started && (video_frame.is_some() || audio_frame.is_some()) {

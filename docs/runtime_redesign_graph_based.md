@@ -54,37 +54,37 @@ This document is a **complete implementation specification**. You MUST follow it
 Each phase has its own feature branch that merges into `feature/redesign-runtime`:
 
 #### Phase 0.5: Plug Pattern & Disconnect Cleanup
-**Branch**: `feature/redesign-runtime/phase-0-5`
+**Branch**: `feature/redesign-runtime-phase-0-5`
 **Parent**: `feature/redesign-runtime`
 **Draft PR**: Create immediately when branch opens
 **Mark Ready**: When all success criteria checkboxes checked
 
 #### Phase 0: Graph Infrastructure
-**Branch**: `feature/redesign-runtime/phase-0`
+**Branch**: `feature/redesign-runtime-phase-0`
 **Parent**: `feature/redesign-runtime`
 **Draft PR**: Create immediately when branch opens
 **Mark Ready**: When all success criteria checkboxes checked
 
 #### Phase 1: Helper Methods & Delta Application
-**Branch**: `feature/redesign-runtime/phase-1`
+**Branch**: `feature/redesign-runtime-phase-1`
 **Parent**: `feature/redesign-runtime`
 **Draft PR**: Create immediately when branch opens
 **Mark Ready**: When all success criteria checkboxes checked
 
 #### Phase 2: Recompile Pipeline
-**Branch**: `feature/redesign-runtime/phase-2`
+**Branch**: `feature/redesign-runtime-phase-2`
 **Parent**: `feature/redesign-runtime`
 **Draft PR**: Create immediately when branch opens
 **Mark Ready**: When all success criteria checkboxes checked
 
 #### Phase 3: Runtime State Management
-**Branch**: `feature/redesign-runtime/phase-3`
+**Branch**: `feature/redesign-runtime-phase-3`
 **Parent**: `feature/redesign-runtime`
 **Draft PR**: Create immediately when branch opens
 **Mark Ready**: When all success criteria checkboxes checked
 
 #### Phase 4: Graph Optimization
-**Branch**: `feature/redesign-runtime/phase-4`
+**Branch**: `feature/redesign-runtime-phase-4`
 **Parent**: `feature/redesign-runtime`
 **Draft PR**: Create immediately when branch opens
 **Mark Ready**: When all success criteria checkboxes checked
@@ -95,7 +95,7 @@ Each phase has its own feature branch that merges into `feature/redesign-runtime
    ```bash
    git checkout feature/redesign-runtime
    git pull origin feature/redesign-runtime
-   git checkout -b feature/redesign-runtime/phase-X
+   git checkout -b feature/redesign-runtime-phase-X
    ```
 
 2. **Create draft PR immediately**
