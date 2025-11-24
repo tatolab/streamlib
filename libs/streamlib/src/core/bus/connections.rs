@@ -1,8 +1,8 @@
 //! Unified connection types supporting both real and plugged connections
 
 use crate::core::bus::plugs::{DisconnectedConsumer, DisconnectedProducer};
-use crate::core::bus::{OwnedConsumer, OwnedProducer, PortAddress, PortMessage};
-use crate::core::runtime::{ConnectionId, WakeupEvent};
+use crate::core::bus::{ConnectionId, OwnedConsumer, OwnedProducer, PortAddress, PortMessage};
+use crate::core::runtime::WakeupEvent;
 use crossbeam_channel::Sender;
 
 /// Output connection - either connected to another processor or disconnected (plug)
@@ -74,11 +74,33 @@ pub enum InputConnection<T: PortMessage> {
 }
 
 impl<T: PortMessage> InputConnection<T> {
-    /// Pop from connection (works for both Connected and Disconnected)
-    pub fn pop(&mut self) -> Result<Option<T>, rtrb::PopError> {
+    /// Read using sequential strategy (in-order consumption, required for audio)
+    fn read_sequential(&mut self) -> Option<T> {
         match self {
-            Self::Connected { consumer, .. } => Ok(consumer.read()),
-            Self::Disconnected { plug, .. } => plug.pop(),
+            Self::Connected { consumer, .. } => consumer.read(),
+            Self::Disconnected { plug, .. } => plug.pop().ok().flatten(),
+        }
+    }
+
+    /// Read using latest strategy (discard old frames, optimal for video)
+    fn read_latest(&mut self) -> Option<T> {
+        match self {
+            Self::Connected { consumer, .. } => consumer.read_latest(),
+            Self::Disconnected { plug, .. } => plug.pop().ok().flatten(),
+        }
+    }
+
+    /// Read from connection using the consumption strategy defined by the frame type
+    ///
+    /// - Video frames: Uses Latest strategy (discards old frames to show newest)
+    /// - Audio frames: Uses Sequential strategy (consumes all frames in order)
+    ///
+    /// This is the primary read method - the strategy is determined automatically
+    /// based on `T::consumption_strategy()`.
+    pub fn read(&mut self) -> Option<T> {
+        match T::consumption_strategy() {
+            crate::core::bus::ports::ConsumptionStrategy::Latest => self.read_latest(),
+            crate::core::bus::ports::ConsumptionStrategy::Sequential => self.read_sequential(),
         }
     }
 

@@ -2,7 +2,6 @@ use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::{Result, StreamInput, StreamOutput};
 use dasp::Signal;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +38,7 @@ pub struct AudioMixerProcessor {
     right: StreamInput<AudioFrame>,
 
     #[output(description = "Mixed stereo audio output")]
-    audio: Arc<StreamOutput<AudioFrame>>,
+    audio: StreamOutput<AudioFrame>,
 
     #[config]
     config: AudioMixerConfig,

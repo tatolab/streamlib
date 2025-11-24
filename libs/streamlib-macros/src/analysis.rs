@@ -257,7 +257,7 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                             .ok_or_else(|| Error::new_spanned(ty, "Arc requires type parameter"))?;
 
                         if let GenericArgument::Type(inner_type) = first_arg {
-                            // Recursively extract from inner type (should be StreamInput/Output<T>)
+                            // Recursively extract from inner type (should be StreamInput/Output<T> or Mutex<StreamInput/Output<T>>)
                             let (message_type, _) = extract_message_type(inner_type)?;
                             return Ok((message_type, true)); // Arc-wrapped!
                         } else {
@@ -268,6 +268,32 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                         return Err(Error::new_spanned(
                             ty,
                             "Arc must have angle-bracketed type parameter",
+                        ));
+                    }
+                }
+            }
+
+            // Check if it's Mutex<...> (handles Arc<Mutex<StreamInput<T>>> pattern)
+            if ident == "Mutex" {
+                // Extract inner type from Mutex<T>
+                match &last_segment.arguments {
+                    PathArguments::AngleBracketed(args) => {
+                        let first_arg = args.args.first().ok_or_else(|| {
+                            Error::new_spanned(ty, "Mutex requires type parameter")
+                        })?;
+
+                        if let GenericArgument::Type(inner_type) = first_arg {
+                            // Recursively extract from inner type (should be StreamInput/Output<T>)
+                            let (message_type, is_arc) = extract_message_type(inner_type)?;
+                            return Ok((message_type, is_arc)); // Preserve Arc-wrapped status
+                        } else {
+                            return Err(Error::new_spanned(ty, "Expected type parameter in Mutex"));
+                        }
+                    }
+                    _ => {
+                        return Err(Error::new_spanned(
+                            ty,
+                            "Mutex must have angle-bracketed type parameter",
                         ));
                     }
                 }

@@ -2,7 +2,6 @@ use crate::core::audio_frame_utils::AudioRechunker;
 use crate::core::frames::AudioFrame;
 use crate::core::{Result, RuntimeContext, StreamInput, StreamOutput};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +28,7 @@ pub struct BufferRechunkerProcessor {
     audio_in: StreamInput<AudioFrame>,
 
     #[output(description = "Fixed-size audio output at target buffer size")]
-    audio_out: Arc<StreamOutput<AudioFrame>>,
+    audio_out: StreamOutput<AudioFrame>,
 
     #[config]
     config: BufferRechunkerConfig,

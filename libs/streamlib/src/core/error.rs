@@ -20,6 +20,12 @@ pub enum StreamError {
     #[error("Connection error: {0}")]
     Connection(String),
 
+    #[error("Connection already exists: {0}")]
+    ConnectionAlreadyExists(String),
+
+    #[error("Connection not found: {0}")]
+    ConnectionNotFound(String),
+
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 

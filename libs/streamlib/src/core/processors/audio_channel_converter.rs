@@ -1,7 +1,6 @@
 use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::{Result, StreamInput, StreamOutput};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -38,7 +37,7 @@ pub struct AudioChannelConverterProcessor {
     audio_in: StreamInput<AudioFrame>,
 
     #[output(description = "Stereo audio output")]
-    audio_out: Arc<StreamOutput<AudioFrame>>,
+    audio_out: StreamOutput<AudioFrame>,
 
     #[config]
     config: AudioChannelConverterConfig,

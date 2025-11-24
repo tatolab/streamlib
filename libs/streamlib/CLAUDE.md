@@ -81,6 +81,309 @@ cd ../../
 cargo run --bin streamlib-mcp --features mcp
 ```
 
+## Development Philosophy: No Hacks, Ask Questions
+
+**CRITICAL RULE**: When you encounter a problem that would require a workaround, hack, or `unimplemented!()`:
+
+1. ⛔ **STOP** - Do not implement the hack
+2. 🤔 **ANALYZE** - Understand why the problem exists
+3. ❓ **ASK** - Present the problem and ask for guidance
+4. ✅ **DEFER** - Wait for architectural direction from the user
+
+**Examples of prohibited patterns**:
+- `unimplemented!()` or `todo!()` in library code (tests are OK)
+- "Temporary" workarounds that bypass type safety
+- Compatibility shims for "old code" in new implementations
+- Methods that exist but do nothing (`fn foo() { /* no-op */ }`)
+
+**Why this matters**: Hacks accumulate and create technical debt. The user has deep architectural knowledge and can provide better solutions than quick fixes.
+
+**What to do instead**:
+```
+"I've hit a problem where X needs Y, but Z is preventing it. I see three options:
+1. [Option A with tradeoffs]
+2. [Option B with tradeoffs]
+3. [Option C with tradeoffs]
+
+Which approach aligns with the Phase 0.5 architecture?"
+```
+
+## Architectural Truth: Runtime and Graph are in Control
+
+**CRITICAL UNDERSTANDING**: In StreamLib's architecture:
+
+### The Runtime is the Orchestrator
+- **Runtime** creates and manages processor lifecycle
+- **ConnectionManager** creates connections (OwnedProducer/OwnedConsumer pairs)
+- **Graph representation** is the single source of truth (directed acyclic graph)
+- **Runtime** wires connections to processor ports via `wire_*` methods
+
+### Processors are Declarative
+- **Processors declare** inputs/outputs via `#[input]` / `#[output]` attributes
+- **Processors implement** business logic in `process()` method
+- **Processors DO NOT** manage their own connections
+- **Processors DO NOT** control wiring or lifecycle
+
+### Dynamic Graph Operations
+The system must support:
+- ✅ Connecting/disconnecting while runtime is **running**
+- ✅ Connecting/disconnecting while runtime is **paused**
+- ✅ Connecting/disconnecting while runtime is **stopped**
+- ✅ Graph optimization (runtime analyzes DAG, reorders, parallelizes)
+- ✅ Runtime has full control over execution strategy
+
+### What This Means for Code
+```rust
+// ❌ WRONG - Processor managing connections
+impl MyProcessor {
+    pub fn add_connection(&mut self, ...) {
+        self.connections.push(...);  // Processor controls state
+    }
+}
+
+// ✅ RIGHT - Runtime manages connections, processor just has ports
+#[derive(StreamProcessor)]
+struct MyProcessor {
+    #[output]
+    video_out: StreamOutput<VideoFrame>,  // Port declaration only
+}
+
+// Runtime does the wiring:
+let (producer, consumer) = connection_manager.create_connection(...)?;
+processor.video_out.wire_producer(connection_id, producer, wakeup)?;
+```
+
+### DynStreamElement is for Runtime Control
+`DynStreamElement` trait methods should only include what the **runtime needs** to:
+- Control lifecycle (`setup`, `teardown`, `process`)
+- Query metadata (`name`, `descriptor`, `port_types`)
+- Set wakeup channels for event-driven scheduling
+- Access type-erased processor (`as_any_mut` for downcasting)
+
+`DynStreamElement` should **NOT** include:
+- Connection management (`add_connection`, `remove_connection`) - that's ConnectionManager's job
+- Graph manipulation - that's Runtime's job
+- Execution strategy - that's Runtime's job
+
+## Type Safety and Internal API Design Principles
+
+**CRITICAL**: These principles MUST be followed for all internal APIs, runtime code, and generated code.
+
+### 1. Use the Type System - Never Dumb Down Internal APIs
+
+**Internal methods should be maximally specific and type-safe**. Don't accept generic types like `String` or `&str` when you mean a specific domain concept.
+
+✅ **Good - Type-safe**:
+```rust
+pub fn add_connection(
+    &mut self,
+    connection_id: ConnectionId,  // Validated, domain-specific type
+    producer: OwnedProducer<T>,
+    wakeup: Sender<WakeupEvent>,
+) -> Result<(), StreamError>
+```
+
+❌ **Bad - Stringly typed**:
+```rust
+pub fn add_connection(
+    &mut self,
+    connection_id: &str,  // Could be anything! No validation!
+    producer: Box<dyn Any>,
+    wakeup: Sender<WakeupEvent>,
+) -> bool  // What does false mean?
+```
+
+### 2. Return Result<T, E>, Never Bool for Fallible Operations
+
+**Errors must be descriptive**. Bool returns are lazy and lose critical debugging information.
+
+✅ **Good - Descriptive errors**:
+```rust
+pub fn remove_connection(&mut self, id: &ConnectionId) -> Result<(), StreamError> {
+    self.connections.iter().position(|c| c.id() == id)
+        .ok_or_else(|| StreamError::ConnectionNotFound(id.to_string()))?;
+    // ... remove logic
+    Ok(())
+}
+```
+
+❌ **Bad - Mystery bool**:
+```rust
+pub fn remove_connection(&mut self, id: &ConnectionId) -> bool {
+    // What does false mean? Not found? Permission denied? Network error?
+    if let Some(idx) = self.connections.iter().position(|c| c.id() == id) {
+        // ... remove logic
+        true
+    } else {
+        false  // User has no idea why it failed
+    }
+}
+```
+
+### 3. Validated Newtypes with Type Guards
+
+**Use the newtype pattern** for domain-specific IDs, handles, and validated strings. Provide `from_string()` as a "type guard" for validation.
+
+✅ **Good - Validated newtype**:
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConnectionId(String);
+
+impl ConnectionId {
+    /// Type guard: validates and creates ConnectionId
+    pub fn from_string(s: impl Into<String>) -> Result<Self, ConnectionIdError> {
+        let s = s.into();
+        if s.is_empty() {
+            return Err(ConnectionIdError::Empty);
+        }
+        // ... more validation
+        Ok(Self(s))
+    }
+
+    /// Internal use only - bypasses validation
+    pub(crate) fn new_unchecked(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
+// Implement Deref for ergonomic &str comparisons
+impl Deref for ConnectionId {
+    type Target = str;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+```
+
+❌ **Bad - Type alias with no validation**:
+```rust
+pub type ConnectionId = String;  // Can be any string, no validation!
+```
+
+### 4. No Implicit Conversions - Explicit is Better
+
+**Don't accept generic `Into<String>` or `AsRef<str>` in internal APIs**. Make callers explicitly validate/convert.
+
+✅ **Good - Explicit validation required**:
+```rust
+// Caller must explicitly validate:
+let conn_id = ConnectionId::from_string("my_id")?;  // Validation happens here
+port.add_connection(conn_id, ...)?;  // Type-safe, validated
+```
+
+❌ **Bad - Accepts anything**:
+```rust
+// Accepts any string without validation:
+pub fn add_connection(&mut self, id: impl Into<String>, ...) {
+    let id = id.into();  // No validation! Could be empty, malformed, etc.
+    // ...
+}
+```
+
+### 5. No Legacy Compatibility Hacks in Internal Code
+
+**Delete old code, don't support it**. If the old API is wrong, make it a compile error.
+
+✅ **Good - Clean break**:
+```rust
+// Old code deleted. New code won't compile until fixed.
+pub fn add_connection(connection_id: ConnectionId, ...) -> Result<()>
+```
+
+❌ **Bad - Backwards compatibility mess**:
+```rust
+// Supporting both old and new patterns
+pub fn add_connection(&mut self, id: impl Into<String>, ...) -> Result<()> {
+    let temp_id = ConnectionId::new_unchecked(id.into());  // Bypasses validation!
+    // ...
+}
+```
+
+### 6. Lock-Free is Non-Negotiable for Hot Paths
+
+**Never use `Arc<Mutex<T>>` in data flow paths**. Only atomic operations (`rtrb::Producer`, `AtomicUsize`, etc.).
+
+✅ **Good - Lock-free**:
+```rust
+pub struct OwnedProducer<T> {
+    inner: Producer<T>,  // rtrb lock-free ring buffer
+    cached_size: Arc<AtomicUsize>,  // Only atomic operations
+}
+
+impl<T> OwnedProducer<T> {
+    pub fn write(&mut self, data: T) {
+        match self.inner.push(data) {  // Lock-free atomic operation
+            Ok(()) => self.cached_size.fetch_add(1, Ordering::Relaxed),
+            Err(_) => { /* drop data */ }
+        }
+    }
+}
+```
+
+❌ **Bad - Locks in hot path**:
+```rust
+pub struct Producer<T> {
+    inner: Arc<Mutex<rtrb::Producer<T>>>,  // KILLS PERFORMANCE!
+}
+
+impl<T> Producer<T> {
+    pub fn write(&mut self, data: T) {
+        let mut inner = self.inner.lock();  // Contention!
+        inner.push(data).ok();
+    }
+}
+```
+
+### 7. Owned vs Borrowed Parameters
+
+**Guidelines**:
+- **Take ownership** (`ConnectionId`) when the value is stored/moved
+- **Take reference** (`&ConnectionId`) when just reading/comparing
+- **Take `&mut`** when modifying in place
+
+```rust
+// Ownership transferred - ConnectionId stored in port
+pub fn add_connection(&mut self, id: ConnectionId, ...) -> Result<()> {
+    self.connections.push(Connection { id, ... });  // id moved here
+    Ok(())
+}
+
+// Just comparing - no ownership needed
+pub fn remove_connection(&mut self, id: &ConnectionId) -> Result<()> {
+    let idx = self.connections.iter().position(|c| c.id() == id)?;
+    // ...
+}
+```
+
+### 8. Convenience Helpers are Separate from Core
+
+**Core internal APIs are strict**. Create separate convenience functions/methods for ergonomics.
+
+```rust
+// Core API - strict, type-safe
+impl StreamOutput<T> {
+    pub fn add_connection(
+        &mut self,
+        connection_id: ConnectionId,  // Must be validated
+        producer: OwnedProducer<T>,
+        wakeup: Sender<WakeupEvent>,
+    ) -> Result<()> { ... }
+}
+
+// Convenience wrapper - validates and delegates
+impl StreamOutput<T> {
+    pub fn try_add_connection_from_string(
+        &mut self,
+        id_str: &str,  // Accepts string for convenience
+        producer: OwnedProducer<T>,
+        wakeup: Sender<WakeupEvent>,
+    ) -> Result<()> {
+        let connection_id = ConnectionId::from_string(id_str)?;  // Validate
+        self.add_connection(connection_id, producer, wakeup)  // Delegate to core
+    }
+}
+```
+
+**Summary**: Internal APIs enforce correctness through types. Convenience layers provide ergonomics.
+
 ## Code Architecture (libs/streamlib Specific)
 
 ### Module Structure

@@ -117,7 +117,7 @@ impl CameraDelegate {
 )]
 pub struct AppleCameraProcessor {
     #[output(description = "Live video frames from the camera")]
-    video: Arc<StreamOutput<VideoFrame>>,
+    video: StreamOutput<VideoFrame>,
 
     #[config]
     config: AppleCameraConfig,

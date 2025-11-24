@@ -320,7 +320,8 @@ impl AppleMp4WriterProcessor {
             );
 
             // IMPORTANT: Check for new video frame for EACH audio frame
-            if let Some(video) = self.video.read_latest() {
+            // Phase 0.5: read() automatically uses Latest strategy for VideoFrame
+            if let Some(video) = self.video.read() {
                 debug!(
                     "New video frame received: timestamp_ns={}, frame_number={}, size={}x{}",
                     video.timestamp_ns, video.frame_number, video.width, video.height

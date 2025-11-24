@@ -44,7 +44,8 @@ impl SimplePassthroughProcessor {
 
     // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
-        if let Some(frame) = self.input.read_latest() {
+        // Phase 0.5: read() automatically uses Latest strategy for VideoFrame
+        if let Some(frame) = self.input.read() {
             self.output.write(frame);
         }
         Ok(())

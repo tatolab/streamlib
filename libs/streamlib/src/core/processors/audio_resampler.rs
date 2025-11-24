@@ -2,7 +2,6 @@ use crate::core::audio_resample_utils::{AudioResampler, ResamplingQuality};
 use crate::core::frames::AudioFrame;
 use crate::core::{Result, StreamInput, StreamOutput};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +31,7 @@ pub struct AudioResamplerProcessor {
     audio_in: StreamInput<AudioFrame>,
 
     #[output(description = "Audio output at target sample rate")]
-    audio_out: Arc<StreamOutput<AudioFrame>>,
+    audio_out: StreamOutput<AudioFrame>,
 
     #[config]
     config: AudioResamplerConfig,

@@ -107,10 +107,10 @@ impl Default for WebRtcWhepConfig {
 )]
 pub struct WebRtcWhepProcessor {
     #[output(description = "Output video frames (decoded H.264)")]
-    video_out: Arc<StreamOutput<VideoFrame>>,
+    video_out: StreamOutput<VideoFrame>,
 
     #[output(description = "Output audio frames (decoded Opus, stereo)")]
-    audio_out: Arc<StreamOutput<AudioFrame>>,
+    audio_out: StreamOutput<AudioFrame>,
 
     #[config]
     config: WebRtcWhepConfig,

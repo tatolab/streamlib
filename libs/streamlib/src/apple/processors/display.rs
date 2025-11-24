@@ -249,7 +249,8 @@ impl AppleDisplayProcessor {
             }
 
             // Render the latest available frame (if any)
-            if let Some(frame) = self.video.read_latest() {
+            // Phase 0.5: read() automatically uses Latest strategy for VideoFrame
+            if let Some(frame) = self.video.read() {
                 self.render_frame(frame)?;
             }
 

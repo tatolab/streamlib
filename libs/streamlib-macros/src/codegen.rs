@@ -504,18 +504,19 @@ fn generate_port_methods(analysis: &AnalysisResult) -> TokenStream {
             .iter()
             .map(|port| {
                 let port_name = &port.port_name;
-                let field_name = &port.field_name;
-
+                // Phase 0.5: Wakeups are now passed per-connection in add_connection()
+                // This method is deprecated but kept for backward compatibility
                 quote! {
                     #port_name => {
-                        self.#field_name.set_downstream_wakeup(wakeup_tx);
+                        // No-op: wakeups are now per-connection, not per-port
                     }
                 }
             })
             .collect();
 
         quote! {
-            fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<::streamlib::core::runtime::WakeupEvent>) {
+            fn set_output_wakeup(&mut self, port_name: &str, _wakeup_tx: crossbeam_channel::Sender<::streamlib::core::runtime::WakeupEvent>) {
+                // Deprecated: Phase 0.5 uses per-connection wakeups
                 match port_name {
                     #(#port_matches,)*
                     _ => {},
@@ -731,34 +732,26 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         }
     };
 
-    // Generate wire_input_consumer implementation (Phase 2: lock-free)
+    // Generate wire_input_consumer implementation (Phase 2: lock-free - deprecated, delegates to Phase 0.5)
     let input_wire_arms = input_ports.iter().map(|p| {
         let field_name = &p.field_name;
         let port_name = &p.port_name;
         let message_type = &p.message_type;
-        let is_arc_wrapped = p.is_arc_wrapped;
 
-        if is_arc_wrapped {
-            // Arc-wrapped: need to call .as_ref() to get &StreamInput
-            quote! {
-                #port_name => {
-                    if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
-                        self.#field_name.as_ref().set_consumer(*typed_consumer);
-                        return true;
-                    }
-                    false
+        // Phase 0.5: No Arc-wrapping needed - StreamOutput handles it internally
+        quote! {
+            #port_name => {
+                if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
+                    // Generate temporary connection ID for backwards compatibility
+                    let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                        format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+                    );
+                    let (tx, _rx) = ::crossbeam_channel::bounded(1);
+                    let source_addr = ::streamlib::core::PortAddress::new("unknown", #port_name);
+                    self.#field_name.add_connection(temp_id, *typed_consumer, source_addr, tx).ok();
+                    return true;
                 }
-            }
-        } else {
-            // Normal: direct access
-            quote! {
-                #port_name => {
-                    if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
-                        self.#field_name.set_consumer(*typed_consumer);
-                        return true;
-                    }
-                    false
-                }
+                false
             }
         }
     });
@@ -789,34 +782,25 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         }
     };
 
-    // Generate wire_output_producer implementation (Phase 2: lock-free)
+    // Generate wire_output_producer implementation (Phase 2: lock-free - deprecated, delegates to Phase 0.5)
     let output_wire_arms = output_ports.iter().map(|p| {
         let field_name = &p.field_name;
         let port_name = &p.port_name;
         let message_type = &p.message_type;
-        let is_arc_wrapped = p.is_arc_wrapped;
 
-        if is_arc_wrapped {
-            // Arc-wrapped: need to call .as_ref() to get &StreamOutput
-            quote! {
-                #port_name => {
-                    if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
-                        self.#field_name.as_ref().add_producer(*typed_producer);
-                        return true;
-                    }
-                    false
+        // Phase 0.5: No Arc-wrapping needed - StreamOutput handles it internally
+        quote! {
+            #port_name => {
+                if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
+                    // Generate temporary connection ID for backwards compatibility
+                    let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                        format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+                    );
+                    let (tx, _rx) = ::crossbeam_channel::bounded(1);
+                    self.#field_name.add_connection(temp_id, *typed_producer, tx).ok();
+                    return true;
                 }
-            }
-        } else {
-            // Normal: direct access
-            quote! {
-                #port_name => {
-                    if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
-                        self.#field_name.add_producer(*typed_producer);
-                        return true;
-                    }
-                    false
-                }
+                false
             }
         }
     });
@@ -890,6 +874,10 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
     } else {
         quote! {}
     };
+
+    // Phase 0.5: Connection management removed from DynStreamElement
+    // Runtime manages connections directly via ConnectionManager
+    // Processors only declare ports - they don't manage connection lifecycle
 
     quote! {
         #get_input_port_type_impl
@@ -1244,7 +1232,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         }
     };
 
-    // Generate wire_output_producer()
+    // Generate wire_output_producer() (deprecated, delegates to Phase 0.5)
     let wire_output_producer_arms: Vec<TokenStream> = analysis
         .output_ports()
         .map(|field| {
@@ -1257,7 +1245,11 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
                 quote! {
                     #port_name => {
                         if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
-                            self.#field_name.as_ref().add_producer(*typed_producer);
+                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                                format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+                            );
+                            let (tx, _rx) = ::crossbeam_channel::bounded(1);
+                            self.#field_name.as_ref().add_connection(temp_id, *typed_producer, tx);
                             return true;
                         }
                         false
@@ -1267,7 +1259,11 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
                 quote! {
                     #port_name => {
                         if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
-                            self.#field_name.add_producer(*typed_producer);
+                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                                format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+                            );
+                            let (tx, _rx) = ::crossbeam_channel::bounded(1);
+                            self.#field_name.add_connection(temp_id, *typed_producer, tx);
                             return true;
                         }
                         false
@@ -1290,7 +1286,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         }
     };
 
-    // Generate wire_input_consumer()
+    // Generate wire_input_consumer() (deprecated, delegates to Phase 0.5)
     let wire_input_consumer_arms: Vec<TokenStream> = analysis
         .input_ports()
         .map(|field| {
@@ -1303,7 +1299,12 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
                 quote! {
                     #port_name => {
                         if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
-                            self.#field_name.as_ref().set_consumer(*typed_consumer);
+                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                                format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+                            );
+                            let (tx, _rx) = ::crossbeam_channel::bounded(1);
+                            let source_addr = ::streamlib::core::PortAddress::new("unknown", #port_name);
+                            self.#field_name.as_ref().add_connection(temp_id, *typed_consumer, source_addr, tx);
                             return true;
                         }
                         false
@@ -1313,7 +1314,12 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
                 quote! {
                     #port_name => {
                         if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
-                            self.#field_name.set_consumer(*typed_consumer);
+                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                                format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+                            );
+                            let (tx, _rx) = ::crossbeam_channel::bounded(1);
+                            let source_addr = ::streamlib::core::PortAddress::new("unknown", #port_name);
+                            self.#field_name.add_connection(temp_id, *typed_consumer, source_addr, tx);
                             return true;
                         }
                         false
@@ -1341,20 +1347,11 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         .output_ports()
         .map(|field| {
             let port_name = &field.port_name;
-            let field_name = &field.field_name;
-            let is_arc_wrapped = field.is_arc_wrapped;
-
-            if is_arc_wrapped {
-                quote! {
-                    #port_name => {
-                        self.#field_name.as_ref().set_downstream_wakeup(wakeup_tx);
-                    }
-                }
-            } else {
-                quote! {
-                    #port_name => {
-                        self.#field_name.set_downstream_wakeup(wakeup_tx);
-                    }
+            // Phase 0.5: Wakeups are now per-connection, not per-port
+            // This method is deprecated but kept for backward compatibility
+            quote! {
+                #port_name => {
+                    // No-op: wakeups are now per-connection, passed in add_connection()
                 }
             }
         })
@@ -1364,7 +1361,8 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         quote! {}
     } else {
         quote! {
-            fn set_output_wakeup(&mut self, port_name: &str, wakeup_tx: crossbeam_channel::Sender<::streamlib::core::runtime::WakeupEvent>) {
+            fn set_output_wakeup(&mut self, port_name: &str, _wakeup_tx: crossbeam_channel::Sender<::streamlib::core::runtime::WakeupEvent>) {
+                // Deprecated: Phase 0.5 uses per-connection wakeups
                 match port_name {
                     #(#set_output_wakeup_arms,)*
                     _ => {},

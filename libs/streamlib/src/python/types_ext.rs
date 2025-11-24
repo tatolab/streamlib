@@ -30,12 +30,12 @@ impl PyStreamInput {
 
     fn read_latest(&self) -> Option<PyVideoFrame> {
         let port = self.port.lock();
-        port.read_latest().map(PyVideoFrame::from_rust)
+        port.read().map(PyVideoFrame::from_rust)
     }
 
     fn has_data(&self) -> bool {
         let port = self.port.lock();
-        port.read_latest().is_some()
+        port.read().is_some()
     }
 
     fn __repr__(&self) -> String {
