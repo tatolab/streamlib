@@ -41,6 +41,93 @@ This document is a **complete implementation specification**. You MUST follow it
 
 ---
 
+## Git Branching Strategy
+
+### Primary Feature Branch
+**Branch**: `feature/redesign-runtime`
+**Purpose**: Main integration branch for all phases of the redesign
+**Merge target**: `main` (when all phases complete)
+**Pull Request**: [#65](https://github.com/tatolab/streamlib/pull/65) (Draft)
+
+### Phase Branches
+
+Each phase has its own feature branch that merges into `feature/redesign-runtime`:
+
+#### Phase 0.5: Plug Pattern & Disconnect Cleanup
+**Branch**: `feature/redesign-runtime/phase-0-5`
+**Parent**: `feature/redesign-runtime`
+**Draft PR**: Create immediately when branch opens
+**Mark Ready**: When all success criteria checkboxes checked
+
+#### Phase 0: Graph Infrastructure
+**Branch**: `feature/redesign-runtime/phase-0`
+**Parent**: `feature/redesign-runtime`
+**Draft PR**: Create immediately when branch opens
+**Mark Ready**: When all success criteria checkboxes checked
+
+#### Phase 1: Helper Methods & Delta Application
+**Branch**: `feature/redesign-runtime/phase-1`
+**Parent**: `feature/redesign-runtime`
+**Draft PR**: Create immediately when branch opens
+**Mark Ready**: When all success criteria checkboxes checked
+
+#### Phase 2: Recompile Pipeline
+**Branch**: `feature/redesign-runtime/phase-2`
+**Parent**: `feature/redesign-runtime`
+**Draft PR**: Create immediately when branch opens
+**Mark Ready**: When all success criteria checkboxes checked
+
+#### Phase 3: Runtime State Management
+**Branch**: `feature/redesign-runtime/phase-3`
+**Parent**: `feature/redesign-runtime`
+**Draft PR**: Create immediately when branch opens
+**Mark Ready**: When all success criteria checkboxes checked
+
+#### Phase 4: Graph Optimization
+**Branch**: `feature/redesign-runtime/phase-4`
+**Parent**: `feature/redesign-runtime`
+**Draft PR**: Create immediately when branch opens
+**Mark Ready**: When all success criteria checkboxes checked
+
+### Workflow Per Phase
+
+1. **Create phase branch** from `feature/redesign-runtime`
+   ```bash
+   git checkout feature/redesign-runtime
+   git pull origin feature/redesign-runtime
+   git checkout -b feature/redesign-runtime/phase-X
+   ```
+
+2. **Create draft PR immediately**
+   - Push branch to origin
+   - Create PR on GitHub with `draft: true`
+   - Link to main PR #65 in description
+
+3. **Use commits for safe rollback points**
+   - Commit after each logical change
+   - Write clear commit messages
+   - Push regularly to avoid losing work
+
+4. **Mark PR ready when phase complete**
+   - Verify all success criteria checkboxes checked
+   - Run full test suite
+   - Mark PR as "Ready for review"
+
+5. **Merge to feature/redesign-runtime**
+   - Merge phase PR after review/approval
+   - Delete phase branch after merge
+   - Move to next phase
+
+### Final Merge
+
+When all phases complete and tested:
+- Mark main PR #65 as "Ready for review"
+- Comprehensive testing across all examples
+- Merge `feature/redesign-runtime` → `main`
+- Complete runtime redesign deployed
+
+---
+
 ## Design Philosophy
 
 This redesign consolidates two parallel design efforts:
