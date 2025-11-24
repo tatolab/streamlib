@@ -11,6 +11,12 @@ pub struct DisconnectedProducer<T: PortMessage> {
     _phantom: PhantomData<T>,
 }
 
+impl<T: PortMessage> Default for DisconnectedProducer<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: PortMessage> DisconnectedProducer<T> {
     pub fn new() -> Self {
         Self {
@@ -28,6 +34,12 @@ impl<T: PortMessage> DisconnectedProducer<T> {
 /// A consumer that always returns None (disconnected port)
 pub struct DisconnectedConsumer<T: PortMessage> {
     _phantom: PhantomData<T>,
+}
+
+impl<T: PortMessage> Default for DisconnectedConsumer<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: PortMessage> DisconnectedConsumer<T> {
