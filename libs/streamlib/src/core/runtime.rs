@@ -113,8 +113,14 @@ pub struct StreamRuntime {
     /// Index for fast connection lookup by processor ID
     /// Maps processor ID to list of connection IDs involving that processor
     processor_connections: HashMap<ProcessorId, Vec<ConnectionId>>,
+    /// Graph representation (source of truth for desired topology)
+    graph: crate::core::graph::Graph,
     /// Graph optimizer for topology analysis and execution plan generation
     graph_optimizer: crate::core::graph_optimizer::GraphOptimizer,
+    /// Current execution plan (how to run the graph)
+    execution_plan: Option<crate::core::graph_optimizer::ExecutionPlan>,
+    /// Graph has changed, needs recompilation
+    dirty: bool,
 }
 
 impl Default for StreamRuntime {
@@ -138,7 +144,10 @@ impl StreamRuntime {
             bus: crate::core::Bus::new(),
             pending_connections: Vec::new(),
             processor_connections: HashMap::new(),
+            graph: crate::core::graph::Graph::new(),
             graph_optimizer: crate::core::graph_optimizer::GraphOptimizer::new(),
+            execution_plan: None,
+            dirty: false,
         }
     }
 
@@ -180,13 +189,51 @@ impl StreamRuntime {
         self.gpu_context.as_ref()
     }
 
-    /// Get a reference to the graph optimizer for querying graph topology.
+    /// Get reference to graph (for testing/debugging)
     ///
-    /// The optimizer provides query APIs for visualization and analysis:
-    /// - `to_dot()` / `to_json()` - Export graph structure
-    /// - `find_sources()` / `find_sinks()` - Find entry/exit processors
-    /// - `find_upstream()` / `find_downstream()` - Traverse dependencies
-    /// - `topological_order()` - Get processors in dependency order
+    /// # Example Test Usage
+    /// ```rust,ignore
+    /// let runtime = StreamRuntime::new();
+    /// // ... build graph ...
+    ///
+    /// // Export graph state for verification
+    /// let graph_json = runtime.graph().to_json();
+    /// assert_eq!(graph_json["nodes"].as_array().unwrap().len(), 3);
+    ///
+    /// // Or use DOT for visualization
+    /// let dot = runtime.graph().to_dot();
+    /// println!("{}", dot);  // Paste into Graphviz
+    /// ```
+    pub fn graph(&self) -> &crate::core::graph::Graph {
+        &self.graph
+    }
+
+    /// Get reference to current execution plan (for testing/debugging)
+    ///
+    /// Returns None if runtime hasn't been started yet (no plan generated).
+    ///
+    /// # Example Test Usage
+    /// ```rust,ignore
+    /// let mut runtime = StreamRuntime::new();
+    /// // ... build graph ...
+    /// runtime.start()?;
+    ///
+    /// // Verify optimizer generated correct plan
+    /// let plan = runtime.execution_plan().expect("no plan generated");
+    /// let plan_json = plan.to_json();
+    /// assert_eq!(plan_json["variant"], "Legacy");
+    /// assert_eq!(plan_json["processors"].as_array().unwrap().len(), 3);
+    /// ```
+    pub fn execution_plan(&self) -> Option<&crate::core::graph_optimizer::ExecutionPlan> {
+        self.execution_plan.as_ref()
+    }
+
+    /// Get a reference to the graph optimizer for advanced use cases.
+    ///
+    /// Most graph queries should go through `graph()` instead.
+    /// The optimizer is mainly used for:
+    /// - Cache statistics (`stats()`)
+    /// - Cache management (`clear_cache()`)
     pub fn graph_optimizer(&self) -> &crate::core::graph_optimizer::GraphOptimizer {
         &self.graph_optimizer
     }
@@ -263,13 +310,14 @@ impl StreamRuntime {
             tracing::debug!("[{}] Published RuntimeEvent::ProcessorAdded", id);
         }
 
-        // Update graph optimizer
-        self.graph_optimizer.add_processor(
-            &id,
+        // Update graph (source of truth for topology)
+        self.graph.add_processor(
+            id.clone(),
             processor_type.clone(),
-            None, // No config checksum for boxed processors
+            0, // No config checksum for boxed processors
         );
-        tracing::debug!("[{}] Added to graph optimizer", id);
+        self.dirty = true;
+        tracing::debug!("[{}] Added to graph", id);
 
         // Return handle with metadata (no config checksum for boxed processors)
         Ok(ProcessorHandle::with_metadata(
@@ -836,17 +884,24 @@ impl StreamRuntime {
             );
         }
 
-        // Update graph optimizer
-        self.graph_optimizer.add_connection(
-            &connection_id.to_string(),
-            &connection.source_processor,
-            &connection.dest_processor,
-            source_port.to_string(),
-            dest_port.to_string(),
-            format!("{:?}", source_port_type),
-            capacity,
-        );
-        tracing::debug!("[{}] Added connection to graph optimizer", connection_id);
+        // Update graph (source of truth for topology)
+        // Note: connection_id is already validated, use unchecked conversion
+        let graph_connection_id =
+            crate::core::bus::connection_id::__private::new_unchecked(connection_id.clone());
+        if let Err(e) = self.graph.add_connection(
+            graph_connection_id,
+            source.to_string(),
+            destination.to_string(),
+            source_port_type,
+        ) {
+            tracing::warn!(
+                "[{}] Failed to add connection to graph: {}",
+                connection_id,
+                e
+            );
+        }
+        self.dirty = true;
+        tracing::debug!("[{}] Added connection to graph", connection_id);
 
         tracing::info!("Registered runtime connection: {}", connection_id);
         Ok(connection_id)
@@ -1086,12 +1141,12 @@ impl StreamRuntime {
             );
         }
 
-        // Update graph optimizer
-        self.graph_optimizer.remove_connection(connection_id);
-        tracing::debug!(
-            "[{}] Removed connection from graph optimizer",
-            connection_id
-        );
+        // Update graph (source of truth for topology)
+        let graph_connection_id =
+            crate::core::bus::connection_id::__private::new_unchecked(connection_id.clone());
+        self.graph.remove_connection(&graph_connection_id);
+        self.dirty = true;
+        tracing::debug!("[{}] Removed connection from graph", connection_id);
 
         tracing::info!("Successfully disconnected connection: {}", connection_id);
         Ok(())
@@ -1203,11 +1258,18 @@ impl StreamRuntime {
 
         self.running = true;
 
-        // Generate execution plan (Phase 0: Legacy plan, used for logging only)
-        tracing::info!("Generating execution plan...");
-        let plan = self.graph_optimizer.optimize();
-        tracing::info!("Execution plan generated: {:?}", plan);
-        tracing::debug!("Optimizer stats: {:?}", self.graph_optimizer.stats());
+        // Generate execution plan if graph is dirty (Phase 0: Legacy plan)
+        if self.dirty {
+            tracing::info!("Generating execution plan...");
+            let plan = self.graph_optimizer.optimize(&self.graph)?;
+            tracing::info!("Execution plan generated: {:?}", plan);
+            tracing::debug!(
+                "Optimizer stats: {:?}",
+                self.graph_optimizer.stats(&self.graph)
+            );
+            self.execution_plan = Some(plan);
+            self.dirty = false;
+        }
 
         self.spawn_handler_threads()?;
 
@@ -1429,9 +1491,10 @@ impl StreamRuntime {
             );
         }
 
-        // Update graph optimizer
-        self.graph_optimizer.remove_processor(processor_id);
-        tracing::debug!("[{}] Removed from graph optimizer", processor_id);
+        // Update graph (source of truth for topology)
+        self.graph.remove_processor(processor_id);
+        self.dirty = true;
+        tracing::debug!("[{}] Removed from graph", processor_id);
 
         // Clean up connection index for this processor
         self.processor_connections.remove(processor_id);

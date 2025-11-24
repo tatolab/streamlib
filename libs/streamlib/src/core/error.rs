@@ -26,6 +26,15 @@ pub enum StreamError {
     #[error("Connection not found: {0}")]
     ConnectionNotFound(String),
 
+    #[error("Invalid port address: {0}")]
+    InvalidPortAddress(String),
+
+    #[error("Invalid graph: {0}")]
+    InvalidGraph(String),
+
+    #[error("Processor not found: {0}")]
+    ProcessorNotFound(String),
+
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 

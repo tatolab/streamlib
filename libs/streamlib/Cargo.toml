@@ -63,6 +63,7 @@ ctrlc = "3.4"  # Cross-platform Ctrl+C handler (works with GUI apps)
 dashmap = "6.1"  # Lock-free concurrent HashMap for event bus topic routing
 rayon = "1.10"  # Parallel task execution for event bus dispatch
 petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
+ahash = "0.8"  # Fast hashing for graph checksum computation
 
 # Serialization
 serde.workspace = true
