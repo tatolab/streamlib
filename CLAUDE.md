@@ -2,6 +2,41 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL IMPLEMENTATION INSTRUCTIONS FOR CLAUDE CODE ⚠️
+
+This document is a **complete implementation specification**. You MUST follow it exactly as written.
+
+### Rules for Implementation:
+
+1. **NO DEVIATIONS**: Do not make design decisions, simplifications, or "improvements" without explicit approval
+2. **ASK BEFORE CHANGING**: If you encounter:
+   - Ambiguity in the spec
+   - Something that seems "too complex"
+   - Uncertainty about implementation details
+   - Desire to refactor or simplify
+   - **STOP IMMEDIATELY** and ask for clarification
+3. **IMPLEMENT AS-IS**: Follow the code examples verbatim, including:
+   - Exact struct field names
+   - Exact method signatures
+   - Exact error handling patterns
+   - Exact comments and documentation
+4. **VERIFY AGAINST SPEC**: Before completing any task:
+   - Re-read the relevant section
+   - Confirm your implementation matches the spec exactly
+   - Check that you haven't added "helpful" changes
+5. **REPORT DEVIATIONS**: If you must deviate (e.g., Rust syntax errors in spec), report the issue and propose the minimal fix
+
+### This System is Critical:
+- Powers real-time audio/video processing
+- Must handle dynamic graph modifications safely
+- Memory leaks or crashes are unacceptable
+- Performance regressions will break production workloads
+
+### When in Doubt:
+**STOP. ASK. WAIT FOR APPROVAL.**
+
+---
+
 ## Project Overview
 
 StreamLib is a real-time audio/video processing framework for Rust and Python, featuring:
