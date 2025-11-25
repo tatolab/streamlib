@@ -62,10 +62,11 @@ impl StreamRuntime {
             );
         }
 
-        tracing::info!("Initializing GPU context...");
+        tracing::info!("Initializing runtime context...");
         let gpu_context = crate::core::context::GpuContext::init_for_platform_sync()?;
         tracing::info!("GPU context initialized: {:?}", gpu_context);
-        self.gpu_context = Some(gpu_context);
+        let runtime_context = crate::core::context::RuntimeContext::new(gpu_context);
+        self.runtime_context = Some(runtime_context);
 
         self.state = RuntimeState::Starting;
 

@@ -50,7 +50,6 @@ use crate::core::{Result, StreamError};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
 /// The main stream processing runtime
 ///
@@ -92,12 +91,11 @@ pub struct StreamRuntime {
     pub(crate) processors: Arc<Mutex<HashMap<ProcessorId, RuntimeProcessorHandle>>>,
     pub(super) pending_processors:
         Vec<(ProcessorId, DynProcessor, crossbeam_channel::Receiver<()>)>,
-    #[allow(dead_code)]
-    handler_threads: Vec<JoinHandle<()>>,
     /// Runtime state machine
     pub(super) state: RuntimeState,
     pub(super) event_loop: Option<EventLoopFn>,
-    pub(super) gpu_context: Option<crate::core::context::GpuContext>,
+    /// Runtime context (GPU + main thread dispatch) - created once at start()
+    pub(super) runtime_context: Option<crate::core::context::RuntimeContext>,
     pub(super) next_processor_id: usize,
     pub(crate) connections: Arc<Mutex<HashMap<ConnectionId, Connection>>>,
     pub(super) next_connection_id: usize,
@@ -127,10 +125,9 @@ impl StreamRuntime {
         Self {
             processors: Arc::new(Mutex::new(HashMap::new())),
             pending_processors: Vec::new(),
-            handler_threads: Vec::new(),
             state: RuntimeState::Stopped,
             event_loop: None,
-            gpu_context: None,
+            runtime_context: None,
             next_processor_id: 0,
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: 0,
@@ -234,9 +231,14 @@ impl StreamRuntime {
         self.event_loop = Some(event_loop);
     }
 
+    /// Get reference to runtime context
+    pub fn runtime_context(&self) -> Option<&crate::core::context::RuntimeContext> {
+        self.runtime_context.as_ref()
+    }
+
     /// Get reference to GPU context
     pub fn gpu_context(&self) -> Option<&crate::core::context::GpuContext> {
-        self.gpu_context.as_ref()
+        self.runtime_context.as_ref().map(|ctx| &ctx.gpu)
     }
 
     /// Get reference to graph (for testing/debugging)
@@ -342,15 +344,14 @@ impl StreamRuntime {
         let status = Arc::new(Mutex::new(ProcessorStatus::Running));
         let processor_arc = Arc::new(Mutex::new(processor));
 
-        // Setup processor
+        // Setup processor with runtime context
         {
             let mut guard = processor_arc.lock();
-            let gpu_context = self
-                .gpu_context
+            let ctx = self
+                .runtime_context
                 .as_ref()
-                .ok_or_else(|| StreamError::Runtime("GPU context not initialized".to_string()))?;
-            let ctx = crate::core::context::RuntimeContext::new(gpu_context.clone());
-            guard.__generated_setup(&ctx)?;
+                .ok_or_else(|| StreamError::Runtime("Runtime context not initialized".to_string()))?;
+            guard.__generated_setup(ctx)?;
         }
 
         let processor_clone = Arc::clone(&processor_arc);
