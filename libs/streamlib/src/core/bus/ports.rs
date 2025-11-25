@@ -6,7 +6,8 @@ use super::connection::{OwnedConsumer, OwnedProducer};
 use super::connection_id::{self, ConnectionId};
 use super::connections::{InputConnection, OutputConnection};
 use super::plugs::{DisconnectedConsumer, DisconnectedProducer};
-use crate::core::runtime::{ProcessorId, WakeupEvent};
+use crate::core::bus::WakeupEvent;
+use crate::core::graph::ProcessorId;
 use crate::core::Result;
 use crate::StreamError;
 use crossbeam_channel::Sender;
@@ -41,7 +42,9 @@ impl PortAddress {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PortType {
     Video,
     Audio,

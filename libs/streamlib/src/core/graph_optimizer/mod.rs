@@ -134,7 +134,7 @@ mod tests {
         graph.add_processor("sink".into(), "SinkProcessor".into(), 0);
 
         graph
-            .add_connection(
+            .add_connection_with_id(
                 new_unchecked("conn_1"),
                 "source.output".into(),
                 "transform.input".into(),
@@ -143,7 +143,7 @@ mod tests {
             .unwrap();
 
         graph
-            .add_connection(
+            .add_connection_with_id(
                 new_unchecked("conn_2"),
                 "transform.output".into(),
                 "sink.input".into(),

@@ -55,7 +55,7 @@ static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> =
     std::sync::OnceLock::new();
 
 static WAKEUP_CHANNEL: std::sync::OnceLock<
-    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>>,
+    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::bus::WakeupEvent>>>>,
 > = std::sync::OnceLock::new();
 
 define_class!(
@@ -91,7 +91,7 @@ define_class!(
 
                 if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
                     if let Some(tx) = wakeup_storage.lock().as_ref() {
-                        let _ = tx.send(crate::core::runtime::WakeupEvent::DataAvailable);
+                        let _ = tx.send(crate::core::bus::WakeupEvent::DataAvailable);
                     }
                 }
             } else {
@@ -215,7 +215,7 @@ impl AppleCameraProcessor {
         let _ = FRAME_STORAGE.set(latest_frame);
 
         let wakeup_holder: Arc<
-            Mutex<Option<crossbeam_channel::Sender<crate::core::runtime::WakeupEvent>>>,
+            Mutex<Option<crossbeam_channel::Sender<crate::core::bus::WakeupEvent>>>,
         > = Arc::new(Mutex::new(None));
         let _ = WAKEUP_CHANNEL.set(wakeup_holder.clone());
 

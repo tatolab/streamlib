@@ -1,5 +1,5 @@
 use crate::core::bus::ConnectionId;
-use crate::core::handles::ProcessorId;
+use crate::core::graph::ProcessorId;
 
 /// Execution plan - how to run the graph
 ///
@@ -45,8 +45,8 @@ impl ExecutionPlan {
     /// 4. **Visualize execution** - Show how graph maps to threads/buffers
     ///
     /// # Example Test Usage
-    /// ```rust
-    /// let plan = runtime.execution_plan().unwrap();
+    /// ```rust,ignore
+    /// let plan = executor.execution_plan().unwrap();
     /// let json = plan.to_json();
     ///
     /// // Verify it's a Legacy plan

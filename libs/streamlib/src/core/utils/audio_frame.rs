@@ -8,7 +8,7 @@
 //! These utilities enable processors to dynamically adapt to different audio configurations
 //! without requiring compile-time generics.
 
-use crate::core::audio_resample_utils::{AudioResampler, ResamplingQuality};
+use super::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::Result;
 

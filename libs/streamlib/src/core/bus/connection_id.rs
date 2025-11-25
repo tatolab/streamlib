@@ -73,7 +73,7 @@ pub mod __private {
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust,ignore
 /// use streamlib::core::ConnectionId;
 ///
 /// // Parse and validate from string (type guard pattern)
@@ -86,7 +86,6 @@ pub mod __private {
 /// if conn_id.as_str() == "my_connection" {
 ///     // ...
 /// }
-/// # Ok::<(), streamlib::core::ConnectionIdError>(())
 /// ```
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,

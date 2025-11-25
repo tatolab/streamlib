@@ -58,12 +58,10 @@ pub use core::{
     ClapEffectProcessor,
     ClapPluginInfo,
     ClapScanner,
-    ConnectionTopology,
     DataFrame,
     DescriptorProvider,
     DisplayConfig,
     DynStreamElement,
-    Edge,
     ElementType,
     EncodedAudioFrame,
     Field,
@@ -73,7 +71,6 @@ pub use core::{
     MetadataValue,
     MixingStrategy,
     Mp4WriterConfig,
-    NodeInfo,
     // Streaming utilities:
     OpusEncoder,
     OwnedConsumer,
@@ -83,7 +80,6 @@ pub use core::{
     ParameterModulator,
     PluginInfo,
     PortDescriptor,
-    PortInfo,
     PortMessage,
     PortType,
     ProcessorDescriptor,
@@ -106,7 +102,6 @@ pub use core::{
     TextureFormat,
     TextureUsages,
     TextureView,
-    TopologyAnalyzer,
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
@@ -180,11 +175,11 @@ pub use permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,
 };
 
-#[cfg(feature = "mcp")]
-pub mod mcp;
+// MCP server removed - needs complete redesign for Phase 1 architecture
+// TODO: Reimplement MCP server with new graph-based API
 
-#[cfg(any(feature = "python", feature = "python-embed"))]
-pub mod python;
+// Python bindings removed - needs complete redesign for Phase 1 architecture
+// TODO: Reimplement Python bindings with new graph-based API
 
 mod runtime;
 pub use runtime::StreamRuntime;
@@ -209,14 +204,4 @@ pub mod platform {
         #[cfg(target_os = "windows")]
         return "Direct3D 12";
     }
-}
-
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-
-#[cfg(feature = "python")]
-#[pymodule]
-#[pyo3(name = "streamlib")]
-fn streamlib_py(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    python::register_python_module(m)
 }

@@ -1,0 +1,146 @@
+
+
+
+// only one runtime file, don't want an inner and outer helper file
+streamruntime {
+  new {
+    //creates a new stream runtime environment
+    // initializes a new runtime context
+    // initiales a graph representation (this is the dom reprresentation of the graph)
+    // initialzes an executor
+    
+  }
+
+  start => Result<void, Error> {
+    // sends will start runtime event
+    // starts runtime, calls the executor startegy
+    // sends runtime started event
+  }
+
+  stop => Result<void, Error> {
+    // sends will stop runtime event
+    // stops runtime
+    // sends runtime stopped event
+  }
+
+  pause => Result<void, Error>  {
+    // sends will pause runtime event
+    // pauses the stream processing
+    // sends runtime paused event
+  }
+
+  resume  => Result<void, Error> {
+
+    // sends will resume runtime event
+    // resumes the stream processing
+    // sends runtime resumed event
+  }
+
+  restart  => Result<void, Error> {
+    // sends will restart runtime event
+    // calls stop then start
+    // sends runtime restarted event
+  }
+
+  add processor {processor}  => Result<{processor handle}, Error> {
+    // adds a new node to the graph with given configuration returns a processor handle
+  }
+
+  remove processor {processor handle} => Result<void, Error> {
+    // removes a node from the graph using the processor handle
+  }
+
+  connect processor ports (output port, input port)  => Result<{connection handle}, Error> {
+    // adds an edge between two nodes in the graph and returns a connection handle
+  }
+
+  disconnect processor ports (connection handle) => Result<void, Error> {
+    // removes an edge between two nodes in the graph
+  }
+}
+
+
+// would implement a graph data structure here
+// it should be comparable and diffable such that two graphs can be compared and diffed
+// to determine what has changed between two versions of a graph
+graph {
+  new {
+    // initializes an empty graph
+  }
+
+  nodes {
+    // list of nodes in the graph
+  }
+
+  edges {
+    // list of edges in the graph
+  }
+
+  compile {
+    // using the execution  
+  }
+
+  serialize {
+    // serializes the graph to a storable format json
+  }
+
+  deserialize {
+    // deserializes the graph from a storable format json
+  }
+}
+
+
+// move all the graph operations here
+// move all the connection logic here
+// in the case of the existing legacy way we handle things it all mvoes here
+graph executor strategy {
+  // execution_graph
+  // reference to the dom graph
+
+  new {
+    // creates an internal execution graph, this is the vdom representation of the graph
+  }
+
+  optimize {
+    // adds metadata to our nodes and edges here
+  }
+
+  compile {
+    // using all the metadata information and the dom graph we create an execution graph
+    // which holds references to actual real instances of connections and processors in the graph
+    // such that for example a node has its processor handle representation, metadata optimizations
+    // and the instance we want to use
+  }
+
+  start {
+    // starts execution of the compiled graph
+  }
+
+  stop {
+    // stops execution of the compiled graph
+  }
+
+  pause {
+    // pauses execution of the compiled graph
+  }
+
+  resume {
+    // resumes execution of the compiled graph
+  }
+
+  restart {
+    // restarts execution of the compiled graph
+  }
+
+  to_processor_instance {node} {
+    // converts a graph node which is handle / data to a process instance for execution
+    // for example in legacy mode this would spawn a thread per processor node in the graph
+  }
+
+  to_connection_instance {edge} {
+    // converts a graph edge to a data flow mechanism for execution
+    // for example in legacy mode this would create the same lock free wiring as before
+  }
+}
+
+

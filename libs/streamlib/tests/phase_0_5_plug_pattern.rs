@@ -13,10 +13,9 @@ use streamlib::core::{
         connections::{InputConnection, OutputConnection},
         plugs::{DisconnectedConsumer, DisconnectedProducer},
         ports::{PortAddress, StreamInput, StreamOutput},
-        OwnedConsumer, OwnedProducer,
+        OwnedConsumer, OwnedProducer, WakeupEvent,
     },
     frames::VideoFrame,
-    runtime::WakeupEvent,
 };
 
 /// Test that StreamOutput starts with a disconnected plug

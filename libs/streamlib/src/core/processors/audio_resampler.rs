@@ -1,4 +1,4 @@
-use crate::core::audio_resample_utils::{AudioResampler, ResamplingQuality};
+use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::frames::AudioFrame;
 use crate::core::{Result, StreamInput, StreamOutput};
 use serde::{Deserialize, Serialize};

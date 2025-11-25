@@ -105,9 +105,38 @@ impl Event {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RuntimeEvent {
     // ===== Runtime Lifecycle =====
-    RuntimeStart,
-    RuntimeStop,
+    /// Emitted when runtime is about to start
+    RuntimeStarting,
+    /// Emitted when runtime has started successfully
+    RuntimeStarted,
+    /// Emitted when runtime failed to start
+    RuntimeStartFailed { error: String },
+    /// Emitted when runtime is about to stop
+    RuntimeStopping,
+    /// Emitted when runtime has stopped successfully
+    RuntimeStopped,
+    /// Emitted when runtime failed to stop cleanly
+    RuntimeStopFailed { error: String },
+    /// Emitted when runtime is about to pause
+    RuntimePausing,
+    /// Emitted when runtime has paused successfully
+    RuntimePaused,
+    /// Emitted when runtime failed to pause
+    RuntimePauseFailed { error: String },
+    /// Emitted when runtime is about to resume
+    RuntimeResuming,
+    /// Emitted when runtime has resumed successfully
+    RuntimeResumed,
+    /// Emitted when runtime failed to resume
+    RuntimeResumeFailed { error: String },
+    /// Emitted when shutdown is requested (e.g., Ctrl+C, Cmd+Q)
     RuntimeShutdown,
+
+    // Legacy variants (kept for compatibility)
+    #[doc(hidden)]
+    RuntimeStart,
+    #[doc(hidden)]
+    RuntimeStop,
 
     // ===== Input Events =====
     KeyboardInput {

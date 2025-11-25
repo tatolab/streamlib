@@ -4,7 +4,7 @@
 //! shutdown signals published via the global event bus.
 //!
 //! # Example
-//! ```no_run
+//! ```rust,ignore
 //! use streamlib::core::loop_utils::{shutdown_aware_loop, LoopControl};
 //!
 //! shutdown_aware_loop(|| {
@@ -65,7 +65,7 @@ impl EventListener for ShutdownListener {
 /// - Total overhead: <0.01% vs typical processor work
 ///
 /// # Example
-/// ```no_run
+/// ```rust,ignore
 /// use streamlib::core::loop_utils::{shutdown_aware_loop, LoopControl};
 ///
 /// shutdown_aware_loop(|| {

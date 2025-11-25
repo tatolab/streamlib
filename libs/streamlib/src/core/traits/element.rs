@@ -1,22 +1,21 @@
 use crate::core::error::Result;
-use crate::core::schema::{PortDescriptor, ProcessorDescriptor};
+use crate::core::schema::ProcessorDescriptor;
 use crate::core::RuntimeContext;
-use serde::{Deserialize, Serialize};
 
-pub trait ProcessorConfig: Serialize + for<'de> Deserialize<'de> {
-    type Processor: StreamElement;
-    fn build(self) -> Result<Self::Processor>;
-}
-
+/// Classification of processor types for graph analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElementType {
+    /// Produces data (no inputs, has outputs)
     Source,
-
+    /// Consumes data (has inputs, no outputs)
     Sink,
-
+    /// Transforms data (has both inputs and outputs)
     Transform,
 }
 
+/// Base trait for all stream elements.
+///
+/// Provides identity and metadata. Implemented by all processors.
 pub trait StreamElement: Send + 'static {
     fn name(&self) -> &str;
 
@@ -25,47 +24,11 @@ pub trait StreamElement: Send + 'static {
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
 
     fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(()) // Default: no-op
+        Ok(())
     }
 
     fn __generated_teardown(&mut self) -> Result<()> {
-        Ok(()) // Default: no-op
-    }
-
-    fn shutdown(&mut self) -> Result<()> {
-        self.__generated_teardown()
-    }
-
-    fn input_ports(&self) -> Vec<PortDescriptor> {
-        Vec::new()
-    }
-
-    fn output_ports(&self) -> Vec<PortDescriptor> {
-        Vec::new()
-    }
-
-    fn as_source(&self) -> Option<&dyn std::any::Any> {
-        None
-    }
-
-    fn as_source_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        None
-    }
-
-    fn as_sink(&self) -> Option<&dyn std::any::Any> {
-        None
-    }
-
-    fn as_sink_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        None
-    }
-
-    fn as_transform(&self) -> Option<&dyn std::any::Any> {
-        None
-    }
-
-    fn as_transform_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        None
+        Ok(())
     }
 }
 
@@ -89,24 +52,6 @@ mod tests {
         fn descriptor(&self) -> Option<ProcessorDescriptor> {
             None
         }
-
-        fn output_ports(&self) -> Vec<PortDescriptor> {
-            use crate::core::schema::SCHEMA_VIDEO_FRAME;
-            vec![PortDescriptor {
-                name: "video".to_string(),
-                schema: SCHEMA_VIDEO_FRAME.clone(),
-                required: true,
-                description: "Test video output".to_string(),
-            }]
-        }
-
-        fn as_source(&self) -> Option<&dyn std::any::Any> {
-            Some(self)
-        }
-
-        fn as_source_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-            Some(self)
-        }
     }
 
     #[test]
@@ -126,37 +71,11 @@ mod tests {
     }
 
     #[test]
-    fn test_output_ports() {
-        let source = MockSource {
-            name: "test".to_string(),
-        };
-        let ports = source.output_ports();
-        assert_eq!(ports.len(), 1);
-        assert_eq!(ports[0].name, "video");
-        assert_eq!(ports[0].schema.name, "VideoFrame");
-        assert_eq!(ports[0].description, "Test video output");
-        assert!(ports[0].required);
-    }
-
-    #[test]
-    fn test_downcast_to_source() {
-        let source = MockSource {
-            name: "test".to_string(),
-        };
-        assert!(source.as_source().is_some());
-        assert!(source.as_sink().is_none());
-        assert!(source.as_transform().is_none());
-    }
-
-    #[test]
     fn test_lifecycle_defaults() {
         let mut source = MockSource {
             name: "test".to_string(),
         };
-
-        // Test that default lifecycle methods work
         assert!(source.__generated_teardown().is_ok());
-        assert!(source.shutdown().is_ok());
     }
 
     #[test]

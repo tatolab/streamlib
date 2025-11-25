@@ -1,12 +1,16 @@
 use super::StreamElement;
 use crate::core::bus::PortType;
+use crate::core::bus::WakeupEvent;
 use crate::core::error::Result;
-use crate::core::runtime::WakeupEvent;
 use crate::core::scheduling::SchedulingConfig;
 use crate::core::schema::ProcessorDescriptor;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
+/// Core trait for stream processors.
+///
+/// Processors implement this trait to define their processing logic.
+/// The executor manages lifecycle, threading, and wiring - processors
+/// just declare their ports and implement `process()`.
 pub trait StreamProcessor: StreamElement {
     type Config: Serialize + for<'de> Deserialize<'de> + Default;
 
@@ -24,12 +28,9 @@ pub trait StreamProcessor: StreamElement {
     where
         Self: Sized;
 
-    fn set_output_wakeup(
-        &mut self,
-        _port_name: &str,
-        _wakeup_tx: crossbeam_channel::Sender<WakeupEvent>,
-    ) {
-    }
+    // =========================================================================
+    // Port introspection (macro-generated, used by executor for type-safe wiring)
+    // =========================================================================
 
     fn get_output_port_type(&self, _port_name: &str) -> Option<PortType> {
         None
@@ -39,23 +40,10 @@ pub trait StreamProcessor: StreamElement {
         None
     }
 
-    fn wire_output_connection(
-        &mut self,
-        _port_name: &str,
-        _connection: Arc<dyn std::any::Any + Send + Sync>,
-    ) -> bool {
-        false
-    }
+    // =========================================================================
+    // Wiring (macro-generated, called by executor to connect ports)
+    // =========================================================================
 
-    fn wire_input_connection(
-        &mut self,
-        _port_name: &str,
-        _connection: Arc<dyn std::any::Any + Send + Sync>,
-    ) -> bool {
-        false
-    }
-
-    // Phase 2: Lock-free owned connection wiring methods
     fn wire_output_producer(
         &mut self,
         _port_name: &str,
@@ -70,5 +58,12 @@ pub trait StreamProcessor: StreamElement {
         _consumer: Box<dyn std::any::Any + Send>,
     ) -> bool {
         false
+    }
+
+    fn set_output_wakeup(
+        &mut self,
+        _port_name: &str,
+        _wakeup_tx: crossbeam_channel::Sender<WakeupEvent>,
+    ) {
     }
 }

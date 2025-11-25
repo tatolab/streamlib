@@ -1,4 +1,4 @@
-use crate::core::audio_frame_utils::AudioRechunker;
+use crate::core::utils::audio_frame::AudioRechunker;
 use crate::core::frames::AudioFrame;
 use crate::core::{Result, RuntimeContext, StreamInput, StreamOutput};
 use serde::{Deserialize, Serialize};

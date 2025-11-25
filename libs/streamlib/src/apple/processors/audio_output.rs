@@ -1,4 +1,4 @@
-use crate::core::audio_resample_utils::{ResamplingQuality, StereoResampler};
+use crate::core::utils::audio_resample::{ResamplingQuality, StereoResampler};
 use crate::core::frames::AudioFrame;
 use crate::core::{Result, StreamError, StreamInput};
 use cpal::traits::StreamTrait;

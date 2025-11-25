@@ -2,7 +2,7 @@
 
 use crate::core::bus::plugs::{DisconnectedConsumer, DisconnectedProducer};
 use crate::core::bus::{ConnectionId, OwnedConsumer, OwnedProducer, PortAddress, PortMessage};
-use crate::core::runtime::WakeupEvent;
+use crate::core::bus::WakeupEvent;
 use crossbeam_channel::Sender;
 
 /// Output connection - either connected to another processor or disconnected (plug)

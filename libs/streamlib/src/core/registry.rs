@@ -1,3 +1,14 @@
+// TODO(jonathan): Redesign processor registry for Phase 1 architecture
+//
+// This is a processor TYPE registry (catalog of available processor types),
+// not a runtime instance registry. It answers "what processor types exist?"
+// for AI agent discovery, tooling, and MCP servers.
+//
+// Questions to resolve:
+// - How does this relate to the Graph's processor nodes?
+// - Should processor instantiation go through this registry?
+// - How do we handle dynamic processor loading?
+
 use super::{ProcessorDescriptor, StreamError};
 use parking_lot::Mutex;
 use std::collections::HashMap;
