@@ -225,6 +225,16 @@ impl Graph {
     pub(crate) fn petgraph(&self) -> &DiGraph<ProcessorNode, ConnectionEdge> {
         &self.graph
     }
+
+    /// Find a connection by its ID
+    ///
+    /// Returns the edge data if found, None otherwise.
+    pub fn find_connection_by_id(&self, connection_id: &ConnectionId) -> Option<&ConnectionEdge> {
+        self.graph
+            .edge_indices()
+            .find(|&e| self.graph[e].id == *connection_id)
+            .map(|e| &self.graph[e])
+    }
 }
 
 impl Default for Graph {

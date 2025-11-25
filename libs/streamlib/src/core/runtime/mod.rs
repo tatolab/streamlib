@@ -31,11 +31,13 @@
 //! ```
 
 pub mod connections;
+pub mod delta;
 pub mod lifecycle;
 pub mod state;
 pub mod types;
 
 // Re-export primary types
+pub use delta::{compute_delta, ExecutionDelta};
 pub use state::{ProcessorStatus, RuntimeState, WakeupEvent};
 pub use types::{Connection, ConnectionId, EventLoopFn, ProcessorId, RuntimeStatus, ShaderId};
 

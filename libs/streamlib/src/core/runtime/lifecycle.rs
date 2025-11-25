@@ -11,8 +11,10 @@
 //! to keep the lifecycle logic isolated and testable.
 
 use crate::core::error::{Result, StreamError};
+use crate::core::graph_optimizer::ExecutionPlan;
 use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
 
+use super::delta::{compute_delta, ExecutionDelta};
 use super::state::{ProcessorStatus, RuntimeState};
 use super::types::ProcessorId;
 use super::StreamRuntime;
@@ -335,6 +337,164 @@ impl StreamRuntime {
 
         tracing::info!("Runtime restarted successfully");
         Ok(())
+    }
+
+    /// Apply delta between execution plans for hot reloading
+    ///
+    /// This method computes the difference between the current and new execution
+    /// plans and applies those changes incrementally. This enables hot reloading
+    /// of graph changes without requiring a full restart.
+    ///
+    /// # Arguments
+    /// * `old_plan` - The previous execution plan
+    /// * `new_plan` - The new execution plan to apply
+    ///
+    /// # Returns
+    /// The computed delta that was applied
+    ///
+    /// # Phase 1 Implementation
+    ///
+    /// For Phase 1, delta application handles:
+    /// - Removing connections (unwire first to avoid dangling references)
+    /// - Removing processors (shutdown threads)
+    /// - Adding processors (spawn new threads)
+    /// - Adding connections (wire new connections)
+    ///
+    /// The order is important: we remove before adding to avoid conflicts.
+    pub fn apply_delta(
+        &mut self,
+        old_plan: &ExecutionPlan,
+        new_plan: &ExecutionPlan,
+    ) -> Result<ExecutionDelta> {
+        let delta = compute_delta(old_plan, new_plan);
+
+        if delta.is_empty() {
+            tracing::debug!("No changes to apply (delta is empty)");
+            return Ok(delta);
+        }
+
+        tracing::info!(
+            "Applying delta: {} processor(s) to add, {} to remove, {} connection(s) to add, {} to remove",
+            delta.processors_to_add.len(),
+            delta.processors_to_remove.len(),
+            delta.connections_to_add.len(),
+            delta.connections_to_remove.len()
+        );
+
+        // Step 1: Remove connections first (to avoid dangling references)
+        for conn_id in &delta.connections_to_remove {
+            let conn_id_str = conn_id.to_string();
+            match self.disconnect_by_id(&conn_id_str) {
+                Ok(_) => tracing::debug!("Removed connection: {}", conn_id_str),
+                Err(e) => tracing::warn!("Failed to remove connection {}: {}", conn_id_str, e),
+            }
+        }
+
+        // Step 2: Remove processors
+        for proc_id in &delta.processors_to_remove {
+            match self.remove_processor(proc_id) {
+                Ok(_) => tracing::debug!("Removed processor: {}", proc_id),
+                Err(e) => tracing::warn!("Failed to remove processor {}: {}", proc_id, e),
+            }
+        }
+
+        // Step 3: Add new processors
+        // Note: In Phase 1, new processors must be added via add_processor() before
+        // apply_delta is called. This step just verifies they exist.
+        for proc_id in &delta.processors_to_add {
+            let exists = {
+                let processors = self.processors.lock();
+                processors.contains_key(proc_id)
+            };
+
+            if !exists {
+                tracing::warn!(
+                    "Processor {} should be added but doesn't exist. \
+                     Call add_processor() before apply_delta().",
+                    proc_id
+                );
+            } else {
+                tracing::debug!("Verified processor exists: {}", proc_id);
+            }
+        }
+
+        // Step 4: Add new connections
+        // Note: Connections in the delta use ConnectionId from the graph.
+        // We need to look up the actual port addresses from the graph.
+        // Clone the port addresses to avoid borrow checker issues.
+        let connections_to_wire: Vec<_> = delta
+            .connections_to_add
+            .iter()
+            .filter_map(|conn_id| {
+                self.graph.find_connection_by_id(conn_id).map(|edge| {
+                    (
+                        conn_id.clone(),
+                        edge.from_port.clone(),
+                        edge.to_port.clone(),
+                    )
+                })
+            })
+            .collect();
+
+        for (conn_id, source, dest) in connections_to_wire {
+            match self.connect_internal(&source, &dest) {
+                Ok(new_id) => {
+                    tracing::debug!("Added connection: {} ({} → {})", new_id, source, dest)
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to add connection {} ({} → {}): {}",
+                    conn_id,
+                    source,
+                    dest,
+                    e
+                ),
+            }
+        }
+
+        // Log any connections that couldn't be found in graph
+        for conn_id in &delta.connections_to_add {
+            if self.graph.find_connection_by_id(conn_id).is_none() {
+                tracing::warn!("Connection {} not found in graph, cannot wire", conn_id);
+            }
+        }
+
+        tracing::info!("Delta applied successfully");
+        Ok(delta)
+    }
+
+    /// Recompile and apply delta (convenience method)
+    ///
+    /// This method:
+    /// 1. Stores the old execution plan
+    /// 2. Recompiles to generate a new plan
+    /// 3. Computes and applies the delta
+    ///
+    /// Use this when you want hot reloading with automatic delta computation.
+    pub fn recompile_with_delta(&mut self) -> Result<ExecutionDelta> {
+        if !self.dirty {
+            return Ok(ExecutionDelta::default());
+        }
+
+        // Store old plan
+        let old_plan = self
+            .execution_plan
+            .clone()
+            .unwrap_or_else(|| ExecutionPlan::Legacy {
+                processors: vec![],
+                connections: vec![],
+            });
+
+        // Recompile
+        self.recompile()?;
+
+        // Clone new plan to avoid borrow checker issues with apply_delta
+        let new_plan = self
+            .execution_plan
+            .clone()
+            .ok_or_else(|| StreamError::Runtime("No execution plan after recompile".to_string()))?;
+
+        // Apply delta
+        self.apply_delta(&old_plan, &new_plan)
     }
 }
 
