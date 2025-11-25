@@ -28,8 +28,8 @@ pub use audio_frame_utils::{
 };
 pub use audio_resample_utils::ResamplingQuality;
 pub use bus::{
-    create_owned_connection, Bus, ConnectionId, ConnectionManager, OwnedConsumer, OwnedProducer,
-    PortAddress, PortMessage, PortType, StreamInput, StreamOutput,
+    create_owned_connection, Bus, ConnectionManager, OwnedConsumer, OwnedProducer, PortAddress,
+    PortMessage, PortType, StreamInput, StreamOutput,
 };
 pub use clap::{
     ClapParameterControl, LfoWaveform, ParameterAutomation, ParameterInfo, ParameterModulator,
@@ -49,7 +49,10 @@ pub use pubsub::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
     ProcessorState, RuntimeEvent, WindowEventType, EVENT_BUS,
 };
-pub use runtime::{ShaderId, StreamRuntime, WakeupEvent};
+pub use runtime::{
+    Connection, ConnectionId, ProcessorStatus, RuntimeState, RuntimeStatus, ShaderId,
+    StreamRuntime, WakeupEvent,
+};
 pub use traits::{DynStreamElement, ElementType, EmptyConfig, StreamElement, StreamProcessor};
 
 pub use processors::{
