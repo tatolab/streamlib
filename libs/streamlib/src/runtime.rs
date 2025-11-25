@@ -1,6 +1,8 @@
 use crate::core::{bus::PortMessage, Result};
 
 pub use crate::core::handles::ProcessorHandle;
+pub use crate::core::runtime::state::RuntimeState;
+pub use crate::core::runtime::{compute_delta, ExecutionDelta};
 
 pub struct StreamRuntime {
     inner: crate::core::StreamRuntime,
@@ -68,6 +70,43 @@ impl StreamRuntime {
 
     pub fn stop(&mut self) -> Result<()> {
         self.inner.stop()
+    }
+
+    /// Pause the runtime (suspend processor threads, keep state)
+    ///
+    /// While paused:
+    /// - Processor threads are suspended (not executing process())
+    /// - Graph can be modified (add/remove processors, connect/disconnect)
+    /// - State is preserved (no teardown)
+    /// - Use `resume()` to continue execution
+    pub fn pause(&mut self) -> Result<()> {
+        self.inner.pause()
+    }
+
+    /// Resume the runtime from paused state
+    ///
+    /// If the graph was modified while paused, this will trigger recompilation
+    /// before resuming execution.
+    pub fn resume(&mut self) -> Result<()> {
+        self.inner.resume()
+    }
+
+    /// Restart the runtime (stop and start with the same graph)
+    ///
+    /// This is useful for applying graph changes that require full re-initialization,
+    /// or for recovering from errors.
+    pub fn restart(&mut self) -> Result<()> {
+        self.inner.restart()
+    }
+
+    /// Get the current runtime state
+    pub fn state(&self) -> RuntimeState {
+        self.inner.state()
+    }
+
+    /// Access the graph for inspection
+    pub fn graph(&self) -> &crate::core::graph::Graph {
+        self.inner.graph()
     }
 
     /// Request camera permission from the system.
