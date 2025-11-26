@@ -87,9 +87,7 @@ pub fn install_macos_shutdown_handler() {
 /// This function blocks until the application terminates.
 pub fn run_macos_event_loop() {
     use objc2::sel;
-    use objc2_app_kit::{
-        NSApplicationActivationPolicy, NSEventMask, NSMenu, NSMenuItem,
-    };
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSEventMask, NSMenu, NSMenuItem};
     use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSProcessInfo, NSString};
 
     let mtm = MainThreadMarker::new().expect("Must be on main thread");

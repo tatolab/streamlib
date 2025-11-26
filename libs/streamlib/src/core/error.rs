@@ -14,17 +14,20 @@ pub enum StreamError {
     #[error("Stream graph error: {0}")]
     GraphError(String),
 
-    #[error("Port connection error: {0}")]
+    #[error("Port error: {0}")]
     PortError(String),
 
-    #[error("Connection error: {0}")]
-    Connection(String),
+    #[error("Link error: {0}")]
+    Link(String),
 
-    #[error("Connection already exists: {0}")]
-    ConnectionAlreadyExists(String),
+    #[error("Link already exists: {0}")]
+    LinkAlreadyExists(String),
 
-    #[error("Connection not found: {0}")]
-    ConnectionNotFound(String),
+    #[error("Link not found: {0}")]
+    LinkNotFound(String),
+
+    #[error("Invalid link: {0}")]
+    InvalidLink(String),
 
     #[error("Invalid port address: {0}")]
     InvalidPortAddress(String),

@@ -28,17 +28,18 @@ use std::thread::JoinHandle;
 use parking_lot::{Mutex, RwLock};
 
 use super::{Executor, ExecutorState};
-use crate::core::bus::{Bus, ConnectionId, PortAddress, PortType, WakeupEvent};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::error::{Result, StreamError};
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{Graph, ProcessorId};
-use crate::core::graph_optimizer::{ExecutionPlan, GraphOptimizer};
+use crate::core::link_channel::{
+    LinkChannel, LinkId, LinkPortAddress, LinkPortType, LinkWakeupEvent,
+};
+use crate::core::processors::DynProcessor;
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode};
-use crate::core::traits::DynStreamElement;
 
 /// Type alias for boxed dynamic processor
-pub type DynProcessor = Box<dyn DynStreamElement + Send>;
+pub type BoxedProcessor = Box<dyn DynProcessor + Send>;
 
 /// Status of a processor instance
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,36 +73,32 @@ pub(crate) struct ProcessorInstance {
     pub id: ProcessorId,
     pub thread: Option<JoinHandle<()>>,
     pub shutdown_tx: crossbeam_channel::Sender<()>,
-    pub wakeup_tx: crossbeam_channel::Sender<WakeupEvent>,
+    pub wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
     pub status: Arc<Mutex<ProcessorStatus>>,
-    pub processor: Option<Arc<Mutex<DynProcessor>>>,
+    pub processor: Option<Arc<Mutex<BoxedProcessor>>>,
 }
 
 /// Runtime metadata for a connection instance
 #[derive(Debug, Clone)]
-pub struct ConnectionInstance {
-    pub id: ConnectionId,
+pub struct LinkInstance {
+    pub id: LinkId,
     pub from_port: String,
     pub to_port: String,
-    pub port_type: PortType,
+    pub port_type: LinkPortType,
     pub capacity: usize,
     pub source_processor: ProcessorId,
     pub dest_processor: ProcessorId,
 }
 
-impl ConnectionInstance {
+impl LinkInstance {
     pub fn new(
-        id: ConnectionId,
+        id: LinkId,
         from_port: String,
         to_port: String,
-        port_type: PortType,
+        port_type: LinkPortType,
         capacity: usize,
     ) -> Self {
-        let source_processor = from_port
-            .split('.')
-            .next()
-            .unwrap_or_default()
-            .to_string();
+        let source_processor = from_port.split('.').next().unwrap_or_default().to_string();
         let dest_processor = to_port.split('.').next().unwrap_or_default().to_string();
 
         Self {
@@ -126,17 +123,13 @@ pub struct LegacyExecutor {
     /// Live processor instances
     processors: HashMap<ProcessorId, ProcessorInstance>,
     /// Processors waiting to be started (from runtime's pending_processors)
-    pending_processors: Vec<(ProcessorId, DynProcessor)>,
+    pending_processors: Vec<(ProcessorId, BoxedProcessor)>,
     /// Live connection instances
-    connections: HashMap<ConnectionId, ConnectionInstance>,
+    connections: HashMap<LinkId, LinkInstance>,
     /// Connection bus (creates ring buffers)
-    bus: Bus,
+    link_channel: LinkChannel,
     /// Index: processor ID → connection IDs
-    processor_connections: HashMap<ProcessorId, Vec<ConnectionId>>,
-    /// Graph optimizer
-    optimizer: GraphOptimizer,
-    /// Current execution plan
-    execution_plan: Option<ExecutionPlan>,
+    processor_connections: HashMap<ProcessorId, Vec<LinkId>>,
     /// Connections to wire on start (from_port, to_port)
     connections_to_wire: Vec<(String, String)>,
     /// Next processor ID counter
@@ -163,10 +156,8 @@ impl LegacyExecutor {
             processors: HashMap::new(),
             pending_processors: Vec::new(),
             connections: HashMap::new(),
-            bus: Bus::new(),
+            link_channel: LinkChannel::new(),
             processor_connections: HashMap::new(),
-            optimizer: GraphOptimizer::new(),
-            execution_plan: None,
             connections_to_wire: Vec::new(),
             next_processor_id: 0,
             next_connection_id: 0,
@@ -186,10 +177,8 @@ impl LegacyExecutor {
             processors: HashMap::new(),
             pending_processors: Vec::new(),
             connections: HashMap::new(),
-            bus: Bus::new(),
+            link_channel: LinkChannel::new(),
             processor_connections: HashMap::new(),
-            optimizer: GraphOptimizer::new(),
-            execution_plan: None,
             connections_to_wire: Vec::new(),
             next_processor_id: 0,
             next_connection_id: 0,
@@ -201,7 +190,7 @@ impl LegacyExecutor {
     ///
     /// Called by runtime.add_processor() to delegate processor ownership to the executor.
     /// The executor owns all processor instances - the runtime only knows about the Graph.
-    pub fn register_processor(&mut self, id: ProcessorId, processor: DynProcessor) {
+    pub fn register_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) {
         self.pending_processors.push((id, processor));
         self.dirty = true;
     }
@@ -209,7 +198,7 @@ impl LegacyExecutor {
     /// Compile the execution plan from the shared graph
     ///
     /// This is an internal method that reads the shared graph, creates a runtime context,
-    /// and compiles an execution plan. Called automatically by start() if needed.
+    /// and prepares for execution. Called automatically by start() if needed.
     fn compile_from_graph(&mut self) -> Result<()> {
         // Get the graph (either shared or we need one passed in)
         let graph = self
@@ -220,21 +209,16 @@ impl LegacyExecutor {
         // Read graph to extract connections
         let graph_guard = graph.read();
 
-        // Validate graph
+        // Validate graph (checks for cycles, etc.)
         graph_guard.validate()?;
 
-        // Extract connections to wire from the graph edges
+        // Extract connections to wire from the graph links
         self.connections_to_wire.clear();
         for edge in graph_guard.petgraph().edge_indices() {
-            let edge_data = &graph_guard.petgraph()[edge];
+            let link = &graph_guard.petgraph()[edge];
             self.connections_to_wire
-                .push((edge_data.from_port.clone(), edge_data.to_port.clone()));
+                .push((link.from_port(), link.to_port()));
         }
-
-        // Generate execution plan
-        let plan = self.optimizer.optimize(&graph_guard)?;
-        tracing::debug!("Execution plan: {:?}", plan);
-        self.execution_plan = Some(plan);
 
         // Drop the guard before creating context (might need GPU init)
         drop(graph_guard);
@@ -247,7 +231,7 @@ impl LegacyExecutor {
         self.dirty = false;
         self.state = ExecutorState::Compiled;
 
-        tracing::info!("Execution plan compiled successfully");
+        tracing::info!("Graph compiled successfully");
         Ok(())
     }
 
@@ -259,11 +243,6 @@ impl LegacyExecutor {
     /// Get runtime context
     pub fn runtime_context(&self) -> Option<&RuntimeContext> {
         self.runtime_context.as_ref().map(|arc| arc.as_ref())
-    }
-
-    /// Get execution plan
-    pub fn execution_plan(&self) -> Option<&ExecutionPlan> {
-        self.execution_plan.as_ref()
     }
 
     /// Get runtime status snapshot
@@ -288,20 +267,20 @@ impl LegacyExecutor {
     }
 
     /// Get the next connection ID
-    pub fn next_connection_id(&mut self) -> ConnectionId {
+    pub fn next_connection_id(&mut self) -> LinkId {
         let id = format!("connection_{}", self.next_connection_id);
         self.next_connection_id += 1;
         // Internal use - format is guaranteed valid (alphanumeric + underscore)
-        crate::core::bus::connection_id::__private::new_unchecked(id)
+        crate::core::link_channel::link_id::__private::new_unchecked(id)
     }
 
     /// Add a processor (alias for add_pending_processor)
-    pub fn add_processor(&mut self, id: ProcessorId, processor: DynProcessor) {
+    pub fn add_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) {
         self.add_pending_processor(id, processor);
     }
 
     /// Queue a connection to be wired on start
-    pub fn queue_connection(&mut self, _id: ConnectionId, from_port: String, to_port: String) {
+    pub fn queue_connection(&mut self, _id: LinkId, from_port: String, to_port: String) {
         self.connections_to_wire.push((from_port, to_port));
         self.dirty = true;
     }
@@ -336,7 +315,7 @@ impl LegacyExecutor {
     }
 
     /// Add a processor to pending (to be started on compile/start)
-    pub fn add_pending_processor(&mut self, id: ProcessorId, processor: DynProcessor) {
+    pub fn add_pending_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) {
         self.pending_processors.push((id, processor));
         self.dirty = true;
     }
@@ -352,12 +331,12 @@ impl LegacyExecutor {
     }
 
     /// Get connection instance
-    pub fn get_connection(&self, id: &ConnectionId) -> Option<&ConnectionInstance> {
+    pub fn get_connection(&self, id: &LinkId) -> Option<&LinkInstance> {
         self.connections.get(id)
     }
 
     /// Get connections for a processor
-    pub fn get_processor_connections(&self, processor_id: &ProcessorId) -> Vec<ConnectionId> {
+    pub fn get_processor_connections(&self, processor_id: &ProcessorId) -> Vec<LinkId> {
         self.processor_connections
             .get(processor_id)
             .cloned()
@@ -377,14 +356,14 @@ impl LegacyExecutor {
     ///
     /// This is `to_processor_instance` from the design doc.
     /// It spawns a thread and sets up the processor for execution.
-    fn spawn_processor(&mut self, id: ProcessorId, processor: DynProcessor) -> Result<()> {
+    fn spawn_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) -> Result<()> {
         let ctx = self
             .runtime_context
             .as_ref()
             .ok_or_else(|| StreamError::Runtime("Runtime context not initialized".into()))?;
 
         let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
-        let (wakeup_tx, wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
+        let (wakeup_tx, wakeup_rx) = crossbeam_channel::unbounded::<LinkWakeupEvent>();
 
         let status = Arc::new(Mutex::new(ProcessorStatus::Running));
         let processor_arc = Arc::new(Mutex::new(processor));
@@ -435,8 +414,7 @@ impl LegacyExecutor {
         })?;
 
         let current_status = *instance.status.lock();
-        if current_status == ProcessorStatus::Stopped
-            || current_status == ProcessorStatus::Stopping
+        if current_status == ProcessorStatus::Stopped || current_status == ProcessorStatus::Stopping
         {
             return Ok(()); // Already stopped/stopping
         }
@@ -480,9 +458,9 @@ impl LegacyExecutor {
     /// Processor thread main loop
     fn processor_thread_loop(
         id: ProcessorId,
-        processor: Arc<Mutex<DynProcessor>>,
+        processor: Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: crossbeam_channel::Receiver<()>,
-        wakeup_rx: crossbeam_channel::Receiver<WakeupEvent>,
+        wakeup_rx: crossbeam_channel::Receiver<LinkWakeupEvent>,
         status: Arc<Mutex<ProcessorStatus>>,
         sched_config: SchedulingConfig,
     ) {
@@ -515,7 +493,7 @@ impl LegacyExecutor {
     /// Loop scheduling mode - tight polling loop
     fn run_loop_mode(
         id: &ProcessorId,
-        processor: &Arc<Mutex<DynProcessor>>,
+        processor: &Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: &crossbeam_channel::Receiver<()>,
     ) {
         loop {
@@ -537,16 +515,16 @@ impl LegacyExecutor {
     /// Push scheduling mode - event-driven, woken on input data
     fn run_push_mode(
         id: &ProcessorId,
-        processor: &Arc<Mutex<DynProcessor>>,
+        processor: &Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: &crossbeam_channel::Receiver<()>,
-        wakeup_rx: &crossbeam_channel::Receiver<WakeupEvent>,
+        wakeup_rx: &crossbeam_channel::Receiver<LinkWakeupEvent>,
     ) {
         loop {
             crossbeam_channel::select! {
                 recv(shutdown_rx) -> _ => break,
                 recv(wakeup_rx) -> msg => {
                     if let Ok(event) = msg {
-                        if event == WakeupEvent::Shutdown {
+                        if event == LinkWakeupEvent::Shutdown {
                             break;
                         }
                         let mut guard = processor.lock();
@@ -562,9 +540,9 @@ impl LegacyExecutor {
     /// Pull scheduling mode - processor manages its own callbacks
     fn run_pull_mode(
         id: &ProcessorId,
-        processor: &Arc<Mutex<DynProcessor>>,
+        processor: &Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: &crossbeam_channel::Receiver<()>,
-        wakeup_rx: &crossbeam_channel::Receiver<WakeupEvent>,
+        wakeup_rx: &crossbeam_channel::Receiver<LinkWakeupEvent>,
     ) {
         // Initial process call
         {
@@ -579,7 +557,7 @@ impl LegacyExecutor {
                 recv(shutdown_rx) -> _ => break,
                 recv(wakeup_rx) -> msg => {
                     if let Ok(event) = msg {
-                        if event == WakeupEvent::Shutdown {
+                        if event == LinkWakeupEvent::Shutdown {
                             break;
                         }
                     }
@@ -597,7 +575,7 @@ impl LegacyExecutor {
     ///
     /// This is `to_connection_instance` from the design doc.
     /// It creates the ring buffer and wires producer/consumer to ports.
-    fn wire_connection(&mut self, from_port: &str, to_port: &str) -> Result<ConnectionId> {
+    fn wire_connection(&mut self, from_port: &str, to_port: &str) -> Result<LinkId> {
         let (source_proc_id, source_port) = from_port.split_once('.').ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Invalid source format '{}'. Expected 'processor_id.port_name'",
@@ -714,8 +692,8 @@ impl LegacyExecutor {
         };
 
         // Create port addresses and determine capacity
-        let source_addr = PortAddress::new(source_proc_id.to_string(), source_port.to_string());
-        let dest_addr = PortAddress::new(dest_proc_id.to_string(), dest_port.to_string());
+        let source_addr = LinkPortAddress::new(source_proc_id.to_string(), source_port.to_string());
+        let dest_addr = LinkPortAddress::new(dest_proc_id.to_string(), dest_port.to_string());
         let capacity = source_port_type.default_capacity();
 
         // Wire connection based on port type
@@ -739,7 +717,7 @@ impl LegacyExecutor {
         );
 
         // Store connection metadata
-        let connection = ConnectionInstance::new(
+        let connection = LinkInstance::new(
             connection_id.clone(),
             from_port.to_string(),
             to_port.to_string(),
@@ -758,8 +736,7 @@ impl LegacyExecutor {
             .or_default()
             .push(connection_id.clone());
 
-        self.connections
-            .insert(connection_id.clone(), connection);
+        self.connections.insert(connection_id.clone(), connection);
 
         // Wire wakeup channel for push/pull scheduling
         {
@@ -789,18 +766,18 @@ impl LegacyExecutor {
     /// Wire connection based on port type (creates appropriate ring buffer)
     fn wire_by_port_type(
         &mut self,
-        port_type: PortType,
-        source_addr: &PortAddress,
-        dest_addr: &PortAddress,
+        port_type: LinkPortType,
+        source_addr: &LinkPortAddress,
+        dest_addr: &LinkPortAddress,
         capacity: usize,
-        source_processor: &Arc<Mutex<DynProcessor>>,
-        dest_processor: &Arc<Mutex<DynProcessor>>,
+        source_processor: &Arc<Mutex<BoxedProcessor>>,
+        dest_processor: &Arc<Mutex<BoxedProcessor>>,
         source_port: &str,
         dest_port: &str,
     ) -> Result<()> {
         match port_type {
-            PortType::Audio => {
-                let (producer, consumer) = self.bus.create_connection::<AudioFrame>(
+            LinkPortType::Audio => {
+                let (producer, consumer) = self.link_channel.create_channel::<AudioFrame>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
@@ -823,8 +800,8 @@ impl LegacyExecutor {
                     )));
                 }
             }
-            PortType::Video => {
-                let (producer, consumer) = self.bus.create_connection::<VideoFrame>(
+            LinkPortType::Video => {
+                let (producer, consumer) = self.link_channel.create_channel::<VideoFrame>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
@@ -847,8 +824,8 @@ impl LegacyExecutor {
                     )));
                 }
             }
-            PortType::Data => {
-                let (producer, consumer) = self.bus.create_connection::<DataFrame>(
+            LinkPortType::Data => {
+                let (producer, consumer) = self.link_channel.create_channel::<DataFrame>(
                     source_addr.clone(),
                     dest_addr.clone(),
                     capacity,
@@ -877,10 +854,14 @@ impl LegacyExecutor {
 
     /// Unwire a connection
     #[allow(dead_code)]
-    fn unwire_connection(&mut self, connection_id: &ConnectionId) -> Result<()> {
-        let connection = self.connections.get(connection_id).cloned().ok_or_else(|| {
-            StreamError::Configuration(format!("Connection {} not found", connection_id))
-        })?;
+    fn unwire_connection(&mut self, connection_id: &LinkId) -> Result<()> {
+        let connection = self
+            .connections
+            .get(connection_id)
+            .cloned()
+            .ok_or_else(|| {
+                StreamError::Configuration(format!("Connection {} not found", connection_id))
+            })?;
 
         tracing::info!("Unwiring connection: {}", connection_id);
 
@@ -894,11 +875,16 @@ impl LegacyExecutor {
         self.connections.remove(connection_id);
 
         // Remove from processor connections index
-        if let Some(connections) = self.processor_connections.get_mut(&connection.source_processor)
+        if let Some(connections) = self
+            .processor_connections
+            .get_mut(&connection.source_processor)
         {
             connections.retain(|id| id != connection_id);
         }
-        if let Some(connections) = self.processor_connections.get_mut(&connection.dest_processor) {
+        if let Some(connections) = self
+            .processor_connections
+            .get_mut(&connection.dest_processor)
+        {
             connections.retain(|id| id != connection_id);
         }
 
@@ -914,7 +900,7 @@ impl LegacyExecutor {
             if let Some(proc_ref) = &instance.processor {
                 let sched_config = proc_ref.lock().scheduling_config();
                 if matches!(sched_config.mode, SchedulingMode::Pull) {
-                    if let Err(e) = instance.wakeup_tx.send(WakeupEvent::DataAvailable) {
+                    if let Err(e) = instance.wakeup_tx.send(LinkWakeupEvent::DataAvailable) {
                         tracing::warn!(
                             "[{}] Failed to send Pull mode initialization wakeup: {}",
                             proc_id,
@@ -980,22 +966,17 @@ impl Executor for LegacyExecutor {
     }
 
     fn compile(&mut self, graph: &Graph, ctx: &RuntimeContext) -> Result<()> {
-        tracing::info!("Compiling execution plan...");
+        tracing::info!("Compiling graph...");
 
         self.runtime_context = Some(Arc::new(ctx.clone()));
 
-        // Validate graph
+        // Validate graph (checks for cycles, etc.)
         graph.validate()?;
 
-        // Generate execution plan
-        let plan = self.optimizer.optimize(graph)?;
-        tracing::debug!("Execution plan: {:?}", plan);
-
-        self.execution_plan = Some(plan);
         self.dirty = false;
         self.state = ExecutorState::Compiled;
 
-        tracing::info!("Execution plan compiled successfully");
+        tracing::info!("Graph compiled successfully");
         Ok(())
     }
 
@@ -1134,13 +1115,13 @@ mod tests {
 
     #[test]
     fn test_connection_instance_parsing() {
-        use crate::core::bus::connection_id::__private::new_unchecked;
+        use crate::core::link_channel::link_id::__private::new_unchecked;
 
-        let conn = ConnectionInstance::new(
+        let conn = LinkInstance::new(
             new_unchecked("conn_0"),
             "proc_a.video".into(),
             "proc_b.video".into(),
-            PortType::Video,
+            LinkPortType::Video,
             16,
         );
 

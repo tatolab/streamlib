@@ -1,6 +1,6 @@
 //! Procedural macros for streamlib
 //!
-//! This crate provides the `#[derive(StreamProcessor)]` macro to automatically generate:
+//! This crate provides the `#[derive(Processor)]` macro to automatically generate:
 //! - Config struct (or use existing/EmptyConfig)
 //! - `from_config()` method for processor construction
 //! - `descriptor()` method with type-safe schemas
@@ -11,15 +11,15 @@
 //! ## Level 0: Minimal (Everything Auto-Generated)
 //!
 //! ```rust
-//! use streamlib::{StreamInput, StreamOutput, VideoFrame, AudioFrame};
+//! use streamlib::{LinkInput, LinkOutput, VideoFrame, AudioFrame};
 //!
-//! #[derive(StreamProcessor)]
+//! #[derive(Processor)]
 //! struct VideoEffectProcessor {
 //!     #[input]
-//!     video_in: StreamInput<VideoFrame>,
+//!     video_in: LinkInput<VideoFrame>,
 //!
 //!     #[output]
-//!     video_out: StreamOutput<VideoFrame>,
+//!     video_out: LinkOutput<VideoFrame>,
 //! }
 //!
 //! impl VideoEffectProcessor {
@@ -36,7 +36,7 @@
 //! ## Level 1: With Descriptions and Config
 //!
 //! ```rust
-//! #[derive(StreamProcessor)]
+//! #[derive(Processor)]
 //! #[processor(
 //!     description = "Applies blur effect to video",
 //!     usage = "Connect video input, adjust blur_radius, connect output",
@@ -44,10 +44,10 @@
 //! )]
 //! struct BlurProcessor {
 //!     #[input(description = "Video input to blur")]
-//!     video: StreamInput<VideoFrame>,
+//!     video: LinkInput<VideoFrame>,
 //!
 //!     #[output(description = "Blurred video output")]
-//!     output: StreamOutput<VideoFrame>,
+//!     output: LinkOutput<VideoFrame>,
 //!
 //!     // Config fields (not ports)
 //!     blur_radius: f32,
@@ -57,7 +57,7 @@
 //! ## Level 2: Full Control with Custom Config
 //!
 //! ```rust
-//! #[derive(StreamProcessor)]
+//! #[derive(Processor)]
 //! #[processor(
 //!     config = BlurConfig,
 //!     audio_requirements = {
@@ -67,10 +67,10 @@
 //! )]
 //! struct AdvancedProcessor {
 //!     #[input(name = "video_input", description = "Main video", required = true)]
-//!     video_in: StreamInput<VideoFrame>,
+//!     video_in: LinkInput<VideoFrame>,
 //!
 //!     #[output(name = "video_output")]
-//!     video_out: StreamOutput<VideoFrame>,
+//!     video_out: LinkOutput<VideoFrame>,
 //! }
 //! ```
 
@@ -81,19 +81,19 @@ mod codegen;
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
 
-/// Derive macro for StreamProcessor trait
+/// Derive macro for Processor trait
 ///
 /// Automatically generates:
 /// - Config struct (or uses existing/EmptyConfig)
-/// - `StreamProcessorFactory::from_config()` implementation
+/// - `Processor::from_config()` implementation
 /// - `DescriptorProvider::descriptor()` implementation
-/// - `DynStreamProcessor::as_any_mut()` implementation
+/// - `DynProcessor::as_any_mut()` implementation for downcasting
 ///
 /// Smart defaults:
 /// - Description: Generated from struct name and port configuration
 /// - Usage context: Generated from port types and names
 /// - Tags: Auto-detected from port types (video, audio, data, source, sink, effect)
-/// - Examples: Extracted from `PortMessage::examples()`
+/// - Examples: Extracted from `LinkPortMessage::examples()`
 /// - Audio requirements: Auto-detected if processor has audio ports
 ///
 /// # Attributes
@@ -117,7 +117,7 @@ use syn::{parse_macro_input, DeriveInput};
 /// # Type Safety
 ///
 /// Schemas are extracted from generic type parameters at compile time:
-/// - `StreamInput<VideoFrame>` → `VideoFrame::schema()`
+/// - `LinkInput<VideoFrame>` → `VideoFrame::schema()`
 /// - No string-based type references
 /// - Full IDE autocomplete support
 /// - Compile-time type checking
@@ -127,13 +127,13 @@ use syn::{parse_macro_input, DeriveInput};
 /// For a processor with ports and config fields:
 ///
 /// ```rust
-/// #[derive(StreamProcessor)]
+/// #[derive(Processor)]
 /// struct MyProcessor {
 ///     #[input]
-///     input: StreamInput<VideoFrame>,
+///     input: LinkInput<VideoFrame>,
 ///
 ///     #[output]
-///     output: StreamOutput<VideoFrame>,
+///     output: LinkOutput<VideoFrame>,
 ///
 ///     config_value: f32,
 /// }
@@ -146,13 +146,13 @@ use syn::{parse_macro_input, DeriveInput};
 ///     config_value: f32,
 /// }
 ///
-/// impl StreamProcessorFactory for MyProcessor {
+/// impl Processor for MyProcessor {
 ///     type Config = Config;
 ///
 ///     fn from_config(config: Config) -> Result<Self> {
 ///         Ok(Self {
-///             input: StreamInput::new("input"),
-///             output: StreamOutput::new("output"),
+///             input: LinkInput::new("input"),
+///             output: LinkOutput::new("output"),
 ///             config_value: config.config_value,
 ///         })
 ///     }
@@ -170,14 +170,14 @@ use syn::{parse_macro_input, DeriveInput};
 ///     }
 /// }
 ///
-/// impl DynStreamProcessor for MyProcessor {
+/// impl DynProcessor for MyProcessor {
 ///     fn as_any_mut(&mut self) -> &mut dyn Any {
 ///         self
 ///     }
 /// }
 /// ```
-#[proc_macro_derive(StreamProcessor, attributes(processor, input, output, state, config))]
-pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(Processor, attributes(processor, input, output, state, config))]
+pub fn derive_processor(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     // Phase 1: Analyze struct (classify fields, extract types)
@@ -185,9 +185,6 @@ pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
         Ok(result) => result,
         Err(err) => return err.to_compile_error().into(),
     };
-
-    // Phase 0.5: StreamOutput now handles Arc internally, no longer need external Arc-wrapping
-    // Arc-wrapping enforcement removed - StreamOutput is Arc-wrapped internally by design
 
     // Phase 2: Generate code
     let generated = codegen::generate_processor_impl(&analysis);

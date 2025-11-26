@@ -1,7 +1,7 @@
-use crate::core::{Result, StreamInput, StreamOutput, VideoFrame};
+use crate::core::{LinkInput, LinkOutput, Result, VideoFrame};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePassthroughConfig {
@@ -15,17 +15,17 @@ impl Default for SimplePassthroughConfig {
 }
 
 // NEW PATTERN: Complete trait generation - always generates implementations!
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Pull,
     description = "Passes video frames through unchanged (for testing)"
 )]
 pub struct SimplePassthroughProcessor {
     #[input(description = "Input video stream")]
-    input: StreamInput<VideoFrame>,
+    input: LinkInput<VideoFrame>,
 
     #[output(description = "Output video stream")]
-    output: Arc<StreamOutput<VideoFrame>>,
+    output: Arc<LinkOutput<VideoFrame>>,
 
     #[config]
     config: SimplePassthroughConfig,
@@ -44,7 +44,6 @@ impl SimplePassthroughProcessor {
 
     // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
-        // Phase 0.5: read() automatically uses Latest strategy for VideoFrame
         if let Some(frame) = self.input.read() {
             self.output.write(frame);
         }

@@ -1,28 +1,30 @@
-//! Unified connection types supporting both real and plugged connections
+//! Link channel connection types supporting both real and plugged connections
 
-use crate::core::bus::plugs::{DisconnectedConsumer, DisconnectedProducer};
-use crate::core::bus::{ConnectionId, OwnedConsumer, OwnedProducer, PortAddress, PortMessage};
-use crate::core::bus::WakeupEvent;
+use super::link_plugs::{LinkDisconnectedConsumer, LinkDisconnectedProducer};
+use super::link_ports::ConsumptionStrategy;
+use super::{
+    LinkId, LinkOwnedConsumer, LinkOwnedProducer, LinkPortAddress, LinkPortMessage, LinkWakeupEvent,
+};
 use crossbeam_channel::Sender;
 
-/// Output connection - either connected to another processor or disconnected (plug)
-pub enum OutputConnection<T: PortMessage> {
-    /// Connected to another processor
+/// Output link connection - either linked to another processor or disconnected (plug)
+pub enum LinkOutputConnection<T: LinkPortMessage> {
+    /// Linked to another processor
     Connected {
-        id: ConnectionId,
-        producer: OwnedProducer<T>,
-        wakeup: Sender<WakeupEvent>,
+        id: LinkId,
+        producer: LinkOwnedProducer<T>,
+        wakeup: Sender<LinkWakeupEvent>,
     },
 
     /// Disconnected plug (silently drops data)
     Disconnected {
-        id: ConnectionId,
-        plug: DisconnectedProducer<T>,
+        id: LinkId,
+        plug: LinkDisconnectedProducer<T>,
     },
 }
 
-impl<T: PortMessage> OutputConnection<T> {
-    /// Push to connection (works for both Connected and Disconnected)
+impl<T: LinkPortMessage> LinkOutputConnection<T> {
+    /// Push data to link (works for both Connected and Disconnected)
     pub fn push(&mut self, value: T) -> Result<(), rtrb::PushError<T>> {
         match self {
             Self::Connected { producer, .. } => {
@@ -37,43 +39,43 @@ impl<T: PortMessage> OutputConnection<T> {
     pub fn wake(&self) {
         if let Self::Connected { wakeup, .. } = self {
             // Ignore send errors (downstream processor may have stopped)
-            let _ = wakeup.send(WakeupEvent::DataAvailable);
+            let _ = wakeup.send(LinkWakeupEvent::DataAvailable);
         }
         // Disconnected has no wakeup - no-op
     }
 
-    /// Get connection ID
-    pub fn id(&self) -> &ConnectionId {
+    /// Get link ID
+    pub fn id(&self) -> &LinkId {
         match self {
             Self::Connected { id, .. } => id,
             Self::Disconnected { id, .. } => id,
         }
     }
 
-    /// Check if this is a real connection (not a plug)
+    /// Check if this is a real link (not a plug)
     pub fn is_connected(&self) -> bool {
         matches!(self, Self::Connected { .. })
     }
 }
 
-/// Input connection - either connected to another processor or disconnected (plug)
-pub enum InputConnection<T: PortMessage> {
-    /// Connected to another processor
+/// Input link connection - either linked to another processor or disconnected (plug)
+pub enum LinkInputConnection<T: LinkPortMessage> {
+    /// Linked to another processor
     Connected {
-        id: ConnectionId,
-        consumer: OwnedConsumer<T>,
-        source_address: PortAddress,
-        wakeup: Sender<WakeupEvent>,
+        id: LinkId,
+        consumer: LinkOwnedConsumer<T>,
+        source_address: LinkPortAddress,
+        wakeup: Sender<LinkWakeupEvent>,
     },
 
     /// Disconnected plug (always returns None)
     Disconnected {
-        id: ConnectionId,
-        plug: DisconnectedConsumer<T>,
+        id: LinkId,
+        plug: LinkDisconnectedConsumer<T>,
     },
 }
 
-impl<T: PortMessage> InputConnection<T> {
+impl<T: LinkPortMessage> LinkInputConnection<T> {
     /// Read using sequential strategy (in-order consumption, required for audio)
     fn read_sequential(&mut self) -> Option<T> {
         match self {
@@ -90,7 +92,7 @@ impl<T: PortMessage> InputConnection<T> {
         }
     }
 
-    /// Read from connection using the consumption strategy defined by the frame type
+    /// Read from link using the consumption strategy defined by the frame type
     ///
     /// - Video frames: Uses Latest strategy (discards old frames to show newest)
     /// - Audio frames: Uses Sequential strategy (consumes all frames in order)
@@ -99,20 +101,20 @@ impl<T: PortMessage> InputConnection<T> {
     /// based on `T::consumption_strategy()`.
     pub fn read(&mut self) -> Option<T> {
         match T::consumption_strategy() {
-            crate::core::bus::ports::ConsumptionStrategy::Latest => self.read_latest(),
-            crate::core::bus::ports::ConsumptionStrategy::Sequential => self.read_sequential(),
+            ConsumptionStrategy::Latest => self.read_latest(),
+            ConsumptionStrategy::Sequential => self.read_sequential(),
         }
     }
 
-    /// Get connection ID
-    pub fn id(&self) -> &ConnectionId {
+    /// Get link ID
+    pub fn id(&self) -> &LinkId {
         match self {
             Self::Connected { id, .. } => id,
             Self::Disconnected { id, .. } => id,
         }
     }
 
-    /// Check if this is a real connection (not a plug)
+    /// Check if this is a real link (not a plug)
     pub fn is_connected(&self) -> bool {
         matches!(self, Self::Connected { .. })
     }

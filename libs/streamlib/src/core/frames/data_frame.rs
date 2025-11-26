@@ -1,10 +1,10 @@
 use super::metadata::MetadataValue;
-use crate::core::bus::{PortMessage, PortType};
+use crate::core::link_channel::{LinkPortMessage, LinkPortType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 // Implement sealed trait
-impl crate::core::bus::ports::sealed::Sealed for DataFrame {}
+impl crate::core::link_channel::link_ports::sealed::Sealed for DataFrame {}
 
 #[derive(Clone)]
 pub struct DataFrame {
@@ -29,9 +29,9 @@ impl DataFrame {
     }
 }
 
-impl PortMessage for DataFrame {
-    fn port_type() -> PortType {
-        PortType::Data
+impl LinkPortMessage for DataFrame {
+    fn port_type() -> LinkPortType {
+        LinkPortType::Data
     }
 
     fn schema() -> std::sync::Arc<crate::core::Schema> {

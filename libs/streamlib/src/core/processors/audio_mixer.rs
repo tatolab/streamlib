@@ -1,8 +1,8 @@
 use crate::core::frames::{AudioChannelCount, AudioFrame};
-use crate::core::{Result, StreamInput, StreamOutput};
+use crate::core::{LinkInput, LinkOutput, Result};
 use dasp::Signal;
 use serde::{Deserialize, Serialize};
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioMixerConfig {
@@ -25,20 +25,20 @@ pub enum MixingStrategy {
     SumClipped,
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Push,
     description = "Mixes two mono signals (left and right) into a stereo signal"
 )]
 pub struct AudioMixerProcessor {
     #[input(description = "Left channel mono audio input")]
-    left: StreamInput<AudioFrame>,
+    left: LinkInput<AudioFrame>,
 
     #[input(description = "Right channel mono audio input")]
-    right: StreamInput<AudioFrame>,
+    right: LinkInput<AudioFrame>,
 
     #[output(description = "Mixed stereo audio output")]
-    audio: StreamOutput<AudioFrame>,
+    audio: LinkOutput<AudioFrame>,
 
     #[config]
     config: AudioMixerConfig,

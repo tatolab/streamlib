@@ -8,14 +8,14 @@
 
 use std::sync::{atomic::AtomicUsize, Arc};
 use streamlib::core::{
-    bus::{
-        connection_id::ConnectionId,
-        connections::{InputConnection, OutputConnection},
+    frames::VideoFrame,
+    link_channel::{
+        channel_connections::{InputLinkConnection, OutputLinkConnection},
+        link_id::LinkId,
         plugs::{DisconnectedConsumer, DisconnectedProducer},
         ports::{PortAddress, StreamInput, StreamOutput},
         OwnedConsumer, OwnedProducer, WakeupEvent,
     },
-    frames::VideoFrame,
 };
 
 /// Test that StreamOutput starts with a disconnected plug
@@ -40,7 +40,7 @@ fn test_stream_input_starts_with_plug() {
 
 /// Test that adding a real connection to StreamOutput works
 #[test]
-fn test_stream_output_add_connection() {
+fn test_stream_output_add_link() {
     let output = StreamOutput::<VideoFrame>::new("test_output");
 
     // Create a real connection
@@ -48,11 +48,11 @@ fn test_stream_output_add_connection() {
     let cached_size = Arc::new(AtomicUsize::new(0));
     let owned_producer = OwnedProducer::new(producer, cached_size);
     let (wakeup_tx, _wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
-    let conn_id = ConnectionId::from_string("test_connection_1").unwrap();
+    let link_id = LinkId::from_string("test_link_1").unwrap();
 
-    // Add connection
+    // Add link
     output
-        .add_connection(conn_id.clone(), owned_producer, wakeup_tx)
+        .add_link(link_id.clone(), owned_producer, wakeup_tx)
         .unwrap();
 
     // Should now have 1 real connection
@@ -60,27 +60,27 @@ fn test_stream_output_add_connection() {
     assert!(output.is_connected());
 }
 
-/// Test that removing last connection restores plug
+/// Test that removing last link restores plug
 #[test]
-fn test_stream_output_remove_connection_restores_plug() {
+fn test_stream_output_remove_link_restores_plug() {
     let output = StreamOutput::<VideoFrame>::new("test_output");
 
-    // Add a connection
+    // Add a link
     let (producer, _consumer) = rtrb::RingBuffer::<VideoFrame>::new(16);
     let cached_size = Arc::new(AtomicUsize::new(0));
     let owned_producer = OwnedProducer::new(producer, cached_size);
     let (wakeup_tx, _wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
-    let conn_id = ConnectionId::from_string("test_connection_1").unwrap();
+    let link_id = LinkId::from_string("test_link_1").unwrap();
 
     output
-        .add_connection(conn_id.clone(), owned_producer, wakeup_tx)
+        .add_link(link_id.clone(), owned_producer, wakeup_tx)
         .unwrap();
 
     assert_eq!(output.connection_count(), 1);
     assert!(output.is_connected());
 
-    // Remove the connection
-    output.remove_connection(&conn_id).unwrap();
+    // Remove the link
+    output.remove_link(&link_id).unwrap();
 
     // Should be back to plug state
     assert_eq!(output.connection_count(), 0);
@@ -123,17 +123,17 @@ fn test_multiple_connect_disconnect_cycles() {
         let cached_size = Arc::new(AtomicUsize::new(0));
         let owned_producer = OwnedProducer::new(producer, cached_size);
         let (wakeup_tx, _wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
-        let conn_id = ConnectionId::from_string(format!("test_connection_{}", i)).unwrap();
+        let conn_id = LinkId::from_string(format!("test_connection_{}", i)).unwrap();
 
         output
-            .add_connection(conn_id.clone(), owned_producer, wakeup_tx)
+            .add_link(conn_id.clone(), owned_producer, wakeup_tx)
             .unwrap();
 
         assert_eq!(output.connection_count(), 1);
         assert!(output.is_connected());
 
         // Remove connection
-        output.remove_connection(&conn_id).unwrap();
+        output.remove_link(&conn_id).unwrap();
 
         assert_eq!(output.connection_count(), 0);
         assert!(!output.is_connected());
@@ -160,14 +160,14 @@ fn test_disconnected_plug_pattern_verified() {
     assert!(true);
 }
 
-/// Test OutputConnection enum behavior
+/// Test OutputLinkConnection enum behavior
 #[test]
 fn test_output_connection_enum() {
     use streamlib::core::frames::DataFrame;
 
     // Create disconnected plug connection
-    let plug_id = ConnectionId::from_string("plug_1").unwrap();
-    let plug_conn = OutputConnection::<DataFrame>::Disconnected {
+    let plug_id = LinkId::from_string("plug_1").unwrap();
+    let plug_conn = OutputLinkConnection::<DataFrame>::Disconnected {
         id: plug_id.clone(),
         plug: DisconnectedProducer::new(),
     };
@@ -180,9 +180,9 @@ fn test_output_connection_enum() {
     let cached_size = Arc::new(AtomicUsize::new(0));
     let owned_producer = OwnedProducer::new(producer, cached_size);
     let (wakeup_tx, _wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
-    let real_id = ConnectionId::from_string("real_1").unwrap();
+    let real_id = LinkId::from_string("real_1").unwrap();
 
-    let real_conn = OutputConnection::<DataFrame>::Connected {
+    let real_conn = OutputLinkConnection::<DataFrame>::Connected {
         id: real_id.clone(),
         producer: owned_producer,
         wakeup: wakeup_tx,
@@ -192,14 +192,14 @@ fn test_output_connection_enum() {
     assert!(real_conn.is_connected());
 }
 
-/// Test InputConnection enum behavior
+/// Test InputLinkConnection enum behavior
 #[test]
 fn test_input_connection_enum() {
     use streamlib::core::frames::DataFrame;
 
     // Create disconnected plug connection
-    let plug_id = ConnectionId::from_string("plug_1").unwrap();
-    let plug_conn = InputConnection::<DataFrame>::Disconnected {
+    let plug_id = LinkId::from_string("plug_1").unwrap();
+    let plug_conn = InputLinkConnection::<DataFrame>::Disconnected {
         id: plug_id.clone(),
         plug: DisconnectedConsumer::new(),
     };
@@ -212,10 +212,10 @@ fn test_input_connection_enum() {
     let cached_size = Arc::new(AtomicUsize::new(0));
     let owned_consumer = OwnedConsumer::new(consumer, cached_size);
     let (wakeup_tx, _wakeup_rx) = crossbeam_channel::unbounded::<WakeupEvent>();
-    let real_id = ConnectionId::from_string("real_1").unwrap();
+    let real_id = LinkId::from_string("real_1").unwrap();
     let source_addr = PortAddress::new("test_processor", "test_port");
 
-    let real_conn = InputConnection::<DataFrame>::Connected {
+    let real_conn = InputLinkConnection::<DataFrame>::Connected {
         id: real_id.clone(),
         consumer: owned_consumer,
         source_address: source_addr,
@@ -247,15 +247,15 @@ fn test_processor_ports_with_plugs() {
     let owned_consumer = OwnedConsumer::new(consumer, Arc::clone(&cached_size));
     let (wakeup_tx_out, _wakeup_rx_out) = crossbeam_channel::unbounded::<WakeupEvent>();
     let (wakeup_tx_in, _wakeup_rx_in) = crossbeam_channel::unbounded::<WakeupEvent>();
-    let conn_id = ConnectionId::from_string("video_connection").unwrap();
+    let conn_id = LinkId::from_string("video_connection").unwrap();
     let source_addr = PortAddress::new("source_processor", "video_out");
 
     // Wire them up
     video_output
-        .add_connection(conn_id.clone(), owned_producer, wakeup_tx_out)
+        .add_link(conn_id.clone(), owned_producer, wakeup_tx_out)
         .unwrap();
     video_input
-        .add_connection(conn_id.clone(), owned_consumer, source_addr, wakeup_tx_in)
+        .add_link(conn_id.clone(), owned_consumer, source_addr, wakeup_tx_in)
         .unwrap();
 
     // Now connected
@@ -265,8 +265,8 @@ fn test_processor_ports_with_plugs() {
     assert_eq!(video_output.connection_count(), 1);
 
     // Disconnect
-    video_output.remove_connection(&conn_id).unwrap();
-    video_input.remove_connection(&conn_id).unwrap();
+    video_output.remove_link(&conn_id).unwrap();
+    video_input.remove_link(&conn_id).unwrap();
 
     // Back to plug state
     assert!(!video_input.is_connected());

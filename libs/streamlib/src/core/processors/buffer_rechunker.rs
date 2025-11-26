@@ -1,8 +1,8 @@
-use crate::core::utils::audio_frame::AudioRechunker;
 use crate::core::frames::AudioFrame;
-use crate::core::{Result, RuntimeContext, StreamInput, StreamOutput};
+use crate::core::utils::audio_frame::AudioRechunker;
+use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 use serde::{Deserialize, Serialize};
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferRechunkerConfig {
@@ -18,17 +18,17 @@ impl Default for BufferRechunkerConfig {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Push,
     description = "Rechunks variable-sized audio buffers into fixed-size chunks (works with any channel count)"
 )]
 pub struct BufferRechunkerProcessor {
     #[input(description = "Variable-sized audio input")]
-    audio_in: StreamInput<AudioFrame>,
+    audio_in: LinkInput<AudioFrame>,
 
     #[output(description = "Fixed-size audio output at target buffer size")]
-    audio_out: StreamOutput<AudioFrame>,
+    audio_out: LinkOutput<AudioFrame>,
 
     #[config]
     config: BufferRechunkerConfig,

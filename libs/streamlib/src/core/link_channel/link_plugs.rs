@@ -1,23 +1,23 @@
-//! Null object pattern for disconnected ports
+//! Null object pattern for disconnected link ports
 //!
-//! Every port always has at least one connection - either real or a "plug".
+//! Every link port always has at least one connection - either real or a "plug".
 //! Plugs silently drop pushed data and always return None when popped.
 
-use crate::core::bus::PortMessage;
+use super::link_ports::LinkPortMessage;
 use std::marker::PhantomData;
 
-/// A producer that silently drops all pushed data (disconnected port)
-pub struct DisconnectedProducer<T: PortMessage> {
+/// A producer that silently drops all pushed data (disconnected link port)
+pub struct LinkDisconnectedProducer<T: LinkPortMessage> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: PortMessage> Default for DisconnectedProducer<T> {
+impl<T: LinkPortMessage> Default for LinkDisconnectedProducer<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: PortMessage> DisconnectedProducer<T> {
+impl<T: LinkPortMessage> LinkDisconnectedProducer<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -31,18 +31,18 @@ impl<T: PortMessage> DisconnectedProducer<T> {
     }
 }
 
-/// A consumer that always returns None (disconnected port)
-pub struct DisconnectedConsumer<T: PortMessage> {
+/// A consumer that always returns None (disconnected link port)
+pub struct LinkDisconnectedConsumer<T: LinkPortMessage> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: PortMessage> Default for DisconnectedConsumer<T> {
+impl<T: LinkPortMessage> Default for LinkDisconnectedConsumer<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: PortMessage> DisconnectedConsumer<T> {
+impl<T: LinkPortMessage> LinkDisconnectedConsumer<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,

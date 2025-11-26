@@ -1,6 +1,6 @@
 use crate::apple::{metal::MetalDevice, WgpuBridge};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, Result, StreamError, StreamInput, VideoFrame,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, LinkInput, Result, StreamError, VideoFrame,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -15,7 +15,7 @@ use objc2_foundation::{NSString, NSURL};
 use objc2_io_surface::IOSurface;
 use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 use tracing::{debug, error, info, trace};
 
 // FFI bindings for CoreVideo functions
@@ -81,7 +81,7 @@ impl Default for AppleMp4WriterConfig {
 /// // Connect audio and video sources to writer inputs
 /// // writer.teardown() will finalize the MP4 file
 /// ```
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Push,
     description = "Writes stereo audio and video to MP4 file with A/V synchronization",
@@ -89,10 +89,10 @@ impl Default for AppleMp4WriterConfig {
 )]
 pub struct AppleMp4WriterProcessor {
     #[input(description = "Stereo audio frames to write to MP4")]
-    audio: StreamInput<AudioFrame>,
+    audio: LinkInput<AudioFrame>,
 
     #[input(description = "Video frames to write to MP4")]
-    video: StreamInput<VideoFrame>,
+    video: LinkInput<VideoFrame>,
 
     #[config]
     config: AppleMp4WriterConfig,
@@ -320,7 +320,6 @@ impl AppleMp4WriterProcessor {
             );
 
             // IMPORTANT: Check for new video frame for EACH audio frame
-            // Phase 0.5: read() automatically uses Latest strategy for VideoFrame
             if let Some(video) = self.video.read() {
                 debug!(
                     "New video frame received: timestamp_ns={}, frame_number={}, size={}x{}",

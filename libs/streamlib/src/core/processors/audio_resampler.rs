@@ -1,8 +1,8 @@
-use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::frames::AudioFrame;
-use crate::core::{Result, StreamInput, StreamOutput};
+use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
+use crate::core::{LinkInput, LinkOutput, Result};
 use serde::{Deserialize, Serialize};
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioResamplerConfig {
@@ -21,17 +21,17 @@ impl Default for AudioResamplerConfig {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Push,
     description = "Resamples audio from source to target sample rate (supports any channel count)"
 )]
 pub struct AudioResamplerProcessor {
     #[input(description = "Audio input at source sample rate")]
-    audio_in: StreamInput<AudioFrame>,
+    audio_in: LinkInput<AudioFrame>,
 
     #[output(description = "Audio output at target sample rate")]
-    audio_out: StreamOutput<AudioFrame>,
+    audio_out: LinkOutput<AudioFrame>,
 
     #[config]
     config: AudioResamplerConfig,

@@ -1,10 +1,10 @@
 use crate::core::frames::AudioChannelCount;
-use crate::core::{AudioFrame, Result, StreamError, StreamOutput};
+use crate::core::{AudioFrame, LinkOutput, Result, StreamError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 // Apple-specific configuration and device types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -22,7 +22,7 @@ pub struct AppleAudioInputDevice {
     pub is_default: bool,
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Pull,
     description = "Captures mono audio from macOS microphones in device-native format - driven by CoreAudio callback",
@@ -32,7 +32,7 @@ pub struct AppleAudioCaptureProcessor {
     #[output(
         description = "Captured mono audio frames in device-native sample rate and buffer size"
     )]
-    audio: StreamOutput<AudioFrame>,
+    audio: LinkOutput<AudioFrame>,
 
     #[config]
     config: AppleAudioCaptureConfig,
@@ -172,7 +172,7 @@ impl AppleAudioCaptureProcessor {
             )));
         }
 
-        let audio_output_clone = self.audio.clone(); // Phase 0.5: Clone StreamOutput (internally clones Arc)
+        let audio_output_clone = self.audio.clone();
         let frame_counter_clone = self.frame_counter.clone();
         let is_capturing_clone = Arc::clone(&self.is_capturing);
         let sample_rate_clone = device_sample_rate;
@@ -306,7 +306,7 @@ impl AppleAudioCaptureProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::traits::StreamProcessor;
+    use crate::core::processors::Processor;
 
     #[test]
     #[ignore] // Requires real audio hardware - not available in CI

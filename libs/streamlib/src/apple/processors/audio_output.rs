@@ -1,10 +1,10 @@
-use crate::core::utils::audio_resample::{ResamplingQuality, StereoResampler};
 use crate::core::frames::AudioFrame;
-use crate::core::{Result, StreamError, StreamInput};
+use crate::core::utils::audio_resample::{ResamplingQuality, StereoResampler};
+use crate::core::{LinkInput, Result, StreamError};
 use cpal::traits::StreamTrait;
 use cpal::Stream;
 use std::sync::{Arc, Mutex};
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 // Apple-specific configuration and device types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -55,7 +55,7 @@ impl ResamplerState {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Pull,
     description = "Plays audio through speakers/headphones using CoreAudio",
@@ -63,7 +63,7 @@ impl ResamplerState {
 )]
 pub struct AppleAudioOutputProcessor {
     #[input(description = "Stereo audio frame to play through speakers")]
-    audio: StreamInput<AudioFrame>,
+    audio: LinkInput<AudioFrame>,
 
     #[config]
     config: AppleAudioOutputConfig,
@@ -161,7 +161,7 @@ impl AppleAudioOutputProcessor {
             device_buffer_size
         );
 
-        // Clone the port for the audio callback thread (Phase 0.5: StreamInput clones internally via Arc)
+        // Clone the port for the audio callback thread
         let audio_port = self.audio.clone();
 
         // Clone resampler state for the audio callback thread
@@ -185,7 +185,6 @@ impl AppleAudioOutputProcessor {
                 // This ensures audio plays at correct speed regardless of device sample rate
 
                 while frame_buffer.len() < data.len() {
-                    // Phase 0.5: StreamInput uses interior mutability, no lock needed
                     if let Some(audio_frame) = audio_port.read() {
                         // Check if resampling is needed
                         if audio_frame.sample_rate != device_sample_rate {

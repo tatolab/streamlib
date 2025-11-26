@@ -37,10 +37,12 @@
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use serde::Serialize;
 
-use crate::core::bus::ConnectionId;
 use crate::core::executor::{Executor, LegacyExecutor};
-use crate::core::graph::{ConnectionEdge, Graph, ProcessorId, ProcessorNode};
+use crate::core::graph::{Graph, IntoLinkPortRef, Link, ProcessorId, ProcessorNode};
+use crate::core::link_channel::LinkId;
+use crate::core::processors::Processor;
 use crate::core::Result;
 
 // Re-export types
@@ -81,14 +83,28 @@ impl StreamRuntime {
     // Graph Mutations
     // =========================================================================
 
-    /// Add a processor node to the graph
+    /// Add a processor to the graph with its config
     ///
-    /// Returns the ProcessorNode (pure data). The executor will convert
-    /// this to an actual processor instance during compile.
-    pub fn add_processor(&mut self, processor_type: &str) -> Result<ProcessorNode> {
+    /// Thin proxy to `Graph::add_processor_node`. All introspection and metadata
+    /// extraction happens in the graph layer.
+    ///
+    /// Returns the `ProcessorNode` (pure serializable data).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let camera = runtime.add_processor::<CameraProcessor>(CameraConfig {
+    ///     device_id: None,
+    /// })?;
+    /// ```
+    pub fn add_processor<P>(&mut self, config: P::Config) -> Result<ProcessorNode>
+    where
+        P: Processor + 'static,
+        P::Config: Serialize,
+    {
+        // Delegate to graph layer
         let node = {
             let mut graph = self.graph.write();
-            graph.add_processor_node(processor_type)
+            graph.add_processor_node::<P>(config)?
         };
 
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
@@ -96,47 +112,63 @@ impl StreamRuntime {
             "runtime:global",
             &Event::RuntimeGlobal(RuntimeEvent::ProcessorAdded {
                 processor_id: node.id.clone(),
-                processor_type: processor_type.to_string(),
+                processor_type: node.processor_type.clone(),
             }),
         );
 
         Ok(node)
     }
 
-    /// Connect two ports - adds an edge to the graph
+    /// Connect two ports - adds a link to the graph
     ///
-    /// Port addresses should be in format "processor_id.port_name".
-    /// Returns the ConnectionEdge (pure data).
-    pub fn connect(&mut self, from_port: &str, to_port: &str) -> Result<ConnectionEdge> {
-        let edge = {
+    /// Thin proxy to `Graph::add_link`. All validation
+    /// happens in the graph layer.
+    ///
+    /// Accepts multiple input types via `IntoLinkPortRef`:
+    /// - `LinkPortRef` from `node.output("video")` / `node.input("video")`
+    /// - Raw strings like `"camera_0.video"` (escape hatch)
+    ///
+    /// # Example
+    /// ```ignore
+    /// runtime.connect(camera.output("video"), display.input("video"))?;
+    /// // or with strings:
+    /// runtime.connect("camera_0.video", "display_0.video")?;
+    /// ```
+    pub fn connect(
+        &mut self,
+        from: impl IntoLinkPortRef,
+        to: impl IntoLinkPortRef,
+    ) -> Result<Link> {
+        // Delegate to graph layer
+        let link = {
             let mut graph = self.graph.write();
-            graph.add_connection_edge(from_port, to_port)
+            graph.add_link(from, to)?
         };
 
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
         EVENT_BUS.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::ConnectionCreated {
-                connection_id: edge.id.to_string(),
-                from_port: from_port.to_string(),
-                to_port: to_port.to_string(),
+            &Event::RuntimeGlobal(RuntimeEvent::LinkCreated {
+                link_id: link.id.to_string(),
+                from_port: link.from_port(),
+                to_port: link.to_port(),
             }),
         );
 
-        Ok(edge)
+        Ok(link)
     }
 
-    /// Disconnect by edge - removes edge from graph
-    pub fn disconnect(&mut self, edge: &ConnectionEdge) -> Result<()> {
+    /// Disconnect by link - removes link from graph
+    pub fn disconnect(&mut self, link: &Link) -> Result<()> {
         let mut graph = self.graph.write();
-        graph.remove_connection_edge(&edge.id);
+        graph.remove_link(&link.id);
         Ok(())
     }
 
-    /// Disconnect by connection ID
-    pub fn disconnect_by_id(&mut self, connection_id: &ConnectionId) -> Result<()> {
+    /// Disconnect by link ID
+    pub fn disconnect_by_id(&mut self, link_id: &LinkId) -> Result<()> {
         let mut graph = self.graph.write();
-        graph.remove_connection_edge(connection_id);
+        graph.remove_link(link_id);
         Ok(())
     }
 

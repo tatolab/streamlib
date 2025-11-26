@@ -17,14 +17,14 @@ use crate::core::streaming::{
     OpusEncoder, RtpTimestampCalculator,
 };
 use crate::core::{
-    media_clock::MediaClock, AudioFrame, GpuContext, Result, RuntimeContext, StreamError,
-    StreamInput, VideoFrame,
+    media_clock::MediaClock, AudioFrame, GpuContext, LinkInput, Result, RuntimeContext,
+    StreamError, VideoFrame,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::time::Duration;
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 // ============================================================================
 // VIDEO ENCODER TRAIT (WebRTC-specific interface)
@@ -106,17 +106,17 @@ impl Default for WebRtcWhipConfig {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Push,
     description = "Streams video and audio to Cloudflare Stream via WebRTC WHIP"
 )]
 pub struct WebRtcWhipProcessor {
     #[input(description = "Input video frames to encode and stream")]
-    video_in: StreamInput<VideoFrame>,
+    video_in: LinkInput<VideoFrame>,
 
     #[input(description = "Input audio frames to encode and stream")]
-    audio_in: StreamInput<AudioFrame>,
+    audio_in: LinkInput<AudioFrame>,
 
     #[config]
     config: WebRtcWhipConfig,
@@ -191,7 +191,6 @@ impl WebRtcWhipProcessor {
 
     /// Main processing loop: reads video and audio frames, encodes them, and streams via WebRTC
     fn process(&mut self) -> Result<()> {
-        // Phase 0.5: read() automatically uses correct strategy (Latest for video, Sequential for audio)
         let video_frame = self.video_in.read();
         let audio_frame = self.audio_in.read();
 

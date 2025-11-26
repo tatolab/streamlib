@@ -1,8 +1,8 @@
-//! Integration tests for StreamProcessor derive macro
+//! Integration tests for Processor derive macro
 //!
 //! These tests verify that the macro generates correct code for various configurations.
 
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 // Note: These tests compile but don't run because we'd need the full streamlib runtime.
 // The primary goal is to verify that the macro generates valid Rust code that compiles.
@@ -14,11 +14,11 @@ mod mock {
     use std::sync::Arc;
 
     // Mock port types
-    pub struct StreamInput<T> {
+    pub struct LinkInput<T> {
         _phantom: std::marker::PhantomData<T>,
     }
 
-    impl<T: PortMessage> StreamInput<T> {
+    impl<T: LinkPortMessage> LinkInput<T> {
         pub fn new(_name: impl Into<String>) -> Self {
             Self {
                 _phantom: std::marker::PhantomData,
@@ -26,11 +26,11 @@ mod mock {
         }
     }
 
-    pub struct StreamOutput<T> {
+    pub struct LinkOutput<T> {
         _phantom: std::marker::PhantomData<T>,
     }
 
-    impl<T: PortMessage> StreamOutput<T> {
+    impl<T: LinkPortMessage> LinkOutput<T> {
         pub fn new(_name: impl Into<String>) -> Self {
             Self {
                 _phantom: std::marker::PhantomData,
@@ -51,36 +51,36 @@ mod mock {
     // Mock schema type
     pub struct Schema;
 
-    // Mock PortMessage trait
-    pub trait PortMessage: Clone + Send + 'static {
-        fn port_type() -> PortType;
+    // Mock LinkPortMessage trait
+    pub trait LinkPortMessage: Clone + Send + 'static {
+        fn port_type() -> LinkPortType;
         fn schema() -> Arc<Schema>;
         fn examples() -> Vec<(&'static str, String)> {
             Vec::new()
         }
     }
 
-    impl PortMessage for VideoFrame {
-        fn port_type() -> PortType {
-            PortType::Video
+    impl LinkPortMessage for VideoFrame {
+        fn port_type() -> LinkPortType {
+            LinkPortType::Video
         }
         fn schema() -> Arc<Schema> {
             Arc::new(Schema)
         }
     }
 
-    impl PortMessage for AudioFrame {
-        fn port_type() -> PortType {
-            PortType::Audio
+    impl LinkPortMessage for AudioFrame {
+        fn port_type() -> LinkPortType {
+            LinkPortType::Audio
         }
         fn schema() -> Arc<Schema> {
             Arc::new(Schema)
         }
     }
 
-    impl PortMessage for DataMessage {
-        fn port_type() -> PortType {
-            PortType::Data
+    impl LinkPortMessage for DataMessage {
+        fn port_type() -> LinkPortType {
+            LinkPortType::Data
         }
         fn schema() -> Arc<Schema> {
             Arc::new(Schema)
@@ -89,7 +89,7 @@ mod mock {
 
     // Mock port type
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum PortType {
+    pub enum LinkPortType {
         Video,
         Audio,
         Data,
@@ -149,7 +149,7 @@ mod mock {
     pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
     // Mock traits that the macro implements
-    pub trait StreamProcessorFactory {
+    pub trait ProcessorFactory {
         type Config;
         fn from_config(config: Self::Config) -> Result<Self>
         where
@@ -160,7 +160,7 @@ mod mock {
         fn descriptor() -> Option<ProcessorDescriptor>;
     }
 
-    pub trait DynStreamProcessor {
+    pub trait DynProcessor {
         fn as_any_mut(&mut self) -> &mut dyn Any;
     }
 }
@@ -170,13 +170,13 @@ use mock::*;
 
 // === Test Case 1: Simple Processor (No Config Fields) ===
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 struct SimpleVideoProcessor {
     #[input()]
-    video_in: StreamInput<VideoFrame>,
+    video_in: LinkInput<VideoFrame>,
 
     #[output()]
-    video_out: StreamOutput<VideoFrame>,
+    video_out: LinkOutput<VideoFrame>,
 }
 
 #[test]
@@ -191,13 +191,13 @@ fn test_simple_processor_compiles() {
 
 // === Test Case 2: Processor with Config Fields ===
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 struct ProcessorWithConfig {
     #[input()]
-    input: StreamInput<VideoFrame>,
+    input: LinkInput<VideoFrame>,
 
     #[output()]
-    output: StreamOutput<VideoFrame>,
+    output: LinkOutput<VideoFrame>,
 
     // Config fields (not ports)
     threshold: f32,
@@ -221,14 +221,14 @@ struct CustomBlurConfig {
     sigma: f32,
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(config = CustomBlurConfig)]
 struct BlurProcessorWithCustomConfig {
     #[input()]
-    video: StreamInput<VideoFrame>,
+    video: LinkInput<VideoFrame>,
 
     #[output()]
-    output: StreamOutput<VideoFrame>,
+    output: LinkOutput<VideoFrame>,
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn test_custom_config_type_compiles() {
 
 // === Test Case 4: Custom Port Names and Descriptions ===
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     description = "Applies custom video effect",
     usage = "Connect video input, adjust settings, connect output"
@@ -253,10 +253,10 @@ struct CustomizedProcessor {
         description = "Primary video input",
         required = true
     )]
-    video_in: StreamInput<VideoFrame>,
+    video_in: LinkInput<VideoFrame>,
 
     #[output(name = "main_output", description = "Processed video output")]
-    video_out: StreamOutput<VideoFrame>,
+    video_out: LinkOutput<VideoFrame>,
 
     effect_strength: f32,
 }
@@ -272,16 +272,16 @@ fn test_customized_ports_compiles() {
 
 // === Test Case 5: Audio Processor (Auto-Detect Audio Requirements) ===
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 struct AudioMixerProcessor {
     #[input()]
-    audio_1: StreamInput<AudioFrame>,
+    audio_1: LinkInput<AudioFrame>,
 
     #[input()]
-    audio_2: StreamInput<AudioFrame>,
+    audio_2: LinkInput<AudioFrame>,
 
     #[output()]
-    mixed: StreamOutput<AudioFrame>,
+    mixed: LinkOutput<AudioFrame>,
 }
 
 #[test]
@@ -310,7 +310,7 @@ impl Default for AdvancedConfig {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     config = AdvancedConfig,
     description = "Advanced multi-modal processor",
@@ -318,16 +318,16 @@ impl Default for AdvancedConfig {
 )]
 struct AdvancedProcessor {
     #[input(name = "video_input", description = "Video stream", required = true)]
-    video: StreamInput<VideoFrame>,
+    video: LinkInput<VideoFrame>,
 
     #[input(name = "audio_input", description = "Audio stream", required = false)]
-    audio: StreamInput<AudioFrame>,
+    audio: LinkInput<AudioFrame>,
 
     #[output(name = "video_output", description = "Processed video")]
-    video_out: StreamOutput<VideoFrame>,
+    video_out: LinkOutput<VideoFrame>,
 
     #[output(name = "audio_output", description = "Processed audio")]
-    audio_out: StreamOutput<AudioFrame>,
+    audio_out: LinkOutput<AudioFrame>,
 }
 
 #[test]
@@ -341,13 +341,13 @@ fn test_advanced_processor_compiles() {
 
 // === Test Case 7: Data Processor (Non-Video/Audio) ===
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 struct DataProcessor {
     #[input()]
-    data_in: StreamInput<DataMessage>,
+    data_in: LinkInput<DataMessage>,
 
     #[output()]
-    data_out: StreamOutput<DataMessage>,
+    data_out: LinkOutput<DataMessage>,
 
     buffer_size: usize,
 }
@@ -360,10 +360,10 @@ fn test_data_processor_compiles() {
 
 // === Test Case 8: Source Processor (Output Only) ===
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 struct SourceProcessor {
     #[output()]
-    output: StreamOutput<VideoFrame>,
+    output: LinkOutput<VideoFrame>,
 
     frame_rate: u32,
 }
@@ -380,10 +380,10 @@ fn test_source_processor_compiles() {
 
 // === Test Case 9: Sink Processor (Input Only) ===
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 struct SinkProcessor {
     #[input()]
-    input: StreamInput<VideoFrame>,
+    input: LinkInput<VideoFrame>,
 
     save_path: String,
 }

@@ -11,13 +11,13 @@ use crate::apple::videotoolbox::VideoToolboxDecoder;
 use crate::apple::webrtc::{WebRtcSession, WhepClient, WhepConfig};
 use crate::core::streaming::{H264RtpDepacketizer, OpusDecoder};
 use crate::core::{
-    media_clock::MediaClock, AudioFrame, GpuContext, Result, RuntimeContext, StreamError,
-    StreamOutput, VideoFrame,
+    media_clock::MediaClock, AudioFrame, GpuContext, LinkOutput, Result, RuntimeContext,
+    StreamError, VideoFrame,
 };
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 // ============================================================================
 // H.264 NAL FORMAT DETECTION
@@ -100,17 +100,17 @@ impl Default for WebRtcWhepConfig {
 /// decodes them, and outputs VideoFrame/AudioFrame.
 ///
 /// Uses Loop mode because RTP packets arrive via callbacks and need continuous polling.
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Loop,
     description = "Receives video and audio from WHEP endpoint (WebRTC egress)"
 )]
 pub struct WebRtcWhepProcessor {
     #[output(description = "Output video frames (decoded H.264)")]
-    video_out: StreamOutput<VideoFrame>,
+    video_out: LinkOutput<VideoFrame>,
 
     #[output(description = "Output audio frames (decoded Opus, stereo)")]
-    audio_out: StreamOutput<AudioFrame>,
+    audio_out: LinkOutput<AudioFrame>,
 
     #[config]
     config: WebRtcWhepConfig,

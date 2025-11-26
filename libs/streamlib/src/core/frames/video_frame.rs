@@ -1,10 +1,10 @@
 use super::metadata::MetadataValue;
-use crate::core::bus::{PortMessage, PortType};
+use crate::core::link_channel::{LinkPortMessage, LinkPortType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 // Implement sealed trait
-impl crate::core::bus::ports::sealed::Sealed for VideoFrame {}
+impl crate::core::link_channel::link_ports::sealed::Sealed for VideoFrame {}
 
 #[derive(Clone)]
 pub struct VideoFrame {
@@ -97,9 +97,9 @@ impl VideoFrame {
     }
 }
 
-impl PortMessage for VideoFrame {
-    fn port_type() -> PortType {
-        PortType::Video
+impl LinkPortMessage for VideoFrame {
+    fn port_type() -> LinkPortType {
+        LinkPortType::Video
     }
 
     fn schema() -> std::sync::Arc<crate::core::Schema> {

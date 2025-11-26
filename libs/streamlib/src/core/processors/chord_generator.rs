@@ -1,9 +1,9 @@
 use crate::core::frames::{AudioChannelCount, AudioFrame};
-use crate::core::{Result, StreamOutput};
+use crate::core::{LinkOutput, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChordGeneratorConfig {
@@ -60,16 +60,15 @@ impl SineOscillator {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Pull,
     description = "Generates a C major chord (C4, E4, G4) pre-mixed into a stereo output",
     unsafe_send
 )]
 pub struct ChordGeneratorProcessor {
-    // Lock-free port (Phase 0.5: Arc is now internal to StreamOutput)
     #[output(description = "Stereo C Major chord (C4 + E4 + G4 mixed to both channels)")]
-    chord: StreamOutput<AudioFrame>,
+    chord: LinkOutput<AudioFrame>,
 
     // Config field - macro extracts type and uses it as Config type
     #[config]
@@ -148,7 +147,7 @@ impl ChordGeneratorProcessor {
         let osc_c4 = Arc::clone(&self.osc_c4);
         let osc_e4 = Arc::clone(&self.osc_e4);
         let osc_g4 = Arc::clone(&self.osc_g4);
-        let chord_output = self.chord.clone(); // Phase 0.5: Clone StreamOutput (internally clones Arc)
+        let chord_output = self.chord.clone();
         let frame_counter = Arc::clone(&self.frame_counter);
         let running = Arc::clone(&self.running);
         let buffer_size = self.buffer_size;

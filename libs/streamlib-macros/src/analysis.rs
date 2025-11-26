@@ -33,7 +33,7 @@ pub struct PortField {
     /// Message type (e.g., VideoFrame, AudioFrame)
     pub message_type: Type,
 
-    /// Whether the port is Arc-wrapped (Arc<StreamInput/Output<T>>)
+    /// Whether the port is Arc-wrapped (Arc<LinkInput/Output<T>>)
     pub is_arc_wrapped: bool,
 
     /// Full field type (for code generation)
@@ -233,7 +233,7 @@ impl AnalysisResult {
     }
 }
 
-/// Extract message type from StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>
+/// Extract message type from LinkInput<T>, LinkOutput<T>, or Arc<LinkInput/Output<T>>
 /// Returns (message_type, is_arc_wrapped)
 fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
     match ty {
@@ -257,7 +257,7 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                             .ok_or_else(|| Error::new_spanned(ty, "Arc requires type parameter"))?;
 
                         if let GenericArgument::Type(inner_type) = first_arg {
-                            // Recursively extract from inner type (should be StreamInput/Output<T> or Mutex<StreamInput/Output<T>>)
+                            // Recursively extract from inner type (should be LinkInput/Output<T> or Mutex<LinkInput/Output<T>>)
                             let (message_type, _) = extract_message_type(inner_type)?;
                             return Ok((message_type, true)); // Arc-wrapped!
                         } else {
@@ -273,7 +273,7 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                 }
             }
 
-            // Check if it's Mutex<...> (handles Arc<Mutex<StreamInput<T>>> pattern)
+            // Check if it's Mutex<...> (handles Arc<Mutex<LinkInput<T>>> pattern)
             if ident == "Mutex" {
                 // Extract inner type from Mutex<T>
                 match &last_segment.arguments {
@@ -283,7 +283,7 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                         })?;
 
                         if let GenericArgument::Type(inner_type) = first_arg {
-                            // Recursively extract from inner type (should be StreamInput/Output<T>)
+                            // Recursively extract from inner type (should be LinkInput/Output<T>)
                             let (message_type, is_arc) = extract_message_type(inner_type)?;
                             return Ok((message_type, is_arc)); // Preserve Arc-wrapped status
                         } else {
@@ -299,15 +299,15 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                 }
             }
 
-            // Check if it's StreamInput, StreamOutput, or V2 variants
-            if ident != "StreamInput"
-                && ident != "StreamOutput"
-                && ident != "StreamInputV2"
-                && ident != "StreamOutputV2"
+            // Check if it's LinkInput, LinkOutput, or V2 variants
+            if ident != "LinkInput"
+                && ident != "LinkOutput"
+                && ident != "LinkInputV2"
+                && ident != "LinkOutputV2"
             {
                 return Err(Error::new_spanned(
                     ty,
-                    "Port fields must be StreamInput<T>, StreamOutput<T>, StreamInputV2<T>, StreamOutputV2<T>, or Arc<...>",
+                    "Port fields must be LinkInput<T>, LinkOutput<T>, LinkInputV2<T>, LinkOutputV2<T>, or Arc<...>",
                 ));
             }
 
@@ -315,7 +315,7 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
             match &last_segment.arguments {
                 PathArguments::AngleBracketed(args) => {
                     let first_arg = args.args.first().ok_or_else(|| {
-                        Error::new_spanned(ty, "StreamInput/StreamOutput requires type parameter")
+                        Error::new_spanned(ty, "LinkInput/LinkOutput requires type parameter")
                     })?;
 
                     if let GenericArgument::Type(inner_type) = first_arg {
@@ -326,13 +326,13 @@ fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
                 }
                 _ => Err(Error::new_spanned(
                     ty,
-                    "StreamInput/StreamOutput must have angle-bracketed type parameter",
+                    "LinkInput/LinkOutput must have angle-bracketed type parameter",
                 )),
             }
         }
         _ => Err(Error::new_spanned(
             ty,
-            "Port field must be StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>",
+            "Port field must be LinkInput<T>, LinkOutput<T>, or Arc<LinkInput/Output<T>>",
         )),
     }
 }
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_extract_message_type() {
-        let ty: Type = parse_quote! { StreamInput<VideoFrame> };
+        let ty: Type = parse_quote! { LinkInput<VideoFrame> };
         let (result, is_arc) = extract_message_type(&ty).unwrap();
         assert!(is_video_frame_type(&result));
         assert!(!is_arc);
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_extract_message_type_arc_wrapped() {
-        let ty: Type = parse_quote! { Arc<StreamOutput<AudioFrame>> };
+        let ty: Type = parse_quote! { Arc<LinkOutput<AudioFrame>> };
         let (result, is_arc) = extract_message_type(&ty).unwrap();
         assert!(is_audio_frame_type(&result));
         assert!(is_arc);

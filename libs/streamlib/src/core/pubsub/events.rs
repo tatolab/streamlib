@@ -110,25 +110,33 @@ pub enum RuntimeEvent {
     /// Emitted when runtime has started successfully
     RuntimeStarted,
     /// Emitted when runtime failed to start
-    RuntimeStartFailed { error: String },
+    RuntimeStartFailed {
+        error: String,
+    },
     /// Emitted when runtime is about to stop
     RuntimeStopping,
     /// Emitted when runtime has stopped successfully
     RuntimeStopped,
     /// Emitted when runtime failed to stop cleanly
-    RuntimeStopFailed { error: String },
+    RuntimeStopFailed {
+        error: String,
+    },
     /// Emitted when runtime is about to pause
     RuntimePausing,
     /// Emitted when runtime has paused successfully
     RuntimePaused,
     /// Emitted when runtime failed to pause
-    RuntimePauseFailed { error: String },
+    RuntimePauseFailed {
+        error: String,
+    },
     /// Emitted when runtime is about to resume
     RuntimeResuming,
     /// Emitted when runtime has resumed successfully
     RuntimeResumed,
     /// Emitted when runtime failed to resume
-    RuntimeResumeFailed { error: String },
+    RuntimeResumeFailed {
+        error: String,
+    },
     /// Emitted when shutdown is requested (e.g., Ctrl+C, Cmd+Q)
     RuntimeShutdown,
 
@@ -167,21 +175,21 @@ pub enum RuntimeEvent {
         processor_id: String,
     },
 
-    // ===== Connection Lifecycle Events =====
-    ConnectionCreated {
-        connection_id: String,
+    // ===== Link Lifecycle Events =====
+    LinkCreated {
+        link_id: String,
         from_port: String, // "processor_id.port_name"
         to_port: String,
     },
-    ConnectionRemoved {
-        connection_id: String,
+    LinkRemoved {
+        link_id: String,
         from_port: String,
         to_port: String,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PortType {
+pub enum LinkPortDirection {
     Input,
     Output,
 }
@@ -205,26 +213,26 @@ pub enum ProcessorEvent {
         new_state: ProcessorState,
     },
 
-    // ===== Connection Lifecycle Events =====
-    WillConnect {
-        connection_id: String,
+    // ===== Link Lifecycle Events =====
+    WillLink {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
-    Connected {
-        connection_id: String,
+    Linked {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
-    WillDisconnect {
-        connection_id: String,
+    WillUnlink {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
-    Disconnected {
-        connection_id: String,
+    Unlinked {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
 
     // ===== Generic Commands =====

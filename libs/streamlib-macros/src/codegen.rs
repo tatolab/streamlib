@@ -1,4 +1,4 @@
-//! Code generation for StreamProcessor derive macro
+//! Code generation for Processor derive macro
 //!
 //! Generates:
 //! - Config struct (or uses existing/EmptyConfig)
@@ -10,7 +10,7 @@
 //! - Descriptions from struct/port names
 //! - Usage context from port configuration
 //! - Tags from port types and processor category
-//! - Examples from PortMessage::examples()
+//! - Examples from LinkPortMessage::examples()
 //! - Audio requirements for audio processors
 
 // TODO(@jonathan): Review unused code generation functions - many appear to be from old macro implementation
@@ -23,7 +23,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::Type;
 
-/// Generate all code for the StreamProcessor implementation
+/// Generate all code for the Processor implementation
 pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     let struct_name = &analysis.struct_name;
 
@@ -33,6 +33,9 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
 
     // Generate port introspection methods (these are added to existing impls)
     let port_introspection = generate_port_introspection_methods(analysis);
+
+    // Generate port marker types for compile-time safe port access
+    let port_markers = generate_port_marker_types(analysis);
 
     // Always generate complete trait implementations
     let stream_element_impl = generate_stream_element_impl(analysis);
@@ -51,6 +54,8 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     quote! {
         #view_structs
 
+        #port_markers
+
         impl #struct_name {
             #ports_method
         }
@@ -60,14 +65,140 @@ pub fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #port_introspection
         }
 
-        // Generate complete StreamElement implementation
+        // Generate complete BaseProcessor implementation
         #stream_element_impl
 
-        // Generate complete StreamProcessor implementation
+        // Generate complete Processor implementation
         #stream_processor_impl
 
         // Generate unsafe impl Send if requested
         #unsafe_send_impl
+    }
+}
+
+/// Generate port marker types for compile-time safe port access
+///
+/// For a processor like:
+/// ```ignore
+/// #[derive(Processor)]
+/// struct CameraProcessor {
+///     #[output] video: LinkOutput<VideoFrame>,
+///     #[output] thumbnail: LinkOutput<VideoFrame>,
+/// }
+/// ```
+///
+/// Generates:
+/// ```ignore
+/// impl CameraProcessor {
+///     pub mod outputs {
+///         pub struct video;
+///         pub struct thumbnail;
+///     }
+/// }
+///
+/// impl ::streamlib::core::OutputPortMarker for CameraProcessor::outputs::video {
+///     const PORT_NAME: &'static str = "video";
+///     type Processor = CameraProcessor;
+/// }
+/// ```
+fn generate_port_marker_types(analysis: &AnalysisResult) -> TokenStream {
+    let struct_name = &analysis.struct_name;
+
+    let input_ports: Vec<_> = analysis.input_ports().collect();
+    let output_ports: Vec<_> = analysis.output_ports().collect();
+
+    // Generate input marker structs
+    // Allow non-camel-case since port names like "video" become struct names
+    let input_markers: Vec<TokenStream> = input_ports
+        .iter()
+        .map(|port| {
+            let field_name = &port.field_name;
+            quote! {
+                #[allow(non_camel_case_types)]
+                #[derive(Debug, Clone, Copy)]
+                pub struct #field_name;
+            }
+        })
+        .collect();
+
+    // Generate output marker structs
+    // Allow non-camel-case since port names like "video" become struct names
+    let output_markers: Vec<TokenStream> = output_ports
+        .iter()
+        .map(|port| {
+            let field_name = &port.field_name;
+            quote! {
+                #[allow(non_camel_case_types)]
+                #[derive(Debug, Clone, Copy)]
+                pub struct #field_name;
+            }
+        })
+        .collect();
+
+    // Generate InputPortMarker trait impls
+    let input_marker_impls: Vec<TokenStream> = input_ports
+        .iter()
+        .map(|port| {
+            let field_name = &port.field_name;
+            let port_name = &port.port_name;
+            quote! {
+                impl ::streamlib::core::InputPortMarker for inputs::#field_name {
+                    const PORT_NAME: &'static str = #port_name;
+                    type Processor = #struct_name;
+                }
+            }
+        })
+        .collect();
+
+    // Generate OutputPortMarker trait impls
+    let output_marker_impls: Vec<TokenStream> = output_ports
+        .iter()
+        .map(|port| {
+            let field_name = &port.field_name;
+            let port_name = &port.port_name;
+            quote! {
+                impl ::streamlib::core::OutputPortMarker for outputs::#field_name {
+                    const PORT_NAME: &'static str = #port_name;
+                    type Processor = #struct_name;
+                }
+            }
+        })
+        .collect();
+
+    // Only generate modules if there are ports
+    let inputs_mod = if !input_markers.is_empty() {
+        quote! {
+            /// Input port markers for compile-time safe connections
+            pub mod inputs {
+                #(#input_markers)*
+            }
+        }
+    } else {
+        quote! {
+            /// Input port markers (none defined)
+            pub mod inputs {}
+        }
+    };
+
+    let outputs_mod = if !output_markers.is_empty() {
+        quote! {
+            /// Output port markers for compile-time safe connections
+            pub mod outputs {
+                #(#output_markers)*
+            }
+        }
+    } else {
+        quote! {
+            /// Output port markers (none defined)
+            pub mod outputs {}
+        }
+    };
+
+    quote! {
+        #inputs_mod
+        #outputs_mod
+        #(#input_marker_impls)*
+        #(#output_marker_impls)*
     }
 }
 
@@ -137,12 +268,12 @@ fn generate_from_config_body(analysis: &AnalysisResult) -> TokenStream {
             match field.direction {
                 PortDirection::Input => {
                     quote! {
-                        #field_name: ::streamlib::core::StreamInput::<#message_type>::new(#port_name)
+                        #field_name: ::streamlib::core::LinkInput::<#message_type>::new(#port_name)
                     }
                 }
                 PortDirection::Output => {
                     quote! {
-                        #field_name: ::streamlib::core::StreamOutput::<#message_type>::new(#port_name)
+                        #field_name: ::streamlib::core::LinkOutput::<#message_type>::new(#port_name)
                     }
                 }
             }
@@ -261,7 +392,7 @@ fn generate_port_descriptor(field: &PortField, method_name: &str) -> TokenStream
     quote! {
         .#method(::streamlib::core::PortDescriptor::new(
             #port_name,
-            <#message_type as ::streamlib::core::PortMessage>::schema(),
+            <#message_type as ::streamlib::core::LinkPortMessage>::schema(),
             #required,
             #description
         ))
@@ -425,13 +556,13 @@ fn generate_ports_view_structs(analysis: &AnalysisResult) -> TokenStream {
     let input_fields = input_ports.iter().map(|p| {
         let name = &p.field_name;
         if p.is_arc_wrapped {
-            // Arc-wrapped: &'a Arc<StreamInput<T>>
+            // Arc-wrapped: &'a Arc<LinkInput<T>>
             let field_type = &p.field_type;
             quote! { pub #name: &'a #field_type }
         } else {
-            // Normal: &'a StreamInput<T>
+            // Normal: &'a LinkInput<T>
             let message_type = &p.message_type;
-            quote! { pub #name: &'a ::streamlib::core::StreamInput<#message_type> }
+            quote! { pub #name: &'a ::streamlib::core::LinkInput<#message_type> }
         }
     });
 
@@ -453,13 +584,13 @@ fn generate_ports_view_structs(analysis: &AnalysisResult) -> TokenStream {
     let output_fields = output_ports.iter().map(|p| {
         let name = &p.field_name;
         if p.is_arc_wrapped {
-            // Arc-wrapped: &'a Arc<StreamOutput<T>>
+            // Arc-wrapped: &'a Arc<LinkOutput<T>>
             let field_type = &p.field_type;
             quote! { pub #name: &'a #field_type }
         } else {
-            // Normal: &'a StreamOutput<T>
+            // Normal: &'a LinkOutput<T>
             let message_type = &p.message_type;
-            quote! { pub #name: &'a ::streamlib::core::StreamOutput<#message_type> }
+            quote! { pub #name: &'a ::streamlib::core::LinkOutput<#message_type> }
         }
     });
 
@@ -562,13 +693,13 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         let port_name = &p.port_name;
         let message_type = &p.message_type;
         quote! {
-            #port_name => Some(<#message_type as ::streamlib::core::PortMessage>::port_type())
+            #port_name => Some(<#message_type as ::streamlib::core::LinkPortMessage>::port_type())
         }
     });
 
     let get_input_port_type_impl = if !input_ports.is_empty() {
         quote! {
-            pub fn get_input_port_type_impl(&self, port_name: &str) -> Option<::streamlib::core::PortType> {
+            pub fn get_input_port_type_impl(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 match port_name {
                     #(#input_port_type_arms,)*
                     _ => None,
@@ -577,7 +708,7 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         }
     } else {
         quote! {
-            pub fn get_input_port_type_impl(&self, _port_name: &str) -> Option<::streamlib::core::PortType> {
+            pub fn get_input_port_type_impl(&self, _port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 None
             }
         }
@@ -588,13 +719,13 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         let port_name = &p.port_name;
         let message_type = &p.message_type;
         quote! {
-            #port_name => Some(<#message_type as ::streamlib::core::PortMessage>::port_type())
+            #port_name => Some(<#message_type as ::streamlib::core::LinkPortMessage>::port_type())
         }
     });
 
     let get_output_port_type_impl = if !output_ports.is_empty() {
         quote! {
-            pub fn get_output_port_type_impl(&self, port_name: &str) -> Option<::streamlib::core::PortType> {
+            pub fn get_output_port_type_impl(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 match port_name {
                     #(#output_port_type_arms,)*
                     _ => None,
@@ -603,29 +734,27 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         }
     } else {
         quote! {
-            pub fn get_output_port_type_impl(&self, _port_name: &str) -> Option<::streamlib::core::PortType> {
+            pub fn get_output_port_type_impl(&self, _port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 None
             }
         }
     };
 
-    // Generate wire_input_consumer implementation (Phase 2: lock-free - deprecated, delegates to Phase 0.5)
+    // Generate wire_input_consumer implementation
     let input_wire_arms = input_ports.iter().map(|p| {
         let field_name = &p.field_name;
         let port_name = &p.port_name;
         let message_type = &p.message_type;
 
-        // Phase 0.5: No Arc-wrapping needed - StreamOutput handles it internally
         quote! {
             #port_name => {
-                if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
-                    // Generate temporary connection ID for backwards compatibility
-                    let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::LinkOwnedConsumer<#message_type>>() {
+                    let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
                         format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
                     );
                     let (tx, _rx) = ::crossbeam_channel::bounded(1);
-                    let source_addr = ::streamlib::core::PortAddress::new("unknown", #port_name);
-                    self.#field_name.add_connection(temp_id, *typed_consumer, source_addr, tx).ok();
+                    let source_addr = ::streamlib::core::LinkPortAddress::new("unknown", #port_name);
+                    let _ = self.#field_name.add_link(temp_id, *typed_consumer, source_addr, tx);
                     return true;
                 }
                 false
@@ -659,22 +788,20 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         }
     };
 
-    // Generate wire_output_producer implementation (Phase 2: lock-free - deprecated, delegates to Phase 0.5)
+    // Generate wire_output_producer implementation
     let output_wire_arms = output_ports.iter().map(|p| {
         let field_name = &p.field_name;
         let port_name = &p.port_name;
         let message_type = &p.message_type;
 
-        // Phase 0.5: No Arc-wrapping needed - StreamOutput handles it internally
         quote! {
             #port_name => {
-                if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
-                    // Generate temporary connection ID for backwards compatibility
-                    let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                if let Ok(typed_producer) = producer.downcast::<::streamlib::core::LinkOwnedProducer<#message_type>>() {
+                    let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
                         format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
                     );
                     let (tx, _rx) = ::crossbeam_channel::bounded(1);
-                    self.#field_name.add_connection(temp_id, *typed_producer, tx).ok();
+                    let _ = self.#field_name.add_link(temp_id, *typed_producer, tx);
                     return true;
                 }
                 false
@@ -708,7 +835,7 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         }
     };
 
-    // Generate StreamProcessor trait method implementations that delegate to the _impl methods
+    // Generate Processor trait method implementations that delegate to the _impl methods
     let has_inputs = !input_ports.is_empty();
     let has_outputs = !output_ports.is_empty();
 
@@ -734,7 +861,7 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
 
     let get_input_port_type_trait = if has_inputs {
         quote! {
-            fn get_input_port_type(&self, port_name: &str) -> Option<::streamlib::core::PortType> {
+            fn get_input_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 self.get_input_port_type_impl(port_name)
             }
         }
@@ -744,17 +871,13 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
 
     let get_output_port_type_trait = if has_outputs {
         quote! {
-            fn get_output_port_type(&self, port_name: &str) -> Option<::streamlib::core::PortType> {
+            fn get_output_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 self.get_output_port_type_impl(port_name)
             }
         }
     } else {
         quote! {}
     };
-
-    // Phase 0.5: Connection management removed from DynStreamElement
-    // Runtime manages connections directly via ConnectionManager
-    // Processors only declare ports - they don't manage connection lifecycle
 
     quote! {
         #get_input_port_type_impl
@@ -768,9 +891,9 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
     }
 }
 
-/// Generate complete StreamElement trait implementation
+/// Generate complete BaseProcessor trait implementation
 ///
-/// This generates all methods of the StreamElement trait, eliminating the need for
+/// This generates all methods of the BaseProcessor trait, eliminating the need for
 /// users to manually implement the trait.
 pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
     let struct_name = &analysis.struct_name;
@@ -783,24 +906,24 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
         .cloned()
         .unwrap_or_else(|| struct_name.to_string());
 
-    // Determine element type from port configuration
+    // Determine processor type from port configuration
     let has_inputs = !analysis.input_ports().collect::<Vec<_>>().is_empty();
     let has_outputs = !analysis.output_ports().collect::<Vec<_>>().is_empty();
 
-    let element_type = match (has_inputs, has_outputs) {
-        (false, true) => quote! { ::streamlib::core::ElementType::Source },
-        (true, false) => quote! { ::streamlib::core::ElementType::Sink },
-        (true, true) => quote! { ::streamlib::core::ElementType::Transform },
+    let processor_type = match (has_inputs, has_outputs) {
+        (false, true) => quote! { ::streamlib::core::ProcessorType::Source },
+        (true, false) => quote! { ::streamlib::core::ProcessorType::Sink },
+        (true, true) => quote! { ::streamlib::core::ProcessorType::Transform },
         (false, false) => {
             // No ports - treat as transform (unusual case)
-            quote! { ::streamlib::core::ElementType::Transform }
+            quote! { ::streamlib::core::ProcessorType::Transform }
         }
     };
 
-    // Generate descriptor call (delegates to StreamProcessor::descriptor)
+    // Generate descriptor call (delegates to Processor::descriptor)
     let descriptor_impl = quote! {
         fn descriptor(&self) -> Option<::streamlib::core::ProcessorDescriptor> {
-            <Self as ::streamlib::core::StreamProcessor>::descriptor()
+            <Self as ::streamlib::core::Processor>::descriptor()
         }
     };
 
@@ -831,13 +954,13 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
     };
 
     quote! {
-        impl ::streamlib::core::StreamElement for #struct_name {
+        impl ::streamlib::core::BaseProcessor for #struct_name {
             fn name(&self) -> &str {
                 #processor_name
             }
 
-            fn element_type(&self) -> ::streamlib::core::ElementType {
-                #element_type
+            fn processor_type(&self) -> ::streamlib::core::ProcessorType {
+                #processor_type
             }
 
             #descriptor_impl
@@ -849,9 +972,9 @@ pub fn generate_stream_element_impl(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate complete StreamProcessor trait implementation
+/// Generate complete Processor trait implementation
 ///
-/// This generates all methods of the StreamProcessor trait, eliminating the need for
+/// This generates all methods of the Processor trait, eliminating the need for
 /// users to manually implement the trait.
 pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     let struct_name = &analysis.struct_name;
@@ -923,7 +1046,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             let port_name = &field.port_name;
             let message_type = &field.message_type;
             quote! {
-                #port_name => Some(<#message_type as ::streamlib::core::bus::PortMessage>::port_type())
+                #port_name => Some(<#message_type as ::streamlib::core::link_channel::LinkPortMessage>::port_type())
             }
         })
         .collect();
@@ -932,7 +1055,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         quote! {}
     } else {
         quote! {
-            fn get_output_port_type(&self, port_name: &str) -> Option<::streamlib::core::PortType> {
+            fn get_output_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 match port_name {
                     #(#output_port_type_arms,)*
                     _ => None
@@ -948,7 +1071,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             let port_name = &field.port_name;
             let message_type = &field.message_type;
             quote! {
-                #port_name => Some(<#message_type as ::streamlib::core::bus::PortMessage>::port_type())
+                #port_name => Some(<#message_type as ::streamlib::core::link_channel::LinkPortMessage>::port_type())
             }
         })
         .collect();
@@ -957,7 +1080,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         quote! {}
     } else {
         quote! {
-            fn get_input_port_type(&self, port_name: &str) -> Option<::streamlib::core::PortType> {
+            fn get_input_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
                 match port_name {
                     #(#input_port_type_arms,)*
                     _ => None
@@ -966,7 +1089,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         }
     };
 
-    // Generate wire_output_producer() (deprecated, delegates to Phase 0.5)
+    // Generate wire_output_producer()
     let wire_output_producer_arms: Vec<TokenStream> = analysis
         .output_ports()
         .map(|field| {
@@ -978,12 +1101,12 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             if is_arc_wrapped {
                 quote! {
                     #port_name => {
-                        if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
-                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                        if let Ok(typed_producer) = producer.downcast::<::streamlib::core::LinkOwnedProducer<#message_type>>() {
+                            let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
                                 format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
                             );
                             let (tx, _rx) = ::crossbeam_channel::bounded(1);
-                            self.#field_name.as_ref().add_connection(temp_id, *typed_producer, tx);
+                            let _ = self.#field_name.as_ref().add_link(temp_id, *typed_producer, tx);
                             return true;
                         }
                         false
@@ -992,12 +1115,12 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             } else {
                 quote! {
                     #port_name => {
-                        if let Ok(typed_producer) = producer.downcast::<::streamlib::core::OwnedProducer<#message_type>>() {
-                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                        if let Ok(typed_producer) = producer.downcast::<::streamlib::core::LinkOwnedProducer<#message_type>>() {
+                            let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
                                 format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
                             );
                             let (tx, _rx) = ::crossbeam_channel::bounded(1);
-                            self.#field_name.add_connection(temp_id, *typed_producer, tx);
+                            let _ = self.#field_name.add_link(temp_id, *typed_producer, tx);
                             return true;
                         }
                         false
@@ -1020,7 +1143,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         }
     };
 
-    // Generate wire_input_consumer() (deprecated, delegates to Phase 0.5)
+    // Generate wire_input_consumer()
     let wire_input_consumer_arms: Vec<TokenStream> = analysis
         .input_ports()
         .map(|field| {
@@ -1032,13 +1155,13 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             if is_arc_wrapped {
                 quote! {
                     #port_name => {
-                        if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
-                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                        if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::LinkOwnedConsumer<#message_type>>() {
+                            let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
                                 format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
                             );
                             let (tx, _rx) = ::crossbeam_channel::bounded(1);
-                            let source_addr = ::streamlib::core::PortAddress::new("unknown", #port_name);
-                            self.#field_name.as_ref().add_connection(temp_id, *typed_consumer, source_addr, tx);
+                            let source_addr = ::streamlib::core::LinkPortAddress::new("unknown", #port_name);
+                            let _ = self.#field_name.as_ref().add_link(temp_id, *typed_consumer, source_addr, tx);
                             return true;
                         }
                         false
@@ -1047,13 +1170,13 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
             } else {
                 quote! {
                     #port_name => {
-                        if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::OwnedConsumer<#message_type>>() {
-                            let temp_id = ::streamlib::core::bus::connection_id::__private::new_unchecked(
+                        if let Ok(typed_consumer) = consumer.downcast::<::streamlib::core::LinkOwnedConsumer<#message_type>>() {
+                            let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
                                 format!("{}.wire_compat_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
                             );
                             let (tx, _rx) = ::crossbeam_channel::bounded(1);
-                            let source_addr = ::streamlib::core::PortAddress::new("unknown", #port_name);
-                            self.#field_name.add_connection(temp_id, *typed_consumer, source_addr, tx);
+                            let source_addr = ::streamlib::core::LinkPortAddress::new("unknown", #port_name);
+                            let _ = self.#field_name.add_link(temp_id, *typed_consumer, source_addr, tx);
                             return true;
                         }
                         false
@@ -1081,11 +1204,9 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         .output_ports()
         .map(|field| {
             let port_name = &field.port_name;
-            // Phase 0.5: Wakeups are now per-connection, not per-port
-            // This method is deprecated but kept for backward compatibility
             quote! {
                 #port_name => {
-                    // No-op: wakeups are now per-connection, passed in add_connection()
+                    // Wakeups are per-connection, passed in add_link()
                 }
             }
         })
@@ -1095,8 +1216,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
         quote! {}
     } else {
         quote! {
-            fn set_output_wakeup(&mut self, port_name: &str, _wakeup_tx: crossbeam_channel::Sender<::streamlib::core::bus::WakeupEvent>) {
-                // Deprecated: Phase 0.5 uses per-connection wakeups
+            fn set_output_wakeup(&mut self, port_name: &str, _wakeup_tx: crossbeam_channel::Sender<::streamlib::core::link_channel::LinkWakeupEvent>) {
                 match port_name {
                     #(#set_output_wakeup_arms,)*
                     _ => {},
@@ -1106,7 +1226,7 @@ pub fn generate_stream_processor_impl(analysis: &AnalysisResult) -> TokenStream 
     };
 
     quote! {
-        impl ::streamlib::core::StreamProcessor for #struct_name {
+        impl ::streamlib::core::Processor for #struct_name {
             type Config = #config_type;
 
             #from_config_body
@@ -1146,22 +1266,22 @@ fn generate_from_config_impl(analysis: &AnalysisResult) -> TokenStream {
                 PortDirection::Input => {
                     if is_arc_wrapped {
                         quote! {
-                            #field_name: std::sync::Arc::new(::streamlib::core::StreamInput::<#message_type>::new(#port_name))
+                            #field_name: std::sync::Arc::new(::streamlib::core::LinkInput::<#message_type>::new(#port_name))
                         }
                     } else {
                         quote! {
-                            #field_name: ::streamlib::core::StreamInput::<#message_type>::new(#port_name)
+                            #field_name: ::streamlib::core::LinkInput::<#message_type>::new(#port_name)
                         }
                     }
                 }
                 PortDirection::Output => {
                     if is_arc_wrapped {
                         quote! {
-                            #field_name: std::sync::Arc::new(::streamlib::core::StreamOutput::<#message_type>::new(#port_name))
+                            #field_name: std::sync::Arc::new(::streamlib::core::LinkOutput::<#message_type>::new(#port_name))
                         }
                     } else {
                         quote! {
-                            #field_name: ::streamlib::core::StreamOutput::<#message_type>::new(#port_name)
+                            #field_name: ::streamlib::core::LinkOutput::<#message_type>::new(#port_name)
                         }
                     }
                 }
@@ -1283,7 +1403,7 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
             quote! {
                 .with_input(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: <#message_type as ::streamlib::core::bus::PortMessage>::schema(),
+                    schema: <#message_type as ::streamlib::core::link_channel::LinkPortMessage>::schema(),
                     required: #required,
                     description: #description.to_string(),
                 })
@@ -1302,7 +1422,7 @@ fn generate_descriptor_impl(analysis: &AnalysisResult) -> TokenStream {
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: <#message_type as ::streamlib::core::bus::PortMessage>::schema(),
+                    schema: <#message_type as ::streamlib::core::link_channel::LinkPortMessage>::schema(),
                     required: true,
                     description: #description.to_string(),
                 })

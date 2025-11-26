@@ -1,5 +1,5 @@
 use crate::apple::{iosurface, MetalDevice, WgpuBridge};
-use crate::core::{Result, StreamError, StreamOutput, VideoFrame};
+use crate::core::{LinkOutput, Result, StreamError, VideoFrame};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -13,7 +13,7 @@ use objc2_io_surface::IOSurface;
 use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::Arc;
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 // Apple-specific configuration and device types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -55,7 +55,7 @@ static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> =
     std::sync::OnceLock::new();
 
 static WAKEUP_CHANNEL: std::sync::OnceLock<
-    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::bus::WakeupEvent>>>>,
+    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::link_channel::LinkWakeupEvent>>>>,
 > = std::sync::OnceLock::new();
 
 define_class!(
@@ -91,7 +91,7 @@ define_class!(
 
                 if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
                     if let Some(tx) = wakeup_storage.lock().as_ref() {
-                        let _ = tx.send(crate::core::bus::WakeupEvent::DataAvailable);
+                        let _ = tx.send(crate::core::link_channel::LinkWakeupEvent::DataAvailable);
                     }
                 }
             } else {
@@ -110,14 +110,14 @@ impl CameraDelegate {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Pull,
     description = "Captures video from macOS cameras using AVFoundation"
 )]
 pub struct AppleCameraProcessor {
     #[output(description = "Live video frames from the camera")]
-    video: StreamOutput<VideoFrame>,
+    video: LinkOutput<VideoFrame>,
 
     #[config]
     config: AppleCameraConfig,
@@ -215,7 +215,7 @@ impl AppleCameraProcessor {
         let _ = FRAME_STORAGE.set(latest_frame);
 
         let wakeup_holder: Arc<
-            Mutex<Option<crossbeam_channel::Sender<crate::core::bus::WakeupEvent>>>,
+            Mutex<Option<crossbeam_channel::Sender<crate::core::link_channel::LinkWakeupEvent>>>,
         > = Arc::new(Mutex::new(None));
         let _ = WAKEUP_CHANNEL.set(wakeup_holder.clone());
 

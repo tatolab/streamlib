@@ -1,7 +1,7 @@
 use crate::core::frames::{AudioChannelCount, AudioFrame};
-use crate::core::{Result, StreamInput, StreamOutput};
+use crate::core::{LinkInput, LinkOutput, Result};
 use serde::{Deserialize, Serialize};
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ChannelConversionMode {
@@ -27,17 +27,17 @@ impl Default for AudioChannelConverterConfig {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Push,
     description = "Converts mono audio to stereo using configurable channel mapping"
 )]
 pub struct AudioChannelConverterProcessor {
     #[input(description = "Mono audio input")]
-    audio_in: StreamInput<AudioFrame>,
+    audio_in: LinkInput<AudioFrame>,
 
     #[output(description = "Stereo audio output")]
-    audio_out: StreamOutput<AudioFrame>,
+    audio_out: LinkOutput<AudioFrame>,
 
     #[config]
     config: AudioChannelConverterConfig,

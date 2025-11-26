@@ -1,7 +1,7 @@
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 use crate::core::frames::AudioFrame;
-use crate::core::{Result, StreamInput, StreamOutput};
-use streamlib_macros::StreamProcessor;
+use crate::core::{LinkInput, LinkOutput, Result};
+use streamlib_macros::Processor;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -28,17 +28,17 @@ impl Default for ClapEffectConfig {
     }
 }
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Push,
     description = "CLAP audio plugin processor with parameter control and automation"
 )]
 pub struct ClapEffectProcessor {
     #[input(description = "Stereo audio frame to process through CLAP plugin")]
-    audio_in: StreamInput<AudioFrame>,
+    audio_in: LinkInput<AudioFrame>,
 
     #[output(description = "Processed stereo audio frame from CLAP plugin")]
-    audio_out: Arc<StreamOutput<AudioFrame>>,
+    audio_out: Arc<LinkOutput<AudioFrame>>,
 
     #[config]
     config: ClapEffectConfig,

@@ -1,5 +1,5 @@
 use crate::apple::{display_link::DisplayLink, metal::MetalDevice, WgpuBridge};
-use crate::core::{Result, StreamError, StreamInput, VideoFrame};
+use crate::core::{LinkInput, Result, StreamError, VideoFrame};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_app_kit::{
@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
-use streamlib_macros::StreamProcessor;
+use streamlib_macros::Processor;
 
 // Scaling mode for video content in the display window
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -51,7 +51,7 @@ pub struct AppleWindowId(pub u64);
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(StreamProcessor)]
+#[derive(Processor)]
 #[processor(
     mode = Pull,
     description = "Displays video frames in a window using Metal with vsync",
@@ -59,7 +59,7 @@ static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 )]
 pub struct AppleDisplayProcessor {
     #[input(description = "Video frames to display in the window")]
-    video: StreamInput<VideoFrame>,
+    video: LinkInput<VideoFrame>,
 
     #[config]
     config: AppleDisplayConfig,
@@ -249,7 +249,6 @@ impl AppleDisplayProcessor {
             }
 
             // Render the latest available frame (if any)
-            // Phase 0.5: read() automatically uses Latest strategy for VideoFrame
             if let Some(frame) = self.video.read() {
                 self.render_frame(frame)?;
             }

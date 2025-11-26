@@ -8,7 +8,7 @@
 //! `Processor` trait API. It will be re-enabled when the Phase 1 unified
 //! API is in place.
 //!
-//! TODO: Rewrite using #[derive(StreamProcessor)] macro once Phase 1 is complete.
+//! TODO: Rewrite using #[derive(Processor)] macro once Phase 1 is complete.
 
 // Tests are ignored - the code below uses deprecated APIs and won't compile.
 // Kept as documentation of desired test behavior.
