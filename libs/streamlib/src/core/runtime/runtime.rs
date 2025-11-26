@@ -12,10 +12,7 @@ use crate::core::Result;
 // Re-export types
 pub use crate::core::executor::RuntimeStatus;
 
-/// The main stream processing runtime
-///
-/// A thin orchestrator that ONLY modifies the Graph and publishes events.
-/// All lifecycle, state management, and execution is delegated to the Executor.
+/// The main stream processing runtime.
 pub struct StreamRuntime {
     graph: Arc<RwLock<Graph>>,
     executor: SimpleExecutor,
@@ -47,19 +44,7 @@ impl StreamRuntime {
     // Graph Mutations
     // =========================================================================
 
-    /// Add a processor to the graph with its config
-    ///
-    /// Thin proxy to `Graph::add_processor_node`. All introspection and metadata
-    /// extraction happens in the graph layer.
-    ///
-    /// Returns the `ProcessorNode` (pure serializable data).
-    ///
-    /// # Example
-    /// ```ignore
-    /// let camera = runtime.add_processor::<CameraProcessor>(CameraConfig {
-    ///     device_id: None,
-    /// })?;
-    /// ```
+    /// Add a processor to the graph with its config.
     pub fn add_processor<P>(&mut self, config: P::Config) -> Result<ProcessorNode>
     where
         P: Processor + 'static,
@@ -83,11 +68,7 @@ impl StreamRuntime {
         Ok(node)
     }
 
-    /// Connect two ports - adds a link to the graph
-    ///
-    /// Accepts [`LinkPortRef`](crate::core::graph::LinkPortRef) which can be created via:
-    /// - Type-safe helpers: [`output`](crate::core::graph::output) / [`input`](crate::core::graph::input)
-    /// - Raw strings: `"camera_0.video"` (escape hatch)
+    /// Connect two ports - adds a link to the graph.
     pub fn connect(
         &mut self,
         from: impl IntoLinkPortRef,
@@ -112,21 +93,18 @@ impl StreamRuntime {
         Ok(link)
     }
 
-    /// Disconnect by link - removes link from graph
     pub fn disconnect(&mut self, link: &Link) -> Result<()> {
         let mut graph = self.graph.write();
         graph.remove_link(&link.id);
         Ok(())
     }
 
-    /// Disconnect by link ID
     pub fn disconnect_by_id(&mut self, link_id: &LinkId) -> Result<()> {
         let mut graph = self.graph.write();
         graph.remove_link(link_id);
         Ok(())
     }
 
-    /// Remove a processor node from the graph
     pub fn remove_processor(&mut self, node: &ProcessorNode) -> Result<()> {
         {
             let mut graph = self.graph.write();
@@ -144,7 +122,6 @@ impl StreamRuntime {
         Ok(())
     }
 
-    /// Remove a processor by ID
     pub fn remove_processor_by_id(&mut self, processor_id: &ProcessorId) -> Result<()> {
         {
             let mut graph = self.graph.write();
@@ -166,9 +143,7 @@ impl StreamRuntime {
     // Lifecycle - Publishes events, delegates execution to Executor
     // =========================================================================
 
-    /// Start the runtime
-    ///
-    /// Publishes RuntimeStarting, then RuntimeStarted or RuntimeStartFailed.
+    /// Start the runtime.
     pub fn start(&mut self) -> Result<()> {
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
 
@@ -197,9 +172,7 @@ impl StreamRuntime {
         }
     }
 
-    /// Stop the runtime
-    ///
-    /// Publishes RuntimeStopping, then RuntimeStopped or RuntimeStopFailed.
+    /// Stop the runtime.
     pub fn stop(&mut self) -> Result<()> {
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
 
@@ -228,9 +201,7 @@ impl StreamRuntime {
         }
     }
 
-    /// Pause the runtime
-    ///
-    /// Publishes RuntimePausing, then RuntimePaused or RuntimePauseFailed.
+    /// Pause the runtime.
     pub fn pause(&mut self) -> Result<()> {
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
 
@@ -259,9 +230,7 @@ impl StreamRuntime {
         }
     }
 
-    /// Resume the runtime
-    ///
-    /// Publishes RuntimeResuming, then RuntimeResumed or RuntimeResumeFailed.
+    /// Resume the runtime.
     pub fn resume(&mut self) -> Result<()> {
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
 
@@ -290,10 +259,7 @@ impl StreamRuntime {
         }
     }
 
-    /// Run the runtime (blocking)
-    ///
-    /// Starts the runtime and runs until shutdown signal received.
-    /// Publishes RuntimeStarting/Started/StartFailed and RuntimeStopped/StopFailed.
+    /// Run the runtime (blocking until shutdown signal).
     pub fn run(&mut self) -> Result<()> {
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
 
@@ -323,7 +289,6 @@ impl StreamRuntime {
         }
     }
 
-    /// Get runtime status - delegates to executor
     pub fn status(&self) -> RuntimeStatus {
         self.executor.status()
     }
