@@ -24,7 +24,7 @@ pub use clap::{
 };
 pub use context::{GpuContext, RuntimeContext};
 pub use error::{Result, StreamError};
-pub use executor::{ExecutorState, RuntimeStatus, SimpleExecutor};
+pub use executor::{compute_delta, ExecutorState, GraphDelta, RuntimeStatus, SimpleExecutor};
 pub use frames::{
     AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
 };
@@ -38,7 +38,8 @@ pub use link_channel::{
 };
 pub use link_channel::{LinkId, LinkWakeupEvent};
 pub use processors::{
-    BaseProcessor, DynProcessor, EmptyConfig, Processor, ProcessorState, ProcessorType,
+    BaseProcessor, BoxedProcessor, CompositeFactory, DynProcessor, EmptyConfig, Processor,
+    ProcessorNodeFactory, ProcessorState, ProcessorType, RegistryBackedFactory,
 };
 pub use pubsub::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
@@ -64,7 +65,7 @@ pub use registry::{
     register_processor, unregister_processor, DescriptorProvider, ProcessorRegistration,
     ProcessorRegistry,
 };
-pub use runtime::StreamRuntime;
+pub use runtime::{CommitMode, StreamRuntime};
 pub use scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 pub use schema::{
     AudioRequirements, Field, FieldType, PortDescriptor, ProcessorDescriptor, ProcessorExample,

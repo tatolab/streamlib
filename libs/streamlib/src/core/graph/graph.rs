@@ -301,11 +301,27 @@ impl Graph {
         self.graph.edge_count()
     }
 
-    pub fn find_link_by_id(&self, link_id: &LinkId) -> Option<&Link> {
+    /// Get a link by its ID.
+    pub fn get_link(&self, link_id: &LinkId) -> Option<&Link> {
         self.graph
             .edge_indices()
             .find(|&e| self.graph[e].id == *link_id)
             .map(|e| &self.graph[e])
+    }
+
+    /// Get a link by its ID (alias for `get_link` for backwards compatibility).
+    pub fn find_link_by_id(&self, link_id: &LinkId) -> Option<&Link> {
+        self.get_link(link_id)
+    }
+
+    /// Get all processor nodes in the graph.
+    pub fn nodes(&self) -> &[ProcessorNode] {
+        &self.nodes
+    }
+
+    /// Get all links in the graph.
+    pub fn links(&self) -> &[Link] {
+        &self.links
     }
 
     pub fn find_link_by_ports(&self, from_port: &str, to_port: &str) -> Option<LinkId> {

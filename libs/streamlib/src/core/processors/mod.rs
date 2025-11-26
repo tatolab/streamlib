@@ -1,11 +1,15 @@
 mod base;
 mod dyn_processor;
 mod dyn_processor_impl;
+pub mod factory;
 mod processor;
 mod state;
 
 pub use base::{BaseProcessor, ProcessorType};
 pub use dyn_processor::DynProcessor;
+pub use factory::{
+    BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory,
+};
 pub use processor::Processor;
 pub use state::ProcessorState;
 

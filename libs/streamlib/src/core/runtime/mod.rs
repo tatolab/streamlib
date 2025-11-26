@@ -1,3 +1,3 @@
 mod runtime;
 
-pub use runtime::StreamRuntime;
+pub use runtime::{CommitMode, StreamRuntime};

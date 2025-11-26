@@ -6,16 +6,29 @@ use serde::Serialize;
 use crate::core::executor::{Executor, SimpleExecutor};
 use crate::core::graph::{Graph, IntoLinkPortRef, Link, ProcessorId, ProcessorNode};
 use crate::core::link_channel::LinkId;
+use crate::core::processors::factory::RegistryBackedFactory;
 use crate::core::processors::Processor;
 use crate::core::Result;
 
 // Re-export types
 pub use crate::core::executor::RuntimeStatus;
 
+/// Controls when graph mutations are applied to the executor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CommitMode {
+    /// Changes apply immediately after each mutation.
+    #[default]
+    Auto,
+    /// Changes batch until explicit `commit()` call.
+    Manual,
+}
+
 /// The main stream processing runtime.
 pub struct StreamRuntime {
     graph: Arc<RwLock<Graph>>,
     executor: SimpleExecutor,
+    factory: Arc<RegistryBackedFactory>,
+    commit_mode: CommitMode,
 }
 
 impl Default for StreamRuntime {
@@ -26,10 +39,37 @@ impl Default for StreamRuntime {
 
 impl StreamRuntime {
     pub fn new() -> Self {
-        let graph = Arc::new(RwLock::new(Graph::new()));
-        let executor = SimpleExecutor::with_graph(Arc::clone(&graph));
+        Self::with_commit_mode(CommitMode::default())
+    }
 
-        Self { graph, executor }
+    pub fn with_commit_mode(commit_mode: CommitMode) -> Self {
+        let graph = Arc::new(RwLock::new(Graph::new()));
+        let factory = Arc::new(RegistryBackedFactory::new());
+        let executor = SimpleExecutor::with_graph_and_factory(
+            Arc::clone(&graph),
+            Arc::clone(&factory) as Arc<dyn crate::core::processors::factory::ProcessorNodeFactory>,
+        );
+
+        Self {
+            graph,
+            executor,
+            factory,
+            commit_mode,
+        }
+    }
+
+    // =========================================================================
+    // Configuration
+    // =========================================================================
+
+    /// Get the current commit mode.
+    pub fn commit_mode(&self) -> CommitMode {
+        self.commit_mode
+    }
+
+    /// Set the commit mode.
+    pub fn set_commit_mode(&mut self, mode: CommitMode) {
+        self.commit_mode = mode;
     }
 
     // =========================================================================
@@ -41,6 +81,26 @@ impl StreamRuntime {
     }
 
     // =========================================================================
+    // Commit Control
+    // =========================================================================
+
+    /// Apply all pending graph changes to the executor.
+    ///
+    /// In `Auto` mode, this is called automatically after each mutation.
+    /// In `Manual` mode, call this explicitly to batch changes.
+    pub fn commit(&mut self) -> Result<()> {
+        self.executor.sync_to_graph()
+    }
+
+    /// Central handler for graph mutations - respects commit mode.
+    fn on_graph_changed(&mut self) -> Result<()> {
+        match self.commit_mode {
+            CommitMode::Auto => self.commit(),
+            CommitMode::Manual => Ok(()),
+        }
+    }
+
+    // =========================================================================
     // Graph Mutations
     // =========================================================================
 
@@ -48,14 +108,18 @@ impl StreamRuntime {
     pub fn add_processor<P>(&mut self, config: P::Config) -> Result<ProcessorNode>
     where
         P: Processor + 'static,
-        P::Config: Serialize,
+        P::Config: Serialize + for<'de> serde::Deserialize<'de> + Default,
     {
-        // Delegate to graph layer
+        // Ensure type is registered with factory
+        self.factory.register::<P>();
+
+        // Add to graph
         let node = {
             let mut graph = self.graph.write();
             graph.add_processor_node::<P>(config)?
         };
 
+        // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
         EVENT_BUS.publish(
             "runtime:global",
@@ -64,6 +128,9 @@ impl StreamRuntime {
                 processor_type: node.processor_type.clone(),
             }),
         );
+
+        // Handle commit mode
+        self.on_graph_changed()?;
 
         Ok(node)
     }
@@ -74,12 +141,13 @@ impl StreamRuntime {
         from: impl IntoLinkPortRef,
         to: impl IntoLinkPortRef,
     ) -> Result<Link> {
-        // Delegate to graph layer
+        // Add to graph
         let link = {
             let mut graph = self.graph.write();
             graph.add_link(from, to)?
         };
 
+        // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
         EVENT_BUS.publish(
             "runtime:global",
@@ -90,36 +158,70 @@ impl StreamRuntime {
             }),
         );
 
+        // Handle commit mode
+        self.on_graph_changed()?;
+
         Ok(link)
     }
 
     pub fn disconnect(&mut self, link: &Link) -> Result<()> {
-        let mut graph = self.graph.write();
-        graph.remove_link(&link.id);
-        Ok(())
-    }
+        let from_port = link.from_port();
+        let to_port = link.to_port();
+        let link_id_str = link.id.to_string();
 
-    pub fn disconnect_by_id(&mut self, link_id: &LinkId) -> Result<()> {
-        let mut graph = self.graph.write();
-        graph.remove_link(link_id);
-        Ok(())
-    }
-
-    pub fn remove_processor(&mut self, node: &ProcessorNode) -> Result<()> {
         {
             let mut graph = self.graph.write();
-            graph.remove_processor_node(&node.id);
+            graph.remove_link(&link.id);
         }
 
+        // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
         EVENT_BUS.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::ProcessorRemoved {
-                processor_id: node.id.clone(),
+            &Event::RuntimeGlobal(RuntimeEvent::LinkRemoved {
+                link_id: link_id_str,
+                from_port,
+                to_port,
             }),
         );
 
-        Ok(())
+        // Handle commit mode
+        self.on_graph_changed()
+    }
+
+    pub fn disconnect_by_id(&mut self, link_id: &LinkId) -> Result<()> {
+        // Get link info before removing
+        let (from_port, to_port) = {
+            let graph = self.graph.read();
+            if let Some(link) = graph.get_link(link_id) {
+                (link.from_port(), link.to_port())
+            } else {
+                (String::new(), String::new())
+            }
+        };
+
+        {
+            let mut graph = self.graph.write();
+            graph.remove_link(link_id);
+        }
+
+        // Publish event
+        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+        EVENT_BUS.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(RuntimeEvent::LinkRemoved {
+                link_id: link_id.to_string(),
+                from_port,
+                to_port,
+            }),
+        );
+
+        // Handle commit mode
+        self.on_graph_changed()
+    }
+
+    pub fn remove_processor(&mut self, node: &ProcessorNode) -> Result<()> {
+        self.remove_processor_by_id(&node.id)
     }
 
     pub fn remove_processor_by_id(&mut self, processor_id: &ProcessorId) -> Result<()> {
@@ -128,6 +230,7 @@ impl StreamRuntime {
             graph.remove_processor_node(processor_id);
         }
 
+        // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
         EVENT_BUS.publish(
             "runtime:global",
@@ -136,7 +239,8 @@ impl StreamRuntime {
             }),
         );
 
-        Ok(())
+        // Handle commit mode
+        self.on_graph_changed()
     }
 
     // =========================================================================
@@ -302,5 +406,17 @@ mod tests {
     fn test_runtime_creation() {
         let _runtime = StreamRuntime::new();
         // Runtime starts in Idle state - executor manages state
+    }
+
+    #[test]
+    fn test_runtime_with_manual_commit() {
+        let runtime = StreamRuntime::with_commit_mode(CommitMode::Manual);
+        assert_eq!(runtime.commit_mode(), CommitMode::Manual);
+    }
+
+    #[test]
+    fn test_runtime_default_is_auto() {
+        let runtime = StreamRuntime::new();
+        assert_eq!(runtime.commit_mode(), CommitMode::Auto);
     }
 }

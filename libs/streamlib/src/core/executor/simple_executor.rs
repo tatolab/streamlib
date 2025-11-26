@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
+use super::delta::{compute_delta, GraphDelta};
 use super::execution_graph::{CompilationMetadata, ExecutionGraph};
 use super::running::{RunningProcessor, WiredLink};
 use super::{Executor, ExecutorState};
@@ -13,6 +14,7 @@ use crate::core::graph::{Graph, ProcessorId};
 use crate::core::link_channel::{
     LinkChannel, LinkId, LinkPortAddress, LinkPortType, LinkWakeupEvent,
 };
+use crate::core::processors::factory::ProcessorNodeFactory;
 use crate::core::processors::{DynProcessor, ProcessorState};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode};
 
@@ -42,12 +44,10 @@ pub struct SimpleExecutor {
     /// Execution graph (VDOM) - runtime state extending the Graph
     /// Created during compile(), contains RunningProcessors and WiredLinks
     execution_graph: Option<ExecutionGraph>,
-    /// Processors waiting to be started (from runtime's pending_processors)
-    pending_processors: Vec<(ProcessorId, BoxedProcessor)>,
+    /// Factory for creating processor instances from graph nodes
+    factory: Option<Arc<dyn ProcessorNodeFactory>>,
     /// Connection bus (creates ring buffers)
     link_channel: LinkChannel,
-    /// Connections to wire on start (from_port, to_port)
-    connections_to_wire: Vec<(String, String)>,
     /// Next processor ID counter
     next_processor_id: usize,
     /// Next connection ID counter
@@ -70,9 +70,8 @@ impl SimpleExecutor {
             graph: None,
             runtime_context: None,
             execution_graph: None,
-            pending_processors: Vec::new(),
+            factory: None,
             link_channel: LinkChannel::new(),
-            connections_to_wire: Vec::new(),
             next_processor_id: 0,
             next_connection_id: 0,
             dirty: false,
@@ -89,22 +88,32 @@ impl SimpleExecutor {
             graph: Some(graph),
             runtime_context: None,
             execution_graph: None,
-            pending_processors: Vec::new(),
+            factory: None,
             link_channel: LinkChannel::new(),
-            connections_to_wire: Vec::new(),
             next_processor_id: 0,
             next_connection_id: 0,
             dirty: false,
         }
     }
 
-    /// Register a processor with the executor
+    /// Create a new simple executor with a shared graph and processor factory
     ///
-    /// Called by runtime.add_processor() to delegate processor ownership to the executor.
-    /// The executor owns all processor instances - the runtime only knows about the Graph.
-    pub fn register_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) {
-        self.pending_processors.push((id, processor));
-        self.dirty = true;
+    /// The factory is used to create processor instances from graph nodes during sync.
+    pub fn with_graph_and_factory(
+        graph: Arc<RwLock<Graph>>,
+        factory: Arc<dyn ProcessorNodeFactory>,
+    ) -> Self {
+        Self {
+            state: ExecutorState::Idle,
+            graph: Some(graph),
+            runtime_context: None,
+            execution_graph: None,
+            factory: Some(factory),
+            link_channel: LinkChannel::new(),
+            next_processor_id: 0,
+            next_connection_id: 0,
+            dirty: false,
+        }
     }
 
     /// Compile the execution plan from the shared graph
@@ -129,14 +138,6 @@ impl SimpleExecutor {
         // Compute checksum of the source graph for cache invalidation
         let source_checksum = graph_guard.checksum();
 
-        // Extract connections to wire from the graph links
-        self.connections_to_wire.clear();
-        for edge in graph_guard.petgraph().edge_indices() {
-            let link = &graph_guard.petgraph()[edge];
-            self.connections_to_wire
-                .push((link.from_port(), link.to_port()));
-        }
-
         // Drop the guard before creating context (might need GPU init)
         drop(graph_guard);
 
@@ -157,6 +158,174 @@ impl SimpleExecutor {
             "Graph compiled successfully (checksum: {:?})",
             source_checksum
         );
+        Ok(())
+    }
+
+    // =========================================================================
+    // Delta-based Synchronization
+    // =========================================================================
+
+    /// Sync execution state to match the current graph
+    ///
+    /// Computes the delta between the Graph (desired state) and ExecutionGraph
+    /// (current running state), then applies the delta.
+    pub fn sync_to_graph(&mut self) -> Result<()> {
+        // Auto-compile if not yet compiled
+        if self.execution_graph.is_none() {
+            self.compile_from_graph()?;
+        }
+
+        let delta = self.compute_graph_delta()?;
+
+        if delta.is_empty() {
+            tracing::debug!("sync_to_graph: No changes to apply");
+            return Ok(());
+        }
+
+        tracing::info!(
+            "sync_to_graph: Applying {} changes",
+            delta.change_count()
+        );
+
+        self.apply_delta(delta)
+    }
+
+    /// Compute delta between Graph and ExecutionGraph
+    fn compute_graph_delta(&self) -> Result<GraphDelta> {
+        let graph = self
+            .graph
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
+
+        let exec_graph = self
+            .execution_graph
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
+
+        let graph_guard = graph.read();
+
+        // Collect processor IDs from graph (desired state)
+        let graph_processor_ids: HashSet<ProcessorId> = graph_guard
+            .nodes()
+            .iter()
+            .map(|n| n.id.clone())
+            .collect();
+
+        // Collect link IDs from graph (desired state)
+        let graph_link_ids: HashSet<LinkId> = graph_guard
+            .links()
+            .iter()
+            .map(|l| l.id.clone())
+            .collect();
+
+        // Collect running processor IDs (current state)
+        let running_processor_ids: HashSet<ProcessorId> = exec_graph
+            .processor_ids()
+            .cloned()
+            .collect();
+
+        // Collect wired link IDs (current state)
+        let wired_link_ids: HashSet<LinkId> = exec_graph
+            .iter_link_runtime()
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        Ok(compute_delta(
+            &graph_processor_ids,
+            &graph_link_ids,
+            &running_processor_ids,
+            &wired_link_ids,
+        ))
+    }
+
+    /// Apply a computed delta to the execution state
+    fn apply_delta(&mut self, delta: GraphDelta) -> Result<()> {
+        // Order matters for correctness:
+        // 1. Unwire removed links (before removing processors that use them)
+        // 2. Shutdown removed processors
+        // 3. Spawn new processors (before wiring links that need them)
+        // 4. Wire new links
+
+        // Step 1: Unwire removed links
+        for link_id in &delta.links_to_remove {
+            tracing::info!("Removing link: {}", link_id);
+            if let Err(e) = self.unwire_connection(link_id) {
+                tracing::warn!("Error unwiring link {}: {}", link_id, e);
+            }
+        }
+
+        // Step 2: Shutdown removed processors
+        for proc_id in &delta.processors_to_remove {
+            tracing::info!("Removing processor: {}", proc_id);
+            if let Err(e) = self.shutdown_processor(proc_id) {
+                tracing::warn!("Error shutting down processor {}: {}", proc_id, e);
+            }
+            if let Some(exec_graph) = &mut self.execution_graph {
+                exec_graph.remove_processor_runtime(proc_id);
+            }
+        }
+
+        // Step 3: Spawn new processors
+        for proc_id in &delta.processors_to_add {
+            tracing::info!("Adding processor: {}", proc_id);
+            self.spawn_processor_by_id(proc_id)?;
+        }
+
+        // Step 4: Wire new links
+        for link_id in &delta.links_to_add {
+            tracing::info!("Adding link: {}", link_id);
+            self.wire_connection_by_id(link_id)?;
+        }
+
+        // TODO: Handle processors_to_update and links_to_update
+
+        self.dirty = false;
+        Ok(())
+    }
+
+    /// Spawn a processor by looking up its definition in the graph and using the factory
+    fn spawn_processor_by_id(&mut self, proc_id: &ProcessorId) -> Result<()> {
+        // Get the node from the graph
+        let node = {
+            let graph = self
+                .graph
+                .as_ref()
+                .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
+            let graph_guard = graph.read();
+            graph_guard.get_processor(proc_id).cloned().ok_or_else(|| {
+                StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
+            })?
+        };
+
+        // Use factory to create the processor instance
+        let factory = self
+            .factory
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("No processor factory set".into()))?;
+
+        let processor = factory.create(&node)?;
+
+        // Spawn the processor
+        self.spawn_processor(proc_id.clone(), processor)
+    }
+
+    /// Wire a connection by looking up the link in the graph
+    fn wire_connection_by_id(&mut self, link_id: &LinkId) -> Result<()> {
+        // Get the link from the graph
+        let (from_port, to_port) = {
+            let graph = self
+                .graph
+                .as_ref()
+                .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
+            let graph_guard = graph.read();
+            let link = graph_guard.get_link(link_id).ok_or_else(|| {
+                StreamError::LinkNotFound(format!("Link '{}' not found in graph", link_id))
+            })?;
+            (link.from_port(), link.to_port())
+        };
+
+        // Wire the connection
+        self.wire_connection(&from_port, &to_port)?;
         Ok(())
     }
 
@@ -210,18 +379,10 @@ impl SimpleExecutor {
         crate::core::link_channel::link_id::__private::new_unchecked(id)
     }
 
-    /// Add a processor (alias for add_pending_processor)
-    pub fn add_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) {
-        self.add_pending_processor(id, processor);
-    }
-
-    /// Queue a connection to be wired on start
-    pub fn queue_connection(&mut self, _id: LinkId, from_port: String, to_port: String) {
-        self.connections_to_wire.push((from_port, to_port));
-        self.dirty = true;
-    }
-
     /// Remove a processor (shutdown if running)
+    ///
+    /// Note: Prefer using the graph-based approach via `sync_to_graph()`.
+    /// This method is kept for compatibility but will be deprecated.
     pub fn remove_processor(&mut self, processor_id: &str) -> crate::core::Result<()> {
         let proc_id = processor_id.to_string();
 
@@ -252,17 +413,8 @@ impl SimpleExecutor {
             exec_graph.remove_processor_runtime(&proc_id);
         }
 
-        // Remove from pending if present
-        self.pending_processors.retain(|(id, _)| id != processor_id);
-
         self.dirty = true;
         Ok(())
-    }
-
-    /// Add a processor to pending (to be started on compile/start)
-    pub fn add_pending_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) {
-        self.pending_processors.push((id, processor));
-        self.dirty = true;
     }
 
     /// Get running processor (for wiring)
@@ -991,17 +1143,8 @@ impl Executor for SimpleExecutor {
 
         tracing::info!("Starting executor...");
 
-        // Spawn all pending processors
-        let pending = std::mem::take(&mut self.pending_processors);
-        for (id, processor) in pending {
-            self.spawn_processor(id, processor)?;
-        }
-
-        // Wire all connections from execution plan
-        // Note: connections_to_wire is populated during compile from the graph
-        for (from_port, to_port) in std::mem::take(&mut self.connections_to_wire) {
-            self.wire_connection(&from_port, &to_port)?;
-        }
+        // Sync execution state to match graph (spawns processors, wires links)
+        self.sync_to_graph()?;
 
         // Send initialization wakeup to Pull mode processors
         self.send_pull_mode_wakeups();
