@@ -184,6 +184,160 @@ fn test_registry_factory_registration() {
     assert!(!outputs.is_empty());
 }
 
+// Test port unwiring
+mod unwire_tests {
+    use streamlib::core::link_channel::link_id;
+    use streamlib::core::processors::SimplePassthroughProcessor;
+    use streamlib::core::runtime::StreamRuntime;
+    use streamlib::core::LinkInput;
+    use streamlib::core::LinkOutput;
+    use streamlib::core::VideoFrame;
+
+    #[test]
+    fn test_link_output_add_remove() {
+        // Test that LinkOutput properly handles add_link/remove_link
+        let output: LinkOutput<VideoFrame> = LinkOutput::new("test_output");
+
+        // Initially has plug (disconnected), so is_connected() is false
+        assert!(!output.is_connected());
+        assert_eq!(output.link_count(), 0);
+
+        // Create a link channel for testing
+        let link_id = link_id::__private::new_unchecked("test_link".to_string());
+        let (producer, _consumer) = streamlib::core::create_link_channel::<VideoFrame>(16);
+        let (wakeup_tx, _wakeup_rx) = crossbeam_channel::bounded(1);
+
+        // Add link
+        output.add_link(link_id.clone(), producer, wakeup_tx).unwrap();
+        assert!(output.is_connected());
+        assert_eq!(output.link_count(), 1);
+
+        // Remove link
+        output.remove_link(&link_id).unwrap();
+        assert!(!output.is_connected());
+        assert_eq!(output.link_count(), 0);
+    }
+
+    #[test]
+    fn test_link_input_add_remove() {
+        // Test that LinkInput properly handles add_link/remove_link
+        let input: LinkInput<VideoFrame> = LinkInput::new("test_input");
+
+        // Initially has plug (disconnected), so is_connected() is false
+        assert!(!input.is_connected());
+        assert_eq!(input.link_count(), 0);
+
+        // Create a link channel for testing
+        let link_id = link_id::__private::new_unchecked("test_link".to_string());
+        let (_producer, consumer) = streamlib::core::create_link_channel::<VideoFrame>(16);
+        let (wakeup_tx, _wakeup_rx) = crossbeam_channel::bounded(1);
+        let source_addr =
+            streamlib::core::LinkPortAddress::new("source_proc", "output");
+
+        // Add link
+        input
+            .add_link(link_id.clone(), consumer, source_addr, wakeup_tx)
+            .unwrap();
+        assert!(input.is_connected());
+        assert_eq!(input.link_count(), 1);
+
+        // Remove link
+        input.remove_link(&link_id).unwrap();
+        assert!(!input.is_connected());
+        assert_eq!(input.link_count(), 0);
+    }
+
+    #[test]
+    fn test_link_remove_not_found_error() {
+        let output: LinkOutput<VideoFrame> = LinkOutput::new("test_output");
+        let link_id = link_id::__private::new_unchecked("nonexistent".to_string());
+
+        // Removing a link that doesn't exist should error
+        let result = output.remove_link(&link_id);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Link not found"));
+    }
+
+    #[test]
+    fn test_multiple_processors_pipeline() {
+        let mut runtime = StreamRuntime::new();
+
+        // Create a chain: source -> middle -> sink
+        let source = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add source");
+        let middle = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add middle");
+        let sink = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add sink");
+
+        // Connect the chain
+        let link1 = runtime
+            .connect(
+                format!("{}.output", source.id),
+                format!("{}.input", middle.id),
+            )
+            .expect("connect source->middle");
+
+        let link2 = runtime
+            .connect(
+                format!("{}.output", middle.id),
+                format!("{}.input", sink.id),
+            )
+            .expect("connect middle->sink");
+
+        // Verify topology
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(graph.processor_count(), 3);
+            assert_eq!(graph.link_count(), 2);
+        }
+
+        // Disconnect middle link
+        runtime.disconnect(&link1).expect("disconnect");
+
+        // Verify partial topology
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(graph.processor_count(), 3);
+            assert_eq!(graph.link_count(), 1);
+            assert!(graph.get_link(&link2.id).is_some());
+            assert!(graph.get_link(&link1.id).is_none());
+        }
+    }
+
+    #[test]
+    fn test_disconnect_by_id() {
+        let mut runtime = StreamRuntime::new();
+
+        let source = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add source");
+
+        let sink = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add sink");
+
+        let link = runtime
+            .connect(
+                format!("{}.output", source.id),
+                format!("{}.input", sink.id),
+            )
+            .expect("connect");
+
+        // Disconnect by ID
+        runtime.disconnect_by_id(&link.id).expect("disconnect by id");
+
+        // Verify removed
+        let graph = runtime.graph().read();
+        assert_eq!(graph.link_count(), 0);
+    }
+}
+
 // Test delta computation
 mod delta_tests {
     use std::collections::HashSet;

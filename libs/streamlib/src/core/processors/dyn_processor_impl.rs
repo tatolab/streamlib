@@ -64,6 +64,22 @@ where
         <Self as Processor>::wire_input_consumer(self, port_name, consumer)
     }
 
+    fn unwire_output_producer(
+        &mut self,
+        port_name: &str,
+        link_id: &crate::core::link_channel::LinkId,
+    ) -> crate::core::Result<()> {
+        <Self as Processor>::unwire_output_producer(self, port_name, link_id)
+    }
+
+    fn unwire_input_consumer(
+        &mut self,
+        port_name: &str,
+        link_id: &crate::core::link_channel::LinkId,
+    ) -> crate::core::Result<()> {
+        <Self as Processor>::unwire_input_consumer(self, port_name, link_id)
+    }
+
     fn set_output_wakeup(
         &mut self,
         port_name: &str,

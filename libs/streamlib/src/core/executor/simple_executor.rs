@@ -1006,8 +1006,7 @@ impl SimpleExecutor {
         Ok(())
     }
 
-    /// Unwire a connection
-    #[allow(dead_code)]
+    /// Unwire a connection, cleaning up producer/consumer from processors.
     fn unwire_connection(&mut self, connection_id: &LinkId) -> Result<()> {
         let exec_graph = self
             .execution_graph
@@ -1016,11 +1015,50 @@ impl SimpleExecutor {
 
         tracing::info!("Unwiring connection: {}", connection_id);
 
-        // TODO: Full port-level cleanup (remove producers/consumers from processors)
-        tracing::warn!(
-            "Connection {} unwired from tracking, but port-level cleanup not yet implemented",
-            connection_id
-        );
+        // Get link info before removing
+        let wired_link = exec_graph
+            .get_link_runtime(connection_id)
+            .ok_or_else(|| StreamError::LinkNotFound(connection_id.to_string()))?;
+
+        // Extract info we need (WiredLink derefs to Link)
+        let source_proc_id = wired_link.source.node.clone();
+        let dest_proc_id = wired_link.target.node.clone();
+        let source_port = wired_link.source.port.clone();
+        let dest_port = wired_link.target.port.clone();
+
+        // Get processor instances
+        let source_processor = exec_graph
+            .get_processor_runtime(&source_proc_id)
+            .and_then(|r| r.processor.clone());
+        let dest_processor = exec_graph
+            .get_processor_runtime(&dest_proc_id)
+            .and_then(|r| r.processor.clone());
+
+        // Unwire from source processor (output port)
+        if let Some(proc) = source_processor {
+            let mut guard = proc.lock();
+            if let Err(e) = guard.unwire_output_producer(&source_port, connection_id) {
+                tracing::warn!(
+                    "Failed to unwire output producer from {}.{}: {}",
+                    source_proc_id,
+                    source_port,
+                    e
+                );
+            }
+        }
+
+        // Unwire from dest processor (input port)
+        if let Some(proc) = dest_processor {
+            let mut guard = proc.lock();
+            if let Err(e) = guard.unwire_input_consumer(&dest_port, connection_id) {
+                tracing::warn!(
+                    "Failed to unwire input consumer from {}.{}: {}",
+                    dest_proc_id,
+                    dest_port,
+                    e
+                );
+            }
+        }
 
         // Remove from execution graph (handles index cleanup internally)
         exec_graph.remove_link_runtime(connection_id);

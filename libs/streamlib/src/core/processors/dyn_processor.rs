@@ -36,6 +36,18 @@ pub trait DynProcessor: Send + 'static {
         consumer: Box<dyn std::any::Any + Send>,
     ) -> bool;
 
+    fn unwire_output_producer(
+        &mut self,
+        port_name: &str,
+        link_id: &crate::core::link_channel::LinkId,
+    ) -> crate::core::Result<()>;
+
+    fn unwire_input_consumer(
+        &mut self,
+        port_name: &str,
+        link_id: &crate::core::link_channel::LinkId,
+    ) -> crate::core::Result<()>;
+
     fn set_output_wakeup(
         &mut self,
         port_name: &str,

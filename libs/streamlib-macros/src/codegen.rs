@@ -879,15 +879,106 @@ fn generate_port_introspection_methods(analysis: &AnalysisResult) -> TokenStream
         quote! {}
     };
 
+    // Generate unwire_input_consumer implementation
+    let input_unwire_arms = input_ports.iter().map(|p| {
+        let field_name = &p.field_name;
+        let port_name = &p.port_name;
+
+        quote! {
+            #port_name => {
+                self.#field_name.remove_link(link_id)
+            }
+        }
+    });
+
+    let unwire_input_consumer_impl = if !input_ports.is_empty() {
+        quote! {
+            pub fn unwire_input_consumer_impl(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+                match port_name {
+                    #(#input_unwire_arms,)*
+                    _ => Err(::streamlib::core::StreamError::PortError(
+                        format!("Unknown input port: {}", port_name)
+                    )),
+                }
+            }
+        }
+    } else {
+        quote! {
+            pub fn unwire_input_consumer_impl(&mut self, port_name: &str, _link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+                Err(::streamlib::core::StreamError::PortError(
+                    format!("No input ports available, cannot unwire: {}", port_name)
+                ))
+            }
+        }
+    };
+
+    // Generate unwire_output_producer implementation
+    let output_unwire_arms = output_ports.iter().map(|p| {
+        let field_name = &p.field_name;
+        let port_name = &p.port_name;
+
+        quote! {
+            #port_name => {
+                self.#field_name.remove_link(link_id)
+            }
+        }
+    });
+
+    let unwire_output_producer_impl = if !output_ports.is_empty() {
+        quote! {
+            pub fn unwire_output_producer_impl(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+                match port_name {
+                    #(#output_unwire_arms,)*
+                    _ => Err(::streamlib::core::StreamError::PortError(
+                        format!("Unknown output port: {}", port_name)
+                    )),
+                }
+            }
+        }
+    } else {
+        quote! {
+            pub fn unwire_output_producer_impl(&mut self, port_name: &str, _link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+                Err(::streamlib::core::StreamError::PortError(
+                    format!("No output ports available, cannot unwire: {}", port_name)
+                ))
+            }
+        }
+    };
+
+    // Generate unwire trait implementations
+    let unwire_input_consumer_trait = if has_inputs {
+        quote! {
+            fn unwire_input_consumer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+                self.unwire_input_consumer_impl(port_name, link_id)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let unwire_output_producer_trait = if has_outputs {
+        quote! {
+            fn unwire_output_producer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+                self.unwire_output_producer_impl(port_name, link_id)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #get_input_port_type_impl
         #get_output_port_type_impl
         #wire_input_consumer_impl
         #wire_output_producer_impl
+        #unwire_input_consumer_impl
+        #unwire_output_producer_impl
         #get_input_port_type_trait
         #get_output_port_type_trait
         #wire_input_consumer_trait
         #wire_output_producer_trait
+        #unwire_input_consumer_trait
+        #unwire_output_producer_trait
     }
 }
 

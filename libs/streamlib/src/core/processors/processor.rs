@@ -46,6 +46,24 @@ pub trait Processor: BaseProcessor {
         false
     }
 
+    /// Remove a producer from an output port by link ID.
+    fn unwire_output_producer(
+        &mut self,
+        _port_name: &str,
+        _link_id: &crate::core::link_channel::LinkId,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Remove a consumer from an input port by link ID.
+    fn unwire_input_consumer(
+        &mut self,
+        _port_name: &str,
+        _link_id: &crate::core::link_channel::LinkId,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn set_output_wakeup(
         &mut self,
         _port_name: &str,
