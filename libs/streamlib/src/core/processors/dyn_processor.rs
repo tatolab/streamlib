@@ -54,5 +54,8 @@ pub trait DynProcessor: Send + 'static {
         wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
     );
 
+    /// Apply a JSON config update at runtime.
+    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()>;
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }

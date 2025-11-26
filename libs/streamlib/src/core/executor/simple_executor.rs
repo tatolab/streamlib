@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
-use super::delta::{compute_delta, GraphDelta};
+use super::delta::{compute_delta_with_config, GraphDelta};
 use super::execution_graph::{CompilationMetadata, ExecutionGraph};
 use super::running::{RunningProcessor, WiredLink};
 use super::{Executor, ExecutorState};
@@ -218,6 +218,13 @@ impl SimpleExecutor {
             .map(|l| l.id.clone())
             .collect();
 
+        // Collect config checksums from graph (desired state)
+        let graph_config_checksums: HashMap<ProcessorId, u64> = graph_guard
+            .nodes()
+            .iter()
+            .map(|n| (n.id.clone(), n.config_checksum))
+            .collect();
+
         // Collect running processor IDs (current state)
         let running_processor_ids: HashSet<ProcessorId> = exec_graph
             .processor_ids()
@@ -230,11 +237,19 @@ impl SimpleExecutor {
             .map(|(id, _)| id.clone())
             .collect();
 
-        Ok(compute_delta(
+        // Collect config checksums from running processors (current state)
+        let running_config_checksums: HashMap<ProcessorId, u64> = exec_graph
+            .iter_processor_runtime()
+            .map(|(id, proc)| (id.clone(), proc.node.config_checksum))
+            .collect();
+
+        Ok(compute_delta_with_config(
             &graph_processor_ids,
             &graph_link_ids,
             &running_processor_ids,
             &wired_link_ids,
+            &graph_config_checksums,
+            &running_config_checksums,
         ))
     }
 
@@ -277,9 +292,81 @@ impl SimpleExecutor {
             self.wire_connection_by_id(link_id)?;
         }
 
-        // TODO: Handle processors_to_update and links_to_update
+        // Step 5: Apply config changes to existing processors
+        for config_change in &delta.processors_to_update {
+            tracing::info!(
+                "Updating processor config: {} (checksum {} -> {})",
+                config_change.id,
+                config_change.old_config_checksum,
+                config_change.new_config_checksum
+            );
+            if let Err(e) = self.apply_config_change(&config_change.id) {
+                tracing::warn!(
+                    "Error applying config change to processor {}: {}",
+                    config_change.id,
+                    e
+                );
+            }
+        }
+
+        // TODO: Handle links_to_update when needed
 
         self.dirty = false;
+        Ok(())
+    }
+
+    /// Apply a config change to a running processor
+    fn apply_config_change(&mut self, proc_id: &ProcessorId) -> Result<()> {
+        // Get the new config from the graph
+        let new_config = {
+            let graph = self
+                .graph
+                .as_ref()
+                .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
+            let graph_guard = graph.read();
+            let node = graph_guard.get_processor(proc_id).ok_or_else(|| {
+                StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
+            })?;
+            node.config.clone()
+        };
+
+        // Get the processor instance and apply the config
+        let exec_graph = self
+            .execution_graph
+            .as_mut()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
+
+        let running = exec_graph.get_processor_runtime_mut(proc_id).ok_or_else(|| {
+            StreamError::ProcessorNotFound(format!(
+                "Processor '{}' not found in execution graph",
+                proc_id
+            ))
+        })?;
+
+        // Apply config via the DynProcessor trait
+        if let Some(processor_arc) = &running.processor {
+            if let Some(config) = &new_config {
+                let mut proc_guard = processor_arc.lock();
+                proc_guard.apply_config_json(config)?;
+            }
+        }
+
+        // Update the checksum in the running processor's node
+        let new_checksum = {
+            let graph = self.graph.as_ref().unwrap();
+            let graph_guard = graph.read();
+            graph_guard
+                .get_processor(proc_id)
+                .map(|n| n.config_checksum)
+                .unwrap_or(0)
+        };
+
+        // Update the running processor's node to reflect new config
+        if let Some(running) = exec_graph.get_processor_runtime_mut(proc_id) {
+            running.node.config = new_config;
+            running.node.config_checksum = new_checksum;
+        }
+
         Ok(())
     }
 

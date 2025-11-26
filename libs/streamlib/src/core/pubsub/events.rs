@@ -172,6 +172,9 @@ pub enum RuntimeEvent {
     ProcessorRemoved {
         processor_id: String,
     },
+    ProcessorConfigUpdated {
+        processor_id: String,
+    },
 
     // ===== Link Lifecycle Events =====
     LinkCreated {

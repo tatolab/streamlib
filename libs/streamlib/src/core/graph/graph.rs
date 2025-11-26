@@ -333,6 +333,38 @@ impl Graph {
             })
             .map(|e| self.graph[e].id.clone())
     }
+
+    /// Update a processor's configuration.
+    ///
+    /// Returns the old checksum if the processor exists (for delta detection).
+    pub fn update_processor_config(
+        &mut self,
+        processor_id: &ProcessorId,
+        config: serde_json::Value,
+    ) -> Result<u64> {
+        let node_idx = self
+            .processor_to_node
+            .get(processor_id)
+            .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.clone()))?;
+
+        let node = &mut self.graph[*node_idx];
+        let old_checksum = node.config_checksum;
+        node.set_config(config.clone());
+
+        // Also update the nodes vec for serialization consistency
+        if let Some(n) = self.nodes.iter_mut().find(|n| &n.id == processor_id) {
+            n.set_config(config);
+        }
+
+        Ok(old_checksum)
+    }
+
+    /// Get a processor's config checksum.
+    pub fn get_processor_config_checksum(&self, processor_id: &ProcessorId) -> Option<u64> {
+        self.processor_to_node
+            .get(processor_id)
+            .map(|&idx| self.graph[idx].config_checksum)
+    }
 }
 
 impl Default for Graph {

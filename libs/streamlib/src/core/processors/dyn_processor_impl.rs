@@ -88,6 +88,10 @@ where
         <Self as Processor>::set_output_wakeup(self, port_name, wakeup_tx)
     }
 
+    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()> {
+        <Self as Processor>::apply_config_json(self, config_json)
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

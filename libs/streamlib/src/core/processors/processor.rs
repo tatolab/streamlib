@@ -14,6 +14,27 @@ pub trait Processor: BaseProcessor {
 
     fn process(&mut self) -> Result<()>;
 
+    /// Update configuration at runtime (hot-reload).
+    ///
+    /// Called when the config changes in the Graph. Default implementation
+    /// does nothing - override to handle config updates without restart.
+    fn update_config(&mut self, _config: Self::Config) -> Result<()> {
+        Ok(())
+    }
+
+    /// Apply a JSON config update at runtime.
+    ///
+    /// Called by the executor when a config change is detected.
+    /// Default deserializes JSON and calls `update_config()`.
+    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()>
+    where
+        Self: Sized,
+    {
+        let config: Self::Config = serde_json::from_value(config_json.clone())
+            .map_err(|e| crate::core::StreamError::Config(e.to_string()))?;
+        self.update_config(config)
+    }
+
     fn scheduling_config(&self) -> SchedulingConfig {
         SchedulingConfig::default()
     }

@@ -243,6 +243,36 @@ impl StreamRuntime {
         self.on_graph_changed()
     }
 
+    /// Update a processor's configuration at runtime.
+    ///
+    /// The new config will be applied to the running processor on the next
+    /// sync (immediately in Auto mode, or on explicit commit in Manual mode).
+    pub fn update_processor_config<C: Serialize>(
+        &mut self,
+        processor_id: &ProcessorId,
+        config: C,
+    ) -> Result<()> {
+        let config_json = serde_json::to_value(&config)
+            .map_err(|e| crate::core::StreamError::Config(e.to_string()))?;
+
+        {
+            let mut graph = self.graph.write();
+            graph.update_processor_config(processor_id, config_json)?;
+        }
+
+        // Publish event
+        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+        EVENT_BUS.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigUpdated {
+                processor_id: processor_id.clone(),
+            }),
+        );
+
+        // Handle commit mode
+        self.on_graph_changed()
+    }
+
     // =========================================================================
     // Lifecycle - Publishes events, delegates execution to Executor
     // =========================================================================

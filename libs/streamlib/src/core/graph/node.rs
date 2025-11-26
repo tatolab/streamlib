@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use super::link_port_ref::LinkPortRef;
+
+/// Compute a deterministic checksum from a JSON value.
+fn compute_json_checksum(value: &serde_json::Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    // Use canonical string representation for deterministic hashing
+    value.to_string().hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Unique identifier for a processor
 pub type ProcessorId = String;
@@ -39,6 +49,9 @@ pub struct ProcessorNode {
     pub processor_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    /// Checksum of config for change detection.
+    #[serde(default)]
+    pub config_checksum: u64,
     pub ports: NodePorts,
 }
 
@@ -50,12 +63,23 @@ impl ProcessorNode {
         inputs: Vec<PortInfo>,
         outputs: Vec<PortInfo>,
     ) -> Self {
+        let config_checksum = config
+            .as_ref()
+            .map(|c| compute_json_checksum(c))
+            .unwrap_or(0);
         Self {
             id,
             processor_type,
             config,
+            config_checksum,
             ports: NodePorts { inputs, outputs },
         }
+    }
+
+    /// Update config and recompute checksum.
+    pub fn set_config(&mut self, config: serde_json::Value) {
+        self.config_checksum = compute_json_checksum(&config);
+        self.config = Some(config);
     }
 
     pub fn processor_type(&self) -> &str {

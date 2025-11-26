@@ -468,3 +468,163 @@ mod delta_tests {
         assert_eq!(delta.links_to_remove.len(), 1);
     }
 }
+
+// Test config hot-reload
+mod config_tests {
+    use streamlib::core::graph::compute_config_checksum;
+    use streamlib::core::processors::{SimplePassthroughConfig, SimplePassthroughProcessor};
+    use streamlib::core::runtime::StreamRuntime;
+
+    #[test]
+    fn test_config_checksum_computed_on_add() {
+        let mut runtime = StreamRuntime::new();
+
+        let node = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add processor");
+
+        // Checksum should be computed for the default config
+        let graph = runtime.graph().read();
+        let processor = graph.get_processor(&node.id).expect("get processor");
+
+        // Default config should have a non-zero checksum
+        assert!(processor.config_checksum != 0);
+    }
+
+    #[test]
+    fn test_config_checksum_unchanged_for_same_config() {
+        let mut runtime = StreamRuntime::new();
+
+        let node = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add processor");
+
+        // Get original checksum
+        let original_checksum = {
+            let graph = runtime.graph().read();
+            graph
+                .get_processor(&node.id)
+                .expect("get processor")
+                .config_checksum
+        };
+
+        // Update with same config
+        runtime
+            .update_processor_config(&node.id, SimplePassthroughConfig::default())
+            .expect("update config");
+
+        // Checksum should be the same for identical config
+        let new_checksum = {
+            let graph = runtime.graph().read();
+            graph
+                .get_processor(&node.id)
+                .expect("get processor")
+                .config_checksum
+        };
+
+        assert_eq!(original_checksum, new_checksum);
+    }
+
+    #[test]
+    fn test_config_checksum_changes_for_different_config() {
+        let mut runtime = StreamRuntime::new();
+
+        let node = runtime
+            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .expect("add processor");
+
+        // Get original checksum
+        let original_checksum = {
+            let graph = runtime.graph().read();
+            graph
+                .get_processor(&node.id)
+                .expect("get processor")
+                .config_checksum
+        };
+
+        // Update with different config (scale = 2.0 instead of default 1.0)
+        runtime
+            .update_processor_config(&node.id, SimplePassthroughConfig { scale: 2.0 })
+            .expect("update config");
+
+        // Checksum should be different for different config
+        let new_checksum = {
+            let graph = runtime.graph().read();
+            graph
+                .get_processor(&node.id)
+                .expect("get processor")
+                .config_checksum
+        };
+
+        assert_ne!(original_checksum, new_checksum);
+    }
+
+    #[test]
+    fn test_compute_config_checksum_deterministic() {
+        #[derive(Debug)]
+        struct TestConfig {
+            value: i32,
+            name: String,
+        }
+
+        let config1 = TestConfig {
+            value: 42,
+            name: "test".to_string(),
+        };
+        let config2 = TestConfig {
+            value: 42,
+            name: "test".to_string(),
+        };
+        let config3 = TestConfig {
+            value: 99,
+            name: "different".to_string(),
+        };
+
+        // Same config = same checksum
+        assert_eq!(
+            compute_config_checksum(&config1),
+            compute_config_checksum(&config2)
+        );
+
+        // Different config = different checksum
+        assert_ne!(
+            compute_config_checksum(&config1),
+            compute_config_checksum(&config3)
+        );
+    }
+
+    #[test]
+    fn test_graph_update_processor_config() {
+        use streamlib::core::graph::Graph;
+
+        let mut graph = Graph::new();
+
+        // Add processor manually
+        let node = graph
+            .add_processor_node::<SimplePassthroughProcessor>(Default::default())
+            .expect("add processor");
+
+        let original_checksum = graph
+            .get_processor_config_checksum(&node.id)
+            .expect("get checksum");
+
+        // Update with a different JSON config
+        let new_config = serde_json::json!({"scale": 5.0});
+        let old_checksum = graph
+            .update_processor_config(&node.id, new_config.clone())
+            .expect("update config");
+
+        assert_eq!(old_checksum, original_checksum);
+
+        // New checksum should be different
+        let updated_checksum = graph
+            .get_processor_config_checksum(&node.id)
+            .expect("get updated checksum");
+
+        assert_ne!(original_checksum, updated_checksum);
+
+        // Config should be updated
+        let processor = graph.get_processor(&node.id).expect("get processor");
+        assert_eq!(processor.config, Some(new_config));
+    }
+}

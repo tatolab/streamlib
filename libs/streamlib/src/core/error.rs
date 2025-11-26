@@ -50,6 +50,9 @@ pub enum StreamError {
     #[error("Invalid configuration: {0}")]
     Configuration(String),
 
+    #[error("Config update failed: {0}")]
+    Config(String),
+
     #[error("Operation not supported: {0}")]
     NotSupported(String),
 
