@@ -60,12 +60,12 @@ fn run_whep_player() -> Result<()> {
 
     // Create WHEP processor
     tracing::info!("🎬 Creating WHEP processor...");
-    let whep_processor = runtime.add_processor_with_config::<WebRtcWhepProcessor>(whep_config)?;
+    let whep_processor = runtime.add_processor::<WebRtcWhepProcessor>(whep_config)?;
     tracing::info!("✅ WHEP processor created\n");
 
     // Create display processor for video output
     tracing::info!("📺 Creating display processor...");
-    let display = runtime.add_processor_with_config::<DisplayProcessor>(DisplayConfig {
+    let display = runtime.add_processor::<DisplayProcessor>(DisplayConfig {
         width: 1920,
         height: 1080,
         title: Some("WHEP Player".to_string()),
@@ -76,7 +76,7 @@ fn run_whep_player() -> Result<()> {
     // Create audio output processor
     tracing::info!("🔊 Creating audio output processor...");
     let audio_output =
-        runtime.add_processor_with_config::<AudioOutputProcessor>(Default::default())?;
+        runtime.add_processor::<AudioOutputProcessor>(Default::default())?;
     tracing::info!("✅ Audio output processor created\n");
 
     // Connect processors

@@ -1,5 +1,3 @@
-//! Utility modules for audio processing, resampling, and control flow
-
 pub mod audio_frame;
 pub mod audio_resample;
 pub mod loop_control;

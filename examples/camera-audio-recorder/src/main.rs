@@ -47,21 +47,21 @@ fn main() -> Result<()> {
     println!("📹 Output file: {}\n", output_path);
 
     println!("📷 Adding camera processor...");
-    let camera = runtime.add_processor_with_config::<CameraProcessor>(CameraConfig {
+    let camera = runtime.add_processor::<CameraProcessor>(CameraConfig {
         device_id: Some("0x1424001bcf2284".to_string()), // Use default camera
     })?;
     println!("✓ Camera added (capturing video)\n");
 
     println!("🎤 Adding audio capture processor...");
     let audio_capture =
-        runtime.add_processor_with_config::<AudioCaptureProcessor>(AudioCaptureConfig {
+        runtime.add_processor::<AudioCaptureProcessor>(AudioCaptureConfig {
             device_id: None, // Use default microphone
         })?;
     println!("✓ Audio capture added (mono @ 24kHz)\n");
 
     println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
     let resampler =
-        runtime.add_processor_with_config::<AudioResamplerProcessor>(AudioResamplerConfig {
+        runtime.add_processor::<AudioResamplerProcessor>(AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
@@ -69,7 +69,7 @@ fn main() -> Result<()> {
     println!("✓ Resampler added\n");
 
     println!("🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
+    let channel_converter = runtime.add_processor::<AudioChannelConverterProcessor>(
         AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
         },
@@ -77,7 +77,7 @@ fn main() -> Result<()> {
     println!("✓ Channel converter added\n");
 
     println!("💾 Adding MP4 writer processor...");
-    let mp4_writer = runtime.add_processor_with_config::<Mp4WriterProcessor>(Mp4WriterConfig {
+    let mp4_writer = runtime.add_processor::<Mp4WriterProcessor>(Mp4WriterConfig {
         output_path: PathBuf::from(&output_path),
         sync_tolerance_ms: Some(16.6),         // ~1 frame at 60fps
         video_codec: Some("avc1".to_string()), // H.264

@@ -187,8 +187,7 @@ pub use permissions::{
 // Python bindings removed - needs complete redesign for Phase 1 architecture
 // TODO: Reimplement Python bindings with new graph-based API
 
-mod runtime;
-pub use runtime::StreamRuntime;
+pub use core::StreamRuntime;
 
 pub mod platform {
     pub fn name() -> &'static str {

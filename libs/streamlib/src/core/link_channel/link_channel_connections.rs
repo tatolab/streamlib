@@ -1,5 +1,3 @@
-//! Link channel connection types supporting both real and plugged connections
-
 use super::link_plugs::{LinkDisconnectedConsumer, LinkDisconnectedProducer};
 use super::link_ports::ConsumptionStrategy;
 use super::{

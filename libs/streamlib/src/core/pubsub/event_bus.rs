@@ -1,15 +1,11 @@
-//! Lock-free pub/sub event bus with parallel dispatch
-
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::sync::{Arc, LazyLock, Weak};
 
 use super::events::{Event, EventListener};
 
-/// Maximum event size: 64KB
 const MAX_EVENT_SIZE: usize = 64 * 1024;
 
-/// Compile-time size check for Event type
 const _: () = {
     assert!(
         std::mem::size_of::<Event>() <= MAX_EVENT_SIZE,
@@ -17,19 +13,10 @@ const _: () = {
     );
 };
 
-/// Global event bus singleton - accessible from anywhere
 pub static EVENT_BUS: LazyLock<EventBus> = LazyLock::new(EventBus::new);
 
-/// Lock-free event bus with parallel dispatch
-///
-/// - Publish is ~100-200ns (Arc allocation + rayon spawn)
-/// - No queuing = no message pile-up
-/// - Events dispatched in parallel to all listeners
-/// - Slow listeners don't block publisher or other listeners
+/// Lock-free event bus with parallel dispatch.
 pub struct EventBus {
-    /// Map of topic name -> list of weak listener references
-    /// DashMap provides lock-free concurrent HashMap
-    /// Weak refs allow listeners to be dropped without explicit unsubscribe
     topics: DashMap<String, Vec<Weak<Mutex<dyn EventListener>>>>,
 }
 
@@ -40,20 +27,13 @@ impl Default for EventBus {
 }
 
 impl EventBus {
-    /// Create a new event bus
     pub fn new() -> Self {
         Self {
             topics: DashMap::new(),
         }
     }
 
-    /// Subscribe a listener to a topic
-    ///
-    /// # Example
-    /// ```ignore
-    /// let listener = Arc::new(Mutex::new(MyListener));
-    /// EVENT_BUS.subscribe("my-topic", listener);
-    /// ```
+    /// Subscribe a listener to a topic.
     pub fn subscribe(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
         let weak_listener = Arc::downgrade(&listener);
         self.topics
@@ -62,20 +42,7 @@ impl EventBus {
             .push(weak_listener);
     }
 
-    /// Publish event to topic (instant, non-blocking, parallel dispatch)
-    ///
-    /// Events are shared via Arc and dispatched in parallel to all listeners.
-    /// Each listener runs in its own rayon task, so slow listeners don't block others.
-    ///
-    /// Returns immediately (~100-200ns) regardless of number of listeners.
-    ///
-    /// # Example
-    /// ```ignore
-    /// EVENT_BUS.publish("my-topic", &Event::Custom {
-    ///     topic: "my-topic".to_string(),
-    ///     data: serde_json::json!({"key": "value"}),
-    /// });
-    /// ```
+    /// Publish event to topic (non-blocking, parallel dispatch).
     pub fn publish(&self, topic: &str, event: &Event) {
         if let Some(subscribers) = self.topics.get(topic) {
             eprintln!(
@@ -144,7 +111,6 @@ impl EventBus {
         self.cleanup_dead_listeners(topic);
     }
 
-    /// Remove dead listeners (called periodically during publish)
     fn cleanup_dead_listeners(&self, topic: &str) {
         if let Some(mut subscribers) = self.topics.get_mut(topic) {
             subscribers.retain(|weak| weak.strong_count() > 0);

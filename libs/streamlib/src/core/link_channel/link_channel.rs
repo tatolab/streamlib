@@ -1,5 +1,3 @@
-//! LinkChannel - manages runtime link channels between processors
-
 use super::link_channel_manager::LinkChannelManager;
 use super::link_id::LinkId;
 use super::link_owned_channel::{LinkOwnedConsumer, LinkOwnedProducer};

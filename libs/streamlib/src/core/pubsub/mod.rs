@@ -1,5 +1,3 @@
-//! Pub/sub event system
-
 mod event_bus;
 mod events;
 

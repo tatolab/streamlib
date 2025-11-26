@@ -1,35 +1,8 @@
-//! Audio frame manipulation utilities
-//!
-//! Provides runtime utilities for audio frame operations including:
-//! - Channel conversion (mono ↔ stereo ↔ multichannel)
-//! - Sample rate conversion (resampling)
-//! - Buffer rechunking
-//!
-//! These utilities enable processors to dynamically adapt to different audio configurations
-//! without requiring compile-time generics.
-
 use super::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::Result;
 
-/// Convert audio frame to a different channel count
-///
-/// # Channel Conversion Rules
-/// - Upmixing: Duplicate channels or zero-fill
-///   - Mono → Stereo: duplicate to both channels
-///   - Mono → Multichannel: duplicate to all channels
-///   - Stereo → Multichannel: L/R to front, zero-fill rest
-/// - Downmixing: Mix or drop channels
-///   - Stereo → Mono: average L and R
-///   - Multichannel → Stereo: take front L/R, discard rest
-///   - Multichannel → Mono: average all channels
-///
-/// # Arguments
-/// * `frame` - Input audio frame
-/// * `target_channels` - Desired channel count
-///
-/// # Returns
-/// New audio frame with target channel count
+/// Convert audio frame to a different channel count.
 pub fn convert_channels(frame: &AudioFrame, target_channels: AudioChannelCount) -> AudioFrame {
     let source_channels = frame.channels;
 
@@ -137,18 +110,7 @@ pub fn convert_channels(frame: &AudioFrame, target_channels: AudioChannelCount) 
     )
 }
 
-/// Resample audio frame to a different sample rate
-///
-/// Creates a resampler and processes the frame. For repeated resampling of many frames,
-/// prefer creating a persistent `AudioResampler` instance to avoid initialization overhead.
-///
-/// # Arguments
-/// * `frame` - Input audio frame
-/// * `target_sample_rate` - Desired sample rate in Hz
-/// * `quality` - Resampling quality preset
-///
-/// # Returns
-/// New audio frame at target sample rate
+/// Resample audio frame to a different sample rate.
 pub fn resample_frame(
     frame: &AudioFrame,
     target_sample_rate: u32,
@@ -179,19 +141,7 @@ pub fn resample_frame(
     ))
 }
 
-/// Convert audio frame to match target configuration (channels + sample rate)
-///
-/// This is a convenience function that combines channel conversion and resampling.
-/// Order: channel conversion first, then resampling.
-///
-/// # Arguments
-/// * `frame` - Input audio frame
-/// * `target_channels` - Desired channel count
-/// * `target_sample_rate` - Desired sample rate in Hz
-/// * `quality` - Resampling quality preset
-///
-/// # Returns
-/// New audio frame matching target configuration
+/// Convert audio frame to match target configuration (channels + sample rate).
 pub fn convert_audio_frame(
     frame: &AudioFrame,
     target_channels: AudioChannelCount,
@@ -205,20 +155,7 @@ pub fn convert_audio_frame(
     resample_frame(&frame, target_sample_rate, quality)
 }
 
-/// Rechunk audio frames to match a target buffer size
-///
-/// Accumulates samples from multiple input frames and outputs frames with exactly
-/// `target_sample_count` samples per channel.
-///
-/// # Usage
-/// ```ignore
-/// let mut rechunker = AudioRechunker::new(AudioChannelCount::Two, 480);
-///
-/// // Feed frames
-/// if let Some(output) = rechunker.process(input_frame) {
-///     // Got a rechunked frame
-/// }
-/// ```
+/// Accumulates samples and outputs frames with exact target sample count.
 pub struct AudioRechunker {
     channels: AudioChannelCount,
     target_sample_count: usize,
@@ -227,11 +164,7 @@ pub struct AudioRechunker {
 }
 
 impl AudioRechunker {
-    /// Create a new audio rechunker
-    ///
-    /// # Arguments
-    /// * `channels` - Channel count to expect/output
-    /// * `target_sample_count` - Samples per channel in output frames
+    /// Create a new audio rechunker.
     pub fn new(channels: AudioChannelCount, target_sample_count: usize) -> Self {
         Self {
             channels,
@@ -241,10 +174,7 @@ impl AudioRechunker {
         }
     }
 
-    /// Process an input frame, returning an output frame if buffer is full
-    ///
-    /// May return `None` if more samples are needed to fill the target buffer.
-    /// Call repeatedly with input frames until output is produced.
+    /// Process an input frame, returning an output frame if buffer is full.
     pub fn process(&mut self, input: &AudioFrame) -> Option<AudioFrame> {
         // Validate channel count
         if input.channels != self.channels {
@@ -282,9 +212,7 @@ impl AudioRechunker {
         }
     }
 
-    /// Flush remaining samples as a potentially shorter frame
-    ///
-    /// Use at end of stream to output any remaining buffered samples.
+    /// Flush remaining samples as a potentially shorter frame.
     pub fn flush(&mut self, timestamp_ns: i64, sample_rate: u32) -> Option<AudioFrame> {
         let channels_usize = self.channels.as_usize();
 
@@ -312,7 +240,7 @@ impl AudioRechunker {
         Some(frame)
     }
 
-    /// Clear internal buffer
+    /// Clear internal buffer.
     pub fn reset(&mut self) {
         self.buffer.clear();
         self.next_frame_number = 0;

@@ -1,47 +1,16 @@
-//! Link port references for type-safe connection API
-//!
-//! This module provides `LinkPortRef` for building links in a type-safe way.
-//! These types are NOT serializable - they exist only for the runtime API.
-//!
-//! # Creating LinkPortRefs
-//!
-//! There are multiple ways to create a `LinkPortRef`:
-//!
-//! ```ignore
-//! // 1. From ProcessorNode (validates port exists)
-//! let port = camera_node.output("video");
-//!
-//! // 2. From address string (parsed, direction inferred by connect())
-//! let port = LinkPortRef::parse("camera_0.video", LinkDirection::Output)?;
-//!
-//! // 3. From marker types (compile-time validation) - see output::<T>() helper
-//! let port = output::<CameraProcessor::outputs::video>(&camera_node);
-//! ```
-
 use super::link::LinkDirection;
 use super::ProcessorId;
 use crate::core::error::{Result, StreamError};
 
-/// Reference to a port on a processor node for creating links
-///
-/// This is a lightweight reference used for the `connect()` API.
-/// It encodes the processor ID, port name, and direction.
-///
-/// Created by `ProcessorNode::output()` and `ProcessorNode::input()`.
-///
-/// NOT serializable - this is a runtime-only type for API ergonomics.
+/// Reference to a port on a processor node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkPortRef {
-    /// The processor this port belongs to
     pub processor_id: ProcessorId,
-    /// The name of the port
     pub port_name: String,
-    /// Whether this is an input or output port
     pub direction: LinkDirection,
 }
 
 impl LinkPortRef {
-    /// Create a new output port reference
     pub fn output(processor_id: ProcessorId, port_name: impl Into<String>) -> Self {
         Self {
             processor_id,
@@ -50,7 +19,6 @@ impl LinkPortRef {
         }
     }
 
-    /// Create a new input port reference
     pub fn input(processor_id: ProcessorId, port_name: impl Into<String>) -> Self {
         Self {
             processor_id,
@@ -59,31 +27,19 @@ impl LinkPortRef {
         }
     }
 
-    /// Convert to port address string (processor_id.port_name)
     pub fn to_address(&self) -> String {
         format!("{}.{}", self.processor_id, self.port_name)
     }
 
-    /// Check if this is an output port
     pub fn is_output(&self) -> bool {
         self.direction == LinkDirection::Output
     }
 
-    /// Check if this is an input port
     pub fn is_input(&self) -> bool {
         self.direction == LinkDirection::Input
     }
 
-    /// Parse a port address string into a LinkPortRef
-    ///
-    /// Format: "processor_id.port_name"
-    ///
-    /// The direction must be provided since it cannot be inferred from the string.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let port = LinkPortRef::parse("camera_0.video", LinkDirection::Output)?;
-    /// ```
+    /// Parse "processor_id.port_name" format.
     pub fn parse(address: &str, direction: LinkDirection) -> Result<Self> {
         let parts: Vec<&str> = address.splitn(2, '.').collect();
         if parts.len() != 2 {
@@ -117,25 +73,17 @@ impl LinkPortRef {
         })
     }
 
-    /// Parse an output port address
     pub fn parse_output(address: &str) -> Result<Self> {
         Self::parse(address, LinkDirection::Output)
     }
 
-    /// Parse an input port address
     pub fn parse_input(address: &str) -> Result<Self> {
         Self::parse(address, LinkDirection::Input)
     }
 }
 
-/// Trait for types that can be converted into a LinkPortRef
-///
-/// This enables `connect()` to accept multiple types:
-/// - `LinkPortRef` directly
-/// - `&str` or `String` address (requires direction context)
-/// - Marker types from the macro
+/// Trait for types that can be converted into a [`LinkPortRef`].
 pub trait IntoLinkPortRef {
-    /// Convert into a LinkPortRef with the given direction
     fn into_link_port_ref(self, direction: LinkDirection) -> Result<LinkPortRef>;
 }
 

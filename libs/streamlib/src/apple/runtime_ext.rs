@@ -1,13 +1,3 @@
-//! macOS runtime extensions
-//!
-//! This module provides macOS-specific integration for graceful shutdown handling.
-//! The NSApplicationDelegate receives Cmd+Q and system shutdown events and publishes
-//! them to the global EVENT_BUS for the executor to handle.
-//!
-//! NOTE: This module uses the global pub/sub system (EVENT_BUS) which is the standard
-//! way to communicate events in streamlib. It does NOT access processor instances,
-//! executor internals, or runtime state directly.
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};

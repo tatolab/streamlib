@@ -1,8 +1,3 @@
-//! Graph implementation
-//!
-//! The Graph is the "DOM" - a pure data representation of the desired processor topology.
-//! It can be serialized, compared, cloned, and analyzed without any execution state.
-
 use crate::core::error::{Result, StreamError};
 use crate::core::link_channel::link_id::__private::new_unchecked as new_link_id;
 use crate::core::link_channel::{LinkId, LinkPortType};
@@ -20,45 +15,27 @@ use super::link_port_ref::IntoLinkPortRef;
 use super::node::{PortInfo, ProcessorId, ProcessorNode};
 use super::validation;
 
-/// Global counter for generating unique processor IDs
 static PROCESSOR_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Global counter for generating unique link IDs
 static LINK_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Generate a unique processor ID
 fn generate_processor_id(processor_type: &str) -> ProcessorId {
     let id = PROCESSOR_COUNTER.fetch_add(1, Ordering::SeqCst);
     format!("{}_{}", processor_type.to_lowercase(), id)
 }
 
-/// Generate a unique link ID
 fn generate_link_id() -> LinkId {
     let id = LINK_COUNTER.fetch_add(1, Ordering::SeqCst);
     new_link_id(format!("link_{}", id))
 }
 
-/// Graph represents the desired processor topology (DAG)
-///
-/// This is a pure data structure that can be:
-/// - Serialized to JSON for persistence/debugging
-/// - Compared for equality (for delta computation)
-/// - Cloned for snapshot/rollback
-/// - Analyzed with petgraph algorithms
+/// Processor topology graph (DAG).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Graph {
-    /// petgraph directed graph
     #[serde(skip)]
     graph: DiGraph<ProcessorNode, Link>,
-
-    /// Map processor ID to graph node index
     #[serde(skip)]
     processor_to_node: HashMap<ProcessorId, NodeIndex>,
-
-    /// Serializable representation of nodes (for serde)
     nodes: Vec<ProcessorNode>,
-
-    /// Serializable representation of links (connections between ports)
     links: Vec<Link>,
 }
 
@@ -72,7 +49,6 @@ impl Graph {
         }
     }
 
-    /// Add processor to graph (internal API with explicit ID, for testing)
     pub fn add_processor(
         &mut self,
         id: ProcessorId,
@@ -86,23 +62,7 @@ impl Graph {
         self.nodes.push(node);
     }
 
-    // =========================================================================
-    // Runtime API - These methods are called by StreamRuntime
-    // =========================================================================
-
-    /// Add a processor node to the graph
-    ///
-    /// Extracts type info and port metadata from `P`, serializes config,
-    /// and creates a ProcessorNode in the graph.
-    ///
-    /// Returns the `ProcessorNode` (pure serializable data).
-    ///
-    /// # Example
-    /// ```ignore
-    /// let camera = graph.add_processor_node::<CameraProcessor>(CameraConfig {
-    ///     device_id: None,
-    /// })?;
-    /// ```
+    /// Add a processor node to the graph.
     pub fn add_processor_node<P>(&mut self, config: P::Config) -> Result<ProcessorNode>
     where
         P: Processor + 'static,
@@ -157,16 +117,7 @@ impl Graph {
         Ok(node)
     }
 
-    /// Add a link to the graph
-    ///
-    /// This is the primary API for adding links from the runtime.
-    /// Accepts `IntoLinkPortRef` for flexible port references.
-    /// Returns the Link (pure data).
-    ///
-    /// # Example
-    /// ```ignore
-    /// graph.add_link(camera.output("video"), display.input("video"))?;
-    /// ```
+    /// Add a link between two ports.
     pub fn add_link(
         &mut self,
         from: impl IntoLinkPortRef,
@@ -208,14 +159,11 @@ impl Graph {
         Ok(link)
     }
 
-    /// Remove a processor node from the graph
-    ///
-    /// Also removes any links involving this processor.
+    /// Remove a processor node and its links.
     pub fn remove_processor_node(&mut self, id: &ProcessorId) {
         self.remove_processor(id);
     }
 
-    /// Remove a link from the graph
     pub fn remove_link(&mut self, id: &LinkId) {
         if let Some(edge_idx) = self.graph.edge_indices().find(|&e| self.graph[e].id == *id) {
             self.graph.remove_edge(edge_idx);
@@ -223,21 +171,14 @@ impl Graph {
         }
     }
 
-    // =========================================================================
-    // Internal API
-    // =========================================================================
-
-    /// Check if a processor exists in the graph
     pub fn has_processor(&self, id: &ProcessorId) -> bool {
         self.processor_to_node.contains_key(id)
     }
 
-    /// Get a processor node by ID
     pub fn get_processor(&self, id: &ProcessorId) -> Option<&ProcessorNode> {
         self.processor_to_node.get(id).map(|&idx| &self.graph[idx])
     }
 
-    /// Remove processor from graph (also removes connected links)
     pub fn remove_processor(&mut self, id: &ProcessorId) {
         if let Some(node_idx) = self.processor_to_node.remove(id) {
             self.graph.remove_node(node_idx);
@@ -248,19 +189,13 @@ impl Graph {
         }
     }
 
-    /// Add link to graph (simple string API - generates link ID)
-    ///
-    /// Port addresses should be in format "processor_id.port_name".
-    /// For type-safe API, use `add_link()` with `LinkPortRef`.
+    /// Add link by port address strings ("processor_id.port_name").
     pub fn add_link_by_address(&mut self, from_port: String, to_port: String) -> LinkId {
         let id = generate_link_id();
         let _ = self.add_link_with_id(id.clone(), from_port, to_port, LinkPortType::Data);
         id
     }
 
-    /// Add link to graph with explicit ID and port type
-    ///
-    /// This is the detailed API for when you need full control over the link.
     pub fn add_link_with_id(
         &mut self,
         id: LinkId,
@@ -293,19 +228,14 @@ impl Graph {
         }
     }
 
-    /// Find a link by source and destination ports
-    ///
-    /// Returns the link ID if found.
     pub fn find_link(&self, from_port: &str, to_port: &str) -> Option<LinkId> {
         self.find_link_by_ports(from_port, to_port)
     }
 
-    /// Validate graph (check for cycles, type mismatches, etc.)
     pub fn validate(&self) -> Result<()> {
         validation::validate_graph(&self.graph)
     }
 
-    /// Export graph as DOT format for Graphviz visualization
     pub fn to_dot(&self) -> String {
         use petgraph::dot::{Config, Dot};
         format!(
@@ -314,42 +244,13 @@ impl Graph {
         )
     }
 
-    /// Export graph as JSON for web visualization and testing
-    ///
-    /// This method is critical for:
-    /// 1. **Testing**: Assert exact graph structure in tests
-    /// 2. **Debugging**: Inspect graph state during development
-    /// 3. **Visualization**: Render graph in web UI or tools
-    /// 4. **Snapshot testing**: Compare graph before/after mutations
-    ///
-    /// # Example Test Usage
-    /// ```rust,ignore
-    /// let json = runtime.graph().read().to_json();
-    /// assert_eq!(json["nodes"].as_array().unwrap().len(), 3);
-    /// assert_eq!(json["links"].as_array().unwrap().len(), 2);
-    ///
-    /// // Verify specific node exists
-    /// let camera_node = json["nodes"].as_array().unwrap()
-    ///     .iter()
-    ///     .find(|n| n["id"] == "camera_1")
-    ///     .expect("camera node not found");
-    /// assert_eq!(camera_node["type"], "CameraProcessor");
-    ///
-    /// // Verify specific link exists
-    /// let link = json["links"].as_array().unwrap()
-    ///     .iter()
-    ///     .find(|l| l["source"]["node"] == "camera_1" && l["target"]["node"] == "display_1")
-    ///     .expect("link not found");
-    /// assert_eq!(link["source"]["port"], "video");
-    /// assert_eq!(link["target"]["port"], "video");
-    /// ```
     pub fn to_json(&self) -> serde_json::Value {
         // Note: to_json() is now redundant since Graph implements Serialize
         // This method is kept for backwards compatibility but just delegates to serde
         serde_json::to_value(self).unwrap_or_default()
     }
 
-    /// Get all processors in topological order (sources first)
+    /// Get all processors in topological order.
     pub fn topological_order(&self) -> Result<Vec<ProcessorId>> {
         use petgraph::algo::toposort;
 
@@ -362,7 +263,6 @@ impl Graph {
             .collect())
     }
 
-    /// Find all source processors (no incoming connections)
     pub fn find_sources(&self) -> Vec<ProcessorId> {
         self.graph
             .node_indices()
@@ -376,7 +276,6 @@ impl Graph {
             .collect()
     }
 
-    /// Find all sink processors (no outgoing connections)
     pub fn find_sinks(&self) -> Vec<ProcessorId> {
         self.graph
             .node_indices()
@@ -390,24 +289,18 @@ impl Graph {
             .collect()
     }
 
-    /// Get petgraph reference (for optimizer)
     pub(crate) fn petgraph(&self) -> &DiGraph<ProcessorNode, Link> {
         &self.graph
     }
 
-    /// Get the number of processors in the graph
     pub fn processor_count(&self) -> usize {
         self.graph.node_count()
     }
 
-    /// Get the number of links in the graph
     pub fn link_count(&self) -> usize {
         self.graph.edge_count()
     }
 
-    /// Find a link by its ID
-    ///
-    /// Returns the link data if found, None otherwise.
     pub fn find_link_by_id(&self, link_id: &LinkId) -> Option<&Link> {
         self.graph
             .edge_indices()
@@ -415,10 +308,6 @@ impl Graph {
             .map(|e| &self.graph[e])
     }
 
-    /// Find a link by its source and destination port addresses
-    ///
-    /// Port addresses are in format "processor_id.port_name".
-    /// Returns the link ID if found, None otherwise.
     pub fn find_link_by_ports(&self, from_port: &str, to_port: &str) -> Option<LinkId> {
         self.graph
             .edge_indices()
@@ -446,23 +335,12 @@ impl PartialEq for Graph {
 
 impl Eq for Graph {}
 
-// ============================================================================
-// Checksum utilities
-// ============================================================================
-
-/// Checksum of a graph's structure for caching/comparison
+/// Checksum of a graph's structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GraphChecksum(pub u64);
 
 impl Graph {
-    /// Compute deterministic checksum of graph structure
-    ///
-    /// The checksum includes:
-    /// - All processor IDs and types (sorted for determinism)
-    /// - All processor configs (JSON serialized)
-    /// - All link IDs and port addresses (sorted for determinism)
-    ///
-    /// Use this for cache invalidation or detecting graph changes.
+    /// Compute deterministic checksum of graph structure.
     pub fn checksum(&self) -> GraphChecksum {
         let mut hasher = DefaultHasher::new();
 
@@ -495,10 +373,7 @@ impl Graph {
     }
 }
 
-/// Compute a checksum from any Debug-able config
-///
-/// Simple utility for hashing configuration structs.
-/// Uses the Debug representation, so configs should have meaningful Debug impls.
+/// Compute a checksum from any Debug-able config.
 pub fn compute_config_checksum<T: std::fmt::Debug>(config: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     format!("{:?}", config).hash(&mut hasher);

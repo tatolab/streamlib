@@ -1,43 +1,16 @@
-// Opus Audio Decoding
-//
-// Provides Opus decoding for real-time audio streaming from WebRTC.
-
 use crate::core::{AudioChannelCount, AudioFrame, Result, StreamError};
 
-// ============================================================================
-// OPUS DECODER IMPLEMENTATION
-// ============================================================================
-
 /// Opus audio decoder for real-time WebRTC streaming.
-///
-/// # Features
-/// - Decodes Opus packets to PCM audio
-/// - Supports mono and stereo input
-/// - Always outputs stereo `AudioFrame` (mono input is duplicated to both channels)
-/// - Sample rate: 48kHz (WebRTC standard)
-///
-/// # Usage
-/// ```ignore
-/// let decoder = OpusDecoder::new(48000, 2)?; // 48kHz, stereo
-/// let audio_frame = decoder.decode_to_audio_frame(opus_packet, timestamp_ns)?;
-/// ```
 #[derive(Debug)]
 pub struct OpusDecoder {
     decoder: opus::Decoder,
     sample_rate: u32,
-    input_channels: usize, // Channels in the input stream (1 or 2)
-    frame_size: usize,     // Expected frame size in samples per channel
+    input_channels: usize,
+    frame_size: usize,
 }
 
 impl OpusDecoder {
-    /// Create a new Opus decoder
-    ///
-    /// # Arguments
-    /// * `sample_rate` - Sample rate in Hz (8000, 12000, 16000, 24000, or 48000)
-    /// * `input_channels` - Number of channels in the Opus stream (1=mono, 2=stereo)
-    ///
-    /// # Returns
-    /// Configured Opus decoder that outputs stereo frames
+    /// Create a new Opus decoder.
     pub fn new(sample_rate: u32, input_channels: usize) -> Result<Self> {
         // Opus supports: 8000, 12000, 16000, 24000, 48000 Hz
         // WebRTC typically uses 48000 Hz
@@ -84,13 +57,7 @@ impl OpusDecoder {
         })
     }
 
-    /// Decode Opus packet to raw PCM samples
-    ///
-    /// # Arguments
-    /// * `packet` - Compressed Opus packet data
-    ///
-    /// # Returns
-    /// Vec of f32 samples (interleaved stereo: [L, R, L, R, ...])
+    /// Decode Opus packet to raw PCM samples.
     pub fn decode(&mut self, packet: &[u8]) -> Result<Vec<f32>> {
         // Track decode calls for debugging
         static DECODE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -166,14 +133,7 @@ impl OpusDecoder {
         }
     }
 
-    /// Decode Opus packet directly to `AudioFrame`
-    ///
-    /// # Arguments
-    /// * `packet` - Compressed Opus packet data
-    /// * `timestamp_ns` - Presentation timestamp in nanoseconds (from MediaClock)
-    ///
-    /// # Returns
-    /// Stereo audio frame ready to be sent to audio output
+    /// Decode Opus packet directly to [`AudioFrame`].
     pub fn decode_to_audio_frame(
         &mut self,
         packet: &[u8],
@@ -192,17 +152,14 @@ impl OpusDecoder {
         ))
     }
 
-    /// Get the configured sample rate
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    /// Get the input channel count (from stream)
     pub fn input_channels(&self) -> usize {
         self.input_channels
     }
 
-    /// Get the expected frame size in samples per channel
     pub fn frame_size(&self) -> usize {
         self.frame_size
     }

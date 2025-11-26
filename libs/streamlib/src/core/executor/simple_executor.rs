@@ -1,32 +1,10 @@
-//! Legacy executor implementation
-//!
-//! This executor implements the original streamlib execution model:
-//! - One thread per processor
-//! - Lock-free ring buffer connections (via rtrb)
-//! - Three scheduling modes: Loop, Push, Pull
-//!
-//! # Execution Model
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                     LegacyExecutor                          │
-//! │                                                             │
-//! │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
-//! │  │  Thread 1   │    │  Thread 2   │    │  Thread 3   │     │
-//! │  │ Processor A │───►│ Processor B │───►│ Processor C │     │
-//! │  └─────────────┘    └─────────────┘    └─────────────┘     │
-//! │         │                  │                  │             │
-//! │         └──────────────────┴──────────────────┘             │
-//! │                   Lock-free ring buffers                    │
-//! └─────────────────────────────────────────────────────────────┘
-//! ```
-
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
 use parking_lot::{Mutex, RwLock};
 
+use super::execution_graph::{CompilationMetadata, ExecutionGraph};
+use super::running::{RunningProcessor, WiredLink};
 use super::{Executor, ExecutorState};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::error::{Result, StreamError};
@@ -35,24 +13,11 @@ use crate::core::graph::{Graph, ProcessorId};
 use crate::core::link_channel::{
     LinkChannel, LinkId, LinkPortAddress, LinkPortType, LinkWakeupEvent,
 };
-use crate::core::processors::DynProcessor;
+use crate::core::processors::{DynProcessor, ProcessorState};
 use crate::core::scheduling::{SchedulingConfig, SchedulingMode};
 
 /// Type alias for boxed dynamic processor
 pub type BoxedProcessor = Box<dyn DynProcessor + Send>;
-
-/// Status of a processor instance
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcessorStatus {
-    /// Waiting to be started
-    Pending,
-    /// Currently running
-    Running,
-    /// In process of stopping
-    Stopping,
-    /// Stopped
-    Stopped,
-}
 
 /// Runtime status snapshot
 #[derive(Debug, Clone)]
@@ -63,73 +28,24 @@ pub struct RuntimeStatus {
     pub processor_count: usize,
     /// Number of active connections
     pub connection_count: usize,
-    /// Per-processor status
-    pub processor_statuses: HashMap<ProcessorId, ProcessorStatus>,
+    /// Per-processor state
+    pub processor_states: HashMap<ProcessorId, ProcessorState>,
 }
 
-/// Runtime handle for a processor instance
-pub(crate) struct ProcessorInstance {
-    #[allow(dead_code)]
-    pub id: ProcessorId,
-    pub thread: Option<JoinHandle<()>>,
-    pub shutdown_tx: crossbeam_channel::Sender<()>,
-    pub wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
-    pub status: Arc<Mutex<ProcessorStatus>>,
-    pub processor: Option<Arc<Mutex<BoxedProcessor>>>,
-}
-
-/// Runtime metadata for a connection instance
-#[derive(Debug, Clone)]
-pub struct LinkInstance {
-    pub id: LinkId,
-    pub from_port: String,
-    pub to_port: String,
-    pub port_type: LinkPortType,
-    pub capacity: usize,
-    pub source_processor: ProcessorId,
-    pub dest_processor: ProcessorId,
-}
-
-impl LinkInstance {
-    pub fn new(
-        id: LinkId,
-        from_port: String,
-        to_port: String,
-        port_type: LinkPortType,
-        capacity: usize,
-    ) -> Self {
-        let source_processor = from_port.split('.').next().unwrap_or_default().to_string();
-        let dest_processor = to_port.split('.').next().unwrap_or_default().to_string();
-
-        Self {
-            id,
-            from_port,
-            to_port,
-            port_type,
-            capacity,
-            source_processor,
-            dest_processor,
-        }
-    }
-}
-
-/// Legacy executor - thread-per-processor with lock-free connections
-pub struct LegacyExecutor {
+/// Simple executor - thread-per-processor with lock-free connections
+pub struct SimpleExecutor {
     state: ExecutorState,
     /// Shared graph (DOM) - read-only access to topology
     graph: Option<Arc<RwLock<Graph>>>,
     /// Runtime context (GPU + main thread dispatch)
     runtime_context: Option<Arc<RuntimeContext>>,
-    /// Live processor instances
-    processors: HashMap<ProcessorId, ProcessorInstance>,
+    /// Execution graph (VDOM) - runtime state extending the Graph
+    /// Created during compile(), contains RunningProcessors and WiredLinks
+    execution_graph: Option<ExecutionGraph>,
     /// Processors waiting to be started (from runtime's pending_processors)
     pending_processors: Vec<(ProcessorId, BoxedProcessor)>,
-    /// Live connection instances
-    connections: HashMap<LinkId, LinkInstance>,
     /// Connection bus (creates ring buffers)
     link_channel: LinkChannel,
-    /// Index: processor ID → connection IDs
-    processor_connections: HashMap<ProcessorId, Vec<LinkId>>,
     /// Connections to wire on start (from_port, to_port)
     connections_to_wire: Vec<(String, String)>,
     /// Next processor ID counter
@@ -140,24 +56,22 @@ pub struct LegacyExecutor {
     dirty: bool,
 }
 
-impl Default for LegacyExecutor {
+impl Default for SimpleExecutor {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LegacyExecutor {
-    /// Create a new legacy executor (standalone, no shared graph)
+impl SimpleExecutor {
+    /// Create a new simple executor (standalone, no shared graph)
     pub fn new() -> Self {
         Self {
             state: ExecutorState::Idle,
             graph: None,
             runtime_context: None,
-            processors: HashMap::new(),
+            execution_graph: None,
             pending_processors: Vec::new(),
-            connections: HashMap::new(),
             link_channel: LinkChannel::new(),
-            processor_connections: HashMap::new(),
             connections_to_wire: Vec::new(),
             next_processor_id: 0,
             next_connection_id: 0,
@@ -165,7 +79,7 @@ impl LegacyExecutor {
         }
     }
 
-    /// Create a new legacy executor with a shared graph reference
+    /// Create a new simple executor with a shared graph reference
     ///
     /// The executor reads the graph on compile/start to understand the topology.
     /// The runtime modifies the graph, and the executor sees changes via the shared reference.
@@ -174,11 +88,9 @@ impl LegacyExecutor {
             state: ExecutorState::Idle,
             graph: Some(graph),
             runtime_context: None,
-            processors: HashMap::new(),
+            execution_graph: None,
             pending_processors: Vec::new(),
-            connections: HashMap::new(),
             link_channel: LinkChannel::new(),
-            processor_connections: HashMap::new(),
             connections_to_wire: Vec::new(),
             next_processor_id: 0,
             next_connection_id: 0,
@@ -197,8 +109,10 @@ impl LegacyExecutor {
 
     /// Compile the execution plan from the shared graph
     ///
-    /// This is an internal method that reads the shared graph, creates a runtime context,
-    /// and prepares for execution. Called automatically by start() if needed.
+    /// This is the "DOM to VDOM" step - reads the Graph (DOM) and creates
+    /// the ExecutionGraph (VDOM) with runtime metadata.
+    ///
+    /// Called automatically by start() if needed.
     fn compile_from_graph(&mut self) -> Result<()> {
         // Get the graph (either shared or we need one passed in)
         let graph = self
@@ -211,6 +125,9 @@ impl LegacyExecutor {
 
         // Validate graph (checks for cycles, etc.)
         graph_guard.validate()?;
+
+        // Compute checksum of the source graph for cache invalidation
+        let source_checksum = graph_guard.checksum();
 
         // Extract connections to wire from the graph links
         self.connections_to_wire.clear();
@@ -228,10 +145,18 @@ impl LegacyExecutor {
         let runtime_context = RuntimeContext::new(gpu_context);
         self.runtime_context = Some(Arc::new(runtime_context));
 
+        // Create the execution graph (VDOM) with compilation metadata
+        // ExecutionGraph wraps the Graph and adds runtime state
+        let metadata = CompilationMetadata::new(source_checksum);
+        self.execution_graph = Some(ExecutionGraph::new(Arc::clone(graph), metadata));
+
         self.dirty = false;
         self.state = ExecutorState::Compiled;
 
-        tracing::info!("Graph compiled successfully");
+        tracing::info!(
+            "Graph compiled successfully (checksum: {:?})",
+            source_checksum
+        );
         Ok(())
     }
 
@@ -247,15 +172,26 @@ impl LegacyExecutor {
 
     /// Get runtime status snapshot
     pub fn status(&self) -> RuntimeStatus {
+        let (processor_count, connection_count, processor_states) =
+            if let Some(exec_graph) = &self.execution_graph {
+                let states = exec_graph
+                    .iter_processor_runtime()
+                    .map(|(id, proc)| (id.clone(), *proc.state.lock()))
+                    .collect();
+                (
+                    exec_graph.processor_count(),
+                    exec_graph.link_count(),
+                    states,
+                )
+            } else {
+                (0, 0, HashMap::new())
+            };
+
         RuntimeStatus {
             running: self.state == ExecutorState::Running,
-            processor_count: self.processors.len(),
-            connection_count: self.connections.len(),
-            processor_statuses: self
-                .processors
-                .iter()
-                .map(|(id, inst)| (id.clone(), *inst.status.lock()))
-                .collect(),
+            processor_count,
+            connection_count,
+            processor_states,
         }
     }
 
@@ -290,25 +226,34 @@ impl LegacyExecutor {
         let proc_id = processor_id.to_string();
 
         // If running, shutdown the processor
-        if let Some(instance) = self.processors.get(&proc_id) {
-            let status = *instance.status.lock();
-            if status == ProcessorStatus::Running {
-                self.shutdown_processor(&proc_id)?;
+        if let Some(exec_graph) = &self.execution_graph {
+            if let Some(instance) = exec_graph.get_processor_runtime(&proc_id) {
+                let current_state = *instance.state.lock();
+                if current_state == ProcessorState::Running {
+                    self.shutdown_processor(&proc_id)?;
+                }
             }
         }
 
-        // Remove from processors map
-        self.processors.remove(&proc_id);
+        // Remove from execution graph (if present)
+        if let Some(exec_graph) = &mut self.execution_graph {
+            // Find and remove associated links first
+            let link_ids: Vec<_> = exec_graph
+                .iter_link_runtime()
+                .filter(|(_, wired)| {
+                    wired.source_processor() == proc_id || wired.dest_processor() == proc_id
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            for link_id in link_ids {
+                exec_graph.remove_link_runtime(&link_id);
+            }
+            exec_graph.remove_processor_runtime(&proc_id);
+        }
 
         // Remove from pending if present
         self.pending_processors.retain(|(id, _)| id != processor_id);
-
-        // Remove associated connections
-        if let Some(conn_ids) = self.processor_connections.remove(&proc_id) {
-            for conn_id in conn_ids {
-                self.connections.remove(&conn_id);
-            }
-        }
 
         self.dirty = true;
         Ok(())
@@ -320,27 +265,35 @@ impl LegacyExecutor {
         self.dirty = true;
     }
 
-    /// Get processor instance (for wiring)
-    pub(crate) fn get_processor(&self, id: &ProcessorId) -> Option<&ProcessorInstance> {
-        self.processors.get(id)
+    /// Get running processor (for wiring)
+    pub(crate) fn get_processor(&self, id: &ProcessorId) -> Option<&RunningProcessor> {
+        self.execution_graph.as_ref()?.get_processor_runtime(id)
     }
 
-    /// Get mutable processor instance
-    pub(crate) fn get_processor_mut(&mut self, id: &ProcessorId) -> Option<&mut ProcessorInstance> {
-        self.processors.get_mut(id)
+    /// Get mutable running processor
+    pub(crate) fn get_processor_mut(&mut self, id: &ProcessorId) -> Option<&mut RunningProcessor> {
+        self.execution_graph.as_mut()?.get_processor_runtime_mut(id)
     }
 
-    /// Get connection instance
-    pub fn get_connection(&self, id: &LinkId) -> Option<&LinkInstance> {
-        self.connections.get(id)
+    /// Get wired link
+    pub(crate) fn get_connection(&self, id: &LinkId) -> Option<&WiredLink> {
+        self.execution_graph.as_ref()?.get_link_runtime(id)
     }
 
-    /// Get connections for a processor
+    /// Get connections for a processor (links where processor is source or destination)
     pub fn get_processor_connections(&self, processor_id: &ProcessorId) -> Vec<LinkId> {
-        self.processor_connections
-            .get(processor_id)
-            .cloned()
-            .unwrap_or_default()
+        let Some(exec_graph) = &self.execution_graph else {
+            return Vec::new();
+        };
+
+        // Find all links connected to this processor by iterating link runtime state
+        exec_graph
+            .iter_link_runtime()
+            .filter(|(_, wired)| {
+                wired.source_processor() == processor_id || wired.dest_processor() == processor_id
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     /// Mark executor as dirty (needs recompile)
@@ -355,17 +308,30 @@ impl LegacyExecutor {
     /// Convert a graph node to a running processor instance
     ///
     /// This is `to_processor_instance` from the design doc.
-    /// It spawns a thread and sets up the processor for execution.
+    /// Looks up the ProcessorNode from the Graph (DOM), spawns a thread,
+    /// and creates a RunningProcessor in the ExecutionGraph (VDOM).
     fn spawn_processor(&mut self, id: ProcessorId, processor: BoxedProcessor) -> Result<()> {
         let ctx = self
             .runtime_context
             .as_ref()
             .ok_or_else(|| StreamError::Runtime("Runtime context not initialized".into()))?;
 
+        // Look up the ProcessorNode from the Graph (DOM)
+        let node = {
+            let graph = self
+                .graph
+                .as_ref()
+                .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
+            let graph_guard = graph.read();
+            graph_guard.get_processor(&id).cloned().ok_or_else(|| {
+                StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", id))
+            })?
+        };
+
         let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
         let (wakeup_tx, wakeup_rx) = crossbeam_channel::unbounded::<LinkWakeupEvent>();
 
-        let status = Arc::new(Mutex::new(ProcessorStatus::Running));
+        let state = Arc::new(Mutex::new(ProcessorState::Running));
         let processor_arc = Arc::new(Mutex::new(processor));
 
         // Setup processor with runtime context
@@ -375,7 +341,7 @@ impl LegacyExecutor {
         }
 
         let processor_clone = Arc::clone(&processor_arc);
-        let status_clone = Arc::clone(&status);
+        let state_clone = Arc::clone(&state);
         let id_clone = id.clone();
 
         let sched_config = processor_arc.lock().scheduling_config();
@@ -388,38 +354,51 @@ impl LegacyExecutor {
                     processor_clone,
                     shutdown_rx,
                     wakeup_rx,
-                    status_clone,
+                    state_clone,
                     sched_config,
                 );
             })
             .map_err(|e| StreamError::Runtime(format!("Failed to spawn thread: {}", e)))?;
 
-        let instance = ProcessorInstance {
-            id: id.clone(),
-            thread: Some(thread),
+        // Create RunningProcessor extending the node from the graph
+        let running = RunningProcessor::new(
+            node,
+            Some(thread),
             shutdown_tx,
             wakeup_tx,
-            status,
-            processor: Some(processor_arc),
-        };
+            state,
+            Some(processor_arc),
+        );
 
-        self.processors.insert(id, instance);
+        // Insert into execution graph (VDOM)
+        let exec_graph = self
+            .execution_graph
+            .as_mut()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
+        exec_graph.insert_processor_runtime(id, running);
+
         Ok(())
     }
 
     /// Shutdown a processor instance
     fn shutdown_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
-        let instance = self.processors.get_mut(processor_id).ok_or_else(|| {
-            StreamError::NotFound(format!("Processor '{}' not found", processor_id))
-        })?;
+        let exec_graph = self
+            .execution_graph
+            .as_mut()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
 
-        let current_status = *instance.status.lock();
-        if current_status == ProcessorStatus::Stopped || current_status == ProcessorStatus::Stopping
-        {
+        let instance = exec_graph
+            .get_processor_runtime_mut(processor_id)
+            .ok_or_else(|| {
+                StreamError::NotFound(format!("Processor '{}' not found", processor_id))
+            })?;
+
+        let current_state = *instance.state.lock();
+        if current_state == ProcessorState::Stopped || current_state == ProcessorState::Stopping {
             return Ok(()); // Already stopped/stopping
         }
 
-        *instance.status.lock() = ProcessorStatus::Stopping;
+        *instance.state.lock() = ProcessorState::Stopping;
 
         tracing::info!("[{}] Shutting down processor...", processor_id);
 
@@ -434,7 +413,7 @@ impl LegacyExecutor {
             match handle.join() {
                 Ok(_) => {
                     tracing::info!("[{}] Processor thread joined successfully", processor_id);
-                    *instance.status.lock() = ProcessorStatus::Stopped;
+                    *instance.state.lock() = ProcessorState::Stopped;
                 }
                 Err(panic_err) => {
                     tracing::error!(
@@ -442,7 +421,7 @@ impl LegacyExecutor {
                         processor_id,
                         panic_err
                     );
-                    *instance.status.lock() = ProcessorStatus::Stopped;
+                    *instance.state.lock() = ProcessorState::Stopped;
                     return Err(StreamError::Runtime(format!(
                         "Processor '{}' thread panicked",
                         processor_id
@@ -461,7 +440,7 @@ impl LegacyExecutor {
         processor: Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: crossbeam_channel::Receiver<()>,
         wakeup_rx: crossbeam_channel::Receiver<LinkWakeupEvent>,
-        status: Arc<Mutex<ProcessorStatus>>,
+        state: Arc<Mutex<ProcessorState>>,
         sched_config: SchedulingConfig,
     ) {
         tracing::debug!("[{}] Thread started with mode {:?}", id, sched_config.mode);
@@ -486,7 +465,7 @@ impl LegacyExecutor {
             }
         }
 
-        *status.lock() = ProcessorStatus::Stopped;
+        *state.lock() = ProcessorState::Stopped;
         tracing::debug!("[{}] Thread stopped", id);
     }
 
@@ -574,7 +553,8 @@ impl LegacyExecutor {
     /// Convert a graph edge to a live connection instance
     ///
     /// This is `to_connection_instance` from the design doc.
-    /// It creates the ring buffer and wires producer/consumer to ports.
+    /// Looks up the Link from the Graph (DOM), creates the ring buffer,
+    /// and creates a WiredLink in the ExecutionGraph (VDOM).
     fn wire_connection(&mut self, from_port: &str, to_port: &str) -> Result<LinkId> {
         let (source_proc_id, source_port) = from_port.split_once('.').ok_or_else(|| {
             StreamError::Configuration(format!(
@@ -590,8 +570,28 @@ impl LegacyExecutor {
             ))
         })?;
 
-        // Generate connection ID
-        let connection_id = self.next_connection_id();
+        // Look up the Link from the Graph (DOM)
+        let link = {
+            let graph = self
+                .graph
+                .as_ref()
+                .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
+            let graph_guard = graph.read();
+            let link_id = graph_guard.find_link(from_port, to_port).ok_or_else(|| {
+                StreamError::InvalidLink(format!(
+                    "Link '{}' → '{}' not found in graph",
+                    from_port, to_port
+                ))
+            })?;
+            graph_guard
+                .find_link_by_id(&link_id)
+                .cloned()
+                .ok_or_else(|| {
+                    StreamError::InvalidLink(format!("Link '{}' not found by ID", link_id))
+                })?
+        };
+
+        let connection_id = link.id.clone();
 
         tracing::info!(
             "Wiring {} ({}:{}) → ({}:{}) [{}]",
@@ -603,21 +603,30 @@ impl LegacyExecutor {
             connection_id
         );
 
-        // Get processor references
-        let (source_processor, dest_processor) = {
-            let source_instance = self.processors.get(source_proc_id).ok_or_else(|| {
-                StreamError::Configuration(format!(
-                    "Source processor '{}' not found",
-                    source_proc_id
-                ))
-            })?;
+        // Get processor references from execution graph
+        let exec_graph = self
+            .execution_graph
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
 
-            let dest_instance = self.processors.get(dest_proc_id).ok_or_else(|| {
-                StreamError::Configuration(format!(
-                    "Destination processor '{}' not found",
-                    dest_proc_id
-                ))
-            })?;
+        let (source_processor, dest_processor) = {
+            let source_instance = exec_graph
+                .get_processor_runtime(&source_proc_id.to_string())
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Source processor '{}' not found",
+                        source_proc_id
+                    ))
+                })?;
+
+            let dest_instance = exec_graph
+                .get_processor_runtime(&dest_proc_id.to_string())
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Destination processor '{}' not found",
+                        dest_proc_id
+                    ))
+                })?;
 
             let source_proc = source_instance.processor.as_ref().ok_or_else(|| {
                 StreamError::Runtime(format!(
@@ -716,32 +725,18 @@ impl LegacyExecutor {
             dest_port_type
         );
 
-        // Store connection metadata
-        let connection = LinkInstance::new(
-            connection_id.clone(),
-            from_port.to_string(),
-            to_port.to_string(),
-            source_port_type,
-            capacity,
-        );
-
-        // Update processor connections index
-        self.processor_connections
-            .entry(connection.source_processor.clone())
-            .or_default()
-            .push(connection_id.clone());
-
-        self.processor_connections
-            .entry(connection.dest_processor.clone())
-            .or_default()
-            .push(connection_id.clone());
-
-        self.connections.insert(connection_id.clone(), connection);
+        // Create WiredLink extending the Link from the graph
+        let wired = WiredLink::new(link, source_port_type, capacity);
 
         // Wire wakeup channel for push/pull scheduling
         {
-            let source_instance = self.processors.get(source_proc_id);
-            let dest_instance = self.processors.get(dest_proc_id);
+            let exec_graph = self
+                .execution_graph
+                .as_ref()
+                .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
+
+            let source_instance = exec_graph.get_processor_runtime(&source_proc_id.to_string());
+            let dest_instance = exec_graph.get_processor_runtime(&dest_proc_id.to_string());
 
             if let (Some(src), Some(dst)) = (source_instance, dest_instance) {
                 if let Some(src_proc) = src.processor.as_ref() {
@@ -758,6 +753,13 @@ impl LegacyExecutor {
                 }
             }
         }
+
+        // Insert WiredLink into execution graph (VDOM)
+        let exec_graph = self
+            .execution_graph
+            .as_mut()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
+        exec_graph.insert_link_runtime(connection_id.clone(), wired);
 
         tracing::info!("Registered connection: {}", connection_id);
         Ok(connection_id)
@@ -855,13 +857,10 @@ impl LegacyExecutor {
     /// Unwire a connection
     #[allow(dead_code)]
     fn unwire_connection(&mut self, connection_id: &LinkId) -> Result<()> {
-        let connection = self
-            .connections
-            .get(connection_id)
-            .cloned()
-            .ok_or_else(|| {
-                StreamError::Configuration(format!("Connection {} not found", connection_id))
-            })?;
+        let exec_graph = self
+            .execution_graph
+            .as_mut()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
 
         tracing::info!("Unwiring connection: {}", connection_id);
 
@@ -871,22 +870,8 @@ impl LegacyExecutor {
             connection_id
         );
 
-        // Remove from connections
-        self.connections.remove(connection_id);
-
-        // Remove from processor connections index
-        if let Some(connections) = self
-            .processor_connections
-            .get_mut(&connection.source_processor)
-        {
-            connections.retain(|id| id != connection_id);
-        }
-        if let Some(connections) = self
-            .processor_connections
-            .get_mut(&connection.dest_processor)
-        {
-            connections.retain(|id| id != connection_id);
-        }
+        // Remove from execution graph (handles index cleanup internally)
+        exec_graph.remove_link_runtime(connection_id);
 
         tracing::info!("Unwired connection: {}", connection_id);
         Ok(())
@@ -896,7 +881,12 @@ impl LegacyExecutor {
     fn send_pull_mode_wakeups(&self) {
         tracing::debug!("Sending initialization wakeup to Pull mode processors");
 
-        for (proc_id, instance) in &self.processors {
+        let Some(exec_graph) = &self.execution_graph else {
+            tracing::warn!("Cannot send wakeups: execution graph not initialized");
+            return;
+        };
+
+        for (proc_id, instance) in exec_graph.iter_processor_runtime() {
             if let Some(proc_ref) = &instance.processor {
                 let sched_config = proc_ref.lock().scheduling_config();
                 if matches!(sched_config.mode, SchedulingMode::Pull) {
@@ -960,7 +950,7 @@ impl LegacyExecutor {
     }
 }
 
-impl Executor for LegacyExecutor {
+impl Executor for SimpleExecutor {
     fn state(&self) -> ExecutorState {
         self.state
     }
@@ -1031,17 +1021,23 @@ impl Executor for LegacyExecutor {
 
         tracing::info!("Stopping executor...");
 
-        // Shutdown all processors
-        let processor_ids: Vec<_> = self.processors.keys().cloned().collect();
+        // Shutdown all processors in the execution graph
+        let processor_ids: Vec<_> = self
+            .execution_graph
+            .as_ref()
+            .map(|eg| eg.processor_ids().cloned().collect())
+            .unwrap_or_default();
+
         for id in processor_ids {
             if let Err(e) = self.shutdown_processor(&id) {
                 tracing::warn!("Error shutting down processor {}: {}", id, e);
             }
         }
 
-        // Clear connections
-        self.connections.clear();
-        self.processor_connections.clear();
+        // Clear execution graph
+        if let Some(exec_graph) = &mut self.execution_graph {
+            exec_graph.clear_runtime_state();
+        }
 
         self.state = ExecutorState::Idle;
         tracing::info!("Executor stopped");
@@ -1108,24 +1104,22 @@ mod tests {
 
     #[test]
     fn test_executor_creation() {
-        let executor = LegacyExecutor::new();
+        let executor = SimpleExecutor::new();
         assert_eq!(executor.state(), ExecutorState::Idle);
         assert!(!executor.needs_recompile());
     }
 
     #[test]
-    fn test_connection_instance_parsing() {
+    fn test_wired_link_parsing() {
+        use crate::core::graph::Link;
         use crate::core::link_channel::link_id::__private::new_unchecked;
 
-        let conn = LinkInstance::new(
-            new_unchecked("conn_0"),
-            "proc_a.video".into(),
-            "proc_b.video".into(),
-            LinkPortType::Video,
-            16,
-        );
+        let link = Link::new(new_unchecked("conn_0"), "proc_a.video", "proc_b.video");
+        let wired = WiredLink::new(link, LinkPortType::Video, 16);
 
-        assert_eq!(conn.source_processor, "proc_a");
-        assert_eq!(conn.dest_processor, "proc_b");
+        assert_eq!(wired.source_processor(), "proc_a");
+        assert_eq!(wired.dest_processor(), "proc_b");
+        // Deref allows direct access to Link fields
+        assert_eq!(wired.id.as_str(), "conn_0");
     }
 }

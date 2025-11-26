@@ -85,7 +85,7 @@ fn main() -> Result<()> {
 
     // Step 3: Add microphone input processor using config-based API
     println!("\n🎤 Adding microphone input...");
-    let mic = runtime.add_processor_with_config::<AudioCaptureProcessor>(AudioCaptureConfig {
+    let mic = runtime.add_processor::<AudioCaptureProcessor>(AudioCaptureConfig {
         device_id: None,
     })?;
     println!("✅ Microphone processor added (mono output at 24kHz)");
@@ -93,7 +93,7 @@ fn main() -> Result<()> {
     // Step 4: Add resampler (24kHz → 48kHz)
     println!("\n🔄 Adding resampler (24kHz → 48kHz)...");
     let resampler =
-        runtime.add_processor_with_config::<AudioResamplerProcessor>(AudioResamplerConfig {
+        runtime.add_processor::<AudioResamplerProcessor>(AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
@@ -102,7 +102,7 @@ fn main() -> Result<()> {
 
     // Step 5: Add channel converter (mono → stereo)
     println!("\n🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
+    let channel_converter = runtime.add_processor::<AudioChannelConverterProcessor>(
         AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
         },
@@ -112,14 +112,14 @@ fn main() -> Result<()> {
     // Step 6: Add buffer rechunker (variable → fixed size)
     println!("\n🔧 Adding buffer rechunker (normalizes buffer sizes)...");
     let rechunker =
-        runtime.add_processor_with_config::<BufferRechunkerProcessor>(BufferRechunkerConfig {
+        runtime.add_processor::<BufferRechunkerProcessor>(BufferRechunkerConfig {
             target_buffer_size: 512, // Fixed buffer size for CLAP plugin
         })?;
     println!("✅ Buffer rechunker added (ensures fixed 512 sample chunks)");
 
     // Step 7: Add CLAP reverb plugin using config-based API
     println!("\n🎛️  Adding CLAP plugin...");
-    let reverb = runtime.add_processor_with_config::<ClapEffectProcessor>(ClapEffectConfig {
+    let reverb = runtime.add_processor::<ClapEffectProcessor>(ClapEffectConfig {
         plugin_path,
         plugin_name: None, // Use first plugin in bundle
         plugin_index: None,
@@ -132,7 +132,7 @@ fn main() -> Result<()> {
 
     // Step 8: Add speaker output processor using config-based API
     println!("\n🔊 Adding speaker output...");
-    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(AudioOutputConfig {
+    let speaker = runtime.add_processor::<AudioOutputProcessor>(AudioOutputConfig {
         device_id: None, // Use default speaker
     })?;
     println!("✅ Speaker processor added (will query hardware for native config)");

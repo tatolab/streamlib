@@ -1,45 +1,9 @@
-//! Stream processing runtime
-//!
-//! # Design (LOCKED)
-//!
-//! The `StreamRuntime` is a **thin orchestrator** with exactly three responsibilities:
-//!
-//! 1. **Graph Mutations** - Add/remove processors and connections (modifies the DOM)
-//! 2. **Event Publishing** - Publishes lifecycle events to EVENT_BUS
-//! 3. **Executor Delegation** - Delegates all execution to the Executor
-//!
-//! ## What Runtime Does
-//!
-//! - Owns the `Graph` (shared via `Arc<RwLock<Graph>>`)
-//! - Owns the `Executor` (currently `LegacyExecutor`)
-//! - Publishes `RuntimeEvent` variants for all lifecycle transitions
-//! - Provides public API for graph manipulation and lifecycle control
-//!
-//! ## What Runtime Does NOT Do
-//!
-//! - ❌ Manage processor instances (Executor's job)
-//! - ❌ Manage connections/wiring (Executor's job)
-//! - ❌ Handle threading/scheduling (Executor's job)
-//! - ❌ Track execution state (Executor's job)
-//! - ❌ Run event loops (Executor's job)
-//!
-//! ## Event Publishing Pattern
-//!
-//! All lifecycle methods follow this pattern:
-//! ```text
-//! 1. Publish "Starting/Stopping/Pausing/Resuming" event
-//! 2. Delegate to executor
-//! 3. Publish "Started/Stopped/Paused/Resumed" or "Failed" event based on Result
-//! ```
-//!
-//! This ensures consistent event publishing regardless of executor implementation.
-
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 use serde::Serialize;
 
-use crate::core::executor::{Executor, LegacyExecutor};
+use crate::core::executor::{Executor, SimpleExecutor};
 use crate::core::graph::{Graph, IntoLinkPortRef, Link, ProcessorId, ProcessorNode};
 use crate::core::link_channel::LinkId;
 use crate::core::processors::Processor;
@@ -54,7 +18,7 @@ pub use crate::core::executor::RuntimeStatus;
 /// All lifecycle, state management, and execution is delegated to the Executor.
 pub struct StreamRuntime {
     graph: Arc<RwLock<Graph>>,
-    executor: LegacyExecutor,
+    executor: SimpleExecutor,
 }
 
 impl Default for StreamRuntime {
@@ -66,7 +30,7 @@ impl Default for StreamRuntime {
 impl StreamRuntime {
     pub fn new() -> Self {
         let graph = Arc::new(RwLock::new(Graph::new()));
-        let executor = LegacyExecutor::with_graph(Arc::clone(&graph));
+        let executor = SimpleExecutor::with_graph(Arc::clone(&graph));
 
         Self { graph, executor }
     }
@@ -121,19 +85,9 @@ impl StreamRuntime {
 
     /// Connect two ports - adds a link to the graph
     ///
-    /// Thin proxy to `Graph::add_link`. All validation
-    /// happens in the graph layer.
-    ///
-    /// Accepts multiple input types via `IntoLinkPortRef`:
-    /// - `LinkPortRef` from `node.output("video")` / `node.input("video")`
-    /// - Raw strings like `"camera_0.video"` (escape hatch)
-    ///
-    /// # Example
-    /// ```ignore
-    /// runtime.connect(camera.output("video"), display.input("video"))?;
-    /// // or with strings:
-    /// runtime.connect("camera_0.video", "display_0.video")?;
-    /// ```
+    /// Accepts [`LinkPortRef`](crate::core::graph::LinkPortRef) which can be created via:
+    /// - Type-safe helpers: [`output`](crate::core::graph::output) / [`input`](crate::core::graph::input)
+    /// - Raw strings: `"camera_0.video"` (escape hatch)
     pub fn connect(
         &mut self,
         from: impl IntoLinkPortRef,

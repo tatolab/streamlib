@@ -1,8 +1,3 @@
-//! Null object pattern for disconnected link ports
-//!
-//! Every link port always has at least one connection - either real or a "plug".
-//! Plugs silently drop pushed data and always return None when popped.
-
 use super::link_ports::LinkPortMessage;
 use std::marker::PhantomData;
 

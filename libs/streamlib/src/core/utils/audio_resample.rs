@@ -1,8 +1,3 @@
-//! Shared audio resampling utilities
-//!
-//! This module provides reusable resampling logic used by both AudioResamplerProcessor
-//! and AppleAudioOutputProcessor to ensure consistent behavior and reduce code duplication.
-
 use crate::core::frames::AudioChannelCount;
 use crate::core::{Result, StreamError};
 use rubato::{
@@ -10,7 +5,7 @@ use rubato::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Quality presets for audio resampling
+/// Quality presets for audio resampling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResamplingQuality {
     High,
@@ -19,7 +14,7 @@ pub enum ResamplingQuality {
 }
 
 impl ResamplingQuality {
-    /// Convert quality preset to rubato interpolation parameters
+    /// Convert to rubato interpolation parameters.
     pub fn to_parameters(&self) -> SincInterpolationParameters {
         match self {
             ResamplingQuality::High => SincInterpolationParameters {
@@ -47,12 +42,7 @@ impl ResamplingQuality {
     }
 }
 
-/// Multi-channel audio resampler that supports any channel count
-///
-/// This resampler handles interleaved audio with any number of channels (1-8)
-/// and provides adaptive sample rate conversion for use in audio pipelines.
-///
-/// Internally dispatches to the appropriate channel-specific resampler.
+/// Multi-channel audio resampler (1-8 channels).
 pub struct AudioResampler {
     inner: ResamplerInner,
     source_sample_rate: u32,
@@ -61,7 +51,6 @@ pub struct AudioResampler {
     quality: ResamplingQuality,
 }
 
-/// Internal resampler variants for different channel counts
 enum ResamplerInner {
     One(SincFixedIn<f32>),
     Two(SincFixedIn<f32>),
@@ -74,20 +63,7 @@ enum ResamplerInner {
 }
 
 impl AudioResampler {
-    /// Create a new multi-channel audio resampler
-    ///
-    /// # Arguments
-    /// * `source_rate` - Input sample rate (Hz)
-    /// * `target_rate` - Output sample rate (Hz)
-    /// * `channels` - Number of audio channels
-    /// * `chunk_size` - Number of samples per channel to process at once
-    /// * `quality` - Quality preset for interpolation
-    ///
-    /// # Returns
-    /// A configured resampler ready to process multi-channel audio
-    ///
-    /// # Supported Channel Counts
-    /// All counts from 1 to 8 channels
+    /// Create a new multi-channel audio resampler.
     pub fn new(
         source_rate: u32,
         target_rate: u32,
@@ -191,18 +167,7 @@ impl AudioResampler {
         })
     }
 
-    /// Resample interleaved multi-channel audio
-    ///
-    /// # Arguments
-    /// * `input` - Interleaved samples [ch0, ch1, ..., chN, ch0, ch1, ...]
-    ///
-    /// # Returns
-    /// Resampled interleaved samples at target sample rate
-    ///
-    /// # Performance
-    /// This function converts between interleaved and planar formats internally.
-    /// For real-time audio, the conversion overhead is negligible compared to
-    /// the resampling computation.
+    /// Resample interleaved multi-channel audio.
     pub fn resample(&mut self, input: &[f32]) -> Result<Vec<f32>> {
         let channels_usize = self.channels.as_usize();
         // Convert interleaved to planar (separate channels)
@@ -243,36 +208,29 @@ impl AudioResampler {
         Ok(interleaved_output)
     }
 
-    /// Get the source sample rate
     pub fn source_sample_rate(&self) -> u32 {
         self.source_sample_rate
     }
 
-    /// Get the target sample rate
     pub fn target_sample_rate(&self) -> u32 {
         self.target_sample_rate
     }
 
-    /// Get the number of channels
     pub fn channels(&self) -> AudioChannelCount {
         self.channels
     }
 
-    /// Get the quality setting
     pub fn quality(&self) -> ResamplingQuality {
         self.quality
     }
 }
 
-/// Legacy stereo-only resampler (kept for backward compatibility)
-///
-/// For new code, prefer `AudioResampler` which supports any channel count.
+/// Legacy stereo-only resampler. Prefer [`AudioResampler`].
 pub struct StereoResampler {
     inner: AudioResampler,
 }
 
 impl StereoResampler {
-    /// Create a new stereo resampler
     pub fn new(
         source_rate: u32,
         target_rate: u32,
@@ -289,22 +247,18 @@ impl StereoResampler {
         Ok(Self { inner })
     }
 
-    /// Resample interleaved stereo audio
     pub fn resample(&mut self, input: &[f32]) -> Result<Vec<f32>> {
         self.inner.resample(input)
     }
 
-    /// Get the source sample rate
     pub fn source_sample_rate(&self) -> u32 {
         self.inner.source_sample_rate()
     }
 
-    /// Get the target sample rate
     pub fn target_sample_rate(&self) -> u32 {
         self.inner.target_sample_rate()
     }
 
-    /// Get the quality setting
     pub fn quality(&self) -> ResamplingQuality {
         self.inner.quality()
     }

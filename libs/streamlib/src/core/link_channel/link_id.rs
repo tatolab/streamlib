@@ -1,53 +1,10 @@
-//! Link identifier with validation
-//!
-//! Provides a type-safe wrapper for link identifiers that enforces validation
-//! and prevents mixing up link IDs with other string types (processor IDs, port names, etc.).
-
 use std::ops::Deref;
 
-/// **Internal APIs - DO NOT USE**
-///
-/// This module contains internal implementation details that bypass safety checks.
-/// These functions are used exclusively by macro-generated code and runtime internals.
-///
-/// # For Library Users
-///
-/// **If you're reading this in the source code**: These APIs are not part of the public
-/// contract and may change or be removed without notice. Use the public APIs instead.
-///
-/// # For Contributors/Forkers
-///
-/// If you're tempted to use these functions directly: **don't**. They exist to optimize
-/// hot paths where we've already guaranteed validity. Using them incorrectly will
-/// introduce subtle bugs and panics in debug builds.
+/// Internal APIs - DO NOT USE directly.
 pub mod __private {
     use super::LinkId;
 
-    /// **INTERNAL USE ONLY** - creates a LinkId without validation
-    ///
-    /// # ⚠️ WARNING ⚠️
-    ///
-    /// This function bypasses all validation. It exists **only** for:
-    /// - Macro-generated code that constructs IDs in known-valid formats
-    /// - Runtime internals where validation would be redundant
-    ///
-    /// # Safety Contract
-    ///
-    /// Caller **must guarantee** the string is valid:
-    /// - Non-empty
-    /// - Only contains: alphanumeric, `_`, `-`, `.`, `>`, `:`
-    ///
-    /// Violating this contract will cause **debug assertions to panic** and may
-    /// cause undefined behavior in release builds.
-    ///
-    /// # For External Users
-    ///
-    /// **Do not use this function.** Use [`LinkId::from_string`] instead.
-    ///
-    /// # Debug Assertions
-    ///
-    /// In debug builds, validates input to catch misuse.
-    /// In release builds, validation is skipped for performance.
+    /// Creates a [`LinkId`] without validation. Use [`LinkId::from_string`] instead.
     pub fn new_unchecked(id: impl Into<String>) -> LinkId {
         let s = id.into();
 
@@ -65,41 +22,17 @@ pub mod __private {
     }
 }
 
-/// A validated, unique link identifier
-///
-/// Cannot be constructed directly from arbitrary strings - must go through validation
-/// via [`LinkId::from_string`]. This ensures all LinkIds in the system
-/// are valid and prevents mixing up link IDs with other string types.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use streamlib::core::LinkId;
-///
-/// // Parse and validate from string (type guard pattern)
-/// let link_id = LinkId::from_string("source.video_out->dest.video_in")?;
-///
-/// // Use in method calls
-/// output_port.add_link(link_id, producer, wakeup)?;
-///
-/// // Works with &str comparisons due to Deref
-/// if link_id.as_str() == "my_link" {
-///     // ...
-/// }
-/// ```
+/// A validated, unique link identifier.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct LinkId(String);
 
-/// Errors that can occur when parsing a LinkId
+/// Errors that can occur when parsing a [`LinkId`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkIdError {
-    /// Link ID is empty
     Empty,
-    /// Link ID contains invalid characters
     InvalidCharacters(String),
-    /// Link ID has invalid format
     InvalidFormat(String),
 }
 
@@ -118,31 +51,7 @@ impl std::fmt::Display for LinkIdError {
 impl std::error::Error for LinkIdError {}
 
 impl LinkId {
-    /// Parse and validate a link ID from a string
-    ///
-    /// This is the **only public way** to create a LinkId from arbitrary input.
-    /// Acts as a "type guard" - if this returns Ok, you have a valid LinkId.
-    ///
-    /// # Validation Rules
-    ///
-    /// - Must not be empty
-    /// - Must contain only alphanumeric characters, underscore, hyphen, or dot
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use streamlib::core::LinkId;
-    ///
-    /// // Valid IDs
-    /// assert!(LinkId::from_string("simple_id").is_ok());
-    /// assert!(LinkId::from_string("proc1.out->proc2.in").is_ok());
-    /// assert!(LinkId::from_string("link-123").is_ok());
-    ///
-    /// // Invalid IDs
-    /// assert!(LinkId::from_string("").is_err());
-    /// assert!(LinkId::from_string("invalid spaces").is_err());
-    /// assert!(LinkId::from_string("bad@char").is_err());
-    /// ```
+    /// Parse and validate a link ID from a string.
     pub fn from_string(s: impl Into<String>) -> Result<Self, LinkIdError> {
         let s = s.into();
 

@@ -1,8 +1,3 @@
-//! Link channel module - runtime data flow between processors
-//!
-//! This module provides the infrastructure for creating typed, lock-free
-//! communication channels between processor link ports in the graph.
-
 pub mod link_channel;
 pub mod link_channel_connections;
 pub mod link_channel_manager;

@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
 
     // 1. Add camera processor using config-based API
     tracing::info!("Adding camera processor...");
-    let camera = runtime.add_processor_with_config::<CameraProcessor>(
+    let camera = runtime.add_processor::<CameraProcessor>(
         CameraConfig {
             device_id: Some("0x1424001bcf2284".to_string()),
         }
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
 
     // 2. Add lower third effect processor (custom processor - needs config struct)
     tracing::info!("Adding lower third effect processor...");
-    let lower_third = runtime.add_processor_with_config::<LowerThirdProcessor>(
+    let lower_third = runtime.add_processor::<LowerThirdProcessor>(
         lower_third::LowerThirdConfig {
             headline: "BREAKING NEWS".to_string(),
             subtitle: "StreamLib Rust Migration Complete".to_string(),
@@ -54,13 +54,13 @@ async fn main() -> Result<()> {
 
     // 3. Add performance overlay processor
     tracing::info!("Adding performance overlay processor...");
-    let perf_overlay = runtime.add_processor_with_config::<PerformanceOverlayProcessor>(
+    let perf_overlay = runtime.add_processor::<PerformanceOverlayProcessor>(
         PerformanceOverlayConfig {}
     )?;
 
     // 4. Add display processor
     tracing::info!("Adding display processor...");
-    let display = runtime.add_processor_with_config::<DisplayProcessor>(
+    let display = runtime.add_processor::<DisplayProcessor>(
         DisplayConfig {
             width: 1920,
             height: 1080,

@@ -1,5 +1,3 @@
-//! Event types for pub/sub messaging
-
 use crate::core::error::Result;
 use serde::{Deserialize, Serialize};
 
@@ -248,13 +246,8 @@ pub enum ProcessorEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ProcessorState {
-    Idle,    // Setup complete, not processing
-    Running, // Actively processing
-    Paused,  // Paused (resources still allocated)
-    Error,   // Error state
-}
+// Re-export ProcessorState from the canonical location
+pub use crate::core::processors::ProcessorState;
 
 // ===== Input Types =====
 

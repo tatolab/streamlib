@@ -1,14 +1,3 @@
-// H.264 RTP Depacketization (RFC 6184)
-//
-// Implements FU-A (Fragmentation Unit) reassembly for H.264 NAL units transmitted over RTP.
-//
-// RFC 6184 defines three packetization modes:
-// 1. Single NAL Unit mode: One NAL per RTP packet (NAL size < MTU)
-// 2. FU-A mode: NAL fragmented across multiple RTP packets (NAL size >= MTU)
-// 3. STAP-A mode: Multiple small NALs aggregated in one RTP packet
-//
-// This implementation handles modes 1 and 2, which are most common for streaming.
-
 use crate::core::{Result, StreamError};
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -29,24 +18,15 @@ const NAL_TYPE_AUD: u8 = 9; // Access Unit Delimiter
 const NAL_TYPE_FU_A: u8 = 28; // Fragmentation Unit A
 const NAL_TYPE_STAP_A: u8 = 24; // Single-Time Aggregation Packet A
 
-/// H.264 RTP depacketizer with FU-A reassembly
-///
-/// Handles incoming RTP packets and reconstructs complete NAL units.
-/// Maintains state for fragmented packets across multiple RTP packets.
+/// H.264 RTP depacketizer with FU-A reassembly.
 pub struct H264RtpDepacketizer {
-    /// Buffer for FU-A fragments being reassembled (keyed by timestamp)
     fu_buffers: HashMap<u32, FuBuffer>,
 }
 
-/// FU-A reassembly buffer for a single NAL unit
 struct FuBuffer {
-    /// NAL header (reconstructed from FU indicator and header)
     nal_header: u8,
-    /// Accumulated fragments
     fragments: Vec<Bytes>,
-    /// Expected sequence number for next fragment
     next_seq: Option<u16>,
-    /// Total size of accumulated data
     total_size: usize,
 }
 
@@ -57,15 +37,7 @@ impl H264RtpDepacketizer {
         }
     }
 
-    /// Process an RTP packet and return complete NAL units if available
-    ///
-    /// # Arguments
-    /// * `payload` - Raw RTP payload (H.264 packetized data)
-    /// * `timestamp` - RTP timestamp for this packet
-    /// * `seq_num` - RTP sequence number for detecting packet loss
-    ///
-    /// # Returns
-    /// Vector of complete NAL units (may be empty if packet is a fragment)
+    /// Process an RTP packet and return complete NAL units if available.
     pub fn process_packet(
         &mut self,
         payload: Bytes,
@@ -101,23 +73,6 @@ impl H264RtpDepacketizer {
         }
     }
 
-    /// Process FU-A (Fragmentation Unit) packet
-    ///
-    /// FU-A format:
-    /// ```text
-    /// 0                   1                   2                   3
-    /// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /// | FU indicator  |   FU header   |                               |
-    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               |
-    /// |                                                               |
-    /// |                         FU payload                            |
-    /// |                                                               |
-    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /// ```
-    ///
-    /// FU indicator: F=0 | NRI (2 bits) | Type=28
-    /// FU header: S (start) | E (end) | R=0 | NAL type (5 bits)
     fn process_fu_a(&mut self, payload: Bytes, timestamp: u32, seq_num: u16) -> Result<Vec<Bytes>> {
         if payload.len() < 2 {
             return Err(StreamError::Runtime("FU-A packet too small".into()));
@@ -245,21 +200,6 @@ impl H264RtpDepacketizer {
         }
     }
 
-    /// Process STAP-A (Single-Time Aggregation Packet) packet
-    ///
-    /// STAP-A format:
-    /// ```text
-    /// 0                   1                   2                   3
-    /// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /// |                          RTP Header                           |
-    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /// |STAP-A NAL HDR |         NALU 1 Size           | NALU 1 HDR    |
-    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /// |                         NALU 1 Data                           |
-    /// :                                                               :
-    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    /// ```
     fn process_stap_a(&mut self, payload: Bytes) -> Result<Vec<Bytes>> {
         let mut nal_units = Vec::new();
         let mut offset = 1; // Skip STAP-A NAL header
@@ -290,10 +230,7 @@ impl H264RtpDepacketizer {
         Ok(nal_units)
     }
 
-    /// Clean up stale FU-A buffers (call periodically to prevent memory leaks)
-    ///
-    /// Removes buffers older than the given threshold (in RTP timestamp units).
-    /// For H.264 @ 90kHz clock, 90000 units = 1 second.
+    /// Clean up stale FU-A buffers to prevent memory leaks.
     pub fn cleanup_stale_buffers(&mut self, current_timestamp: u32, threshold: u32) {
         self.fu_buffers.retain(|&ts, _| {
             // Handle timestamp wraparound

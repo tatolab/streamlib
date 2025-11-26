@@ -2,10 +2,12 @@ mod base;
 mod dyn_processor;
 mod dyn_processor_impl;
 mod processor;
+mod state;
 
 pub use base::{BaseProcessor, ProcessorType};
 pub use dyn_processor::DynProcessor;
 pub use processor::Processor;
+pub use state::ProcessorState;
 
 /// Empty config type for processors that don't need configuration
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

@@ -1,16 +1,3 @@
-//! Graph module - processor topology as a DAG
-//!
-//! The Graph is the "DOM" - a pure data representation of the desired processor topology.
-//! It can be serialized, compared, cloned, and analyzed without any execution state.
-//!
-//! # Design
-//!
-//! The Graph follows a DOM/VDOM pattern:
-//! - **Graph (DOM)**: Pure data structure describing topology
-//! - **Executor**: Reads the graph and creates execution state
-//!
-//! The runtime modifies the Graph, and the executor reads it via shared `Arc<RwLock<Graph>>`.
-
 mod graph;
 mod link;
 mod link_port_markers;

@@ -1,52 +1,3 @@
-//! GPU-Accelerated Pixel Format Conversion using VTPixelTransferSession
-//!
-//! This module provides a wrapper around Apple's VTPixelTransferSession for
-//! hardware-accelerated RGBA → NV12 conversion on the GPU.
-//!
-//! ## Performance
-//!
-//! - **Target**: <2ms for 1080p RGBA→NV12 conversion
-//! - **vs CPU**: ~13ms for 1080p (8ms GPU copy + 5ms CPU YUV conversion)
-//! - **Speedup**: ~6.5x faster than CPU path
-//!
-//! ## Architecture
-//!
-//! The conversion happens in two GPU-accelerated steps:
-//!
-//! 1. **Metal Blit** (GPU): wgpu::Texture (RGBA) → CVPixelBuffer (RGBA)
-//!    - Uses Metal command encoder to blit texture data
-//!    - Pattern borrowed from mp4_writer.rs and display.rs
-//!    - Stays entirely on GPU, no CPU involvement
-//!
-//! 2. **VTPixelTransferSession** (GPU): CVPixelBuffer (RGBA) → CVPixelBuffer (NV12)
-//!    - Apple's hardware-accelerated format converter
-//!    - Handles color space conversion (BT.709, limited range)
-//!    - GPU-only operation
-//!
-//! ## Why Not Direct IOSurface Access?
-//!
-//! We cannot directly extract IOSurface from wgpu Metal textures because:
-//! - wgpu creates IOSurface-backed textures internally but doesn't expose the pointer
-//! - The `metal` crate has no `texture.iosurface()` method
-//! - `MTLTextureGetIOSurface()` is private/undocumented
-//!
-//! See `iosurface.rs` module documentation for detailed explanation.
-//!
-//! ## Usage
-//!
-//! ```rust,ignore
-//! use streamlib::apple::PixelTransferSession;
-//!
-//! // Create once, reuse for all conversions
-//! let pixel_transfer = PixelTransferSession::new(wgpu_bridge, metal_command_queue)?;
-//!
-//! // Convert frames
-//! let nv12_buffer = pixel_transfer.convert_to_nv12(&wgpu_texture, width, height)?;
-//!
-//! // Use with VideoToolbox encoder
-//! VTCompressionSessionEncodeFrame(session, nv12_buffer, ...);
-//! ```
-
 use crate::apple::iosurface;
 use crate::apple::WgpuBridge;
 use crate::core::{Result, StreamError};
@@ -96,24 +47,14 @@ mod ffi {
 }
 
 /// GPU-accelerated pixel format converter using VTPixelTransferSession.
-///
-/// Converts RGBA textures to NV12 CVPixelBuffers for H.264 encoding or MP4 writing.
 pub struct PixelTransferSession {
-    /// VTPixelTransferSession handle for GPU format conversion
     session: ffi::VTPixelTransferSessionRef,
-
-    /// Bridge for wgpu ↔ Metal texture conversion
     wgpu_bridge: Arc<WgpuBridge>,
-
-    /// Metal command queue for blitting operations
     command_queue: metal::CommandQueue,
 }
 
 impl PixelTransferSession {
     /// Creates a new pixel transfer session.
-    ///
-    /// This should be created once and reused for all conversions to amortize
-    /// the session creation cost.
     pub fn new(wgpu_bridge: Arc<WgpuBridge>) -> Result<Self> {
         // Create VTPixelTransferSession
         let mut session: ffi::VTPixelTransferSessionRef = std::ptr::null_mut();
@@ -155,24 +96,6 @@ impl PixelTransferSession {
     }
 
     /// Converts an RGBA wgpu texture to NV12 CVPixelBuffer.
-    ///
-    /// This performs GPU-accelerated conversion in two steps:
-    /// 1. Metal blit: wgpu texture → RGBA CVPixelBuffer
-    /// 2. VTPixelTransferSession: RGBA CVPixelBuffer → NV12 CVPixelBuffer
-    ///
-    /// # Arguments
-    ///
-    /// * `wgpu_texture` - Source RGBA texture (typically from camera or processing pipeline)
-    /// * `width` - Texture width in pixels
-    /// * `height` - Texture height in pixels
-    ///
-    /// # Returns
-    ///
-    /// Raw pointer to NV12 CVPixelBuffer. Caller is responsible for releasing.
-    ///
-    /// # Performance
-    ///
-    /// Target: <2ms for 1080p on modern Apple Silicon
     pub fn convert_to_nv12(
         &self,
         wgpu_texture: &wgpu::Texture,

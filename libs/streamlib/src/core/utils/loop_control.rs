@@ -1,42 +1,16 @@
-//! Loop utilities with shutdown signal support via event bus
-//!
-//! Provides helpers for processors that run infinite loops while respecting
-//! shutdown signals published via the global event bus.
-//!
-//! # Example
-//! ```rust,ignore
-//! use streamlib::core::loop_utils::{shutdown_aware_loop, LoopControl};
-//!
-//! shutdown_aware_loop(|| {
-//!     // Your processing logic here
-//!     if let Some(data) = get_data() {
-//!         process(data)?;
-//!     }
-//!     Ok(LoopControl::Continue)
-//! })?;
-//! ```
-//!
-//! # Performance
-//! - Event bus dispatch (once on shutdown): 17-60µs
-//! - Atomic flag check (per iteration): ~2ns
-//! - Total overhead: <0.01% (negligible)
-
 use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, EVENT_BUS};
 use crate::core::Result;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Control flow for shutdown-aware loops
+/// Control flow for shutdown-aware loops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopControl {
-    /// Continue loop iteration
     Continue,
-    /// Break loop and exit gracefully
     Break,
 }
 
-/// Event listener that sets a flag when shutdown is received
 struct ShutdownListener {
     shutdown_flag: Arc<AtomicBool>,
 }
@@ -53,33 +27,7 @@ impl EventListener for ShutdownListener {
     }
 }
 
-/// Run a loop that automatically exits on shutdown events
-///
-/// This function subscribes to runtime shutdown events from the global event bus
-/// and checks a shutdown flag on each iteration. When a shutdown event is received,
-/// the loop exits gracefully.
-///
-/// # Performance
-/// - Event subscription: ~17-60µs (one-time cost)
-/// - Per-iteration check: ~2ns (atomic load)
-/// - Total overhead: <0.01% vs typical processor work
-///
-/// # Example
-/// ```rust,ignore
-/// use streamlib::core::loop_utils::{shutdown_aware_loop, LoopControl};
-///
-/// shutdown_aware_loop(|| {
-///     // Poll for data
-///     if let Some(frame) = get_frame() {
-///         process_frame(frame)?;
-///     }
-///
-///     Ok(LoopControl::Continue)
-/// })?;
-/// ```
-///
-/// # Errors
-/// Returns the error from the user closure if it fails.
+/// Run a loop that automatically exits on shutdown events.
 pub fn shutdown_aware_loop<F, E>(mut f: F) -> std::result::Result<(), E>
 where
     F: FnMut() -> std::result::Result<LoopControl, E>,

@@ -40,7 +40,7 @@ fn main() -> Result<()> {
     // Create a chord generator (C major: C4 + E4 + G4)
     println!("🎵 Adding chord generator (C major - C4, E4, G4)...");
     let chord =
-        runtime.add_processor_with_config::<ChordGeneratorProcessor>(ChordGeneratorConfig {
+        runtime.add_processor::<ChordGeneratorProcessor>(ChordGeneratorConfig {
             amplitude: 0.15, // 15% volume to avoid clipping
             sample_rate,
             buffer_size,
@@ -49,7 +49,7 @@ fn main() -> Result<()> {
 
     // Create audio output processor
     println!("🔊 Adding audio output processor...");
-    let output = runtime.add_processor_with_config::<AudioOutputProcessor>(AudioOutputConfig {
+    let output = runtime.add_processor::<AudioOutputProcessor>(AudioOutputConfig {
         device_id: None, // Use default audio device
     })?;
     println!("✓ Audio output added\n");

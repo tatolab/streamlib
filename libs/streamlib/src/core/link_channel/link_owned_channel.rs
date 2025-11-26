@@ -1,16 +1,8 @@
-//! Lock-Free Link Channel Architecture
-//!
-//! This module provides true lock-free channels using rtrb's lock-free ring buffer.
-//! NO Arc<Mutex> - just atomic operations for maximum performance.
-
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// Lock-free producer for writing data to a link channel
-///
-/// Wraps rtrb::Producer directly (no Arc<Mutex>) for true lock-free writes
-/// using only atomic operations.
+/// Lock-free producer for writing data to a link channel.
 pub struct LinkOwnedProducer<T: Clone + Send + 'static> {
     inner: Producer<T>,
     cached_size: Arc<AtomicUsize>,
@@ -24,11 +16,7 @@ impl<T: Clone + Send + 'static> LinkOwnedProducer<T> {
         }
     }
 
-    /// Write data to the link channel with drop-on-full semantics (lock-free)
-    ///
-    /// If the buffer is full, the data is dropped (acceptable for real-time streaming).
-    /// This is necessary because we can't access the consumer from the producer side
-    /// in the lock-free architecture.
+    /// Write data to the channel, dropping if buffer is full.
     pub fn write(&mut self, data: T) {
         match self.inner.push(data) {
             Ok(()) => {
@@ -42,7 +30,7 @@ impl<T: Clone + Send + 'static> LinkOwnedProducer<T> {
         }
     }
 
-    /// Try to write data, returning the data back if buffer is full (lock-free)
+    /// Try to write data, returning the data back if buffer is full.
     pub fn try_write(&mut self, data: T) -> Result<(), T> {
         match self.inner.push(data) {
             Ok(()) => {
@@ -53,16 +41,13 @@ impl<T: Clone + Send + 'static> LinkOwnedProducer<T> {
         }
     }
 
-    /// Check if buffer has space (lock-free, atomic read)
+    /// Check if buffer has space.
     pub fn has_space(&self) -> bool {
         self.inner.slots() > 0
     }
 }
 
-/// Lock-free consumer for reading data from a link channel
-///
-/// Wraps rtrb::Consumer directly (no Arc<Mutex>) for true lock-free reads
-/// using only atomic operations.
+/// Lock-free consumer for reading data from a link channel.
 pub struct LinkOwnedConsumer<T: Clone + Send + 'static> {
     inner: Consumer<T>,
     cached_size: Arc<AtomicUsize>,
@@ -76,10 +61,7 @@ impl<T: Clone + Send + 'static> LinkOwnedConsumer<T> {
         }
     }
 
-    /// Read and return the most recent item, discarding all older items (lock-free)
-    ///
-    /// Optimal for video frames where you want the latest frame and don't care about
-    /// missed intermediate frames.
+    /// Read and return the most recent item, discarding older items.
     pub fn read_latest(&mut self) -> Option<T> {
         let mut latest = None;
         while let Ok(item) = self.inner.pop() {
@@ -89,10 +71,7 @@ impl<T: Clone + Send + 'static> LinkOwnedConsumer<T> {
         latest
     }
 
-    /// Read the next item sequentially (lock-free)
-    ///
-    /// Returns None if buffer is empty. Use this for audio or data where you need
-    /// every item in order.
+    /// Read the next item sequentially.
     pub fn read(&mut self) -> Option<T> {
         match self.inner.pop() {
             Ok(item) => {
@@ -103,34 +82,18 @@ impl<T: Clone + Send + 'static> LinkOwnedConsumer<T> {
         }
     }
 
-    /// Check if data is available (lock-free, atomic read)
+    /// Check if data is available.
     pub fn has_data(&self) -> bool {
         self.cached_size.load(Ordering::Relaxed) > 0
     }
 
-    /// Peek at the next item without consuming it (lock-free)
+    /// Peek at the next item without consuming it.
     pub fn peek(&self) -> Option<T> {
         self.inner.peek().ok().cloned()
     }
 }
 
-/// Create a pair of owned producer/consumer for lock-free link communication
-///
-/// This is the primary way to create link channels.
-///
-/// # Example
-///
-/// ```
-/// use streamlib::core::link_channel::create_link_channel;
-///
-/// let (mut producer, mut consumer) = create_link_channel::<i32>(32);
-///
-/// // Lock-free write
-/// producer.write(42);
-///
-/// // Lock-free read
-/// assert_eq!(consumer.read(), Some(42));
-/// ```
+/// Create a producer/consumer pair for lock-free link communication.
 pub fn create_link_channel<T: Clone + Send + 'static>(
     capacity: usize,
 ) -> (LinkOwnedProducer<T>, LinkOwnedConsumer<T>) {

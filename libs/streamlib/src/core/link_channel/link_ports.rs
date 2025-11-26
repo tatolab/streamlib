@@ -1,8 +1,3 @@
-//! Link port types for processor input/output
-//!
-//! This module provides LinkInput and LinkOutput types that processors use
-//! to receive and send data through links in the graph.
-
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::sync::Arc;

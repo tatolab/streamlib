@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     println!("   Generates stereo output with C4 + E4 + G4 pre-mixed");
 
     let chord_gen = runtime
-        .add_processor_with_config::<ChordGeneratorProcessor>(ChordGeneratorConfig::default())?;
+        .add_processor::<ChordGeneratorProcessor>(ChordGeneratorConfig::default())?;
     println!("   ✅ C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)");
     println!("   ✅ Pre-mixed stereo output on port 'chord'");
     println!("   All 3 tones generated from single synchronized source\n");
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
 
     // Step 5: Add speaker output
     println!("🔊 Adding speaker output...");
-    let speaker = runtime.add_processor_with_config::<AudioOutputProcessor>(AudioOutputConfig {
+    let speaker = runtime.add_processor::<AudioOutputProcessor>(AudioOutputConfig {
         device_id: None, // Use default speaker
     })?;
     println!("   Using default audio device\n");

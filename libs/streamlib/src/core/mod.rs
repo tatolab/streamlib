@@ -9,6 +9,7 @@ pub mod media_clock;
 pub mod processors;
 pub mod pubsub;
 pub mod registry;
+pub mod runtime;
 pub mod scheduling;
 pub mod schema;
 pub mod signals;
@@ -23,7 +24,7 @@ pub use clap::{
 };
 pub use context::{GpuContext, RuntimeContext};
 pub use error::{Result, StreamError};
-pub use executor::{ExecutorState, LegacyExecutor, RuntimeStatus};
+pub use executor::{ExecutorState, RuntimeStatus, SimpleExecutor};
 pub use frames::{
     AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
 };
@@ -36,10 +37,12 @@ pub use link_channel::{
     LinkOwnedProducer, LinkPortAddress, LinkPortMessage, LinkPortType,
 };
 pub use link_channel::{LinkId, LinkWakeupEvent};
-pub use processors::{BaseProcessor, DynProcessor, EmptyConfig, Processor, ProcessorType};
+pub use processors::{
+    BaseProcessor, DynProcessor, EmptyConfig, Processor, ProcessorState, ProcessorType,
+};
 pub use pubsub::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
-    ProcessorState, RuntimeEvent, WindowEventType, EVENT_BUS,
+    RuntimeEvent, WindowEventType, EVENT_BUS,
 };
 pub use utils::{
     convert_audio_frame, convert_channels, resample_frame, AudioRechunker, LoopControl,
@@ -61,6 +64,7 @@ pub use registry::{
     register_processor, unregister_processor, DescriptorProvider, ProcessorRegistration,
     ProcessorRegistry,
 };
+pub use runtime::StreamRuntime;
 pub use scheduling::{SchedulingConfig, SchedulingMode, ThreadPriority};
 pub use schema::{
     AudioRequirements, Field, FieldType, PortDescriptor, ProcessorDescriptor, ProcessorExample,

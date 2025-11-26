@@ -1,5 +1,3 @@
-//! LinkChannelManager - manages metadata for link channels
-
 use super::link_id::{self, LinkId};
 use super::link_owned_channel::{create_link_channel, LinkOwnedConsumer, LinkOwnedProducer};
 use super::link_ports::{LinkPortAddress, LinkPortMessage};
