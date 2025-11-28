@@ -74,8 +74,9 @@ fn main() -> Result<()> {
     tracing::info!("  - Blue bar sliding up from bottom");
     tracing::info!("  - Gold accent line");
 
-    // Run forever (until Ctrl+C)
-    runtime.run()?;
+    // Block until Ctrl+C
+    runtime.block_until_signal()?;
+    runtime.stop()?;
 
     Ok(())
 }

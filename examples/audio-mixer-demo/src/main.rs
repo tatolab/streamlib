@@ -65,7 +65,8 @@ fn main() -> Result<()> {
     println!("   • Type-safe connections verified at compile time\n");
 
     runtime.start()?;
-    runtime.run()?;
+    runtime.block_until_signal()?;
+    runtime.stop()?;
 
     println!("\n\n⏹️  Stopping...");
     println!("✅ Stopped\n");

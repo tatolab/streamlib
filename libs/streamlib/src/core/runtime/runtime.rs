@@ -393,34 +393,19 @@ impl StreamRuntime {
         }
     }
 
-    /// Run the runtime (blocking until shutdown signal).
-    pub fn run(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
-
-        EVENT_BUS.publish(
-            "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
-        );
-
-        // Delegate to executor (handles start, event loop, and stop internally)
-        match self.executor.run() {
-            Ok(()) => {
-                EVENT_BUS.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
-                );
-                Ok(())
-            }
-            Err(e) => {
-                EVENT_BUS.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopFailed {
-                        error: e.to_string(),
-                    }),
-                );
-                Err(e)
-            }
-        }
+    /// Block until shutdown signal (Ctrl+C / SIGTERM).
+    ///
+    /// Call after `start()` to keep the process alive until interrupted.
+    /// Does not automatically stop - call `stop()` after if needed.
+    ///
+    /// # Example
+    /// ```ignore
+    /// runtime.start()?;
+    /// runtime.block_until_signal()?;  // Blocks here
+    /// runtime.stop()?;                 // Clean shutdown
+    /// ```
+    pub fn block_until_signal(&self) -> Result<()> {
+        self.executor.block_until_signal()
     }
 
     pub fn status(&self) -> RuntimeStatus {

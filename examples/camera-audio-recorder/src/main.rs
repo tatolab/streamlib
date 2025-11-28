@@ -126,7 +126,8 @@ fn main() -> Result<()> {
     println!("📊 A/V sync tolerance: 16.6ms (video frames may be dropped/duplicated)\n");
 
     runtime.start()?;
-    runtime.run()?;
+    runtime.block_until_signal()?;
+    runtime.stop()?;
 
     println!("\n✅ Recording stopped");
     println!("✅ MP4 file finalized: {}", output_path);

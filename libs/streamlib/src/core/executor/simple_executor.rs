@@ -1262,12 +1262,19 @@ impl Executor for SimpleExecutor {
     }
 
     fn start(&mut self) -> Result<()> {
+        // Idempotent: already running is ok
+        if self.state == ExecutorState::Running {
+            tracing::debug!("Executor already running");
+            return Ok(());
+        }
+
         // Auto-compile if in Idle state
         if self.state == ExecutorState::Idle {
             self.compile_from_graph()?;
         }
 
-        if self.state != ExecutorState::Compiled {
+        // Can start from Compiled or Paused state
+        if self.state != ExecutorState::Compiled && self.state != ExecutorState::Paused {
             return Err(StreamError::Runtime(format!(
                 "Cannot start executor in state {:?}",
                 self.state
@@ -1288,6 +1295,13 @@ impl Executor for SimpleExecutor {
     }
 
     fn stop(&mut self) -> Result<()> {
+        // Idempotent: already stopped is ok
+        if self.state == ExecutorState::Idle {
+            tracing::debug!("Executor already stopped");
+            return Ok(());
+        }
+
+        // Can only stop from Running or Paused
         if self.state != ExecutorState::Running && self.state != ExecutorState::Paused {
             return Err(StreamError::Runtime(format!(
                 "Cannot stop executor in state {:?}",
@@ -1321,6 +1335,12 @@ impl Executor for SimpleExecutor {
     }
 
     fn pause(&mut self) -> Result<()> {
+        // Idempotent: already paused is ok
+        if self.state == ExecutorState::Paused {
+            tracing::debug!("Executor already paused");
+            return Ok(());
+        }
+
         if self.state != ExecutorState::Running {
             return Err(StreamError::Runtime(format!(
                 "Cannot pause executor in state {:?}",
@@ -1336,6 +1356,12 @@ impl Executor for SimpleExecutor {
     }
 
     fn resume(&mut self) -> Result<()> {
+        // Idempotent: already running is ok
+        if self.state == ExecutorState::Running {
+            tracing::debug!("Executor already running");
+            return Ok(());
+        }
+
         if self.state != ExecutorState::Paused {
             return Err(StreamError::Runtime(format!(
                 "Cannot resume executor in state {:?}",
@@ -1350,23 +1376,25 @@ impl Executor for SimpleExecutor {
         Ok(())
     }
 
-    fn run(&mut self) -> Result<()> {
-        // Start if not already running (start() auto-compiles if needed)
-        if self.state != ExecutorState::Running {
-            self.start()?;
-        }
-
+    fn block_until_signal(&self) -> Result<()> {
         // Install signal handlers
         crate::core::signals::install_signal_handlers().map_err(|e| {
             StreamError::Configuration(format!("Failed to install signal handlers: {}", e))
         })?;
 
-        // Run the default event loop - blocking until shutdown
-        self.run_event_loop()?;
+        // On macOS, run the NSApplication event loop (required for windows, vsync, camera callbacks)
+        // On other platforms, use the generic crossbeam-based event loop
+        #[cfg(target_os = "macos")]
+        {
+            crate::apple::runtime_ext::install_macos_shutdown_handler();
+            crate::apple::runtime_ext::run_macos_event_loop();
+            Ok(())
+        }
 
-        // Stop and cleanup
-        self.stop()?;
-        Ok(())
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.run_event_loop()
+        }
     }
 
     fn needs_recompile(&self) -> bool {

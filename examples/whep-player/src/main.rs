@@ -100,8 +100,9 @@ fn run_whep_player() -> Result<()> {
     tracing::info!("📺 WHEP stream is now playing!");
     tracing::info!("Press Cmd+Q to stop.\n");
 
-    // Run until stopped
-    runtime.run()?;
+    // Block until stopped
+    runtime.block_until_signal()?;
+    runtime.stop()?;
 
     tracing::info!("✅ WHEP player stopped");
 
