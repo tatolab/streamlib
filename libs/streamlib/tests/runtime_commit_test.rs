@@ -26,7 +26,7 @@ fn test_auto_commit_syncs_graph_changes() {
 
     // Add a processor - should auto-commit
     let node = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add processor");
 
     // Verify node was added to graph
@@ -41,11 +41,11 @@ fn test_manual_commit_batches_changes() {
 
     // Add multiple processors without committing
     let node1 = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add processor 1");
 
     let node2 = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add processor 2");
 
     // Verify nodes are in the graph
@@ -66,11 +66,11 @@ fn test_connect_with_auto_commit() {
 
     // Add source and sink processors
     let source = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add source");
 
     let sink = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add sink");
 
     // Connect them - in auto mode this syncs immediately
@@ -93,11 +93,11 @@ fn test_disconnect_removes_link() {
 
     // Setup: add processors and connect
     let source = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add source");
 
     let sink = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add sink");
 
     let link = runtime
@@ -128,7 +128,7 @@ fn test_remove_processor() {
     let mut runtime = StreamRuntime::new();
 
     let node = runtime
-        .add_processor::<SimplePassthroughProcessor>(Default::default())
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add processor");
 
     // Verify exists
@@ -138,7 +138,9 @@ fn test_remove_processor() {
     }
 
     // Remove
-    runtime.remove_processor(&node).expect("Failed to remove processor");
+    runtime
+        .remove_processor(&node)
+        .expect("Failed to remove processor");
 
     // Verify removed
     {
@@ -170,7 +172,7 @@ fn test_registry_factory_registration() {
     assert!(!factory.can_create("SimplePassthroughProcessor"));
 
     // Register
-    factory.register::<SimplePassthroughProcessor>();
+    factory.register::<SimplePassthroughProcessor::Processor>();
 
     // After registration
     assert!(factory.is_registered("SimplePassthroughProcessor"));
@@ -208,7 +210,9 @@ mod unwire_tests {
         let (wakeup_tx, _wakeup_rx) = crossbeam_channel::bounded(1);
 
         // Add link
-        output.add_link(link_id.clone(), producer, wakeup_tx).unwrap();
+        output
+            .add_link(link_id.clone(), producer, wakeup_tx)
+            .unwrap();
         assert!(output.is_connected());
         assert_eq!(output.link_count(), 1);
 
@@ -231,8 +235,7 @@ mod unwire_tests {
         let link_id = link_id::__private::new_unchecked("test_link".to_string());
         let (_producer, consumer) = streamlib::core::create_link_channel::<VideoFrame>(16);
         let (wakeup_tx, _wakeup_rx) = crossbeam_channel::bounded(1);
-        let source_addr =
-            streamlib::core::LinkPortAddress::new("source_proc", "output");
+        let source_addr = streamlib::core::LinkPortAddress::new("source_proc", "output");
 
         // Add link
         input
@@ -266,13 +269,13 @@ mod unwire_tests {
 
         // Create a chain: source -> middle -> sink
         let source = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add source");
         let middle = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add middle");
         let sink = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add sink");
 
         // Connect the chain
@@ -315,11 +318,11 @@ mod unwire_tests {
         let mut runtime = StreamRuntime::new();
 
         let source = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add source");
 
         let sink = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add sink");
 
         let link = runtime
@@ -330,7 +333,9 @@ mod unwire_tests {
             .expect("connect");
 
         // Disconnect by ID
-        runtime.disconnect_by_id(&link.id).expect("disconnect by id");
+        runtime
+            .disconnect_by_id(&link.id)
+            .expect("disconnect by id");
 
         // Verify removed
         let graph = runtime.graph().read();
@@ -480,7 +485,7 @@ mod config_tests {
         let mut runtime = StreamRuntime::new();
 
         let node = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add processor");
 
         // Checksum should be computed for the default config
@@ -496,7 +501,7 @@ mod config_tests {
         let mut runtime = StreamRuntime::new();
 
         let node = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add processor");
 
         // Get original checksum
@@ -530,7 +535,7 @@ mod config_tests {
         let mut runtime = StreamRuntime::new();
 
         let node = runtime
-            .add_processor::<SimplePassthroughProcessor>(Default::default())
+            .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add processor");
 
         // Get original checksum
@@ -601,7 +606,7 @@ mod config_tests {
 
         // Add processor manually
         let node = graph
-            .add_processor_node::<SimplePassthroughProcessor>(Default::default())
+            .add_processor_node::<SimplePassthroughProcessor::Processor>(Default::default())
             .expect("add processor");
 
         let original_checksum = graph
@@ -626,5 +631,77 @@ mod config_tests {
         // Config should be updated
         let processor = graph.get_processor(&node.id).expect("get processor");
         assert_eq!(processor.config, Some(new_config));
+    }
+}
+
+/// Tests that verify macro-generated update_config() works correctly
+mod macro_update_config_tests {
+    use streamlib::core::processors::SimplePassthroughConfig;
+    use streamlib::core::Processor;
+
+    /// Test that macro generates update_config() that actually updates the #[config] field
+    #[test]
+    fn test_macro_generates_update_config() {
+        use streamlib::core::processors::SimplePassthroughProcessor;
+
+        // Create processor with default config
+        let mut processor = SimplePassthroughProcessor::Processor::from_config(Default::default())
+            .expect("create processor");
+
+        // Verify initial config
+        assert_eq!(processor.scale(), 1.0);
+
+        // Create new config
+        let new_config = SimplePassthroughConfig { scale: 5.0 };
+
+        // Call update_config - should update the internal #[config] field
+        processor
+            .update_config(new_config)
+            .expect("update_config should succeed");
+
+        // Verify config was updated
+        assert_eq!(processor.scale(), 5.0);
+    }
+
+    /// Test that apply_config_json works with macro-generated processor
+    #[test]
+    fn test_macro_apply_config_json() {
+        use streamlib::core::processors::SimplePassthroughProcessor;
+
+        // Create processor with default config
+        let mut processor = SimplePassthroughProcessor::Processor::from_config(Default::default())
+            .expect("create processor");
+
+        // Verify initial config
+        assert_eq!(processor.scale(), 1.0);
+
+        // Apply JSON config
+        let config_json = serde_json::json!({"scale": 3.14});
+        processor
+            .apply_config_json(&config_json)
+            .expect("apply_config_json should succeed");
+
+        // Verify config was updated
+        assert!((processor.scale() - 3.14).abs() < 0.001);
+    }
+
+    /// Test that update_config can be called multiple times
+    #[test]
+    fn test_macro_update_config_multiple_times() {
+        use streamlib::core::processors::SimplePassthroughProcessor;
+
+        let mut processor = SimplePassthroughProcessor::Processor::from_config(Default::default())
+            .expect("create processor");
+
+        // Update multiple times
+        for i in 1..=5 {
+            let config = SimplePassthroughConfig {
+                scale: i as f32 * 2.0,
+            };
+            processor
+                .update_config(config)
+                .expect("update_config should succeed");
+            assert_eq!(processor.scale(), i as f32 * 2.0);
+        }
     }
 }

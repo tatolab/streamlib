@@ -24,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::time::Duration;
-use streamlib_macros::Processor;
 
 // ============================================================================
 // VIDEO ENCODER TRAIT (WebRTC-specific interface)
@@ -106,19 +105,18 @@ impl Default for WebRtcWhipConfig {
     }
 }
 
-#[derive(Processor)]
-#[processor(
-    mode = Push,
+#[crate::processor(
+    execution = Reactive,
     description = "Streams video and audio to Cloudflare Stream via WebRTC WHIP"
 )]
 pub struct WebRtcWhipProcessor {
-    #[input(description = "Input video frames to encode and stream")]
+    #[crate::input(description = "Input video frames to encode and stream")]
     video_in: LinkInput<VideoFrame>,
 
-    #[input(description = "Input audio frames to encode and stream")]
+    #[crate::input(description = "Input audio frames to encode and stream")]
     audio_in: LinkInput<AudioFrame>,
 
-    #[config]
+    #[crate::config]
     config: WebRtcWhipConfig,
 
     // RuntimeContext for main thread dispatch
@@ -150,8 +148,7 @@ pub struct WebRtcWhipProcessor {
     last_audio_packets_sent: u64,
 }
 
-impl WebRtcWhipProcessor {
-    /// Called by StreamProcessor macro during setup phase.
+impl WebRtcWhipProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         self.ctx = Some(ctx.clone());
@@ -165,7 +162,6 @@ impl WebRtcWhipProcessor {
         Ok(())
     }
 
-    /// Called by StreamProcessor macro during teardown phase.
     fn teardown(&mut self) -> Result<()> {
         tracing::info!("WebRtcWhipProcessor shutting down");
 
@@ -189,7 +185,6 @@ impl WebRtcWhipProcessor {
         Ok(())
     }
 
-    /// Main processing loop: reads video and audio frames, encodes them, and streams via WebRTC
     fn process(&mut self) -> Result<()> {
         let video_frame = self.video_in.read();
         let audio_frame = self.audio_in.read();
@@ -468,7 +463,7 @@ impl WebRtcWhipProcessor {
     }
 }
 
-impl Drop for WebRtcWhipProcessor {
+impl Drop for WebRtcWhipProcessor::Processor {
     fn drop(&mut self) {
         if let Some(whip_client) = &self.whip_client {
             if let Ok(client) = whip_client.lock() {

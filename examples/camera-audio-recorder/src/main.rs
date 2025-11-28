@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 use streamlib::core::{
-    AudioCaptureConfig, AudioChannelConverterConfig, AudioFrame, AudioResamplerConfig,
-    CameraConfig, ChannelConversionMode, Mp4WriterConfig, ResamplingQuality, VideoFrame,
+    AudioCaptureConfig, AudioChannelConverterConfig, AudioResamplerConfig, CameraConfig,
+    ChannelConversionMode, Mp4WriterConfig, ResamplingQuality,
 };
 use streamlib::{
-    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioResamplerProcessor,
-    CameraProcessor, Mp4WriterProcessor,
+    input, output, request_audio_permission, request_camera_permission, AudioCaptureProcessor,
+    AudioChannelConverterProcessor, AudioResamplerProcessor, CameraProcessor, Mp4WriterProcessor,
+    Result, StreamRuntime,
 };
-use streamlib::{Result, StreamRuntime};
 
 fn main() -> Result<()> {
     // Initialize tracing
@@ -22,7 +22,7 @@ fn main() -> Result<()> {
 
     // Request camera and microphone permissions (must be on main thread)
     println!("🔒 Requesting camera permission...");
-    if !runtime.request_camera()? {
+    if !request_camera_permission()? {
         eprintln!("❌ Camera permission denied!");
         eprintln!("Please grant permission in System Settings → Privacy & Security → Camera");
         return Ok(());
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     println!("✅ Camera permission granted\n");
 
     println!("🔒 Requesting microphone permission...");
-    if !runtime.request_microphone()? {
+    if !request_audio_permission()? {
         eprintln!("❌ Microphone permission denied!");
         eprintln!("Please grant permission in System Settings → Privacy & Security → Microphone");
         return Ok(());
@@ -47,21 +47,21 @@ fn main() -> Result<()> {
     println!("📹 Output file: {}\n", output_path);
 
     println!("📷 Adding camera processor...");
-    let camera = runtime.add_processor::<CameraProcessor>(CameraConfig {
+    let camera = runtime.add_processor::<CameraProcessor::Processor>(CameraConfig {
         device_id: Some("0x1424001bcf2284".to_string()), // Use default camera
     })?;
     println!("✓ Camera added (capturing video)\n");
 
     println!("🎤 Adding audio capture processor...");
     let audio_capture =
-        runtime.add_processor::<AudioCaptureProcessor>(AudioCaptureConfig {
+        runtime.add_processor::<AudioCaptureProcessor::Processor>(AudioCaptureConfig {
             device_id: None, // Use default microphone
         })?;
     println!("✓ Audio capture added (mono @ 24kHz)\n");
 
     println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
     let resampler =
-        runtime.add_processor::<AudioResamplerProcessor>(AudioResamplerConfig {
+        runtime.add_processor::<AudioResamplerProcessor::Processor>(AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
@@ -69,7 +69,7 @@ fn main() -> Result<()> {
     println!("✓ Resampler added\n");
 
     println!("🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor::<AudioChannelConverterProcessor>(
+    let channel_converter = runtime.add_processor::<AudioChannelConverterProcessor::Processor>(
         AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
         },
@@ -77,7 +77,7 @@ fn main() -> Result<()> {
     println!("✓ Channel converter added\n");
 
     println!("💾 Adding MP4 writer processor...");
-    let mp4_writer = runtime.add_processor::<Mp4WriterProcessor>(Mp4WriterConfig {
+    let mp4_writer = runtime.add_processor::<Mp4WriterProcessor::Processor>(Mp4WriterConfig {
         output_path: PathBuf::from(&output_path),
         sync_tolerance_ms: Some(16.6),         // ~1 frame at 60fps
         video_codec: Some("avc1".to_string()), // H.264
@@ -88,31 +88,32 @@ fn main() -> Result<()> {
     println!("✓ MP4 writer added (H.264 video + stereo LPCM audio @ 48kHz)\n");
 
     println!("🔗 Connecting pipeline:");
+
     println!("   camera.video → mp4_writer.video");
     runtime.connect(
-        camera.output_port::<VideoFrame>("video"),
-        mp4_writer.input_port::<VideoFrame>("video"),
+        output::<CameraProcessor::OutputLink::video>(&camera),
+        input::<Mp4WriterProcessor::InputLink::video>(&mp4_writer),
     )?;
     println!("   ✓ Video connected");
 
     println!("   audio_capture.audio → resampler.audio_in");
     runtime.connect(
-        audio_capture.output_port::<AudioFrame>("audio"),
-        resampler.input_port::<AudioFrame>("audio_in"),
+        output::<AudioCaptureProcessor::OutputLink::audio>(&audio_capture),
+        input::<AudioResamplerProcessor::InputLink::audio_in>(&resampler),
     )?;
     println!("   ✓ Audio capture → resampler");
 
     println!("   resampler.audio_out → channel_converter.audio_in");
     runtime.connect(
-        resampler.output_port::<AudioFrame>("audio_out"),
-        channel_converter.input_port::<AudioFrame>("audio_in"),
+        output::<AudioResamplerProcessor::OutputLink::audio_out>(&resampler),
+        input::<AudioChannelConverterProcessor::InputLink::audio_in>(&channel_converter),
     )?;
     println!("   ✓ Resampler → channel converter");
 
     println!("   channel_converter.audio_out → mp4_writer.audio");
     runtime.connect(
-        channel_converter.output_port::<AudioFrame>("audio_out"),
-        mp4_writer.input_port::<AudioFrame>("audio"),
+        output::<AudioChannelConverterProcessor::OutputLink::audio_out>(&channel_converter),
+        input::<Mp4WriterProcessor::InputLink::audio>(&mp4_writer),
     )?;
     println!("   ✓ Channel converter → MP4 writer\n");
 

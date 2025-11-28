@@ -12,7 +12,9 @@
 //! You should hear a C major chord (C4, E4, G4) for 2 seconds.
 
 use streamlib::core::{AudioOutputConfig, ChordGeneratorConfig};
-use streamlib::{AudioFrame, AudioOutputProcessor, ChordGeneratorProcessor, Result, StreamRuntime};
+use streamlib::{
+    input, output, AudioOutputProcessor, ChordGeneratorProcessor, Result, StreamRuntime,
+};
 
 fn main() -> Result<()> {
     // Initialize logging
@@ -40,7 +42,7 @@ fn main() -> Result<()> {
     // Create a chord generator (C major: C4 + E4 + G4)
     println!("🎵 Adding chord generator (C major - C4, E4, G4)...");
     let chord =
-        runtime.add_processor::<ChordGeneratorProcessor>(ChordGeneratorConfig {
+        runtime.add_processor::<ChordGeneratorProcessor::Processor>(ChordGeneratorConfig {
             amplitude: 0.15, // 15% volume to avoid clipping
             sample_rate,
             buffer_size,
@@ -49,17 +51,18 @@ fn main() -> Result<()> {
 
     // Create audio output processor
     println!("🔊 Adding audio output processor...");
-    let output = runtime.add_processor::<AudioOutputProcessor>(AudioOutputConfig {
-        device_id: None, // Use default audio device
-    })?;
+    let audio_out =
+        runtime.add_processor::<AudioOutputProcessor::Processor>(AudioOutputConfig {
+            device_id: None, // Use default audio device
+        })?;
     println!("✓ Audio output added\n");
 
-    // Connect processors using type-safe handles
-    // The compiler verifies that AudioFrame → AudioFrame types match!
+    // Connect processors using type-safe port markers
+    // The compiler verifies that port types match!
     println!("🔗 Connecting chord generator → audio output...");
     runtime.connect(
-        chord.output_port::<AudioFrame>("chord"), // OutputPortRef<AudioFrame>
-        output.input_port::<AudioFrame>("audio"), // InputPortRef<AudioFrame>
+        output::<ChordGeneratorProcessor::OutputLink::chord>(&chord),
+        input::<AudioOutputProcessor::InputLink::audio>(&audio_out),
     )?;
     println!("✓ Pipeline connected\n");
 
@@ -78,7 +81,7 @@ fn main() -> Result<()> {
     println!("✓ Demonstrated:");
     println!("  • Event-driven architecture (no FPS/tick parameters)");
     println!("  • Config-based API (ChordGeneratorConfig, AudioOutputConfig)");
-    println!("  • Type-safe connections (AudioFrame → AudioFrame)");
+    println!("  • Type-safe connections (port markers verified at compile time)");
     println!("  • Same code works on macOS, Linux, Windows!");
 
     Ok(())

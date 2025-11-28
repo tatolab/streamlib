@@ -1,6 +1,6 @@
 use super::{DynProcessor, Processor, ProcessorType};
+use crate::core::execution::ExecutionConfig;
 use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
-use crate::core::scheduling::SchedulingConfig;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::Result;
 
@@ -36,8 +36,8 @@ where
         <T as Processor>::descriptor()
     }
 
-    fn scheduling_config(&self) -> SchedulingConfig {
-        <Self as Processor>::scheduling_config(self)
+    fn execution_config(&self) -> ExecutionConfig {
+        <Self as Processor>::execution_config(self)
     }
 
     fn get_output_port_type(&self, port_name: &str) -> Option<LinkPortType> {
@@ -52,7 +52,7 @@ where
         &mut self,
         port_name: &str,
         producer: Box<dyn std::any::Any + Send>,
-    ) -> bool {
+    ) -> crate::core::Result<()> {
         <Self as Processor>::wire_output_producer(self, port_name, producer)
     }
 
@@ -60,7 +60,7 @@ where
         &mut self,
         port_name: &str,
         consumer: Box<dyn std::any::Any + Send>,
-    ) -> bool {
+    ) -> crate::core::Result<()> {
         <Self as Processor>::wire_input_consumer(self, port_name, consumer)
     }
 

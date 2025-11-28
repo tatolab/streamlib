@@ -1,7 +1,7 @@
 use super::BaseProcessor;
 use crate::core::error::Result;
+use crate::core::execution::ExecutionConfig;
 use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
-use crate::core::scheduling::SchedulingConfig;
 use crate::core::schema::ProcessorDescriptor;
 use serde::{Deserialize, Serialize};
 
@@ -35,8 +35,16 @@ pub trait Processor: BaseProcessor {
         self.update_config(config)
     }
 
-    fn scheduling_config(&self) -> SchedulingConfig {
-        SchedulingConfig::default()
+    /// Returns the execution configuration for this processor.
+    ///
+    /// This determines how and when `process()` is called by the runtime:
+    /// - `Continuous`: Runtime loops, calling process() repeatedly (with optional interval)
+    /// - `Reactive`: Called when upstream writes to any input port
+    /// - `Manual`: Called once, then you control timing via callbacks/external systems
+    ///
+    /// Default is `Reactive` - process() called when input data arrives.
+    fn execution_config(&self) -> ExecutionConfig {
+        ExecutionConfig::default()
     }
 
     fn descriptor() -> Option<ProcessorDescriptor>
@@ -51,20 +59,28 @@ pub trait Processor: BaseProcessor {
         None
     }
 
+    /// Wire a producer to an output port.
     fn wire_output_producer(
         &mut self,
-        _port_name: &str,
+        port_name: &str,
         _producer: Box<dyn std::any::Any + Send>,
-    ) -> bool {
-        false
+    ) -> Result<()> {
+        Err(crate::core::StreamError::PortError(format!(
+            "Output port '{}' not found or type mismatch",
+            port_name
+        )))
     }
 
+    /// Wire a consumer to an input port.
     fn wire_input_consumer(
         &mut self,
-        _port_name: &str,
+        port_name: &str,
         _consumer: Box<dyn std::any::Any + Send>,
-    ) -> bool {
-        false
+    ) -> Result<()> {
+        Err(crate::core::StreamError::PortError(format!(
+            "Input port '{}' not found or type mismatch",
+            port_name
+        )))
     }
 
     /// Remove a producer from an output port by link ID.

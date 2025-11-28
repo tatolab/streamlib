@@ -11,11 +11,17 @@
 // Allow `::streamlib::` paths to work inside this crate (for proc macro generated code)
 extern crate self as streamlib;
 
+// Re-export crossbeam_channel for macro-generated code
+pub use crossbeam_channel;
+
 pub mod core;
 
-// Re-export derive macro with same name as trait (standard Rust pattern)
-// The macro and trait occupy different namespaces, so no collision occurs
-pub use streamlib_macros::Processor;
+// Re-export attribute macros for processor syntax:
+// - #[streamlib::processor(execution = Reactive)] - Main processor definition
+// - #[streamlib::input] - Input port marker
+// - #[streamlib::output] - Output port marker
+// - #[streamlib::config] - Config field marker
+pub use streamlib_macros::{config, input, output, processor};
 
 pub use core::{
     are_synchronized,

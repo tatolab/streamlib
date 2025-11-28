@@ -1,7 +1,6 @@
 use crate::core::frames::{AudioChannelCount, AudioFrame};
-use crate::core::{LinkInput, LinkOutput, Result};
+use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 use serde::{Deserialize, Serialize};
-use streamlib_macros::Processor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ChannelConversionMode {
@@ -27,27 +26,25 @@ impl Default for AudioChannelConverterConfig {
     }
 }
 
-#[derive(Processor)]
-#[processor(
-    mode = Push,
+#[crate::processor(
+    execution = Reactive,
     description = "Converts mono audio to stereo using configurable channel mapping"
 )]
 pub struct AudioChannelConverterProcessor {
-    #[input(description = "Mono audio input")]
+    #[crate::input(description = "Mono audio input")]
     audio_in: LinkInput<AudioFrame>,
 
-    #[output(description = "Stereo audio output")]
+    #[crate::output(description = "Stereo audio output")]
     audio_out: LinkOutput<AudioFrame>,
 
-    #[config]
+    #[crate::config]
     config: AudioChannelConverterConfig,
 
-    // Runtime state fields - auto-detected (no attribute needed)
     frame_counter: u64,
 }
 
-impl AudioChannelConverterProcessor {
-    fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+impl AudioChannelConverterProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         tracing::info!(
             "[AudioChannelConverter] setup() - mode: {:?}",
             self.config.mode

@@ -1,6 +1,7 @@
 use crate::apple::{metal::MetalDevice, WgpuBridge};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, LinkInput, Result, StreamError, VideoFrame,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, LinkInput, Result, RuntimeContext, StreamError,
+    VideoFrame,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -15,7 +16,6 @@ use objc2_foundation::{NSString, NSURL};
 use objc2_io_surface::IOSurface;
 use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib_macros::Processor;
 use tracing::{debug, error, info, trace};
 
 // FFI bindings for CoreVideo functions
@@ -49,21 +49,19 @@ impl Default for AppleMp4WriterConfig {
     }
 }
 
-/// MP4 writer processor using AVFoundation's AVAssetWriter.
-#[derive(Processor)]
-#[processor(
-    mode = Push,
+#[crate::processor(
+    execution = Reactive,
     description = "Writes stereo audio and video to MP4 file with A/V synchronization",
     unsafe_send
 )]
 pub struct AppleMp4WriterProcessor {
-    #[input(description = "Stereo audio frames to write to MP4")]
+    #[crate::input(description = "Stereo audio frames to write to MP4")]
     audio: LinkInput<AudioFrame>,
 
-    #[input(description = "Video frames to write to MP4")]
+    #[crate::input(description = "Video frames to write to MP4")]
     video: LinkInput<VideoFrame>,
 
-    #[config]
+    #[crate::config]
     config: AppleMp4WriterConfig,
 
     // RuntimeContext for main thread dispatch
@@ -119,8 +117,8 @@ pub struct AppleMp4WriterProcessor {
     pixel_transfer: Option<crate::apple::PixelTransferSession>,
 }
 
-impl AppleMp4WriterProcessor {
-    fn setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
+impl AppleMp4WriterProcessor::Processor {
+    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         info!("Setting up MP4 writer processor");
 
         // Store RuntimeContext for main thread dispatch

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::{ProcessorNode, PortInfo};
+use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::Processor;
 
 use super::DynProcessor;
@@ -113,7 +113,9 @@ impl RegistryBackedFactory {
             Ok(Box::new(processor) as BoxedProcessor)
         });
 
-        self.constructors.write().insert(type_name.clone(), constructor);
+        self.constructors
+            .write()
+            .insert(type_name.clone(), constructor);
 
         tracing::debug!("Registered processor factory for '{}'", type_name);
     }

@@ -9,6 +9,7 @@ use super::running::{RunningProcessor, WiredLink};
 use super::{Executor, ExecutorState};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::error::{Result, StreamError};
+use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{Graph, ProcessorId};
 use crate::core::link_channel::{
@@ -16,7 +17,6 @@ use crate::core::link_channel::{
 };
 use crate::core::processors::factory::ProcessorNodeFactory;
 use crate::core::processors::{DynProcessor, ProcessorState};
-use crate::core::scheduling::{SchedulingConfig, SchedulingMode};
 
 /// Type alias for boxed dynamic processor
 pub type BoxedProcessor = Box<dyn DynProcessor + Send>;
@@ -182,10 +182,7 @@ impl SimpleExecutor {
             return Ok(());
         }
 
-        tracing::info!(
-            "sync_to_graph: Applying {} changes",
-            delta.change_count()
-        );
+        tracing::info!("sync_to_graph: Applying {} changes", delta.change_count());
 
         self.apply_delta(delta)
     }
@@ -205,18 +202,12 @@ impl SimpleExecutor {
         let graph_guard = graph.read();
 
         // Collect processor IDs from graph (desired state)
-        let graph_processor_ids: HashSet<ProcessorId> = graph_guard
-            .nodes()
-            .iter()
-            .map(|n| n.id.clone())
-            .collect();
+        let graph_processor_ids: HashSet<ProcessorId> =
+            graph_guard.nodes().iter().map(|n| n.id.clone()).collect();
 
         // Collect link IDs from graph (desired state)
-        let graph_link_ids: HashSet<LinkId> = graph_guard
-            .links()
-            .iter()
-            .map(|l| l.id.clone())
-            .collect();
+        let graph_link_ids: HashSet<LinkId> =
+            graph_guard.links().iter().map(|l| l.id.clone()).collect();
 
         // Collect config checksums from graph (desired state)
         let graph_config_checksums: HashMap<ProcessorId, u64> = graph_guard
@@ -226,10 +217,8 @@ impl SimpleExecutor {
             .collect();
 
         // Collect running processor IDs (current state)
-        let running_processor_ids: HashSet<ProcessorId> = exec_graph
-            .processor_ids()
-            .cloned()
-            .collect();
+        let running_processor_ids: HashSet<ProcessorId> =
+            exec_graph.processor_ids().cloned().collect();
 
         // Collect wired link IDs (current state)
         let wired_link_ids: HashSet<LinkId> = exec_graph
@@ -325,7 +314,10 @@ impl SimpleExecutor {
                 .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
             let graph_guard = graph.read();
             let node = graph_guard.get_processor(proc_id).ok_or_else(|| {
-                StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
+                StreamError::ProcessorNotFound(format!(
+                    "Processor '{}' not found in graph",
+                    proc_id
+                ))
             })?;
             node.config.clone()
         };
@@ -336,12 +328,14 @@ impl SimpleExecutor {
             .as_mut()
             .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
 
-        let running = exec_graph.get_processor_runtime_mut(proc_id).ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!(
-                "Processor '{}' not found in execution graph",
-                proc_id
-            ))
-        })?;
+        let running = exec_graph
+            .get_processor_runtime_mut(proc_id)
+            .ok_or_else(|| {
+                StreamError::ProcessorNotFound(format!(
+                    "Processor '{}' not found in execution graph",
+                    proc_id
+                ))
+            })?;
 
         // Apply config via the DynProcessor trait
         if let Some(processor_arc) = &running.processor {
@@ -380,7 +374,10 @@ impl SimpleExecutor {
                 .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
             let graph_guard = graph.read();
             graph_guard.get_processor(proc_id).cloned().ok_or_else(|| {
-                StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
+                StreamError::ProcessorNotFound(format!(
+                    "Processor '{}' not found in graph",
+                    proc_id
+                ))
             })?
         };
 
@@ -583,7 +580,7 @@ impl SimpleExecutor {
         let state_clone = Arc::clone(&state);
         let id_clone = id.clone();
 
-        let sched_config = processor_arc.lock().scheduling_config();
+        let exec_config = processor_arc.lock().execution_config();
 
         let thread = std::thread::Builder::new()
             .name(format!("processor-{}", id))
@@ -594,7 +591,7 @@ impl SimpleExecutor {
                     shutdown_rx,
                     wakeup_rx,
                     state_clone,
-                    sched_config,
+                    exec_config,
                 );
             })
             .map_err(|e| StreamError::Runtime(format!("Failed to spawn thread: {}", e)))?;
@@ -680,19 +677,23 @@ impl SimpleExecutor {
         shutdown_rx: crossbeam_channel::Receiver<()>,
         wakeup_rx: crossbeam_channel::Receiver<LinkWakeupEvent>,
         state: Arc<Mutex<ProcessorState>>,
-        sched_config: SchedulingConfig,
+        exec_config: ExecutionConfig,
     ) {
-        tracing::debug!("[{}] Thread started with mode {:?}", id, sched_config.mode);
+        tracing::info!(
+            "[{}] Starting with {}",
+            id,
+            exec_config.execution.description()
+        );
 
-        match sched_config.mode {
-            SchedulingMode::Loop => {
-                Self::run_loop_mode(&id, &processor, &shutdown_rx);
+        match exec_config.execution {
+            ProcessExecution::Continuous { interval_ms } => {
+                Self::run_continuous_mode(&id, &processor, &shutdown_rx, interval_ms);
             }
-            SchedulingMode::Push => {
-                Self::run_push_mode(&id, &processor, &shutdown_rx, &wakeup_rx);
+            ProcessExecution::Reactive => {
+                Self::run_reactive_mode(&id, &processor, &shutdown_rx, &wakeup_rx);
             }
-            SchedulingMode::Pull => {
-                Self::run_pull_mode(&id, &processor, &shutdown_rx, &wakeup_rx);
+            ProcessExecution::Manual => {
+                Self::run_manual_mode(&id, &processor, &shutdown_rx, &wakeup_rx);
             }
         }
 
@@ -708,12 +709,29 @@ impl SimpleExecutor {
         tracing::debug!("[{}] Thread stopped", id);
     }
 
-    /// Loop scheduling mode - tight polling loop
-    fn run_loop_mode(
+    /// Continuous execution - runtime loops, calling process() repeatedly.
+    ///
+    /// The runtime manages a continuous loop calling `process()` with an optional
+    /// interval between calls. Use for generators, sources, and polling processors.
+    fn run_continuous_mode(
         id: &ProcessorId,
         processor: &Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: &crossbeam_channel::Receiver<()>,
+        interval_ms: u32,
     ) {
+        let sleep_duration = if interval_ms > 0 {
+            std::time::Duration::from_millis(interval_ms as u64)
+        } else {
+            // Default: yield to scheduler but run as fast as possible
+            std::time::Duration::from_micros(100)
+        };
+
+        tracing::debug!(
+            "[{}] Continuous mode: process() will be called every {:?}",
+            id,
+            sleep_duration
+        );
+
         loop {
             if shutdown_rx.try_recv().is_ok() {
                 break;
@@ -726,17 +744,22 @@ impl SimpleExecutor {
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_micros(10));
+            std::thread::sleep(sleep_duration);
         }
     }
 
-    /// Push scheduling mode - event-driven, woken on input data
-    fn run_push_mode(
+    /// Reactive execution - process() called when input data arrives.
+    ///
+    /// The processor sleeps until upstream writes to any input port,
+    /// then wakes to process the data. Efficient and event-driven.
+    fn run_reactive_mode(
         id: &ProcessorId,
         processor: &Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: &crossbeam_channel::Receiver<()>,
         wakeup_rx: &crossbeam_channel::Receiver<LinkWakeupEvent>,
     ) {
+        tracing::debug!("[{}] Reactive mode: waiting for input data...", id);
+
         loop {
             crossbeam_channel::select! {
                 recv(shutdown_rx) -> _ => break,
@@ -755,14 +778,23 @@ impl SimpleExecutor {
         }
     }
 
-    /// Pull scheduling mode - processor manages its own callbacks
-    fn run_pull_mode(
+    /// Manual execution - process() called once, then you control timing.
+    ///
+    /// After setup, the runtime calls `process()` exactly once to initialize.
+    /// From then on, YOU control when `process()` is called via your own
+    /// callbacks, threads, or external systems.
+    fn run_manual_mode(
         id: &ProcessorId,
         processor: &Arc<Mutex<BoxedProcessor>>,
         shutdown_rx: &crossbeam_channel::Receiver<()>,
         wakeup_rx: &crossbeam_channel::Receiver<LinkWakeupEvent>,
     ) {
-        // Initial process call
+        tracing::info!(
+            "[{}] Manual mode: calling process() once, then YOU control timing",
+            id
+        );
+
+        // Initial process call to let processor set up callbacks/threads
         {
             let mut guard = processor.lock();
             if let Err(e) = guard.process() {
@@ -770,6 +802,12 @@ impl SimpleExecutor {
             }
         }
 
+        tracing::debug!(
+            "[{}] Manual mode: runtime will NOT call process() again - you must invoke it",
+            id
+        );
+
+        // Just wait for shutdown - processor manages its own timing
         loop {
             crossbeam_channel::select! {
                 recv(shutdown_rx) -> _ => break,
@@ -1025,21 +1063,11 @@ impl SimpleExecutor {
                 )?;
 
                 let mut source_guard = source_processor.lock();
-                if !source_guard.wire_output_producer(source_port, Box::new(producer)) {
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to wire producer to output port '{}'",
-                        source_port
-                    )));
-                }
+                source_guard.wire_output_producer(source_port, Box::new(producer))?;
                 drop(source_guard);
 
                 let mut dest_guard = dest_processor.lock();
-                if !dest_guard.wire_input_consumer(dest_port, Box::new(consumer)) {
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to wire consumer to input port '{}'",
-                        dest_port
-                    )));
-                }
+                dest_guard.wire_input_consumer(dest_port, Box::new(consumer))?;
             }
             LinkPortType::Video => {
                 let (producer, consumer) = self.link_channel.create_channel::<VideoFrame>(
@@ -1049,21 +1077,11 @@ impl SimpleExecutor {
                 )?;
 
                 let mut source_guard = source_processor.lock();
-                if !source_guard.wire_output_producer(source_port, Box::new(producer)) {
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to wire producer to output port '{}'",
-                        source_port
-                    )));
-                }
+                source_guard.wire_output_producer(source_port, Box::new(producer))?;
                 drop(source_guard);
 
                 let mut dest_guard = dest_processor.lock();
-                if !dest_guard.wire_input_consumer(dest_port, Box::new(consumer)) {
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to wire consumer to input port '{}'",
-                        dest_port
-                    )));
-                }
+                dest_guard.wire_input_consumer(dest_port, Box::new(consumer))?;
             }
             LinkPortType::Data => {
                 let (producer, consumer) = self.link_channel.create_channel::<DataFrame>(
@@ -1073,21 +1091,11 @@ impl SimpleExecutor {
                 )?;
 
                 let mut source_guard = source_processor.lock();
-                if !source_guard.wire_output_producer(source_port, Box::new(producer)) {
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to wire producer to output port '{}'",
-                        source_port
-                    )));
-                }
+                source_guard.wire_output_producer(source_port, Box::new(producer))?;
                 drop(source_guard);
 
                 let mut dest_guard = dest_processor.lock();
-                if !dest_guard.wire_input_consumer(dest_port, Box::new(consumer)) {
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to wire consumer to input port '{}'",
-                        dest_port
-                    )));
-                }
+                dest_guard.wire_input_consumer(dest_port, Box::new(consumer))?;
             }
         }
         Ok(())
@@ -1154,9 +1162,9 @@ impl SimpleExecutor {
         Ok(())
     }
 
-    /// Send initialization wakeup to Pull mode processors
-    fn send_pull_mode_wakeups(&self) {
-        tracing::debug!("Sending initialization wakeup to Pull mode processors");
+    /// Send initialization wakeup to Manual execution mode processors
+    fn send_manual_mode_wakeups(&self) {
+        tracing::debug!("Sending initialization wakeup to Manual execution mode processors");
 
         let Some(exec_graph) = &self.execution_graph else {
             tracing::warn!("Cannot send wakeups: execution graph not initialized");
@@ -1165,16 +1173,16 @@ impl SimpleExecutor {
 
         for (proc_id, instance) in exec_graph.iter_processor_runtime() {
             if let Some(proc_ref) = &instance.processor {
-                let sched_config = proc_ref.lock().scheduling_config();
-                if matches!(sched_config.mode, SchedulingMode::Pull) {
+                let exec_config = proc_ref.lock().execution_config();
+                if exec_config.execution.is_manual() {
                     if let Err(e) = instance.wakeup_tx.send(LinkWakeupEvent::DataAvailable) {
                         tracing::warn!(
-                            "[{}] Failed to send Pull mode initialization wakeup: {}",
+                            "[{}] Failed to send Manual mode initialization wakeup: {}",
                             proc_id,
                             e
                         );
                     } else {
-                        tracing::debug!("[{}] Sent Pull mode initialization wakeup", proc_id);
+                        tracing::debug!("[{}] Sent Manual mode initialization wakeup", proc_id);
                     }
                 }
             }
@@ -1271,8 +1279,8 @@ impl Executor for SimpleExecutor {
         // Sync execution state to match graph (spawns processors, wires links)
         self.sync_to_graph()?;
 
-        // Send initialization wakeup to Pull mode processors
-        self.send_pull_mode_wakeups();
+        // Send initialization wakeup to Manual execution mode processors
+        self.send_manual_mode_wakeups();
 
         self.state = ExecutorState::Running;
         tracing::info!("Executor started");

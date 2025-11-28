@@ -150,6 +150,7 @@ impl<T: LinkPortMessage> LinkOutput<T> {
     /// SAFETY: Get mutable access to output link connections
     /// Safe because processor has exclusive ownership (single-threaded access)
     #[inline]
+    #[allow(clippy::mut_from_ref)] // Intentional interior mutability pattern with UnsafeCell
     unsafe fn output_link_connections_mut(&self) -> &mut Vec<LinkOutputConnection<T>> {
         &mut *self.inner.output_link_connections.get()
     }
@@ -332,6 +333,7 @@ impl<T: LinkPortMessage> LinkInput<T> {
     /// SAFETY: Get mutable access to input link connections
     /// Safe because processor has exclusive ownership (single-threaded access)
     #[inline]
+    #[allow(clippy::mut_from_ref)] // Intentional interior mutability pattern with UnsafeCell
     unsafe fn input_link_connections_mut(&self) -> &mut Vec<LinkInputConnection<T>> {
         &mut *self.inner.input_link_connections.get()
     }

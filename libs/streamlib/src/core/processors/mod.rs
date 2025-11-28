@@ -7,9 +7,7 @@ mod state;
 
 pub use base::{BaseProcessor, ProcessorType};
 pub use dyn_processor::DynProcessor;
-pub use factory::{
-    BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory,
-};
+pub use factory::{BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory};
 pub use processor::Processor;
 pub use state::ProcessorState;
 

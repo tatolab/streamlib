@@ -1,7 +1,6 @@
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 use crate::core::frames::AudioFrame;
-use crate::core::{LinkInput, LinkOutput, Result};
-use streamlib_macros::Processor;
+use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -28,28 +27,26 @@ impl Default for ClapEffectConfig {
     }
 }
 
-#[derive(Processor)]
-#[processor(
-    mode = Push,
+#[crate::processor(
+    execution = Reactive,
     description = "CLAP audio plugin processor with parameter control and automation"
 )]
 pub struct ClapEffectProcessor {
-    #[input(description = "Stereo audio frame to process through CLAP plugin")]
+    #[crate::input(description = "Stereo audio frame to process through CLAP plugin")]
     audio_in: LinkInput<AudioFrame>,
 
-    #[output(description = "Processed stereo audio frame from CLAP plugin")]
+    #[crate::output(description = "Processed stereo audio frame from CLAP plugin")]
     audio_out: Arc<LinkOutput<AudioFrame>>,
 
-    #[config]
+    #[crate::config]
     config: ClapEffectConfig,
 
-    // Runtime state fields - auto-detected (no attribute needed)
     host: Option<ClapPluginHost>,
     sample_rate: u32,
     buffer_size: usize,
 }
 
-impl ClapEffectProcessor {
+impl ClapEffectProcessor::Processor {
     pub fn plugin_info(&self) -> Result<&PluginInfo> {
         use crate::core::StreamError;
         self.host
@@ -127,8 +124,7 @@ impl ClapEffectProcessor {
         Ok(output_frame)
     }
 
-    // Lifecycle - auto-detected by macro
-    fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         self.sample_rate = self.config.sample_rate;
         self.buffer_size = self.config.buffer_size;
 
@@ -183,11 +179,9 @@ impl ClapEffectProcessor {
         Ok(())
     }
 
-    // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[ClapEffect] process() called");
 
-        // Use read() for sequential audio consumption (not read_latest() which skips frames)
         if let Some(input_frame) = self.audio_in.read() {
             tracing::debug!("[ClapEffect] Got input frame, processing through CLAP");
 
@@ -203,17 +197,17 @@ impl ClapEffectProcessor {
     }
 }
 
-impl crate::core::clap::ClapParameterControl for ClapEffectProcessor {
+impl crate::core::clap::ClapParameterControl for ClapEffectProcessor::Processor {
     fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
-        self.set_parameter(id, value)
+        ClapEffectProcessor::Processor::set_parameter(self, id, value)
     }
 
     fn begin_edit(&mut self, id: u32) -> Result<()> {
-        self.begin_edit(id)
+        ClapEffectProcessor::Processor::begin_edit(self, id)
     }
 
     fn end_edit(&mut self, id: u32) -> Result<()> {
-        self.end_edit(id)
+        ClapEffectProcessor::Processor::end_edit(self, id)
     }
 }
 

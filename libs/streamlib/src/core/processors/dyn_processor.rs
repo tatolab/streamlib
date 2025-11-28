@@ -1,5 +1,5 @@
+use crate::core::execution::ExecutionConfig;
 use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
-use crate::core::scheduling::SchedulingConfig;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::{Result, RuntimeContext};
 
@@ -20,7 +20,14 @@ pub trait DynProcessor: Send + 'static {
     fn processor_type(&self) -> ProcessorType;
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
     fn descriptor_instance(&self) -> Option<ProcessorDescriptor>;
-    fn scheduling_config(&self) -> SchedulingConfig;
+
+    /// Returns the execution configuration for this processor.
+    ///
+    /// This determines how and when `process()` is called:
+    /// - `Continuous`: Runtime loops, calling process() repeatedly
+    /// - `Reactive`: Called when input data arrives
+    /// - `Manual`: Called once, then you control timing
+    fn execution_config(&self) -> ExecutionConfig;
     fn get_output_port_type(&self, port_name: &str) -> Option<LinkPortType>;
     fn get_input_port_type(&self, port_name: &str) -> Option<LinkPortType>;
 
@@ -28,13 +35,13 @@ pub trait DynProcessor: Send + 'static {
         &mut self,
         port_name: &str,
         producer: Box<dyn std::any::Any + Send>,
-    ) -> bool;
+    ) -> crate::core::Result<()>;
 
     fn wire_input_consumer(
         &mut self,
         port_name: &str,
         consumer: Box<dyn std::any::Any + Send>,
-    ) -> bool;
+    ) -> crate::core::Result<()>;
 
     fn unwire_output_producer(
         &mut self,
