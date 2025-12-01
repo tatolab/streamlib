@@ -1,9 +1,10 @@
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 
-use crate::core::executor::{Executor, SimpleExecutor};
+use crate::core::executor::{ExecutorLifecycle, SimpleExecutor};
 use crate::core::graph::{Graph, IntoLinkPortRef, Link, ProcessorId, ProcessorNode};
 use crate::core::link_channel::LinkId;
 use crate::core::processors::factory::RegistryBackedFactory;
@@ -26,7 +27,7 @@ pub enum CommitMode {
 /// The main stream processing runtime.
 pub struct StreamRuntime {
     graph: Arc<RwLock<Graph>>,
-    executor: SimpleExecutor,
+    executor: Arc<Mutex<SimpleExecutor>>,
     factory: Arc<RegistryBackedFactory>,
     commit_mode: CommitMode,
 }
@@ -49,6 +50,11 @@ impl StreamRuntime {
             Arc::clone(&graph),
             Arc::clone(&factory) as Arc<dyn crate::core::processors::factory::ProcessorNodeFactory>,
         );
+
+        let executor = Arc::new(Mutex::new(executor));
+
+        // Set global executor reference for event-driven callbacks
+        SimpleExecutor::set_executor_ref(Arc::clone(&executor));
 
         Self {
             graph,
@@ -89,7 +95,8 @@ impl StreamRuntime {
     /// In `Auto` mode, this is called automatically after each mutation.
     /// In `Manual` mode, call this explicitly to batch changes.
     pub fn commit(&mut self) -> Result<()> {
-        self.executor.sync_to_graph()
+        self.executor.lock().mark_dirty();
+        Ok(())
     }
 
     /// Central handler for graph mutations - respects commit mode.
@@ -274,7 +281,7 @@ impl StreamRuntime {
     }
 
     // =========================================================================
-    // Lifecycle - Publishes events, delegates execution to Executor
+    // Lifecycle
     // =========================================================================
 
     /// Start the runtime.
@@ -286,7 +293,7 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
         );
 
-        match self.executor.start() {
+        match self.executor.lock().start() {
             Ok(()) => {
                 EVENT_BUS.publish(
                     "runtime:global",
@@ -315,7 +322,7 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
         );
 
-        match self.executor.stop() {
+        match self.executor.lock().stop() {
             Ok(()) => {
                 EVENT_BUS.publish(
                     "runtime:global",
@@ -344,7 +351,7 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
         );
 
-        match self.executor.pause() {
+        match self.executor.lock().pause() {
             Ok(()) => {
                 EVENT_BUS.publish(
                     "runtime:global",
@@ -373,7 +380,7 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
         );
 
-        match self.executor.resume() {
+        match self.executor.lock().resume() {
             Ok(()) => {
                 EVENT_BUS.publish(
                     "runtime:global",
@@ -393,23 +400,84 @@ impl StreamRuntime {
         }
     }
 
-    /// Block until shutdown signal (Ctrl+C / SIGTERM).
-    ///
-    /// Call after `start()` to keep the process alive until interrupted.
-    /// Does not automatically stop - call `stop()` after if needed.
-    ///
-    /// # Example
-    /// ```ignore
-    /// runtime.start()?;
-    /// runtime.block_until_signal()?;  // Blocks here
-    /// runtime.stop()?;                 // Clean shutdown
-    /// ```
-    pub fn block_until_signal(&self) -> Result<()> {
-        self.executor.block_until_signal()
+    /// Block until shutdown signal (Ctrl+C, SIGTERM, Cmd+Q).
+    pub fn wait_for_signal(&mut self) -> Result<()> {
+        self.wait_for_signal_with(|_| ControlFlow::Continue(()))
+    }
+
+    /// Block until shutdown signal, with periodic callback for dynamic control.
+    pub fn wait_for_signal_with<F>(&mut self, mut callback: F) -> Result<()>
+    where
+        F: FnMut(&mut Self) -> ControlFlow<()>,
+    {
+        use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, EVENT_BUS};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        // Install signal handlers
+        crate::core::signals::install_signal_handlers().map_err(|e| {
+            crate::core::StreamError::Configuration(format!(
+                "Failed to install signal handlers: {}",
+                e
+            ))
+        })?;
+
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let shutdown_flag_clone = Arc::clone(&shutdown_flag);
+
+        // Listener that sets shutdown flag when RuntimeShutdown received
+        struct ShutdownListener {
+            flag: Arc<AtomicBool>,
+        }
+
+        impl EventListener for ShutdownListener {
+            fn on_event(&mut self, event: &Event) -> Result<()> {
+                if let Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown) = event {
+                    self.flag.store(true, Ordering::SeqCst);
+                }
+                Ok(())
+            }
+        }
+
+        let listener = ShutdownListener {
+            flag: shutdown_flag_clone.clone(),
+        };
+        EVENT_BUS.subscribe(
+            topics::RUNTIME_GLOBAL,
+            Arc::new(parking_lot::Mutex::new(listener)),
+        );
+
+        // On macOS, run the NSApplication event loop (required for GUI)
+        #[cfg(target_os = "macos")]
+        {
+            crate::apple::runtime_ext::run_macos_event_loop();
+            // Event loop exited (Cmd+Q or terminate)
+            self.stop()?;
+            return Ok(());
+        }
+
+        // Non-macOS: poll loop
+        #[cfg(not(target_os = "macos"))]
+        {
+            while !shutdown_flag.load(Ordering::SeqCst) {
+                // Call user callback
+                if let ControlFlow::Break(()) = callback(self) {
+                    break;
+                }
+
+                // Small sleep to avoid busy-waiting
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
+            // Auto-stop on exit
+            self.stop()?;
+
+            Ok(())
+        }
     }
 
     pub fn status(&self) -> RuntimeStatus {
-        self.executor.status()
+        self.executor.lock().status()
     }
 }
 

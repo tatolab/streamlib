@@ -192,7 +192,7 @@ fn print_runtime_status(status: &RuntimeStatus, label: &str) {
     println!("[{}] Runtime Status:", label);
     println!("  running: {}", status.running);
     println!("  processor_count: {}", status.processor_count);
-    println!("  connection_count: {}", status.connection_count);
+    println!("  link_count: {}", status.link_count);
     println!("  processor_states: {:?}", status.processor_states);
 }
 
@@ -374,8 +374,8 @@ fn test_runtime_lifecycle_full_flow() {
     let status = runtime.status();
     print_runtime_status(&status, "After Adding Link (Pre-Commit)");
     println!(
-        "[STEP 3] Executor connection_count: {} (expected 0 before commit)",
-        status.connection_count
+        "[STEP 3] Executor link_count: {} (expected 0 before commit)",
+        status.link_count
     );
 
     // Commit
@@ -393,7 +393,7 @@ fn test_runtime_lifecycle_full_flow() {
             let g = runtime.graph().read();
             g.link_count()
         },
-        status.connection_count
+        status.link_count
     );
 
     // =========================================================================
@@ -470,7 +470,7 @@ fn test_runtime_lifecycle_full_flow() {
             let g = runtime.graph().read();
             g.link_count()
         },
-        status.connection_count
+        status.link_count
     );
 
     // =========================================================================
@@ -528,7 +528,7 @@ fn test_runtime_lifecycle_full_flow() {
 
     println!(
         "\n[STEP 6 RESULT] Graph is back to empty state. Executor has {} processors, {} connections",
-        status.processor_count, status.connection_count
+        status.processor_count, status.link_count
     );
 
     // =========================================================================

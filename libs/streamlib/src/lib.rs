@@ -129,7 +129,6 @@ pub(crate) mod apple;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    configure_macos_event_loop,
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
     AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,

@@ -39,6 +39,10 @@ pub struct Graph {
     links: Vec<Link>,
 }
 
+/// Checksum of a graph's structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GraphChecksum(pub u64);
+
 impl Graph {
     pub fn new() -> Self {
         Self {
@@ -289,10 +293,6 @@ impl Graph {
             .collect()
     }
 
-    pub(crate) fn petgraph(&self) -> &DiGraph<ProcessorNode, Link> {
-        &self.graph
-    }
-
     pub fn processor_count(&self) -> usize {
         self.graph.node_count()
     }
@@ -382,10 +382,6 @@ impl PartialEq for Graph {
 }
 
 impl Eq for Graph {}
-
-/// Checksum of a graph's structure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GraphChecksum(pub u64);
 
 impl Graph {
     /// Compute deterministic checksum of graph structure.
@@ -521,10 +517,10 @@ mod tests {
         graph.add_processor("proc_0".into(), "TestProcessor".into(), 0);
         graph.add_processor("proc_1".into(), "TestProcessor".into(), 0);
 
-        assert_eq!(graph.petgraph().node_count(), 2);
+        assert_eq!(graph.processor_count(), 2);
 
         graph.remove_processor(&"proc_0".into());
-        assert_eq!(graph.petgraph().node_count(), 1);
+        assert_eq!(graph.processor_count(), 1);
     }
 
     #[test]
@@ -535,10 +531,10 @@ mod tests {
 
         let link_id = graph.add_link_by_address("source.output".into(), "sink.input".into());
 
-        assert_eq!(graph.petgraph().edge_count(), 1);
+        assert_eq!(graph.link_count(), 1);
 
         graph.remove_link(&link_id);
-        assert_eq!(graph.petgraph().edge_count(), 0);
+        assert_eq!(graph.link_count(), 0);
     }
 
     #[test]

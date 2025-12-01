@@ -57,8 +57,7 @@ fn main() -> Result<()> {
     println!("   Press Ctrl+C to stop\n");
 
     runtime.start()?;
-    runtime.block_until_signal()?;
-    runtime.stop()?;
+    runtime.wait_for_signal()?;
 
     println!("\n✓ Pipeline stopped gracefully");
 

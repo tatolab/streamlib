@@ -425,6 +425,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    /// Wait for rayon thread pool to complete pending tasks
+    fn wait_for_rayon() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
     // Test listener that counts events and tracks received events
     struct TestListener {
         count: Arc<AtomicUsize>,
@@ -470,6 +475,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -492,6 +498,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -517,6 +524,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -542,6 +550,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -564,6 +573,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -591,6 +601,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -645,6 +656,7 @@ mod tests {
         assert_eq!(runtime_event.topic(), topics::RUNTIME_GLOBAL);
         bus.publish(&runtime_event.topic(), &runtime_event);
 
+        wait_for_rayon();
         // Verify routing - each listener only received its specific events
         assert_eq!(keyboard_listener_concrete.lock().count(), 1);
         assert_eq!(mouse_listener_concrete.lock().count(), 1);
@@ -686,6 +698,7 @@ mod tests {
         );
         bus.publish(&a_with_shift.topic(), &a_with_shift);
 
+        wait_for_rayon();
         // Both events should be received
         assert_eq!(listener_concrete.lock().count(), 2);
     }
@@ -766,6 +779,7 @@ mod tests {
         let video_event = Event::processor("video-filter", ProcessorEvent::Resumed);
         bus.publish(&video_event.topic(), &video_event);
 
+        wait_for_rayon();
         // Each listener only received its own processor's events
         assert_eq!(audio_listener_concrete.lock().count(), 1);
         assert_eq!(video_listener_concrete.lock().count(), 1);

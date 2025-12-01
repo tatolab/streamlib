@@ -125,9 +125,8 @@ fn main() -> Result<()> {
     println!("📊 Video pipeline: camera → MP4");
     println!("📊 A/V sync tolerance: 16.6ms (video frames may be dropped/duplicated)\n");
 
+    // start() blocks on macOS standalone (runs NSApplication event loop)
     runtime.start()?;
-    runtime.block_until_signal()?;
-    runtime.stop()?;
 
     println!("\n✅ Recording stopped");
     println!("✅ MP4 file finalized: {}", output_path);

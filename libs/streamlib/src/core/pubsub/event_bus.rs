@@ -78,29 +78,27 @@ impl EventBus {
                 live_listeners.len()
             );
 
-            // Dispatch in parallel to all listeners
+            // Dispatch in parallel to all listeners (fire-and-forget, non-blocking)
             // Each listener gets its own rayon task
-            rayon::scope(|s| {
-                for listener in live_listeners {
-                    let event = Arc::clone(&event);
-                    s.spawn(move |_| {
-                        // Try lock without blocking
-                        // If listener is busy, skip (fire-and-forget)
-                        if let Some(mut guard) = listener.try_lock() {
-                            eprintln!("[EVENT_BUS]   - Calling on_event for listener");
-                            tracing::info!("EVENT_BUS: Calling on_event for listener");
-                            let _ = guard.on_event(&event);
-                        } else {
-                            eprintln!(
-                                "[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)"
-                            );
-                            tracing::warn!(
-                                "EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)"
-                            );
-                        }
-                    });
-                }
-            });
+            for listener in live_listeners {
+                let event = Arc::clone(&event);
+                rayon::spawn(move || {
+                    // Try lock without blocking
+                    // If listener is busy, skip (fire-and-forget)
+                    if let Some(mut guard) = listener.try_lock() {
+                        eprintln!("[EVENT_BUS]   - Calling on_event for listener");
+                        tracing::info!("EVENT_BUS: Calling on_event for listener");
+                        let _ = guard.on_event(&event);
+                    } else {
+                        eprintln!(
+                            "[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)"
+                        );
+                        tracing::warn!(
+                            "EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)"
+                        );
+                    }
+                });
+            }
         } else {
             eprintln!("[EVENT_BUS] No subscribers for topic '{}'", topic);
             tracing::warn!("EVENT_BUS: No subscribers for topic '{}'", topic);
@@ -128,6 +126,12 @@ impl EventBus {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Wait for rayon thread pool to complete pending tasks
+    fn wait_for_rayon() {
+        // rayon::spawn is fire-and-forget, so we need to wait
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 
     // Test listener that counts events (thread-safe)
     struct CountingListener {
@@ -163,11 +167,9 @@ mod tests {
         let audio_listener: Arc<Mutex<dyn EventListener>> = audio_listener_concrete.clone();
         let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
 
-        // Subscribe to different topics
         bus.subscribe("processor:audio", audio_listener);
         bus.subscribe("processor:video", video_listener);
 
-        // Publish to audio topic
         bus.publish(
             "processor:audio",
             &Event::ProcessorEvent {
@@ -176,8 +178,7 @@ mod tests {
             },
         );
 
-        // Rayon scope ensures all tasks complete before returning
-        // Only audio subscriber receives
+        wait_for_rayon();
         assert_eq!(audio_listener_concrete.lock().count(), 1);
         assert_eq!(video_listener_concrete.lock().count(), 0);
     }
@@ -192,17 +193,15 @@ mod tests {
         let listener1: Arc<Mutex<dyn EventListener>> = listener1_concrete.clone();
         let listener2: Arc<Mutex<dyn EventListener>> = listener2_concrete.clone();
 
-        // Multiple subscribers to runtime:global
         bus.subscribe("runtime:global", listener1);
         bus.subscribe("runtime:global", listener2);
 
-        // Publish to runtime:global
         bus.publish(
             "runtime:global",
             &Event::RuntimeGlobal(super::super::events::RuntimeEvent::RuntimeStart),
         );
 
-        // Both subscribers receive (rayon scope ensures completion)
+        wait_for_rayon();
         assert_eq!(listener1_concrete.lock().count(), 1);
         assert_eq!(listener2_concrete.lock().count(), 1);
     }
@@ -254,6 +253,7 @@ mod tests {
             },
         );
 
+        wait_for_rayon();
         // Subscriber should receive second message only
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -290,6 +290,7 @@ mod tests {
             },
         );
 
+        wait_for_rayon();
         // All 5 subscribers should receive the message (parallel dispatch)
         assert_eq!(listener1_concrete.lock().count(), 1);
         assert_eq!(listener2_concrete.lock().count(), 1);

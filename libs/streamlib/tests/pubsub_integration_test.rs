@@ -7,6 +7,11 @@ use streamlib::core::pubsub::{
     ProcessorEvent,
 };
 
+/// Wait for rayon thread pool to complete pending tasks
+fn wait_for_rayon() {
+    std::thread::sleep(std::time::Duration::from_millis(50));
+}
+
 struct CountingListener {
     count: Arc<AtomicUsize>,
 }
@@ -43,6 +48,7 @@ fn test_keyboard_event_routing() {
     assert_eq!(event.topic(), topics::KEYBOARD);
     bus.publish(&event.topic(), &event);
 
+    wait_for_rayon();
     assert_eq!(concrete_listener.lock().count(), 1);
 }
 
@@ -59,6 +65,7 @@ fn test_mouse_event_routing() {
     assert_eq!(event.topic(), topics::MOUSE);
     bus.publish(&event.topic(), &event);
 
+    wait_for_rayon();
     assert_eq!(concrete_listener.lock().count(), 1);
 }
 
@@ -78,6 +85,7 @@ fn test_processor_event_routing() {
     assert_eq!(event.topic(), topic);
     bus.publish(&event.topic(), &event);
 
+    wait_for_rayon();
     assert_eq!(concrete_listener.lock().count(), 1);
 }
 
@@ -100,6 +108,7 @@ fn test_multiple_subscribers_all_receive() {
     let event = Event::custom("broadcast", serde_json::json!({"value": 42}));
     bus.publish(&event.topic(), &event);
 
+    wait_for_rayon();
     assert_eq!(concrete1.lock().count(), 1);
     assert_eq!(concrete2.lock().count(), 1);
     assert_eq!(concrete3.lock().count(), 1);
@@ -121,6 +130,7 @@ fn test_topic_isolation() {
     let audio_event = Event::processor("audio", ProcessorEvent::Started);
     bus.publish(&audio_event.topic(), &audio_event);
 
+    wait_for_rayon();
     assert_eq!(concrete_audio.lock().count(), 1);
     assert_eq!(concrete_video.lock().count(), 0);
 }

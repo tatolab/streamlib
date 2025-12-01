@@ -10,7 +10,7 @@ use crate::core::graph::{Link, ProcessorNode};
 use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
 use crate::core::processors::ProcessorState;
 
-use super::simple_executor::BoxedProcessor;
+use super::BoxedProcessor;
 
 /// A processor that is currently running in the executor
 ///

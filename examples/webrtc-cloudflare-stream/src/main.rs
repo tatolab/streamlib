@@ -155,9 +155,8 @@ fn main() -> Result<()> {
     println!("   https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce\n");
     println!("⏹️  Press Ctrl+C to stop streaming\n");
 
+    // start() blocks on macOS standalone (runs NSApplication event loop)
     runtime.start()?;
-    runtime.block_until_signal()?;
-    runtime.stop()?;
 
     println!("\n✅ Streaming stopped, cleaning up...");
     Ok(())

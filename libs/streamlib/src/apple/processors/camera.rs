@@ -298,9 +298,12 @@ impl AppleCameraProcessor::Processor {
     // Business logic - called by macro-generated process()
     // Pull mode: called once, sets up camera and enters frame processing loop
     fn process(&mut self) -> Result<()> {
+        tracing::trace!("Camera: process() called");
+
         // First-time setup: Initialize camera on main thread
         if self.metal_device.is_none() {
             tracing::info!("Camera: Initializing AVFoundation capture session");
+            tracing::trace!("Camera: About to dispatch to main thread for initialization...");
 
             // AVFoundation requires main thread, so dispatch asynchronously to main thread
             // and wait for completion using a condvar
@@ -313,7 +316,9 @@ impl AppleCameraProcessor::Processor {
             let config = self.config.clone();
             let latest_frame = self.latest_frame.clone();
 
+            tracing::trace!("Camera: Dispatching exec_async to main queue...");
             DispatchQueue::main().exec_async(move || {
+                tracing::trace!("Camera: Main thread dispatch executing!");
                 // SAFETY: This closure executes on the main thread via GCD
                 let mtm = unsafe { MainThreadMarker::new_unchecked() };
 
@@ -328,11 +333,14 @@ impl AppleCameraProcessor::Processor {
             });
 
             // Wait for the result
+            tracing::trace!("Camera: Waiting for main thread dispatch to complete...");
             let (lock, cvar) = &*pair;
             let mut result = lock.lock().unwrap();
             while result.is_none() {
+                tracing::trace!("Camera: Still waiting on condvar...");
                 result = cvar.wait(result).unwrap();
             }
+            tracing::trace!("Camera: Main thread dispatch completed!");
 
             let init_result = result
                 .take()

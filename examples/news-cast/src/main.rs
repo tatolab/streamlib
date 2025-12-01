@@ -66,17 +66,15 @@ fn main() -> Result<()> {
 
     // Start the runtime
     tracing::info!("Starting runtime...");
-    runtime.start()?;
-
-    tracing::info!("Runtime started! Press Ctrl+C to stop.");
     tracing::info!("You should see:");
     tracing::info!("  - Live camera feed in window");
     tracing::info!("  - Blue bar sliding up from bottom");
     tracing::info!("  - Gold accent line");
 
-    // Block until Ctrl+C
-    runtime.block_until_signal()?;
-    runtime.stop()?;
+    // start() blocks on macOS standalone (runs NSApplication event loop)
+    runtime.start()?;
+
+    tracing::info!("Runtime stopped");
 
     Ok(())
 }

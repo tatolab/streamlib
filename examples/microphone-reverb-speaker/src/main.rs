@@ -180,9 +180,8 @@ fn main() -> Result<()> {
     println!("   Press Ctrl+C to stop\n");
     println!("🎙️  Speak into your microphone - you should hear yourself with reverb!\n");
 
+    // start() blocks on macOS standalone (runs NSApplication event loop)
     runtime.start()?;
-    runtime.block_until_signal()?;
-    runtime.stop()?;
 
     println!("\n✅ Stopped\n");
 

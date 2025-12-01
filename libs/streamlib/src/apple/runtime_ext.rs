@@ -67,18 +67,20 @@ pub fn install_macos_shutdown_handler() {
     *SHUTDOWN_CALLBACK.lock() = Some(shutdown_callback);
 }
 
-/// Configure and run the macOS NSApplication event loop (blocking)
+/// Set up NSApplication for standalone macOS apps.
 ///
-/// This must be called from the main thread. It sets up the NSApplication with:
-/// - A main menu with Quit item (Cmd+Q)
-/// - The StreamlibAppDelegate for shutdown handling
-/// - A polling event loop that allows signal handlers to run
-///
-/// This function blocks until the application terminates.
-pub fn run_macos_event_loop() {
+/// Call this once before creating any windows. Idempotent - safe to call multiple times.
+/// Sets activation policy, creates menu with Quit item, installs shutdown delegate.
+pub fn setup_macos_app() {
     use objc2::sel;
-    use objc2_app_kit::{NSApplicationActivationPolicy, NSEventMask, NSMenu, NSMenuItem};
-    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSProcessInfo, NSString};
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSMenu, NSMenuItem};
+    use objc2_foundation::{NSProcessInfo, NSString};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static SETUP_DONE: AtomicBool = AtomicBool::new(false);
+    if SETUP_DONE.swap(true, Ordering::SeqCst) {
+        return; // Already set up
+    }
 
     let mtm = MainThreadMarker::new().expect("Must be on main thread");
     let app = NSApplication::sharedApplication(mtm);
@@ -93,12 +95,10 @@ pub fn run_macos_event_loop() {
 
     let app_menu = NSMenu::new(mtm);
 
-    // Get app name from process info
     let process_info = NSProcessInfo::processInfo();
     let app_name = process_info.processName();
     let quit_title = NSString::from_str(&format!("Quit {}", app_name));
 
-    // Create Quit menu item with Cmd+Q shortcut
     let quit_item = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             mtm.alloc(),
@@ -110,27 +110,33 @@ pub fn run_macos_event_loop() {
     app_menu.addItem(&quit_item);
     app_menu_item.setSubmenu(Some(&app_menu));
 
-    // Create and set our custom delegate
+    // Set our delegate for shutdown handling
     let delegate: Retained<StreamlibAppDelegate> =
         unsafe { msg_send![StreamlibAppDelegate::alloc(mtm), init] };
     let delegate_protocol: &ProtocolObject<dyn NSApplicationDelegate> =
         ProtocolObject::from_ref(&*delegate);
     app.setDelegate(Some(delegate_protocol));
 
-    tracing::info!("macOS: NSApplicationDelegate installed");
-    tracing::info!("macOS: Main menu with Quit item created");
-    tracing::info!("macOS: Starting NSApplication event loop");
+    tracing::info!("macOS: App configured (activation policy, menu, delegate)");
+}
 
-    // Use polling event loop instead of app.run() to allow signal handlers (ctrlc)
-    // to execute between iterations. The ctrlc crate handles Ctrl+C, but needs
-    // periodic breaks in the event loop to deliver the signal.
+/// Run the NSApplication event loop (blocking).
+///
+/// Call `setup_macos_app()` first. This blocks until the app terminates.
+pub fn run_macos_event_loop() {
+    use objc2_app_kit::NSEventMask;
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
+
+    let mtm = MainThreadMarker::new().expect("Must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+
     app.finishLaunching();
 
+    tracing::info!("macOS: Event loop starting");
+
     loop {
-        // Poll for events with a short timeout (0.1 seconds)
         let date = NSDate::dateWithTimeIntervalSinceNow(0.1);
 
-        // Get next event (if any) - this is the polling approach
         let event = unsafe {
             app.nextEventMatchingMask_untilDate_inMode_dequeue(
                 NSEventMask::Any,
@@ -141,29 +147,8 @@ pub fn run_macos_event_loop() {
         };
 
         if let Some(event) = event {
-            // Dispatch the event
             app.sendEvent(&event);
-            // Update windows
             app.updateWindows();
         }
     }
-}
-
-/// Legacy compatibility shim - configures macOS event loop integration
-///
-/// DEPRECATED: This function is maintained for backward compatibility.
-/// Use `install_macos_shutdown_handler()` followed by `run_macos_event_loop()` instead,
-/// or let the executor handle the event loop via `runtime.run()`.
-#[deprecated(
-    since = "0.2.0",
-    note = "Use install_macos_shutdown_handler() and run_macos_event_loop() separately"
-)]
-pub fn configure_macos_event_loop(_runtime: &mut crate::StreamRuntime) {
-    install_macos_shutdown_handler();
-
-    tracing::warn!(
-        "configure_macos_event_loop is deprecated. \
-         The executor now handles the event loop via runtime.run(). \
-         For macOS GUI apps, call run_macos_event_loop() explicitly on the main thread."
-    );
 }

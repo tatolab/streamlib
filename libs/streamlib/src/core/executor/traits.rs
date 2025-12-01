@@ -1,43 +1,49 @@
-use crate::core::context::RuntimeContext;
 use crate::core::error::Result;
-use crate::core::graph::Graph;
+use crate::core::graph::ProcessorId;
+use crate::core::link_channel::LinkId;
 
 use super::ExecutorState;
 
-/// Executor trait for running processor graphs.
+/// Executor lifecycle management.
 ///
 /// Lifecycle methods (`start`, `stop`, `pause`, `resume`) are idempotent -
 /// calling them when already in the target state returns `Ok(())`.
-pub trait Executor: Send {
+pub trait ExecutorLifecycle: Send {
     /// Current executor state.
     fn state(&self) -> ExecutorState;
 
-    /// Compile the graph into an execution plan.
-    fn compile(&mut self, graph: &Graph, ctx: &RuntimeContext) -> Result<()>;
-
-    /// Recompile after graph changes.
-    fn recompile(&mut self, graph: &Graph, ctx: &RuntimeContext) -> Result<()>;
-
-    /// Start the executor - spawns processors and wires links.
-    /// Idempotent: returns Ok if already running.
+    /// Start the executor.
     fn start(&mut self) -> Result<()>;
 
-    /// Stop the executor - shuts down all processors.
-    /// Idempotent: returns Ok if already stopped.
+    /// Stop the executor.
     fn stop(&mut self) -> Result<()>;
 
-    /// Pause execution - suspends processing but keeps state.
-    /// Idempotent: returns Ok if already paused.
+    /// Pause execution.
     fn pause(&mut self) -> Result<()>;
 
     /// Resume from paused state.
-    /// Idempotent: returns Ok if already running.
     fn resume(&mut self) -> Result<()>;
+}
 
-    /// Block until shutdown signal (Ctrl+C / SIGTERM).
-    /// Call after `start()` to keep the process alive.
-    fn block_until_signal(&self) -> Result<()>;
+/// Graph compilation operations.
+///
+/// Implementors translate graph definitions into running processor instances.
+pub trait GraphCompiler {
+    /// Compile the full graph, creating and wiring all processors.
+    fn compile(&mut self) -> Result<()>;
 
-    /// Check if graph has changed and needs recompilation.
-    fn needs_recompile(&self) -> bool;
+    /// Create a processor instance from graph definition.
+    fn create_processor(&mut self, processor_id: &ProcessorId) -> Result<()>;
+
+    /// Wire a link between two processor ports.
+    fn wire_link(&mut self, link_id: &LinkId) -> Result<()>;
+
+    /// Setup a processor (call after creation and wiring).
+    fn setup_processor(&mut self, processor_id: &ProcessorId) -> Result<()>;
+
+    /// Start a processor thread.
+    fn start_processor(&mut self, processor_id: &ProcessorId) -> Result<()>;
+
+    /// Shutdown a running processor.
+    fn shutdown_processor(&mut self, processor_id: &ProcessorId) -> Result<()>;
 }

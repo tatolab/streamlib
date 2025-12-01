@@ -93,16 +93,11 @@ fn run_whep_player() -> Result<()> {
     tracing::info!("✅ Processors connected\n");
 
     tracing::info!("🚀 Starting WHEP playback pipeline...\n");
-
-    // Start the runtime
-    runtime.start()?;
-
     tracing::info!("📺 WHEP stream is now playing!");
     tracing::info!("Press Cmd+Q to stop.\n");
 
-    // Block until stopped
-    runtime.block_until_signal()?;
-    runtime.stop()?;
+    // start() blocks on macOS standalone (runs NSApplication event loop)
+    runtime.start()?;
 
     tracing::info!("✅ WHEP player stopped");
 

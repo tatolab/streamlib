@@ -2,9 +2,7 @@ use crate::apple::{display_link::DisplayLink, metal::MetalDevice, WgpuBridge};
 use crate::core::{LinkInput, Result, RuntimeContext, StreamError, VideoFrame};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
-};
+use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
@@ -530,7 +528,6 @@ impl AppleDisplayProcessor::Processor {
             window.makeKeyAndOrderFront(None);
 
             let app = NSApplication::sharedApplication(mtm);
-            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
             #[allow(deprecated)]
             app.activateIgnoringOtherApps(true);
 
