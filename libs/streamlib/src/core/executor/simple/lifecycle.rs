@@ -7,12 +7,9 @@ impl crate::core::pubsub::EventListener for SimpleExecutor {
     fn on_event(&mut self, event: &crate::core::pubsub::Event) -> Result<()> {
         use crate::core::pubsub::{Event, RuntimeEvent};
 
-        match event {
-            Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted) => {
-                tracing::info!("Executor received RuntimeStarted, triggering compile...");
-                self.compile()?;
-            }
-            _ => {}
+        if let Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted) = event {
+            tracing::info!("Executor received RuntimeStarted, triggering compile...");
+            self.compile()?;
         }
         Ok(())
     }

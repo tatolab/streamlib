@@ -406,6 +406,7 @@ impl StreamRuntime {
     }
 
     /// Block until shutdown signal, with periodic callback for dynamic control.
+    #[allow(unused_variables, unused_mut)]
     pub fn wait_for_signal_with<F>(&mut self, mut callback: F) -> Result<()>
     where
         F: FnMut(&mut Self) -> ControlFlow<()>,
@@ -453,7 +454,7 @@ impl StreamRuntime {
             crate::apple::runtime_ext::run_macos_event_loop();
             // Event loop exited (Cmd+Q or terminate)
             self.stop()?;
-            return Ok(());
+            Ok(())
         }
 
         // Non-macOS: poll loop

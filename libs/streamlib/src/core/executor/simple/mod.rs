@@ -210,6 +210,7 @@ impl SimpleExecutor {
 // Internal accessors
 // ============================================================================
 
+#[allow(dead_code)]
 impl SimpleExecutor {
     pub(crate) fn get_processor(&self, id: &ProcessorId) -> Option<&RunningProcessor> {
         self.execution_graph.as_ref()?.get_processor_runtime(id)

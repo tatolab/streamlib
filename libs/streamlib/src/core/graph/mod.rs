@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 mod graph;
 mod link;
 mod link_port_markers;

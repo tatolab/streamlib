@@ -102,6 +102,7 @@ impl ExecutionGraph {
     }
 
     /// Get the underlying graph reference
+    #[allow(dead_code)]
     pub fn graph(&self) -> &Arc<RwLock<Graph>> {
         &self.graph
     }
@@ -160,6 +161,7 @@ impl ExecutionGraph {
     }
 
     /// Get mutable runtime state for a link
+    #[allow(dead_code)]
     pub fn get_link_runtime_mut(&mut self, id: &LinkId) -> Option<&mut LinkRuntimeState> {
         self.link_runtime.get_mut(id)
     }

@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 pub mod link_channel;
 pub mod link_channel_connections;
 pub mod link_channel_manager;

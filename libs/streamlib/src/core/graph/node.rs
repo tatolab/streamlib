@@ -63,10 +63,7 @@ impl ProcessorNode {
         inputs: Vec<PortInfo>,
         outputs: Vec<PortInfo>,
     ) -> Self {
-        let config_checksum = config
-            .as_ref()
-            .map(|c| compute_json_checksum(c))
-            .unwrap_or(0);
+        let config_checksum = config.as_ref().map(compute_json_checksum).unwrap_or(0);
         Self {
             id,
             processor_type,

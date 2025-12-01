@@ -66,6 +66,7 @@ impl RunningProcessor {
     }
 
     /// Get the current state (locks the mutex briefly)
+    #[allow(dead_code)]
     pub fn current_state(&self) -> ProcessorState {
         *self.state.lock()
     }
