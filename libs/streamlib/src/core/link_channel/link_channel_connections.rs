@@ -1,8 +1,7 @@
 use super::link_plugs::{LinkDisconnectedConsumer, LinkDisconnectedProducer};
 use super::link_ports::ConsumptionStrategy;
-use super::{
-    LinkId, LinkOwnedConsumer, LinkOwnedProducer, LinkPortAddress, LinkPortMessage, LinkWakeupEvent,
-};
+use super::processor_events::ProcessFunctionEvent;
+use super::{LinkId, LinkOwnedConsumer, LinkOwnedProducer, LinkPortAddress, LinkPortMessage};
 use crossbeam_channel::Sender;
 
 /// Output link connection - either linked to another processor or disconnected (plug)
@@ -11,7 +10,7 @@ pub enum LinkOutputConnection<T: LinkPortMessage> {
     Connected {
         id: LinkId,
         producer: LinkOwnedProducer<T>,
-        wakeup: Sender<LinkWakeupEvent>,
+        process_function_invoke_send: Sender<ProcessFunctionEvent>,
     },
 
     /// Disconnected plug (silently drops data)
@@ -33,13 +32,17 @@ impl<T: LinkPortMessage> LinkOutputConnection<T> {
         }
     }
 
-    /// Send wakeup to downstream processor (only for Connected)
+    /// Notify downstream processor that data is available (only for Connected)
     pub fn wake(&self) {
-        if let Self::Connected { wakeup, .. } = self {
+        if let Self::Connected {
+            process_function_invoke_send,
+            ..
+        } = self
+        {
             // Ignore send errors (downstream processor may have stopped)
-            let _ = wakeup.send(LinkWakeupEvent::DataAvailable);
+            let _ = process_function_invoke_send.send(ProcessFunctionEvent::InvokeFunction);
         }
-        // Disconnected has no wakeup - no-op
+        // Disconnected has no notification - no-op
     }
 
     /// Get link ID
@@ -54,6 +57,19 @@ impl<T: LinkPortMessage> LinkOutputConnection<T> {
     pub fn is_connected(&self) -> bool {
         matches!(self, Self::Connected { .. })
     }
+
+    /// Update the process function invoke sender for this connection.
+    ///
+    /// Only affects Connected links; Disconnected links are no-op.
+    pub fn set_process_function_invoke_send(&mut self, new_sender: Sender<ProcessFunctionEvent>) {
+        if let Self::Connected {
+            process_function_invoke_send,
+            ..
+        } = self
+        {
+            *process_function_invoke_send = new_sender;
+        }
+    }
 }
 
 /// Input link connection - either linked to another processor or disconnected (plug)
@@ -63,7 +79,7 @@ pub enum LinkInputConnection<T: LinkPortMessage> {
         id: LinkId,
         consumer: LinkOwnedConsumer<T>,
         source_address: LinkPortAddress,
-        wakeup: Sender<LinkWakeupEvent>,
+        process_function_invoke_send: Sender<ProcessFunctionEvent>,
     },
 
     /// Disconnected plug (always returns None)

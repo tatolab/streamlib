@@ -207,11 +207,11 @@ mod unwire_tests {
         // Create a link channel for testing
         let link_id = link_id::__private::new_unchecked("test_link".to_string());
         let (producer, _consumer) = streamlib::core::create_link_channel::<VideoFrame>(16);
-        let (wakeup_tx, _wakeup_rx) = crossbeam_channel::bounded(1);
+        let (process_invoke_send, _process_invoke_receive) = crossbeam_channel::bounded(1);
 
         // Add link
         output
-            .add_link(link_id.clone(), producer, wakeup_tx)
+            .add_link(link_id.clone(), producer, process_invoke_send)
             .unwrap();
         assert!(output.is_connected());
         assert_eq!(output.link_count(), 1);
@@ -234,12 +234,12 @@ mod unwire_tests {
         // Create a link channel for testing
         let link_id = link_id::__private::new_unchecked("test_link".to_string());
         let (_producer, consumer) = streamlib::core::create_link_channel::<VideoFrame>(16);
-        let (wakeup_tx, _wakeup_rx) = crossbeam_channel::bounded(1);
+        let (process_invoke_send, _process_invoke_receive) = crossbeam_channel::bounded(1);
         let source_addr = streamlib::core::LinkPortAddress::new("source_proc", "output");
 
         // Add link
         input
-            .add_link(link_id.clone(), consumer, source_addr, wakeup_tx)
+            .add_link(link_id.clone(), consumer, source_addr, process_invoke_send)
             .unwrap();
         assert!(input.is_connected());
         assert_eq!(input.link_count(), 1);

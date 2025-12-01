@@ -1,5 +1,5 @@
 use crate::core::execution::ExecutionConfig;
-use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
+use crate::core::link_channel::{LinkPortType, ProcessFunctionEvent};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::{Result, RuntimeContext};
 
@@ -55,10 +55,11 @@ pub trait DynProcessor: Send + 'static {
         link_id: &crate::core::link_channel::LinkId,
     ) -> crate::core::Result<()>;
 
-    fn set_output_wakeup(
+    /// Set the sender for invoking the downstream processor's process() function.
+    fn set_output_process_function_invoke_send(
         &mut self,
         port_name: &str,
-        wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
+        process_function_invoke_send: crossbeam_channel::Sender<ProcessFunctionEvent>,
     );
 
     /// Apply a JSON config update at runtime.

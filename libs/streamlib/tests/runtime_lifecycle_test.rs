@@ -125,8 +125,8 @@ impl GeneratorProcessor::Processor {
 
 // -----------------------------------------------------------------------------
 // Counter Processor - counts received AudioFrames
-// NOTE: Using Loop mode instead of Push because of wakeup channel bug
-// (set_output_wakeup doesn't update existing connections)
+// NOTE: Using Loop mode instead of Push because of process function invoke channel bug
+// (set_output_process_function_invoke_send doesn't update existing connections)
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -63,7 +63,7 @@ RUST_LOG=debug cargo run 2>&1 > output.log
   - Pull mode processors using `shutdown_aware_loop` will exit their loops
 - **Step 2**: Sends shutdown signals via channels to all processor threads
   - Push mode processors receive shutdown signal
-  - Wakeup event sent to unblock waiting processors
+  - Process function invoke event sent to unblock waiting processors
 - **Step 3**: Joins all processor threads with 120-second timeout
   - Waits for each processor's teardown to complete
   - Updates processor status to `Stopped`

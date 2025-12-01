@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 
 use super::BoxedProcessor;
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::link_channel::LinkWakeupEvent;
+use crate::core::link_channel::ProcessFunctionEvent;
 use crate::core::processors::ProcessorState;
 
 type ProcessorId = String;
@@ -14,7 +14,7 @@ pub(super) fn run_processor_loop(
     id: ProcessorId,
     processor: Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: crossbeam_channel::Receiver<()>,
-    wakeup_rx: crossbeam_channel::Receiver<LinkWakeupEvent>,
+    process_function_invoke_receive: crossbeam_channel::Receiver<ProcessFunctionEvent>,
     state: Arc<Mutex<ProcessorState>>,
     exec_config: ExecutionConfig,
 ) {
@@ -37,11 +37,21 @@ pub(super) fn run_processor_loop(
         }
         ProcessExecution::Reactive => {
             tracing::trace!("[{}] Entering reactive mode", id);
-            run_reactive_mode(&id, &processor, &shutdown_rx, &wakeup_rx);
+            run_reactive_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &process_function_invoke_receive,
+            );
         }
         ProcessExecution::Manual => {
             tracing::trace!("[{}] Entering manual mode", id);
-            run_manual_mode(&id, &processor, &shutdown_rx, &wakeup_rx);
+            run_manual_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &process_function_invoke_receive,
+            );
         }
     }
 
@@ -99,16 +109,16 @@ fn run_reactive_mode(
     id: &ProcessorId,
     processor: &Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    wakeup_rx: &crossbeam_channel::Receiver<LinkWakeupEvent>,
+    process_function_invoke_receive: &crossbeam_channel::Receiver<ProcessFunctionEvent>,
 ) {
     tracing::debug!("[{}] Reactive mode: waiting for input data...", id);
 
     loop {
         crossbeam_channel::select! {
             recv(shutdown_rx) -> _ => break,
-            recv(wakeup_rx) -> msg => {
+            recv(process_function_invoke_receive) -> msg => {
                 if let Ok(event) = msg {
-                    if event == LinkWakeupEvent::Shutdown {
+                    if event == ProcessFunctionEvent::StopProcessing {
                         break;
                     }
                     let mut guard = processor.lock();
@@ -125,7 +135,7 @@ fn run_manual_mode(
     id: &ProcessorId,
     processor: &Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    wakeup_rx: &crossbeam_channel::Receiver<LinkWakeupEvent>,
+    process_function_invoke_receive: &crossbeam_channel::Receiver<ProcessFunctionEvent>,
 ) {
     tracing::info!(
         "[{}] Manual mode: calling process() once, then YOU control timing",
@@ -161,10 +171,10 @@ fn run_manual_mode(
                 tracing::trace!("[{}] Manual mode: received shutdown signal", id);
                 break;
             },
-            recv(wakeup_rx) -> msg => {
+            recv(process_function_invoke_receive) -> msg => {
                 if let Ok(event) = msg {
-                    tracing::trace!("[{}] Manual mode: received wakeup event {:?}", id, event);
-                    if event == LinkWakeupEvent::Shutdown {
+                    tracing::trace!("[{}] Manual mode: received process event {:?}", id, event);
+                    if event == ProcessFunctionEvent::StopProcessing {
                         break;
                     }
                 }

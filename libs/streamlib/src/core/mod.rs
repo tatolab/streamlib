@@ -48,7 +48,7 @@ pub use link_channel::{
     create_link_channel, LinkChannel, LinkChannelManager, LinkInput, LinkOutput, LinkOwnedConsumer,
     LinkOwnedProducer, LinkPortAddress, LinkPortMessage, LinkPortType,
 };
-pub use link_channel::{LinkId, LinkWakeupEvent};
+pub use link_channel::{LinkId, ProcessFunctionEvent};
 pub use processors::{
     BaseProcessor, BoxedProcessor, CompositeFactory, DynProcessor, EmptyConfig, Processor,
     ProcessorNodeFactory, ProcessorState, ProcessorType, RegistryBackedFactory,

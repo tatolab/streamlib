@@ -104,7 +104,7 @@ runtime.disconnect(link)?;               // Removes link from graph
 │                    │  │ • ProcessorNode (ref)  │  │                   │
 │                    │  │ • thread handle        │  │                   │
 │                    │  │ • shutdown channel     │  │                   │
-│                    │  │ • wakeup channel       │  │                   │
+│                    │  │ • process invoke chan  │  │                   │
 │                    │  │ • processor instance   │  │                   │
 │                    │  └────────────────────────┘  │                   │
 │                    │                              │                   │
@@ -173,7 +173,7 @@ pub struct RunningProcessor {
     pub node: ProcessorNode,                    // Copy of graph node
     pub thread: Option<JoinHandle<()>>,         // Thread handle
     pub shutdown_tx: Sender<()>,                // Graceful shutdown
-    pub wakeup_tx: Sender<LinkWakeupEvent>,     // Reactive wakeup
+    pub process_function_invoke_send: Sender<ProcessFunctionEvent>,  // Reactive trigger
     pub state: Arc<Mutex<ProcessorState>>,      // Current state
     pub processor: Option<Arc<Mutex<BoxedProcessor>>>, // Instance
 }
@@ -216,7 +216,7 @@ pub enum ProcessExecution {
     /// Tight loop, optional sleep interval
     Continuous { interval_ms: u32 },
 
-    /// Sleep until data arrives (wakeup event)
+    /// Sleep until data arrives (process function invoked)
     Reactive,
 
     /// User controls timing via callbacks
@@ -256,7 +256,7 @@ pub enum LinkOutputConnection<T> {
     Connected {
         id: LinkId,
         producer: LinkOwnedProducer<T>,
-        wakeup: Sender<LinkWakeupEvent>,
+        process_function_invoke_send: Sender<ProcessFunctionEvent>,
     },
     Disconnected {
         plug: LinkDisconnectedProducer<T>,  // Silently drops data

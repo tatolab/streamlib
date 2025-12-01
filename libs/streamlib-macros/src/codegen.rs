@@ -224,7 +224,8 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     let wire_input_consumer = generate_wire_input_consumer(analysis);
     let unwire_output_producer = generate_unwire_output_producer(analysis);
     let unwire_input_consumer = generate_unwire_input_consumer(analysis);
-    let set_output_wakeup = generate_set_output_wakeup(analysis);
+    let set_output_process_function_invoke_send =
+        generate_set_output_process_function_invoke_send(analysis);
 
     let update_config = analysis.config_field_name.as_ref().map(|name| {
         quote! {
@@ -292,7 +293,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #wire_input_consumer
             #unwire_output_producer
             #unwire_input_consumer
-            #set_output_wakeup
+            #set_output_process_function_invoke_send
         }
     }
 }
@@ -628,13 +629,22 @@ fn generate_unwire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate set_output_wakeup method
-fn generate_set_output_wakeup(analysis: &AnalysisResult) -> TokenStream {
+/// Generate set_output_process_function_invoke_send method
+fn generate_set_output_process_function_invoke_send(analysis: &AnalysisResult) -> TokenStream {
     let arms: Vec<TokenStream> = analysis
         .output_ports()
         .map(|p| {
             let port_name = &p.port_name;
-            quote! { #port_name => {} }
+            let field_name = &p.field_name;
+            let is_arc = p.is_arc_wrapped;
+
+            let set_sender = if is_arc {
+                quote! { self.#field_name.as_ref().set_process_function_invoke_send(process_function_invoke_send) }
+            } else {
+                quote! { self.#field_name.set_process_function_invoke_send(process_function_invoke_send) }
+            };
+
+            quote! { #port_name => { #set_sender } }
         })
         .collect();
 
@@ -643,7 +653,7 @@ fn generate_set_output_wakeup(analysis: &AnalysisResult) -> TokenStream {
     }
 
     quote! {
-        fn set_output_wakeup(&mut self, port_name: &str, _wakeup_tx: ::streamlib::crossbeam_channel::Sender<::streamlib::core::link_channel::LinkWakeupEvent>) {
+        fn set_output_process_function_invoke_send(&mut self, port_name: &str, process_function_invoke_send: ::streamlib::crossbeam_channel::Sender<::streamlib::core::link_channel::ProcessFunctionEvent>) {
             match port_name {
                 #(#arms,)*
                 _ => {}

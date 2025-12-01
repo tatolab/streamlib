@@ -143,7 +143,7 @@ fn wire_link_ports(
         &dest_port,
     )?;
 
-    setup_wakeup_channel(
+    setup_process_function_invoke_channel(
         executor,
         &source_proc_id,
         &dest_proc_id,
@@ -343,7 +343,7 @@ fn create_link_channel(
     Ok(())
 }
 
-fn setup_wakeup_channel(
+fn setup_process_function_invoke_channel(
     executor: &SimpleExecutor,
     source_proc_id: &str,
     dest_proc_id: &str,
@@ -358,10 +358,13 @@ fn setup_wakeup_channel(
     if let (Some(src), Some(dst)) = (source_instance, dest_instance) {
         if let Some(src_proc) = src.processor.as_ref() {
             let mut source_guard = src_proc.lock();
-            source_guard.set_output_wakeup(source_port, dst.wakeup_tx.clone());
+            source_guard.set_output_process_function_invoke_send(
+                source_port,
+                dst.process_function_invoke_send.clone(),
+            );
 
             tracing::debug!(
-                "Wired wakeup notification: {} ({}) → {} ({})",
+                "Wired process function invoke: {} ({}) → {} ({})",
                 source_proc_id,
                 source_port,
                 dest_proc_id,

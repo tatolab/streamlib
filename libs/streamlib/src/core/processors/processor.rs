@@ -1,7 +1,7 @@
 use super::BaseProcessor;
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
-use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
+use crate::core::link_channel::{LinkPortType, ProcessFunctionEvent};
 use crate::core::schema::ProcessorDescriptor;
 use serde::{Deserialize, Serialize};
 
@@ -101,10 +101,11 @@ pub trait Processor: BaseProcessor {
         Ok(())
     }
 
-    fn set_output_wakeup(
+    /// Set the sender for invoking the downstream processor's process() function.
+    fn set_output_process_function_invoke_send(
         &mut self,
         _port_name: &str,
-        _wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
+        _process_function_invoke_send: crossbeam_channel::Sender<ProcessFunctionEvent>,
     ) {
     }
 }

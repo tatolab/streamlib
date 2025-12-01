@@ -7,7 +7,7 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 
 use crate::core::graph::{Link, ProcessorNode};
-use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
+use crate::core::link_channel::{LinkPortType, ProcessFunctionEvent};
 use crate::core::processors::ProcessorState;
 
 use super::BoxedProcessor;
@@ -16,7 +16,7 @@ use super::BoxedProcessor;
 ///
 /// Extends `ProcessorNode` (graph data) with runtime state:
 /// - Thread handle for the processor's execution thread
-/// - Channels for shutdown and wakeup signals
+/// - Channels for shutdown and process function invocation signals
 /// - Current execution state
 /// - Reference to the actual processor instance
 ///
@@ -27,10 +27,14 @@ pub(crate) struct RunningProcessor {
     pub node: ProcessorNode,
     /// Thread handle (None if not yet started or already joined)
     pub thread: Option<JoinHandle<()>>,
-    /// Channel to signal shutdown
+    /// Channel to signal shutdown (sender)
     pub shutdown_tx: crossbeam_channel::Sender<()>,
-    /// Channel to wake up the processor (for push/pull scheduling)
-    pub wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
+    /// Channel to receive shutdown signal (receiver for the thread)
+    pub shutdown_rx: Option<crossbeam_channel::Receiver<()>>,
+    /// Send events to invoke the processor's process() function
+    pub process_function_invoke_send: crossbeam_channel::Sender<ProcessFunctionEvent>,
+    /// Receive events to invoke the processor's process() function
+    pub process_function_invoke_receive: Option<crossbeam_channel::Receiver<ProcessFunctionEvent>>,
     /// Current processor state
     pub state: Arc<Mutex<ProcessorState>>,
     /// The actual processor instance
@@ -51,7 +55,9 @@ impl RunningProcessor {
         node: ProcessorNode,
         thread: Option<JoinHandle<()>>,
         shutdown_tx: crossbeam_channel::Sender<()>,
-        wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
+        shutdown_rx: crossbeam_channel::Receiver<()>,
+        process_function_invoke_send: crossbeam_channel::Sender<ProcessFunctionEvent>,
+        process_function_invoke_receive: crossbeam_channel::Receiver<ProcessFunctionEvent>,
         state: Arc<Mutex<ProcessorState>>,
         processor: Option<Arc<Mutex<BoxedProcessor>>>,
     ) -> Self {
@@ -59,7 +65,9 @@ impl RunningProcessor {
             node,
             thread,
             shutdown_tx,
-            wakeup_tx,
+            shutdown_rx: Some(shutdown_rx),
+            process_function_invoke_send,
+            process_function_invoke_receive: Some(process_function_invoke_receive),
             state,
             processor,
         }

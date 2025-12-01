@@ -1,6 +1,6 @@
 use super::{DynProcessor, Processor, ProcessorType};
 use crate::core::execution::ExecutionConfig;
-use crate::core::link_channel::{LinkPortType, LinkWakeupEvent};
+use crate::core::link_channel::{LinkPortType, ProcessFunctionEvent};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::Result;
 
@@ -80,12 +80,16 @@ where
         <Self as Processor>::unwire_input_consumer(self, port_name, link_id)
     }
 
-    fn set_output_wakeup(
+    fn set_output_process_function_invoke_send(
         &mut self,
         port_name: &str,
-        wakeup_tx: crossbeam_channel::Sender<LinkWakeupEvent>,
+        process_function_invoke_send: crossbeam_channel::Sender<ProcessFunctionEvent>,
     ) {
-        <Self as Processor>::set_output_wakeup(self, port_name, wakeup_tx)
+        <Self as Processor>::set_output_process_function_invoke_send(
+            self,
+            port_name,
+            process_function_invoke_send,
+        )
     }
 
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()> {

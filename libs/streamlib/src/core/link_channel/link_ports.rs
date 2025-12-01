@@ -6,7 +6,7 @@ use super::link_channel_connections::{LinkInputConnection, LinkOutputConnection}
 use super::link_id::{self, LinkId};
 use super::link_owned_channel::{LinkOwnedConsumer, LinkOwnedProducer};
 use super::link_plugs::{LinkDisconnectedConsumer, LinkDisconnectedProducer};
-use super::link_wakeup::LinkWakeupEvent;
+use super::processor_events::ProcessFunctionEvent;
 use crate::core::graph::ProcessorId;
 use crate::core::Result;
 use crate::StreamError;
@@ -110,7 +110,7 @@ struct LinkOutputInner<T: LinkPortMessage> {
 // 1. Each processor thread has exclusive logical ownership of its outputs
 // 2. Link connections are only modified during setup and disconnect operations
 // 3. UnsafeCell is used for interior mutability with manual synchronization guarantee
-// 4. LinkOwnedProducer and Sender<LinkWakeupEvent> operations are atomic
+// 4. LinkOwnedProducer and Sender<ProcessFunctionEvent> operations are atomic
 unsafe impl<T: LinkPortMessage> Sync for LinkOutputInner<T> {}
 unsafe impl<T: LinkPortMessage> Send for LinkOutputInner<T> {}
 
@@ -169,7 +169,7 @@ impl<T: LinkPortMessage> LinkOutput<T> {
         &self,
         link_id: LinkId,
         producer: LinkOwnedProducer<T>,
-        wakeup: Sender<LinkWakeupEvent>,
+        process_function_invoke_send: Sender<ProcessFunctionEvent>,
     ) -> Result<()> {
         // SAFETY: Processor has exclusive ownership
         unsafe {
@@ -183,7 +183,7 @@ impl<T: LinkPortMessage> LinkOutput<T> {
             output_link_connections.push(LinkOutputConnection::Connected {
                 id: link_id,
                 producer,
-                wakeup,
+                process_function_invoke_send,
             });
         }
 
@@ -279,6 +279,23 @@ impl<T: LinkPortMessage> LinkOutput<T> {
             .filter(|c: &&LinkOutputConnection<T>| c.is_connected())
             .count()
     }
+
+    /// Set the process function invoke sender for all connected links on this output port.
+    ///
+    /// Called by the executor during wiring to connect the downstream processor's
+    /// process function invoke channel to this output, enabling reactive execution.
+    pub fn set_process_function_invoke_send(
+        &self,
+        process_function_invoke_send: Sender<ProcessFunctionEvent>,
+    ) {
+        // SAFETY: Processor has exclusive ownership
+        unsafe {
+            let output_link_connections = self.output_link_connections_mut();
+            for conn in output_link_connections.iter_mut() {
+                conn.set_process_function_invoke_send(process_function_invoke_send.clone());
+            }
+        }
+    }
 }
 
 /// Inner state for LinkInput
@@ -355,7 +372,7 @@ impl<T: LinkPortMessage> LinkInput<T> {
         link_id: LinkId,
         consumer: LinkOwnedConsumer<T>,
         source_address: LinkPortAddress,
-        wakeup: Sender<LinkWakeupEvent>,
+        process_function_invoke_send: Sender<ProcessFunctionEvent>,
     ) -> Result<()> {
         // SAFETY: Processor has exclusive ownership
         unsafe {
@@ -375,7 +392,7 @@ impl<T: LinkPortMessage> LinkInput<T> {
                 id: link_id,
                 consumer,
                 source_address,
-                wakeup,
+                process_function_invoke_send,
             });
         }
 

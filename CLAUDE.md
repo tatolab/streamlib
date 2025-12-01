@@ -116,7 +116,7 @@ streamlib/
 ├── libs/                     # Library crates
 │   ├── streamlib/           # Core streaming library
 │   │   └── CLAUDE.md        # 📖 Detailed library documentation
-│   ├── streamlib-macros/    # Procedural macros for #[derive(StreamProcessor)]
+│   ├── streamlib-macros/    # Procedural macros for #[streamlib::processor()]
 │   │   └── CLAUDE.md        # 📖 Macro implementation details
 │   └── yuv/                 # SIMD-optimized YUV/RGB conversion
 ├── examples/                 # Standalone example applications
@@ -140,7 +140,7 @@ The main streaming library implementing the graph-based processor pipeline.
 - **Test**: `cargo test -p streamlib`
 
 #### `libs/streamlib-macros` - Procedural Macros
-Provides the `#[derive(StreamProcessor)]` macro for ergonomic processor creation.
+Provides the `#[streamlib::processor()]` attribute macro for ergonomic processor creation.
 - **Documentation**: See [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md)
 - **Purpose**: Code generation for processor boilerplate, port introspection, and trait implementations
 - **Build**: `cargo build -p streamlib-macros`
@@ -259,7 +259,7 @@ StreamLib uses a **graph-based processing pipeline** where processors are nodes 
 
 ### Key Concepts
 
-- **Processor**: Node in graph implementing `StreamProcessor` trait
+- **Processor**: Node in graph implementing `Processor` trait
 - **Port**: Typed input/output endpoints (`StreamInput<T>`, `StreamOutput<T>`)
 - **Frame**: Data flowing between processors:
   - `VideoFrame` - GPU texture with metadata
@@ -279,7 +279,24 @@ Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) **require** main thread
 See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md) and [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
 
 #### 2. Processor Macro System
-Use `#[derive(StreamProcessor)]` to automatically generate boilerplate.
+Use `#[streamlib::processor()]` attribute macro to automatically generate boilerplate:
+
+```rust
+#[streamlib::processor(
+    execution = Reactive,
+    description = "My processor description"
+)]
+pub struct MyProcessor {
+    #[streamlib::input(description = "Video input")]
+    input: LinkInput<VideoFrame>,
+    
+    #[streamlib::output(description = "Video output")]  
+    output: LinkOutput<VideoFrame>,
+    
+    #[streamlib::config]
+    config: MyConfig,
+}
+```
 
 See [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md) for implementation details.
 

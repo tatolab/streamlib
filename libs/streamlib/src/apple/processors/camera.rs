@@ -53,8 +53,8 @@ unsafe impl Sync for FrameHolder {}
 static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> =
     std::sync::OnceLock::new();
 
-static WAKEUP_CHANNEL: std::sync::OnceLock<
-    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::link_channel::LinkWakeupEvent>>>>,
+static PROCESS_FUNCTION_INVOKE_CHANNEL: std::sync::OnceLock<
+    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::link_channel::ProcessFunctionEvent>>>>,
 > = std::sync::OnceLock::new();
 
 define_class!(
@@ -88,9 +88,10 @@ define_class!(
                 let mut latest = storage.lock();
                 *latest = Some(frame_holder);
 
-                if let Some(wakeup_storage) = WAKEUP_CHANNEL.get() {
-                    if let Some(tx) = wakeup_storage.lock().as_ref() {
-                        let _ = tx.send(crate::core::link_channel::LinkWakeupEvent::DataAvailable);
+                if let Some(invoke_storage) = PROCESS_FUNCTION_INVOKE_CHANNEL.get() {
+                    if let Some(tx) = invoke_storage.lock().as_ref() {
+                        let _ = tx
+                            .send(crate::core::link_channel::ProcessFunctionEvent::InvokeFunction);
                     }
                 }
             } else {
@@ -209,10 +210,12 @@ impl AppleCameraProcessor::Processor {
 
         let _ = FRAME_STORAGE.set(latest_frame);
 
-        let wakeup_holder: Arc<
-            Mutex<Option<crossbeam_channel::Sender<crate::core::link_channel::LinkWakeupEvent>>>,
+        let invoke_holder: Arc<
+            Mutex<
+                Option<crossbeam_channel::Sender<crate::core::link_channel::ProcessFunctionEvent>>,
+            >,
         > = Arc::new(Mutex::new(None));
-        let _ = WAKEUP_CHANNEL.set(wakeup_holder.clone());
+        let _ = PROCESS_FUNCTION_INVOKE_CHANNEL.set(invoke_holder.clone());
 
         let output = unsafe { AVCaptureVideoDataOutput::new() };
 

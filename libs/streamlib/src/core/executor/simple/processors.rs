@@ -6,7 +6,7 @@ use crate::core::error::{Result, StreamError};
 use crate::core::executor::running::RunningProcessor;
 use crate::core::executor::thread_runner::run_processor_loop;
 use crate::core::graph::ProcessorId;
-use crate::core::link_channel::LinkWakeupEvent;
+use crate::core::link_channel::ProcessFunctionEvent;
 use crate::core::processors::ProcessorState;
 
 use super::{BoxedProcessor, SimpleExecutor};
@@ -79,13 +79,23 @@ pub(super) fn start_processor(
         exec_config.execution.description()
     );
 
-    // Create new channels for this processor's thread
-    let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
-    let (wakeup_tx, wakeup_rx) = crossbeam_channel::unbounded::<LinkWakeupEvent>();
-
-    // Update the instance with new channels
-    instance.shutdown_tx = shutdown_tx;
-    instance.wakeup_tx = wakeup_tx;
+    // Take the receivers from the instance (they were created in Phase 1)
+    // This ensures we use the same channels that were wired in Phase 2
+    let shutdown_rx = instance.shutdown_rx.take().ok_or_else(|| {
+        StreamError::Runtime(format!(
+            "Processor '{}' shutdown_rx already taken",
+            processor_id
+        ))
+    })?;
+    let process_function_invoke_receive = instance
+        .process_function_invoke_receive
+        .take()
+        .ok_or_else(|| {
+            StreamError::Runtime(format!(
+                "Processor '{}' process_function_invoke_receive already taken",
+                processor_id
+            ))
+        })?;
 
     let processor_clone = Arc::clone(&processor_arc);
     let state_clone = Arc::clone(&instance.state);
@@ -100,7 +110,7 @@ pub(super) fn start_processor(
                 id_clone,
                 processor_clone,
                 shutdown_rx,
-                wakeup_rx,
+                process_function_invoke_receive,
                 state_clone,
                 exec_config,
             );
@@ -181,8 +191,9 @@ fn create_processor_instance(
         })?
     };
 
-    let (shutdown_tx, _shutdown_rx) = crossbeam_channel::bounded(1);
-    let (wakeup_tx, _wakeup_rx) = crossbeam_channel::unbounded::<LinkWakeupEvent>();
+    let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+    let (process_function_invoke_send, process_function_invoke_receive) =
+        crossbeam_channel::unbounded::<ProcessFunctionEvent>();
 
     let state = Arc::new(Mutex::new(ProcessorState::Idle));
     let processor_arc = Arc::new(Mutex::new(processor));
@@ -191,7 +202,9 @@ fn create_processor_instance(
         node,
         None,
         shutdown_tx,
-        wakeup_tx,
+        shutdown_rx,
+        process_function_invoke_send,
+        process_function_invoke_receive,
         state,
         Some(processor_arc),
     );
