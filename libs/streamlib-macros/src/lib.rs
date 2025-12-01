@@ -1,76 +1,43 @@
 //! Procedural macros for streamlib
 //!
-//! This crate provides the `#[derive(StreamProcessor)]` macro to automatically generate:
-//! - Config struct (or use existing/EmptyConfig)
-//! - `from_config()` method for processor construction
-//! - `descriptor()` method with type-safe schemas
-//! - Smart defaults for descriptions, tags, examples
+//! Attribute macros for defining processors:
 //!
-//! # Example Usage
+//! - `#[streamlib::processor]` - Main processor definition
+//! - `#[streamlib::input]` - Input port marker
+//! - `#[streamlib::output]` - Output port marker
+//! - `#[streamlib::config]` - Config field marker
 //!
-//! ## Level 0: Minimal (Everything Auto-Generated)
+//! # Example
 //!
-//! ```rust
-//! use streamlib::{StreamInput, StreamOutput, VideoFrame, AudioFrame};
+//! ```ignore
+//! use streamlib::prelude::*;
 //!
-//! #[derive(StreamProcessor)]
-//! struct VideoEffectProcessor {
-//!     #[input]
-//!     video_in: StreamInput<VideoFrame>,
+//! #[streamlib::processor(execution = Manual)]
+//! pub struct CameraProcessor {
+//!     #[streamlib::output]
+//!     video: LinkOutput<VideoFrame>,
 //!
-//!     #[output]
-//!     video_out: StreamOutput<VideoFrame>,
+//!     #[streamlib::config]
+//!     config: CameraConfig,
 //! }
 //!
-//! impl VideoEffectProcessor {
-//!     fn process(&mut self, tick: TimedTick) -> Result<()> {
-//!         if let Some(frame) = self.video_in.read_latest() {
-//!             // Process frame...
-//!             self.video_out.write(frame);
-//!         }
-//!         Ok(())
-//!     }
+//! impl CameraProcessor::Processor {
+//!     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> { Ok(()) }
+//!     fn teardown(&mut self) -> Result<()> { Ok(()) }
+//!     fn process(&mut self) -> Result<()> { Ok(()) }
 //! }
 //! ```
 //!
-//! ## Level 1: With Descriptions and Config
+//! Generates:
 //!
-//! ```rust
-//! #[derive(StreamProcessor)]
-//! #[processor(
-//!     description = "Applies blur effect to video",
-//!     usage = "Connect video input, adjust blur_radius, connect output",
-//!     tags = ["video", "effect", "blur"]
-//! )]
-//! struct BlurProcessor {
-//!     #[input(description = "Video input to blur")]
-//!     video: StreamInput<VideoFrame>,
+//! ```ignore
+//! pub mod CameraProcessor {
+//!     pub struct Processor { ... }
 //!
-//!     #[output(description = "Blurred video output")]
-//!     output: StreamOutput<VideoFrame>,
-//!
-//!     // Config fields (not ports)
-//!     blur_radius: f32,
-//! }
-//! ```
-//!
-//! ## Level 2: Full Control with Custom Config
-//!
-//! ```rust
-//! #[derive(StreamProcessor)]
-//! #[processor(
-//!     config = BlurConfig,
-//!     audio_requirements = {
-//!         sample_rate: 48000,
-//!         buffer_size: 2048,
+//!     pub mod InputLink {}
+//!     pub mod OutputLink {
+//!         pub struct video;
 //!     }
-//! )]
-//! struct AdvancedProcessor {
-//!     #[input(name = "video_input", description = "Main video", required = true)]
-//!     video_in: StreamInput<VideoFrame>,
-//!
-//!     #[output(name = "video_output")]
-//!     video_out: StreamOutput<VideoFrame>,
 //! }
 //! ```
 
@@ -79,118 +46,93 @@ mod attributes;
 mod codegen;
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, ItemStruct};
 
-/// Derive macro for StreamProcessor trait
+/// Main processor attribute macro.
 ///
-/// Automatically generates:
-/// - Config struct (or uses existing/EmptyConfig)
-/// - `StreamProcessorFactory::from_config()` implementation
-/// - `DescriptorProvider::descriptor()` implementation
-/// - `DynStreamProcessor::as_any_mut()` implementation
-///
-/// Smart defaults:
-/// - Description: Generated from struct name and port configuration
-/// - Usage context: Generated from port types and names
-/// - Tags: Auto-detected from port types (video, audio, data, source, sink, effect)
-/// - Examples: Extracted from `PortMessage::examples()`
-/// - Audio requirements: Auto-detected if processor has audio ports
+/// Transforms a struct definition into a processor module containing:
+/// - `Processor` struct with port fields
+/// - `InputLink` module with input port markers
+/// - `OutputLink` module with output port markers
+/// - All necessary trait implementations
 ///
 /// # Attributes
 ///
-/// ## `#[processor(...)]` - Processor-level attributes
+/// ## Execution Mode (determines when `process()` is called)
 ///
-/// - `config = MyConfig` - Use custom config type (instead of auto-generating)
-/// - `description = "..."` - Processor description (overrides smart default)
-/// - `usage = "..."` - Usage context (overrides smart default)
-/// - `tags = ["tag1", "tag2"]` - Custom tags (overrides smart defaults)
-/// - `audio_requirements = {...}` - Custom audio requirements
-/// - `mode = Pull` or `mode = Push` - Scheduling mode (Pull = pull-based, Push = push-based)
-/// - `unsafe_send` - Generate `unsafe impl Send` for types with !Send hardware resources
+/// - `execution = Continuous` - Runtime loops, calling process() repeatedly (for polling sources)
+/// - `execution = Reactive` - Called when upstream writes to any input port (default)
+/// - `execution = Manual` - Called once, then you control timing via callbacks/external systems
 ///
-/// ## `#[input(...)]` or `#[output(...)]` - Port-level attributes
+/// ### Execution Mode with Interval
 ///
-/// - `name = "custom_name"` - Custom port name (instead of field name)
-/// - `description = "..."` - Port description (overrides smart default)
-/// - `required = true` - Mark input as required (inputs only)
+/// - `execution = Continuous, execution_interval_ms = 100` - Sleep 100ms between process() calls
 ///
-/// # Type Safety
+/// ## Other Attributes
 ///
-/// Schemas are extracted from generic type parameters at compile time:
-/// - `StreamInput<VideoFrame>` → `VideoFrame::schema()`
-/// - No string-based type references
-/// - Full IDE autocomplete support
-/// - Compile-time type checking
+/// - `description = "..."` - Processor description
+/// - `unsafe_send` - Generate `unsafe impl Send`
 ///
-/// # Generated Code
+/// # Example
 ///
-/// For a processor with ports and config fields:
+/// ```ignore
+/// #[streamlib::processor(execution = Reactive)]
+/// pub struct MyProcessor {
+///     #[streamlib::input]
+///     audio_in: LinkInput<AudioFrame>,
 ///
-/// ```rust
-/// #[derive(StreamProcessor)]
-/// struct MyProcessor {
-///     #[input]
-///     input: StreamInput<VideoFrame>,
+///     #[streamlib::output]
+///     audio_out: LinkOutput<AudioFrame>,
 ///
-///     #[output]
-///     output: StreamOutput<VideoFrame>,
-///
-///     config_value: f32,
+///     #[streamlib::config]
+///     config: MyConfig,
 /// }
 /// ```
-///
-/// Generates approximately:
-///
-/// ```rust
-/// struct Config {
-///     config_value: f32,
-/// }
-///
-/// impl StreamProcessorFactory for MyProcessor {
-///     type Config = Config;
-///
-///     fn from_config(config: Config) -> Result<Self> {
-///         Ok(Self {
-///             input: StreamInput::new("input"),
-///             output: StreamOutput::new("output"),
-///             config_value: config.config_value,
-///         })
-///     }
-/// }
-///
-/// impl DescriptorProvider for MyProcessor {
-///     fn descriptor() -> Option<ProcessorDescriptor> {
-///         Some(
-///             ProcessorDescriptor::new("MyProcessor", "My effect processor")
-///                 .with_input("input", VideoFrame::schema(), "Input")
-///                 .with_output("output", VideoFrame::schema(), "Output")
-///                 .with_examples(VideoFrame::examples())
-///                 .with_tags(vec!["video", "effect"])
-///         )
-///     }
-/// }
-///
-/// impl DynStreamProcessor for MyProcessor {
-///     fn as_any_mut(&mut self) -> &mut dyn Any {
-///         self
-///     }
-/// }
-/// ```
-#[proc_macro_derive(StreamProcessor, attributes(processor, input, output, state, config))]
-pub fn derive_stream_processor(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+#[proc_macro_attribute]
+pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item_struct = parse_macro_input!(item as ItemStruct);
+    let attr_tokens: proc_macro2::TokenStream = attr.into();
 
-    // Phase 1: Analyze struct (classify fields, extract types)
-    let analysis = match analysis::AnalysisResult::analyze(&input) {
+    let analysis = match analysis::AnalysisResult::analyze(&item_struct, attr_tokens) {
         Ok(result) => result,
         Err(err) => return err.to_compile_error().into(),
     };
 
-    // Phase 0.5: StreamOutput now handles Arc internally, no longer need external Arc-wrapping
-    // Arc-wrapping enforcement removed - StreamOutput is Arc-wrapped internally by design
-
-    // Phase 2: Generate code
-    let generated = codegen::generate_processor_impl(&analysis);
+    let generated = codegen::generate_processor_module(&analysis);
 
     TokenStream::from(generated)
+}
+
+/// Input port marker attribute.
+///
+/// Marks a field as an input port. Used within `#[streamlib::processor]`.
+///
+/// # Attributes
+///
+/// - `description = "..."` - Port description
+/// - `name = "..."` - Custom port name (defaults to field name)
+#[proc_macro_attribute]
+pub fn input(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// Output port marker attribute.
+///
+/// Marks a field as an output port. Used within `#[streamlib::processor]`.
+///
+/// # Attributes
+///
+/// - `description = "..."` - Port description
+/// - `name = "..."` - Custom port name (defaults to field name)
+#[proc_macro_attribute]
+pub fn output(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// Config field marker attribute.
+///
+/// Marks a field as a config field. Used within `#[streamlib::processor]`.
+#[proc_macro_attribute]
+pub fn config(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
 }

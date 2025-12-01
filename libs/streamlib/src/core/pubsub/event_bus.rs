@@ -1,15 +1,11 @@
-//! Lock-free pub/sub event bus with parallel dispatch
-
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::sync::{Arc, LazyLock, Weak};
 
 use super::events::{Event, EventListener};
 
-/// Maximum event size: 64KB
 const MAX_EVENT_SIZE: usize = 64 * 1024;
 
-/// Compile-time size check for Event type
 const _: () = {
     assert!(
         std::mem::size_of::<Event>() <= MAX_EVENT_SIZE,
@@ -17,19 +13,10 @@ const _: () = {
     );
 };
 
-/// Global event bus singleton - accessible from anywhere
 pub static EVENT_BUS: LazyLock<EventBus> = LazyLock::new(EventBus::new);
 
-/// Lock-free event bus with parallel dispatch
-///
-/// - Publish is ~100-200ns (Arc allocation + rayon spawn)
-/// - No queuing = no message pile-up
-/// - Events dispatched in parallel to all listeners
-/// - Slow listeners don't block publisher or other listeners
+/// Lock-free event bus with parallel dispatch.
 pub struct EventBus {
-    /// Map of topic name -> list of weak listener references
-    /// DashMap provides lock-free concurrent HashMap
-    /// Weak refs allow listeners to be dropped without explicit unsubscribe
     topics: DashMap<String, Vec<Weak<Mutex<dyn EventListener>>>>,
 }
 
@@ -40,20 +27,13 @@ impl Default for EventBus {
 }
 
 impl EventBus {
-    /// Create a new event bus
     pub fn new() -> Self {
         Self {
             topics: DashMap::new(),
         }
     }
 
-    /// Subscribe a listener to a topic
-    ///
-    /// # Example
-    /// ```ignore
-    /// let listener = Arc::new(Mutex::new(MyListener));
-    /// EVENT_BUS.subscribe("my-topic", listener);
-    /// ```
+    /// Subscribe a listener to a topic.
     pub fn subscribe(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
         let weak_listener = Arc::downgrade(&listener);
         self.topics
@@ -62,20 +42,7 @@ impl EventBus {
             .push(weak_listener);
     }
 
-    /// Publish event to topic (instant, non-blocking, parallel dispatch)
-    ///
-    /// Events are shared via Arc and dispatched in parallel to all listeners.
-    /// Each listener runs in its own rayon task, so slow listeners don't block others.
-    ///
-    /// Returns immediately (~100-200ns) regardless of number of listeners.
-    ///
-    /// # Example
-    /// ```ignore
-    /// EVENT_BUS.publish("my-topic", &Event::Custom {
-    ///     topic: "my-topic".to_string(),
-    ///     data: serde_json::json!({"key": "value"}),
-    /// });
-    /// ```
+    /// Publish event to topic (non-blocking, parallel dispatch).
     pub fn publish(&self, topic: &str, event: &Event) {
         if let Some(subscribers) = self.topics.get(topic) {
             eprintln!(
@@ -111,29 +78,27 @@ impl EventBus {
                 live_listeners.len()
             );
 
-            // Dispatch in parallel to all listeners
+            // Dispatch in parallel to all listeners (fire-and-forget, non-blocking)
             // Each listener gets its own rayon task
-            rayon::scope(|s| {
-                for listener in live_listeners {
-                    let event = Arc::clone(&event);
-                    s.spawn(move |_| {
-                        // Try lock without blocking
-                        // If listener is busy, skip (fire-and-forget)
-                        if let Some(mut guard) = listener.try_lock() {
-                            eprintln!("[EVENT_BUS]   - Calling on_event for listener");
-                            tracing::info!("EVENT_BUS: Calling on_event for listener");
-                            let _ = guard.on_event(&event);
-                        } else {
-                            eprintln!(
-                                "[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)"
-                            );
-                            tracing::warn!(
-                                "EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)"
-                            );
-                        }
-                    });
-                }
-            });
+            for listener in live_listeners {
+                let event = Arc::clone(&event);
+                rayon::spawn(move || {
+                    // Try lock without blocking
+                    // If listener is busy, skip (fire-and-forget)
+                    if let Some(mut guard) = listener.try_lock() {
+                        eprintln!("[EVENT_BUS]   - Calling on_event for listener");
+                        tracing::info!("EVENT_BUS: Calling on_event for listener");
+                        let _ = guard.on_event(&event);
+                    } else {
+                        eprintln!(
+                            "[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)"
+                        );
+                        tracing::warn!(
+                            "EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)"
+                        );
+                    }
+                });
+            }
         } else {
             eprintln!("[EVENT_BUS] No subscribers for topic '{}'", topic);
             tracing::warn!("EVENT_BUS: No subscribers for topic '{}'", topic);
@@ -144,7 +109,6 @@ impl EventBus {
         self.cleanup_dead_listeners(topic);
     }
 
-    /// Remove dead listeners (called periodically during publish)
     fn cleanup_dead_listeners(&self, topic: &str) {
         if let Some(mut subscribers) = self.topics.get_mut(topic) {
             subscribers.retain(|weak| weak.strong_count() > 0);
@@ -162,6 +126,12 @@ impl EventBus {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Wait for rayon thread pool to complete pending tasks
+    fn wait_for_rayon() {
+        // rayon::spawn is fire-and-forget, so we need to wait
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 
     // Test listener that counts events (thread-safe)
     struct CountingListener {
@@ -197,11 +167,9 @@ mod tests {
         let audio_listener: Arc<Mutex<dyn EventListener>> = audio_listener_concrete.clone();
         let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
 
-        // Subscribe to different topics
         bus.subscribe("processor:audio", audio_listener);
         bus.subscribe("processor:video", video_listener);
 
-        // Publish to audio topic
         bus.publish(
             "processor:audio",
             &Event::ProcessorEvent {
@@ -210,8 +178,7 @@ mod tests {
             },
         );
 
-        // Rayon scope ensures all tasks complete before returning
-        // Only audio subscriber receives
+        wait_for_rayon();
         assert_eq!(audio_listener_concrete.lock().count(), 1);
         assert_eq!(video_listener_concrete.lock().count(), 0);
     }
@@ -226,17 +193,15 @@ mod tests {
         let listener1: Arc<Mutex<dyn EventListener>> = listener1_concrete.clone();
         let listener2: Arc<Mutex<dyn EventListener>> = listener2_concrete.clone();
 
-        // Multiple subscribers to runtime:global
         bus.subscribe("runtime:global", listener1);
         bus.subscribe("runtime:global", listener2);
 
-        // Publish to runtime:global
         bus.publish(
             "runtime:global",
             &Event::RuntimeGlobal(super::super::events::RuntimeEvent::RuntimeStart),
         );
 
-        // Both subscribers receive (rayon scope ensures completion)
+        wait_for_rayon();
         assert_eq!(listener1_concrete.lock().count(), 1);
         assert_eq!(listener2_concrete.lock().count(), 1);
     }
@@ -288,6 +253,7 @@ mod tests {
             },
         );
 
+        wait_for_rayon();
         // Subscriber should receive second message only
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -324,6 +290,7 @@ mod tests {
             },
         );
 
+        wait_for_rayon();
         // All 5 subscribers should receive the message (parallel dispatch)
         assert_eq!(listener1_concrete.lock().count(), 1);
         assert_eq!(listener2_concrete.lock().count(), 1);

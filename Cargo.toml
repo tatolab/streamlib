@@ -11,6 +11,7 @@ members = [
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare
     "examples/whep-player",     # Example: WHEP (WebRTC egress) player
     "examples/test-main-thread-dispatch", # Test: Main thread dispatch validation
+    "examples/graph-json-demo",           # Example: Graph JSON serialization demo
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 

@@ -120,25 +120,7 @@ impl WhepClient {
         })
     }
 
-    /// POST SDP offer to WHEP endpoint, receive SDP answer (or counter-offer)
-    ///
-    /// WHEP Spec: Client creates session by POSTing SDP offer with "recvonly" media direction.
-    /// Server responds with:
-    /// - 201 Created + SDP answer: Server accepts client's offer
-    /// - 406 Not Acceptable + SDP counter-offer: Server proposes alternative configuration
-    ///
-    /// Both responses include Location header (session URL) and optional ETag.
-    ///
-    /// # Arguments
-    /// * `sdp_offer` - SDP offer string (application/sdp) with "recvonly" attributes
-    ///
-    /// # Returns
-    /// Tuple of (SDP answer/counter-offer, is_counter_offer flag)
-    ///
-    /// # Errors
-    /// - 400 Bad Request: Malformed SDP
-    /// - 401 Unauthorized: Invalid auth token
-    /// - 503 Service Unavailable: Server overloaded (retry with backoff)
+    /// POST SDP offer to WHEP endpoint, receive SDP answer.
     pub fn post_offer(&mut self, sdp_offer: &str) -> Result<(String, bool)> {
         use http_body_util::Full;
         use hyper::{header, Request, StatusCode};
@@ -285,22 +267,12 @@ impl WhepClient {
         }
     }
 
-    /// Queue an ICE candidate for batched transmission
-    ///
-    /// Candidates are buffered and sent in batches via PATCH to reduce HTTP overhead.
-    ///
-    /// # Arguments
-    /// * `candidate_sdp` - ICE candidate in SDP fragment format (e.g., "a=candidate:...")
+    /// Queue an ICE candidate for batched transmission.
     pub fn queue_ice_candidate(&self, candidate_sdp: String) {
         self.pending_candidates.lock().unwrap().push(candidate_sdp);
     }
 
-    /// Send pending ICE candidates to WHEP server via PATCH
-    ///
-    /// WHEP Spec: Trickle ICE candidates sent via PATCH with
-    /// Content-Type: application/trickle-ice-sdpfrag
-    ///
-    /// Sends all buffered candidates in a single PATCH request, then clears the queue.
+    /// Send pending ICE candidates to WHEP server via PATCH.
     pub fn send_ice_candidates(&self) -> Result<()> {
         use http_body_util::{BodyExt, Full};
         use hyper::{header, Request, StatusCode};

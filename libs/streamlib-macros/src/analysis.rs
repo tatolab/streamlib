@@ -1,15 +1,10 @@
-//! Field analysis for StreamProcessor derive macro
+//! Field analysis for processor attribute macro
 //!
-//! Classifies struct fields as ports or config fields,
-//! extracts type parameters, and builds analysis result.
-
-// TODO(@jonathan): Review unused helper functions in this module - may be leftover from old implementation
-// Functions like has_audio_ports(), is_audio_frame_type(), is_video_frame_type() are currently unused
-#![allow(dead_code)]
+//! Classifies struct fields as ports, config, or state fields.
 
 use crate::attributes::{PortAttributes, ProcessorAttributes, StateAttributes};
-use proc_macro2::Ident;
-use syn::{Data, DeriveInput, Error, Fields, GenericArgument, PathArguments, Result, Type};
+use proc_macro2::{Ident, TokenStream};
+use syn::{Error, Fields, GenericArgument, ItemStruct, PathArguments, Result, Type};
 
 /// Direction of a port
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,105 +16,51 @@ pub enum PortDirection {
 /// Information about a port field
 #[derive(Debug)]
 pub struct PortField {
-    /// Rust field name
     pub field_name: Ident,
-
-    /// Port name (field_name or custom from attribute)
     pub port_name: String,
-
-    /// Input or Output
     pub direction: PortDirection,
-
-    /// Message type (e.g., VideoFrame, AudioFrame)
     pub message_type: Type,
-
-    /// Whether the port is Arc-wrapped (Arc<StreamInput/Output<T>>)
     pub is_arc_wrapped: bool,
-
-    /// Full field type (for code generation)
     pub field_type: Type,
-
-    /// Parsed port attributes
     pub attributes: PortAttributes,
 }
 
-/// Information about a config field
-#[derive(Debug)]
-pub struct ConfigField {
-    /// Rust field name
-    pub field_name: Ident,
-
-    /// Field type
-    pub field_type: Type,
-}
-
-/// Information about a state field (runtime state with default initialization)
+/// Information about a state field
 #[derive(Debug)]
 pub struct StateField {
-    /// Rust field name
     pub field_name: Ident,
-
-    /// Field type
     pub field_type: Type,
-
-    /// Parsed state attributes
     pub attributes: StateAttributes,
 }
 
 /// Complete analysis result
 #[derive(Debug)]
 pub struct AnalysisResult {
-    /// Struct name
     pub struct_name: Ident,
-
-    /// Port fields (inputs and outputs)
     pub port_fields: Vec<PortField>,
-
-    /// Config fields (non-ports, non-state)
-    pub config_fields: Vec<ConfigField>,
-
-    /// State fields (runtime state with default initialization)
     pub state_fields: Vec<StateField>,
-
-    /// Config field type (extracted from #[config] field, if present)
     pub config_field_type: Option<Type>,
-
-    /// Processor-level attributes
+    pub config_field_name: Option<Ident>,
     pub processor_attrs: ProcessorAttributes,
 }
 
 impl AnalysisResult {
-    /// Analyze a struct and extract all information
-    pub fn analyze(input: &DeriveInput) -> Result<Self> {
-        let struct_name = input.ident.clone();
+    /// Analyze an ItemStruct from attribute macro
+    pub fn analyze(item: &ItemStruct, args: TokenStream) -> Result<Self> {
+        let struct_name = item.ident.clone();
+        let processor_attrs = ProcessorAttributes::parse_from_args(args)?;
 
-        // Parse processor-level attributes
-        let processor_attrs = ProcessorAttributes::parse(&input.attrs)?;
-
-        // Extract named fields
-        let fields = match &input.data {
-            Data::Struct(data) => match &data.fields {
-                Fields::Named(fields) => &fields.named,
-                _ => {
-                    return Err(Error::new_spanned(
-                        input,
-                        "StreamProcessor only works with structs with named fields",
-                    ));
-                }
-            },
+        let fields = match &item.fields {
+            Fields::Named(fields) => &fields.named,
             _ => {
-                return Err(Error::new_spanned(
-                    input,
-                    "StreamProcessor only works with structs",
-                ));
+                return Err(Error::new_spanned(item, "Processor requires named fields"));
             }
         };
 
-        // Classify fields
         let mut port_fields = Vec::new();
-        let config_fields = Vec::new();
         let mut state_fields = Vec::new();
-        let mut config_field_type: Option<Type> = None;
+        let mut config_field_type = None;
+        let mut config_field_name = None;
 
         for field in fields {
             let field_name = field
@@ -127,8 +68,8 @@ impl AnalysisResult {
                 .clone()
                 .ok_or_else(|| Error::new_spanned(field, "Field must have a name"))?;
 
-            // Check for #[input] attribute
-            if has_attribute(&field.attrs, "input") {
+            // Check for input port
+            if has_attr(&field.attrs, "input") {
                 let port_attrs = PortAttributes::parse(&field.attrs, "input")?;
                 let (message_type, is_arc_wrapped) = extract_message_type(&field.ty)?;
 
@@ -147,8 +88,8 @@ impl AnalysisResult {
                 continue;
             }
 
-            // Check for #[output] attribute
-            if has_attribute(&field.attrs, "output") {
+            // Check for output port
+            if has_attr(&field.attrs, "output") {
                 let port_attrs = PortAttributes::parse(&field.attrs, "output")?;
                 let (message_type, is_arc_wrapped) = extract_message_type(&field.ty)?;
 
@@ -167,15 +108,15 @@ impl AnalysisResult {
                 continue;
             }
 
-            // Check for #[config] attribute
-            if has_attribute(&field.attrs, "config") {
-                // This is the config field - extract its type
+            // Check for config field
+            if has_attr(&field.attrs, "config") {
                 config_field_type = Some(field.ty.clone());
+                config_field_name = Some(field_name);
                 continue;
             }
 
-            // Check for explicit #[state] attribute (optional, for clarity)
-            if has_attribute(&field.attrs, "state") {
+            // Check for explicit state
+            if has_attr(&field.attrs, "state") {
                 let state_attrs = StateAttributes::parse(&field.attrs)?;
                 state_fields.push(StateField {
                     field_name,
@@ -185,7 +126,7 @@ impl AnalysisResult {
                 continue;
             }
 
-            // Not a port or config - must be a state field (auto-detected)
+            // Default: treat as state field
             state_fields.push(StateField {
                 field_name,
                 field_type: field.ty.clone(),
@@ -193,10 +134,9 @@ impl AnalysisResult {
             });
         }
 
-        // Validate that we have at least one port
         if port_fields.is_empty() {
             return Err(Error::new_spanned(
-                input,
+                item,
                 "Processor must have at least one #[input] or #[output] port",
             ));
         }
@@ -204,18 +144,11 @@ impl AnalysisResult {
         Ok(AnalysisResult {
             struct_name,
             port_fields,
-            config_fields,
             state_fields,
             config_field_type,
+            config_field_name,
             processor_attrs,
         })
-    }
-
-    /// Check if processor has audio ports
-    pub fn has_audio_ports(&self) -> bool {
-        self.port_fields
-            .iter()
-            .any(|field| is_audio_frame_type(&field.message_type))
     }
 
     /// Get input ports
@@ -233,133 +166,100 @@ impl AnalysisResult {
     }
 }
 
-/// Extract message type from StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>
-/// Returns (message_type, is_arc_wrapped)
+/// Check if field has attribute (supports `#[name]`, `#[streamlib::name]`, and `#[crate::name]`)
+fn has_attr(attrs: &[syn::Attribute], name: &str) -> bool {
+    attrs.iter().any(|attr| {
+        let path = attr.path();
+        // Simple: #[name]
+        if path.is_ident(name) {
+            return true;
+        }
+        // Qualified: #[streamlib::name] or #[crate::name]
+        if path.segments.len() == 2 {
+            let first = &path.segments[0].ident;
+            let second = &path.segments[1].ident;
+            return (first == "streamlib" || first == "crate") && second == name;
+        }
+        false
+    })
+}
+
+/// Extract message type from LinkInput<T>, LinkOutput<T>, or Arc<...>
 fn extract_message_type(ty: &Type) -> Result<(Type, bool)> {
-    match ty {
-        Type::Path(type_path) => {
-            let last_segment = type_path
-                .path
-                .segments
-                .last()
-                .ok_or_else(|| Error::new_spanned(ty, "Expected type path"))?;
-
-            let ident = &last_segment.ident;
-
-            // Check if it's Arc<...>
-            if ident == "Arc" {
-                // Extract inner type from Arc<T>
-                match &last_segment.arguments {
-                    PathArguments::AngleBracketed(args) => {
-                        let first_arg = args
-                            .args
-                            .first()
-                            .ok_or_else(|| Error::new_spanned(ty, "Arc requires type parameter"))?;
-
-                        if let GenericArgument::Type(inner_type) = first_arg {
-                            // Recursively extract from inner type (should be StreamInput/Output<T> or Mutex<StreamInput/Output<T>>)
-                            let (message_type, _) = extract_message_type(inner_type)?;
-                            return Ok((message_type, true)); // Arc-wrapped!
-                        } else {
-                            return Err(Error::new_spanned(ty, "Expected type parameter in Arc"));
-                        }
-                    }
-                    _ => {
-                        return Err(Error::new_spanned(
-                            ty,
-                            "Arc must have angle-bracketed type parameter",
-                        ));
-                    }
-                }
-            }
-
-            // Check if it's Mutex<...> (handles Arc<Mutex<StreamInput<T>>> pattern)
-            if ident == "Mutex" {
-                // Extract inner type from Mutex<T>
-                match &last_segment.arguments {
-                    PathArguments::AngleBracketed(args) => {
-                        let first_arg = args.args.first().ok_or_else(|| {
-                            Error::new_spanned(ty, "Mutex requires type parameter")
-                        })?;
-
-                        if let GenericArgument::Type(inner_type) = first_arg {
-                            // Recursively extract from inner type (should be StreamInput/Output<T>)
-                            let (message_type, is_arc) = extract_message_type(inner_type)?;
-                            return Ok((message_type, is_arc)); // Preserve Arc-wrapped status
-                        } else {
-                            return Err(Error::new_spanned(ty, "Expected type parameter in Mutex"));
-                        }
-                    }
-                    _ => {
-                        return Err(Error::new_spanned(
-                            ty,
-                            "Mutex must have angle-bracketed type parameter",
-                        ));
-                    }
-                }
-            }
-
-            // Check if it's StreamInput, StreamOutput, or V2 variants
-            if ident != "StreamInput"
-                && ident != "StreamOutput"
-                && ident != "StreamInputV2"
-                && ident != "StreamOutputV2"
-            {
-                return Err(Error::new_spanned(
-                    ty,
-                    "Port fields must be StreamInput<T>, StreamOutput<T>, StreamInputV2<T>, StreamOutputV2<T>, or Arc<...>",
-                ));
-            }
-
-            // Extract generic argument
-            match &last_segment.arguments {
-                PathArguments::AngleBracketed(args) => {
-                    let first_arg = args.args.first().ok_or_else(|| {
-                        Error::new_spanned(ty, "StreamInput/StreamOutput requires type parameter")
-                    })?;
-
-                    if let GenericArgument::Type(inner_type) = first_arg {
-                        Ok((inner_type.clone(), false)) // Not Arc-wrapped
-                    } else {
-                        Err(Error::new_spanned(ty, "Expected type parameter"))
-                    }
-                }
-                _ => Err(Error::new_spanned(
-                    ty,
-                    "StreamInput/StreamOutput must have angle-bracketed type parameter",
-                )),
-            }
-        }
-        _ => Err(Error::new_spanned(
+    let Type::Path(type_path) = ty else {
+        return Err(Error::new_spanned(
             ty,
-            "Port field must be StreamInput<T>, StreamOutput<T>, or Arc<StreamInput/Output<T>>",
-        )),
-    }
-}
+            "Port field must be LinkInput<T>, LinkOutput<T>, or Arc<...>",
+        ));
+    };
 
-/// Check if field has attribute with given name
-fn has_attribute(attrs: &[syn::Attribute], name: &str) -> bool {
-    attrs.iter().any(|attr| attr.path().is_ident(name))
-}
+    let segment = type_path
+        .path
+        .segments
+        .last()
+        .ok_or_else(|| Error::new_spanned(ty, "Expected type path"))?;
 
-/// Check if a type is AudioFrame
-pub fn is_audio_frame_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "AudioFrame";
-        }
-    }
-    false
-}
+    let ident = &segment.ident;
 
-/// Check if a type is VideoFrame
-pub fn is_video_frame_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "VideoFrame";
-        }
+    // Handle Arc<...>
+    if ident == "Arc" {
+        let PathArguments::AngleBracketed(args) = &segment.arguments else {
+            return Err(Error::new_spanned(ty, "Arc requires type parameter"));
+        };
+
+        let GenericArgument::Type(inner_type) = args
+            .args
+            .first()
+            .ok_or_else(|| Error::new_spanned(ty, "Arc requires type parameter"))?
+        else {
+            return Err(Error::new_spanned(ty, "Expected type parameter in Arc"));
+        };
+
+        let (message_type, _) = extract_message_type(inner_type)?;
+        return Ok((message_type, true));
     }
-    false
+
+    // Handle Mutex<...> (for Arc<Mutex<...>> pattern)
+    if ident == "Mutex" {
+        let PathArguments::AngleBracketed(args) = &segment.arguments else {
+            return Err(Error::new_spanned(ty, "Mutex requires type parameter"));
+        };
+
+        let GenericArgument::Type(inner_type) = args
+            .args
+            .first()
+            .ok_or_else(|| Error::new_spanned(ty, "Mutex requires type parameter"))?
+        else {
+            return Err(Error::new_spanned(ty, "Expected type parameter in Mutex"));
+        };
+
+        return extract_message_type(inner_type);
+    }
+
+    // Handle LinkInput/LinkOutput
+    if ident != "LinkInput" && ident != "LinkOutput" {
+        return Err(Error::new_spanned(
+            ty,
+            "Port fields must be LinkInput<T>, LinkOutput<T>, or Arc<...>",
+        ));
+    }
+
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return Err(Error::new_spanned(
+            ty,
+            "LinkInput/LinkOutput requires type parameter",
+        ));
+    };
+
+    let GenericArgument::Type(inner_type) = args
+        .args
+        .first()
+        .ok_or_else(|| Error::new_spanned(ty, "LinkInput/LinkOutput requires type parameter"))?
+    else {
+        return Err(Error::new_spanned(ty, "Expected type parameter"));
+    };
+
+    Ok((inner_type.clone(), false))
 }
 
 #[cfg(test)]
@@ -369,26 +269,21 @@ mod tests {
 
     #[test]
     fn test_extract_message_type() {
-        let ty: Type = parse_quote! { StreamInput<VideoFrame> };
+        let ty: Type = parse_quote! { LinkInput<VideoFrame> };
         let (result, is_arc) = extract_message_type(&ty).unwrap();
-        assert!(is_video_frame_type(&result));
         assert!(!is_arc);
+        if let Type::Path(p) = result {
+            assert_eq!(p.path.segments.last().unwrap().ident, "VideoFrame");
+        }
     }
 
     #[test]
-    fn test_extract_message_type_arc_wrapped() {
-        let ty: Type = parse_quote! { Arc<StreamOutput<AudioFrame>> };
+    fn test_extract_arc_wrapped() {
+        let ty: Type = parse_quote! { Arc<LinkOutput<AudioFrame>> };
         let (result, is_arc) = extract_message_type(&ty).unwrap();
-        assert!(is_audio_frame_type(&result));
         assert!(is_arc);
-    }
-
-    #[test]
-    fn test_is_audio_frame() {
-        let ty: Type = parse_quote! { AudioFrame };
-        assert!(is_audio_frame_type(&ty));
-
-        let ty: Type = parse_quote! { VideoFrame };
-        assert!(!is_audio_frame_type(&ty));
+        if let Type::Path(p) = result {
+            assert_eq!(p.path.segments.last().unwrap().ident, "AudioFrame");
+        }
     }
 }

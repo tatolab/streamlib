@@ -145,20 +145,6 @@ pub fn parse_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
 // ============================================================================
 
 /// Convert AVCC format to Annex B format.
-///
-/// AVCC format (used by VideoToolbox):
-/// - [4-byte length][NAL unit][4-byte length][NAL unit]...
-/// - Length is big-endian u32
-///
-/// Annex B format (required by WebRTC/RTP):
-/// - [00 00 00 01][NAL unit][00 00 00 01][NAL unit]...
-/// - Start codes replace length prefixes
-///
-/// # Arguments
-/// * `avcc_data` - H.264 data in AVCC format
-///
-/// # Returns
-/// H.264 data in Annex B format
 pub fn avcc_to_annex_b(avcc_data: &[u8]) -> Vec<u8> {
     const START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
     let mut annex_b = Vec::with_capacity(avcc_data.len() + 128); // Extra space for start codes
@@ -196,16 +182,7 @@ pub fn avcc_to_annex_b(avcc_data: &[u8]) -> Vec<u8> {
     annex_b
 }
 
-/// Convert Annex B format to AVCC format
-///
-/// Annex B uses start codes (0x00000001 or 0x000001) before each NAL unit.
-/// AVCC uses 4-byte length prefix (big-endian) before each NAL unit.
-///
-/// # Arguments
-/// * `annex_b_data` - H.264 data in Annex B format (start codes)
-///
-/// # Returns
-/// AVCC formatted data with 4-byte length prefixes
+/// Convert Annex B format to AVCC format.
 pub fn annex_b_to_avcc(annex_b_data: &[u8]) -> crate::core::Result<Vec<u8>> {
     use crate::core::StreamError;
 
@@ -273,18 +250,8 @@ fn find_next_start_code(data: &[u8]) -> Option<usize> {
 
 /// Extract SPS and PPS parameter sets from CMFormatDescription and prepend to frame data.
 ///
-/// For H.264 keyframes, decoders need SPS (Sequence Parameter Set) and PPS (Picture Parameter Set)
-/// to initialize properly. VideoToolbox stores these in the CMFormatDescription.
-///
-/// # Arguments
-/// * `sample_buffer` - CMSampleBuffer containing the format description
-/// * `frame_data` - Encoded frame data (will be appended after parameter sets)
-///
-/// # Returns
-/// Annex-B formatted data with: `[SPS][PPS][original frame data]`
-///
 /// # Safety
-/// This function uses unsafe FFI calls to VideoToolbox/CoreMedia APIs.
+/// Uses unsafe FFI calls to VideoToolbox/CoreMedia APIs.
 pub unsafe fn extract_h264_parameters(
     sample_buffer: ffi::CMSampleBufferRef,
     frame_data: Vec<u8>,

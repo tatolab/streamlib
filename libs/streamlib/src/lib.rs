@@ -11,22 +11,31 @@
 // Allow `::streamlib::` paths to work inside this crate (for proc macro generated code)
 extern crate self as streamlib;
 
+// Re-export crossbeam_channel for macro-generated code
+pub use crossbeam_channel;
+
 pub mod core;
 
-// Re-export derive macro with same name as trait (standard Rust pattern)
-// The macro and trait occupy different namespaces, so no collision occurs
-pub use streamlib_macros::StreamProcessor;
+// Re-export attribute macros for processor syntax:
+// - #[streamlib::processor(execution = Reactive)] - Main processor definition
+// - #[streamlib::input] - Input port marker
+// - #[streamlib::output] - Output port marker
+// - #[streamlib::config] - Config field marker
+pub use streamlib_macros::{config, input, output, processor};
 
 pub use core::{
     are_synchronized,
     convert_audio_to_sample,
     convert_video_to_samples,
-    create_owned_connection,
+    create_link_channel,
     global_registry,
+    // Port marker traits and helpers for compile-time safe connections
+    input,
     is_processor_registered,
     list_processors,
     list_processors_by_tag,
     media_clock::MediaClock,
+    output,
     register_processor,
     timestamp_delta_ms,
     unregister_processor,
@@ -47,6 +56,7 @@ pub use core::{
     AudioRequirements,
     AudioResamplerConfig,
     AudioResamplerProcessor,
+    BaseProcessor,
     BufferRechunkerConfig,
     BufferRechunkerProcessor,
     CameraConfig,
@@ -58,38 +68,39 @@ pub use core::{
     ClapEffectProcessor,
     ClapPluginInfo,
     ClapScanner,
-    ConnectionTopology,
     DataFrame,
     DescriptorProvider,
     DisplayConfig,
-    DynStreamElement,
-    Edge,
-    ElementType,
+    DynProcessor,
     EncodedAudioFrame,
     Field,
     FieldType,
     GpuContext,
+    InputPortMarker,
     LfoWaveform,
+    LinkInput,
+    LinkOutput,
+    LinkOwnedConsumer,
+    LinkOwnedProducer,
+    LinkPortMessage,
+    LinkPortType,
     MetadataValue,
     MixingStrategy,
     Mp4WriterConfig,
-    NodeInfo,
     // Streaming utilities:
     OpusEncoder,
-    OwnedConsumer,
-    OwnedProducer,
+    OutputPortMarker,
     ParameterAutomation,
     ParameterInfo,
     ParameterModulator,
     PluginInfo,
     PortDescriptor,
-    PortInfo,
-    PortMessage,
-    PortType,
+    Processor,
     ProcessorDescriptor,
     ProcessorExample,
     ProcessorRegistration,
     ProcessorRegistry,
+    ProcessorType,
     ResamplingQuality,
     Result,
     RtpTimestampCalculator,
@@ -97,16 +108,12 @@ pub use core::{
     Schema,
     SemanticVersion,
     SerializationFormat,
-    StreamElement,
     StreamError,
-    StreamInput,
-    StreamOutput,
     Texture,
     TextureDescriptor,
     TextureFormat,
     TextureUsages,
     TextureView,
-    TopologyAnalyzer,
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
@@ -122,7 +129,6 @@ pub(crate) mod apple;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    configure_macos_event_loop,
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
     AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
@@ -180,14 +186,13 @@ pub use permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,
 };
 
-#[cfg(feature = "mcp")]
-pub mod mcp;
+// MCP server removed - needs complete redesign for Phase 1 architecture
+// TODO: Reimplement MCP server with new graph-based API
 
-#[cfg(any(feature = "python", feature = "python-embed"))]
-pub mod python;
+// Python bindings removed - needs complete redesign for Phase 1 architecture
+// TODO: Reimplement Python bindings with new graph-based API
 
-mod runtime;
-pub use runtime::StreamRuntime;
+pub use core::StreamRuntime;
 
 pub mod platform {
     pub fn name() -> &'static str {
@@ -209,14 +214,4 @@ pub mod platform {
         #[cfg(target_os = "windows")]
         return "Direct3D 12";
     }
-}
-
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-
-#[cfg(feature = "python")]
-#[pymodule]
-#[pyo3(name = "streamlib")]
-fn streamlib_py(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    python::register_python_module(m)
 }

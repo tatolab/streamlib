@@ -81,12 +81,7 @@ pub struct VideoToolboxEncoder {
 }
 
 impl VideoToolboxEncoder {
-    /// Create a new VideoToolbox encoder
-    ///
-    /// # Arguments
-    /// * `config` - Encoder configuration (resolution, bitrate, codec, etc.)
-    /// * `gpu_context` - GPU context for texture conversion (required)
-    /// * `ctx` - Runtime context for main thread dispatch
+    /// Create a new VideoToolbox encoder.
     pub fn new(
         config: VideoEncoderConfig,
         gpu_context: Option<GpuContext>,
@@ -296,13 +291,7 @@ impl VideoToolboxEncoder {
         pixel_transfer.convert_to_nv12(&frame.texture, frame.width, frame.height)
     }
 
-    /// Encode a video frame
-    ///
-    /// # Arguments
-    /// * `frame` - VideoFrame with texture to encode
-    ///
-    /// # Returns
-    /// EncodedVideoFrame with compressed data (Annex B format for H.264)
+    /// Encode a video frame.
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<EncodedVideoFrame> {
         let session = self.compression_session.ok_or_else(|| {
             StreamError::Configuration("Compression session not initialized".into())

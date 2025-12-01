@@ -238,14 +238,7 @@ impl VideoToolboxDecoder {
         Ok(())
     }
 
-    /// Decode H.264 NAL units to VideoFrame
-    ///
-    /// # Arguments
-    /// * `nal_units_annex_b` - H.264 data in Annex B format (start codes)
-    /// * `timestamp_ns` - Presentation timestamp in nanoseconds
-    ///
-    /// # Returns
-    /// Option<VideoFrame> - Some(frame) if decode completed, None if buffering
+    /// Decode H.264 NAL units to VideoFrame.
     pub fn decode(
         &mut self,
         nal_units_annex_b: &[u8],

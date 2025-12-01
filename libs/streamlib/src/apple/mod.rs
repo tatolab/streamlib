@@ -16,7 +16,6 @@ pub mod permissions;
 pub mod main_thread;
 
 pub mod runtime_ext;
-pub use runtime_ext::configure_macos_event_loop;
 
 pub mod time;
 

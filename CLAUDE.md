@@ -44,6 +44,58 @@ This document is a **complete implementation specification**. You MUST follow it
 
 **Instead**: Stop, explain the problem, present options, and wait for guidance.
 
+### Documentation Standards - MANDATORY
+
+Documentation should be **minimal and focused on developer experience** (autocomplete, IDE tooltips). Do NOT over-document.
+
+#### What to Document
+- **Structs/enums/traits**: One-line description of what it represents
+- **Functions/methods**: Brief description, parameters only if non-obvious
+- **Public fields**: Only if the name isn't self-explanatory
+
+#### What NOT to Document
+- ❌ File-level `//!` module docs (architecture explanations rot fast)
+- ❌ `# Example` sections with code blocks
+- ❌ `# Usage` sections
+- ❌ `# Performance` sections
+- ❌ ASCII diagrams or flowcharts
+- ❌ Design rationale or "how this fits into the system"
+- ❌ Historical context
+- ❌ Verbose parameter descriptions for obvious params
+
+#### Style Rules
+1. **One line preferred** - if you need multiple paragraphs, it's too much
+2. **Use intra-doc links** for type references: `[`TypeName`]` not `` `TypeName` ``
+3. **No examples in docs** - examples belong in `examples/` directory
+4. **Brief parameter docs** - only for non-obvious parameters
+
+```rust
+// ✅ CORRECT - minimal, useful for autocomplete
+/// Processor node in the graph.
+pub struct ProcessorNode { ... }
+
+/// Connect two ports.
+pub fn connect(&mut self, from: impl IntoLinkPortRef, to: impl IntoLinkPortRef) -> Result<Link>
+
+/// Convert audio frame to a different channel count.
+pub fn convert_channels(frame: &AudioFrame, target_channels: AudioChannelCount) -> AudioFrame
+
+// ❌ WRONG - too verbose
+/// Convert audio frame to a different channel count.
+///
+/// # Channel Conversion Rules
+/// - Upmixing: Duplicate channels or zero-fill
+///   - Mono → Stereo: duplicate to both channels
+/// ...
+/// # Example
+/// ```rust
+/// let stereo = convert_channels(&mono_frame, AudioChannelCount::Two);
+/// ```
+```
+
+#### Verification
+Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
+
 ---
 
 ## Project Overview
