@@ -11,13 +11,12 @@ use crate::apple::videotoolbox::VideoToolboxDecoder;
 use crate::apple::webrtc::{WebRtcSession, WhepClient, WhepConfig};
 use crate::core::streaming::{H264RtpDepacketizer, OpusDecoder};
 use crate::core::{
-    media_clock::MediaClock, AudioFrame, GpuContext, Result, RuntimeContext, StreamError,
-    StreamOutput, VideoFrame,
+    media_clock::MediaClock, AudioFrame, GpuContext, LinkOutput, Result, RuntimeContext,
+    StreamError, VideoFrame,
 };
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use streamlib_macros::StreamProcessor;
 
 // ============================================================================
 // H.264 NAL FORMAT DETECTION
@@ -93,26 +92,18 @@ impl Default for WebRtcWhepConfig {
     }
 }
 
-/// WebRTC WHEP processor - receives H.264 video and Opus audio from WHEP endpoint
-///
-/// This is a SOURCE processor (no inputs, only outputs).
-/// It connects to a WHEP server, receives RTP packets, depacketizes them,
-/// decodes them, and outputs VideoFrame/AudioFrame.
-///
-/// Uses Loop mode because RTP packets arrive via callbacks and need continuous polling.
-#[derive(StreamProcessor)]
-#[processor(
-    mode = Loop,
+#[crate::processor(
+    execution = Continuous,
     description = "Receives video and audio from WHEP endpoint (WebRTC egress)"
 )]
 pub struct WebRtcWhepProcessor {
-    #[output(description = "Output video frames (decoded H.264)")]
-    video_out: Arc<StreamOutput<VideoFrame>>,
+    #[crate::output(description = "Output video frames (decoded H.264)")]
+    video_out: LinkOutput<VideoFrame>,
 
-    #[output(description = "Output audio frames (decoded Opus, stereo)")]
-    audio_out: Arc<StreamOutput<AudioFrame>>,
+    #[crate::output(description = "Output audio frames (decoded Opus, stereo)")]
+    audio_out: LinkOutput<AudioFrame>,
 
-    #[config]
+    #[crate::config]
     config: WebRtcWhepConfig,
 
     // RuntimeContext for main thread dispatch
@@ -154,8 +145,7 @@ pub struct WebRtcWhepProcessor {
     pending_ice_candidates: Arc<Mutex<Vec<String>>>,
 }
 
-impl WebRtcWhepProcessor {
-    /// Called by StreamProcessor macro during setup phase.
+impl WebRtcWhepProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         self.ctx = Some(ctx.clone());

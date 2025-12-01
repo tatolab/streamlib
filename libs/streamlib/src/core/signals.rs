@@ -1,8 +1,3 @@
-//! Native signal handling for Unix/Linux platforms
-//!
-//! Captures OS signals (SIGTERM, SIGINT) and publishes them to the event bus,
-//! enabling event-driven shutdown without external dependencies.
-
 #[cfg(all(unix, not(target_os = "macos")))]
 use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
 use std::sync::atomic::{AtomicBool, Ordering};

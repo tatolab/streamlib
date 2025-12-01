@@ -6,7 +6,7 @@ use streamlib::core::frames::AudioFrame;
 /// Benchmark: Arc-wrapped vs bare StreamOutput operations
 ///
 /// This measures the performance impact of Arc-wrapping output ports,
-/// which is now required for Push mode wakeup support.
+/// which is now required for Push mode process function invoke support.
 
 fn bench_arc_clone_vs_deep_clone(c: &mut Criterion) {
     let mut group = c.benchmark_group("streamoutput_clone");

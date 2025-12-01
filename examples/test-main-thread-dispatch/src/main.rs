@@ -3,8 +3,8 @@ use std::sync::{
     Arc, Mutex, OnceLock,
 };
 use std::time::Duration;
-use streamlib::core::{DataFrame, RuntimeContext, StreamOutput};
-use streamlib::{Result, StreamProcessor, StreamRuntime};
+use streamlib::core::{DataFrame, LinkOutput, Result, RuntimeContext};
+use streamlib::StreamRuntime;
 
 // Global state for test validation
 static ASYNC_EXECUTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
@@ -12,29 +12,31 @@ static BLOCKING_RESULT: OnceLock<Arc<Mutex<Option<u64>>>> = OnceLock::new();
 static PROCESS_COUNT: OnceLock<Arc<AtomicU64>> = OnceLock::new();
 
 /// Test processor that validates main thread dispatch functionality
-#[derive(StreamProcessor)]
-#[processor(description = "Test processor for main thread dispatch")]
-struct MainThreadTestProcessor {
+#[streamlib::processor(
+    execution = Continuous,
+    description = "Test processor for main thread dispatch"
+)]
+pub struct MainThreadTestProcessor {
     // Dummy output to satisfy macro requirements (never used)
-    #[output(description = "Dummy output (unused)")]
-    _dummy: Arc<StreamOutput<DataFrame>>,
+    #[streamlib::output(description = "Dummy output (unused)")]
+    dummy: LinkOutput<DataFrame>,
 
-    ctx: Option<Arc<RuntimeContext>>,
+    // Config placeholder
+    #[streamlib::config]
+    config: MainThreadTestConfig,
+
+    // Runtime state
+    ctx: Option<RuntimeContext>,
 }
 
-impl Default for MainThreadTestProcessor {
-    fn default() -> Self {
-        Self {
-            _dummy: Arc::new(StreamOutput::new("dummy")),
-            ctx: None,
-        }
-    }
-}
+/// Config for test processor
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+pub struct MainThreadTestConfig {}
 
-impl MainThreadTestProcessor {
+impl MainThreadTestProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         println!("✓ setup() called - storing RuntimeContext");
-        self.ctx = Some(Arc::new(ctx.clone()));
+        self.ctx = Some(ctx.clone());
 
         // Test async dispatch during setup
         println!("  Testing run_on_main_async() from setup()...");
@@ -106,7 +108,7 @@ fn main() {
     let mut runtime = StreamRuntime::new();
     println!("Adding test processor to runtime...");
     runtime
-        .add_processor::<MainThreadTestProcessor>()
+        .add_processor::<MainThreadTestProcessor::Processor>(MainThreadTestConfig {})
         .expect("Failed to add processor");
 
     // Start runtime (spawns worker threads, calls setup())

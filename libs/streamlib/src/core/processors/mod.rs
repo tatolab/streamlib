@@ -1,3 +1,20 @@
+mod base;
+mod dyn_processor;
+mod dyn_processor_impl;
+pub mod factory;
+mod processor;
+mod state;
+
+pub use base::{BaseProcessor, ProcessorType};
+pub use dyn_processor::DynProcessor;
+pub use factory::{BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory};
+pub use processor::Processor;
+pub use state::ProcessorState;
+
+/// Empty config type for processors that don't need configuration
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EmptyConfig;
+
 // Sources
 pub mod audio_capture;
 pub mod camera;
@@ -16,20 +33,14 @@ pub mod buffer_rechunker;
 pub mod clap_effect;
 pub mod simple_passthrough;
 
-#[cfg(feature = "debug-overlay")]
-pub mod performance_overlay;
-
-// Source exports
 pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
 pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
 pub use chord_generator::{ChordGeneratorConfig, ChordGeneratorProcessor};
 
-// Sink exports
 pub use audio_output::{AudioDevice, AudioOutputConfig, AudioOutputProcessor};
 pub use display::{DisplayConfig, DisplayProcessor, WindowId};
 pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
 
-// Transformer exports
 pub use audio_channel_converter::{
     AudioChannelConverterConfig, AudioChannelConverterProcessor, ChannelConversionMode,
 };
@@ -37,7 +48,4 @@ pub use audio_mixer::{AudioMixerConfig, AudioMixerProcessor, MixingStrategy};
 pub use audio_resampler::{AudioResamplerConfig, AudioResamplerProcessor};
 pub use buffer_rechunker::{BufferRechunkerConfig, BufferRechunkerProcessor};
 pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
-pub use simple_passthrough::SimplePassthroughProcessor;
-
-#[cfg(feature = "debug-overlay")]
-pub use performance_overlay::{PerformanceOverlayConfig, PerformanceOverlayProcessor};
+pub use simple_passthrough::{SimplePassthroughConfig, SimplePassthroughProcessor};

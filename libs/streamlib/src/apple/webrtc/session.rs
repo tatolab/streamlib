@@ -49,10 +49,7 @@ pub struct WebRtcSession {
 }
 
 impl WebRtcSession {
-    /// Creates a new WebRTC session with H.264 video and Opus audio tracks in SEND mode (WHIP).
-    ///
-    /// # Arguments
-    /// * `on_ice_candidate` - Callback invoked when ICE candidates are discovered
+    /// Creates a new WebRTC session in SEND mode (WHIP).
     pub fn new<F>(on_ice_candidate: F) -> Result<Self>
     where
         F: Fn(String) + Send + Sync + 'static,
@@ -360,11 +357,7 @@ impl WebRtcSession {
         })
     }
 
-    /// Creates a new WebRTC session in RECEIVE mode (WHEP) for playback.
-    ///
-    /// # Arguments
-    /// * `on_ice_candidate` - Callback invoked when ICE candidates are discovered
-    /// * `on_sample` - Callback invoked when RTP samples are received (mime_type, payload, rtp_timestamp)
+    /// Creates a new WebRTC session in RECEIVE mode (WHEP).
     pub fn new_receive<F, S>(on_ice_candidate: F, on_sample: S) -> Result<Self>
     where
         F: Fn(String) + Send + Sync + 'static,
@@ -599,18 +592,6 @@ impl WebRtcSession {
     }
 
     /// Adds bandwidth attributes to SDP for WHIP compatibility.
-    ///
-    /// Cloudflare Stream requires explicit bandwidth signaling in the SDP.
-    /// Adds b=AS (Application-Specific) and b=TIAS (Transport-Independent) lines
-    /// after each m= line based on configured bitrates.
-    ///
-    /// # Arguments
-    /// * `sdp` - Original SDP string
-    /// * `video_bitrate_bps` - Video bitrate in bits per second
-    /// * `audio_bitrate_bps` - Audio bitrate in bits per second
-    ///
-    /// # Returns
-    /// Modified SDP with bandwidth attributes
     pub fn add_bandwidth_to_sdp(
         sdp: &str,
         video_bitrate_bps: u32,

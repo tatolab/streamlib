@@ -1,5 +1,3 @@
-//! Event types for pub/sub messaging
-
 use crate::core::error::Result;
 use serde::{Deserialize, Serialize};
 
@@ -105,9 +103,46 @@ impl Event {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RuntimeEvent {
     // ===== Runtime Lifecycle =====
-    RuntimeStart,
-    RuntimeStop,
+    /// Emitted when runtime is about to start
+    RuntimeStarting,
+    /// Emitted when runtime has started successfully
+    RuntimeStarted,
+    /// Emitted when runtime failed to start
+    RuntimeStartFailed {
+        error: String,
+    },
+    /// Emitted when runtime is about to stop
+    RuntimeStopping,
+    /// Emitted when runtime has stopped successfully
+    RuntimeStopped,
+    /// Emitted when runtime failed to stop cleanly
+    RuntimeStopFailed {
+        error: String,
+    },
+    /// Emitted when runtime is about to pause
+    RuntimePausing,
+    /// Emitted when runtime has paused successfully
+    RuntimePaused,
+    /// Emitted when runtime failed to pause
+    RuntimePauseFailed {
+        error: String,
+    },
+    /// Emitted when runtime is about to resume
+    RuntimeResuming,
+    /// Emitted when runtime has resumed successfully
+    RuntimeResumed,
+    /// Emitted when runtime failed to resume
+    RuntimeResumeFailed {
+        error: String,
+    },
+    /// Emitted when shutdown is requested (e.g., Ctrl+C, Cmd+Q)
     RuntimeShutdown,
+
+    // Legacy variants (kept for compatibility)
+    #[doc(hidden)]
+    RuntimeStart,
+    #[doc(hidden)]
+    RuntimeStop,
 
     // ===== Input Events =====
     KeyboardInput {
@@ -137,22 +172,25 @@ pub enum RuntimeEvent {
     ProcessorRemoved {
         processor_id: String,
     },
+    ProcessorConfigUpdated {
+        processor_id: String,
+    },
 
-    // ===== Connection Lifecycle Events =====
-    ConnectionCreated {
-        connection_id: String,
+    // ===== Link Lifecycle Events =====
+    LinkCreated {
+        link_id: String,
         from_port: String, // "processor_id.port_name"
         to_port: String,
     },
-    ConnectionRemoved {
-        connection_id: String,
+    LinkRemoved {
+        link_id: String,
         from_port: String,
         to_port: String,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PortType {
+pub enum LinkPortDirection {
     Input,
     Output,
 }
@@ -176,26 +214,26 @@ pub enum ProcessorEvent {
         new_state: ProcessorState,
     },
 
-    // ===== Connection Lifecycle Events =====
-    WillConnect {
-        connection_id: String,
+    // ===== Link Lifecycle Events =====
+    WillLink {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
-    Connected {
-        connection_id: String,
+    Linked {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
-    WillDisconnect {
-        connection_id: String,
+    WillUnlink {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
-    Disconnected {
-        connection_id: String,
+    Unlinked {
+        link_id: String,
         port_name: String,
-        port_type: PortType,
+        port_direction: LinkPortDirection,
     },
 
     // ===== Generic Commands =====
@@ -211,13 +249,8 @@ pub enum ProcessorEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ProcessorState {
-    Idle,    // Setup complete, not processing
-    Running, // Actively processing
-    Paused,  // Paused (resources still allocated)
-    Error,   // Error state
-}
+// Re-export ProcessorState from the canonical location
+pub use crate::core::processors::ProcessorState;
 
 // ===== Input Types =====
 
@@ -392,6 +425,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    /// Wait for rayon thread pool to complete pending tasks
+    fn wait_for_rayon() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
     // Test listener that counts events and tracks received events
     struct TestListener {
         count: Arc<AtomicUsize>,
@@ -437,6 +475,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -459,6 +498,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -484,6 +524,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -509,6 +550,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -531,6 +573,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -558,6 +601,7 @@ mod tests {
         // Publish using the event's topic
         bus.publish(&event.topic(), &event);
 
+        wait_for_rayon();
         // Verify listener received it
         assert_eq!(listener_concrete.lock().count(), 1);
     }
@@ -612,6 +656,7 @@ mod tests {
         assert_eq!(runtime_event.topic(), topics::RUNTIME_GLOBAL);
         bus.publish(&runtime_event.topic(), &runtime_event);
 
+        wait_for_rayon();
         // Verify routing - each listener only received its specific events
         assert_eq!(keyboard_listener_concrete.lock().count(), 1);
         assert_eq!(mouse_listener_concrete.lock().count(), 1);
@@ -653,6 +698,7 @@ mod tests {
         );
         bus.publish(&a_with_shift.topic(), &a_with_shift);
 
+        wait_for_rayon();
         // Both events should be received
         assert_eq!(listener_concrete.lock().count(), 2);
     }
@@ -733,6 +779,7 @@ mod tests {
         let video_event = Event::processor("video-filter", ProcessorEvent::Resumed);
         bus.publish(&video_event.topic(), &video_event);
 
+        wait_for_rayon();
         // Each listener only received its own processor's events
         assert_eq!(audio_listener_concrete.lock().count(), 1);
         assert_eq!(video_listener_concrete.lock().count(), 1);

@@ -6,10 +6,10 @@
 use streamlib::{Result, StreamRuntime};
 
 #[cfg(target_os = "macos")]
-use streamlib::{AudioOutputProcessor, DisplayProcessor};
+use streamlib::core::DisplayConfig;
 
 #[cfg(target_os = "macos")]
-use streamlib::core::{AudioFrame, DisplayConfig, VideoFrame};
+use streamlib::{input, output, AudioOutputProcessor, DisplayProcessor};
 
 fn main() -> Result<()> {
     // Initialize logging
@@ -60,12 +60,12 @@ fn run_whep_player() -> Result<()> {
 
     // Create WHEP processor
     tracing::info!("🎬 Creating WHEP processor...");
-    let whep_processor = runtime.add_processor_with_config::<WebRtcWhepProcessor>(whep_config)?;
+    let whep_processor = runtime.add_processor::<WebRtcWhepProcessor::Processor>(whep_config)?;
     tracing::info!("✅ WHEP processor created\n");
 
     // Create display processor for video output
     tracing::info!("📺 Creating display processor...");
-    let display = runtime.add_processor_with_config::<DisplayProcessor>(DisplayConfig {
+    let display = runtime.add_processor::<DisplayProcessor::Processor>(DisplayConfig {
         width: 1920,
         height: 1080,
         title: Some("WHEP Player".to_string()),
@@ -76,32 +76,28 @@ fn run_whep_player() -> Result<()> {
     // Create audio output processor
     tracing::info!("🔊 Creating audio output processor...");
     let audio_output =
-        runtime.add_processor_with_config::<AudioOutputProcessor>(Default::default())?;
+        runtime.add_processor::<AudioOutputProcessor::Processor>(Default::default())?;
     tracing::info!("✅ Audio output processor created\n");
 
-    // Connect processors
+    // Connect processors using type-safe port markers
     tracing::info!("🔗 Connecting processors...");
     runtime.connect(
-        whep_processor.output_port::<VideoFrame>("video_out"),
-        display.input_port::<VideoFrame>("video"),
+        output::<WebRtcWhepProcessor::OutputLink::video_out>(&whep_processor),
+        input::<DisplayProcessor::InputLink::video>(&display),
     )?;
 
     runtime.connect(
-        whep_processor.output_port::<AudioFrame>("audio_out"),
-        audio_output.input_port::<AudioFrame>("audio"),
+        output::<WebRtcWhepProcessor::OutputLink::audio_out>(&whep_processor),
+        input::<AudioOutputProcessor::InputLink::audio>(&audio_output),
     )?;
     tracing::info!("✅ Processors connected\n");
 
     tracing::info!("🚀 Starting WHEP playback pipeline...\n");
-
-    // Start the runtime
-    runtime.start()?;
-
     tracing::info!("📺 WHEP stream is now playing!");
     tracing::info!("Press Cmd+Q to stop.\n");
 
-    // Run until stopped
-    runtime.run()?;
+    // start() blocks on macOS standalone (runs NSApplication event loop)
+    runtime.start()?;
 
     tracing::info!("✅ WHEP player stopped");
 

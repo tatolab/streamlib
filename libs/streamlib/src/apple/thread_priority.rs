@@ -1,6 +1,7 @@
 use crate::core::{scheduling::ThreadPriority, Result, StreamError};
 
 /// Apply thread priority to the current thread on macOS/iOS
+#[allow(dead_code)]
 pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
     match priority {
         ThreadPriority::RealTime => set_realtime_priority(),

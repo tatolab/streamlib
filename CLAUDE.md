@@ -2,6 +2,102 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL IMPLEMENTATION INSTRUCTIONS FOR CLAUDE CODE ⚠️
+
+This document is a **complete implementation specification**. You MUST follow it exactly as written.
+
+### Rules for Implementation:
+
+1. **NO DEVIATIONS**: Do not make design decisions, simplifications, or "improvements" without explicit approval
+2. **ASK BEFORE CHANGING**: If you encounter:
+   - Ambiguity in the spec
+   - Something that seems "too complex"
+   - Uncertainty about implementation details
+   - Desire to refactor or simplify
+   - **STOP IMMEDIATELY** and ask for clarification
+3. **IMPLEMENT AS-IS**: Follow the code examples verbatim, including:
+   - Exact struct field names
+   - Exact method signatures
+   - Exact error handling patterns
+   - Exact comments and documentation
+4. **VERIFY AGAINST SPEC**: Before completing any task:
+   - Re-read the relevant section
+   - Confirm your implementation matches the spec exactly
+   - Check that you haven't added "helpful" changes
+5. **REPORT DEVIATIONS**: If you must deviate (e.g., Rust syntax errors in spec), report the issue and propose the minimal fix
+
+### This System is Critical:
+- Powers real-time audio/video processing
+- Must handle dynamic graph modifications safely
+- Memory leaks or crashes are unacceptable
+- Performance regressions will break production workloads
+
+### When in Doubt:
+**STOP. ASK. WAIT FOR APPROVAL.**
+
+### Prohibited Patterns - Never Use These:
+1. ❌ `unimplemented!()` or `todo!()` in library code (tests/examples are OK)
+2. ❌ "Temporary" hacks or workarounds
+3. ❌ Methods that do nothing: `fn foo() { /* no-op */ }`
+4. ❌ Compatibility shims for "old code" in new implementations
+5. ❌ Bypassing type safety "just to make it compile"
+
+**Instead**: Stop, explain the problem, present options, and wait for guidance.
+
+### Documentation Standards - MANDATORY
+
+Documentation should be **minimal and focused on developer experience** (autocomplete, IDE tooltips). Do NOT over-document.
+
+#### What to Document
+- **Structs/enums/traits**: One-line description of what it represents
+- **Functions/methods**: Brief description, parameters only if non-obvious
+- **Public fields**: Only if the name isn't self-explanatory
+
+#### What NOT to Document
+- ❌ File-level `//!` module docs (architecture explanations rot fast)
+- ❌ `# Example` sections with code blocks
+- ❌ `# Usage` sections
+- ❌ `# Performance` sections
+- ❌ ASCII diagrams or flowcharts
+- ❌ Design rationale or "how this fits into the system"
+- ❌ Historical context
+- ❌ Verbose parameter descriptions for obvious params
+
+#### Style Rules
+1. **One line preferred** - if you need multiple paragraphs, it's too much
+2. **Use intra-doc links** for type references: `[`TypeName`]` not `` `TypeName` ``
+3. **No examples in docs** - examples belong in `examples/` directory
+4. **Brief parameter docs** - only for non-obvious parameters
+
+```rust
+// ✅ CORRECT - minimal, useful for autocomplete
+/// Processor node in the graph.
+pub struct ProcessorNode { ... }
+
+/// Connect two ports.
+pub fn connect(&mut self, from: impl IntoLinkPortRef, to: impl IntoLinkPortRef) -> Result<Link>
+
+/// Convert audio frame to a different channel count.
+pub fn convert_channels(frame: &AudioFrame, target_channels: AudioChannelCount) -> AudioFrame
+
+// ❌ WRONG - too verbose
+/// Convert audio frame to a different channel count.
+///
+/// # Channel Conversion Rules
+/// - Upmixing: Duplicate channels or zero-fill
+///   - Mono → Stereo: duplicate to both channels
+/// ...
+/// # Example
+/// ```rust
+/// let stereo = convert_channels(&mono_frame, AudioChannelCount::Two);
+/// ```
+```
+
+#### Verification
+Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
+
+---
+
 ## Project Overview
 
 StreamLib is a real-time audio/video processing framework for Rust and Python, featuring:
@@ -20,7 +116,7 @@ streamlib/
 ├── libs/                     # Library crates
 │   ├── streamlib/           # Core streaming library
 │   │   └── CLAUDE.md        # 📖 Detailed library documentation
-│   ├── streamlib-macros/    # Procedural macros for #[derive(StreamProcessor)]
+│   ├── streamlib-macros/    # Procedural macros for #[streamlib::processor()]
 │   │   └── CLAUDE.md        # 📖 Macro implementation details
 │   └── yuv/                 # SIMD-optimized YUV/RGB conversion
 ├── examples/                 # Standalone example applications
@@ -44,7 +140,7 @@ The main streaming library implementing the graph-based processor pipeline.
 - **Test**: `cargo test -p streamlib`
 
 #### `libs/streamlib-macros` - Procedural Macros
-Provides the `#[derive(StreamProcessor)]` macro for ergonomic processor creation.
+Provides the `#[streamlib::processor()]` attribute macro for ergonomic processor creation.
 - **Documentation**: See [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md)
 - **Purpose**: Code generation for processor boilerplate, port introspection, and trait implementations
 - **Build**: `cargo build -p streamlib-macros`
@@ -163,7 +259,7 @@ StreamLib uses a **graph-based processing pipeline** where processors are nodes 
 
 ### Key Concepts
 
-- **Processor**: Node in graph implementing `StreamProcessor` trait
+- **Processor**: Node in graph implementing `Processor` trait
 - **Port**: Typed input/output endpoints (`StreamInput<T>`, `StreamOutput<T>`)
 - **Frame**: Data flowing between processors:
   - `VideoFrame` - GPU texture with metadata
@@ -183,7 +279,24 @@ Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) **require** main thread
 See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md) and [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
 
 #### 2. Processor Macro System
-Use `#[derive(StreamProcessor)]` to automatically generate boilerplate.
+Use `#[streamlib::processor()]` attribute macro to automatically generate boilerplate:
+
+```rust
+#[streamlib::processor(
+    execution = Reactive,
+    description = "My processor description"
+)]
+pub struct MyProcessor {
+    #[streamlib::input(description = "Video input")]
+    input: LinkInput<VideoFrame>,
+    
+    #[streamlib::output(description = "Video output")]  
+    output: LinkOutput<VideoFrame>,
+    
+    #[streamlib::config]
+    config: MyConfig,
+}
+```
 
 See [`libs/streamlib-macros/CLAUDE.md`](libs/streamlib-macros/CLAUDE.md) for implementation details.
 

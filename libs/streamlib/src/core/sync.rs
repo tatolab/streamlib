@@ -2,14 +2,11 @@ use crate::core::{AudioFrame, VideoFrame};
 
 pub const DEFAULT_SYNC_TOLERANCE_MS: f64 = 16.6;
 
-/// Action to take when audio and video streams are out of sync
+/// Action to take when audio and video streams are out of sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncAction {
-    /// Streams are synchronized, no action needed
     NoAction,
-    /// Video is ahead of audio, drop this video frame
     DropVideoFrame,
-    /// Video is behind audio, duplicate the last video frame
     DuplicateVideoFrame,
 }
 
@@ -47,20 +44,7 @@ pub fn video_audio_synchronized_with_tolerance(
     are_synchronized(video.timestamp_ns, audio.timestamp_ns, tolerance_ms)
 }
 
-/// Determine what action to take to maintain audio/video synchronization
-///
-/// Returns a `SyncAction` indicating whether to drop/duplicate video frames
-/// based on the drift between video and audio timestamps.
-///
-/// # Arguments
-/// * `video` - Video frame to check
-/// * `audio` - Audio frame to check against
-/// * `tolerance_ms` - Maximum acceptable drift in milliseconds (default: 16.6ms)
-///
-/// # Returns
-/// * `NoAction` - Streams are within tolerance
-/// * `DropVideoFrame` - Video is ahead, skip this frame
-/// * `DuplicateVideoFrame` - Video is behind, reuse last frame
+/// Determine what action to take to maintain audio/video synchronization.
 #[inline]
 pub fn sync_action(video: &VideoFrame, audio: &AudioFrame, tolerance_ms: f64) -> SyncAction {
     let drift_ns = video.timestamp_ns - audio.timestamp_ns;
@@ -77,10 +61,7 @@ pub fn sync_action(video: &VideoFrame, audio: &AudioFrame, tolerance_ms: f64) ->
     }
 }
 
-/// Calculate detailed synchronization statistics for monitoring
-///
-/// Returns drift in milliseconds (positive means video ahead, negative means audio ahead)
-/// and whether the streams are synchronized within tolerance.
+/// Calculate drift (ms) and whether streams are synchronized.
 #[inline]
 pub fn sync_statistics(video: &VideoFrame, audio: &AudioFrame, tolerance_ms: f64) -> (f64, bool) {
     let drift_ns = video.timestamp_ns - audio.timestamp_ns;

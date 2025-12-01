@@ -1,7 +1,6 @@
-use crate::core::{Result, StreamInput, StreamOutput, VideoFrame};
+use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext, VideoFrame};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use streamlib_macros::StreamProcessor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePassthroughConfig {
@@ -14,27 +13,23 @@ impl Default for SimplePassthroughConfig {
     }
 }
 
-// NEW PATTERN: Complete trait generation - always generates implementations!
-#[derive(StreamProcessor)]
-#[processor(
-    mode = Pull,
+#[crate::processor(
+    execution = Manual,
     description = "Passes video frames through unchanged (for testing)"
 )]
 pub struct SimplePassthroughProcessor {
-    #[input(description = "Input video stream")]
-    input: StreamInput<VideoFrame>,
+    #[crate::input(description = "Input video stream")]
+    input: LinkInput<VideoFrame>,
 
-    #[output(description = "Output video stream")]
-    output: Arc<StreamOutput<VideoFrame>>,
+    #[crate::output(description = "Output video stream")]
+    output: Arc<LinkOutput<VideoFrame>>,
 
-    #[config]
+    #[crate::config]
     config: SimplePassthroughConfig,
 }
 
-// Only business logic implementation needed!
-impl SimplePassthroughProcessor {
-    // Lifecycle - auto-detected by macro (empty implementations for simple processor)
-    fn setup(&mut self, _ctx: &crate::core::RuntimeContext) -> Result<()> {
+impl SimplePassthroughProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
 
@@ -42,16 +37,15 @@ impl SimplePassthroughProcessor {
         Ok(())
     }
 
-    // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
-        if let Some(frame) = self.input.read_latest() {
+        if let Some(frame) = self.input.read() {
             self.output.write(frame);
         }
         Ok(())
     }
 }
 
-impl SimplePassthroughProcessor {
+impl SimplePassthroughProcessor::Processor {
     pub fn scale(&self) -> f32 {
         self.config.scale
     }
@@ -76,11 +70,4 @@ mod tests {
         let config = SimplePassthroughConfig { scale: 2.5 };
         assert_eq!(config.scale, 2.5);
     }
-
-    // Note: SimplePassthroughProcessor uses the StreamProcessor macro which generates
-    // from_config(), descriptor(), and other trait implementations.
-    // These are tested indirectly through integration tests and actual usage in the runtime.
-    // Direct unit testing of macro-generated code is not practical here as the macro
-    // generates code at compile time and the generated methods may have specific signatures
-    // that don't match simple test expectations.
 }

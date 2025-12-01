@@ -1,13 +1,13 @@
 use streamlib::core::{
-    AudioCaptureConfig, AudioChannelConverterConfig, AudioFrame, AudioResamplerConfig,
-    BufferRechunkerConfig, CameraConfig, ChannelConversionMode, ResamplingQuality, VideoFrame,
+    AudioCaptureConfig, AudioChannelConverterConfig, AudioResamplerConfig, BufferRechunkerConfig,
+    CameraConfig, ChannelConversionMode, ResamplingQuality,
 };
 use streamlib::{
-    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioEncoderConfig,
-    AudioResamplerProcessor, BufferRechunkerProcessor, CameraProcessor, H264Profile, VideoCodec,
+    input, output, request_audio_permission, request_camera_permission, AudioCaptureProcessor,
+    AudioChannelConverterProcessor, AudioEncoderConfig, AudioResamplerProcessor,
+    BufferRechunkerProcessor, CameraProcessor, H264Profile, Result, StreamRuntime, VideoCodec,
     VideoEncoderConfig, WebRtcWhipConfig, WebRtcWhipProcessor, WhipConfig,
 };
-use streamlib::{Result, StreamRuntime};
 
 fn main() -> Result<()> {
     // Initialize rustls crypto provider (required by webrtc crate)
@@ -26,7 +26,7 @@ fn main() -> Result<()> {
 
     // Request camera and microphone permissions (must be on main thread)
     println!("🔒 Requesting camera permission...");
-    if !runtime.request_camera()? {
+    if !request_camera_permission()? {
         eprintln!("❌ Camera permission denied!");
         eprintln!("Please grant permission in System Settings → Privacy & Security → Camera");
         return Ok(());
@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     println!("✅ Camera permission granted\n");
 
     println!("🔒 Requesting microphone permission...");
-    if !runtime.request_microphone()? {
+    if !request_audio_permission()? {
         eprintln!("❌ Microphone permission denied!");
         eprintln!("Please grant permission in System Settings → Privacy & Security → Microphone");
         return Ok(());
@@ -45,21 +45,21 @@ fn main() -> Result<()> {
     let whip_url = "https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce/webRTC/publish";
 
     println!("📹 Adding camera processor...");
-    let camera = runtime.add_processor_with_config::<CameraProcessor>(CameraConfig {
+    let camera = runtime.add_processor::<CameraProcessor::Processor>(CameraConfig {
         device_id: None, // Use default camera
     })?;
     println!("✓ Camera added (capturing video @ 1280x720)\n");
 
     println!("🎤 Adding audio capture processor...");
     let audio_capture =
-        runtime.add_processor_with_config::<AudioCaptureProcessor>(AudioCaptureConfig {
+        runtime.add_processor::<AudioCaptureProcessor::Processor>(AudioCaptureConfig {
             device_id: None, // Use default microphone
         })?;
     println!("✓ Audio capture added (mono @ 24kHz)\n");
 
     println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
     let resampler =
-        runtime.add_processor_with_config::<AudioResamplerProcessor>(AudioResamplerConfig {
+        runtime.add_processor::<AudioResamplerProcessor::Processor>(AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
@@ -67,7 +67,7 @@ fn main() -> Result<()> {
     println!("✓ Resampler added\n");
 
     println!("🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor_with_config::<AudioChannelConverterProcessor>(
+    let channel_converter = runtime.add_processor::<AudioChannelConverterProcessor::Processor>(
         AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
         },
@@ -76,13 +76,13 @@ fn main() -> Result<()> {
 
     println!("📦 Adding buffer rechunker (512 samples → 960 samples for Opus)...");
     let rechunker =
-        runtime.add_processor_with_config::<BufferRechunkerProcessor>(BufferRechunkerConfig {
+        runtime.add_processor::<BufferRechunkerProcessor::Processor>(BufferRechunkerConfig {
             target_buffer_size: 960, // 20ms @ 48kHz (Opus requirement)
         })?;
     println!("✓ Buffer rechunker added\n");
 
     println!("🌐 Adding WebRTC WHIP streaming processor...");
-    let webrtc = runtime.add_processor_with_config::<WebRtcWhipProcessor>(WebRtcWhipConfig {
+    let webrtc = runtime.add_processor::<WebRtcWhipProcessor::Processor>(WebRtcWhipConfig {
         whip: WhipConfig {
             endpoint_url: whip_url.to_string(),
             auth_token: None, // Cloudflare endpoint doesn't require authentication
@@ -109,38 +109,39 @@ fn main() -> Result<()> {
     println!("✓ WebRTC WHIP processor added\n");
 
     println!("🔗 Connecting pipeline:");
+
     println!("   camera.video → webrtc.video_in");
     runtime.connect(
-        camera.output_port::<VideoFrame>("video"),
-        webrtc.input_port::<VideoFrame>("video_in"),
+        output::<CameraProcessor::OutputLink::video>(&camera),
+        input::<WebRtcWhipProcessor::InputLink::video_in>(&webrtc),
     )?;
     println!("   ✓ Camera → WebRTC");
 
     println!("   audio_capture.audio → resampler.audio_in");
     runtime.connect(
-        audio_capture.output_port::<AudioFrame>("audio"),
-        resampler.input_port::<AudioFrame>("audio_in"),
+        output::<AudioCaptureProcessor::OutputLink::audio>(&audio_capture),
+        input::<AudioResamplerProcessor::InputLink::audio_in>(&resampler),
     )?;
     println!("   ✓ Audio capture → resampler");
 
     println!("   resampler.audio_out → channel_converter.audio_in");
     runtime.connect(
-        resampler.output_port::<AudioFrame>("audio_out"),
-        channel_converter.input_port::<AudioFrame>("audio_in"),
+        output::<AudioResamplerProcessor::OutputLink::audio_out>(&resampler),
+        input::<AudioChannelConverterProcessor::InputLink::audio_in>(&channel_converter),
     )?;
     println!("   ✓ Resampler → channel converter");
 
     println!("   channel_converter.audio_out → rechunker.audio_in");
     runtime.connect(
-        channel_converter.output_port::<AudioFrame>("audio_out"),
-        rechunker.input_port::<AudioFrame>("audio_in"),
+        output::<AudioChannelConverterProcessor::OutputLink::audio_out>(&channel_converter),
+        input::<BufferRechunkerProcessor::InputLink::audio_in>(&rechunker),
     )?;
     println!("   ✓ Channel converter → rechunker");
 
     println!("   rechunker.audio_out → webrtc.audio_in");
     runtime.connect(
-        rechunker.output_port::<AudioFrame>("audio_out"),
-        webrtc.input_port::<AudioFrame>("audio_in"),
+        output::<BufferRechunkerProcessor::OutputLink::audio_out>(&rechunker),
+        input::<WebRtcWhipProcessor::InputLink::audio_in>(&webrtc),
     )?;
     println!("   ✓ Rechunker → WebRTC\n");
 
@@ -154,8 +155,10 @@ fn main() -> Result<()> {
     println!("   https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce\n");
     println!("⏹️  Press Ctrl+C to stop streaming\n");
 
-    // Run the runtime (blocks until Ctrl+C)
-    runtime.run()?;
+    // start() blocks on macOS standalone (runs NSApplication event loop)
+    runtime.start()?;
+
+    runtime.wait_for_signal()?;
 
     println!("\n✅ Streaming stopped, cleaning up...");
     Ok(())

@@ -1,55 +1,42 @@
-//! Attribute parsing for StreamProcessor derive macro
+//! Attribute parsing for processor attribute macro
 //!
-//! Parses #[processor(...)] and #[input(...)]/#[output(...)] attributes
-//! into structured data for code generation.
+//! Parses `#[processor(...)]` and `#[input(...)]`/`#[output(...)]` attributes.
 
 use proc_macro2::TokenStream;
-use syn::{punctuated::Punctuated, Attribute, Error, Expr, ExprLit, Lit, Result, Token, Type};
+use syn::{Attribute, Error, Lit, Result};
 
-/// Parsed attributes from #[processor(...)]
+/// Process execution mode - determines how and when `process()` is called.
+///
+/// This is the parsed representation that will be converted to `ProcessExecution` in codegen.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ExecutionMode {
+    /// Runtime loops, calling process() repeatedly.
+    /// Optional interval_ms for minimum time between calls.
+    Continuous { interval_ms: Option<u32> },
+    /// Called when upstream writes to any input port.
+    #[default]
+    Reactive,
+    /// Called once, then you control timing.
+    Manual,
+}
+
+/// Parsed attributes from `#[processor(...)]`
 #[derive(Debug, Default)]
 pub struct ProcessorAttributes {
-    /// Custom config type: `config = MyConfig`
-    pub config_type: Option<Type>,
+    /// Execution mode: determines how and when `process()` is called.
+    ///
+    /// New syntax: `execution = Continuous` or `execution = Reactive` or `execution = Manual`
+    /// Legacy syntax (deprecated): `mode = Loop` or `mode = Push` or `mode = Pull`
+    pub execution_mode: Option<ExecutionMode>,
 
     /// Description: `description = "..."`
     pub description: Option<String>,
 
-    /// Usage context: `usage = "..."`
-    pub usage_context: Option<String>,
-
-    /// Tags: `tags = ["tag1", "tag2"]`
-    pub tags: Vec<String>,
-
-    /// Audio requirements expression: `audio_requirements = {...}`
-    pub audio_requirements: Option<TokenStream>,
-
-    /// Custom process method name: `process = "my_process"`
-    /// Defaults to auto-detecting "process" method
-    pub process_method: Option<String>,
-
-    /// Custom on_start method name: `on_start = "my_start"`
-    /// Defaults to auto-detecting "on_start" method
-    pub on_start_method: Option<String>,
-
-    /// Custom on_stop method name: `on_stop = "my_stop"`
-    /// Defaults to auto-detecting "on_stop" method
-    pub on_stop_method: Option<String>,
-
-    /// Custom processor name: `name = "MyProcessor"`
-    /// If not specified, uses struct name
-    pub processor_name: Option<String>,
-
-    /// Scheduling mode: `mode = Pull` or `mode = Push`
-    /// Defaults to Pull if not specified
-    pub scheduling_mode: Option<String>,
-
     /// Generate unsafe impl Send: `unsafe_send`
-    /// When true, generates `unsafe impl Send for StructName {}`
     pub unsafe_send: bool,
 }
 
-/// Parsed attributes from #[input(...)] or #[output(...)]
+/// Parsed attributes from `#[input(...)]` or `#[output(...)]`
 #[derive(Debug, Default)]
 pub struct PortAttributes {
     /// Custom port name: `name = "custom_name"`
@@ -57,12 +44,9 @@ pub struct PortAttributes {
 
     /// Port description: `description = "..."`
     pub description: Option<String>,
-
-    /// Required flag (inputs only): `required = true`
-    pub required: Option<bool>,
 }
 
-/// Parsed attributes from #[state]
+/// Parsed attributes from `#[state]`
 #[derive(Debug, Default)]
 pub struct StateAttributes {
     /// Custom default expression: `default = "expression"`
@@ -70,147 +54,157 @@ pub struct StateAttributes {
 }
 
 impl ProcessorAttributes {
-    /// Parse #[processor(...)] attribute
-    pub fn parse(attrs: &[Attribute]) -> Result<Self> {
+    /// Parse from attribute macro args: `#[streamlib::processor(execution = Reactive)]`
+    pub fn parse_from_args(args: TokenStream) -> Result<Self> {
         let mut result = Self::default();
 
-        for attr in attrs {
-            if !attr.path().is_ident("processor") {
-                continue;
-            }
-
-            // Parse the attribute content
-            attr.parse_nested_meta(|meta| {
-                // config = MyType
-                if meta.path.is_ident("config") {
-                    let value: Type = meta.value()?.parse()?;
-                    result.config_type = Some(value);
-                    return Ok(());
-                }
-
-                // description = "..."
-                if meta.path.is_ident("description") {
-                    let value = parse_string_value(&meta)?;
-                    result.description = Some(value);
-                    return Ok(());
-                }
-
-                // usage = "..."
-                if meta.path.is_ident("usage") {
-                    let value = parse_string_value(&meta)?;
-                    result.usage_context = Some(value);
-                    return Ok(());
-                }
-
-                // tags = ["tag1", "tag2"]
-                if meta.path.is_ident("tags") {
-                    // Parse the `= [...]` part
-                    meta.value()?;  // Consume the `=` sign
-                    let content;
-                    syn::bracketed!(content in meta.input);
-                    let tags: Punctuated<Expr, Token![,]> =
-                        content.parse_terminated(|input| input.parse::<Expr>(), Token![,])?;
-
-                    for expr in tags {
-                        if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = expr {
-                            result.tags.push(s.value());
-                        }
-                    }
-                    return Ok(());
-                }
-
-                // audio_requirements = {...}
-                if meta.path.is_ident("audio_requirements") {
-                    let content;
-                    syn::braced!(content in meta.input);
-                    let tokens: TokenStream = content.parse()?;
-                    result.audio_requirements = Some(tokens);
-                    return Ok(());
-                }
-
-                // process = "method_name"
-                if meta.path.is_ident("process") {
-                    let value = parse_string_value(&meta)?;
-                    result.process_method = Some(value);
-                    return Ok(());
-                }
-
-                // on_start = "method_name"
-                if meta.path.is_ident("on_start") {
-                    let value = parse_string_value(&meta)?;
-                    result.on_start_method = Some(value);
-                    return Ok(());
-                }
-
-                // on_stop = "method_name"
-                if meta.path.is_ident("on_stop") {
-                    let value = parse_string_value(&meta)?;
-                    result.on_stop_method = Some(value);
-                    return Ok(());
-                }
-
-                // name = "ProcessorName"
-                if meta.path.is_ident("name") {
-                    let value = parse_string_value(&meta)?;
-                    result.processor_name = Some(value);
-                    return Ok(());
-                }
-
-                // mode = SchedulingMode::Pull, SchedulingMode::Push, or SchedulingMode::Loop
-                if meta.path.is_ident("mode") {
-                    // Parse as a full path (e.g., SchedulingMode::Push)
-                    let path: syn::Path = meta.value()?.parse()?;
-
-                    // Extract the last segment (Push, Pull, Loop)
-                    let mode = path.segments.last()
-                        .map(|seg| seg.ident.to_string())
-                        .ok_or_else(|| Error::new_spanned(&path, "Invalid mode path"))?;
-
-                    // Validate against SchedulingMode enum variants
-                    if mode != "Pull" && mode != "Push" && mode != "Loop" {
-                        return Err(Error::new_spanned(
-                            path,
-                            format!("mode must be SchedulingMode::Pull, SchedulingMode::Push, or SchedulingMode::Loop (got '{}')", mode)
-                        ));
-                    }
-
-                    result.scheduling_mode = Some(mode);
-                    return Ok(());
-                }
-
-                // unsafe_send (flag attribute, no value)
-                if meta.path.is_ident("unsafe_send") {
-                    result.unsafe_send = true;
-                    return Ok(());
-                }
-
-                Err(meta.error("unsupported processor attribute"))
-            })?;
+        if args.is_empty() {
+            return Ok(result);
         }
 
+        // Parse as a synthetic attribute to reuse existing logic
+        let attr: Attribute = syn::parse_quote! { #[processor(#args)] };
+        Self::parse_single_attr(&attr, &mut result)?;
+
         Ok(result)
+    }
+
+    /// Parse a single processor attribute into the result
+    fn parse_single_attr(attr: &Attribute, result: &mut Self) -> Result<()> {
+        attr.parse_nested_meta(|meta| {
+            // description = "..."
+            if meta.path.is_ident("description") {
+                let value = parse_string_value(&meta)?;
+                result.description = Some(value);
+                return Ok(());
+            }
+
+            // NEW: execution = Continuous | Reactive | Manual
+            if meta.path.is_ident("execution") {
+                let path: syn::Path = meta.value()?.parse()?;
+                let mode_str = path
+                    .segments
+                    .last()
+                    .map(|seg| seg.ident.to_string())
+                    .ok_or_else(|| Error::new_spanned(&path, "Invalid execution path"))?;
+
+                let execution_mode = match mode_str.as_str() {
+                    "Continuous" => ExecutionMode::Continuous { interval_ms: None },
+                    "Reactive" => ExecutionMode::Reactive,
+                    "Manual" => ExecutionMode::Manual,
+                    _ => {
+                        return Err(Error::new_spanned(
+                            path,
+                            format!(
+                                "execution must be Continuous, Reactive, or Manual (got '{}')\n\
+                                 \n\
+                                 Help:\n\
+                                 - Continuous: Runtime loops, calling process() repeatedly\n\
+                                 - Reactive: Called when upstream writes to any input port\n\
+                                 - Manual: Called once, then you control timing",
+                                mode_str
+                            ),
+                        ));
+                    }
+                };
+
+                result.execution_mode = Some(execution_mode);
+                return Ok(());
+            }
+
+            // NEW: execution_interval_ms = N (for Continuous mode)
+            if meta.path.is_ident("execution_interval_ms") {
+                let value: syn::LitInt = meta.value()?.parse()?;
+                let interval_ms: u32 = value.base10_parse()?;
+
+                // Update or create Continuous mode with interval
+                match &mut result.execution_mode {
+                    Some(ExecutionMode::Continuous {
+                        interval_ms: ref mut i,
+                    }) => {
+                        *i = Some(interval_ms);
+                    }
+                    None => {
+                        result.execution_mode = Some(ExecutionMode::Continuous {
+                            interval_ms: Some(interval_ms),
+                        });
+                    }
+                    Some(_) => {
+                        return Err(Error::new_spanned(
+                            value,
+                            "execution_interval_ms can only be used with execution = Continuous",
+                        ));
+                    }
+                }
+                return Ok(());
+            }
+
+            // LEGACY: mode = Pull | Push | Loop (deprecated, maps to new names)
+            if meta.path.is_ident("mode") {
+                let path: syn::Path = meta.value()?.parse()?;
+                let mode = path
+                    .segments
+                    .last()
+                    .map(|seg| seg.ident.to_string())
+                    .ok_or_else(|| Error::new_spanned(&path, "Invalid mode path"))?;
+
+                let execution_mode = match mode.as_str() {
+                    "Loop" => ExecutionMode::Continuous { interval_ms: None },
+                    "Push" => ExecutionMode::Reactive,
+                    "Pull" => ExecutionMode::Manual,
+                    _ => {
+                        return Err(Error::new_spanned(
+                            path,
+                            format!(
+                                "mode must be Loop, Push, or Pull (got '{}')\n\
+                                 \n\
+                                 Note: 'mode' is deprecated. Use 'execution' instead:\n\
+                                 - Loop -> execution = Continuous\n\
+                                 - Push -> execution = Reactive\n\
+                                 - Pull -> execution = Manual",
+                                mode
+                            ),
+                        ));
+                    }
+                };
+
+                result.execution_mode = Some(execution_mode);
+                return Ok(());
+            }
+
+            // unsafe_send (flag attribute, no value)
+            if meta.path.is_ident("unsafe_send") {
+                result.unsafe_send = true;
+                return Ok(());
+            }
+
+            Err(meta.error("unsupported processor attribute"))
+        })
     }
 }
 
 impl PortAttributes {
-    /// Parse #[input(...)] or #[output(...)] attribute
-    ///
-    /// Supports both bare attributes (#[input]) and attributes with parameters (#[input(name = "foo")])
+    /// Parse `#[input(...)]` or `#[output(...)]` attribute
     pub fn parse(attrs: &[Attribute], attr_name: &str) -> Result<Self> {
         let mut result = Self::default();
 
         for attr in attrs {
-            if !attr.path().is_ident(attr_name) {
+            // Check `#[name]`, `#[streamlib::name]`, and `#[crate::name]`
+            let is_match = attr.path().is_ident(attr_name)
+                || (attr.path().segments.len() == 2
+                    && (attr.path().segments[0].ident == "streamlib"
+                        || attr.path().segments[0].ident == "crate")
+                    && attr.path().segments[1].ident == attr_name);
+
+            if !is_match {
                 continue;
             }
 
-            // Check if attribute has content (tokens)
+            // Bare attribute like #[input] - no parameters to parse
             if attr.meta.require_path_only().is_ok() {
-                // Bare attribute like #[input] - no parameters to parse
                 continue;
             }
 
-            // Parse the attribute content
             attr.parse_nested_meta(|meta| {
                 // name = "custom_name"
                 if meta.path.is_ident("name") {
@@ -226,15 +220,6 @@ impl PortAttributes {
                     return Ok(());
                 }
 
-                // required = true/false (inputs only)
-                if meta.path.is_ident("required") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Bool(b) = value {
-                        result.required = Some(b.value);
-                    }
-                    return Ok(());
-                }
-
                 Err(meta.error("unsupported port attribute"))
             })?;
         }
@@ -244,7 +229,7 @@ impl PortAttributes {
 }
 
 impl StateAttributes {
-    /// Parse #[state(...)] attribute
+    /// Parse `#[state(...)]` attribute
     pub fn parse(attrs: &[Attribute]) -> Result<Self> {
         let mut result = Self::default();
 
@@ -253,13 +238,11 @@ impl StateAttributes {
                 continue;
             }
 
-            // Check if attribute has content (tokens)
+            // Bare #[state] attribute - use Default::default()
             if attr.meta.require_path_only().is_ok() {
-                // Bare #[state] attribute - use Default::default()
                 continue;
             }
 
-            // Parse the attribute content
             attr.parse_nested_meta(|meta| {
                 // default = "expression"
                 if meta.path.is_ident("default") {
@@ -276,7 +259,6 @@ impl StateAttributes {
     }
 }
 
-/// Helper to parse string value from meta
 fn parse_string_value(meta: &syn::meta::ParseNestedMeta) -> Result<String> {
     let value: Lit = meta.value()?.parse()?;
     if let Lit::Str(s) = value {
@@ -293,100 +275,129 @@ mod tests {
 
     #[test]
     fn test_parse_processor_description() {
-        let attrs: Vec<Attribute> =
-            vec![parse_quote! { #[processor(description = "Test processor")] }];
-
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
+        let args: TokenStream = quote::quote! { description = "Test processor" };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
         assert_eq!(result.description, Some("Test processor".to_string()));
     }
 
+    // New execution syntax tests
     #[test]
-    fn test_parse_processor_tags() {
-        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(tags = ["video", "effect"])] }];
+    fn test_parse_execution_continuous() {
+        let args: TokenStream = quote::quote! { execution = Continuous };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(
+            result.execution_mode,
+            Some(ExecutionMode::Continuous { interval_ms: None })
+        );
+    }
 
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
-        assert_eq!(result.tags, vec!["video", "effect"]);
+    #[test]
+    fn test_parse_execution_reactive() {
+        let args: TokenStream = quote::quote! { execution = Reactive };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.execution_mode, Some(ExecutionMode::Reactive));
+    }
+
+    #[test]
+    fn test_parse_execution_manual() {
+        let args: TokenStream = quote::quote! { execution = Manual };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.execution_mode, Some(ExecutionMode::Manual));
+    }
+
+    #[test]
+    fn test_parse_execution_with_interval() {
+        let args: TokenStream =
+            quote::quote! { execution = Continuous, execution_interval_ms = 100 };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(
+            result.execution_mode,
+            Some(ExecutionMode::Continuous {
+                interval_ms: Some(100)
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_execution_interval_implies_continuous() {
+        let args: TokenStream = quote::quote! { execution_interval_ms = 50 };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(
+            result.execution_mode,
+            Some(ExecutionMode::Continuous {
+                interval_ms: Some(50)
+            })
+        );
+    }
+
+    // Legacy mode syntax tests (backwards compatibility)
+    #[test]
+    fn test_parse_legacy_mode_loop() {
+        let args: TokenStream = quote::quote! { mode = Loop };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(
+            result.execution_mode,
+            Some(ExecutionMode::Continuous { interval_ms: None })
+        );
+    }
+
+    #[test]
+    fn test_parse_legacy_mode_push() {
+        let args: TokenStream = quote::quote! { mode = Push };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.execution_mode, Some(ExecutionMode::Reactive));
+    }
+
+    #[test]
+    fn test_parse_legacy_mode_pull() {
+        let args: TokenStream = quote::quote! { mode = Pull };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.execution_mode, Some(ExecutionMode::Manual));
+    }
+
+    #[test]
+    fn test_parse_unsafe_send() {
+        let args: TokenStream = quote::quote! { execution = Manual, unsafe_send };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert!(result.unsafe_send);
+    }
+
+    #[test]
+    fn test_parse_multiple_attributes() {
+        let args: TokenStream = quote::quote! {
+            execution = Manual,
+            description = "Test processor",
+            unsafe_send
+        };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.execution_mode, Some(ExecutionMode::Manual));
+        assert_eq!(result.description, Some("Test processor".to_string()));
+        assert!(result.unsafe_send);
+    }
+
+    #[test]
+    fn test_invalid_execution_mode() {
+        let args: TokenStream = quote::quote! { execution = Invalid };
+        let result = ProcessorAttributes::parse_from_args(args);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("execution must be"));
     }
 
     #[test]
     fn test_parse_port_attributes() {
         let attrs: Vec<Attribute> =
             vec![parse_quote! { #[input(name = "video_in", description = "Video input")] }];
-
         let result = PortAttributes::parse(&attrs, "input").unwrap();
         assert_eq!(result.custom_name, Some("video_in".to_string()));
         assert_eq!(result.description, Some("Video input".to_string()));
     }
 
     #[test]
-    fn test_parse_process_method() {
-        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(process = "my_process")] }];
-
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
-        assert_eq!(result.process_method, Some("my_process".to_string()));
-    }
-
-    #[test]
-    fn test_parse_lifecycle_methods() {
-        let attrs: Vec<Attribute> =
-            vec![parse_quote! { #[processor(on_start = "init", on_stop = "cleanup")] }];
-
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
-        assert_eq!(result.on_start_method, Some("init".to_string()));
-        assert_eq!(result.on_stop_method, Some("cleanup".to_string()));
-    }
-
-    #[test]
-    fn test_parse_processor_name() {
-        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(name = "CustomProcessor")] }];
-
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
-        assert_eq!(result.processor_name, Some("CustomProcessor".to_string()));
-    }
-
-    #[test]
-    fn test_parse_scheduling_mode_pull() {
-        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(mode = Pull)] }];
-
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
-        assert_eq!(result.scheduling_mode, Some("Pull".to_string()));
-    }
-
-    #[test]
-    fn test_parse_scheduling_mode_push() {
-        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(mode = Push)] }];
-
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
-        assert_eq!(result.scheduling_mode, Some("Push".to_string()));
-    }
-
-    #[test]
-    fn test_parse_multiple_processor_attributes() {
-        let attrs: Vec<Attribute> = vec![parse_quote! {
-            #[processor(
-                name = "MyProcessor",
-                process = "do_process",
-                mode = Pull,
-                description = "Test processor"
-            )]
-        }];
-
-        let result = ProcessorAttributes::parse(&attrs).unwrap();
-        assert_eq!(result.processor_name, Some("MyProcessor".to_string()));
-        assert_eq!(result.process_method, Some("do_process".to_string()));
-        assert_eq!(result.scheduling_mode, Some("Pull".to_string()));
-        assert_eq!(result.description, Some("Test processor".to_string()));
-    }
-
-    #[test]
-    fn test_invalid_scheduling_mode() {
-        let attrs: Vec<Attribute> = vec![parse_quote! { #[processor(mode = Invalid)] }];
-
-        let result = ProcessorAttributes::parse(&attrs);
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("mode must be"));
-        assert!(error_msg.contains("Pull"));
-        assert!(error_msg.contains("Push"));
+    fn test_parse_bare_port_attribute() {
+        let attrs: Vec<Attribute> = vec![parse_quote! { #[input] }];
+        let result = PortAttributes::parse(&attrs, "input").unwrap();
+        assert_eq!(result.custom_name, None);
+        assert_eq!(result.description, None);
     }
 }

@@ -14,11 +14,29 @@ pub enum StreamError {
     #[error("Stream graph error: {0}")]
     GraphError(String),
 
-    #[error("Port connection error: {0}")]
+    #[error("Port error: {0}")]
     PortError(String),
 
-    #[error("Connection error: {0}")]
-    Connection(String),
+    #[error("Link error: {0}")]
+    Link(String),
+
+    #[error("Link already exists: {0}")]
+    LinkAlreadyExists(String),
+
+    #[error("Link not found: {0}")]
+    LinkNotFound(String),
+
+    #[error("Invalid link: {0}")]
+    InvalidLink(String),
+
+    #[error("Invalid port address: {0}")]
+    InvalidPortAddress(String),
+
+    #[error("Invalid graph: {0}")]
+    InvalidGraph(String),
+
+    #[error("Processor not found: {0}")]
+    ProcessorNotFound(String),
 
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
@@ -31,6 +49,9 @@ pub enum StreamError {
 
     #[error("Invalid configuration: {0}")]
     Configuration(String),
+
+    #[error("Config update failed: {0}")]
+    Config(String),
 
     #[error("Operation not supported: {0}")]
     NotSupported(String),
