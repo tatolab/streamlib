@@ -35,6 +35,20 @@ impl DefaultFactory {
             inner: RegistryBackedFactory::new(),
         }
     }
+
+    /// Get a reference to the inner registry-backed factory.
+    pub fn inner(&self) -> &RegistryBackedFactory {
+        &self.inner
+    }
+
+    /// Register a processor type with the factory.
+    pub fn register<P>(&self)
+    where
+        P: crate::core::processors::Processor + 'static,
+        P::Config: serde::Serialize + for<'de> serde::Deserialize<'de> + Default,
+    {
+        self.inner.register::<P>();
+    }
 }
 
 impl Default for DefaultFactory {

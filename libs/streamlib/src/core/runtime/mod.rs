@@ -3,4 +3,4 @@ mod builder;
 mod runtime;
 
 pub use builder::RuntimeBuilder;
-pub use runtime::{CommitMode, StreamRuntime};
+pub use runtime::{CommitMode, RuntimeStatus, StreamRuntime};

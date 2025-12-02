@@ -1,28 +1,25 @@
 //! Core compiler struct that orchestrates graph compilation.
+//!
+//! The Compiler is responsible for the 4-phase compilation pipeline:
+//! 1. CREATE - Instantiate processors via factory
+//! 2. WIRE - Create ring buffers and connect ports
+//! 3. SETUP - Initialize processors (GPU, devices)
+//! 4. START - Spawn processor threads
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
+use crate::core::compiler::delta::GraphDelta;
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{
     DefaultProcessorDelegate, DefaultScheduler, FactoryDelegate, ProcessorDelegate,
     SchedulerDelegate,
 };
 use crate::core::error::Result;
-use crate::core::executor::delta::GraphDelta;
-use crate::core::executor::execution_graph::ExecutionGraph;
-use crate::core::graph::Graph;
+use crate::core::graph::PropertyGraph;
 use crate::core::link_channel::LinkChannel;
 use crate::core::processors::ProcessorNodeFactory;
 
 /// Compiles graph changes into running processor state.
-///
-/// The Compiler is responsible for the 4-phase compilation pipeline:
-/// 1. CREATE - Instantiate processors via factory
-/// 2. WIRE - Create ring buffers and connect ports
-/// 3. SETUP - Initialize processors (GPU, devices)
-/// 4. START - Spawn processor threads
 pub struct Compiler {
     factory: Arc<dyn FactoryDelegate>,
     processor_delegate: Arc<dyn ProcessorDelegate>,
@@ -71,10 +68,9 @@ impl Compiler {
     ///
     /// Executes 4 phases: Create, Wire, Setup, Start.
     /// Only processes the delta (changes since last compilation).
-    pub(crate) fn compile(
+    pub fn compile(
         &self,
-        graph: &Arc<RwLock<Graph>>,
-        execution_graph: &mut ExecutionGraph,
+        property_graph: &mut PropertyGraph,
         runtime_context: &Arc<RuntimeContext>,
         link_channel: &mut LinkChannel,
         delta: &GraphDelta,
@@ -89,19 +85,26 @@ impl Compiler {
         super::phases::phase_create(
             &self.factory,
             &self.processor_delegate,
-            graph,
-            execution_graph,
+            property_graph,
             delta,
         )?;
 
         // Phase 2: Wire links (create ring buffers, connect ports)
-        super::phases::phase_wire(graph, execution_graph, link_channel, delta)?;
+        super::phases::phase_wire(property_graph, link_channel, delta)?;
 
         // Phase 3: Setup processors (GPU init, device open)
-        super::phases::phase_setup(execution_graph, runtime_context, delta)?;
+        super::phases::phase_setup(property_graph, runtime_context, delta)?;
 
         // Phase 4: Start processor threads
-        super::phases::phase_start(&self.processor_delegate, execution_graph, delta)?;
+        super::phases::phase_start(
+            &self.processor_delegate,
+            &self.scheduler,
+            property_graph,
+            delta,
+        )?;
+
+        // Mark the graph as compiled
+        property_graph.mark_compiled();
 
         tracing::info!("Compile complete");
         Ok(())

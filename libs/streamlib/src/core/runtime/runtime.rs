@@ -1,18 +1,30 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serde::Serialize;
 
-use crate::core::executor::{ExecutorLifecycle, SimpleExecutor};
-use crate::core::graph::{Graph, IntoLinkPortRef, Link, ProcessorId, ProcessorNode};
-use crate::core::link_channel::LinkId;
-use crate::core::processors::factory::RegistryBackedFactory;
+use crate::core::compiler::delta::GraphDelta;
+use crate::core::compiler::{shutdown_all_processors, shutdown_processor, Compiler};
+use crate::core::context::RuntimeContext;
+use crate::core::delegates::{
+    DefaultFactory, FactoryDelegate, ProcessorDelegate, SchedulerDelegate,
+};
+use crate::core::graph::{
+    GraphState, IntoLinkPortRef, Link, ProcessorId, ProcessorNode, PropertyGraph,
+};
+use crate::core::link_channel::{LinkChannel, LinkId};
 use crate::core::processors::Processor;
 use crate::core::Result;
 
-// Re-export types
-pub use crate::core::executor::RuntimeStatus;
+/// Runtime status information.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeStatus {
+    pub running: bool,
+    pub processor_count: usize,
+    pub link_count: usize,
+    pub processor_states: Vec<(ProcessorId, String)>,
+}
 
 /// Controls when graph mutations are applied to the executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -26,42 +38,78 @@ pub enum CommitMode {
 
 /// The main stream processing runtime.
 pub struct StreamRuntime {
-    pub(crate) graph: Arc<RwLock<Graph>>,
-    pub(crate) executor: Arc<Mutex<SimpleExecutor>>,
-    pub(crate) factory: Arc<RegistryBackedFactory>,
+    /// Unified graph with topology and ECS components.
+    pub(crate) graph: Arc<RwLock<PropertyGraph>>,
+    /// Compiles graph changes into running processors.
+    pub(crate) compiler: Compiler,
+    /// Concrete factory for processor registration.
+    pub(crate) default_factory: Arc<DefaultFactory>,
+    /// Factory delegate for processor creation (same as default_factory but dyn).
+    #[allow(dead_code)]
+    pub(crate) factory: Arc<dyn FactoryDelegate>,
+    /// Processor lifecycle delegate.
+    #[allow(dead_code)]
+    pub(crate) processor_delegate: Arc<dyn ProcessorDelegate>,
+    /// Scheduler delegate for thread decisions.
+    #[allow(dead_code)]
+    pub(crate) scheduler: Arc<dyn SchedulerDelegate>,
+    /// When mutations are applied.
     pub(crate) commit_mode: CommitMode,
+    /// Link channel for ring buffers.
+    pub(crate) link_channel: LinkChannel,
+    /// Runtime context (GPU, audio config).
+    pub(crate) runtime_context: Option<Arc<RuntimeContext>>,
+    /// Tracks pending changes since last compile.
+    pub(crate) pending_delta: GraphDelta,
 }
 
 impl Default for StreamRuntime {
     fn default() -> Self {
-        Self::new()
+        use crate::core::delegates::{DefaultProcessorDelegate, DefaultScheduler};
+        use crate::core::graph::Graph;
+
+        let default_factory = Arc::new(DefaultFactory::new());
+        let factory: Arc<dyn FactoryDelegate> =
+            Arc::clone(&default_factory) as Arc<dyn FactoryDelegate>;
+        let processor_delegate: Arc<dyn ProcessorDelegate> = Arc::new(DefaultProcessorDelegate);
+        let scheduler: Arc<dyn SchedulerDelegate> = Arc::new(DefaultScheduler);
+
+        let compiler = Compiler::with_delegates(
+            Arc::clone(&factory),
+            Arc::clone(&processor_delegate),
+            Arc::clone(&scheduler),
+        );
+
+        let graph = Arc::new(RwLock::new(Graph::new()));
+        let property_graph = Arc::new(RwLock::new(PropertyGraph::new(graph)));
+
+        Self {
+            graph: property_graph,
+            compiler,
+            default_factory,
+            factory,
+            processor_delegate,
+            scheduler,
+            commit_mode: CommitMode::Auto,
+            link_channel: LinkChannel::new(),
+            runtime_context: None,
+            pending_delta: GraphDelta::default(),
+        }
     }
 }
 
 impl StreamRuntime {
     pub fn new() -> Self {
-        Self::with_commit_mode(CommitMode::default())
+        Self::default()
     }
 
-    pub fn with_commit_mode(commit_mode: CommitMode) -> Self {
-        let graph = Arc::new(RwLock::new(Graph::new()));
-        let factory = Arc::new(RegistryBackedFactory::new());
-        let executor = SimpleExecutor::with_graph_and_factory(
-            Arc::clone(&graph),
-            Arc::clone(&factory) as Arc<dyn crate::core::processors::factory::ProcessorNodeFactory>,
-        );
+    pub fn builder() -> crate::core::runtime::RuntimeBuilder {
+        crate::core::runtime::RuntimeBuilder::new()
+    }
 
-        let executor = Arc::new(Mutex::new(executor));
-
-        // Set global executor reference for event-driven callbacks
-        SimpleExecutor::set_executor_ref(Arc::clone(&executor));
-
-        Self {
-            graph,
-            executor,
-            factory,
-            commit_mode,
-        }
+    /// Create a runtime with a specific commit mode.
+    pub fn with_commit_mode(mode: CommitMode) -> Self {
+        Self::builder().with_commit_mode(mode).build()
     }
 
     // =========================================================================
@@ -82,7 +130,7 @@ impl StreamRuntime {
     // Graph Access
     // =========================================================================
 
-    pub fn graph(&self) -> &Arc<RwLock<Graph>> {
+    pub fn graph(&self) -> &Arc<RwLock<PropertyGraph>> {
         &self.graph
     }
 
@@ -90,12 +138,35 @@ impl StreamRuntime {
     // Commit Control
     // =========================================================================
 
-    /// Apply all pending graph changes to the executor.
+    /// Apply all pending graph changes.
     ///
     /// In `Auto` mode, this is called automatically after each mutation.
     /// In `Manual` mode, call this explicitly to batch changes.
     pub fn commit(&mut self) -> Result<()> {
-        self.executor.lock().mark_dirty();
+        // Only compile if there are pending changes
+        if self.pending_delta.is_empty() {
+            return Ok(());
+        }
+
+        // Ensure runtime context exists
+        if self.runtime_context.is_none() {
+            use crate::core::context::GpuContext;
+            let gpu = GpuContext::init_for_platform_sync()?;
+            self.runtime_context = Some(Arc::new(RuntimeContext::new(gpu)));
+        }
+
+        let runtime_ctx = self.runtime_context.as_ref().unwrap();
+        let delta = std::mem::take(&mut self.pending_delta);
+
+        // Compile the delta
+        let mut property_graph = self.graph.write();
+        self.compiler.compile(
+            &mut property_graph,
+            runtime_ctx,
+            &mut self.link_channel,
+            &delta,
+        )?;
+
         Ok(())
     }
 
@@ -118,13 +189,17 @@ impl StreamRuntime {
         P::Config: Serialize + for<'de> serde::Deserialize<'de> + Default,
     {
         // Ensure type is registered with factory
-        self.factory.register::<P>();
+        self.default_factory.register::<P>();
 
-        // Add to graph
+        // Add to underlying graph
         let node = {
-            let mut graph = self.graph.write();
+            let property_graph = self.graph.read();
+            let mut graph = property_graph.graph().write();
             graph.add_processor_node::<P>(config)?
         };
+
+        // Track in pending delta
+        self.pending_delta.processors_to_add.push(node.id.clone());
 
         // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
@@ -148,11 +223,15 @@ impl StreamRuntime {
         from: impl IntoLinkPortRef,
         to: impl IntoLinkPortRef,
     ) -> Result<Link> {
-        // Add to graph
+        // Add to underlying graph
         let link = {
-            let mut graph = self.graph.write();
+            let property_graph = self.graph.read();
+            let mut graph = property_graph.graph().write();
             graph.add_link(from, to)?
         };
+
+        // Track in pending delta
+        self.pending_delta.links_to_add.push(link.id.clone());
 
         // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
@@ -175,11 +254,23 @@ impl StreamRuntime {
         let from_port = link.from_port();
         let to_port = link.to_port();
         let link_id_str = link.id.to_string();
+        let link_id = link.id.clone();
 
+        // Unwire if already wired
         {
-            let mut graph = self.graph.write();
-            graph.remove_link(&link.id);
+            let mut property_graph = self.graph.write();
+            let _ = crate::core::compiler::wiring::unwire_link(&mut property_graph, &link_id);
         }
+
+        // Remove from underlying graph
+        {
+            let property_graph = self.graph.read();
+            let mut graph = property_graph.graph().write();
+            graph.remove_link(&link_id);
+        }
+
+        // Track in pending delta
+        self.pending_delta.links_to_remove.push(link_id);
 
         // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
@@ -199,18 +290,29 @@ impl StreamRuntime {
     pub fn disconnect_by_id(&mut self, link_id: &LinkId) -> Result<()> {
         // Get link info before removing
         let (from_port, to_port) = {
-            let graph = self.graph.read();
-            if let Some(link) = graph.get_link(link_id) {
+            let property_graph = self.graph.read();
+            if let Some(link) = property_graph.get_link(link_id) {
                 (link.from_port(), link.to_port())
             } else {
                 (String::new(), String::new())
             }
         };
 
+        // Unwire if already wired
         {
-            let mut graph = self.graph.write();
+            let mut property_graph = self.graph.write();
+            let _ = crate::core::compiler::wiring::unwire_link(&mut property_graph, link_id);
+        }
+
+        // Remove from underlying graph
+        {
+            let property_graph = self.graph.read();
+            let mut graph = property_graph.graph().write();
             graph.remove_link(link_id);
         }
+
+        // Track in pending delta
+        self.pending_delta.links_to_remove.push(link_id.clone());
 
         // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
@@ -232,10 +334,24 @@ impl StreamRuntime {
     }
 
     pub fn remove_processor_by_id(&mut self, processor_id: &ProcessorId) -> Result<()> {
+        // Shutdown processor if running
         {
-            let mut graph = self.graph.write();
+            let mut property_graph = self.graph.write();
+            let _ = shutdown_processor(&mut property_graph, processor_id);
+            property_graph.remove_processor_entity(processor_id);
+        }
+
+        // Remove from underlying graph
+        {
+            let property_graph = self.graph.read();
+            let mut graph = property_graph.graph().write();
             graph.remove_processor_node(processor_id);
         }
+
+        // Track in pending delta
+        self.pending_delta
+            .processors_to_remove
+            .push(processor_id.clone());
 
         // Publish event
         use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
@@ -251,9 +367,6 @@ impl StreamRuntime {
     }
 
     /// Update a processor's configuration at runtime.
-    ///
-    /// The new config will be applied to the running processor on the next
-    /// sync (immediately in Auto mode, or on explicit commit in Manual mode).
     pub fn update_processor_config<C: Serialize>(
         &mut self,
         processor_id: &ProcessorId,
@@ -263,7 +376,8 @@ impl StreamRuntime {
             .map_err(|e| crate::core::StreamError::Config(e.to_string()))?;
 
         {
-            let mut graph = self.graph.write();
+            let property_graph = self.graph.read();
+            let mut graph = property_graph.graph().write();
             graph.update_processor_config(processor_id, config_json)?;
         }
 
@@ -293,24 +407,18 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
         );
 
-        match self.executor.lock().start() {
-            Ok(()) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
-                );
-                Ok(())
-            }
-            Err(e) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeStartFailed {
-                        error: e.to_string(),
-                    }),
-                );
-                Err(e)
-            }
-        }
+        // Set graph state to Running
+        self.graph.write().set_state(GraphState::Running);
+
+        // Compile any pending changes (this also initializes RuntimeContext if needed)
+        self.commit()?;
+
+        PUBSUB.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
+        );
+
+        Ok(())
     }
 
     /// Stop the runtime.
@@ -322,24 +430,18 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
         );
 
-        match self.executor.lock().stop() {
-            Ok(()) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
-                );
-                Ok(())
-            }
-            Err(e) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopFailed {
-                        error: e.to_string(),
-                    }),
-                );
-                Err(e)
-            }
+        // Shutdown all processors
+        {
+            let mut property_graph = self.graph.write();
+            shutdown_all_processors(&mut property_graph)?;
         }
+
+        PUBSUB.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
+        );
+
+        Ok(())
     }
 
     /// Pause the runtime.
@@ -351,24 +453,17 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
         );
 
-        match self.executor.lock().pause() {
-            Ok(()) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimePaused),
-                );
-                Ok(())
-            }
-            Err(e) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimePauseFailed {
-                        error: e.to_string(),
-                    }),
-                );
-                Err(e)
-            }
-        }
+        // Set graph state to Paused
+        self.graph.write().set_state(GraphState::Paused);
+
+        // TODO: Signal processors to pause (they should check state periodically)
+
+        PUBSUB.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(RuntimeEvent::RuntimePaused),
+        );
+
+        Ok(())
     }
 
     /// Resume the runtime.
@@ -380,24 +475,17 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
         );
 
-        match self.executor.lock().resume() {
-            Ok(()) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumed),
-                );
-                Ok(())
-            }
-            Err(e) => {
-                PUBSUB.publish(
-                    "runtime:global",
-                    &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumeFailed {
-                        error: e.to_string(),
-                    }),
-                );
-                Err(e)
-            }
-        }
+        // Set graph state to Running
+        self.graph.write().set_state(GraphState::Running);
+
+        // TODO: Signal processors to resume
+
+        PUBSUB.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumed),
+        );
+
+        Ok(())
     }
 
     /// Block until shutdown signal (Ctrl+C, SIGTERM, Cmd+Q).
@@ -478,7 +566,15 @@ impl StreamRuntime {
     }
 
     pub fn status(&self) -> RuntimeStatus {
-        self.executor.lock().status()
+        let property_graph = self.graph.read();
+        let graph = property_graph.graph().read();
+
+        RuntimeStatus {
+            running: property_graph.state() == GraphState::Running,
+            processor_count: graph.processor_count(),
+            link_count: graph.link_count(),
+            processor_states: vec![], // TODO: Implement processor state tracking
+        }
     }
 }
 
@@ -489,18 +585,20 @@ mod tests {
     #[test]
     fn test_runtime_creation() {
         let _runtime = StreamRuntime::new();
-        // Runtime starts in Idle state - executor manages state
-    }
-
-    #[test]
-    fn test_runtime_with_manual_commit() {
-        let runtime = StreamRuntime::with_commit_mode(CommitMode::Manual);
-        assert_eq!(runtime.commit_mode(), CommitMode::Manual);
+        // Runtime starts in Idle state
     }
 
     #[test]
     fn test_runtime_default_is_auto() {
         let runtime = StreamRuntime::new();
         assert_eq!(runtime.commit_mode(), CommitMode::Auto);
+    }
+
+    #[test]
+    fn test_runtime_builder() {
+        let runtime = StreamRuntime::builder()
+            .with_commit_mode(CommitMode::Manual)
+            .build();
+        assert_eq!(runtime.commit_mode(), CommitMode::Manual);
     }
 }

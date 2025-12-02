@@ -2,21 +2,22 @@
 
 use std::sync::Arc;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
+use crate::core::compiler::delta::GraphDelta;
+use crate::core::compiler::Compiler;
 use crate::core::delegates::{
     DefaultFactory, DefaultProcessorDelegate, DefaultScheduler, FactoryDelegate, ProcessorDelegate,
     SchedulerDelegate,
 };
-use crate::core::executor::SimpleExecutor;
-use crate::core::graph::Graph;
-use crate::core::processors::RegistryBackedFactory;
+use crate::core::graph::{Graph, PropertyGraph};
+use crate::core::link_channel::LinkChannel;
 
 use super::{CommitMode, StreamRuntime};
 
 /// Builder for configuring and constructing a [`StreamRuntime`].
 pub struct RuntimeBuilder {
-    factory: Option<Arc<dyn FactoryDelegate>>,
+    default_factory: Option<Arc<DefaultFactory>>,
     processor_delegate: Option<Arc<dyn ProcessorDelegate>>,
     scheduler: Option<Arc<dyn SchedulerDelegate>>,
     commit_mode: CommitMode,
@@ -32,22 +33,22 @@ impl RuntimeBuilder {
     /// Create a new runtime builder with defaults.
     pub fn new() -> Self {
         Self {
-            factory: None,
+            default_factory: None,
             processor_delegate: None,
             scheduler: None,
             commit_mode: CommitMode::Auto,
         }
     }
 
-    /// Set a custom factory delegate.
-    pub fn with_factory<F: FactoryDelegate + 'static>(mut self, factory: F) -> Self {
-        self.factory = Some(Arc::new(factory));
+    /// Set a custom factory.
+    pub fn with_factory(mut self, factory: DefaultFactory) -> Self {
+        self.default_factory = Some(Arc::new(factory));
         self
     }
 
-    /// Set a custom factory delegate from an Arc.
-    pub fn with_factory_arc(mut self, factory: Arc<dyn FactoryDelegate>) -> Self {
-        self.factory = Some(factory);
+    /// Set a custom factory from an Arc.
+    pub fn with_factory_arc(mut self, factory: Arc<DefaultFactory>) -> Self {
+        self.default_factory = Some(factory);
         self
     }
 
@@ -83,44 +84,40 @@ impl RuntimeBuilder {
 
     /// Build the runtime with the configured delegates.
     pub fn build(self) -> StreamRuntime {
-        let graph = Arc::new(RwLock::new(Graph::new()));
-
         // Use provided delegates or defaults
-        let _factory_delegate = self
-            .factory
+        let default_factory = self
+            .default_factory
             .unwrap_or_else(|| Arc::new(DefaultFactory::new()));
-        let _processor_delegate = self
+        let factory: Arc<dyn FactoryDelegate> =
+            Arc::clone(&default_factory) as Arc<dyn FactoryDelegate>;
+        let processor_delegate = self
             .processor_delegate
             .unwrap_or_else(|| Arc::new(DefaultProcessorDelegate));
-        let _scheduler = self.scheduler.unwrap_or_else(|| Arc::new(DefaultScheduler));
+        let scheduler = self.scheduler.unwrap_or_else(|| Arc::new(DefaultScheduler));
 
-        // For now, we still need to use RegistryBackedFactory for the executor
-        // because SimpleExecutor expects ProcessorNodeFactory.
-        // TODO: Update SimpleExecutor to use delegates in Phase 3
-        let factory = Arc::new(RegistryBackedFactory::new());
-        let executor = SimpleExecutor::with_graph_and_factory(
-            Arc::clone(&graph),
-            Arc::clone(&factory) as Arc<dyn crate::core::processors::factory::ProcessorNodeFactory>,
+        // Create compiler with delegates
+        let compiler = Compiler::with_delegates(
+            Arc::clone(&factory),
+            Arc::clone(&processor_delegate),
+            Arc::clone(&scheduler),
         );
 
-        let executor = Arc::new(Mutex::new(executor));
-
-        // Set global executor reference for event-driven callbacks
-        SimpleExecutor::set_executor_ref(Arc::clone(&executor));
+        // Create graph and property graph
+        let graph = Arc::new(RwLock::new(Graph::new()));
+        let property_graph = Arc::new(RwLock::new(PropertyGraph::new(graph)));
 
         StreamRuntime {
-            graph,
-            executor,
+            graph: property_graph,
+            compiler,
+            default_factory,
             factory,
+            processor_delegate,
+            scheduler,
             commit_mode: self.commit_mode,
+            link_channel: LinkChannel::new(),
+            runtime_context: None,
+            pending_delta: GraphDelta::default(),
         }
-    }
-}
-
-impl StreamRuntime {
-    /// Create a runtime builder for customization.
-    pub fn builder() -> RuntimeBuilder {
-        RuntimeBuilder::new()
     }
 }
 

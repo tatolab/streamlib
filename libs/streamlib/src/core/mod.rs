@@ -1,4 +1,5 @@
 pub mod clap;
+pub mod compat;
 pub mod compiler;
 pub mod context;
 pub mod delegates;
@@ -10,6 +11,7 @@ pub mod graph;
 pub mod link_channel;
 pub mod media_clock;
 pub mod observability;
+pub mod prelude;
 pub mod processors;
 pub mod pubsub;
 pub mod registry;
@@ -25,9 +27,12 @@ pub use clap::{
     ClapParameterControl, LfoWaveform, ParameterAutomation, ParameterInfo, ParameterModulator,
     PluginInfo,
 };
+pub use compiler::{
+    compute_delta, compute_delta_with_config, GraphDelta, LinkConfigChange, ProcessorConfigChange,
+};
 pub use context::{GpuContext, RuntimeContext};
 pub use error::{Result, StreamError};
-pub use executor::{compute_delta, ExecutorState, GraphDelta, RuntimeStatus, SimpleExecutor};
+pub use executor::{ExecutorState, RuntimeStatus, SimpleExecutor};
 pub use frames::{
     AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
 };

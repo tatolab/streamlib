@@ -278,6 +278,16 @@ impl PropertyGraph {
     pub fn has_processor(&self, id: &ProcessorId) -> bool {
         self.graph.read().has_processor(id)
     }
+
+    /// Get the number of processors in the graph.
+    pub fn processor_count(&self) -> usize {
+        self.graph.read().processor_count()
+    }
+
+    /// Get the number of links in the graph.
+    pub fn link_count(&self) -> usize {
+        self.graph.read().link_count()
+    }
 }
 
 #[cfg(test)]

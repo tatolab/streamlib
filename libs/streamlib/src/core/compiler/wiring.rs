@@ -1,59 +1,58 @@
 //! Link wiring implementation for the compiler.
+//!
+//! Wiring creates ring buffers between processor ports and sets up
+//! process function invoke channels for reactive processing.
 
 use std::sync::Arc;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use crate::core::error::{Result, StreamError};
-use crate::core::executor::execution_graph::ExecutionGraph;
-use crate::core::executor::running::WiredLink;
-use crate::core::executor::BoxedProcessor;
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
-use crate::core::graph::Graph;
+use crate::core::graph::{ProcessInvokeChannel, ProcessorInstance, PropertyGraph};
 use crate::core::link_channel::{LinkChannel, LinkId, LinkPortAddress, LinkPortType};
+use crate::core::processors::BoxedProcessor;
 
 /// Wire a link by ID from the graph.
-pub(super) fn wire_link(
-    graph: &Arc<RwLock<Graph>>,
-    execution_graph: &mut ExecutionGraph,
+pub fn wire_link(
+    property_graph: &mut PropertyGraph,
     link_channel: &mut LinkChannel,
     link_id: &LinkId,
 ) -> Result<()> {
     let (from_port, to_port) = {
-        let graph_guard = graph.read();
-        let link = graph_guard.get_link(link_id).ok_or_else(|| {
+        let link = property_graph.get_link(link_id).ok_or_else(|| {
             StreamError::LinkNotFound(format!("Link '{}' not found in graph", link_id))
         })?;
         (link.from_port(), link.to_port())
     };
 
-    wire_link_ports(graph, execution_graph, link_channel, &from_port, &to_port)?;
+    wire_link_ports(property_graph, link_channel, &from_port, &to_port, link_id)?;
     Ok(())
 }
 
 /// Unwire a link by ID.
 #[allow(dead_code)]
-pub(crate) fn unwire_link(execution_graph: &mut ExecutionGraph, link_id: &LinkId) -> Result<()> {
+pub fn unwire_link(property_graph: &mut PropertyGraph, link_id: &LinkId) -> Result<()> {
     tracing::info!("Unwiring link: {}", link_id);
 
-    let wired_link = execution_graph
-        .get_link_runtime(link_id)
+    let link = property_graph
+        .get_link(link_id)
         .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
 
-    let source_proc_id = wired_link.source.node.clone();
-    let dest_proc_id = wired_link.target.node.clone();
-    let source_port = wired_link.source.port.clone();
-    let dest_port = wired_link.target.port.clone();
+    let (source_proc_id, source_port) = parse_port_address(&link.from_port())?;
+    let (dest_proc_id, dest_port) = parse_port_address(&link.to_port())?;
 
-    let source_processor = execution_graph
-        .get_processor_runtime(&source_proc_id)
-        .and_then(|r| r.processor.clone());
-    let dest_processor = execution_graph
-        .get_processor_runtime(&dest_proc_id)
-        .and_then(|r| r.processor.clone());
+    // Get processor instance arcs first (clone them to release borrow)
+    let source_arc = property_graph
+        .get::<ProcessorInstance>(&source_proc_id)
+        .map(|instance| instance.0.clone());
+    let dest_arc = property_graph
+        .get::<ProcessorInstance>(&dest_proc_id)
+        .map(|instance| instance.0.clone());
 
-    if let Some(proc) = source_processor {
-        let mut guard = proc.lock();
+    // Now we can operate on the cloned Arcs without borrowing property_graph
+    if let Some(arc) = source_arc {
+        let mut guard = arc.lock();
         if let Err(e) = guard.unwire_output_producer(&source_port, link_id) {
             tracing::warn!(
                 "Failed to unwire output producer from {}.{}: {}",
@@ -64,8 +63,8 @@ pub(crate) fn unwire_link(execution_graph: &mut ExecutionGraph, link_id: &LinkId
         }
     }
 
-    if let Some(proc) = dest_processor {
-        let mut guard = proc.lock();
+    if let Some(arc) = dest_arc {
+        let mut guard = arc.lock();
         if let Err(e) = guard.unwire_input_consumer(&dest_port, link_id) {
             tracing::warn!(
                 "Failed to unwire input consumer from {}.{}: {}",
@@ -76,7 +75,8 @@ pub(crate) fn unwire_link(execution_graph: &mut ExecutionGraph, link_id: &LinkId
         }
     }
 
-    execution_graph.remove_link_runtime(link_id);
+    // Remove link entity if we're tracking link components
+    property_graph.remove_link_entity(link_id);
 
     tracing::info!("Unwired link: {}", link_id);
     Ok(())
@@ -98,17 +98,14 @@ pub fn parse_port_address(port: &str) -> Result<(String, String)> {
 // ============================================================================
 
 fn wire_link_ports(
-    graph: &Arc<RwLock<Graph>>,
-    execution_graph: &mut ExecutionGraph,
+    property_graph: &mut PropertyGraph,
     link_channel: &mut LinkChannel,
     from_port: &str,
     to_port: &str,
-) -> Result<LinkId> {
+    link_id: &LinkId,
+) -> Result<()> {
     let (source_proc_id, source_port) = parse_port_address(from_port)?;
     let (dest_proc_id, dest_port) = parse_port_address(to_port)?;
-
-    let link = get_link_from_graph(graph, from_port, to_port)?;
-    let link_id = link.id.clone();
 
     tracing::info!(
         "Wiring {} ({}:{}) → ({}:{}) [{}]",
@@ -121,7 +118,7 @@ fn wire_link_ports(
     );
 
     let (source_processor, dest_processor) =
-        get_processor_pair(execution_graph, &source_proc_id, &dest_proc_id)?;
+        get_processor_pair(property_graph, &source_proc_id, &dest_proc_id)?;
 
     validate_audio_compatibility(&source_processor, &dest_processor, from_port, to_port)?;
 
@@ -134,8 +131,8 @@ fn wire_link_ports(
         to_port,
     )?;
 
-    let source_addr = LinkPortAddress::new(source_proc_id.to_string(), source_port.to_string());
-    let dest_addr = LinkPortAddress::new(dest_proc_id.to_string(), dest_port.to_string());
+    let source_addr = LinkPortAddress::new(source_proc_id.clone(), source_port.clone());
+    let dest_addr = LinkPortAddress::new(dest_proc_id.clone(), dest_port.clone());
     let capacity = source_port_type.default_capacity();
 
     create_link_channel(
@@ -151,51 +148,32 @@ fn wire_link_ports(
     )?;
 
     setup_process_function_invoke_channel(
-        execution_graph,
+        property_graph,
         &source_proc_id,
         &dest_proc_id,
         &source_port,
-        &dest_port,
     )?;
 
-    let wired = WiredLink::new(link, source_port_type, capacity);
-    execution_graph.insert_link_runtime(link_id.clone(), wired);
+    // Create link entity for tracking
+    property_graph.ensure_link_entity(link_id);
 
     tracing::info!("Registered link: {}", link_id);
-    Ok(link_id)
-}
-
-fn get_link_from_graph(
-    graph: &Arc<RwLock<Graph>>,
-    from_port: &str,
-    to_port: &str,
-) -> Result<crate::core::graph::Link> {
-    let graph_guard = graph.read();
-    let link_id = graph_guard.find_link(from_port, to_port).ok_or_else(|| {
-        StreamError::InvalidLink(format!(
-            "Link '{}' → '{}' not found in graph",
-            from_port, to_port
-        ))
-    })?;
-    graph_guard
-        .find_link_by_id(&link_id)
-        .cloned()
-        .ok_or_else(|| StreamError::InvalidLink(format!("Link '{}' not found by ID", link_id)))
+    Ok(())
 }
 
 fn get_processor_pair(
-    execution_graph: &ExecutionGraph,
+    property_graph: &PropertyGraph,
     source_proc_id: &str,
     dest_proc_id: &str,
 ) -> Result<(Arc<Mutex<BoxedProcessor>>, Arc<Mutex<BoxedProcessor>>)> {
-    let source_instance = execution_graph
-        .get_processor_runtime(&source_proc_id.to_string())
+    let source_instance = property_graph
+        .get::<ProcessorInstance>(&source_proc_id.to_string())
         .ok_or_else(|| {
             StreamError::Configuration(format!("Source processor '{}' not found", source_proc_id))
         })?;
 
-    let dest_instance = execution_graph
-        .get_processor_runtime(&dest_proc_id.to_string())
+    let dest_instance = property_graph
+        .get::<ProcessorInstance>(&dest_proc_id.to_string())
         .ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Destination processor '{}' not found",
@@ -203,21 +181,7 @@ fn get_processor_pair(
             ))
         })?;
 
-    let source_proc = source_instance.processor.as_ref().ok_or_else(|| {
-        StreamError::Runtime(format!(
-            "Source processor '{}' has no processor reference",
-            source_proc_id
-        ))
-    })?;
-
-    let dest_proc = dest_instance.processor.as_ref().ok_or_else(|| {
-        StreamError::Runtime(format!(
-            "Destination processor '{}' has no processor reference",
-            dest_proc_id
-        ))
-    })?;
-
-    Ok((Arc::clone(source_proc), Arc::clone(dest_proc)))
+    Ok((Arc::clone(&source_instance.0), Arc::clone(&dest_instance.0)))
 }
 
 fn validate_audio_compatibility(
@@ -347,32 +311,42 @@ fn create_link_channel(
 }
 
 fn setup_process_function_invoke_channel(
-    execution_graph: &ExecutionGraph,
+    property_graph: &PropertyGraph,
     source_proc_id: &str,
     dest_proc_id: &str,
     source_port: &str,
-    dest_port: &str,
 ) -> Result<()> {
-    let source_instance = execution_graph.get_processor_runtime(&source_proc_id.to_string());
-    let dest_instance = execution_graph.get_processor_runtime(&dest_proc_id.to_string());
+    // Get destination's process invoke channel sender
+    let dest_channel = property_graph
+        .get::<ProcessInvokeChannel>(&dest_proc_id.to_string())
+        .ok_or_else(|| {
+            StreamError::Configuration(format!(
+                "Destination processor '{}' has no ProcessInvokeChannel",
+                dest_proc_id
+            ))
+        })?;
+    let sender = dest_channel.sender.clone();
+    drop(dest_channel);
 
-    if let (Some(src), Some(dst)) = (source_instance, dest_instance) {
-        if let Some(src_proc) = src.processor.as_ref() {
-            let mut source_guard = src_proc.lock();
-            source_guard.set_output_process_function_invoke_send(
-                source_port,
-                dst.process_function_invoke_send.clone(),
-            );
+    // Get source processor and set its output's invoke sender
+    let source_instance = property_graph
+        .get::<ProcessorInstance>(&source_proc_id.to_string())
+        .ok_or_else(|| {
+            StreamError::Configuration(format!(
+                "Source processor '{}' has no ProcessorInstance",
+                source_proc_id
+            ))
+        })?;
 
-            tracing::debug!(
-                "Wired process function invoke: {} ({}) → {} ({})",
-                source_proc_id,
-                source_port,
-                dest_proc_id,
-                dest_port
-            );
-        }
-    }
+    let mut source_guard = source_instance.0.lock();
+    source_guard.set_output_process_function_invoke_send(source_port, sender);
+
+    tracing::debug!(
+        "Wired process function invoke: {} ({}) → {}",
+        source_proc_id,
+        source_port,
+        dest_proc_id
+    );
 
     Ok(())
 }

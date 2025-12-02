@@ -1,14 +1,15 @@
 //! GraphCompiler implementation for SimpleExecutor.
 //!
-//! Delegates to the core Compiler module for the actual compilation work.
+//! NOTE: This is legacy code. The new architecture uses PropertyGraph + Compiler directly
+//! through StreamRuntime. This implementation is kept for backwards compatibility but
+//! uses the old per-phase approach instead of the new unified Compiler.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::core::compiler::Compiler;
+use crate::core::compiler::delta::{compute_delta_with_config, GraphDelta};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::error::{Result, StreamError};
-use crate::core::executor::delta::{compute_delta_with_config, GraphDelta};
 use crate::core::executor::execution_graph::{CompilationMetadata, ExecutionGraph};
 use crate::core::executor::{ExecutorState, GraphCompiler};
 use crate::core::graph::ProcessorId;
@@ -23,10 +24,9 @@ impl GraphCompiler for SimpleExecutor {
             return Ok(());
         }
 
-        tracing::info!("Compiling graph...");
+        tracing::info!("Compiling graph (legacy SimpleExecutor)...");
 
         self.init_execution_graph_if_needed()?;
-        self.init_compiler_if_needed()?;
 
         let delta = self.compute_graph_delta()?;
 
@@ -42,31 +42,8 @@ impl GraphCompiler for SimpleExecutor {
             delta.links_to_add.len()
         );
 
-        // Delegate to the Compiler
-        let compiler = self
-            .compiler
-            .as_ref()
-            .ok_or_else(|| StreamError::Runtime("Compiler not initialized".into()))?;
-        let graph = self
-            .graph
-            .as_ref()
-            .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
-        let execution_graph = self
-            .execution_graph
-            .as_mut()
-            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
-        let runtime_context = self
-            .runtime_context
-            .as_ref()
-            .ok_or_else(|| StreamError::Runtime("Runtime context not initialized".into()))?;
-
-        compiler.compile(
-            graph,
-            execution_graph,
-            runtime_context,
-            &mut self.link_channel,
-            &delta,
-        )?;
+        // Use the legacy per-phase approach
+        self.apply_delta(delta)?;
 
         self.dirty = false;
         tracing::info!("Compile complete");
@@ -130,20 +107,6 @@ impl SimpleExecutor {
 
         Ok(())
     }
-
-    fn init_compiler_if_needed(&mut self) -> Result<()> {
-        if self.compiler.is_some() {
-            return Ok(());
-        }
-
-        let factory = self
-            .factory
-            .as_ref()
-            .ok_or_else(|| StreamError::Runtime("No processor factory set".into()))?;
-
-        self.compiler = Some(Compiler::new(Arc::clone(factory)));
-        Ok(())
-    }
 }
 
 // ============================================================================
@@ -189,7 +152,6 @@ impl SimpleExecutor {
         ))
     }
 
-    #[allow(dead_code)]
     pub(super) fn apply_delta(&mut self, delta: GraphDelta) -> Result<()> {
         // Step 1: Unwire removed links
         for link_id in &delta.links_to_remove {
@@ -212,17 +174,29 @@ impl SimpleExecutor {
 
         // Step 3: Create new processors
         for proc_id in &delta.processors_to_add {
-            tracing::info!("Adding processor: {}", proc_id);
+            tracing::info!("[Phase 1: CREATE] {}", proc_id);
             GraphCompiler::create_processor(self, proc_id)?;
         }
 
         // Step 4: Wire new links
         for link_id in &delta.links_to_add {
-            tracing::info!("Adding link: {}", link_id);
+            tracing::info!("[Phase 2: WIRE] {}", link_id);
             GraphCompiler::wire_link(self, link_id)?;
         }
 
-        // Step 5: Apply config changes
+        // Step 5: Setup processors
+        for proc_id in &delta.processors_to_add {
+            tracing::info!("[Phase 3: SETUP] {}", proc_id);
+            GraphCompiler::setup_processor(self, proc_id)?;
+        }
+
+        // Step 6: Start processors
+        for proc_id in &delta.processors_to_add {
+            tracing::info!("[Phase 4: START] {}", proc_id);
+            GraphCompiler::start_processor(self, proc_id)?;
+        }
+
+        // Step 7: Apply config changes
         for config_change in &delta.processors_to_update {
             tracing::info!(
                 "Updating processor config: {} (checksum {} -> {})",
@@ -243,7 +217,6 @@ impl SimpleExecutor {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub(super) fn apply_config_change(&mut self, proc_id: &ProcessorId) -> Result<()> {
         // Get the new config from the graph
         let new_config = {
