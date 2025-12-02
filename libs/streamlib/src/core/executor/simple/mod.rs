@@ -199,10 +199,10 @@ impl SimpleExecutor {
     }
 
     pub fn set_executor_ref(executor: Arc<Mutex<SimpleExecutor>>) {
-        use crate::core::pubsub::{topics, EVENT_BUS};
+        use crate::core::pubsub::{topics, PUBSUB};
 
         let _ = EXECUTOR_REF.set(Arc::downgrade(&executor));
-        EVENT_BUS.subscribe(topics::RUNTIME_GLOBAL, executor);
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, executor);
     }
 }
 

@@ -133,7 +133,7 @@ name = "phase2_bench"
 harness = false
 
 [[bench]]
-name = "event_bus_bench"
+name = "pubsub_bench"
 harness = false
 
 [[bench]]

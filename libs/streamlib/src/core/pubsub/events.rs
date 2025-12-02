@@ -164,29 +164,74 @@ pub enum RuntimeEvent {
         error: String,
     },
 
-    // ===== Processor Registry Events =====
-    ProcessorAdded {
+    // ===== Graph Processor Events =====
+    /// Emitted when the graph will add a processor
+    GraphWillAddProcessor {
         processor_id: String,
         processor_type: String,
     },
-    ProcessorRemoved {
+    /// Emitted when the graph did add a processor
+    GraphDidAddProcessor {
+        processor_id: String,
+        processor_type: String,
+    },
+    /// Emitted when the graph will remove a processor
+    GraphWillRemoveProcessor {
         processor_id: String,
     },
-    ProcessorConfigUpdated {
+    /// Emitted when the graph did remove a processor
+    GraphDidRemoveProcessor {
         processor_id: String,
+    },
+    /// Emitted when a processor's configuration is updated
+    ProcessorConfigDidChange {
+        processor_id: String,
+    },
+    /// Emitted when a processor's state changes (started, stopped, paused, etc.)
+    ProcessorStateDidChange {
+        processor_id: String,
+        old_state: ProcessorState,
+        new_state: ProcessorState,
     },
 
-    // ===== Link Lifecycle Events =====
-    LinkCreated {
+    // ===== Graph Link Events =====
+    /// Emitted when the graph will create a link
+    GraphWillCreateLink {
+        from_processor: String,
+        from_port: String,
+        to_processor: String,
+        to_port: String,
+    },
+    /// Emitted when the graph did create a link
+    GraphDidCreateLink {
         link_id: String,
         from_port: String, // "processor_id.port_name"
         to_port: String,
     },
-    LinkRemoved {
+    /// Emitted when the graph will remove a link
+    GraphWillRemoveLink {
         link_id: String,
         from_port: String,
         to_port: String,
     },
+    /// Emitted when the graph did remove a link
+    GraphDidRemoveLink {
+        link_id: String,
+        from_port: String,
+        to_port: String,
+    },
+
+    // ===== Graph Compilation Events =====
+    /// Emitted when graph will compile
+    GraphWillCompile,
+    /// Emitted when graph did compile successfully
+    GraphDidCompile,
+    /// Emitted when graph compilation failed
+    GraphCompileFailed {
+        error: String,
+    },
+    /// Emitted when graph topology changed (nodes or edges added/removed)
+    GraphTopologyDidChange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,7 +465,7 @@ pub enum WindowEventType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::pubsub::event_bus::EventBus;
+    use crate::core::pubsub::PubSub;
     use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -459,12 +504,12 @@ mod tests {
 
     #[test]
     fn test_keyboard_event_routing() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
         let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to keyboard topic
-        bus.subscribe(topics::KEYBOARD, listener);
+        pubsub.subscribe(topics::KEYBOARD, listener);
 
         // Create keyboard event
         let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
@@ -473,7 +518,7 @@ mod tests {
         assert_eq!(event.topic(), topics::KEYBOARD);
 
         // Publish using the event's topic
-        bus.publish(&event.topic(), &event);
+        pubsub.publish(&event.topic(), &event);
 
         wait_for_rayon();
         // Verify listener received it
@@ -482,12 +527,12 @@ mod tests {
 
     #[test]
     fn test_mouse_event_routing() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
         let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to mouse topic
-        bus.subscribe(topics::MOUSE, listener);
+        pubsub.subscribe(topics::MOUSE, listener);
 
         // Create mouse event
         let event = Event::mouse(MouseButton::Left, (100.0, 200.0), MouseState::Pressed);
@@ -496,7 +541,7 @@ mod tests {
         assert_eq!(event.topic(), topics::MOUSE);
 
         // Publish using the event's topic
-        bus.publish(&event.topic(), &event);
+        pubsub.publish(&event.topic(), &event);
 
         wait_for_rayon();
         // Verify listener received it
@@ -505,12 +550,12 @@ mod tests {
 
     #[test]
     fn test_window_event_routing() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
         let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to window topic
-        bus.subscribe(topics::WINDOW, listener);
+        pubsub.subscribe(topics::WINDOW, listener);
 
         // Create window event
         let event = Event::window(WindowEventType::Resized {
@@ -522,7 +567,7 @@ mod tests {
         assert_eq!(event.topic(), topics::WINDOW);
 
         // Publish using the event's topic
-        bus.publish(&event.topic(), &event);
+        pubsub.publish(&event.topic(), &event);
 
         wait_for_rayon();
         // Verify listener received it
@@ -531,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_processor_event_routing() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
         let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
@@ -539,7 +584,7 @@ mod tests {
         let topic = topics::processor(processor_id);
 
         // Subscribe to processor-specific topic
-        bus.subscribe(&topic, listener);
+        pubsub.subscribe(&topic, listener);
 
         // Create processor event
         let event = Event::processor(processor_id, ProcessorEvent::Started);
@@ -548,7 +593,7 @@ mod tests {
         assert_eq!(event.topic(), topic);
 
         // Publish using the event's topic
-        bus.publish(&event.topic(), &event);
+        pubsub.publish(&event.topic(), &event);
 
         wait_for_rayon();
         // Verify listener received it
@@ -557,12 +602,12 @@ mod tests {
 
     #[test]
     fn test_runtime_global_event_routing() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
         let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         // Subscribe to runtime global topic
-        bus.subscribe(topics::RUNTIME_GLOBAL, listener);
+        pubsub.subscribe(topics::RUNTIME_GLOBAL, listener);
 
         // Create runtime event (non-input)
         let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStart);
@@ -571,7 +616,7 @@ mod tests {
         assert_eq!(event.topic(), topics::RUNTIME_GLOBAL);
 
         // Publish using the event's topic
-        bus.publish(&event.topic(), &event);
+        pubsub.publish(&event.topic(), &event);
 
         wait_for_rayon();
         // Verify listener received it
@@ -580,14 +625,14 @@ mod tests {
 
     #[test]
     fn test_custom_event_routing() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
         let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
         let custom_topic = "game:player-scored";
 
         // Subscribe to custom topic
-        bus.subscribe(custom_topic, listener);
+        pubsub.subscribe(custom_topic, listener);
 
         // Create custom event
         let event = Event::custom(
@@ -599,7 +644,7 @@ mod tests {
         assert_eq!(event.topic(), custom_topic);
 
         // Publish using the event's topic
-        bus.publish(&event.topic(), &event);
+        pubsub.publish(&event.topic(), &event);
 
         wait_for_rayon();
         // Verify listener received it
@@ -608,7 +653,7 @@ mod tests {
 
     #[test]
     fn test_input_events_routed_to_specific_topics() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         let keyboard_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let mouse_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
@@ -621,10 +666,10 @@ mod tests {
         let runtime_listener: Arc<Mutex<dyn EventListener>> = runtime_listener_concrete.clone();
 
         // Subscribe to all topics
-        bus.subscribe(topics::KEYBOARD, keyboard_listener);
-        bus.subscribe(topics::MOUSE, mouse_listener);
-        bus.subscribe(topics::WINDOW, window_listener);
-        bus.subscribe(topics::RUNTIME_GLOBAL, runtime_listener);
+        pubsub.subscribe(topics::KEYBOARD, keyboard_listener);
+        pubsub.subscribe(topics::MOUSE, mouse_listener);
+        pubsub.subscribe(topics::WINDOW, window_listener);
+        pubsub.subscribe(topics::RUNTIME_GLOBAL, runtime_listener);
 
         // Create keyboard input event (RuntimeEvent variant but routed to KEYBOARD)
         let kb_event = Event::RuntimeGlobal(RuntimeEvent::KeyboardInput {
@@ -633,7 +678,7 @@ mod tests {
             state: KeyState::Pressed,
         });
         assert_eq!(kb_event.topic(), topics::KEYBOARD);
-        bus.publish(&kb_event.topic(), &kb_event);
+        pubsub.publish(&kb_event.topic(), &kb_event);
 
         // Create mouse input event (RuntimeEvent variant but routed to MOUSE)
         let mouse_event = Event::RuntimeGlobal(RuntimeEvent::MouseInput {
@@ -642,19 +687,19 @@ mod tests {
             state: MouseState::Released,
         });
         assert_eq!(mouse_event.topic(), topics::MOUSE);
-        bus.publish(&mouse_event.topic(), &mouse_event);
+        pubsub.publish(&mouse_event.topic(), &mouse_event);
 
         // Create window event (RuntimeEvent variant but routed to WINDOW)
         let window_event = Event::RuntimeGlobal(RuntimeEvent::WindowEvent {
             event: WindowEventType::Focused,
         });
         assert_eq!(window_event.topic(), topics::WINDOW);
-        bus.publish(&window_event.topic(), &window_event);
+        pubsub.publish(&window_event.topic(), &window_event);
 
         // Create non-input runtime event (stays on RUNTIME_GLOBAL)
         let runtime_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStop);
         assert_eq!(runtime_event.topic(), topics::RUNTIME_GLOBAL);
-        bus.publish(&runtime_event.topic(), &runtime_event);
+        pubsub.publish(&runtime_event.topic(), &runtime_event);
 
         wait_for_rayon();
         // Verify routing - each listener only received its specific events
@@ -666,11 +711,11 @@ mod tests {
 
     #[test]
     fn test_modifier_keys_as_regular_keys() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
         let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
 
-        bus.subscribe(topics::KEYBOARD, listener);
+        pubsub.subscribe(topics::KEYBOARD, listener);
 
         // Test pressing shift key itself
         let shift_event = Event::keyboard(
@@ -683,7 +728,7 @@ mod tests {
             },
             KeyState::Pressed,
         );
-        bus.publish(&shift_event.topic(), &shift_event);
+        pubsub.publish(&shift_event.topic(), &shift_event);
 
         // Test pressing a key WITH shift held
         let a_with_shift = Event::keyboard(
@@ -696,7 +741,7 @@ mod tests {
             },
             KeyState::Pressed,
         );
-        bus.publish(&a_with_shift.topic(), &a_with_shift);
+        pubsub.publish(&a_with_shift.topic(), &a_with_shift);
 
         wait_for_rayon();
         // Both events should be received
@@ -759,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_multiple_processors_isolated_topics() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         let audio_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
         let video_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
@@ -768,16 +813,16 @@ mod tests {
         let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
 
         // Subscribe to different processor topics
-        bus.subscribe(&topics::processor("audio-mixer"), audio_listener);
-        bus.subscribe(&topics::processor("video-filter"), video_listener);
+        pubsub.subscribe(&topics::processor("audio-mixer"), audio_listener);
+        pubsub.subscribe(&topics::processor("video-filter"), video_listener);
 
         // Publish to audio processor
         let audio_event = Event::processor("audio-mixer", ProcessorEvent::Paused);
-        bus.publish(&audio_event.topic(), &audio_event);
+        pubsub.publish(&audio_event.topic(), &audio_event);
 
         // Publish to video processor
         let video_event = Event::processor("video-filter", ProcessorEvent::Resumed);
-        bus.publish(&video_event.topic(), &video_event);
+        pubsub.publish(&video_event.topic(), &video_event);
 
         wait_for_rayon();
         // Each listener only received its own processor's events

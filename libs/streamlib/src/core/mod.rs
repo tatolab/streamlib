@@ -53,9 +53,11 @@ pub use processors::{
     BaseProcessor, BoxedProcessor, CompositeFactory, DynProcessor, EmptyConfig, Processor,
     ProcessorNodeFactory, ProcessorState, ProcessorType, RegistryBackedFactory,
 };
+#[allow(deprecated)]
+pub use pubsub::EVENT_BUS;
 pub use pubsub::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
-    RuntimeEvent, WindowEventType, EVENT_BUS,
+    PubSub, RuntimeEvent, WindowEventType, PUBSUB,
 };
 pub use utils::{
     convert_audio_frame, convert_channels, resample_frame, AudioRechunker, LoopControl,

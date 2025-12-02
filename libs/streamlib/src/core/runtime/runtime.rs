@@ -127,10 +127,10 @@ impl StreamRuntime {
         };
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
-        EVENT_BUS.publish(
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        PUBSUB.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::ProcessorAdded {
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidAddProcessor {
                 processor_id: node.id.clone(),
                 processor_type: node.processor_type.clone(),
             }),
@@ -155,10 +155,10 @@ impl StreamRuntime {
         };
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
-        EVENT_BUS.publish(
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        PUBSUB.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::LinkCreated {
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidCreateLink {
                 link_id: link.id.to_string(),
                 from_port: link.from_port(),
                 to_port: link.to_port(),
@@ -182,10 +182,10 @@ impl StreamRuntime {
         }
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
-        EVENT_BUS.publish(
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        PUBSUB.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::LinkRemoved {
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveLink {
                 link_id: link_id_str,
                 from_port,
                 to_port,
@@ -213,10 +213,10 @@ impl StreamRuntime {
         }
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
-        EVENT_BUS.publish(
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        PUBSUB.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::LinkRemoved {
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveLink {
                 link_id: link_id.to_string(),
                 from_port,
                 to_port,
@@ -238,10 +238,10 @@ impl StreamRuntime {
         }
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
-        EVENT_BUS.publish(
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        PUBSUB.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::ProcessorRemoved {
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveProcessor {
                 processor_id: processor_id.clone(),
             }),
         );
@@ -268,10 +268,10 @@ impl StreamRuntime {
         }
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
-        EVENT_BUS.publish(
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        PUBSUB.publish(
             "runtime:global",
-            &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigUpdated {
+            &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
                 processor_id: processor_id.clone(),
             }),
         );
@@ -286,23 +286,23 @@ impl StreamRuntime {
 
     /// Start the runtime.
     pub fn start(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 
-        EVENT_BUS.publish(
+        PUBSUB.publish(
             "runtime:global",
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
         );
 
         match self.executor.lock().start() {
             Ok(()) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
                 );
                 Ok(())
             }
             Err(e) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimeStartFailed {
                         error: e.to_string(),
@@ -315,23 +315,23 @@ impl StreamRuntime {
 
     /// Stop the runtime.
     pub fn stop(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 
-        EVENT_BUS.publish(
+        PUBSUB.publish(
             "runtime:global",
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
         );
 
         match self.executor.lock().stop() {
             Ok(()) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
                 );
                 Ok(())
             }
             Err(e) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopFailed {
                         error: e.to_string(),
@@ -344,23 +344,23 @@ impl StreamRuntime {
 
     /// Pause the runtime.
     pub fn pause(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 
-        EVENT_BUS.publish(
+        PUBSUB.publish(
             "runtime:global",
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
         );
 
         match self.executor.lock().pause() {
             Ok(()) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimePaused),
                 );
                 Ok(())
             }
             Err(e) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimePauseFailed {
                         error: e.to_string(),
@@ -373,23 +373,23 @@ impl StreamRuntime {
 
     /// Resume the runtime.
     pub fn resume(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 
-        EVENT_BUS.publish(
+        PUBSUB.publish(
             "runtime:global",
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
         );
 
         match self.executor.lock().resume() {
             Ok(()) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumed),
                 );
                 Ok(())
             }
             Err(e) => {
-                EVENT_BUS.publish(
+                PUBSUB.publish(
                     "runtime:global",
                     &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumeFailed {
                         error: e.to_string(),
@@ -411,7 +411,7 @@ impl StreamRuntime {
     where
         F: FnMut(&mut Self) -> ControlFlow<()>,
     {
-        use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, EVENT_BUS};
+        use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
 
@@ -443,7 +443,7 @@ impl StreamRuntime {
         let listener = ShutdownListener {
             flag: shutdown_flag_clone.clone(),
         };
-        EVENT_BUS.subscribe(
+        PUBSUB.subscribe(
             topics::RUNTIME_GLOBAL,
             Arc::new(parking_lot::Mutex::new(listener)),
         );

@@ -1,5 +1,5 @@
 #[cfg(all(unix, not(target_os = "macos")))]
-use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -142,10 +142,10 @@ fn install_unix_signal_handlers() -> std::io::Result<()> {
                                 signal
                             );
 
-                            // Publish shutdown event directly to event bus
+                            // Publish shutdown event directly to pubsub
                             let shutdown_event =
                                 Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
-                            EVENT_BUS.publish(&shutdown_event.topic(), &shutdown_event);
+                            PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
                         }
                     }
                     Err(e) => {
