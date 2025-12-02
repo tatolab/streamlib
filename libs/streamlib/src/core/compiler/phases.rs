@@ -7,6 +7,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::context::RuntimeContext;
+use crate::core::delegates::{FactoryDelegate, ProcessorDelegate};
 use crate::core::error::{Result, StreamError};
 use crate::core::executor::delta::GraphDelta;
 use crate::core::executor::execution_graph::ExecutionGraph;
@@ -15,18 +16,19 @@ use crate::core::executor::thread_runner::run_processor_loop;
 use crate::core::executor::BoxedProcessor;
 use crate::core::graph::{Graph, ProcessorId};
 use crate::core::link_channel::{LinkChannel, ProcessFunctionEvent};
-use crate::core::processors::{ProcessorNodeFactory, ProcessorState};
+use crate::core::processors::ProcessorState;
 
 /// Phase 1: CREATE - Instantiate processor instances from factory.
 pub(super) fn phase_create(
-    factory: &Arc<dyn ProcessorNodeFactory>,
+    factory: &Arc<dyn FactoryDelegate>,
+    processor_delegate: &Arc<dyn ProcessorDelegate>,
     graph: &Arc<RwLock<Graph>>,
     execution_graph: &mut ExecutionGraph,
     delta: &GraphDelta,
 ) -> Result<()> {
     for proc_id in &delta.processors_to_add {
         tracing::info!("[Phase 1: CREATE] {}", proc_id);
-        create_processor(factory, graph, execution_graph, proc_id)?;
+        create_processor(factory, processor_delegate, graph, execution_graph, proc_id)?;
     }
     Ok(())
 }
@@ -59,10 +61,14 @@ pub(super) fn phase_setup(
 }
 
 /// Phase 4: START - Spawn processor threads.
-pub(super) fn phase_start(execution_graph: &mut ExecutionGraph, delta: &GraphDelta) -> Result<()> {
+pub(super) fn phase_start(
+    processor_delegate: &Arc<dyn ProcessorDelegate>,
+    execution_graph: &mut ExecutionGraph,
+    delta: &GraphDelta,
+) -> Result<()> {
     for proc_id in &delta.processors_to_add {
         tracing::info!("[Phase 4: START] {}", proc_id);
-        start_processor(execution_graph, proc_id)?;
+        start_processor(processor_delegate, execution_graph, proc_id)?;
     }
     Ok(())
 }
@@ -72,7 +78,8 @@ pub(super) fn phase_start(execution_graph: &mut ExecutionGraph, delta: &GraphDel
 // ============================================================================
 
 fn create_processor(
-    factory: &Arc<dyn ProcessorNodeFactory>,
+    factory: &Arc<dyn FactoryDelegate>,
+    processor_delegate: &Arc<dyn ProcessorDelegate>,
     graph: &Arc<RwLock<Graph>>,
     execution_graph: &mut ExecutionGraph,
     proc_id: &ProcessorId,
@@ -84,7 +91,14 @@ fn create_processor(
         })?
     };
 
+    // Delegate callback: will_create
+    processor_delegate.will_create(&node)?;
+
     let processor = factory.create(&node)?;
+
+    // Delegate callback: did_create
+    processor_delegate.did_create(&node, &processor)?;
+
     create_processor_instance(graph, execution_graph, proc_id.clone(), processor)
 }
 
@@ -151,7 +165,11 @@ fn setup_processor(
 // Phase 4: START implementation
 // ============================================================================
 
-fn start_processor(execution_graph: &mut ExecutionGraph, processor_id: &ProcessorId) -> Result<()> {
+fn start_processor(
+    processor_delegate: &Arc<dyn ProcessorDelegate>,
+    execution_graph: &mut ExecutionGraph,
+    processor_id: &ProcessorId,
+) -> Result<()> {
     let instance = execution_graph
         .get_processor_runtime_mut(processor_id)
         .ok_or_else(|| StreamError::NotFound(format!("Processor '{}' not found", processor_id)))?;
@@ -175,6 +193,9 @@ fn start_processor(execution_graph: &mut ExecutionGraph, processor_id: &Processo
         processor_id,
         exec_config.execution.description()
     );
+
+    // Delegate callback: will_start
+    processor_delegate.will_start(processor_id)?;
 
     // Take the receivers from the instance (they were created in Phase 1)
     let shutdown_rx = instance.shutdown_rx.take().ok_or_else(|| {
@@ -214,6 +235,9 @@ fn start_processor(execution_graph: &mut ExecutionGraph, processor_id: &Processo
         .map_err(|e| StreamError::Runtime(format!("Failed to spawn thread: {}", e)))?;
 
     instance.thread = Some(thread);
+
+    // Delegate callback: did_start
+    processor_delegate.did_start(processor_id)?;
 
     Ok(())
 }

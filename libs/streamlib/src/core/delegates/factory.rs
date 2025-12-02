@@ -1,0 +1,126 @@
+//! Factory delegate for processor instantiation.
+
+use std::sync::Arc;
+
+use crate::core::error::Result;
+use crate::core::graph::{PortInfo, ProcessorNode};
+use crate::core::processors::{BoxedProcessor, ProcessorNodeFactory, RegistryBackedFactory};
+
+/// Delegate for processor instantiation.
+///
+/// This trait abstracts how processors are created, allowing for:
+/// - Custom factory implementations
+/// - Dependency injection
+/// - Testing with mock processors
+pub trait FactoryDelegate: Send + Sync {
+    /// Create a processor instance from a node definition.
+    fn create(&self, node: &ProcessorNode) -> Result<BoxedProcessor>;
+
+    /// Get port information for a processor type (inputs, outputs).
+    fn port_info(&self, processor_type: &str) -> Option<(Vec<PortInfo>, Vec<PortInfo>)>;
+
+    /// Check if this factory can create a processor type.
+    fn can_create(&self, processor_type: &str) -> bool;
+}
+
+/// Default factory implementation using the processor registry.
+pub struct DefaultFactory {
+    inner: RegistryBackedFactory,
+}
+
+impl DefaultFactory {
+    /// Create a new default factory.
+    pub fn new() -> Self {
+        Self {
+            inner: RegistryBackedFactory::new(),
+        }
+    }
+}
+
+impl Default for DefaultFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FactoryDelegate for DefaultFactory {
+    fn create(&self, node: &ProcessorNode) -> Result<BoxedProcessor> {
+        self.inner.create(node)
+    }
+
+    fn port_info(&self, processor_type: &str) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+        self.inner.port_info(processor_type)
+    }
+
+    fn can_create(&self, processor_type: &str) -> bool {
+        self.inner.can_create(processor_type)
+    }
+}
+
+/// Wrapper to adapt a ProcessorNodeFactory to FactoryDelegate.
+pub struct FactoryAdapter<F: ProcessorNodeFactory + Send + Sync> {
+    inner: F,
+}
+
+impl<F: ProcessorNodeFactory + Send + Sync> FactoryAdapter<F> {
+    /// Create a new factory adapter.
+    pub fn new(factory: F) -> Self {
+        Self { inner: factory }
+    }
+}
+
+impl<F: ProcessorNodeFactory + Send + Sync> FactoryDelegate for FactoryAdapter<F> {
+    fn create(&self, node: &ProcessorNode) -> Result<BoxedProcessor> {
+        self.inner.create(node)
+    }
+
+    fn port_info(&self, processor_type: &str) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+        self.inner.port_info(processor_type)
+    }
+
+    fn can_create(&self, processor_type: &str) -> bool {
+        self.inner.can_create(processor_type)
+    }
+}
+
+/// Implement FactoryDelegate for Arc<dyn FactoryDelegate>.
+impl FactoryDelegate for Arc<dyn FactoryDelegate> {
+    fn create(&self, node: &ProcessorNode) -> Result<BoxedProcessor> {
+        (**self).create(node)
+    }
+
+    fn port_info(&self, processor_type: &str) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+        (**self).port_info(processor_type)
+    }
+
+    fn can_create(&self, processor_type: &str) -> bool {
+        (**self).can_create(processor_type)
+    }
+}
+
+/// Implement FactoryDelegate for Arc<dyn ProcessorNodeFactory>.
+impl FactoryDelegate for Arc<dyn ProcessorNodeFactory> {
+    fn create(&self, node: &ProcessorNode) -> Result<BoxedProcessor> {
+        (**self).create(node)
+    }
+
+    fn port_info(&self, processor_type: &str) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+        (**self).port_info(processor_type)
+    }
+
+    fn can_create(&self, processor_type: &str) -> bool {
+        (**self).can_create(processor_type)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_factory_creation() {
+        let factory = DefaultFactory::new();
+        // Should not be able to create unknown processor types
+        assert!(!factory.can_create("UnknownProcessor"));
+    }
+}

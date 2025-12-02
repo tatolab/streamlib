@@ -26,10 +26,10 @@ pub enum CommitMode {
 
 /// The main stream processing runtime.
 pub struct StreamRuntime {
-    graph: Arc<RwLock<Graph>>,
-    executor: Arc<Mutex<SimpleExecutor>>,
-    factory: Arc<RegistryBackedFactory>,
-    commit_mode: CommitMode,
+    pub(crate) graph: Arc<RwLock<Graph>>,
+    pub(crate) executor: Arc<Mutex<SimpleExecutor>>,
+    pub(crate) factory: Arc<RegistryBackedFactory>,
+    pub(crate) commit_mode: CommitMode,
 }
 
 impl Default for StreamRuntime {

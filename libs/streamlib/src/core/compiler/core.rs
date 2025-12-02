@@ -5,6 +5,10 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::context::RuntimeContext;
+use crate::core::delegates::{
+    DefaultProcessorDelegate, DefaultScheduler, FactoryDelegate, ProcessorDelegate,
+    SchedulerDelegate,
+};
 use crate::core::error::Result;
 use crate::core::executor::delta::GraphDelta;
 use crate::core::executor::execution_graph::ExecutionGraph;
@@ -20,18 +24,47 @@ use crate::core::processors::ProcessorNodeFactory;
 /// 3. SETUP - Initialize processors (GPU, devices)
 /// 4. START - Spawn processor threads
 pub struct Compiler {
-    factory: Arc<dyn ProcessorNodeFactory>,
+    factory: Arc<dyn FactoryDelegate>,
+    processor_delegate: Arc<dyn ProcessorDelegate>,
+    scheduler: Arc<dyn SchedulerDelegate>,
 }
 
 impl Compiler {
     /// Create a new compiler with the given factory.
     pub fn new(factory: Arc<dyn ProcessorNodeFactory>) -> Self {
-        Self { factory }
+        Self {
+            factory: Arc::new(factory) as Arc<dyn FactoryDelegate>,
+            processor_delegate: Arc::new(DefaultProcessorDelegate),
+            scheduler: Arc::new(DefaultScheduler),
+        }
     }
 
-    /// Get a reference to the factory.
-    pub fn factory(&self) -> &Arc<dyn ProcessorNodeFactory> {
+    /// Create a new compiler with full delegate configuration.
+    pub fn with_delegates(
+        factory: Arc<dyn FactoryDelegate>,
+        processor_delegate: Arc<dyn ProcessorDelegate>,
+        scheduler: Arc<dyn SchedulerDelegate>,
+    ) -> Self {
+        Self {
+            factory,
+            processor_delegate,
+            scheduler,
+        }
+    }
+
+    /// Get a reference to the factory delegate.
+    pub fn factory(&self) -> &Arc<dyn FactoryDelegate> {
         &self.factory
+    }
+
+    /// Get a reference to the processor delegate.
+    pub fn processor_delegate(&self) -> &Arc<dyn ProcessorDelegate> {
+        &self.processor_delegate
+    }
+
+    /// Get a reference to the scheduler delegate.
+    pub fn scheduler(&self) -> &Arc<dyn SchedulerDelegate> {
+        &self.scheduler
     }
 
     /// Compile graph changes.
@@ -53,7 +86,13 @@ impl Compiler {
         );
 
         // Phase 1: Create processor instances
-        super::phases::phase_create(&self.factory, graph, execution_graph, delta)?;
+        super::phases::phase_create(
+            &self.factory,
+            &self.processor_delegate,
+            graph,
+            execution_graph,
+            delta,
+        )?;
 
         // Phase 2: Wire links (create ring buffers, connect ports)
         super::phases::phase_wire(graph, execution_graph, link_channel, delta)?;
@@ -62,7 +101,7 @@ impl Compiler {
         super::phases::phase_setup(execution_graph, runtime_context, delta)?;
 
         // Phase 4: Start processor threads
-        super::phases::phase_start(execution_graph, delta)?;
+        super::phases::phase_start(&self.processor_delegate, execution_graph, delta)?;
 
         tracing::info!("Compile complete");
         Ok(())
@@ -78,6 +117,18 @@ mod tests {
     fn test_compiler_creation() {
         let factory = Arc::new(CompositeFactory::new());
         let compiler = Compiler::new(factory);
-        assert!(compiler.factory().can_create("unknown") == false);
+        assert!(!compiler.factory().can_create("unknown"));
+    }
+
+    #[test]
+    fn test_compiler_with_delegates() {
+        use crate::core::delegates::DefaultFactory;
+
+        let factory = Arc::new(DefaultFactory::new());
+        let processor_delegate = Arc::new(DefaultProcessorDelegate);
+        let scheduler = Arc::new(DefaultScheduler);
+
+        let compiler = Compiler::with_delegates(factory, processor_delegate, scheduler);
+        assert!(!compiler.factory().can_create("unknown"));
     }
 }

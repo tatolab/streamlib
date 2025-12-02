@@ -1,6 +1,7 @@
 pub mod clap;
 pub mod compiler;
 pub mod context;
+pub mod delegates;
 pub mod error;
 pub mod execution;
 pub mod executor;
@@ -75,13 +76,18 @@ pub use processors::{
     DisplayConfig, DisplayProcessor, MixingStrategy, Mp4WriterConfig, Mp4WriterProcessor, WindowId,
 };
 
+pub use delegates::{
+    DefaultFactory, DefaultProcessorDelegate, DefaultScheduler, FactoryAdapter, FactoryDelegate,
+    ProcessorDelegate, SchedulerDelegate, SchedulingStrategy,
+    ThreadPriority as SchedulerThreadPriority,
+};
 pub use execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 pub use registry::{
     global_registry, is_processor_registered, list_processors, list_processors_by_tag,
     register_processor, unregister_processor, DescriptorProvider, ProcessorRegistration,
     ProcessorRegistry,
 };
-pub use runtime::{CommitMode, StreamRuntime};
+pub use runtime::{CommitMode, RuntimeBuilder, StreamRuntime};
 // Backwards compatibility aliases
 #[deprecated(since = "0.2.0", note = "Use ExecutionConfig instead")]
 pub type SchedulingConfig = ExecutionConfig;
