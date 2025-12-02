@@ -16,7 +16,7 @@ fn main() -> Result<()> {
 
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
     println!("=== WebRTC WHIP Streaming to Cloudflare Stream ===\n");
