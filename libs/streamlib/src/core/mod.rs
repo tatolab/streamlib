@@ -9,6 +9,7 @@ pub mod frames;
 pub mod graph;
 pub mod link_channel;
 pub mod media_clock;
+pub mod observability;
 pub mod processors;
 pub mod pubsub;
 pub mod registry;
@@ -108,3 +109,7 @@ pub use sync::{
 };
 pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView};
 pub use utils::shutdown_aware_loop;
+
+pub use observability::{
+    GraphHealth, GraphInspector, LatencyStats, LinkSnapshot, ProcessorSnapshot,
+};
