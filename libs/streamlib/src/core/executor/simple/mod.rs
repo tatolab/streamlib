@@ -4,7 +4,7 @@ mod processors;
 mod wiring;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
@@ -18,8 +18,6 @@ use crate::core::graph::{Graph, ProcessorId};
 use crate::core::link_channel::{LinkChannel, LinkId};
 use crate::core::processors::factory::ProcessorNodeFactory;
 use crate::core::processors::{DynProcessor, ProcessorState};
-
-static EXECUTOR_REF: std::sync::OnceLock<Weak<Mutex<SimpleExecutor>>> = std::sync::OnceLock::new();
 
 /// Boxed processor trait object.
 pub type BoxedProcessor = Box<dyn DynProcessor + Send>;
@@ -206,7 +204,6 @@ impl SimpleExecutor {
     pub fn set_executor_ref(executor: Arc<Mutex<SimpleExecutor>>) {
         use crate::core::pubsub::{topics, PUBSUB};
 
-        let _ = EXECUTOR_REF.set(Arc::downgrade(&executor));
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, executor);
     }
 }
