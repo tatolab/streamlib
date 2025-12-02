@@ -21,18 +21,6 @@ pub mod sync;
 pub mod texture;
 pub mod utils;
 
-// Backwards compatibility - old scheduling module re-exports new execution module
-#[deprecated(
-    since = "0.2.0",
-    note = "Use `execution` module instead of `scheduling`"
-)]
-pub mod scheduling {
-    //! Deprecated: Use [`crate::core::execution`] instead.
-    pub use super::execution::ExecutionConfig as SchedulingConfig;
-    pub use super::execution::ProcessExecution as SchedulingMode;
-    pub use super::execution::ThreadPriority;
-}
-
 pub use clap::{
     ClapParameterControl, LfoWaveform, ParameterAutomation, ParameterInfo, ParameterModulator,
     PluginInfo,
@@ -56,8 +44,6 @@ pub use processors::{
     BaseProcessor, BoxedProcessor, CompositeFactory, DynProcessor, EmptyConfig, Processor,
     ProcessorNodeFactory, ProcessorState, ProcessorType, RegistryBackedFactory,
 };
-#[allow(deprecated)]
-pub use pubsub::EVENT_BUS;
 pub use pubsub::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
     PubSub, RuntimeEvent, WindowEventType, PUBSUB,
@@ -89,11 +75,6 @@ pub use registry::{
     ProcessorRegistry,
 };
 pub use runtime::{CommitMode, RuntimeBuilder, StreamRuntime};
-// Backwards compatibility aliases
-#[deprecated(since = "0.2.0", note = "Use ExecutionConfig instead")]
-pub type SchedulingConfig = ExecutionConfig;
-#[deprecated(since = "0.2.0", note = "Use ProcessExecution instead")]
-pub type SchedulingMode = ProcessExecution;
 pub use schema::{
     AudioRequirements, Field, FieldType, PortDescriptor, ProcessorDescriptor, ProcessorExample,
     Schema, SemanticVersion, SerializationFormat, SCHEMA_AUDIO_FRAME, SCHEMA_BOUNDING_BOX,

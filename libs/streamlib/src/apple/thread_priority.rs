@@ -1,4 +1,4 @@
-use crate::core::{scheduling::ThreadPriority, Result, StreamError};
+use crate::core::{execution::ThreadPriority, Result, StreamError};
 
 /// Apply thread priority to the current thread on macOS/iOS
 #[allow(dead_code)]

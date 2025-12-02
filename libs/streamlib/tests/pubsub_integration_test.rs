@@ -3,8 +3,8 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use streamlib::core::pubsub::{
-    topics, Event, EventBus, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState,
-    ProcessorEvent,
+    topics, Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState,
+    ProcessorEvent, PubSub,
 };
 
 /// Wait for rayon thread pool to complete pending tasks
@@ -37,7 +37,7 @@ impl EventListener for CountingListener {
 
 #[test]
 fn test_keyboard_event_routing() {
-    let bus = EventBus::new();
+    let bus = PubSub::new();
     let concrete_listener = Arc::new(Mutex::new(CountingListener::new()));
     let listener: Arc<Mutex<dyn EventListener>> = concrete_listener.clone();
 
@@ -54,7 +54,7 @@ fn test_keyboard_event_routing() {
 
 #[test]
 fn test_mouse_event_routing() {
-    let bus = EventBus::new();
+    let bus = PubSub::new();
     let concrete_listener = Arc::new(Mutex::new(CountingListener::new()));
     let listener: Arc<Mutex<dyn EventListener>> = concrete_listener.clone();
 
@@ -71,7 +71,7 @@ fn test_mouse_event_routing() {
 
 #[test]
 fn test_processor_event_routing() {
-    let bus = EventBus::new();
+    let bus = PubSub::new();
     let concrete_listener = Arc::new(Mutex::new(CountingListener::new()));
     let listener: Arc<Mutex<dyn EventListener>> = concrete_listener.clone();
 
@@ -91,7 +91,7 @@ fn test_processor_event_routing() {
 
 #[test]
 fn test_multiple_subscribers_all_receive() {
-    let bus = EventBus::new();
+    let bus = PubSub::new();
 
     let concrete1 = Arc::new(Mutex::new(CountingListener::new()));
     let concrete2 = Arc::new(Mutex::new(CountingListener::new()));
@@ -116,7 +116,7 @@ fn test_multiple_subscribers_all_receive() {
 
 #[test]
 fn test_topic_isolation() {
-    let bus = EventBus::new();
+    let bus = PubSub::new();
 
     let concrete_audio = Arc::new(Mutex::new(CountingListener::new()));
     let concrete_video = Arc::new(Mutex::new(CountingListener::new()));
