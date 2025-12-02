@@ -59,7 +59,7 @@ RUST_LOG=debug cargo run 2>&1 > output.log
 
 ### 4. Shutdown Callback Execution
 - **File**: `libs/streamlib/src/apple/runtime_ext.rs:55-127`
-- **Step 1**: Publishes `RuntimeEvent::RuntimeShutdown` to EVENT_BUS
+- **Step 1**: Publishes `RuntimeEvent::RuntimeShutdown` to PUBSUB
   - Pull mode processors using `shutdown_aware_loop` will exit their loops
 - **Step 2**: Sends shutdown signals via channels to all processor threads
   - Push mode processors receive shutdown signal
@@ -82,7 +82,7 @@ When you press Ctrl+C, you should see:
 ```
 [timestamp] INFO streamlib::core::signals: Ctrl+C received, triggering graceful shutdown
 [timestamp] INFO streamlib::core::signals: Signal handler: Calling NSApplication.terminate()
-[timestamp] INFO Shutdown callback: Published RuntimeShutdown event to EVENT_BUS
+[timestamp] INFO Shutdown callback: Published RuntimeShutdown event to PUBSUB
 [timestamp] INFO Shutdown callback: Sent shutdown signals to 5 processors
 [timestamp] INFO [camera] Thread stopped successfully
 [timestamp] INFO [audio-capture] Thread stopped successfully
@@ -128,4 +128,4 @@ Note: `applicationWillTerminate` itself produces NO output (would cause SIGABRT)
 - `libs/streamlib/src/apple/runtime_ext.rs` - NSApplicationDelegate, shutdown callback
 - `libs/streamlib/src/core/runtime.rs` - Processor management, thread joining
 - `libs/streamlib/src/apple/processors/mp4_writer.rs` - MP4 finalization in teardown()
-- `libs/streamlib/src/core/loop_utils.rs` - Pull mode shutdown via EVENT_BUS
+- `libs/streamlib/src/core/loop_utils.rs` - Pull mode shutdown via PUBSUB

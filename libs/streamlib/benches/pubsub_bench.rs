@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use streamlib::core::pubsub::{Event, EventBus, EventListener};
+use streamlib::core::pubsub::{Event, EventListener, PubSub};
 use streamlib::core::{KeyCode, KeyState};
 
 // Simple test listener that counts events
@@ -57,14 +57,14 @@ fn bench_publish_scaling_subscribers(c: &mut Criterion) {
             BenchmarkId::from_parameter(num_subscribers),
             num_subscribers,
             |b, &num_subs| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 // Subscribe multiple listeners
                 let listeners: Vec<_> = (0..num_subs)
                     .map(|_| {
                         let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                        bus.subscribe("test-topic", listener);
+                        pubsub.subscribe("test-topic", listener);
                         listener_concrete
                     })
                     .collect();
@@ -75,7 +75,7 @@ fn bench_publish_scaling_subscribers(c: &mut Criterion) {
                 };
 
                 b.iter(|| {
-                    bus.publish(black_box("test-topic"), black_box(&event));
+                    pubsub.publish(black_box("test-topic"), black_box(&event));
                 });
 
                 // Verify all listeners received the event
@@ -98,14 +98,14 @@ fn bench_high_frequency_publishing(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}Hz", frequency_hz)),
             frequency_hz,
             |b, &freq| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 // Add a few listeners
                 let _listeners: Vec<_> = (0..3)
                     .map(|_| {
                         let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                        bus.subscribe("input:mouse", listener);
+                        pubsub.subscribe("input:mouse", listener);
                         listener_concrete
                     })
                     .collect();
@@ -120,7 +120,7 @@ fn bench_high_frequency_publishing(c: &mut Criterion) {
                                 "y": (i % 1080) as f32,
                             }),
                         );
-                        bus.publish(black_box("input:mouse"), black_box(&event));
+                        pubsub.publish(black_box("input:mouse"), black_box(&event));
                     }
                 });
             },
@@ -138,7 +138,7 @@ fn bench_topic_routing(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}_topics", num_topics)),
             num_topics,
             |b, &num_topics| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 // Create listeners for each topic
                 let _listeners: Vec<_> = (0..num_topics)
@@ -146,7 +146,7 @@ fn bench_topic_routing(c: &mut Criterion) {
                         let topic = format!("topic-{}", i);
                         let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                        bus.subscribe(&topic, listener);
+                        pubsub.subscribe(&topic, listener);
                         listener_concrete
                     })
                     .collect();
@@ -158,7 +158,7 @@ fn bench_topic_routing(c: &mut Criterion) {
                         topic: topic.clone(),
                         data: serde_json::json!({"test": "data"}),
                     };
-                    bus.publish(black_box(&topic), black_box(&event));
+                    pubsub.publish(black_box(&topic), black_box(&event));
                 });
             },
         );
@@ -175,23 +175,23 @@ fn bench_concurrent_publishing(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}_threads", num_threads)),
             num_threads,
             |b, &num_threads| {
-                let bus = Arc::new(EventBus::new());
+                let pubsub = Arc::new(PubSub::new());
 
                 // Add a listener
                 let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                bus.subscribe("concurrent-topic", listener);
+                pubsub.subscribe("concurrent-topic", listener);
 
                 b.iter(|| {
                     let handles: Vec<_> = (0..num_threads)
                         .map(|i| {
-                            let bus = Arc::clone(&bus);
+                            let pubsub = Arc::clone(&pubsub);
                             std::thread::spawn(move || {
                                 let event = Event::Custom {
                                     topic: "concurrent-topic".to_string(),
                                     data: serde_json::json!({"thread": i}),
                                 };
-                                bus.publish("concurrent-topic", &event);
+                                pubsub.publish("concurrent-topic", &event);
                             })
                         })
                         .collect();
@@ -215,17 +215,17 @@ fn bench_slow_listener_isolation(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}us_delay", slow_listener_delay_us)),
             slow_listener_delay_us,
             |b, &delay| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 // Add a fast listener
                 let fast_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                 let fast_listener: Arc<Mutex<dyn EventListener>> = fast_listener_concrete.clone();
-                bus.subscribe("mixed-speed", fast_listener);
+                pubsub.subscribe("mixed-speed", fast_listener);
 
                 // Add a slow listener
                 let slow_listener_concrete = Arc::new(Mutex::new(SlowListener::new(delay)));
                 let slow_listener: Arc<Mutex<dyn EventListener>> = slow_listener_concrete;
-                bus.subscribe("mixed-speed", slow_listener);
+                pubsub.subscribe("mixed-speed", slow_listener);
 
                 let event = Event::Custom {
                     topic: "mixed-speed".to_string(),
@@ -233,7 +233,7 @@ fn bench_slow_listener_isolation(c: &mut Criterion) {
                 };
 
                 b.iter(|| {
-                    bus.publish(black_box("mixed-speed"), black_box(&event));
+                    pubsub.publish(black_box("mixed-speed"), black_box(&event));
                 });
 
                 // Verify fast listener still got events
@@ -254,11 +254,11 @@ fn bench_event_size_impact(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}KB", data_size_kb)),
             data_size_kb,
             |b, &size_kb| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                bus.subscribe("large-event", listener);
+                pubsub.subscribe("large-event", listener);
 
                 // Create large payload
                 let payload = "x".repeat(size_kb * 1024);
@@ -268,7 +268,7 @@ fn bench_event_size_impact(c: &mut Criterion) {
                 };
 
                 b.iter(|| {
-                    bus.publish(black_box("large-event"), black_box(&event));
+                    pubsub.publish(black_box("large-event"), black_box(&event));
                 });
             },
         );
@@ -281,12 +281,12 @@ fn bench_subscribe_unsubscribe(c: &mut Criterion) {
     let mut group = c.benchmark_group("subscribe_unsubscribe");
 
     group.bench_function("subscribe", |b| {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         b.iter(|| {
             let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
             let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-            bus.subscribe(black_box("test-topic"), listener);
+            pubsub.subscribe(black_box("test-topic"), listener);
             // Listener drops here, will be cleaned up on next publish
         });
     });
@@ -305,11 +305,11 @@ fn bench_keyboard_event_burst(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}cps", chars_per_second)),
             chars_per_second,
             |b, &cps| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                bus.subscribe("input:keyboard", listener);
+                pubsub.subscribe("input:keyboard", listener);
 
                 let keys = vec![KeyCode::H, KeyCode::E, KeyCode::L, KeyCode::L, KeyCode::O];
 
@@ -324,7 +324,7 @@ fn bench_keyboard_event_burst(c: &mut Criterion) {
                                     "state": "Pressed",
                                 }),
                             );
-                            bus.publish(black_box("input:keyboard"), black_box(&event));
+                            pubsub.publish(black_box("input:keyboard"), black_box(&event));
                         }
                     }
                 });
@@ -403,7 +403,7 @@ fn bench_realistic_video_processing(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}fps", fps)),
             fps,
             |b, &fps| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 // Add realistic video effect listeners
                 let effects = vec![
@@ -419,7 +419,7 @@ fn bench_realistic_video_processing(c: &mut Criterion) {
                         let listener_concrete =
                             Arc::new(Mutex::new(VideoEffectListener::new(name, time_us)));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                        bus.subscribe("video:frame", listener);
+                        pubsub.subscribe("video:frame", listener);
                         listener_concrete
                     })
                     .collect();
@@ -432,7 +432,7 @@ fn bench_realistic_video_processing(c: &mut Criterion) {
                 b.iter(|| {
                     // Simulate frame processing at target FPS
                     for _ in 0..fps {
-                        bus.publish(black_box("video:frame"), black_box(&frame_event));
+                        pubsub.publish(black_box("video:frame"), black_box(&frame_event));
                     }
                 });
             },
@@ -453,7 +453,7 @@ fn bench_realistic_audio_processing(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}Hz", callbacks_per_sec)),
             callbacks_per_sec,
             |b, &rate| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 // Add realistic audio DSP listeners
                 let dsp_effects = vec![
@@ -469,7 +469,7 @@ fn bench_realistic_audio_processing(c: &mut Criterion) {
                         let listener_concrete =
                             Arc::new(Mutex::new(AudioDSPListener::new(name, time_us)));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                        bus.subscribe("audio:buffer", listener);
+                        pubsub.subscribe("audio:buffer", listener);
                         listener_concrete
                     })
                     .collect();
@@ -482,7 +482,7 @@ fn bench_realistic_audio_processing(c: &mut Criterion) {
                 b.iter(|| {
                     // Simulate audio callbacks
                     for _ in 0..rate {
-                        bus.publish(black_box("audio:buffer"), black_box(&audio_event));
+                        pubsub.publish(black_box("audio:buffer"), black_box(&audio_event));
                     }
                 });
             },
@@ -496,7 +496,7 @@ fn bench_mixed_realtime_workload(c: &mut Criterion) {
     let mut group = c.benchmark_group("mixed_realtime_workload");
 
     group.bench_function("60fps_video_192Hz_audio_input", |b| {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         // Video listeners
         let _video_listeners: Vec<_> = vec![("blur", 80), ("color", 15)]
@@ -504,7 +504,7 @@ fn bench_mixed_realtime_workload(c: &mut Criterion) {
             .map(|(name, time)| {
                 let listener_concrete = Arc::new(Mutex::new(VideoEffectListener::new(name, time)));
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                bus.subscribe("video:frame", listener);
+                pubsub.subscribe("video:frame", listener);
                 listener_concrete
             })
             .collect();
@@ -515,7 +515,7 @@ fn bench_mixed_realtime_workload(c: &mut Criterion) {
             .map(|(name, time)| {
                 let listener_concrete = Arc::new(Mutex::new(AudioDSPListener::new(name, time)));
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                bus.subscribe("audio:buffer", listener);
+                pubsub.subscribe("audio:buffer", listener);
                 listener_concrete
             })
             .collect();
@@ -525,7 +525,7 @@ fn bench_mixed_realtime_workload(c: &mut Criterion) {
             .map(|_| {
                 let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                bus.subscribe("input:mouse", listener);
+                pubsub.subscribe("input:mouse", listener);
                 listener_concrete
             })
             .collect();
@@ -543,13 +543,13 @@ fn bench_mixed_realtime_workload(c: &mut Criterion) {
         b.iter(|| {
             // Simulate 1 second of events
             for _ in 0..60 {
-                bus.publish(black_box("video:frame"), black_box(&video_event));
+                pubsub.publish(black_box("video:frame"), black_box(&video_event));
             }
             for _ in 0..192 {
-                bus.publish(black_box("audio:buffer"), black_box(&audio_event));
+                pubsub.publish(black_box("audio:buffer"), black_box(&audio_event));
             }
             for _ in 0..100 {
-                bus.publish(black_box("input:mouse"), black_box(&mouse_event));
+                pubsub.publish(black_box("input:mouse"), black_box(&mouse_event));
             }
         });
     });
@@ -563,14 +563,14 @@ fn bench_latency_percentiles(c: &mut Criterion) {
     group.sample_size(1000); // Collect enough samples for percentiles
 
     group.bench_function("publish_latency", |b| {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         // Add a few listeners with realistic work
         let _listeners: Vec<_> = (0..3)
             .map(|_| {
                 let listener_concrete = Arc::new(Mutex::new(VideoEffectListener::new("test", 20)));
                 let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                bus.subscribe("latency-test", listener);
+                pubsub.subscribe("latency-test", listener);
                 listener_concrete
             })
             .collect();
@@ -581,7 +581,7 @@ fn bench_latency_percentiles(c: &mut Criterion) {
         };
 
         b.iter(|| {
-            bus.publish(black_box("latency-test"), black_box(&event));
+            pubsub.publish(black_box("latency-test"), black_box(&event));
         });
     });
 
@@ -597,14 +597,14 @@ fn bench_backpressure_handling(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}_slow_listeners", num_slow_listeners)),
             num_slow_listeners,
             |b, &num_slow| {
-                let bus = EventBus::new();
+                let pubsub = PubSub::new();
 
                 // Add fast listeners
                 let fast_listeners: Vec<_> = (0..3)
                     .map(|_| {
                         let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                        bus.subscribe("backpressure", listener);
+                        pubsub.subscribe("backpressure", listener);
                         listener_concrete
                     })
                     .collect();
@@ -614,7 +614,7 @@ fn bench_backpressure_handling(c: &mut Criterion) {
                     .map(|_| {
                         let listener_concrete = Arc::new(Mutex::new(SlowListener::new(5000))); // 5ms work
                         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-                        bus.subscribe("backpressure", listener);
+                        pubsub.subscribe("backpressure", listener);
                         listener_concrete
                     })
                     .collect();
@@ -627,7 +627,7 @@ fn bench_backpressure_handling(c: &mut Criterion) {
                 b.iter(|| {
                     // Rapid-fire 100 events
                     for _ in 0..100 {
-                        bus.publish(black_box("backpressure"), black_box(&event));
+                        pubsub.publish(black_box("backpressure"), black_box(&event));
                     }
                 });
 

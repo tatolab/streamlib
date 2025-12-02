@@ -13,20 +13,29 @@ const _: () = {
     );
 };
 
-pub static EVENT_BUS: LazyLock<EventBus> = LazyLock::new(EventBus::new);
+/// Global pub/sub instance for runtime events.
+pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
-/// Lock-free event bus with parallel dispatch.
-pub struct EventBus {
+/// Deprecated: Use PUBSUB instead
+#[deprecated(since = "0.2.0", note = "Renamed to PUBSUB for clarity")]
+pub static EVENT_BUS: LazyLock<PubSub> = LazyLock::new(PubSub::new);
+
+/// Lock-free pub/sub with parallel dispatch.
+pub struct PubSub {
     topics: DashMap<String, Vec<Weak<Mutex<dyn EventListener>>>>,
 }
 
-impl Default for EventBus {
+impl Default for PubSub {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl EventBus {
+/// Deprecated alias for PubSub
+#[deprecated(since = "0.2.0", note = "Renamed to PubSub for clarity")]
+pub type EventBus = PubSub;
+
+impl PubSub {
     pub fn new() -> Self {
         Self {
             topics: DashMap::new(),
@@ -46,12 +55,12 @@ impl EventBus {
     pub fn publish(&self, topic: &str, event: &Event) {
         if let Some(subscribers) = self.topics.get(topic) {
             eprintln!(
-                "[EVENT_BUS] Publishing to topic '{}', {} subscribers registered",
+                "[PUBSUB] Publishing to topic '{}', {} subscribers registered",
                 topic,
                 subscribers.len()
             );
             tracing::info!(
-                "EVENT_BUS: Publishing to topic '{}', {} subscribers registered",
+                "PUBSUB: Publishing to topic '{}', {} subscribers registered",
                 topic,
                 subscribers.len()
             );
@@ -65,16 +74,16 @@ impl EventBus {
                 if let Some(listener) = weak_listener.upgrade() {
                     live_listeners.push(listener);
                 } else {
-                    eprintln!("[EVENT_BUS]   - Weak ref upgrade failed (listener dropped)");
+                    eprintln!("[PUBSUB]   - Weak ref upgrade failed (listener dropped)");
                 }
             }
 
             eprintln!(
-                "[EVENT_BUS]   - {} live listeners (weak refs upgraded successfully)",
+                "[PUBSUB]   - {} live listeners (weak refs upgraded successfully)",
                 live_listeners.len()
             );
             tracing::info!(
-                "EVENT_BUS: {} live listeners (weak refs upgraded successfully)",
+                "PUBSUB: {} live listeners (weak refs upgraded successfully)",
                 live_listeners.len()
             );
 
@@ -86,22 +95,18 @@ impl EventBus {
                     // Try lock without blocking
                     // If listener is busy, skip (fire-and-forget)
                     if let Some(mut guard) = listener.try_lock() {
-                        eprintln!("[EVENT_BUS]   - Calling on_event for listener");
-                        tracing::info!("EVENT_BUS: Calling on_event for listener");
+                        eprintln!("[PUBSUB]   - Calling on_event for listener");
+                        tracing::info!("PUBSUB: Calling on_event for listener");
                         let _ = guard.on_event(&event);
                     } else {
-                        eprintln!(
-                            "[EVENT_BUS]   - Listener mutex locked, skipping (fire-and-forget)"
-                        );
-                        tracing::warn!(
-                            "EVENT_BUS: Listener mutex locked, skipping (fire-and-forget)"
-                        );
+                        eprintln!("[PUBSUB]   - Listener mutex locked, skipping (fire-and-forget)");
+                        tracing::warn!("PUBSUB: Listener mutex locked, skipping (fire-and-forget)");
                     }
                 });
             }
         } else {
-            eprintln!("[EVENT_BUS] No subscribers for topic '{}'", topic);
-            tracing::warn!("EVENT_BUS: No subscribers for topic '{}'", topic);
+            eprintln!("[PUBSUB] No subscribers for topic '{}'", topic);
+            tracing::warn!("PUBSUB: No subscribers for topic '{}'", topic);
         }
         // If no subscribers, event is dropped (true fire-and-forget)
 
@@ -159,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_topic_routing() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         let audio_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
         let video_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
@@ -167,10 +172,10 @@ mod tests {
         let audio_listener: Arc<Mutex<dyn EventListener>> = audio_listener_concrete.clone();
         let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
 
-        bus.subscribe("processor:audio", audio_listener);
-        bus.subscribe("processor:video", video_listener);
+        pubsub.subscribe("processor:audio", audio_listener);
+        pubsub.subscribe("processor:video", video_listener);
 
-        bus.publish(
+        pubsub.publish(
             "processor:audio",
             &Event::ProcessorEvent {
                 processor_id: "audio".to_string(),
@@ -185,7 +190,7 @@ mod tests {
 
     #[test]
     fn test_runtime_global_broadcast() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         let listener1_concrete = Arc::new(Mutex::new(CountingListener::new()));
         let listener2_concrete = Arc::new(Mutex::new(CountingListener::new()));
@@ -193,10 +198,10 @@ mod tests {
         let listener1: Arc<Mutex<dyn EventListener>> = listener1_concrete.clone();
         let listener2: Arc<Mutex<dyn EventListener>> = listener2_concrete.clone();
 
-        bus.subscribe("runtime:global", listener1);
-        bus.subscribe("runtime:global", listener2);
+        pubsub.subscribe("runtime:global", listener1);
+        pubsub.subscribe("runtime:global", listener2);
 
-        bus.publish(
+        pubsub.publish(
             "runtime:global",
             &Event::RuntimeGlobal(super::super::events::RuntimeEvent::RuntimeStart),
         );
@@ -208,11 +213,11 @@ mod tests {
 
     #[test]
     fn test_publish_to_nonexistent_topic_no_error() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         // Publish to a topic that has never been subscribed to
         // Should not panic, should not error, just fire-and-forget
-        bus.publish(
+        pubsub.publish(
             "foo",
             &Event::Custom {
                 topic: "foo".to_string(),
@@ -225,10 +230,10 @@ mod tests {
 
     #[test]
     fn test_late_subscriber_misses_earlier_messages() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         // Publish first message with no subscribers
-        bus.publish(
+        pubsub.publish(
             "bar",
             &Event::Custom {
                 topic: "bar".to_string(),
@@ -239,13 +244,13 @@ mod tests {
         // Now subscribe
         let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-        bus.subscribe("bar", listener);
+        pubsub.subscribe("bar", listener);
 
         // Should have no messages (first message was lost)
         assert_eq!(listener_concrete.lock().count(), 0);
 
         // Publish second message
-        bus.publish(
+        pubsub.publish(
             "bar",
             &Event::Custom {
                 topic: "bar".to_string(),
@@ -260,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_multiple_subscribers_all_receive() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         // Subscribe 5 subscribers to the same topic
         let listener1_concrete = Arc::new(Mutex::new(CountingListener::new()));
@@ -275,14 +280,14 @@ mod tests {
         let listener4: Arc<Mutex<dyn EventListener>> = listener4_concrete.clone();
         let listener5: Arc<Mutex<dyn EventListener>> = listener5_concrete.clone();
 
-        bus.subscribe("broadcast", listener1);
-        bus.subscribe("broadcast", listener2);
-        bus.subscribe("broadcast", listener3);
-        bus.subscribe("broadcast", listener4);
-        bus.subscribe("broadcast", listener5);
+        pubsub.subscribe("broadcast", listener1);
+        pubsub.subscribe("broadcast", listener2);
+        pubsub.subscribe("broadcast", listener3);
+        pubsub.subscribe("broadcast", listener4);
+        pubsub.subscribe("broadcast", listener5);
 
         // Publish one message
-        bus.publish(
+        pubsub.publish(
             "broadcast",
             &Event::Custom {
                 topic: "broadcast".to_string(),
@@ -301,17 +306,17 @@ mod tests {
 
     #[test]
     fn test_dropped_listener_auto_cleanup() {
-        let bus = EventBus::new();
+        let pubsub = PubSub::new();
 
         let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
         let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-        bus.subscribe("test", listener);
+        pubsub.subscribe("test", listener);
 
         // Drop the concrete listener
         drop(listener_concrete);
 
         // Publishing should not panic and should clean up the dead listener
-        bus.publish(
+        pubsub.publish(
             "test",
             &Event::Custom {
                 topic: "test".to_string(),

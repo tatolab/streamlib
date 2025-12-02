@@ -1,4 +1,4 @@
-use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, EVENT_BUS};
+use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
 use crate::core::Result;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,7 +44,7 @@ where
     // IMPORTANT: We must keep the Arc alive for the duration of the loop!
     // The event bus stores only weak references, so if we drop the Arc, the listener is lost.
     let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    EVENT_BUS.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
+    PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
 
     tracing::info!(
         "Shutdown-aware loop started, subscribed to {}",
@@ -75,7 +75,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::pubsub::EVENT_BUS;
+    use crate::core::pubsub::PUBSUB;
 
     #[test]
     fn test_loop_control_break() {
@@ -114,7 +114,7 @@ mod tests {
 
         // Publish shutdown event
         let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
-        EVENT_BUS.publish(&shutdown_event.topic(), &shutdown_event);
+        PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
 
         // Wait for loop to exit
         let result = handle.join();

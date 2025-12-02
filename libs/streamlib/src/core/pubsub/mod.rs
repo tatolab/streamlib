@@ -1,7 +1,9 @@
-mod event_bus;
+mod bus;
 mod events;
 
-pub use event_bus::{EventBus, EVENT_BUS};
+#[allow(deprecated)]
+pub use bus::{EventBus, EVENT_BUS};
+pub use bus::{PubSub, PUBSUB};
 pub use events::{
     topics, Event, EventListener, KeyCode, KeyState, LinkPortDirection, Modifiers, MouseButton,
     MouseState, ProcessorEvent, ProcessorState, RuntimeEvent, WindowEventType,

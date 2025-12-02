@@ -6,7 +6,7 @@ use objc2_foundation::{NSObject, NSObjectProtocol};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use crate::core::pubsub::{Event, RuntimeEvent, EVENT_BUS};
+use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 
 /// Global shutdown callback that applicationWillTerminate can invoke
 static SHUTDOWN_CALLBACK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
@@ -47,15 +47,15 @@ define_class!(
 /// Install the macOS shutdown handler
 ///
 /// This sets up the shutdown callback that applicationWillTerminate will invoke.
-/// When called, it publishes a RuntimeShutdown event to the global EVENT_BUS,
+/// When called, it publishes a RuntimeShutdown event to the global PUBSUB,
 /// which the executor listens to for graceful shutdown coordination.
 pub fn install_macos_shutdown_handler() {
     let shutdown_callback = Arc::new(|| {
-        // Publish shutdown event to EVENT_BUS
+        // Publish shutdown event to PUBSUB
         // The executor subscribes to this and handles stopping all processors
         let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
-        EVENT_BUS.publish(&shutdown_event.topic(), &shutdown_event);
-        tracing::info!("macOS shutdown: Published RuntimeShutdown event to EVENT_BUS");
+        PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
+        tracing::info!("macOS shutdown: Published RuntimeShutdown event to PUBSUB");
 
         // Give the executor time to handle shutdown
         // TODO: Better approach would be to wait for executor to signal completion
