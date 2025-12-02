@@ -1,6 +1,11 @@
+//! GraphCompiler implementation for SimpleExecutor.
+//!
+//! Delegates to the core Compiler module for the actual compilation work.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::core::compiler::Compiler;
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::error::{Result, StreamError};
 use crate::core::executor::delta::{compute_delta_with_config, GraphDelta};
@@ -21,18 +26,47 @@ impl GraphCompiler for SimpleExecutor {
         tracing::info!("Compiling graph...");
 
         self.init_execution_graph_if_needed()?;
+        self.init_compiler_if_needed()?;
 
         let delta = self.compute_graph_delta()?;
+
+        if delta.is_empty() {
+            tracing::debug!("No changes to compile");
+            self.dirty = false;
+            return Ok(());
+        }
+
         tracing::info!(
             "Compiling: {} processors, {} links",
             delta.processors_to_add.len(),
             delta.links_to_add.len()
         );
 
-        self.compile_phase_create(&delta)?;
-        self.compile_phase_wire(&delta)?;
-        self.compile_phase_setup(&delta)?;
-        self.compile_phase_start(&delta)?;
+        // Delegate to the Compiler
+        let compiler = self
+            .compiler
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("Compiler not initialized".into()))?;
+        let graph = self
+            .graph
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("No graph reference set".into()))?;
+        let execution_graph = self
+            .execution_graph
+            .as_mut()
+            .ok_or_else(|| StreamError::Runtime("Execution graph not initialized".into()))?;
+        let runtime_context = self
+            .runtime_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("Runtime context not initialized".into()))?;
+
+        compiler.compile(
+            graph,
+            execution_graph,
+            runtime_context,
+            &mut self.link_channel,
+            &delta,
+        )?;
 
         self.dirty = false;
         tracing::info!("Compile complete");
@@ -61,7 +95,7 @@ impl GraphCompiler for SimpleExecutor {
 }
 
 // ============================================================================
-// Compilation phases
+// Initialization helpers
 // ============================================================================
 
 impl SimpleExecutor {
@@ -97,35 +131,17 @@ impl SimpleExecutor {
         Ok(())
     }
 
-    fn compile_phase_create(&mut self, delta: &GraphDelta) -> Result<()> {
-        for proc_id in &delta.processors_to_add {
-            tracing::info!("[Phase 1: CREATE] {}", proc_id);
-            GraphCompiler::create_processor(self, proc_id)?;
+    fn init_compiler_if_needed(&mut self) -> Result<()> {
+        if self.compiler.is_some() {
+            return Ok(());
         }
-        Ok(())
-    }
 
-    fn compile_phase_wire(&mut self, delta: &GraphDelta) -> Result<()> {
-        for link_id in &delta.links_to_add {
-            tracing::info!("[Phase 2: WIRE] {}", link_id);
-            GraphCompiler::wire_link(self, link_id)?;
-        }
-        Ok(())
-    }
+        let factory = self
+            .factory
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("No processor factory set".into()))?;
 
-    fn compile_phase_setup(&mut self, delta: &GraphDelta) -> Result<()> {
-        for proc_id in &delta.processors_to_add {
-            tracing::info!("[Phase 3: SETUP] {}", proc_id);
-            GraphCompiler::setup_processor(self, proc_id)?;
-        }
-        Ok(())
-    }
-
-    fn compile_phase_start(&mut self, delta: &GraphDelta) -> Result<()> {
-        for proc_id in &delta.processors_to_add {
-            tracing::info!("[Phase 4: START] {}", proc_id);
-            GraphCompiler::start_processor(self, proc_id)?;
-        }
+        self.compiler = Some(Compiler::new(Arc::clone(factory)));
         Ok(())
     }
 }

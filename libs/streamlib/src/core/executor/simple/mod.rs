@@ -1,4 +1,4 @@
-mod compiler;
+mod compile;
 mod lifecycle;
 mod processors;
 mod wiring;
@@ -11,6 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use super::execution_graph::ExecutionGraph;
 use super::running::{RunningProcessor, WiredLink};
 use super::ExecutorState;
+use crate::core::compiler::Compiler;
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{Graph, ProcessorId};
@@ -39,6 +40,7 @@ pub struct SimpleExecutor {
     pub(super) runtime_context: Option<Arc<RuntimeContext>>,
     pub(super) execution_graph: Option<ExecutionGraph>,
     pub(super) factory: Option<Arc<dyn ProcessorNodeFactory>>,
+    pub(super) compiler: Option<Compiler>,
     pub(super) link_channel: LinkChannel,
     pub(super) next_processor_id: usize,
     pub(super) next_link_id: usize,
@@ -65,6 +67,7 @@ impl SimpleExecutor {
             runtime_context: None,
             execution_graph: None,
             factory: None,
+            compiler: None,
             link_channel: LinkChannel::new(),
             next_processor_id: 0,
             next_link_id: 0,
@@ -85,9 +88,11 @@ impl SimpleExecutor {
         graph: Arc<RwLock<Graph>>,
         factory: Arc<dyn ProcessorNodeFactory>,
     ) -> Self {
+        let compiler = Compiler::new(Arc::clone(&factory));
         Self {
             graph: Some(graph),
             factory: Some(factory),
+            compiler: Some(compiler),
             ..Self::new()
         }
     }

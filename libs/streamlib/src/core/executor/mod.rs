@@ -1,9 +1,9 @@
-mod delta;
-mod execution_graph;
-mod running;
+pub(crate) mod delta;
+pub(crate) mod execution_graph;
+pub(crate) mod running;
 mod simple;
 mod state;
-mod thread_runner;
+pub(crate) mod thread_runner;
 mod traits;
 
 pub use delta::{

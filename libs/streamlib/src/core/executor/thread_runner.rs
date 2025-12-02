@@ -10,7 +10,7 @@ use crate::core::processors::ProcessorState;
 type ProcessorId = String;
 
 /// Run the processor thread main loop based on execution mode.
-pub(super) fn run_processor_loop(
+pub(crate) fn run_processor_loop(
     id: ProcessorId,
     processor: Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: crossbeam_channel::Receiver<()>,
