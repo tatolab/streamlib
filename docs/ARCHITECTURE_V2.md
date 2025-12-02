@@ -543,10 +543,11 @@ How the processor fundamentally works - set at design time:
 
 ```rust
 /// How a processor receives/generates data.
-pub enum ExecutionMode {
+/// (Current API: `ProcessExecution` enum)
+pub enum ProcessExecution {
     /// Generates data on its own schedule (camera, microphone, timer).
     /// Often involves hardware callbacks or system events.
-    Continuous,
+    Continuous { interval_ms: u64 },
     
     /// Reacts to input data arriving.
     /// Wakes when upstream pushes data.
@@ -579,11 +580,11 @@ pub enum SchedulingStrategy {
 
 **These are orthogonal**:
 
-| Execution Mode | Possible Scheduling Strategies |
-|----------------|-------------------------------|
-| Continuous     | DedicatedThread, MainThread    |
-| Reactive       | DedicatedThread, WorkStealingPool, Lightweight |
-| Manual         | Any (caller controls timing)   |
+| ProcessExecution | Possible Scheduling Strategies |
+|------------------|-------------------------------|
+| Continuous       | DedicatedThread, MainThread    |
+| Reactive         | DedicatedThread, WorkStealingPool, Lightweight |
+| Manual           | Any (caller controls timing)   |
 
 A `Reactive` processor could run on:
 - Dedicated thread (wakes on input)
@@ -740,10 +741,15 @@ pub enum LinkEvent {
 }
 
 pub enum GraphEvent {
-    ProcessorAdded { id: ProcessorId },
-    ProcessorRemoved { id: ProcessorId },
-    LinkCreated { id: LinkId },
-    LinkRemoved { id: LinkId },
+    // Uses Apple's Will/Did naming pattern
+    GraphWillAddProcessor { processor_id: String, processor_type: String },
+    GraphDidAddProcessor { processor_id: String, processor_type: String },
+    GraphWillRemoveProcessor { processor_id: String },
+    GraphDidRemoveProcessor { processor_id: String },
+    GraphWillCreateLink { link_id: String, source: String, target: String },
+    GraphDidCreateLink { link_id: String, source: String, target: String },
+    GraphWillRemoveLink { link_id: String },
+    GraphDidRemoveLink { link_id: String },
     StateChanged { old: GraphState, new: GraphState },
 }
 ```
@@ -1484,8 +1490,8 @@ impl RuntimeBuilder {
 #[deprecated(since = "0.2.0", note = "Use ExecutionConfig")]
 pub type SchedulingConfig = super::execution::ExecutionConfig;
 
-#[deprecated(since = "0.2.0", note = "Use ExecutionMode")]
-pub type SchedulingMode = super::execution::ExecutionMode;
+#[deprecated(since = "0.2.0", note = "Use ProcessExecution")]
+pub type SchedulingMode = super::execution::ProcessExecution;
 
 // Easy to find, easy to remove in next major version
 ```
@@ -1609,9 +1615,9 @@ libs/streamlib/src/
 │   │
 │   ├── execution/
 │   │   ├── mod.rs
-│   │   ├── mode.rs         # ExecutionMode (Continuous/Reactive/Manual)
-│   │   ├── strategy.rs     # NEW - SchedulingStrategy enum
-│   │   ├── priority.rs     # ThreadPriority (renamed from thread_priority.rs)
+│   │   ├── process_execution.rs  # ProcessExecution (Continuous/Reactive/Manual)
+│   │   ├── config.rs       # ExecutionConfig
+│   │   ├── priority.rs     # ThreadPriority
 │   │   └── runner.rs       # Thread/task runner implementations
 │   │
 │   ├── frames/

@@ -590,11 +590,11 @@ sequenceDiagram
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Execution Mode vs Scheduling Strategy Matrix
+### ProcessExecution vs Scheduling Strategy Matrix
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│              Execution Mode × Scheduling Strategy Matrix                     │
+│              ProcessExecution × Scheduling Strategy Matrix                   │
 │                                                                             │
 │                    │ Dedicated  │ Work-Stealing │ MainThread │ Lightweight │
 │                    │  Thread    │    (Rayon)    │            │             │
@@ -619,7 +619,7 @@ sequenceDiagram
 │  ──────────────────┴────────────┴───────────────┴────────────┴─────────────│
 │                                                                             │
 │  Key insight: These are ORTHOGONAL concerns!                               │
-│  - Execution Mode: How the processor works (intrinsic)                     │
+│  - ProcessExecution: How the processor works (intrinsic)                   │
 │  - Scheduling Strategy: How we run it (deployment decision)                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
