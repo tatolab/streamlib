@@ -383,8 +383,8 @@ mod pubsub_event_tests {
             })
             .expect("Failed to add processor");
 
-        // Commit triggers compile
-        runtime.commit().expect("Commit failed");
+        // Start triggers compile
+        runtime.start().expect("Start failed");
 
         wait_for_events();
 
@@ -399,6 +399,9 @@ mod pubsub_event_tests {
             events.has_event(|e| matches!(e, RuntimeEvent::GraphDidCompile)),
             "Should emit GraphDidCompile"
         );
+
+        drop(events);
+        runtime.stop().expect("Stop");
     }
 
     #[test]
@@ -421,7 +424,8 @@ mod pubsub_event_tests {
             })
             .expect("Failed to add processor");
 
-        runtime.commit().expect("Commit failed");
+        // Start triggers compile
+        runtime.start().expect("Start failed");
 
         wait_for_events();
 
@@ -442,6 +446,9 @@ mod pubsub_event_tests {
             events.has_event(|e| matches!(e, RuntimeEvent::GraphDidAddProcessor { .. })),
             "Should emit GraphDidAddProcessor"
         );
+
+        drop(events);
+        runtime.stop().expect("Stop");
     }
 
     #[test]
@@ -468,11 +475,12 @@ mod pubsub_event_tests {
             })
             .expect("Add sink");
 
-        runtime.commit().expect("First commit");
+        // Start compiles processors
+        runtime.start().expect("Start");
 
         collector.lock().clear();
 
-        // Connect them
+        // Connect them (while running)
         let _link = runtime
             .connect(
                 format!("{}.output", source.id),
@@ -495,6 +503,9 @@ mod pubsub_event_tests {
             events.has_event(|e| matches!(e, RuntimeEvent::GraphDidCreateLink { .. })),
             "Should emit GraphDidCreateLink"
         );
+
+        drop(events);
+        runtime.stop().expect("Stop");
     }
 
     #[test]
@@ -508,14 +519,15 @@ mod pubsub_event_tests {
             .with_commit_mode(CommitMode::Manual)
             .build();
 
-        // Add and commit processor
+        // Add processor
         let node = runtime
             .add_processor::<SourceProcessor::Processor>(SourceConfig {
                 name: "to_remove".into(),
             })
             .expect("Add processor");
 
-        runtime.commit().expect("Add commit");
+        // Start compiles the processor
+        runtime.start().expect("Start");
 
         collector.lock().clear();
 
@@ -536,6 +548,9 @@ mod pubsub_event_tests {
             events.has_event(|e| matches!(e, RuntimeEvent::GraphDidRemoveProcessor { .. })),
             "Should emit GraphDidRemoveProcessor"
         );
+
+        drop(events);
+        runtime.stop().expect("Stop");
     }
 
     #[test]
@@ -709,7 +724,8 @@ mod ecs_state_tests {
             })
             .expect("Add processor");
 
-        runtime.commit().expect("Commit");
+        // Start triggers compilation
+        runtime.start().expect("Start");
 
         // After compile, ProcessorInstance should be attached to entity
         let pg = runtime.graph().read();
@@ -717,6 +733,9 @@ mod ecs_state_tests {
             pg.has::<ProcessorInstance>(&node.id),
             "Processor should have ProcessorInstance component after compile"
         );
+
+        drop(pg);
+        runtime.stop().expect("Stop");
     }
 
     #[test]
@@ -731,7 +750,7 @@ mod ecs_state_tests {
             })
             .expect("Add processor");
 
-        runtime.commit().expect("Commit add");
+        runtime.start().expect("Start");
 
         // Verify entity exists
         {
@@ -748,6 +767,8 @@ mod ecs_state_tests {
             let pg = runtime.graph().read();
             assert!(pg.get_processor_entity(&node.id).is_none());
         }
+
+        runtime.stop().expect("Stop");
     }
 
     #[test]
@@ -772,7 +793,7 @@ mod ecs_state_tests {
             })
             .expect("Add sink");
 
-        runtime.commit().expect("Commit");
+        runtime.start().expect("Start");
 
         let pg = runtime.graph().read();
 
@@ -794,6 +815,9 @@ mod ecs_state_tests {
         assert!(pg.has::<ProcessorInstance>(&source.id));
         assert!(pg.has::<ProcessorInstance>(&transform.id));
         assert!(pg.has::<ProcessorInstance>(&sink.id));
+
+        drop(pg);
+        runtime.stop().expect("Stop");
     }
 }
 
@@ -1343,14 +1367,15 @@ mod dynamic_modification_tests {
             })
             .expect("add");
 
-        runtime.commit().expect("first commit");
+        // Start triggers compilation
+        runtime.start().expect("start");
 
-        // Verify graph needs no recompile after commit
+        // Verify graph needs no recompile after start (which calls commit)
         {
             let pg = runtime.graph().read();
             assert!(
                 !pg.needs_recompile(),
-                "Should not need recompile after commit"
+                "Should not need recompile after start"
             );
         }
 
@@ -1379,6 +1404,8 @@ mod dynamic_modification_tests {
                 "Should not need recompile after second commit"
             );
         }
+
+        runtime.stop().expect("stop");
     }
 }
 
@@ -1421,8 +1448,8 @@ fn test_full_property_graph_ecs_integration() {
         )
         .expect("connect");
 
-    // 3. Commit (triggers compile)
-    runtime.commit().expect("commit");
+    // 3. Start (triggers compile)
+    runtime.start().expect("start");
 
     wait_for_events();
 
@@ -1477,10 +1504,7 @@ fn test_full_property_graph_ecs_integration() {
         );
     }
 
-    // 7. Start and verify runtime works
-    runtime.start().expect("start");
-    std::thread::sleep(Duration::from_millis(50));
-
+    // 7. Verify runtime is running (already started in step 3)
     let status = runtime.status();
     assert!(status.running);
     assert_eq!(status.processor_count, 2);

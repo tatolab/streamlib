@@ -11,7 +11,7 @@ use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelega
 use crate::core::graph::{
     GraphState, IntoLinkPortRef, Link, ProcessorId, ProcessorNode, PropertyGraph,
 };
-use crate::core::links::{LinkId, LinkInstanceManager};
+use crate::core::links::LinkId;
 use crate::core::processors::Processor;
 use crate::core::runtime::delegates::DefaultFactory;
 use crate::core::{Result, StreamError};
@@ -54,8 +54,6 @@ pub struct StreamRuntime {
     pub(crate) scheduler: Arc<dyn SchedulerDelegate>,
     /// When mutations are applied.
     pub(crate) commit_mode: CommitMode,
-    /// Link instance manager for LinkInstance storage.
-    pub(crate) link_instance_manager: LinkInstanceManager,
     /// Runtime context (GPU, audio config).
     pub(crate) runtime_context: Option<Arc<RuntimeContext>>,
     /// Tracks pending changes since last compile.
@@ -92,7 +90,6 @@ impl Default for StreamRuntime {
             processor_delegate,
             scheduler,
             commit_mode: CommitMode::Auto,
-            link_instance_manager: LinkInstanceManager::new(),
             runtime_context: None,
             pending_delta: GraphDelta::default(),
             started: false,
@@ -162,12 +159,9 @@ impl StreamRuntime {
 
         // Compile the delta
         let mut property_graph = self.graph.write();
-        let result = self.compiler.compile(
-            &mut property_graph,
-            runtime_ctx,
-            &mut self.link_instance_manager,
-            &delta,
-        )?;
+        let result = self
+            .compiler
+            .compile(&mut property_graph, runtime_ctx, &delta)?;
 
         if result.has_changes() {
             tracing::debug!("Commit result: {}", result);
@@ -322,9 +316,6 @@ impl StreamRuntime {
 
         // Track in pending delta
         self.pending_delta.links_to_remove.push(link_id.clone());
-
-        // Disconnect from LinkInstanceManager - drops LinkInstance, handles gracefully degrade
-        self.link_instance_manager.disconnect(link_id.clone());
 
         // Clean up link entity
         {

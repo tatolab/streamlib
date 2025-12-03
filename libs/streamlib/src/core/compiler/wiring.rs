@@ -12,13 +12,15 @@ use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{
     LinkOutputToProcessorWriterAndReader, LinkState, ProcessorInstance, PropertyGraph,
 };
-use crate::core::links::{LinkId, LinkInstanceManager, LinkPortAddress, LinkPortType};
+use crate::core::links::{
+    LinkFactoryDelegate, LinkId, LinkInstanceComponent, LinkPortType, LinkTypeInfoComponent,
+};
 use crate::core::processors::BoxedProcessor;
 
 /// Wire a link by ID from the graph.
 pub fn wire_link(
     property_graph: &mut PropertyGraph,
-    link_instance_manager: &mut LinkInstanceManager,
+    link_factory: &dyn LinkFactoryDelegate,
     link_id: &LinkId,
 ) -> Result<()> {
     let (from_port, to_port) = {
@@ -28,18 +30,11 @@ pub fn wire_link(
         (link.from_port(), link.to_port())
     };
 
-    wire_link_ports(
-        property_graph,
-        link_instance_manager,
-        &from_port,
-        &to_port,
-        link_id,
-    )?;
+    wire_link_ports(property_graph, link_factory, &from_port, &to_port, link_id)?;
     Ok(())
 }
 
 /// Unwire a link by ID.
-#[allow(dead_code)]
 pub fn unwire_link(property_graph: &mut PropertyGraph, link_id: &LinkId) -> Result<()> {
     tracing::info!("Unwiring link: {}", link_id);
 
@@ -83,6 +78,11 @@ pub fn unwire_link(property_graph: &mut PropertyGraph, link_id: &LinkId) -> Resu
         }
     }
 
+    // Remove the LinkInstanceComponent - this drops the ring buffer
+    // and all handles will gracefully degrade
+    property_graph.remove_link_component::<LinkInstanceComponent>(link_id)?;
+    property_graph.remove_link_component::<LinkTypeInfoComponent>(link_id)?;
+
     // Set link state to Disconnected (keep entity for state queries)
     if let Err(e) = property_graph.set_link_state(link_id, LinkState::Disconnected) {
         tracing::warn!("Failed to set link state to Disconnected: {}", e);
@@ -109,7 +109,7 @@ pub fn parse_port_address(port: &str) -> Result<(String, String)> {
 
 fn wire_link_ports(
     property_graph: &mut PropertyGraph,
-    link_instance_manager: &mut LinkInstanceManager,
+    link_factory: &dyn LinkFactoryDelegate,
     from_port: &str,
     to_port: &str,
     link_id: &LinkId,
@@ -141,21 +141,32 @@ fn wire_link_ports(
         to_port,
     )?;
 
-    let source_addr = LinkPortAddress::new(source_proc_id.clone(), source_port.clone());
-    let dest_addr = LinkPortAddress::new(dest_proc_id.clone(), dest_port.clone());
     let capacity = source_port_type.default_capacity();
 
-    create_link_instance(
-        link_instance_manager,
-        source_port_type,
-        &source_addr,
-        &dest_addr,
-        capacity,
-        link_id,
+    // Create link instance via factory
+    let creation_result = link_factory.create(link_id.clone(), source_port_type, capacity)?;
+
+    // Store instance and type info as ECS components on the link entity
+    property_graph.ensure_link_entity(link_id);
+    property_graph.insert_link(link_id, LinkInstanceComponent(creation_result.instance))?;
+    property_graph.insert_link(link_id, creation_result.type_info)?;
+
+    // Wire data writer to source processor
+    wire_data_writer_to_processor(
         &source_processor,
-        &dest_processor,
         &source_port,
+        link_id,
+        source_port_type,
+        creation_result.data_writer,
+    )?;
+
+    // Wire data reader to destination processor
+    wire_data_reader_to_processor(
+        &dest_processor,
         &dest_port,
+        link_id,
+        source_port_type,
+        creation_result.data_reader,
     )?;
 
     setup_link_output_to_processor_message_writer(
@@ -165,8 +176,7 @@ fn wire_link_ports(
         &source_port,
     )?;
 
-    // Create link entity and set state to Wired
-    property_graph.ensure_link_entity(link_id);
+    // Set link state to Wired
     property_graph.set_link_state(link_id, LinkState::Wired)?;
 
     tracing::info!("Registered link: {} (state: Wired)", link_id);
@@ -275,105 +285,105 @@ pub struct LinkInputDataReaderWrapper<T: crate::core::LinkPortMessage> {
     pub data_reader: crate::core::LinkInputDataReader<T>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn create_link_instance(
-    link_instance_manager: &mut LinkInstanceManager,
-    port_type: LinkPortType,
-    source_addr: &LinkPortAddress,
-    dest_addr: &LinkPortAddress,
-    capacity: usize,
+fn wire_data_writer_to_processor(
+    processor: &Arc<Mutex<BoxedProcessor>>,
+    port_name: &str,
     link_id: &LinkId,
-    source_processor: &Arc<Mutex<BoxedProcessor>>,
-    dest_processor: &Arc<Mutex<BoxedProcessor>>,
-    source_port: &str,
-    dest_port: &str,
+    port_type: LinkPortType,
+    data_writer: Box<dyn std::any::Any + Send>,
 ) -> Result<()> {
+    let mut guard = processor.lock();
+
     match port_type {
         LinkPortType::Audio => {
-            let (data_writer, data_reader) = link_instance_manager
-                .create_link_instance::<AudioFrame>(
-                    source_addr.clone(),
-                    dest_addr.clone(),
-                    capacity,
-                    link_id.clone(),
-                )?;
-
-            let mut source_guard = source_processor.lock();
-            source_guard.add_link_output_data_writer(
-                source_port,
+            let writer = data_writer
+                .downcast::<crate::core::LinkOutputDataWriter<AudioFrame>>()
+                .map_err(|_| StreamError::Link("Failed to downcast audio data writer".into()))?;
+            guard.add_link_output_data_writer(
+                port_name,
                 Box::new(LinkOutputDataWriterWrapper {
                     link_id: link_id.clone(),
-                    data_writer,
-                }),
-            )?;
-            drop(source_guard);
-
-            let mut dest_guard = dest_processor.lock();
-            dest_guard.add_link_input_data_reader(
-                dest_port,
-                Box::new(LinkInputDataReaderWrapper {
-                    link_id: link_id.clone(),
-                    data_reader,
+                    data_writer: *writer,
                 }),
             )?;
         }
         LinkPortType::Video => {
-            let (data_writer, data_reader) = link_instance_manager
-                .create_link_instance::<VideoFrame>(
-                    source_addr.clone(),
-                    dest_addr.clone(),
-                    capacity,
-                    link_id.clone(),
-                )?;
-
-            let mut source_guard = source_processor.lock();
-            source_guard.add_link_output_data_writer(
-                source_port,
+            let writer = data_writer
+                .downcast::<crate::core::LinkOutputDataWriter<VideoFrame>>()
+                .map_err(|_| StreamError::Link("Failed to downcast video data writer".into()))?;
+            guard.add_link_output_data_writer(
+                port_name,
                 Box::new(LinkOutputDataWriterWrapper {
                     link_id: link_id.clone(),
-                    data_writer,
-                }),
-            )?;
-            drop(source_guard);
-
-            let mut dest_guard = dest_processor.lock();
-            dest_guard.add_link_input_data_reader(
-                dest_port,
-                Box::new(LinkInputDataReaderWrapper {
-                    link_id: link_id.clone(),
-                    data_reader,
+                    data_writer: *writer,
                 }),
             )?;
         }
         LinkPortType::Data => {
-            let (data_writer, data_reader) = link_instance_manager
-                .create_link_instance::<DataFrame>(
-                    source_addr.clone(),
-                    dest_addr.clone(),
-                    capacity,
-                    link_id.clone(),
-                )?;
-
-            let mut source_guard = source_processor.lock();
-            source_guard.add_link_output_data_writer(
-                source_port,
+            let writer = data_writer
+                .downcast::<crate::core::LinkOutputDataWriter<DataFrame>>()
+                .map_err(|_| StreamError::Link("Failed to downcast data writer".into()))?;
+            guard.add_link_output_data_writer(
+                port_name,
                 Box::new(LinkOutputDataWriterWrapper {
                     link_id: link_id.clone(),
-                    data_writer,
-                }),
-            )?;
-            drop(source_guard);
-
-            let mut dest_guard = dest_processor.lock();
-            dest_guard.add_link_input_data_reader(
-                dest_port,
-                Box::new(LinkInputDataReaderWrapper {
-                    link_id: link_id.clone(),
-                    data_reader,
+                    data_writer: *writer,
                 }),
             )?;
         }
     }
+
+    Ok(())
+}
+
+fn wire_data_reader_to_processor(
+    processor: &Arc<Mutex<BoxedProcessor>>,
+    port_name: &str,
+    link_id: &LinkId,
+    port_type: LinkPortType,
+    data_reader: Box<dyn std::any::Any + Send>,
+) -> Result<()> {
+    let mut guard = processor.lock();
+
+    match port_type {
+        LinkPortType::Audio => {
+            let reader = data_reader
+                .downcast::<crate::core::LinkInputDataReader<AudioFrame>>()
+                .map_err(|_| StreamError::Link("Failed to downcast audio data reader".into()))?;
+            guard.add_link_input_data_reader(
+                port_name,
+                Box::new(LinkInputDataReaderWrapper {
+                    link_id: link_id.clone(),
+                    data_reader: *reader,
+                }),
+            )?;
+        }
+        LinkPortType::Video => {
+            let reader = data_reader
+                .downcast::<crate::core::LinkInputDataReader<VideoFrame>>()
+                .map_err(|_| StreamError::Link("Failed to downcast video data reader".into()))?;
+            guard.add_link_input_data_reader(
+                port_name,
+                Box::new(LinkInputDataReaderWrapper {
+                    link_id: link_id.clone(),
+                    data_reader: *reader,
+                }),
+            )?;
+        }
+        LinkPortType::Data => {
+            let reader = data_reader
+                .downcast::<crate::core::LinkInputDataReader<DataFrame>>()
+                .map_err(|_| StreamError::Link("Failed to downcast data reader".into()))?;
+            guard.add_link_input_data_reader(
+                port_name,
+                Box::new(LinkInputDataReaderWrapper {
+                    link_id: link_id.clone(),
+                    data_reader: *reader,
+                }),
+            )?;
+        }
+    }
+
     Ok(())
 }
 

@@ -8,7 +8,6 @@ use crate::core::compiler::delta::GraphDelta;
 use crate::core::compiler::Compiler;
 use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{Graph, PropertyGraph};
-use crate::core::links::LinkInstanceManager;
 
 use super::delegates::{DefaultFactory, DefaultProcessorDelegate, DefaultScheduler};
 use super::{CommitMode, StreamRuntime};
@@ -112,7 +111,6 @@ impl RuntimeBuilder {
             processor_delegate,
             scheduler,
             commit_mode: self.commit_mode,
-            link_instance_manager: LinkInstanceManager::new(),
             runtime_context: None,
             pending_delta: GraphDelta::default(),
             started: false,

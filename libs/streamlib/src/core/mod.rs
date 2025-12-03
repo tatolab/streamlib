@@ -41,9 +41,9 @@ pub use graph::{
     LinkPortRef, OutputPortMarker, ProcessorId, ProcessorNode,
 };
 pub use links::{
-    LinkId, LinkInput, LinkInputDataReader, LinkInstance, LinkInstanceManager, LinkOutput,
-    LinkOutputDataWriter, LinkOutputToProcessorMessage, LinkPortAddress, LinkPortMessage,
-    LinkPortType, DEFAULT_LINK_CAPACITY,
+    LinkId, LinkInput, LinkInputDataReader, LinkInstance, LinkOutput, LinkOutputDataWriter,
+    LinkOutputToProcessorMessage, LinkPortAddress, LinkPortMessage, LinkPortType,
+    DEFAULT_LINK_CAPACITY,
 };
 pub use processors::{
     BaseProcessor, BoxedProcessor, CompositeFactory, DynProcessor, EmptyConfig, Processor,

@@ -235,6 +235,25 @@ impl PropertyGraph {
         Ok(())
     }
 
+    /// Remove a component from a link entity.
+    pub fn remove_link_component<C: Component>(&mut self, id: &LinkId) -> Result<()> {
+        let entity = *self
+            .link_entities
+            .get(id)
+            .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", id)))?;
+
+        // Remove component if it exists (ignore if not present)
+        let _ = self.world.remove_one::<C>(entity);
+
+        Ok(())
+    }
+
+    /// Get a component from a link entity.
+    pub fn get_link_component<C: Component>(&self, id: &LinkId) -> Option<hecs::Ref<'_, C>> {
+        let entity = self.link_entities.get(id)?;
+        self.world.get::<&C>(*entity).ok()
+    }
+
     /// Get the state of a link from its ECS component.
     pub fn get_link_state(&self, id: &LinkId) -> Option<LinkState> {
         let entity = self.link_entities.get(id)?;

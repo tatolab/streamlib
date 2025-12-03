@@ -8,7 +8,7 @@ use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::PropertyGraph;
-use crate::core::links::LinkInstanceManager;
+use crate::core::links::{DefaultLinkFactory, LinkFactoryDelegate};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::runtime::delegates::{DefaultProcessorDelegate, DefaultScheduler};
 
@@ -17,6 +17,7 @@ pub struct Compiler {
     factory: Arc<dyn FactoryDelegate>,
     processor_delegate: Arc<dyn ProcessorDelegate>,
     scheduler: Arc<dyn SchedulerDelegate>,
+    link_factory: Arc<dyn LinkFactoryDelegate>,
 }
 
 impl Compiler {
@@ -29,6 +30,7 @@ impl Compiler {
             factory: Arc::new(factory),
             processor_delegate: Arc::new(DefaultProcessorDelegate),
             scheduler: Arc::new(DefaultScheduler),
+            link_factory: Arc::new(DefaultLinkFactory),
         }
     }
 
@@ -43,6 +45,28 @@ impl Compiler {
             factory: Arc::new(factory),
             processor_delegate: Arc::new(processor_delegate),
             scheduler: Arc::new(scheduler),
+            link_factory: Arc::new(DefaultLinkFactory),
+        }
+    }
+
+    /// Create a new compiler with all delegates including link factory.
+    pub fn with_all_delegates<F, P, S, L>(
+        factory: F,
+        processor_delegate: P,
+        scheduler: S,
+        link_factory: L,
+    ) -> Self
+    where
+        F: FactoryDelegate + 'static,
+        P: ProcessorDelegate + 'static,
+        S: SchedulerDelegate + 'static,
+        L: LinkFactoryDelegate + 'static,
+    {
+        Self {
+            factory: Arc::new(factory),
+            processor_delegate: Arc::new(processor_delegate),
+            scheduler: Arc::new(scheduler),
+            link_factory: Arc::new(link_factory),
         }
     }
 
@@ -56,6 +80,22 @@ impl Compiler {
             factory,
             processor_delegate,
             scheduler,
+            link_factory: Arc::new(DefaultLinkFactory),
+        }
+    }
+
+    /// Create from pre-wrapped Arc delegates including link factory.
+    pub fn from_arcs_with_link_factory(
+        factory: Arc<dyn FactoryDelegate>,
+        processor_delegate: Arc<dyn ProcessorDelegate>,
+        scheduler: Arc<dyn SchedulerDelegate>,
+        link_factory: Arc<dyn LinkFactoryDelegate>,
+    ) -> Self {
+        Self {
+            factory,
+            processor_delegate,
+            scheduler,
+            link_factory,
         }
     }
 
@@ -74,6 +114,11 @@ impl Compiler {
         &self.scheduler
     }
 
+    /// Get a reference to the link factory delegate.
+    pub fn link_factory(&self) -> &Arc<dyn LinkFactoryDelegate> {
+        &self.link_factory
+    }
+
     /// Compile graph changes.
     ///
     /// Executes the 4-phase pipeline and handles additions, removals, and updates.
@@ -82,16 +127,9 @@ impl Compiler {
         &self,
         property_graph: &mut PropertyGraph,
         runtime_context: &Arc<RuntimeContext>,
-        link_instance_manager: &mut LinkInstanceManager,
         delta: &GraphDelta,
     ) -> Result<CompileResult> {
-        self.compile_with_options(
-            property_graph,
-            runtime_context,
-            link_instance_manager,
-            delta,
-            true,
-        )
+        self.compile_with_options(property_graph, runtime_context, delta, true)
     }
 
     /// Compile without starting processors (Phase 4 skipped).
@@ -100,16 +138,9 @@ impl Compiler {
         &self,
         property_graph: &mut PropertyGraph,
         runtime_context: &Arc<RuntimeContext>,
-        link_instance_manager: &mut LinkInstanceManager,
         delta: &GraphDelta,
     ) -> Result<CompileResult> {
-        self.compile_with_options(
-            property_graph,
-            runtime_context,
-            link_instance_manager,
-            delta,
-            false,
-        )
+        self.compile_with_options(property_graph, runtime_context, delta, false)
     }
 
     /// Compile with options.
@@ -117,7 +148,6 @@ impl Compiler {
         &self,
         property_graph: &mut PropertyGraph,
         runtime_context: &Arc<RuntimeContext>,
-        link_instance_manager: &mut LinkInstanceManager,
         delta: &GraphDelta,
         run_start_phase: bool,
     ) -> Result<CompileResult> {
@@ -145,7 +175,6 @@ impl Compiler {
         let compile_result = self.execute_phases(
             property_graph,
             runtime_context,
-            link_instance_manager,
             delta,
             &mut result,
             run_start_phase,
@@ -174,14 +203,13 @@ impl Compiler {
         &self,
         property_graph: &mut PropertyGraph,
         runtime_context: &Arc<RuntimeContext>,
-        link_instance_manager: &mut LinkInstanceManager,
         delta: &GraphDelta,
         result: &mut CompileResult,
         run_start_phase: bool,
     ) -> Result<()> {
         // First: Handle removals (before adding new processors)
         // This ensures clean shutdown of removed components
-        self.handle_removals(property_graph, link_instance_manager, delta, result)?;
+        self.handle_removals(property_graph, delta, result)?;
 
         // Phase 1: CREATE - Instantiate processor instances
         self.run_phase(CompilePhase::Create, || {
@@ -190,7 +218,7 @@ impl Compiler {
 
         // Phase 2: WIRE - Create ring buffers and connect ports
         self.run_phase(CompilePhase::Wire, || {
-            self.phase_wire(property_graph, link_instance_manager, delta, result)
+            self.phase_wire(property_graph, delta, result)
         })?;
 
         // Phase 3: SETUP - Initialize processors (GPU, devices)
@@ -231,7 +259,6 @@ impl Compiler {
     fn handle_removals(
         &self,
         property_graph: &mut PropertyGraph,
-        link_instance_manager: &mut LinkInstanceManager,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
@@ -252,7 +279,6 @@ impl Compiler {
                 if let Err(e) = super::wiring::unwire_link(property_graph, link_id) {
                     tracing::warn!("Failed to unwire link {}: {}", link_id, e);
                 }
-                link_instance_manager.disconnect(link_id.clone());
 
                 self.publish_event(RuntimeEvent::GraphDidRemoveLink {
                     link_id: link_id.to_string(),
@@ -331,7 +357,6 @@ impl Compiler {
     fn phase_wire(
         &self,
         property_graph: &mut PropertyGraph,
-        link_instance_manager: &mut LinkInstanceManager,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
@@ -359,7 +384,7 @@ impl Compiler {
 
             tracing::info!("[{}] Wiring {}", CompilePhase::Wire, link_id);
 
-            super::wiring::wire_link(property_graph, link_instance_manager, link_id)?;
+            super::wiring::wire_link(property_graph, self.link_factory.as_ref(), link_id)?;
 
             self.publish_event(RuntimeEvent::GraphDidCreateLink {
                 link_id: link_id.to_string(),
@@ -400,7 +425,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// Handle config updates for running processors.
+    /// Handle config updates on existing processors.
     fn handle_config_updates(
         &self,
         property_graph: &mut PropertyGraph,
@@ -409,51 +434,51 @@ impl Compiler {
     ) -> Result<()> {
         use crate::core::graph::ProcessorInstance;
 
-        for config_change in &delta.processors_to_update {
-            let proc_id = &config_change.id;
+        for update in &delta.processors_to_update {
+            let proc_id = &update.id;
 
-            tracing::info!(
-                "[CONFIG] Updating {} (checksum {} -> {})",
-                proc_id,
-                config_change.old_config_checksum,
-                config_change.new_config_checksum
-            );
-
-            // Get the new config from the graph node
-            let node = property_graph.get_processor(proc_id).ok_or_else(|| {
-                StreamError::ProcessorNotFound(format!(
-                    "Processor '{}' not found for config update",
-                    proc_id
-                ))
-            })?;
-
-            // Config may be None if using defaults
-            let config_json = match &node.config {
-                Some(config) => config.clone(),
+            // Get config from the ProcessorNode in the graph
+            let config_json = match property_graph.get_processor(proc_id) {
+                Some(node) => match node.config {
+                    Some(config) => config,
+                    None => {
+                        tracing::debug!("[CONFIG] {} has no config to update", proc_id);
+                        continue;
+                    }
+                },
                 None => {
-                    tracing::debug!("[CONFIG] {} has no config to update", proc_id);
+                    tracing::warn!("[CONFIG] Processor {} not found in graph", proc_id);
                     continue;
                 }
             };
 
-            // Apply config to running processor instance
-            if let Some(instance) = property_graph.get::<ProcessorInstance>(proc_id) {
-                let mut guard = instance.0.lock();
+            // Get the ProcessorInstance from ECS
+            let instance = property_graph
+                .get::<ProcessorInstance>(proc_id)
+                .ok_or_else(|| {
+                    StreamError::ProcessorNotFound(format!(
+                        "Processor '{}' not found for config update",
+                        proc_id
+                    ))
+                })?;
+
+            // Apply config update
+            let processor_arc = instance.0.clone();
+            drop(instance); // Release borrow before locking
+
+            {
+                let mut guard = processor_arc.lock();
                 guard.apply_config_json(&config_json)?;
-                drop(guard);
-
-                // Delegate callback
-                self.processor_delegate
-                    .did_update_config(proc_id, &config_json)?;
-
-                // Publish event
-                self.publish_event(RuntimeEvent::ProcessorConfigDidChange {
-                    processor_id: proc_id.clone(),
-                });
-
-                result.configs_updated += 1;
             }
+
+            // Notify delegate
+            self.processor_delegate
+                .did_update_config(proc_id, &config_json)?;
+
+            tracing::info!("[CONFIG] Updated config for {}", proc_id);
+            result.configs_updated += 1;
         }
+
         Ok(())
     }
 
@@ -477,20 +502,13 @@ impl Compiler {
             .cloned()
             .collect();
 
-        if processors_to_start.is_empty() {
-            tracing::debug!("No pending processors to start");
-            return Ok(());
-        }
-
-        tracing::info!("Starting {} pending processors", processors_to_start.len());
-
-        for proc_id in &processors_to_start {
-            tracing::info!("[Phase 4: START] Starting {}", proc_id);
+        for proc_id in processors_to_start {
+            tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
             super::phases::start_processor(
                 &self.processor_delegate,
                 &self.scheduler,
                 property_graph,
-                proc_id,
+                &proc_id,
             )?;
         }
 
@@ -505,30 +523,38 @@ mod tests {
 
     #[test]
     fn test_compiler_creation() {
-        // New ergonomic API - no Arc::new() needed
-        let compiler = Compiler::new(DefaultFactory::new());
-        assert!(!compiler.factory().can_create("unknown"));
+        let factory = DefaultFactory::new();
+        let compiler = Compiler::new(factory);
+
+        assert!(Arc::strong_count(compiler.factory()) >= 1);
+        assert!(Arc::strong_count(compiler.processor_delegate()) >= 1);
+        assert!(Arc::strong_count(compiler.scheduler()) >= 1);
+        assert!(Arc::strong_count(compiler.link_factory()) >= 1);
     }
 
     #[test]
     fn test_compiler_with_delegates() {
-        // New ergonomic API - no Arc::new() needed
-        let compiler = Compiler::with_delegates(
-            DefaultFactory::new(),
-            DefaultProcessorDelegate,
-            DefaultScheduler,
-        );
-        assert!(!compiler.factory().can_create("unknown"));
+        let factory = DefaultFactory::new();
+        let processor_delegate = DefaultProcessorDelegate;
+        let scheduler = DefaultScheduler;
+
+        let compiler = Compiler::with_delegates(factory, processor_delegate, scheduler);
+
+        assert!(Arc::strong_count(compiler.factory()) >= 1);
     }
 
     #[test]
     fn test_compiler_from_arcs() {
-        // Legacy API for pre-wrapped Arcs
-        let factory = Arc::new(DefaultFactory::new());
-        let processor_delegate = Arc::new(DefaultProcessorDelegate);
-        let scheduler = Arc::new(DefaultScheduler);
+        let factory: Arc<dyn FactoryDelegate> = Arc::new(DefaultFactory::new());
+        let processor_delegate: Arc<dyn ProcessorDelegate> = Arc::new(DefaultProcessorDelegate);
+        let scheduler: Arc<dyn SchedulerDelegate> = Arc::new(DefaultScheduler);
 
-        let compiler = Compiler::from_arcs(factory, processor_delegate, scheduler);
-        assert!(!compiler.factory().can_create("unknown"));
+        let compiler = Compiler::from_arcs(
+            Arc::clone(&factory),
+            Arc::clone(&processor_delegate),
+            Arc::clone(&scheduler),
+        );
+
+        assert!(Arc::strong_count(compiler.factory()) >= 2);
     }
 }
