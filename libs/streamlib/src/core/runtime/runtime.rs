@@ -4,8 +4,9 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde::Serialize;
 
-use crate::core::compiler::delta::GraphDelta;
-use crate::core::compiler::{shutdown_all_processors, shutdown_processor, Compiler};
+use crate::core::compiler::{
+    shutdown_all_processors, Compiler, PendingOperation, PendingOperationQueue,
+};
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{
@@ -56,8 +57,8 @@ pub struct StreamRuntime {
     pub(crate) commit_mode: CommitMode,
     /// Runtime context (GPU, audio config).
     pub(crate) runtime_context: Option<Arc<RuntimeContext>>,
-    /// Tracks pending changes since last compile.
-    pub(crate) pending_delta: GraphDelta,
+    /// Queue of pending operations to execute at commit time.
+    pub(crate) pending_operations: PendingOperationQueue,
     /// Whether the runtime has been started.
     pub(crate) started: bool,
 }
@@ -91,7 +92,7 @@ impl Default for StreamRuntime {
             scheduler,
             commit_mode: CommitMode::Auto,
             runtime_context: None,
-            pending_delta: GraphDelta::default(),
+            pending_operations: PendingOperationQueue::new(),
             started: false,
         }
     }
@@ -137,34 +138,306 @@ impl StreamRuntime {
     /// In `Auto` mode, this is called automatically after each mutation.
     /// In `Manual` mode, call this explicitly to batch changes.
     ///
-    /// Note: Compilation only happens when the runtime has been started. Before `start()`,
-    /// graph mutations are recorded but not compiled.
+    /// When the runtime is not started, pending operations are kept in the queue
+    /// and will be executed when `start()` is called. When started, operations
+    /// are compiled and executed with proper processor lifecycle.
     pub fn commit(&mut self) -> Result<()> {
-        // Only compile if runtime has been started
+        // Only process if there are pending changes
+        if self.pending_operations.is_empty() {
+            return Ok(());
+        }
+
+        // If runtime not started, operations stay queued until start()
         if !self.started {
             return Ok(());
         }
 
-        // Only compile if there are pending changes
-        if self.pending_delta.is_empty() {
-            return Ok(());
+        // Take all pending operations
+        let operations = self.pending_operations.take_all();
+
+        // Runtime is started - full compilation with processor lifecycle
+        let runtime_ctx = self
+            .runtime_context
+            .as_ref()
+            .ok_or_else(|| {
+                crate::core::error::StreamError::Runtime(
+                    "Runtime context not initialized".to_string(),
+                )
+            })?
+            .clone();
+
+        for op in operations {
+            self.execute_operation(op, &runtime_ctx)?;
         }
 
-        // Runtime context should exist if we're running
-        let runtime_ctx = self.runtime_context.as_ref().ok_or_else(|| {
-            crate::core::error::StreamError::Runtime("Runtime context not initialized".to_string())
-        })?;
+        Ok(())
+    }
 
-        let delta = std::mem::take(&mut self.pending_delta);
+    /// Execute a single pending operation with validation.
+    fn execute_operation(
+        &mut self,
+        op: PendingOperation,
+        runtime_ctx: &Arc<RuntimeContext>,
+    ) -> Result<()> {
+        use crate::core::compiler::GraphDelta;
+        use crate::core::graph::ProcessorInstance;
+        use crate::core::links::LinkInstanceComponent;
 
-        // Compile the delta
-        let mut property_graph = self.graph.write();
-        let result = self
-            .compiler
-            .compile(&mut property_graph, runtime_ctx, &delta)?;
+        match op {
+            PendingOperation::AddProcessor(processor_id) => {
+                // Validate: processor must exist in graph and NOT have ProcessorInstance
+                let (exists_in_graph, already_running) = {
+                    let property_graph = self.graph.read();
+                    let exists = property_graph.has_processor(&processor_id);
+                    let running = property_graph.has::<ProcessorInstance>(&processor_id);
+                    (exists, running)
+                };
 
-        if result.has_changes() {
-            tracing::debug!("Commit result: {}", result);
+                if !exists_in_graph {
+                    tracing::warn!(
+                        "AddProcessor({}): processor not in graph, skipping",
+                        processor_id
+                    );
+                    return Ok(());
+                }
+
+                if already_running {
+                    tracing::debug!("AddProcessor({}): already running, skipping", processor_id);
+                    return Ok(());
+                }
+
+                // Create delta with just this processor
+                let delta = GraphDelta {
+                    processors_to_add: vec![processor_id],
+                    ..Default::default()
+                };
+
+                let mut property_graph = self.graph.write();
+                self.compiler
+                    .compile(&mut property_graph, runtime_ctx, &delta)?;
+            }
+
+            PendingOperation::RemoveProcessor(processor_id) => {
+                // Validate: processor must exist in graph OR have ProcessorInstance component
+                let (exists_in_graph, has_instance) = {
+                    let property_graph = self.graph.read();
+                    let exists = property_graph.has_processor(&processor_id);
+                    let running = property_graph.has::<ProcessorInstance>(&processor_id);
+                    (exists, running)
+                };
+
+                if !exists_in_graph && !has_instance {
+                    tracing::warn!(
+                        "RemoveProcessor({}): not found in graph or ECS, skipping",
+                        processor_id
+                    );
+                    return Ok(());
+                }
+
+                // First, find and queue removal of any links connected to this processor
+                let connected_links: Vec<_> = {
+                    let property_graph = self.graph.read();
+                    let graph = property_graph.graph().read();
+                    graph
+                        .links()
+                        .iter()
+                        .filter(|link| {
+                            link.source.node == processor_id || link.target.node == processor_id
+                        })
+                        .map(|link| link.id.clone())
+                        .collect()
+                };
+
+                // Remove connected links first
+                for link_id in connected_links {
+                    let link_delta = GraphDelta {
+                        links_to_remove: vec![link_id.clone()],
+                        ..Default::default()
+                    };
+                    let mut property_graph = self.graph.write();
+                    self.compiler
+                        .compile(&mut property_graph, runtime_ctx, &link_delta)?;
+
+                    // Remove from graph
+                    let mut graph = property_graph.graph().write();
+                    graph.remove_link(&link_id);
+                }
+
+                // Now remove the processor
+                let delta = GraphDelta {
+                    processors_to_remove: vec![processor_id.clone()],
+                    ..Default::default()
+                };
+
+                {
+                    let mut property_graph = self.graph.write();
+                    self.compiler
+                        .compile(&mut property_graph, runtime_ctx, &delta)?;
+
+                    // Remove from graph after shutdown
+                    {
+                        let mut graph = property_graph.graph().write();
+                        graph.remove_processor_node(&processor_id);
+                    }
+
+                    // Remove ECS entity
+                    property_graph.remove_processor_entity(&processor_id);
+                }
+
+                // Publish event after successful removal
+                use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveProcessor { processor_id }),
+                );
+            }
+
+            PendingOperation::AddLink(link_id) => {
+                // Validate: link must exist in graph and NOT have LinkInstanceComponent
+                let (exists_in_graph, already_wired) = {
+                    let property_graph = self.graph.read();
+                    let exists = property_graph.get_link(&link_id).is_some();
+                    let wired = property_graph
+                        .get_link_entity(&link_id)
+                        .map(|_| {
+                            property_graph
+                                .get_link_component::<LinkInstanceComponent>(&link_id)
+                                .is_some()
+                        })
+                        .unwrap_or(false);
+                    (exists, wired)
+                };
+
+                if !exists_in_graph {
+                    tracing::warn!("AddLink({}): link not in graph, skipping", link_id);
+                    return Ok(());
+                }
+
+                if already_wired {
+                    tracing::debug!("AddLink({}): already wired, skipping", link_id);
+                    return Ok(());
+                }
+
+                let delta = GraphDelta {
+                    links_to_add: vec![link_id],
+                    ..Default::default()
+                };
+
+                let mut property_graph = self.graph.write();
+                self.compiler
+                    .compile(&mut property_graph, runtime_ctx, &delta)?;
+            }
+
+            PendingOperation::RemoveLink(link_id) => {
+                // Validate: link must exist in graph OR have LinkInstanceComponent
+                let (exists_in_graph, has_instance, from_port, to_port) = {
+                    let property_graph = self.graph.read();
+                    let link_info = property_graph.get_link(&link_id);
+                    let exists = link_info.is_some();
+                    let (from, to) = link_info
+                        .map(|l| (l.from_port(), l.to_port()))
+                        .unwrap_or_default();
+                    let has_component = property_graph
+                        .get_link_entity(&link_id)
+                        .map(|_| {
+                            property_graph
+                                .get_link_component::<LinkInstanceComponent>(&link_id)
+                                .is_some()
+                        })
+                        .unwrap_or(false);
+                    (exists, has_component, from, to)
+                };
+
+                if !exists_in_graph && !has_instance {
+                    tracing::warn!(
+                        "RemoveLink({}): not found in graph or ECS, skipping",
+                        link_id
+                    );
+                    return Ok(());
+                }
+
+                let delta = GraphDelta {
+                    links_to_remove: vec![link_id.clone()],
+                    ..Default::default()
+                };
+
+                {
+                    let mut property_graph = self.graph.write();
+                    self.compiler
+                        .compile(&mut property_graph, runtime_ctx, &delta)?;
+
+                    // Remove from graph after unwiring
+                    let mut graph = property_graph.graph().write();
+                    graph.remove_link(&link_id);
+                }
+
+                // Publish event after successful removal
+                use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveLink {
+                        link_id: link_id.to_string(),
+                        from_port,
+                        to_port,
+                    }),
+                );
+            }
+
+            PendingOperation::UpdateProcessorConfig(processor_id) => {
+                // Validate: processor must exist and be running
+                let (exists_in_graph, has_instance) = {
+                    let property_graph = self.graph.read();
+                    let exists = property_graph.has_processor(&processor_id);
+                    let running = property_graph.has::<ProcessorInstance>(&processor_id);
+                    (exists, running)
+                };
+
+                if !exists_in_graph {
+                    tracing::warn!(
+                        "UpdateProcessorConfig({}): processor not in graph, skipping",
+                        processor_id
+                    );
+                    return Ok(());
+                }
+
+                if !has_instance {
+                    tracing::debug!(
+                        "UpdateProcessorConfig({}): not running yet, config will apply on start",
+                        processor_id
+                    );
+                    return Ok(());
+                }
+
+                // Get config from graph and apply to running processor
+                let config_json = {
+                    let property_graph = self.graph.read();
+                    let graph = property_graph.graph().read();
+                    graph
+                        .get_processor(&processor_id)
+                        .and_then(|node| node.config.clone())
+                };
+
+                if let Some(config) = config_json {
+                    // Get the processor instance Arc, then drop the property_graph borrow
+                    let processor_arc = {
+                        let property_graph = self.graph.read();
+                        property_graph
+                            .get::<ProcessorInstance>(&processor_id)
+                            .map(|instance| Arc::clone(&instance.0))
+                    };
+
+                    if let Some(processor_mutex) = processor_arc {
+                        let mut processor = processor_mutex.lock();
+                        if let Err(e) = processor.apply_config_json(&config) {
+                            tracing::warn!(
+                                "Failed to apply config to processor {}: {}",
+                                processor_id,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -198,8 +471,9 @@ impl StreamRuntime {
             graph.add_processor_node::<P>(config)?
         };
 
-        // Track in pending delta
-        self.pending_delta.processors_to_add.push(node.id.clone());
+        // Queue operation for commit
+        self.pending_operations
+            .push(PendingOperation::AddProcessor(node.id.clone()));
 
         // Publish event
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
@@ -230,8 +504,9 @@ impl StreamRuntime {
             graph.add_link(from, to)?
         };
 
-        // Track in pending delta
-        self.pending_delta.links_to_add.push(link.id.clone());
+        // Queue operation for commit
+        self.pending_operations
+            .push(PendingOperation::AddLink(link.id.clone()));
 
         // Publish event
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
@@ -251,130 +526,26 @@ impl StreamRuntime {
     }
 
     pub fn disconnect(&mut self, link: &Link) -> Result<()> {
-        use crate::core::graph::{LinkState, LinkStateComponent};
-
-        let from_port = link.from_port();
-        let to_port = link.to_port();
-        let link_id_str = link.id.to_string();
-        let link_id = link.id.clone();
-
-        // Check current link state via ECS
-        let current_state = {
-            let property_graph = self.graph.read();
-            property_graph
-                .get_link_state(&link_id)
-                .unwrap_or(LinkState::Pending)
-        };
-
-        // Validate state allows disconnection
-        match current_state {
-            LinkState::Disconnected => {
-                return Err(StreamError::LinkAlreadyDisconnected(link_id_str));
-            }
-            LinkState::Pending => {
-                // Link was never wired - just remove from graph
-                tracing::debug!("Disconnecting pending (unwired) link {}", link_id);
-            }
-            LinkState::Wired | LinkState::Disconnecting | LinkState::Error => {
-                // Proceed with unwire
-            }
-        }
-
-        // Update state to Disconnecting
-        {
-            let mut property_graph = self.graph.write();
-            property_graph.ensure_link_entity(&link_id);
-            if let Err(e) =
-                property_graph.insert_link(&link_id, LinkStateComponent(LinkState::Disconnecting))
-            {
-                tracing::warn!("Failed to update link state to Disconnecting: {}", e);
-            }
-        }
-
-        // Unwire if already wired
-        {
-            let mut property_graph = self.graph.write();
-            let _ = crate::core::compiler::wiring::unwire_link(&mut property_graph, &link_id);
-        }
-
-        // Update state to Disconnected
-        {
-            let mut property_graph = self.graph.write();
-            if let Err(e) =
-                property_graph.insert_link(&link_id, LinkStateComponent(LinkState::Disconnected))
-            {
-                tracing::warn!("Failed to update link state to Disconnected: {}", e);
-            }
-        }
-
-        // Remove from underlying graph
-        {
-            let property_graph = self.graph.read();
-            let mut graph = property_graph.graph().write();
-            graph.remove_link(&link_id);
-        }
-
-        // Track in pending delta
-        self.pending_delta.links_to_remove.push(link_id.clone());
-
-        // Clean up link entity
-        {
-            let mut property_graph = self.graph.write();
-            property_graph.remove_link_entity(&link_id);
-        }
-
-        // Publish event
-        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveLink {
-                link_id: link_id_str,
-                from_port,
-                to_port,
-            }),
-        );
-
-        // Handle commit mode
-        self.on_graph_changed()
+        self.disconnect_by_id(&link.id)
     }
 
     pub fn disconnect_by_id(&mut self, link_id: &LinkId) -> Result<()> {
-        // Get link info before removing
-        let (from_port, to_port) = {
+        // Validate link exists in graph
+        let link_exists = {
             let property_graph = self.graph.read();
-            if let Some(link) = property_graph.get_link(link_id) {
-                (link.from_port(), link.to_port())
-            } else {
-                (String::new(), String::new())
-            }
+            property_graph.get_link(link_id).is_some()
         };
 
-        // Unwire if already wired
-        {
-            let mut property_graph = self.graph.write();
-            let _ = crate::core::compiler::wiring::unwire_link(&mut property_graph, link_id);
+        if !link_exists {
+            return Err(StreamError::NotFound(format!(
+                "Link '{}' not found",
+                link_id
+            )));
         }
 
-        // Remove from underlying graph
-        {
-            let property_graph = self.graph.read();
-            let mut graph = property_graph.graph().write();
-            graph.remove_link(link_id);
-        }
-
-        // Track in pending delta
-        self.pending_delta.links_to_remove.push(link_id.clone());
-
-        // Publish event
-        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveLink {
-                link_id: link_id.to_string(),
-                from_port,
-                to_port,
-            }),
-        );
+        // Queue operation for commit - actual unwiring and graph removal happens during commit
+        self.pending_operations
+            .push(PendingOperation::RemoveLink(link_id.clone()));
 
         // Handle commit mode
         self.on_graph_changed()
@@ -385,33 +556,19 @@ impl StreamRuntime {
     }
 
     pub fn remove_processor_by_id(&mut self, processor_id: &ProcessorId) -> Result<()> {
-        // Shutdown processor if running
-        {
-            let mut property_graph = self.graph.write();
-            let _ = shutdown_processor(&mut property_graph, processor_id);
-            property_graph.remove_processor_entity(processor_id);
-        }
-
-        // Remove from underlying graph
-        {
+        // Validate processor exists in graph
+        let processor_exists = {
             let property_graph = self.graph.read();
-            let mut graph = property_graph.graph().write();
-            graph.remove_processor_node(processor_id);
+            property_graph.has_processor(processor_id)
+        };
+
+        if !processor_exists {
+            return Err(StreamError::ProcessorNotFound(processor_id.clone()));
         }
 
-        // Track in pending delta
-        self.pending_delta
-            .processors_to_remove
-            .push(processor_id.clone());
-
-        // Publish event
-        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveProcessor {
-                processor_id: processor_id.clone(),
-            }),
-        );
+        // Queue operation for commit - actual shutdown and graph removal happens during commit
+        self.pending_operations
+            .push(PendingOperation::RemoveProcessor(processor_id.clone()));
 
         // Handle commit mode
         self.on_graph_changed()
@@ -426,11 +583,18 @@ impl StreamRuntime {
         let config_json = serde_json::to_value(&config)
             .map_err(|e| crate::core::StreamError::Config(e.to_string()))?;
 
+        // Update config in graph
         {
             let property_graph = self.graph.read();
             let mut graph = property_graph.graph().write();
             graph.update_processor_config(processor_id, config_json)?;
         }
+
+        // Queue operation for commit
+        self.pending_operations
+            .push(PendingOperation::UpdateProcessorConfig(
+                processor_id.clone(),
+            ));
 
         // Publish event
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};

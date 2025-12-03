@@ -436,32 +436,29 @@ fn test_runtime_lifecycle_full_flow() {
         generated, received
     );
 
-    // Stop runtime (teardown will signal generator thread to stop)
-    println!("[STEP 4] Stopping runtime...");
-    let stop_result = runtime.stop();
-    println!("[STEP 4] Stop result: {:?}", stop_result);
-
-    let status = runtime.status();
-    print_runtime_status(&status, "After Stop");
-
     println!(
         "\n[STEP 4 RESULT] Generated {} frames, Received {} frames",
         generated, received
     );
 
     // =========================================================================
-    // STEP 5: Remove link, verify graph state
+    // STEP 5: Remove link while running, verify graph state
     // =========================================================================
-    print_separator("STEP 5: Remove Link");
+    print_separator("STEP 5: Remove Link (While Running)");
 
     println!("[STEP 5] Disconnecting link: {:?}", link.id);
     let disconnect_result = runtime.disconnect(&link);
     println!("[STEP 5] Disconnect result: {:?}", disconnect_result);
 
-    // Check graph state
+    // In auto-commit mode, disconnect executes immediately. In manual mode, commit is needed.
+    println!("\n[STEP 5] Committing removal...");
+    let commit_result = runtime.commit();
+    println!("[STEP 5] Commit result: {:?}", commit_result);
+
+    // Check graph state after commit
     {
         let property_graph = runtime.graph().read();
-        print_graph_json(&property_graph, "After Removing Link (Pre-Commit)");
+        print_graph_json(&property_graph, "After Removing Link (Post-Commit)");
         print_graph_summary(&property_graph, "After Removing Link");
 
         assert_eq!(
@@ -476,11 +473,6 @@ fn test_runtime_lifecycle_full_flow() {
         assert!(found_link.is_none(), "Link should not exist in graph");
     }
 
-    // Commit
-    println!("\n[STEP 5] Committing removal to executor...");
-    let commit_result = runtime.commit();
-    println!("[STEP 5] Commit result: {:?}", commit_result);
-
     let status = runtime.status();
     print_runtime_status(&status, "After Removing Link (Post-Commit)");
 
@@ -494,24 +486,14 @@ fn test_runtime_lifecycle_full_flow() {
     );
 
     // =========================================================================
-    // STEP 6: Remove processors, verify cleanup
+    // STEP 6: Remove processors while running, verify cleanup
     // =========================================================================
-    print_separator("STEP 6: Remove Processors");
+    print_separator("STEP 6: Remove Processors (While Running)");
 
     // Remove counter first
     println!("[STEP 6] Removing counter processor: {:?}", counter_node.id);
     let remove_result = runtime.remove_processor(&counter_node);
     println!("[STEP 6] Remove counter result: {:?}", remove_result);
-
-    {
-        let property_graph = runtime.graph().read();
-        print_graph_summary(&property_graph, "After Removing Counter");
-        assert_eq!(
-            property_graph.processor_count(),
-            1,
-            "Should have 1 processor"
-        );
-    }
 
     // Remove generator
     println!(
@@ -521,11 +503,17 @@ fn test_runtime_lifecycle_full_flow() {
     let remove_result = runtime.remove_processor(&generator_node);
     println!("[STEP 6] Remove generator result: {:?}", remove_result);
 
+    // Commit all removals
+    println!("\n[STEP 6] Committing removals...");
+    let commit_result = runtime.commit();
+    println!("[STEP 6] Commit result: {:?}", commit_result);
+
+    // Check graph state after commit
     {
         let property_graph = runtime.graph().read();
         print_graph_json(
             &property_graph,
-            "After Removing All Processors (Pre-Commit)",
+            "After Removing All Processors (Post-Commit)",
         );
         print_graph_summary(&property_graph, "After Removing All Processors");
         assert_eq!(
@@ -535,11 +523,6 @@ fn test_runtime_lifecycle_full_flow() {
         );
         assert_eq!(property_graph.link_count(), 0, "Should have 0 links");
     }
-
-    // Commit
-    println!("\n[STEP 6] Committing removals to executor...");
-    let commit_result = runtime.commit();
-    println!("[STEP 6] Commit result: {:?}", commit_result);
 
     let status = runtime.status();
     print_runtime_status(&status, "After Removing All Processors (Post-Commit)");
@@ -561,6 +544,18 @@ fn test_runtime_lifecycle_full_flow() {
         "\n[STEP 6 RESULT] Graph is back to empty state. Executor has {} processors, {} connections",
         status.processor_count, status.link_count
     );
+
+    // =========================================================================
+    // STEP 7: Stop runtime
+    // =========================================================================
+    print_separator("STEP 7: Stop Runtime");
+
+    println!("[STEP 7] Stopping runtime...");
+    let stop_result = runtime.stop();
+    println!("[STEP 7] Stop result: {:?}", stop_result);
+
+    let status = runtime.status();
+    print_runtime_status(&status, "After Stop");
 
     // =========================================================================
     // FINAL SUMMARY

@@ -93,7 +93,9 @@ fn test_connect_with_auto_commit() {
 
 #[test]
 fn test_disconnect_removes_link() {
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
 
     // Setup: add processors and connect
     let source = runtime
@@ -111,47 +113,84 @@ fn test_disconnect_removes_link() {
         )
         .expect("Failed to connect");
 
-    // Verify link exists
+    // Verify link exists in graph (added immediately to graph structure)
     {
         let graph = runtime.graph().read();
         assert_eq!(graph.link_count(), 1);
     }
 
-    // Disconnect
+    // Disconnect - queues the operation
     runtime.disconnect(&link).expect("Failed to disconnect");
 
-    // Verify link is removed
+    // Commit before start does nothing - link should still exist
+    runtime.commit().expect("Commit before start");
     {
         let graph = runtime.graph().read();
-        assert_eq!(graph.link_count(), 0);
+        assert_eq!(
+            graph.link_count(),
+            1,
+            "Link should still exist before start"
+        );
     }
+
+    // Start runtime - executes pending operations (including the disconnect)
+    runtime.start().expect("Failed to start");
+
+    // Verify link is removed after start
+    {
+        let graph = runtime.graph().read();
+        assert_eq!(graph.link_count(), 0, "Link should be removed after start");
+    }
+
+    runtime.stop().expect("Failed to stop");
 }
 
 #[test]
 fn test_remove_processor() {
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
 
     let node = runtime
         .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add processor");
 
-    // Verify exists
+    // Verify exists in graph (added immediately to graph structure)
     {
         let graph = runtime.graph().read();
         assert!(graph.has_processor(&node.id));
     }
 
-    // Remove
+    // Remove - queues the operation
     runtime
         .remove_processor(&node)
         .expect("Failed to remove processor");
 
-    // Verify removed
+    // Commit before start does nothing - processor should still exist
+    runtime.commit().expect("Commit before start");
     {
         let graph = runtime.graph().read();
-        assert!(!graph.has_processor(&node.id));
+        assert!(
+            graph.has_processor(&node.id),
+            "Processor should still exist before start"
+        );
+        assert_eq!(graph.processor_count(), 1);
+    }
+
+    // Start runtime - executes pending operations (including the remove)
+    runtime.start().expect("Failed to start");
+
+    // Verify removed after start
+    {
+        let graph = runtime.graph().read();
+        assert!(
+            !graph.has_processor(&node.id),
+            "Processor should be removed after start"
+        );
         assert_eq!(graph.processor_count(), 0);
     }
+
+    runtime.stop().expect("Failed to stop");
 }
 
 #[test]
@@ -194,7 +233,7 @@ fn test_registry_factory_registration() {
 mod unwire_tests {
     use streamlib::core::links::graph::link_id;
     use streamlib::core::processors::SimplePassthroughProcessor;
-    use streamlib::core::runtime::StreamRuntime;
+    use streamlib::core::runtime::{CommitMode, StreamRuntime};
     use streamlib::core::LinkInput;
     use streamlib::core::LinkInstance;
     use streamlib::core::LinkOutput;
@@ -301,7 +340,9 @@ mod unwire_tests {
 
     #[test]
     fn test_multiple_processors_pipeline() {
-        let mut runtime = StreamRuntime::new();
+        let mut runtime = StreamRuntime::builder()
+            .with_commit_mode(CommitMode::Manual)
+            .build();
 
         // Create a chain: source -> middle -> sink
         let source = runtime
@@ -329,29 +370,51 @@ mod unwire_tests {
             )
             .expect("connect middle->sink");
 
-        // Verify topology
+        // Verify topology in graph (added immediately)
         {
             let graph = runtime.graph().read();
             assert_eq!(graph.processor_count(), 3);
             assert_eq!(graph.link_count(), 2);
         }
 
-        // Disconnect middle link
+        // Disconnect middle link - queues the operation
         runtime.disconnect(&link1).expect("disconnect");
 
-        // Verify partial topology
+        // Commit before start does nothing - link should still exist
+        runtime.commit().expect("commit before start");
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(
+                graph.link_count(),
+                2,
+                "Links should still exist before start"
+            );
+        }
+
+        // Start runtime - executes pending operations
+        runtime.start().expect("start");
+
+        // Verify partial topology after start
         {
             let graph = runtime.graph().read();
             assert_eq!(graph.processor_count(), 3);
-            assert_eq!(graph.link_count(), 1);
+            assert_eq!(
+                graph.link_count(),
+                1,
+                "One link should be removed after start"
+            );
             assert!(graph.get_link(&link2.id).is_some());
             assert!(graph.get_link(&link1.id).is_none());
         }
+
+        runtime.stop().expect("stop");
     }
 
     #[test]
     fn test_disconnect_by_id() {
-        let mut runtime = StreamRuntime::new();
+        let mut runtime = StreamRuntime::builder()
+            .with_commit_mode(CommitMode::Manual)
+            .build();
 
         let source = runtime
             .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
@@ -368,14 +431,38 @@ mod unwire_tests {
             )
             .expect("connect");
 
-        // Disconnect by ID
+        // Verify link exists in graph
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(graph.link_count(), 1);
+        }
+
+        // Disconnect by ID - queues the operation
         runtime
             .disconnect_by_id(&link.id)
             .expect("disconnect by id");
 
-        // Verify removed
-        let graph = runtime.graph().read();
-        assert_eq!(graph.link_count(), 0);
+        // Commit before start does nothing
+        runtime.commit().expect("commit before start");
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(
+                graph.link_count(),
+                1,
+                "Link should still exist before start"
+            );
+        }
+
+        // Start runtime - executes pending operations
+        runtime.start().expect("start");
+
+        // Verify removed after start
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(graph.link_count(), 0, "Link should be removed after start");
+        }
+
+        runtime.stop().expect("stop");
     }
 }
 

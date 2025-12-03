@@ -124,6 +124,7 @@ tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 criterion = "0.5"  # Benchmarking framework
 rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
+serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 
 [[bench]]
 name = "connection_bench"

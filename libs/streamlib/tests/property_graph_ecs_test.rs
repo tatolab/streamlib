@@ -8,9 +8,16 @@
 //! 5. Runtime transparency (user-facing API unchanged)
 //! 6. JSON serialization for React Flow compatibility
 //! 7. Dynamic modification tests
+//!
+//! Note: Tests using StreamRuntime are marked `#[serial]` because the global
+//! PUBSUB can cause interference between parallel tests. This will be fixed
+//! when PUBSUB is made per-runtime instead of global.
+
+#![allow(clippy::await_holding_lock)]
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use streamlib::core::error::Result;
@@ -363,6 +370,7 @@ mod pubsub_event_tests {
     use super::*;
 
     #[test]
+    #[serial]
     fn test_graph_compile_events() {
         let collector = Arc::new(Mutex::new(EventCollector::new()));
         let listener: Arc<Mutex<dyn EventListener>> = collector.clone();
@@ -405,6 +413,7 @@ mod pubsub_event_tests {
     }
 
     #[test]
+    #[serial]
     fn test_processor_add_events() {
         let collector = Arc::new(Mutex::new(EventCollector::new()));
         let listener: Arc<Mutex<dyn EventListener>> = collector.clone();
@@ -452,6 +461,7 @@ mod pubsub_event_tests {
     }
 
     #[test]
+    #[serial]
     fn test_link_create_events() {
         let collector = Arc::new(Mutex::new(EventCollector::new()));
         let listener: Arc<Mutex<dyn EventListener>> = collector.clone();
@@ -509,6 +519,7 @@ mod pubsub_event_tests {
     }
 
     #[test]
+    #[serial]
     fn test_processor_remove_events() {
         let collector = Arc::new(Mutex::new(EventCollector::new()));
         let listener: Arc<Mutex<dyn EventListener>> = collector.clone();
@@ -554,6 +565,7 @@ mod pubsub_event_tests {
     }
 
     #[test]
+    #[serial]
     fn test_link_remove_events() {
         let collector = Arc::new(Mutex::new(EventCollector::new()));
         let listener: Arc<Mutex<dyn EventListener>> = collector.clone();
@@ -584,24 +596,31 @@ mod pubsub_event_tests {
             )
             .expect("Connect");
 
-        runtime.commit().expect("Setup commit");
+        // Start to compile processors and wire link
+        runtime.start().expect("Start");
 
         collector.lock().clear();
 
-        // Remove link - event is emitted immediately by disconnect()
+        // Remove link - queues operation, events emitted on commit
         runtime.disconnect(&link).expect("Disconnect");
+        runtime.commit().expect("Disconnect commit");
 
         wait_for_events();
 
         let events = collector.lock();
 
-        // Verify link removal event (emitted by disconnect(), not by commit)
-        // Note: GraphWillRemoveLink is emitted by compiler during delta processing,
-        // but disconnect() removes from graph immediately and emits GraphDidRemoveLink
+        // Verify link removal events from compiler
+        assert!(
+            events.has_event(|e| matches!(e, RuntimeEvent::GraphWillRemoveLink { .. })),
+            "Should emit GraphWillRemoveLink"
+        );
         assert!(
             events.has_event(|e| matches!(e, RuntimeEvent::GraphDidRemoveLink { .. })),
             "Should emit GraphDidRemoveLink"
         );
+
+        drop(events);
+        runtime.stop().expect("Stop");
     }
 }
 
@@ -613,6 +632,7 @@ mod delegate_tests {
     use super::*;
 
     #[test]
+    #[serial]
     fn test_factory_creates_processors() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -644,6 +664,7 @@ mod delegate_tests {
     }
 
     #[test]
+    #[serial]
     fn test_scheduler_spawns_processor_threads() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -671,6 +692,7 @@ mod delegate_tests {
     }
 
     #[test]
+    #[serial]
     fn test_processor_delegate_lifecycle() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -683,8 +705,8 @@ mod delegate_tests {
             })
             .expect("Add processor");
 
-        // Commit (delegate will_create, did_create called)
-        runtime.commit().expect("Commit add");
+        // Start triggers compilation (delegate will_create, did_create called)
+        runtime.start().expect("Start");
 
         // Verify processor is in graph
         {
@@ -701,6 +723,8 @@ mod delegate_tests {
             let pg = runtime.graph().read();
             assert!(!pg.has_processor(&node.id));
         }
+
+        runtime.stop().expect("Stop");
     }
 }
 
@@ -713,6 +737,7 @@ mod ecs_state_tests {
     use streamlib::core::graph::ProcessorInstance;
 
     #[test]
+    #[serial]
     fn test_processor_instance_component_after_compile() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -739,6 +764,7 @@ mod ecs_state_tests {
     }
 
     #[test]
+    #[serial]
     fn test_processor_entity_removed_on_processor_removal() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -772,6 +798,7 @@ mod ecs_state_tests {
     }
 
     #[test]
+    #[serial]
     fn test_multiple_processors_have_independent_entities() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -829,6 +856,7 @@ mod transparency_tests {
     use super::*;
 
     #[test]
+    #[serial]
     fn test_user_api_unchanged() {
         // This test verifies that the user-facing API is unchanged
         // and works as expected despite internal architectural changes
@@ -863,22 +891,23 @@ mod transparency_tests {
         // Link has expected fields
         assert!(!link.id.is_empty());
 
-        // commit works
-        runtime.commit().expect("commit should work");
+        // start() triggers initial compilation
+        runtime.start().expect("start should work");
 
         // status works
         let status = runtime.status();
         assert_eq!(status.processor_count, 2);
         assert_eq!(status.link_count, 1);
 
-        // disconnect works
+        // disconnect queues operation, commit executes it
         runtime.disconnect(&link).expect("disconnect should work");
+        runtime.commit().expect("disconnect commit");
 
-        // Verify link was removed
+        // Verify link was removed after commit
         let status = runtime.status();
         assert_eq!(
             status.link_count, 0,
-            "Link should be removed after disconnect"
+            "Link should be removed after disconnect + commit"
         );
 
         // remove_processor works (remove just one to avoid petgraph index bug)
@@ -891,9 +920,12 @@ mod transparency_tests {
         let status = runtime.status();
         assert_eq!(status.processor_count, 1, "One processor should remain");
         assert_eq!(status.link_count, 0);
+
+        runtime.stop().expect("stop should work");
     }
 
     #[test]
+    #[serial]
     fn test_graph_access_api() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -919,6 +951,7 @@ mod transparency_tests {
     }
 
     #[test]
+    #[serial]
     fn test_auto_commit_mode() {
         // Auto commit mode should also work
         let mut runtime = StreamRuntime::builder()
@@ -948,6 +981,7 @@ mod json_serialization_tests {
     use super::*;
 
     #[test]
+    #[serial]
     fn test_graph_json_has_nodes_and_links() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -990,6 +1024,7 @@ mod json_serialization_tests {
     }
 
     #[test]
+    #[serial]
     fn test_node_json_structure() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1024,6 +1059,7 @@ mod json_serialization_tests {
     }
 
     #[test]
+    #[serial]
     fn test_link_json_structure() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1063,6 +1099,7 @@ mod json_serialization_tests {
     }
 
     #[test]
+    #[serial]
     fn test_json_port_metadata() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1101,6 +1138,7 @@ mod json_serialization_tests {
     }
 
     #[test]
+    #[serial]
     fn test_json_config_serialization() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1140,6 +1178,7 @@ mod dynamic_modification_tests {
     use super::*;
 
     #[test]
+    #[serial]
     fn test_add_processor_while_running() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1177,6 +1216,7 @@ mod dynamic_modification_tests {
     }
 
     #[test]
+    #[serial]
     fn test_remove_processor_while_running() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1216,10 +1256,14 @@ mod dynamic_modification_tests {
     }
 
     #[test]
+    #[serial]
     fn test_add_link_while_running() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
             .build();
+
+        // Start runtime first
+        runtime.start().expect("start");
 
         let source = runtime
             .add_processor::<SourceProcessor::Processor>(SourceConfig {
@@ -1233,8 +1277,7 @@ mod dynamic_modification_tests {
             })
             .expect("add sink");
 
-        runtime.commit().expect("commit");
-        runtime.start().expect("start");
+        runtime.commit().expect("commit processors");
 
         // Add link while running
         let link = runtime.connect(
@@ -1253,6 +1296,7 @@ mod dynamic_modification_tests {
     }
 
     #[test]
+    #[serial]
     fn test_remove_link_while_running() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1296,17 +1340,18 @@ mod dynamic_modification_tests {
     }
 
     #[test]
+    #[serial]
     fn test_complex_dynamic_modifications() {
-        // This test demonstrates removing processors and adding new links.
-        // NOTE: There's a known issue in Graph where removing a processor
-        // invalidates petgraph node indices for remaining processors.
-        // This test is simplified to avoid triggering that bug.
+        // This test demonstrates disconnecting and reconnecting links dynamically.
 
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
             .build();
 
-        // Build initial pipeline: source -> sink (simple, no middle processor)
+        // Start runtime first
+        runtime.start().expect("start");
+
+        // Build initial pipeline: source -> sink
         let source = runtime
             .add_processor::<SourceProcessor::Processor>(SourceConfig { name: "src".into() })
             .expect("add source");
@@ -1317,6 +1362,8 @@ mod dynamic_modification_tests {
             })
             .expect("add sink");
 
+        runtime.commit().expect("commit processors");
+
         let link = runtime
             .connect(
                 format!("{}.output", source.id),
@@ -1324,8 +1371,7 @@ mod dynamic_modification_tests {
             )
             .expect("link");
 
-        runtime.commit().expect("commit initial");
-        runtime.start().expect("start");
+        runtime.commit().expect("commit link");
 
         assert_eq!(runtime.status().processor_count, 2);
         assert_eq!(runtime.status().link_count, 1);
@@ -1355,6 +1401,7 @@ mod dynamic_modification_tests {
     }
 
     #[test]
+    #[serial]
     fn test_incremental_delta_detection() {
         let mut runtime = StreamRuntime::builder()
             .with_commit_mode(CommitMode::Manual)
@@ -1414,6 +1461,7 @@ mod dynamic_modification_tests {
 // =============================================================================
 
 #[test]
+#[serial]
 fn test_full_property_graph_ecs_integration() {
     // This test combines all aspects to verify the complete system works together
 
@@ -1510,17 +1558,15 @@ fn test_full_property_graph_ecs_integration() {
     assert_eq!(status.processor_count, 2);
     assert_eq!(status.link_count, 1);
 
-    // 8. Stop and cleanup
-    runtime.stop().expect("stop");
-
     collector.lock().clear();
 
-    // 9. Remove link (demonstrates disconnect event)
+    // 8. Remove link while running (demonstrates disconnect event)
     runtime.disconnect(&link).expect("disconnect");
+    runtime.commit().expect("disconnect commit");
 
     wait_for_events();
 
-    // 10. Verify disconnect event
+    // 9. Verify disconnect event
     {
         let events = collector.lock();
         assert!(
@@ -1529,7 +1575,7 @@ fn test_full_property_graph_ecs_integration() {
         );
     }
 
-    // 11. Verify link is removed but processors remain
+    // 10. Verify link is removed but processors remain
     // NOTE: We don't remove processors here to avoid triggering a known
     // petgraph index invalidation bug when removing multiple processors
     {
@@ -1537,6 +1583,9 @@ fn test_full_property_graph_ecs_integration() {
         assert_eq!(pg.processor_count(), 2);
         assert_eq!(pg.link_count(), 0);
     }
+
+    // 11. Stop and cleanup
+    runtime.stop().expect("stop");
 
     println!("Full PropertyGraph + ECS integration test passed!");
 }

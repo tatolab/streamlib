@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::compiler::delta::GraphDelta;
-use crate::core::compiler::Compiler;
+use crate::core::compiler::{Compiler, PendingOperationQueue};
 use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{Graph, PropertyGraph};
 
@@ -112,7 +111,7 @@ impl RuntimeBuilder {
             scheduler,
             commit_mode: self.commit_mode,
             runtime_context: None,
-            pending_delta: GraphDelta::default(),
+            pending_operations: PendingOperationQueue::new(),
             started: false,
         }
     }
