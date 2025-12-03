@@ -4,7 +4,7 @@ use streamlib::{input, output, CameraProcessor, DisplayProcessor, Result, Stream
 fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
     println!("=== Camera → Display Pipeline ===\n");

@@ -12,6 +12,7 @@ use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
 use objc2_io_surface::IOSurface;
 use parking_lot::Mutex;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 // Apple-specific configuration and device types
@@ -50,6 +51,55 @@ struct FrameHolder {
 unsafe impl Send for FrameHolder {}
 unsafe impl Sync for FrameHolder {}
 
+/// Shared state for AVFoundation initialization (async pattern).
+struct CaptureSessionInitState {
+    /// Set to true when AVFoundation init completes successfully.
+    ready: AtomicBool,
+    /// Set to true if AVFoundation init failed.
+    failed: AtomicBool,
+    /// Camera name, populated on success.
+    camera_name: Mutex<Option<String>>,
+    /// Error message if init failed.
+    error_message: Mutex<Option<String>>,
+}
+
+impl CaptureSessionInitState {
+    fn new() -> Self {
+        Self {
+            ready: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+            camera_name: Mutex::new(None),
+            error_message: Mutex::new(None),
+        }
+    }
+
+    fn mark_ready(&self, camera_name: String) {
+        *self.camera_name.lock() = Some(camera_name);
+        self.ready.store(true, Ordering::Release);
+    }
+
+    fn mark_failed(&self, error: String) {
+        *self.error_message.lock() = Some(error);
+        self.failed.store(true, Ordering::Release);
+    }
+
+    fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+
+    fn is_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+
+    fn take_camera_name(&self) -> Option<String> {
+        self.camera_name.lock().take()
+    }
+
+    fn take_error(&self) -> Option<String> {
+        self.error_message.lock().take()
+    }
+}
+
 static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> =
     std::sync::OnceLock::new();
 
@@ -72,9 +122,19 @@ define_class!(
             sample_buffer: CMSampleBufferRef,
             _connection: *mut AVCaptureConnection,
         ) {
+            // NOTE: Cannot use tracing here - this runs on AVFoundation's dispatch queue
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static CALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
+            let count = CALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+
+            if count == 0 {
+                eprintln!("[Camera] AVFoundation: First frame received");
+            } else if count.is_multiple_of(300) {
+                eprintln!("[Camera] AVFoundation: Frame #{}", count);
+            }
+
             let pixel_buffer_ref = CMSampleBufferGetImageBuffer(sample_buffer);
             if pixel_buffer_ref.is_null() {
-                eprintln!("Camera: Sample buffer has no image buffer!");
                 return;
             }
 
@@ -97,8 +157,6 @@ define_class!(
                         );
                     }
                 }
-            } else {
-                eprintln!("Camera: FRAME_STORAGE not initialized!");
             }
         }
     }
@@ -131,20 +189,43 @@ pub struct AppleCameraProcessor {
     wgpu_bridge: Option<Arc<WgpuBridge>>,
     camera_name: String,
     metal_command_queue: Option<metal::CommandQueue>,
+    /// Async init state - None means init not started yet.
+    capture_init_state: Option<Arc<CaptureSessionInitState>>,
+    /// Whether we've dispatched the AVFoundation init to main thread.
+    avfoundation_init_dispatched: bool,
 }
 
 impl AppleCameraProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
-        tracing::info!("Camera: Processor started, will initialize in process()");
+        tracing::info!("Camera: setup() complete, will initialize AVFoundation in process()");
         Ok(())
     }
 
-    /// Initialize AVFoundation capture session on main thread
-    /// Must be called from main thread with valid MainThreadMarker
-    /// Returns the camera name as a String
-    /// Note: Session, device, and delegate are leaked to stay on main thread
+    /// Initialize AVFoundation capture session on main thread.
+    /// Called via dispatch to main queue - MUST NOT block or use tracing.
     fn initialize_capture_session_on_main_thread(
+        mtm: MainThreadMarker,
+        config: &AppleCameraConfig,
+        latest_frame: Arc<Mutex<Option<FrameHolder>>>,
+        init_state: Arc<CaptureSessionInitState>,
+    ) {
+        // All errors are reported via init_state, not returned
+        let result = Self::do_initialize_capture_session(mtm, config, latest_frame);
+        match result {
+            Ok(camera_name) => {
+                eprintln!("[Camera] AVFoundation session started: {}", camera_name);
+                init_state.mark_ready(camera_name);
+            }
+            Err(e) => {
+                eprintln!("[Camera] AVFoundation init FAILED: {}", e);
+                init_state.mark_failed(e.to_string());
+            }
+        }
+    }
+
+    /// Internal init logic, returns Result for cleaner error handling.
+    fn do_initialize_capture_session(
         mtm: MainThreadMarker,
         config: &AppleCameraConfig,
         latest_frame: Arc<Mutex<Option<FrameHolder>>>,
@@ -160,9 +241,10 @@ impl AppleCameraProcessor::Processor {
                 let id_str = NSString::from_str(id);
                 let dev = AVCaptureDevice::deviceWithUniqueID(&id_str);
                 if dev.is_none() {
-                    return Err(StreamError::Configuration(
-                        format!("Camera not found with ID: {}. The device may have been disconnected or the ID changed.", id)
-                    ));
+                    return Err(StreamError::Configuration(format!(
+                        "Camera not found with ID: {}",
+                        id
+                    )));
                 }
                 dev.unwrap()
             } else {
@@ -174,13 +256,6 @@ impl AppleCameraProcessor::Processor {
                     .ok_or_else(|| StreamError::Configuration("No camera found".into()))?
             }
         };
-
-        let _device_name = unsafe { device.localizedName().to_string() };
-        let _device_model = unsafe { device.modelID().to_string() };
-
-        // NOTE: Cannot use tracing::info here - this runs in a dispatch queue callback
-        // where stdout/stderr might not be available, causing panics
-        // tracing::info!("Camera: Found device: {} ({})", _device_name, _device_model);
 
         unsafe {
             if let Err(e) = device.lockForConfiguration() {
@@ -199,11 +274,9 @@ impl AppleCameraProcessor::Processor {
         };
 
         let can_add = unsafe { session.canAddInput(&input) };
-
         if !can_add {
             return Err(StreamError::Configuration(
-                "Session cannot add camera input. The camera may be in use by another application."
-                    .into(),
+                "Session cannot add camera input. Camera may be in use.".into(),
             ));
         }
 
@@ -257,7 +330,6 @@ impl AppleCameraProcessor::Processor {
         }
 
         let can_add_output = unsafe { session.canAddOutput(&output) };
-
         if !can_add_output {
             return Err(StreamError::Configuration(
                 "Cannot add camera output".into(),
@@ -266,25 +338,16 @@ impl AppleCameraProcessor::Processor {
 
         unsafe {
             session.addOutput(&output);
-        }
-
-        unsafe {
             session.commitConfiguration();
         }
 
-        // Get camera name before starting
         let camera_name = unsafe { device.localizedName().to_string() };
 
-        // Start the session
         unsafe {
             session.startRunning();
         }
 
-        // NOTE: Cannot use tracing::info here - this runs in a dispatch queue callback
-        // tracing::info!("Camera: Started AVFoundation session for device: {}", camera_name);
-
-        // Leak all Objective-C objects to keep them alive on main thread
-        // TODO: Properly manage session lifecycle
+        // Leak ObjC objects to keep them alive
         let _ = Retained::into_raw(session);
         let _ = Retained::into_raw(device);
         let _ = Retained::into_raw(delegate);
@@ -301,102 +364,129 @@ impl AppleCameraProcessor::Processor {
         Ok(())
     }
 
+    /// Initialize Metal resources (can run on any thread).
+    fn initialize_metal_resources(&mut self) -> Result<()> {
+        let metal_device = MetalDevice::new()?;
+
+        let metal_command_queue = {
+            use metal::foreign_types::ForeignTypeRef;
+            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+            let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
+            metal_device_ref.new_command_queue()
+        };
+
+        let gpu_context = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+
+        let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
+            metal_device.clone_device(),
+            gpu_context.device().as_ref().clone(),
+            gpu_context.queue().as_ref().clone(),
+        ));
+
+        self.wgpu_bridge = Some(wgpu_bridge);
+        self.metal_command_queue = Some(metal_command_queue);
+        self.metal_device = Some(metal_device);
+
+        Ok(())
+    }
+
     // Business logic - called by macro-generated process()
-    // Pull mode: called once, sets up camera and enters frame processing loop
+    // Manual mode: called once, sets up camera and enters frame processing loop
     fn process(&mut self) -> Result<()> {
-        tracing::trace!("Camera: process() called");
+        // Step 1: Dispatch AVFoundation init to main queue (non-blocking)
+        if !self.avfoundation_init_dispatched {
+            tracing::info!("Camera: Dispatching AVFoundation init to main thread (non-blocking)");
 
-        // First-time setup: Initialize camera on main thread
-        if self.metal_device.is_none() {
-            tracing::info!("Camera: Initializing AVFoundation capture session");
-            tracing::trace!("Camera: About to dispatch to main thread for initialization...");
+            let init_state = Arc::new(CaptureSessionInitState::new());
+            self.capture_init_state = Some(Arc::clone(&init_state));
+            self.avfoundation_init_dispatched = true;
 
-            // AVFoundation requires main thread, so dispatch asynchronously to main thread
-            // and wait for completion using a condvar
-            use dispatch2::DispatchQueue;
-            use std::sync::{Condvar, Mutex as StdMutex};
-
-            // Result holder with condvar for async wait
-            let pair = Arc::new((StdMutex::new(None), Condvar::new()));
-            let pair_clone = Arc::clone(&pair);
             let config = self.config.clone();
             let latest_frame = self.latest_frame.clone();
 
-            tracing::trace!("Camera: Dispatching exec_async to main queue...");
+            use dispatch2::DispatchQueue;
             DispatchQueue::main().exec_async(move || {
-                tracing::trace!("Camera: Main thread dispatch executing!");
                 // SAFETY: This closure executes on the main thread via GCD
                 let mtm = unsafe { MainThreadMarker::new_unchecked() };
-
-                let init_result =
-                    Self::initialize_capture_session_on_main_thread(mtm, &config, latest_frame);
-                let camera_name = init_result;
-
-                let (lock, cvar) = &*pair_clone;
-                let mut result = lock.lock().unwrap();
-                *result = Some(camera_name);
-                cvar.notify_one();
+                Self::initialize_capture_session_on_main_thread(
+                    mtm,
+                    &config,
+                    latest_frame,
+                    init_state,
+                );
             });
 
-            // Wait for the result
-            tracing::trace!("Camera: Waiting for main thread dispatch to complete...");
-            let (lock, cvar) = &*pair;
-            let mut result = lock.lock().unwrap();
-            while result.is_none() {
-                tracing::trace!("Camera: Still waiting on condvar...");
-                result = cvar.wait(result).unwrap();
-            }
-            tracing::trace!("Camera: Main thread dispatch completed!");
-
-            let init_result = result
-                .take()
-                .ok_or_else(|| StreamError::Runtime("Camera initialization failed".into()))?;
-
-            self.camera_name = init_result?;
-
-            tracing::info!("Camera {}: AVFoundation session running", self.camera_name);
-
-            // Initialize Metal resources
-            let metal_device = MetalDevice::new()?;
-
-            // Create metal crate command queue from objc2 Metal device
-            let metal_command_queue = {
-                use metal::foreign_types::ForeignTypeRef;
-                let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-                let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-                metal_device_ref.new_command_queue()
-            };
-
-            let gpu_context = self
-                .gpu_context
-                .as_ref()
-                .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
-
-            // Create wgpu bridge from shared device
-            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-                metal_device.clone_device(),
-                gpu_context.device().as_ref().clone(),
-                gpu_context.queue().as_ref().clone(),
-            ));
-
-            self.wgpu_bridge = Some(wgpu_bridge);
-            self.metal_command_queue = Some(metal_command_queue);
-            self.metal_device = Some(metal_device);
-
-            tracing::info!("Camera {}: Metal resources initialized", self.camera_name);
+            tracing::info!("Camera: AVFoundation init dispatched, continuing without blocking");
         }
 
-        // Main frame processing loop - with shutdown awareness
+        // Step 2: Initialize Metal resources (can happen in parallel, doesn't need main thread)
+        if self.metal_device.is_none() {
+            tracing::info!("Camera: Initializing Metal resources");
+            self.initialize_metal_resources()?;
+            tracing::info!("Camera: Metal resources initialized");
+        }
+
+        // Step 3: Enter frame processing loop
         use crate::core::{shutdown_aware_loop, LoopControl};
 
+        let mut loop_iteration = 0u64;
+        let mut avfoundation_ready = false;
+
         shutdown_aware_loop(|| {
+            loop_iteration += 1;
+
+            // Check if AVFoundation init completed (only until it's ready)
+            if !avfoundation_ready {
+                if let Some(ref init_state) = self.capture_init_state {
+                    if init_state.is_failed() {
+                        let error = init_state
+                            .take_error()
+                            .unwrap_or_else(|| "Unknown error".into());
+                        return Err(StreamError::Runtime(format!(
+                            "Camera AVFoundation init failed: {}",
+                            error
+                        )));
+                    }
+                    if init_state.is_ready() {
+                        if let Some(name) = init_state.take_camera_name() {
+                            self.camera_name = name;
+                        }
+                        avfoundation_ready = true;
+                        tracing::info!(
+                            "Camera {}: AVFoundation ready, starting frame capture",
+                            self.camera_name
+                        );
+                    }
+                }
+
+                // AVFoundation not ready yet - sleep briefly and retry
+                if !avfoundation_ready {
+                    if loop_iteration == 1 {
+                        tracing::debug!(
+                            "Camera: Waiting for AVFoundation init to complete on main thread..."
+                        );
+                    } else if loop_iteration.is_multiple_of(100) {
+                        tracing::trace!(
+                            "Camera: Still waiting for AVFoundation (iteration {})",
+                            loop_iteration
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    return Ok(LoopControl::Continue);
+                }
+            }
+
+            // AVFoundation is ready - process frames
             let frame_holder = {
                 let mut latest = self.latest_frame.lock();
-                latest.take() // Take ownership, leaving None
+                latest.take()
             };
 
             let Some(holder) = frame_holder else {
-                // No frame available yet, wait a bit
+                // No frame available yet
                 std::thread::sleep(std::time::Duration::from_millis(1));
                 return Ok(LoopControl::Continue);
             };
@@ -425,14 +515,11 @@ impl AppleCameraProcessor::Processor {
                 let metal_texture = match iosurface::create_metal_texture_from_iosurface(
                     metal_device.device(),
                     &iosurface,
-                    0, // plane 0 for BGRA
+                    0,
                 ) {
                     Ok(tex) => tex,
                     Err(e) => {
-                        tracing::warn!(
-                            "Camera: Failed to create metal texture: {}, skipping frame",
-                            e
-                        );
+                        tracing::warn!("Camera: Failed to create metal texture: {}", e);
                         return Ok(LoopControl::Continue);
                     }
                 };
@@ -449,10 +536,7 @@ impl AppleCameraProcessor::Processor {
                 ) {
                     Ok(tex) => tex,
                     Err(e) => {
-                        tracing::warn!(
-                            "Camera: Failed to wrap iosurface texture: {}, skipping frame",
-                            e
-                        );
+                        tracing::warn!("Camera: Failed to wrap iosurface texture: {}", e);
                         return Ok(LoopControl::Continue);
                     }
                 };
@@ -471,7 +555,7 @@ impl AppleCameraProcessor::Processor {
                     match metal_device.device().newTextureWithDescriptor(&desc) {
                         Some(tex) => tex,
                         None => {
-                            tracing::warn!("Camera: Failed to create RGBA texture, skipping frame");
+                            tracing::warn!("Camera: Failed to create RGBA texture");
                             return Ok(LoopControl::Continue);
                         }
                     }
@@ -526,10 +610,7 @@ impl AppleCameraProcessor::Processor {
                 ) {
                     Ok(tex) => tex,
                     Err(e) => {
-                        tracing::warn!(
-                            "Camera: Failed to wrap output texture: {}, skipping frame",
-                            e
-                        );
+                        tracing::warn!("Camera: Failed to wrap output texture: {}", e);
                         return Ok(LoopControl::Continue);
                     }
                 };
@@ -549,7 +630,8 @@ impl AppleCameraProcessor::Processor {
 
                 if self.frame_count.is_multiple_of(60) {
                     tracing::info!(
-                        "Camera: Generated frame {} ({}x{}) - WebGPU texture, format=Rgba8Unorm",
+                        "Camera {}: Frame {} ({}x{})",
+                        self.camera_name,
                         self.frame_count,
                         width,
                         height
@@ -557,10 +639,10 @@ impl AppleCameraProcessor::Processor {
                 }
 
                 self.video.write(frame);
-            } // end unsafe block
+            }
 
             Ok(LoopControl::Continue)
-        }) // end shutdown_aware_loop
+        })
     }
 
     // Helper methods

@@ -1,12 +1,14 @@
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSApplicationDelegate};
+use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSRunningApplication};
 use objc2_foundation::{NSObject, NSObjectProtocol};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+use crate::core::Result;
 
 /// Global shutdown callback that applicationWillTerminate can invoke
 static SHUTDOWN_CALLBACK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
@@ -120,9 +122,108 @@ pub fn setup_macos_app() {
     tracing::info!("macOS: App configured (activation policy, menu, delegate)");
 }
 
+/// Verify that the macOS platform is ready for processor initialization.
+///
+/// This function ensures the NSApplication has completed its launch sequence
+/// by calling `finishLaunching()` and then verifying via Apple's APIs that
+/// the application is actually in a ready state.
+///
+/// Must be called from the main thread after `setup_macos_app()`.
+///
+/// Returns `Ok(())` when verified ready, or `Err` if verification fails/times out.
+pub fn ensure_macos_platform_ready() -> Result<()> {
+    use objc2_app_kit::NSEventMask;
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
+
+    let mtm = MainThreadMarker::new().ok_or_else(|| {
+        crate::core::StreamError::Runtime(
+            "ensure_macos_platform_ready must be called from main thread".to_string(),
+        )
+    })?;
+
+    let app = NSApplication::sharedApplication(mtm);
+
+    // Call finishLaunching to complete the app initialization sequence
+    app.finishLaunching();
+
+    // Pump events briefly to allow the system to process the launch
+    // This is necessary because finishLaunching() triggers async system work
+    let pump_start = Instant::now();
+    let pump_duration = Duration::from_millis(50);
+
+    while pump_start.elapsed() < pump_duration {
+        let date = NSDate::dateWithTimeIntervalSinceNow(0.01);
+        let event = unsafe {
+            app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                Some(&date),
+                NSDefaultRunLoopMode,
+                true,
+            )
+        };
+        if let Some(event) = event {
+            app.sendEvent(&event);
+            app.updateWindows();
+        }
+    }
+
+    // Now verify the platform is actually ready using Apple's APIs
+    let timeout = Duration::from_secs(5);
+    let start = Instant::now();
+
+    loop {
+        // Check NSRunningApplication.isFinishedLaunching - this is the authoritative
+        // signal that applicationDidFinishLaunching has been processed
+        let current_app = NSRunningApplication::currentApplication();
+        let is_finished_launching = current_app.isFinishedLaunching();
+
+        if is_finished_launching {
+            tracing::info!(
+                "macOS: Platform verified ready (isFinishedLaunching=true) in {:?}",
+                start.elapsed()
+            );
+            return Ok(());
+        }
+
+        // Timeout check
+        if start.elapsed() > timeout {
+            return Err(crate::core::StreamError::Runtime(format!(
+                "macOS platform readiness timeout after {:?}: isFinishedLaunching={}",
+                timeout, is_finished_launching
+            )));
+        }
+
+        // Pump more events while waiting - the system needs run loop time
+        // to process the launch sequence
+        let date = NSDate::dateWithTimeIntervalSinceNow(0.01);
+        let event = unsafe {
+            app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                Some(&date),
+                NSDefaultRunLoopMode,
+                true,
+            )
+        };
+        if let Some(event) = event {
+            app.sendEvent(&event);
+            app.updateWindows();
+        }
+    }
+}
+
+/// Check if the macOS platform is currently ready (non-blocking).
+///
+/// Returns `true` if `NSRunningApplication.isFinishedLaunching` is true.
+/// This can be called from any thread.
+#[allow(dead_code)]
+pub fn is_macos_platform_ready() -> bool {
+    NSRunningApplication::currentApplication().isFinishedLaunching()
+}
+
 /// Run the NSApplication event loop (blocking).
 ///
-/// Call `setup_macos_app()` first. This blocks until the app terminates.
+/// Call `setup_macos_app()` and `ensure_macos_platform_ready()` first.
+/// This blocks until the app terminates.
 pub fn run_macos_event_loop() {
     use objc2_app_kit::NSEventMask;
     use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
@@ -130,7 +231,8 @@ pub fn run_macos_event_loop() {
     let mtm = MainThreadMarker::new().expect("Must be on main thread");
     let app = NSApplication::sharedApplication(mtm);
 
-    app.finishLaunching();
+    // Note: finishLaunching() should have already been called by ensure_macos_platform_ready()
+    // but calling it again is safe (idempotent)
 
     tracing::info!("macOS: Event loop starting");
 

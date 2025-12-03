@@ -141,6 +141,10 @@ impl StreamRuntime {
     /// When the runtime is not started, pending operations are kept in the queue
     /// and will be executed when `start()` is called. When started, operations
     /// are compiled and executed with proper processor lifecycle.
+    ///
+    /// **Important**: All pending operations are batched into a single compilation
+    /// pass. This ensures that processors are wired BEFORE their threads start,
+    /// avoiding deadlocks when wiring tries to lock a running processor.
     pub fn commit(&mut self) -> Result<()> {
         // Only process if there are pending changes
         if self.pending_operations.is_empty() {
@@ -156,6 +160,10 @@ impl StreamRuntime {
 
         // Take all pending operations
         let operations = self.pending_operations.take_all();
+        tracing::debug!(
+            "[commit] Processing {} pending operations (batched)",
+            operations.len()
+        );
 
         // Runtime is started - full compilation with processor lifecycle
         let runtime_ctx = self
@@ -168,14 +176,185 @@ impl StreamRuntime {
             })?
             .clone();
 
+        // Batch all operations into a single GraphDelta.
+        // This ensures the compile phases run in order:
+        // 1. CREATE all processors
+        // 2. WIRE all links (before any threads start!)
+        // 3. SETUP all processors
+        // 4. START all processors
+        self.execute_operations_batched(operations, &runtime_ctx)?;
+
+        Ok(())
+    }
+
+    /// Execute all pending operations as a single batched compilation.
+    ///
+    /// This collects all add/remove operations into a single GraphDelta,
+    /// ensuring the 4-phase compilation happens in the correct order:
+    /// CREATE → WIRE → SETUP → START
+    ///
+    /// This prevents deadlocks where wiring tries to lock a processor
+    /// that's already running with an internal loop holding the lock.
+    fn execute_operations_batched(
+        &mut self,
+        operations: Vec<PendingOperation>,
+        runtime_ctx: &Arc<RuntimeContext>,
+    ) -> Result<()> {
+        use crate::core::compiler::GraphDelta;
+        use crate::core::graph::ProcessorInstance;
+        use crate::core::links::LinkInstanceComponent;
+
+        // Separate operations by type
+        let mut processors_to_add = Vec::new();
+        let mut processors_to_remove = Vec::new();
+        let mut links_to_add = Vec::new();
+        let mut links_to_remove = Vec::new();
+        let mut config_updates = Vec::new();
+
         for op in operations {
-            self.execute_operation(op, &runtime_ctx)?;
+            match op {
+                PendingOperation::AddProcessor(id) => {
+                    // Validate: must exist in graph and not already running
+                    let (exists, running) = {
+                        let pg = self.graph.read();
+                        (pg.has_processor(&id), pg.has::<ProcessorInstance>(&id))
+                    };
+                    if exists && !running {
+                        processors_to_add.push(id);
+                    } else if !exists {
+                        tracing::warn!("AddProcessor({}): not in graph, skipping", id);
+                    } else {
+                        tracing::debug!("AddProcessor({}): already running, skipping", id);
+                    }
+                }
+                PendingOperation::RemoveProcessor(id) => {
+                    processors_to_remove.push(id);
+                }
+                PendingOperation::AddLink(id) => {
+                    // Validate: must exist in graph and not already wired
+                    let (exists, wired) = {
+                        let pg = self.graph.read();
+                        let exists = pg.get_link(&id).is_some();
+                        let wired = pg
+                            .get_link_entity(&id)
+                            .map(|_| {
+                                pg.get_link_component::<LinkInstanceComponent>(&id)
+                                    .is_some()
+                            })
+                            .unwrap_or(false);
+                        (exists, wired)
+                    };
+                    if exists && !wired {
+                        links_to_add.push(id);
+                    } else if !exists {
+                        tracing::warn!("AddLink({}): not in graph, skipping", id);
+                    } else {
+                        tracing::debug!("AddLink({}): already wired, skipping", id);
+                    }
+                }
+                PendingOperation::RemoveLink(id) => {
+                    links_to_remove.push(id);
+                }
+                PendingOperation::UpdateProcessorConfig(id) => {
+                    config_updates.push(id);
+                }
+            }
+        }
+
+        // Handle removals first (separate delta to ensure clean shutdown)
+        if !processors_to_remove.is_empty() || !links_to_remove.is_empty() {
+            let remove_delta = GraphDelta {
+                processors_to_remove: processors_to_remove.clone(),
+                links_to_remove: links_to_remove.clone(),
+                ..Default::default()
+            };
+
+            if !remove_delta.is_empty() {
+                tracing::debug!(
+                    "[commit] Removing {} processors, {} links",
+                    processors_to_remove.len(),
+                    links_to_remove.len()
+                );
+                let mut property_graph = self.graph.write();
+                self.compiler
+                    .compile(&mut property_graph, runtime_ctx, &remove_delta)?;
+
+                // Clean up graph after removal
+                for link_id in &links_to_remove {
+                    let mut graph = property_graph.graph().write();
+                    graph.remove_link(link_id);
+                }
+                for proc_id in &processors_to_remove {
+                    {
+                        let mut graph = property_graph.graph().write();
+                        graph.remove_processor_node(proc_id);
+                    }
+                    property_graph.remove_processor_entity(proc_id);
+                }
+            }
+        }
+
+        // Handle additions as a single batched delta
+        // This ensures: CREATE all → WIRE all → SETUP all → START all
+        if !processors_to_add.is_empty() || !links_to_add.is_empty() {
+            let add_delta = GraphDelta {
+                processors_to_add,
+                links_to_add,
+                ..Default::default()
+            };
+
+            tracing::debug!(
+                "[commit] Adding {} processors, {} links (batched compilation)",
+                add_delta.processors_to_add.len(),
+                add_delta.links_to_add.len()
+            );
+
+            let mut property_graph = self.graph.write();
+            self.compiler
+                .compile(&mut property_graph, runtime_ctx, &add_delta)?;
+        }
+
+        // Handle config updates (can be done on running processors)
+        for proc_id in config_updates {
+            self.apply_config_update(&proc_id)?;
+        }
+
+        Ok(())
+    }
+
+    /// Apply a config update to a running processor.
+    fn apply_config_update(&mut self, proc_id: &ProcessorId) -> Result<()> {
+        use crate::core::graph::ProcessorInstance;
+
+        let config_json = {
+            let pg = self.graph.read();
+            let graph = pg.graph().read();
+            graph.get_processor(proc_id).and_then(|n| n.config.clone())
+        };
+
+        if let Some(config) = config_json {
+            let processor_arc = {
+                let pg = self.graph.read();
+                pg.get::<ProcessorInstance>(proc_id)
+                    .map(|i| Arc::clone(&i.0))
+            };
+
+            if let Some(proc) = processor_arc {
+                let mut guard = proc.lock();
+                if let Err(e) = guard.apply_config_json(&config) {
+                    tracing::warn!("Failed to apply config to {}: {}", proc_id, e);
+                }
+            }
         }
 
         Ok(())
     }
 
     /// Execute a single pending operation with validation.
+    ///
+    /// Note: This is kept for backwards compatibility but `execute_operations_batched`
+    /// is preferred for avoiding deadlocks.
+    #[allow(dead_code)]
     fn execute_operation(
         &mut self,
         op: PendingOperation,
@@ -618,13 +797,23 @@ impl StreamRuntime {
     /// Start the runtime.
     pub fn start(&mut self) -> Result<()> {
         use crate::core::context::GpuContext;
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
-        use crate::core::pubsub::topics;
+        tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
         );
+
+        // Initialize GPU context FIRST, before any macOS app setup.
+        // wgpu's Metal backend uses async operations that need to complete
+        // before NSApplication configuration changes thread behavior.
+        if self.runtime_context.is_none() {
+            tracing::info!("[start] Initializing GPU context...");
+            let gpu = GpuContext::init_for_platform_sync()?;
+            tracing::info!("[start] GPU context initialized");
+            self.runtime_context = Some(Arc::new(RuntimeContext::new(gpu)));
+        }
 
         // macOS standalone app setup: detect if we're running as a standalone app
         // (not embedded in another app with its own NSApplication event loop)
@@ -642,15 +831,20 @@ impl StreamRuntime {
             };
 
             if is_standalone {
+                tracing::info!("[start] Setting up macOS application");
                 crate::apple::runtime_ext::setup_macos_app();
                 crate::apple::runtime_ext::install_macos_shutdown_handler();
-            }
-        }
 
-        // Initialize runtime context if not already set
-        if self.runtime_context.is_none() {
-            let gpu = GpuContext::init_for_platform_sync()?;
-            self.runtime_context = Some(Arc::new(RuntimeContext::new(gpu)));
+                // CRITICAL: Verify the macOS platform is fully ready BEFORE starting
+                // any processors. This uses Apple's NSRunningApplication.isFinishedLaunching
+                // API to confirm the app has completed its launch sequence.
+                //
+                // Without this verification, processors may try to use AVFoundation,
+                // Metal, or other Apple frameworks before NSApplication is ready,
+                // causing hangs or undefined behavior.
+                tracing::info!("[start] Verifying macOS platform readiness...");
+                crate::apple::runtime_ext::ensure_macos_platform_ready()?;
+            }
         }
 
         // Set graph state to Running
@@ -659,15 +853,11 @@ impl StreamRuntime {
         // Mark runtime as started so commit() will actually compile
         self.started = true;
 
-        // Compile any pending changes
+        // Compile any pending changes (includes Phase 4: START)
+        // This is now safe because we've verified the platform is ready above.
         self.commit()?;
 
-        // Start all processors that were compiled but not yet started
-        {
-            let mut property_graph = self.graph.write();
-            self.compiler.start_all_processors(&mut property_graph)?;
-        }
-
+        tracing::info!("[start] Runtime started (platform verified)");
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
