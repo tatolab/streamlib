@@ -5,17 +5,20 @@ use std::sync::Arc;
 use crate::core::compiler::delta::GraphDelta;
 use crate::core::compiler::phase::{CompilePhase, CompileResult};
 use crate::core::context::RuntimeContext;
-use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
+use crate::core::delegates::{FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::PropertyGraph;
 use crate::core::links::{DefaultLinkFactory, LinkFactoryDelegate};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-use crate::core::runtime::delegates::{DefaultProcessorDelegate, DefaultScheduler};
+use crate::core::runtime::delegates::{
+    DefaultLinkDelegate, DefaultProcessorDelegate, DefaultScheduler,
+};
 
 /// Compiles graph changes into running processor state.
 pub struct Compiler {
     factory: Arc<dyn FactoryDelegate>,
     processor_delegate: Arc<dyn ProcessorDelegate>,
+    link_delegate: Arc<dyn LinkDelegate>,
     scheduler: Arc<dyn SchedulerDelegate>,
     link_factory: Arc<dyn LinkFactoryDelegate>,
 }
@@ -29,6 +32,7 @@ impl Compiler {
         Self {
             factory: Arc::new(factory),
             processor_delegate: Arc::new(DefaultProcessorDelegate),
+            link_delegate: Arc::new(DefaultLinkDelegate),
             scheduler: Arc::new(DefaultScheduler),
             link_factory: Arc::new(DefaultLinkFactory),
         }
@@ -44,27 +48,31 @@ impl Compiler {
         Self {
             factory: Arc::new(factory),
             processor_delegate: Arc::new(processor_delegate),
+            link_delegate: Arc::new(DefaultLinkDelegate),
             scheduler: Arc::new(scheduler),
             link_factory: Arc::new(DefaultLinkFactory),
         }
     }
 
-    /// Create a new compiler with all delegates including link factory.
-    pub fn with_all_delegates<F, P, S, L>(
+    /// Create a new compiler with all delegates including link factory and link delegate.
+    pub fn with_all_delegates<F, P, L, S, LF>(
         factory: F,
         processor_delegate: P,
+        link_delegate: L,
         scheduler: S,
-        link_factory: L,
+        link_factory: LF,
     ) -> Self
     where
         F: FactoryDelegate + 'static,
         P: ProcessorDelegate + 'static,
+        L: LinkDelegate + 'static,
         S: SchedulerDelegate + 'static,
-        L: LinkFactoryDelegate + 'static,
+        LF: LinkFactoryDelegate + 'static,
     {
         Self {
             factory: Arc::new(factory),
             processor_delegate: Arc::new(processor_delegate),
+            link_delegate: Arc::new(link_delegate),
             scheduler: Arc::new(scheduler),
             link_factory: Arc::new(link_factory),
         }
@@ -79,6 +87,7 @@ impl Compiler {
         Self {
             factory,
             processor_delegate,
+            link_delegate: Arc::new(DefaultLinkDelegate),
             scheduler,
             link_factory: Arc::new(DefaultLinkFactory),
         }
@@ -94,6 +103,24 @@ impl Compiler {
         Self {
             factory,
             processor_delegate,
+            link_delegate: Arc::new(DefaultLinkDelegate),
+            scheduler,
+            link_factory,
+        }
+    }
+
+    /// Create from pre-wrapped Arc delegates including all delegates.
+    pub fn from_all_arcs(
+        factory: Arc<dyn FactoryDelegate>,
+        processor_delegate: Arc<dyn ProcessorDelegate>,
+        link_delegate: Arc<dyn LinkDelegate>,
+        scheduler: Arc<dyn SchedulerDelegate>,
+        link_factory: Arc<dyn LinkFactoryDelegate>,
+    ) -> Self {
+        Self {
+            factory,
+            processor_delegate,
+            link_delegate,
             scheduler,
             link_factory,
         }
@@ -107,6 +134,11 @@ impl Compiler {
     /// Get a reference to the processor delegate.
     pub fn processor_delegate(&self) -> &Arc<dyn ProcessorDelegate> {
         &self.processor_delegate
+    }
+
+    /// Get a reference to the link delegate.
+    pub fn link_delegate(&self) -> &Arc<dyn LinkDelegate> {
+        &self.link_delegate
     }
 
     /// Get a reference to the scheduler delegate.
@@ -275,10 +307,16 @@ impl Compiler {
                     to_port: to_port.clone(),
                 });
 
+                // Call link delegate will_unwire hook
+                self.link_delegate.will_unwire(link_id)?;
+
                 tracing::info!("[UNWIRE] {}", link_id);
                 if let Err(e) = super::wiring::unwire_link(property_graph, link_id) {
                     tracing::warn!("Failed to unwire link {}: {}", link_id, e);
                 }
+
+                // Call link delegate did_unwire hook
+                self.link_delegate.did_unwire(link_id)?;
 
                 self.publish_event(RuntimeEvent::GraphDidRemoveLink {
                     link_id: link_id.to_string(),
@@ -382,9 +420,15 @@ impl Compiler {
                 to_port: to_port_name,
             });
 
+            // Call link delegate will_wire hook
+            self.link_delegate.will_wire(&link)?;
+
             tracing::info!("[{}] Wiring {}", CompilePhase::Wire, link_id);
 
             super::wiring::wire_link(property_graph, self.link_factory.as_ref(), link_id)?;
+
+            // Call link delegate did_wire hook
+            self.link_delegate.did_wire(&link)?;
 
             self.publish_event(RuntimeEvent::GraphDidCreateLink {
                 link_id: link_id.to_string(),

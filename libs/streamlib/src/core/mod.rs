@@ -69,7 +69,7 @@ pub use processors::{
 };
 
 pub use delegates::{
-    FactoryDelegate, ProcessorDelegate, SchedulerDelegate, SchedulingStrategy,
+    FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate, SchedulingStrategy,
     ThreadPriority as SchedulerThreadPriority,
 };
 pub use execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
@@ -79,7 +79,7 @@ pub use registry::{
     ProcessorRegistry,
 };
 pub use runtime::delegates::{
-    DefaultFactory, DefaultProcessorDelegate, DefaultScheduler, FactoryAdapter,
+    DefaultFactory, DefaultLinkDelegate, DefaultProcessorDelegate, DefaultScheduler, FactoryAdapter,
 };
 pub use runtime::{CommitMode, RuntimeBuilder, StreamRuntime};
 pub use schema::{

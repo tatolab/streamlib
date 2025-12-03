@@ -144,11 +144,13 @@ impl StreamRuntime {
     pub fn commit(&mut self) -> Result<()> {
         // Only process if there are pending changes
         if self.pending_operations.is_empty() {
+            tracing::info!("[commit] No pending operations");
             return Ok(());
         }
 
         // If runtime not started, operations stay queued until start()
         if !self.started {
+            tracing::info!("[commit] Runtime not started, operations queued, operations will be performed after starting runtime. If this is unexpected please call runtime.start(). On start a commit will automatically be submitted for you.");
             return Ok(());
         }
 
