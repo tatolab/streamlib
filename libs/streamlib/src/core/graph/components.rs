@@ -8,10 +8,28 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
+use serde_json::Value as JsonValue;
 
 use crate::core::graph::link::LinkState;
 use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::{BoxedProcessor, ProcessorState};
+
+// ============================================================================
+// ECS Component JSON Serialization
+// ============================================================================
+
+/// Trait for ECS components that can serialize to JSON.
+///
+/// Components implement this trait to opt-in to JSON serialization.
+/// Components that don't implement this trait are simply skipped during
+/// serialization - they don't cause errors.
+pub trait EcsComponentJson {
+    /// The component's key in the JSON output.
+    fn json_key(&self) -> &'static str;
+
+    /// Serialize this component to JSON.
+    fn to_json(&self) -> JsonValue;
+}
 
 /// The instantiated processor instance.
 pub struct ProcessorInstance(pub Arc<Mutex<BoxedProcessor>>);
@@ -84,6 +102,17 @@ impl Default for StateComponent {
     }
 }
 
+impl EcsComponentJson for StateComponent {
+    fn json_key(&self) -> &'static str {
+        "state"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        let state = self.0.lock();
+        serde_json::json!(format!("{:?}", *state))
+    }
+}
+
 /// Runtime metrics for a processor.
 #[derive(Default, Clone)]
 pub struct ProcessorMetrics {
@@ -97,6 +126,22 @@ pub struct ProcessorMetrics {
     pub frames_processed: u64,
     /// Total frames dropped.
     pub frames_dropped: u64,
+}
+
+impl EcsComponentJson for ProcessorMetrics {
+    fn json_key(&self) -> &'static str {
+        "metrics"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        serde_json::json!({
+            "throughput_fps": self.throughput_fps,
+            "latency_p50_ms": self.latency_p50_ms,
+            "latency_p99_ms": self.latency_p99_ms,
+            "frames_processed": self.frames_processed,
+            "frames_dropped": self.frames_dropped
+        })
+    }
 }
 
 /// Marker for processors that must run on main thread (Apple frameworks).
@@ -114,6 +159,16 @@ pub struct LinkStateComponent(pub LinkState);
 impl Default for LinkStateComponent {
     fn default() -> Self {
         Self(LinkState::Pending)
+    }
+}
+
+impl EcsComponentJson for LinkStateComponent {
+    fn json_key(&self) -> &'static str {
+        "state"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        serde_json::json!(format!("{:?}", self.0))
     }
 }
 

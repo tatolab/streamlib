@@ -2,13 +2,32 @@
 
 use std::any::TypeId;
 
+use serde_json::Value as JsonValue;
+
 use super::super::runtime::BoxedLinkInstance;
+use crate::core::graph::EcsComponentJson;
 
 /// ECS component storing the link instance (ring buffer ownership).
 ///
 /// When this component is removed from an entity, the ring buffer is dropped
 /// and all handles (data writers/readers) gracefully degrade.
 pub struct LinkInstanceComponent(pub BoxedLinkInstance);
+
+impl EcsComponentJson for LinkInstanceComponent {
+    fn json_key(&self) -> &'static str {
+        "buffer"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        serde_json::json!({
+            "fill_level": self.0.len(),
+            "is_empty": self.0.is_empty(),
+            "has_data": self.0.has_data(),
+            "strong_refs": self.0.strong_count(),
+            "weak_refs": self.0.weak_count()
+        })
+    }
+}
 
 /// ECS component storing link type information for debugging and validation.
 pub struct LinkTypeInfoComponent {
@@ -28,5 +47,18 @@ impl LinkTypeInfoComponent {
             type_name: std::any::type_name::<T>(),
             capacity,
         }
+    }
+}
+
+impl EcsComponentJson for LinkTypeInfoComponent {
+    fn json_key(&self) -> &'static str {
+        "type_info"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        serde_json::json!({
+            "type_name": self.type_name,
+            "capacity": self.capacity
+        })
     }
 }

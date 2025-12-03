@@ -9,11 +9,15 @@ use std::time::Instant;
 
 use hecs::{Component, Entity, World};
 use parking_lot::RwLock;
+use serde_json::Value as JsonValue;
 
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::components::LinkStateComponent;
+use crate::core::graph::components::{
+    EcsComponentJson, LinkStateComponent, ProcessorInstance, ProcessorMetrics, StateComponent,
+};
 use crate::core::graph::link::LinkState;
 use crate::core::graph::{Graph, GraphChecksum, Link, ProcessorId, ProcessorNode};
+use crate::core::links::graph::{LinkInstanceComponent, LinkTypeInfoComponent};
 use crate::core::links::LinkId;
 
 /// Graph state.
@@ -343,6 +347,207 @@ impl PropertyGraph {
     pub fn link_count(&self) -> usize {
         self.graph.read().link_count()
     }
+
+    // =========================================================================
+    // Serialization
+    // =========================================================================
+
+    /// Serialize the entire graph to JSON, including topology and ECS components.
+    ///
+    /// Output structure:
+    /// ```json
+    /// {
+    ///   "state": "Running",
+    ///   "processors": {
+    ///     "camera": {
+    ///       "type": "CameraProcessor",
+    ///       "state": "Running",
+    ///       "metrics": { ... },
+    ///       "config": { ... },
+    ///       "runtime": { ... }
+    ///     }
+    ///   },
+    ///   "links": {
+    ///     "link_0": {
+    ///       "from": { "processor": "camera", "port": "output" },
+    ///       "to": { "processor": "display", "port": "input" },
+    ///       "state": "Connected",
+    ///       "type_info": { "type_name": "VideoFrame", "capacity": 4 },
+    ///       "buffer": { "fill_level": 2, "is_empty": false }
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    pub fn to_json(&self) -> JsonValue {
+        let graph = self.graph.read();
+
+        // Serialize processors
+        let mut processors = serde_json::Map::new();
+        for node in graph.nodes() {
+            let mut proc_json = serde_json::Map::new();
+
+            // Basic topology info
+            proc_json.insert(
+                "type".into(),
+                JsonValue::String(node.processor_type.clone()),
+            );
+
+            // Add ECS components if entity exists
+            if let Some(&entity) = self.processor_entities.get(&node.id) {
+                // StateComponent
+                if let Ok(state) = self.world.get::<&StateComponent>(entity) {
+                    proc_json.insert(state.json_key().into(), state.to_json());
+                }
+
+                // ProcessorMetrics
+                if let Ok(metrics) = self.world.get::<&ProcessorMetrics>(entity) {
+                    proc_json.insert(metrics.json_key().into(), metrics.to_json());
+                }
+
+                // ProcessorInstance - get config and runtime state from the processor itself
+                if let Ok(instance) = self.world.get::<&ProcessorInstance>(entity) {
+                    let processor = instance.0.lock();
+
+                    // Config JSON
+                    let config = processor.config_json();
+                    if !config.is_null() {
+                        proc_json.insert("config".into(), config);
+                    }
+
+                    // Runtime JSON (custom processor state)
+                    let runtime = processor.to_runtime_json();
+                    if !runtime.is_null() {
+                        proc_json.insert("runtime".into(), runtime);
+                    }
+                }
+            }
+
+            processors.insert(node.id.to_string(), JsonValue::Object(proc_json));
+        }
+
+        // Serialize links
+        let mut links = serde_json::Map::new();
+        for link in graph.links() {
+            let mut link_json = serde_json::Map::new();
+
+            // Topology info
+            link_json.insert(
+                "from".into(),
+                serde_json::json!({
+                    "processor": link.source.node,
+                    "port": link.source.port
+                }),
+            );
+            link_json.insert(
+                "to".into(),
+                serde_json::json!({
+                    "processor": link.target.node,
+                    "port": link.target.port
+                }),
+            );
+
+            // Add ECS components if entity exists
+            if let Some(&entity) = self.link_entities.get(&link.id) {
+                // LinkStateComponent
+                if let Ok(state) = self.world.get::<&LinkStateComponent>(entity) {
+                    link_json.insert(state.json_key().into(), state.to_json());
+                }
+
+                // LinkTypeInfoComponent
+                if let Ok(type_info) = self.world.get::<&LinkTypeInfoComponent>(entity) {
+                    link_json.insert(type_info.json_key().into(), type_info.to_json());
+                }
+
+                // LinkInstanceComponent (buffer stats)
+                if let Ok(instance) = self.world.get::<&LinkInstanceComponent>(entity) {
+                    link_json.insert(instance.json_key().into(), instance.to_json());
+                }
+            }
+
+            links.insert(link.id.to_string(), JsonValue::Object(link_json));
+        }
+
+        serde_json::json!({
+            "state": format!("{:?}", self.state),
+            "processors": processors,
+            "links": links
+        })
+    }
+
+    /// Generate DOT format for Graphviz visualization.
+    ///
+    /// Includes node labels with processor type and state, and edge labels
+    /// with link type and buffer status.
+    pub fn to_dot(&self) -> String {
+        let graph = self.graph.read();
+        let mut dot = String::new();
+
+        dot.push_str("digraph StreamGraph {\n");
+        dot.push_str("    rankdir=LR;\n");
+        dot.push_str("    node [shape=box, style=rounded];\n\n");
+
+        // Output processor nodes
+        for node in graph.nodes() {
+            let mut label_parts = vec![node.id.to_string(), node.processor_type.clone()];
+
+            // Add state if available
+            if let Some(&entity) = self.processor_entities.get(&node.id) {
+                if let Ok(state) = self.world.get::<&StateComponent>(entity) {
+                    let state_str = format!("{:?}", *state.0.lock());
+                    label_parts.push(state_str);
+                }
+            }
+
+            let label = label_parts.join("\\n");
+            dot.push_str(&format!("    \"{}\" [label=\"{}\"];\n", node.id, label));
+        }
+
+        dot.push('\n');
+
+        // Output edges (links)
+        for link in graph.links() {
+            let mut label_parts = Vec::new();
+
+            // Add type info and buffer stats if available
+            if let Some(&entity) = self.link_entities.get(&link.id) {
+                if let Ok(type_info) = self.world.get::<&LinkTypeInfoComponent>(entity) {
+                    // Shorten type name (just the last part)
+                    let short_type = type_info
+                        .type_name
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or(type_info.type_name);
+                    label_parts.push(short_type.to_string());
+                }
+
+                if let Ok(instance) = self.world.get::<&LinkInstanceComponent>(entity) {
+                    label_parts.push(format!("[{}/{}]", instance.0.len(), {
+                        // Get capacity from type_info if available
+                        if let Ok(ti) = self.world.get::<&LinkTypeInfoComponent>(entity) {
+                            ti.capacity
+                        } else {
+                            0
+                        }
+                    }));
+                }
+            }
+
+            let label = if label_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" [label=\"{}\"]", label_parts.join("\\n"))
+            };
+
+            dot.push_str(&format!(
+                "    \"{}\":\"{}\" -> \"{}\":\"{}\"{};",
+                link.source.node, link.source.port, link.target.node, link.target.port, label
+            ));
+            dot.push('\n');
+        }
+
+        dot.push_str("}\n");
+        dot
+    }
 }
 
 #[cfg(test)]
@@ -469,5 +674,196 @@ mod tests {
 
         pg.set_state(GraphState::Paused);
         assert_eq!(pg.state(), GraphState::Paused);
+    }
+
+    #[test]
+    fn test_property_graph_to_json_basic() {
+        let graph = Arc::new(RwLock::new(Graph::new()));
+
+        // Add processors to graph
+        graph
+            .write()
+            .add_processor("camera".into(), "CameraProcessor".into(), 0);
+        graph
+            .write()
+            .add_processor("display".into(), "DisplayProcessor".into(), 1);
+
+        let mut pg = PropertyGraph::new(Arc::clone(&graph));
+        pg.set_state(GraphState::Running);
+
+        // Create entities for processors
+        pg.ensure_processor_entity(&"camera".into());
+        pg.ensure_processor_entity(&"display".into());
+
+        // Add state component
+        pg.insert(&"camera".into(), StateComponent::default())
+            .unwrap();
+
+        // Add metrics component
+        let mut metrics = ProcessorMetrics::default();
+        metrics.throughput_fps = 30.0;
+        metrics.frames_processed = 100;
+        pg.insert(&"display".into(), metrics).unwrap();
+
+        let json = pg.to_json();
+
+        // Verify structure
+        assert_eq!(json["state"], "Running");
+        assert!(json["processors"]["camera"].is_object());
+        assert!(json["processors"]["display"].is_object());
+        assert_eq!(json["processors"]["camera"]["type"], "CameraProcessor");
+        assert_eq!(json["processors"]["display"]["type"], "DisplayProcessor");
+
+        // Verify state component was serialized
+        assert!(json["processors"]["camera"]["state"].is_string());
+
+        // Verify metrics component was serialized
+        assert_eq!(
+            json["processors"]["display"]["metrics"]["throughput_fps"],
+            30.0
+        );
+        assert_eq!(
+            json["processors"]["display"]["metrics"]["frames_processed"],
+            100
+        );
+    }
+
+    #[test]
+    fn test_property_graph_to_json_with_links() {
+        let graph = Arc::new(RwLock::new(Graph::new()));
+
+        // Add processors
+        graph
+            .write()
+            .add_processor("source".into(), "SourceProcessor".into(), 0);
+        graph
+            .write()
+            .add_processor("sink".into(), "SinkProcessor".into(), 1);
+
+        // Add link - add_link returns the created Link
+        let link = graph
+            .write()
+            .add_link("source.output", "sink.input")
+            .unwrap();
+        let link_id = link.id.clone();
+
+        let mut pg = PropertyGraph::new(Arc::clone(&graph));
+
+        // Create link entity with components
+        pg.ensure_link_entity(&link_id);
+        pg.insert_link(&link_id, LinkStateComponent(LinkState::Wired))
+            .unwrap();
+        pg.insert_link(
+            &link_id,
+            LinkTypeInfoComponent {
+                type_id: std::any::TypeId::of::<u32>(),
+                type_name: "u32",
+                capacity: 8,
+            },
+        )
+        .unwrap();
+
+        let json = pg.to_json();
+
+        // Verify link is in output
+        let links = &json["links"];
+        assert!(links.is_object());
+
+        // Find our link (key is the link_id string)
+        let link_json = &links[link_id.to_string()];
+        assert!(link_json.is_object());
+
+        // Verify from/to
+        assert_eq!(link_json["from"]["processor"], "source");
+        assert_eq!(link_json["from"]["port"], "output");
+        assert_eq!(link_json["to"]["processor"], "sink");
+        assert_eq!(link_json["to"]["port"], "input");
+
+        // Verify ECS components
+        assert!(link_json["state"].is_string());
+        assert_eq!(link_json["type_info"]["type_name"], "u32");
+        assert_eq!(link_json["type_info"]["capacity"], 8);
+    }
+
+    #[test]
+    fn test_property_graph_to_dot() {
+        let graph = Arc::new(RwLock::new(Graph::new()));
+
+        // Add processors
+        graph
+            .write()
+            .add_processor("camera".into(), "CameraProcessor".into(), 0);
+        graph
+            .write()
+            .add_processor("display".into(), "DisplayProcessor".into(), 1);
+
+        // Add link
+        let link = graph
+            .write()
+            .add_link("camera.output", "display.input")
+            .unwrap();
+        let link_id = link.id.clone();
+
+        let mut pg = PropertyGraph::new(Arc::clone(&graph));
+
+        // Create entities
+        pg.ensure_processor_entity(&"camera".into());
+        pg.ensure_link_entity(&link_id);
+
+        // Add state to camera
+        pg.insert(&"camera".into(), StateComponent::default())
+            .unwrap();
+
+        // Add type info to link
+        pg.insert_link(
+            &link_id,
+            LinkTypeInfoComponent {
+                type_id: std::any::TypeId::of::<String>(),
+                type_name: "streamlib::core::frames::VideoFrame",
+                capacity: 4,
+            },
+        )
+        .unwrap();
+
+        let dot = pg.to_dot();
+
+        // Basic DOT structure
+        assert!(dot.starts_with("digraph StreamGraph {"));
+        assert!(dot.ends_with("}\n"));
+        assert!(dot.contains("rankdir=LR"));
+
+        // Node declarations
+        assert!(dot.contains("\"camera\""));
+        assert!(dot.contains("\"display\""));
+        assert!(dot.contains("CameraProcessor"));
+
+        // Edge declaration
+        assert!(dot.contains("->"));
+
+        // Type info in edge label (shortened)
+        assert!(dot.contains("VideoFrame"));
+    }
+
+    #[test]
+    fn test_property_graph_to_json_handles_missing_components() {
+        // Verify that processors/links without ECS components still serialize
+        let graph = Arc::new(RwLock::new(Graph::new()));
+
+        graph
+            .write()
+            .add_processor("test".into(), "TestProcessor".into(), 0);
+
+        let pg = PropertyGraph::new(Arc::clone(&graph));
+
+        // Don't create any entities - just serialize
+        let json = pg.to_json();
+
+        // Should still have the processor with basic info
+        assert!(json["processors"]["test"].is_object());
+        assert_eq!(json["processors"]["test"]["type"], "TestProcessor");
+
+        // But no ECS components (no state, metrics, etc)
+        assert!(json["processors"]["test"]["state"].is_null());
+        assert!(json["processors"]["test"]["metrics"].is_null());
     }
 }

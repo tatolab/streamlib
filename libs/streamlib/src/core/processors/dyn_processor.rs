@@ -60,5 +60,11 @@ pub trait DynProcessor: Send + 'static {
     /// Apply a JSON config update at runtime.
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()>;
 
+    /// Serialize processor-specific runtime state to JSON.
+    fn to_runtime_json(&self) -> serde_json::Value;
+
+    /// Get the current config as JSON.
+    fn config_json(&self) -> serde_json::Value;
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }

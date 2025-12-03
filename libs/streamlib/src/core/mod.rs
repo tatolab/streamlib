@@ -37,8 +37,8 @@ pub use frames::{
     AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
 };
 pub use graph::{
-    compute_config_checksum, input, output, Graph, GraphChecksum, InputPortMarker, Link,
-    LinkPortRef, OutputPortMarker, ProcessorId, ProcessorNode,
+    compute_config_checksum, input, output, EcsComponentJson, Graph, GraphChecksum,
+    InputPortMarker, Link, LinkPortRef, OutputPortMarker, ProcessorId, ProcessorNode,
 };
 pub use links::{
     LinkId, LinkInput, LinkInputDataReader, LinkInstance, LinkOutput, LinkOutputDataWriter,

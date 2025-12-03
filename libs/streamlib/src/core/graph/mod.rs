@@ -10,9 +10,9 @@ mod validation;
 
 // Re-export all public types
 pub use components::{
-    LightweightMarker, LinkOutputToProcessorWriterAndReader, LinkStateComponent, MainThreadMarker,
-    ProcessorInstance, ProcessorMetrics, RayonPoolMarker, ShutdownChannel, StateComponent,
-    ThreadHandle,
+    EcsComponentJson, LightweightMarker, LinkOutputToProcessorWriterAndReader, LinkStateComponent,
+    MainThreadMarker, ProcessorInstance, ProcessorMetrics, RayonPoolMarker, ShutdownChannel,
+    StateComponent, ThreadHandle,
 };
 pub use graph::{compute_config_checksum, Graph, GraphChecksum};
 pub use link::{Link, LinkDirection, LinkEndpoint, LinkState};

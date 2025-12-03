@@ -96,6 +96,14 @@ where
         <Self as Processor>::apply_config_json(self, config_json)
     }
 
+    fn to_runtime_json(&self) -> serde_json::Value {
+        <Self as Processor>::to_runtime_json(self)
+    }
+
+    fn config_json(&self) -> serde_json::Value {
+        <Self as Processor>::config_json(self)
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

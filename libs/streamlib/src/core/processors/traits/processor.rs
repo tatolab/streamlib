@@ -1,9 +1,11 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+
 use super::BaseProcessor;
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
-use serde::{Deserialize, Serialize};
 
 pub trait Processor: BaseProcessor {
     type Config: Serialize + for<'de> Deserialize<'de> + Default;
@@ -94,5 +96,21 @@ pub trait Processor: BaseProcessor {
         _port_name: &str,
         _message_writer: crossbeam_channel::Sender<LinkOutputToProcessorMessage>,
     ) {
+    }
+
+    /// Serialize processor-specific runtime state to JSON.
+    ///
+    /// Override this method to include custom runtime state in JSON serialization.
+    /// The default implementation returns the current config.
+    fn to_runtime_json(&self) -> JsonValue {
+        JsonValue::Null
+    }
+
+    /// Get the current config as JSON.
+    fn config_json(&self) -> JsonValue
+    where
+        Self: Sized,
+    {
+        JsonValue::Null
     }
 }
