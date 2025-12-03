@@ -7,15 +7,14 @@ use serde::Serialize;
 use crate::core::compiler::delta::GraphDelta;
 use crate::core::compiler::{shutdown_all_processors, shutdown_processor, Compiler};
 use crate::core::context::RuntimeContext;
-use crate::core::delegates::{
-    DefaultFactory, FactoryDelegate, ProcessorDelegate, SchedulerDelegate,
-};
+use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{
     GraphState, IntoLinkPortRef, Link, ProcessorId, ProcessorNode, PropertyGraph,
 };
-use crate::core::link_channel::{LinkChannel, LinkId};
+use crate::core::links::{LinkId, LinkInstanceManager};
 use crate::core::processors::Processor;
-use crate::core::Result;
+use crate::core::runtime::delegates::DefaultFactory;
+use crate::core::{Result, StreamError};
 
 /// Runtime status information.
 #[derive(Debug, Clone, Default)]
@@ -55,18 +54,20 @@ pub struct StreamRuntime {
     pub(crate) scheduler: Arc<dyn SchedulerDelegate>,
     /// When mutations are applied.
     pub(crate) commit_mode: CommitMode,
-    /// Link channel for ring buffers.
-    pub(crate) link_channel: LinkChannel,
+    /// Link instance manager for LinkInstance storage.
+    pub(crate) link_instance_manager: LinkInstanceManager,
     /// Runtime context (GPU, audio config).
     pub(crate) runtime_context: Option<Arc<RuntimeContext>>,
     /// Tracks pending changes since last compile.
     pub(crate) pending_delta: GraphDelta,
+    /// Whether the runtime has been started.
+    pub(crate) started: bool,
 }
 
 impl Default for StreamRuntime {
     fn default() -> Self {
-        use crate::core::delegates::{DefaultProcessorDelegate, DefaultScheduler};
         use crate::core::graph::Graph;
+        use crate::core::runtime::delegates::{DefaultProcessorDelegate, DefaultScheduler};
 
         let default_factory = Arc::new(DefaultFactory::new());
         let factory: Arc<dyn FactoryDelegate> =
@@ -74,7 +75,7 @@ impl Default for StreamRuntime {
         let processor_delegate: Arc<dyn ProcessorDelegate> = Arc::new(DefaultProcessorDelegate);
         let scheduler: Arc<dyn SchedulerDelegate> = Arc::new(DefaultScheduler);
 
-        let compiler = Compiler::with_delegates(
+        let compiler = Compiler::from_arcs(
             Arc::clone(&factory),
             Arc::clone(&processor_delegate),
             Arc::clone(&scheduler),
@@ -91,9 +92,10 @@ impl Default for StreamRuntime {
             processor_delegate,
             scheduler,
             commit_mode: CommitMode::Auto,
-            link_channel: LinkChannel::new(),
+            link_instance_manager: LinkInstanceManager::new(),
             runtime_context: None,
             pending_delta: GraphDelta::default(),
+            started: false,
         }
     }
 }
@@ -105,11 +107,6 @@ impl StreamRuntime {
 
     pub fn builder() -> crate::core::runtime::RuntimeBuilder {
         crate::core::runtime::RuntimeBuilder::new()
-    }
-
-    /// Create a runtime with a specific commit mode.
-    pub fn with_commit_mode(mode: CommitMode) -> Self {
-        Self::builder().with_commit_mode(mode).build()
     }
 
     // =========================================================================
@@ -142,30 +139,39 @@ impl StreamRuntime {
     ///
     /// In `Auto` mode, this is called automatically after each mutation.
     /// In `Manual` mode, call this explicitly to batch changes.
+    ///
+    /// Note: Compilation only happens when the runtime has been started. Before `start()`,
+    /// graph mutations are recorded but not compiled.
     pub fn commit(&mut self) -> Result<()> {
+        // Only compile if runtime has been started
+        if !self.started {
+            return Ok(());
+        }
+
         // Only compile if there are pending changes
         if self.pending_delta.is_empty() {
             return Ok(());
         }
 
-        // Ensure runtime context exists
-        if self.runtime_context.is_none() {
-            use crate::core::context::GpuContext;
-            let gpu = GpuContext::init_for_platform_sync()?;
-            self.runtime_context = Some(Arc::new(RuntimeContext::new(gpu)));
-        }
+        // Runtime context should exist if we're running
+        let runtime_ctx = self.runtime_context.as_ref().ok_or_else(|| {
+            crate::core::error::StreamError::Runtime("Runtime context not initialized".to_string())
+        })?;
 
-        let runtime_ctx = self.runtime_context.as_ref().unwrap();
         let delta = std::mem::take(&mut self.pending_delta);
 
         // Compile the delta
         let mut property_graph = self.graph.write();
-        self.compiler.compile(
+        let result = self.compiler.compile(
             &mut property_graph,
             runtime_ctx,
-            &mut self.link_channel,
+            &mut self.link_instance_manager,
             &delta,
         )?;
+
+        if result.has_changes() {
+            tracing::debug!("Commit result: {}", result);
+        }
 
         Ok(())
     }
@@ -202,9 +208,9 @@ impl StreamRuntime {
         self.pending_delta.processors_to_add.push(node.id.clone());
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::GraphDidAddProcessor {
                 processor_id: node.id.clone(),
                 processor_type: node.processor_type.clone(),
@@ -234,9 +240,9 @@ impl StreamRuntime {
         self.pending_delta.links_to_add.push(link.id.clone());
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::GraphDidCreateLink {
                 link_id: link.id.to_string(),
                 from_port: link.from_port(),
@@ -251,15 +257,60 @@ impl StreamRuntime {
     }
 
     pub fn disconnect(&mut self, link: &Link) -> Result<()> {
+        use crate::core::graph::{LinkState, LinkStateComponent};
+
         let from_port = link.from_port();
         let to_port = link.to_port();
         let link_id_str = link.id.to_string();
         let link_id = link.id.clone();
 
+        // Check current link state via ECS
+        let current_state = {
+            let property_graph = self.graph.read();
+            property_graph
+                .get_link_state(&link_id)
+                .unwrap_or(LinkState::Pending)
+        };
+
+        // Validate state allows disconnection
+        match current_state {
+            LinkState::Disconnected => {
+                return Err(StreamError::LinkAlreadyDisconnected(link_id_str));
+            }
+            LinkState::Pending => {
+                // Link was never wired - just remove from graph
+                tracing::debug!("Disconnecting pending (unwired) link {}", link_id);
+            }
+            LinkState::Wired | LinkState::Disconnecting | LinkState::Error => {
+                // Proceed with unwire
+            }
+        }
+
+        // Update state to Disconnecting
+        {
+            let mut property_graph = self.graph.write();
+            property_graph.ensure_link_entity(&link_id);
+            if let Err(e) =
+                property_graph.insert_link(&link_id, LinkStateComponent(LinkState::Disconnecting))
+            {
+                tracing::warn!("Failed to update link state to Disconnecting: {}", e);
+            }
+        }
+
         // Unwire if already wired
         {
             let mut property_graph = self.graph.write();
             let _ = crate::core::compiler::wiring::unwire_link(&mut property_graph, &link_id);
+        }
+
+        // Update state to Disconnected
+        {
+            let mut property_graph = self.graph.write();
+            if let Err(e) =
+                property_graph.insert_link(&link_id, LinkStateComponent(LinkState::Disconnected))
+            {
+                tracing::warn!("Failed to update link state to Disconnected: {}", e);
+            }
         }
 
         // Remove from underlying graph
@@ -270,12 +321,21 @@ impl StreamRuntime {
         }
 
         // Track in pending delta
-        self.pending_delta.links_to_remove.push(link_id);
+        self.pending_delta.links_to_remove.push(link_id.clone());
+
+        // Disconnect from LinkInstanceManager - drops LinkInstance, handles gracefully degrade
+        self.link_instance_manager.disconnect(link_id.clone());
+
+        // Clean up link entity
+        {
+            let mut property_graph = self.graph.write();
+            property_graph.remove_link_entity(&link_id);
+        }
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveLink {
                 link_id: link_id_str,
                 from_port,
@@ -315,9 +375,9 @@ impl StreamRuntime {
         self.pending_delta.links_to_remove.push(link_id.clone());
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveLink {
                 link_id: link_id.to_string(),
                 from_port,
@@ -354,9 +414,9 @@ impl StreamRuntime {
             .push(processor_id.clone());
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::GraphDidRemoveProcessor {
                 processor_id: processor_id.clone(),
             }),
@@ -382,9 +442,9 @@ impl StreamRuntime {
         }
 
         // Publish event
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
                 processor_id: processor_id.clone(),
             }),
@@ -400,21 +460,59 @@ impl StreamRuntime {
 
     /// Start the runtime.
     pub fn start(&mut self) -> Result<()> {
+        use crate::core::context::GpuContext;
         use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 
+        use crate::core::pubsub::topics;
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
         );
+
+        // macOS standalone app setup: detect if we're running as a standalone app
+        // (not embedded in another app with its own NSApplication event loop)
+        #[cfg(target_os = "macos")]
+        {
+            use objc2::MainThreadMarker;
+            use objc2_app_kit::NSApplication;
+
+            let is_standalone = if let Some(mtm) = MainThreadMarker::new() {
+                let app = NSApplication::sharedApplication(mtm);
+                !app.isRunning()
+            } else {
+                // Not on main thread - can't check NSApplication state
+                false
+            };
+
+            if is_standalone {
+                crate::apple::runtime_ext::setup_macos_app();
+                crate::apple::runtime_ext::install_macos_shutdown_handler();
+            }
+        }
+
+        // Initialize runtime context if not already set
+        if self.runtime_context.is_none() {
+            let gpu = GpuContext::init_for_platform_sync()?;
+            self.runtime_context = Some(Arc::new(RuntimeContext::new(gpu)));
+        }
 
         // Set graph state to Running
         self.graph.write().set_state(GraphState::Running);
 
-        // Compile any pending changes (this also initializes RuntimeContext if needed)
+        // Mark runtime as started so commit() will actually compile
+        self.started = true;
+
+        // Compile any pending changes
         self.commit()?;
 
+        // Start all processors that were compiled but not yet started
+        {
+            let mut property_graph = self.graph.write();
+            self.compiler.start_all_processors(&mut property_graph)?;
+        }
+
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
         );
 
@@ -423,12 +521,15 @@ impl StreamRuntime {
 
     /// Stop the runtime.
     pub fn stop(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
         );
+
+        // Mark runtime as stopped
+        self.started = false;
 
         // Shutdown all processors
         {
@@ -437,7 +538,7 @@ impl StreamRuntime {
         }
 
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
         );
 
@@ -446,10 +547,10 @@ impl StreamRuntime {
 
     /// Pause the runtime.
     pub fn pause(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
         );
 
@@ -459,7 +560,7 @@ impl StreamRuntime {
         // TODO: Signal processors to pause (they should check state periodically)
 
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePaused),
         );
 
@@ -468,10 +569,10 @@ impl StreamRuntime {
 
     /// Resume the runtime.
     pub fn resume(&mut self) -> Result<()> {
-        use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+        use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
         );
 
@@ -481,7 +582,7 @@ impl StreamRuntime {
         // TODO: Signal processors to resume
 
         PUBSUB.publish(
-            "runtime:global",
+            topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumed),
         );
 

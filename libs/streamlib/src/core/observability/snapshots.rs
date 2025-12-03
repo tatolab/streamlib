@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::core::graph::ProcessorId;
-use crate::core::link_channel::LinkId;
+use crate::core::links::LinkId;
 use crate::core::processors::ProcessorState;
 
 /// Point-in-time snapshot of a processor.

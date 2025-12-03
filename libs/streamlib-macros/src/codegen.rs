@@ -220,12 +220,12 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     let descriptor_impl = generate_descriptor(analysis);
     let get_output_port_type = generate_get_output_port_type(analysis);
     let get_input_port_type = generate_get_input_port_type(analysis);
-    let wire_output_producer = generate_wire_output_producer(analysis);
-    let wire_input_consumer = generate_wire_input_consumer(analysis);
-    let unwire_output_producer = generate_unwire_output_producer(analysis);
-    let unwire_input_consumer = generate_unwire_input_consumer(analysis);
-    let set_output_process_function_invoke_send =
-        generate_set_output_process_function_invoke_send(analysis);
+    let add_link_output_data_writer = generate_add_link_output_data_writer(analysis);
+    let add_link_input_data_reader = generate_add_link_input_data_reader(analysis);
+    let remove_link_output_data_writer = generate_remove_link_output_data_writer(analysis);
+    let remove_link_input_data_reader = generate_remove_link_input_data_reader(analysis);
+    let set_link_output_to_processor_message_writer =
+        generate_set_link_output_to_processor_message_writer(analysis);
 
     let update_config = analysis.config_field_name.as_ref().map(|name| {
         quote! {
@@ -289,11 +289,11 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #descriptor_impl
             #get_output_port_type
             #get_input_port_type
-            #wire_output_producer
-            #wire_input_consumer
-            #unwire_output_producer
-            #unwire_input_consumer
-            #set_output_process_function_invoke_send
+            #add_link_output_data_writer
+            #add_link_input_data_reader
+            #remove_link_output_data_writer
+            #remove_link_input_data_reader
+            #set_link_output_to_processor_message_writer
         }
     }
 }
@@ -380,7 +380,7 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
             quote! {
                 .with_input(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: <#msg_type as ::streamlib::core::link_channel::LinkPortMessage>::schema(),
+                    schema: <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema(),
                     required: true,
                     description: #port_desc.to_string(),
                 })
@@ -397,7 +397,7 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: <#msg_type as ::streamlib::core::link_channel::LinkPortMessage>::schema(),
+                    schema: <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema(),
                     required: true,
                     description: #port_desc.to_string(),
                 })
@@ -424,7 +424,7 @@ fn generate_get_output_port_type(analysis: &AnalysisResult) -> TokenStream {
             let port_name = &p.port_name;
             let msg_type = &p.message_type;
             quote! {
-                #port_name => Some(<#msg_type as ::streamlib::core::link_channel::LinkPortMessage>::port_type())
+                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::port_type())
             }
         })
         .collect();
@@ -451,7 +451,7 @@ fn generate_get_input_port_type(analysis: &AnalysisResult) -> TokenStream {
             let port_name = &p.port_name;
             let msg_type = &p.message_type;
             quote! {
-                #port_name => Some(<#msg_type as ::streamlib::core::link_channel::LinkPortMessage>::port_type())
+                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::port_type())
             }
         })
         .collect();
@@ -470,8 +470,8 @@ fn generate_get_input_port_type(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate wire_output_producer method
-fn generate_wire_output_producer(analysis: &AnalysisResult) -> TokenStream {
+/// Generate add_link_output_data_writer method
+fn generate_add_link_output_data_writer(analysis: &AnalysisResult) -> TokenStream {
     let arms: Vec<TokenStream> = analysis
         .output_ports()
         .map(|p| {
@@ -480,20 +480,16 @@ fn generate_wire_output_producer(analysis: &AnalysisResult) -> TokenStream {
             let msg_type = &p.message_type;
             let is_arc = p.is_arc_wrapped;
 
-            let add_link = if is_arc {
-                quote! { self.#field_name.as_ref().add_link(temp_id, *typed, tx) }
+            let add_data_writer = if is_arc {
+                quote! { self.#field_name.as_ref().add_data_writer(wrapper.link_id, wrapper.data_writer) }
             } else {
-                quote! { self.#field_name.add_link(temp_id, *typed, tx) }
+                quote! { self.#field_name.add_data_writer(wrapper.link_id, wrapper.data_writer) }
             };
 
             quote! {
                 #port_name => {
-                    if let Ok(typed) = producer.downcast::<::streamlib::core::LinkOwnedProducer<#msg_type>>() {
-                        let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
-                            format!("{}.wire_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
-                        );
-                        let (tx, _rx) = ::streamlib::crossbeam_channel::bounded(1);
-                        let _ = #add_link;
+                    if let Ok(wrapper) = data_writer.downcast::<::streamlib::core::compiler::wiring::LinkOutputDataWriterWrapper<#msg_type>>() {
+                        let _ = #add_data_writer;
                         return Ok(());
                     }
                     Err(::streamlib::core::StreamError::PortError(format!("Type mismatch for output port '{}'", #port_name)))
@@ -507,7 +503,7 @@ fn generate_wire_output_producer(analysis: &AnalysisResult) -> TokenStream {
     }
 
     quote! {
-        fn wire_output_producer(&mut self, port_name: &str, producer: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
+        fn add_link_output_data_writer(&mut self, port_name: &str, data_writer: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Output port '{}' not found", port_name)))
@@ -516,8 +512,8 @@ fn generate_wire_output_producer(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate wire_input_consumer method
-fn generate_wire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
+/// Generate add_link_input_data_reader method
+fn generate_add_link_input_data_reader(analysis: &AnalysisResult) -> TokenStream {
     let arms: Vec<TokenStream> = analysis
         .input_ports()
         .map(|p| {
@@ -526,21 +522,16 @@ fn generate_wire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
             let msg_type = &p.message_type;
             let is_arc = p.is_arc_wrapped;
 
-            let add_link = if is_arc {
-                quote! { self.#field_name.as_ref().add_link(temp_id, *typed, source_addr, tx) }
+            let add_data_reader = if is_arc {
+                quote! { self.#field_name.as_ref().add_data_reader(wrapper.link_id, wrapper.data_reader, None) }
             } else {
-                quote! { self.#field_name.add_link(temp_id, *typed, source_addr, tx) }
+                quote! { self.#field_name.add_data_reader(wrapper.link_id, wrapper.data_reader, None) }
             };
 
             quote! {
                 #port_name => {
-                    if let Ok(typed) = consumer.downcast::<::streamlib::core::LinkOwnedConsumer<#msg_type>>() {
-                        let temp_id = ::streamlib::core::link_channel::link_id::__private::new_unchecked(
-                            format!("{}.wire_{}", #port_name, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
-                        );
-                        let (tx, _rx) = ::streamlib::crossbeam_channel::bounded(1);
-                        let source_addr = ::streamlib::core::LinkPortAddress::new("unknown", #port_name);
-                        let _ = #add_link;
+                    if let Ok(wrapper) = data_reader.downcast::<::streamlib::core::compiler::wiring::LinkInputDataReaderWrapper<#msg_type>>() {
+                        let _ = #add_data_reader;
                         return Ok(());
                     }
                     Err(::streamlib::core::StreamError::PortError(format!("Type mismatch for input port '{}'", #port_name)))
@@ -554,7 +545,7 @@ fn generate_wire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
     }
 
     quote! {
-        fn wire_input_consumer(&mut self, port_name: &str, consumer: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
+        fn add_link_input_data_reader(&mut self, port_name: &str, data_reader: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Input port '{}' not found", port_name)))
@@ -563,8 +554,8 @@ fn generate_wire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate unwire_output_producer method
-fn generate_unwire_output_producer(analysis: &AnalysisResult) -> TokenStream {
+/// Generate remove_link_output_data_writer method
+fn generate_remove_link_output_data_writer(analysis: &AnalysisResult) -> TokenStream {
     let arms: Vec<TokenStream> = analysis
         .output_ports()
         .map(|p| {
@@ -573,9 +564,9 @@ fn generate_unwire_output_producer(analysis: &AnalysisResult) -> TokenStream {
             let is_arc = p.is_arc_wrapped;
 
             let remove = if is_arc {
-                quote! { self.#field_name.as_ref().remove_link(link_id) }
+                quote! { self.#field_name.as_ref().remove_data_writer(link_id) }
             } else {
-                quote! { self.#field_name.remove_link(link_id) }
+                quote! { self.#field_name.remove_data_writer(link_id) }
             };
 
             quote! { #port_name => { #remove } }
@@ -587,7 +578,7 @@ fn generate_unwire_output_producer(analysis: &AnalysisResult) -> TokenStream {
     }
 
     quote! {
-        fn unwire_output_producer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+        fn remove_link_output_data_writer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown output port: {}", port_name)))
@@ -596,8 +587,8 @@ fn generate_unwire_output_producer(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate unwire_input_consumer method
-fn generate_unwire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
+/// Generate remove_link_input_data_reader method
+fn generate_remove_link_input_data_reader(analysis: &AnalysisResult) -> TokenStream {
     let arms: Vec<TokenStream> = analysis
         .input_ports()
         .map(|p| {
@@ -606,9 +597,9 @@ fn generate_unwire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
             let is_arc = p.is_arc_wrapped;
 
             let remove = if is_arc {
-                quote! { self.#field_name.as_ref().remove_link(link_id) }
+                quote! { self.#field_name.as_ref().remove_data_reader(link_id) }
             } else {
-                quote! { self.#field_name.remove_link(link_id) }
+                quote! { self.#field_name.remove_data_reader(link_id) }
             };
 
             quote! { #port_name => { #remove } }
@@ -620,7 +611,7 @@ fn generate_unwire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
     }
 
     quote! {
-        fn unwire_input_consumer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+        fn remove_link_input_data_reader(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown input port: {}", port_name)))
@@ -629,8 +620,8 @@ fn generate_unwire_input_consumer(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate set_output_process_function_invoke_send method
-fn generate_set_output_process_function_invoke_send(analysis: &AnalysisResult) -> TokenStream {
+/// Generate set_link_output_to_processor_message_writer method
+fn generate_set_link_output_to_processor_message_writer(analysis: &AnalysisResult) -> TokenStream {
     let arms: Vec<TokenStream> = analysis
         .output_ports()
         .map(|p| {
@@ -638,13 +629,13 @@ fn generate_set_output_process_function_invoke_send(analysis: &AnalysisResult) -
             let field_name = &p.field_name;
             let is_arc = p.is_arc_wrapped;
 
-            let set_sender = if is_arc {
-                quote! { self.#field_name.as_ref().set_process_function_invoke_send(process_function_invoke_send) }
+            let set_writer = if is_arc {
+                quote! { self.#field_name.as_ref().set_link_output_to_processor_message_writer(message_writer) }
             } else {
-                quote! { self.#field_name.set_process_function_invoke_send(process_function_invoke_send) }
+                quote! { self.#field_name.set_link_output_to_processor_message_writer(message_writer) }
             };
 
-            quote! { #port_name => { #set_sender } }
+            quote! { #port_name => { #set_writer } }
         })
         .collect();
 
@@ -653,7 +644,7 @@ fn generate_set_output_process_function_invoke_send(analysis: &AnalysisResult) -
     }
 
     quote! {
-        fn set_output_process_function_invoke_send(&mut self, port_name: &str, process_function_invoke_send: ::streamlib::crossbeam_channel::Sender<::streamlib::core::link_channel::ProcessFunctionEvent>) {
+        fn set_link_output_to_processor_message_writer(&mut self, port_name: &str, message_writer: ::streamlib::crossbeam_channel::Sender<::streamlib::core::links::LinkOutputToProcessorMessage>) {
             match port_name {
                 #(#arms,)*
                 _ => {}

@@ -1,4 +1,6 @@
-//! Scheduler delegate for processor scheduling decisions.
+//! Scheduler delegate trait for processor scheduling decisions.
+
+use std::sync::Arc;
 
 use crate::core::graph::ProcessorNode;
 
@@ -49,17 +51,12 @@ pub enum SchedulingStrategy {
     },
 
     /// Run on Rayon work-stealing pool.
-    /// Good for: CPU-bound parallel work, many similar processors.
-    /// Scales to 50k+ processors like a game engine.
     WorkStealingPool,
 
     /// Run on main thread.
-    /// Required for: Apple frameworks (AVFoundation, Metal, AppKit).
     MainThread,
 
     /// Lightweight - no dedicated resources.
-    /// Runs inline in caller's context.
-    /// Good for: Simple, fast transformations.
     Lightweight,
 }
 
@@ -114,61 +111,21 @@ impl SchedulingStrategy {
 /// Delegate for processor scheduling decisions.
 ///
 /// Determines how each processor should be scheduled at runtime.
-/// The default implementation uses heuristics based on processor type.
+///
+/// A blanket implementation is provided for `Arc<dyn SchedulerDelegate>`,
+/// so you can pass an Arc directly where a `SchedulerDelegate` is expected.
 pub trait SchedulerDelegate: Send + Sync {
     /// Determine scheduling strategy for a processor.
     fn scheduling_strategy(&self, node: &ProcessorNode) -> SchedulingStrategy;
 }
 
-/// Default scheduler implementation using type-based heuristics.
-pub struct DefaultScheduler;
+// =============================================================================
+// Blanket implementation for Arc wrapper
+// =============================================================================
 
-impl Default for DefaultScheduler {
-    fn default() -> Self {
-        Self
-    }
-}
-
-impl SchedulerDelegate for DefaultScheduler {
+impl SchedulerDelegate for Arc<dyn SchedulerDelegate> {
     fn scheduling_strategy(&self, node: &ProcessorNode) -> SchedulingStrategy {
-        let processor_type = &node.processor_type;
-
-        // Apple framework processors require main thread
-        if processor_type == "CameraProcessor"
-            || processor_type == "DisplayProcessor"
-            || processor_type.contains("Display")
-        {
-            return SchedulingStrategy::MainThread;
-        }
-
-        // Audio processors get real-time priority
-        if processor_type.contains("Audio")
-            || processor_type.contains("Microphone")
-            || processor_type.contains("Speaker")
-        {
-            return SchedulingStrategy::DedicatedThread {
-                priority: ThreadPriority::RealTime,
-                name: Some(format!("audio-{}", node.id)),
-            };
-        }
-
-        // Video encoding/decoding gets high priority
-        if processor_type.contains("Encoder")
-            || processor_type.contains("Decoder")
-            || processor_type.contains("H264")
-            || processor_type.contains("H265")
-        {
-            return SchedulingStrategy::DedicatedThread {
-                priority: ThreadPriority::High,
-                name: Some(format!("video-{}", node.id)),
-            };
-        }
-
-        // Default: normal dedicated thread
-        SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::Normal,
-            name: None,
-        }
+        (**self).scheduling_strategy(node)
     }
 }
 
@@ -189,61 +146,5 @@ mod tests {
             SchedulingStrategy::WorkStealingPool.description(),
             "work-stealing pool"
         );
-    }
-
-    #[test]
-    fn test_default_scheduler_camera() {
-        let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new("cam".into(), "CameraProcessor".into(), None, vec![], vec![]);
-
-        assert_eq!(
-            scheduler.scheduling_strategy(&node),
-            SchedulingStrategy::MainThread
-        );
-    }
-
-    #[test]
-    fn test_default_scheduler_audio() {
-        let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new(
-            "mic".into(),
-            "AudioCaptureProcessor".into(),
-            None,
-            vec![],
-            vec![],
-        );
-
-        match scheduler.scheduling_strategy(&node) {
-            SchedulingStrategy::DedicatedThread { priority, .. } => {
-                assert_eq!(priority, ThreadPriority::RealTime);
-            }
-            _ => panic!("Expected DedicatedThread for audio processor"),
-        }
-    }
-
-    #[test]
-    fn test_default_scheduler_encoder() {
-        let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new("enc".into(), "H264Encoder".into(), None, vec![], vec![]);
-
-        match scheduler.scheduling_strategy(&node) {
-            SchedulingStrategy::DedicatedThread { priority, .. } => {
-                assert_eq!(priority, ThreadPriority::High);
-            }
-            _ => panic!("Expected DedicatedThread for encoder"),
-        }
-    }
-
-    #[test]
-    fn test_default_scheduler_generic() {
-        let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new("proc".into(), "SomeProcessor".into(), None, vec![], vec![]);
-
-        match scheduler.scheduling_strategy(&node) {
-            SchedulingStrategy::DedicatedThread { priority, .. } => {
-                assert_eq!(priority, ThreadPriority::Normal);
-            }
-            _ => panic!("Expected DedicatedThread for generic processor"),
-        }
     }
 }

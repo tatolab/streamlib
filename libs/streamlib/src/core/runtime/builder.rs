@@ -6,13 +6,11 @@ use parking_lot::RwLock;
 
 use crate::core::compiler::delta::GraphDelta;
 use crate::core::compiler::Compiler;
-use crate::core::delegates::{
-    DefaultFactory, DefaultProcessorDelegate, DefaultScheduler, FactoryDelegate, ProcessorDelegate,
-    SchedulerDelegate,
-};
+use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{Graph, PropertyGraph};
-use crate::core::link_channel::LinkChannel;
+use crate::core::links::LinkInstanceManager;
 
+use super::delegates::{DefaultFactory, DefaultProcessorDelegate, DefaultScheduler};
 use super::{CommitMode, StreamRuntime};
 
 /// Builder for configuring and constructing a [`StreamRuntime`].
@@ -96,7 +94,7 @@ impl RuntimeBuilder {
         let scheduler = self.scheduler.unwrap_or_else(|| Arc::new(DefaultScheduler));
 
         // Create compiler with delegates
-        let compiler = Compiler::with_delegates(
+        let compiler = Compiler::from_arcs(
             Arc::clone(&factory),
             Arc::clone(&processor_delegate),
             Arc::clone(&scheduler),
@@ -114,9 +112,10 @@ impl RuntimeBuilder {
             processor_delegate,
             scheduler,
             commit_mode: self.commit_mode,
-            link_channel: LinkChannel::new(),
+            link_instance_manager: LinkInstanceManager::new(),
             runtime_context: None,
             pending_delta: GraphDelta::default(),
+            started: false,
         }
     }
 }

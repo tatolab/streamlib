@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 use crate::core::graph::{
     Graph, GraphState, ProcessorId, ProcessorMetrics, PropertyGraph, StateComponent,
 };
-use crate::core::link_channel::LinkId;
+use crate::core::links::LinkId;
 
 use super::snapshots::{
     GraphHealth, GraphStateSnapshot, LatencyStats, LinkSnapshot, ProcessorSnapshot,

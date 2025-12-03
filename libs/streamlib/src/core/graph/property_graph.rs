@@ -11,8 +11,10 @@ use hecs::{Component, Entity, World};
 use parking_lot::RwLock;
 
 use crate::core::error::{Result, StreamError};
+use crate::core::graph::components::LinkStateComponent;
+use crate::core::graph::link::LinkState;
 use crate::core::graph::{Graph, GraphChecksum, Link, ProcessorId, ProcessorNode};
-use crate::core::link_channel::LinkId;
+use crate::core::links::LinkId;
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -229,6 +231,40 @@ impl PropertyGraph {
         self.world
             .insert_one(*entity, component)
             .map_err(|e| StreamError::Runtime(format!("Failed to insert component: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Get the state of a link from its ECS component.
+    pub fn get_link_state(&self, id: &LinkId) -> Option<LinkState> {
+        let entity = self.link_entities.get(id)?;
+        self.world
+            .get::<&LinkStateComponent>(*entity)
+            .ok()
+            .map(|c| c.0)
+    }
+
+    /// Set the state of a link via its ECS component.
+    pub fn set_link_state(&mut self, id: &LinkId, state: LinkState) -> Result<()> {
+        let entity = *self
+            .link_entities
+            .get(id)
+            .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", id)))?;
+
+        // Check if component exists first
+        let has_component = self.world.get::<&LinkStateComponent>(entity).is_ok();
+
+        if has_component {
+            // Update existing component
+            if let Ok(mut comp) = self.world.get::<&mut LinkStateComponent>(entity) {
+                comp.0 = state;
+            }
+        } else {
+            // Insert new component
+            self.world
+                .insert_one(entity, LinkStateComponent(state))
+                .map_err(|e| StreamError::Runtime(format!("Failed to set link state: {}", e)))?;
+        }
 
         Ok(())
     }

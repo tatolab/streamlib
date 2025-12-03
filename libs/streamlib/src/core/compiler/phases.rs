@@ -1,13 +1,12 @@
 //! Compilation phase implementations.
 //!
-//! Each phase attaches ECS components to processor entities in the PropertyGraph.
-//! This replaces the old approach of creating RunningProcessor structs.
+//! Individual processor operations for each compilation phase.
+//! The Compiler orchestrates these operations with event publishing.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::compiler::delta::GraphDelta;
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{
     FactoryDelegate, ProcessorDelegate, SchedulerDelegate, SchedulingStrategy,
@@ -15,78 +14,17 @@ use crate::core::delegates::{
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    GraphState, LightweightMarker, MainThreadMarker, ProcessInvokeChannel, ProcessorId,
-    ProcessorInstance, PropertyGraph, RayonPoolMarker, ShutdownChannel, StateComponent,
-    ThreadHandle,
+    GraphState, LightweightMarker, LinkOutputToProcessorWriterAndReader, MainThreadMarker,
+    ProcessorId, ProcessorInstance, PropertyGraph, RayonPoolMarker, ShutdownChannel,
+    StateComponent, ThreadHandle,
 };
-use crate::core::link_channel::LinkChannel;
 use crate::core::processors::ProcessorState;
-
-/// Phase 1: CREATE - Instantiate processor instances from factory.
-///
-/// Attaches `ProcessorInstance`, `ShutdownChannel`, `ProcessInvokeChannel`, and
-/// `StateComponent` to each processor entity.
-pub fn phase_create(
-    factory: &Arc<dyn FactoryDelegate>,
-    processor_delegate: &Arc<dyn ProcessorDelegate>,
-    property_graph: &mut PropertyGraph,
-    delta: &GraphDelta,
-) -> Result<()> {
-    for proc_id in &delta.processors_to_add {
-        tracing::info!("[Phase 1: CREATE] {}", proc_id);
-        create_processor(factory, processor_delegate, property_graph, proc_id)?;
-    }
-    Ok(())
-}
-
-/// Phase 2: WIRE - Create ring buffers and connect ports.
-pub fn phase_wire(
-    property_graph: &mut PropertyGraph,
-    link_channel: &mut LinkChannel,
-    delta: &GraphDelta,
-) -> Result<()> {
-    for link_id in &delta.links_to_add {
-        tracing::info!("[Phase 2: WIRE] {}", link_id);
-        super::wiring::wire_link(property_graph, link_channel, link_id)?;
-    }
-    Ok(())
-}
-
-/// Phase 3: SETUP - Initialize processors (GPU, devices).
-pub fn phase_setup(
-    property_graph: &mut PropertyGraph,
-    runtime_context: &Arc<RuntimeContext>,
-    delta: &GraphDelta,
-) -> Result<()> {
-    for proc_id in &delta.processors_to_add {
-        tracing::info!("[Phase 3: SETUP] {}", proc_id);
-        setup_processor(property_graph, runtime_context, proc_id)?;
-    }
-    Ok(())
-}
-
-/// Phase 4: START - Spawn processor threads based on scheduler strategy.
-///
-/// Attaches `ThreadHandle` (for dedicated threads), `MainThreadMarker`,
-/// `RayonPoolMarker`, or `LightweightMarker` based on scheduling strategy.
-pub fn phase_start(
-    processor_delegate: &Arc<dyn ProcessorDelegate>,
-    scheduler: &Arc<dyn SchedulerDelegate>,
-    property_graph: &mut PropertyGraph,
-    delta: &GraphDelta,
-) -> Result<()> {
-    for proc_id in &delta.processors_to_add {
-        tracing::info!("[Phase 4: START] {}", proc_id);
-        start_processor(processor_delegate, scheduler, property_graph, proc_id)?;
-    }
-    Ok(())
-}
 
 // ============================================================================
 // Phase 1: CREATE implementation
 // ============================================================================
 
-fn create_processor(
+pub(crate) fn create_processor(
     factory: &Arc<dyn FactoryDelegate>,
     processor_delegate: &Arc<dyn ProcessorDelegate>,
     property_graph: &mut PropertyGraph,
@@ -113,7 +51,7 @@ fn create_processor(
     let processor_arc = Arc::new(Mutex::new(processor));
     property_graph.insert(proc_id, ProcessorInstance(processor_arc))?;
     property_graph.insert(proc_id, ShutdownChannel::new())?;
-    property_graph.insert(proc_id, ProcessInvokeChannel::new())?;
+    property_graph.insert(proc_id, LinkOutputToProcessorWriterAndReader::new())?;
     property_graph.insert(proc_id, StateComponent::default())?;
 
     tracing::debug!("[{}] Created with ECS components", proc_id);
@@ -124,7 +62,7 @@ fn create_processor(
 // Phase 3: SETUP implementation
 // ============================================================================
 
-fn setup_processor(
+pub(crate) fn setup_processor(
     property_graph: &mut PropertyGraph,
     runtime_context: &Arc<RuntimeContext>,
     processor_id: &ProcessorId,
@@ -151,7 +89,7 @@ fn setup_processor(
 // Phase 4: START implementation
 // ============================================================================
 
-fn start_processor(
+pub(crate) fn start_processor(
     processor_delegate: &Arc<dyn ProcessorDelegate>,
     scheduler: &Arc<dyn SchedulerDelegate>,
     property_graph: &mut PropertyGraph,
@@ -181,19 +119,34 @@ fn start_processor(
         SchedulingStrategy::DedicatedThread { priority, name } => {
             spawn_dedicated_thread(property_graph, processor_id, priority, name)?;
         }
+        // TODO: Implement alternative scheduling strategies in separate branch
+        // For now, all processors use dedicated threads
         SchedulingStrategy::MainThread => {
-            // Mark as main thread processor - will be scheduled differently
-            property_graph.insert(processor_id, MainThreadMarker)?;
-            schedule_on_main_thread(property_graph, processor_id)?;
+            // MainThread processors still get a dedicated thread - they dispatch internally
+            spawn_dedicated_thread(
+                property_graph,
+                processor_id,
+                crate::core::delegates::ThreadPriority::Normal,
+                None,
+            )?;
         }
         SchedulingStrategy::WorkStealingPool => {
-            // Mark for Rayon pool scheduling
-            property_graph.insert(processor_id, RayonPoolMarker)?;
-            // TODO: Register with Rayon pool
+            // Fallback to dedicated thread until Rayon pool is implemented
+            spawn_dedicated_thread(
+                property_graph,
+                processor_id,
+                crate::core::delegates::ThreadPriority::Normal,
+                None,
+            )?;
         }
         SchedulingStrategy::Lightweight => {
-            // Mark as lightweight - runs inline
-            property_graph.insert(processor_id, LightweightMarker)?;
+            // Fallback to dedicated thread until inline execution is implemented
+            spawn_dedicated_thread(
+                property_graph,
+                processor_id,
+                crate::core::delegates::ThreadPriority::Normal,
+                None,
+            )?;
         }
     }
 
@@ -254,19 +207,19 @@ fn spawn_dedicated_thread(
         })?
     };
 
-    // Take process invoke receiver
-    let process_invoke_rx = {
-        let mut channel = property_graph
-            .get_mut::<ProcessInvokeChannel>(processor_id)
+    // Take message reader from LinkOutput
+    let message_reader = {
+        let mut writer_and_reader = property_graph
+            .get_mut::<LinkOutputToProcessorWriterAndReader>(processor_id)
             .ok_or_else(|| {
                 StreamError::Runtime(format!(
-                    "Processor '{}' has no ProcessInvokeChannel",
+                    "Processor '{}' has no LinkOutputToProcessorWriterAndReader",
                     processor_id
                 ))
             })?;
-        channel.take_receiver().ok_or_else(|| {
+        writer_and_reader.take_reader().ok_or_else(|| {
             StreamError::Runtime(format!(
-                "Processor '{}' process invoke receiver already taken",
+                "Processor '{}' message reader already taken",
                 processor_id
             ))
         })?
@@ -284,7 +237,7 @@ fn spawn_dedicated_thread(
                 id_clone,
                 processor_arc,
                 shutdown_rx,
-                process_invoke_rx,
+                message_reader,
                 state_arc,
                 exec_config,
             );

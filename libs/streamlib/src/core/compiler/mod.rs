@@ -9,11 +9,14 @@
 
 mod compiler;
 pub(crate) mod delta;
+mod phase;
 pub(crate) mod phases;
-pub(crate) mod wiring;
+pub mod wiring;
 
 pub use self::compiler::Compiler;
 pub use delta::{
     compute_delta, compute_delta_with_config, GraphDelta, LinkConfigChange, ProcessorConfigChange,
 };
+pub use phase::{CompilePhase, CompileResult};
 pub use phases::{shutdown_all_processors, shutdown_processor};
+pub use wiring::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper};

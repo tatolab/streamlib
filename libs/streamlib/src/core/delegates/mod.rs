@@ -4,11 +4,13 @@
 //! - Factory: How processors are instantiated
 //! - Processor: Lifecycle callbacks (will_create, did_create, etc.)
 //! - Scheduler: How processors are scheduled (thread, pool, main thread)
+//!
+//! Default implementations live in `runtime::delegates`.
 
 mod factory;
 mod processor;
 mod scheduler;
 
-pub use factory::{DefaultFactory, FactoryAdapter, FactoryDelegate};
-pub use processor::{DefaultProcessorDelegate, ProcessorDelegate};
-pub use scheduler::{DefaultScheduler, SchedulerDelegate, SchedulingStrategy, ThreadPriority};
+pub use factory::FactoryDelegate;
+pub use processor::ProcessorDelegate;
+pub use scheduler::{SchedulerDelegate, SchedulingStrategy, ThreadPriority};

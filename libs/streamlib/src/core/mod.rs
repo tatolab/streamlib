@@ -5,10 +5,10 @@ pub mod context;
 pub mod delegates;
 pub mod error;
 pub mod execution;
-pub mod executor;
+
 pub mod frames;
 pub mod graph;
-pub mod link_channel;
+pub mod links;
 pub mod media_clock;
 pub mod observability;
 pub mod prelude;
@@ -32,7 +32,7 @@ pub use compiler::{
 };
 pub use context::{GpuContext, RuntimeContext};
 pub use error::{Result, StreamError};
-pub use executor::{ExecutorState, RuntimeStatus, SimpleExecutor};
+
 pub use frames::{
     AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
 };
@@ -40,11 +40,11 @@ pub use graph::{
     compute_config_checksum, input, output, Graph, GraphChecksum, InputPortMarker, Link,
     LinkPortRef, OutputPortMarker, ProcessorId, ProcessorNode,
 };
-pub use link_channel::{
-    create_link_channel, LinkChannel, LinkChannelManager, LinkInput, LinkOutput, LinkOwnedConsumer,
-    LinkOwnedProducer, LinkPortAddress, LinkPortMessage, LinkPortType,
+pub use links::{
+    LinkId, LinkInput, LinkInputDataReader, LinkInstance, LinkInstanceManager, LinkOutput,
+    LinkOutputDataWriter, LinkOutputToProcessorMessage, LinkPortAddress, LinkPortMessage,
+    LinkPortType, DEFAULT_LINK_CAPACITY,
 };
-pub use link_channel::{LinkId, ProcessFunctionEvent};
 pub use processors::{
     BaseProcessor, BoxedProcessor, CompositeFactory, DynProcessor, EmptyConfig, Processor,
     ProcessorNodeFactory, ProcessorState, ProcessorType, RegistryBackedFactory,
@@ -69,8 +69,7 @@ pub use processors::{
 };
 
 pub use delegates::{
-    DefaultFactory, DefaultProcessorDelegate, DefaultScheduler, FactoryAdapter, FactoryDelegate,
-    ProcessorDelegate, SchedulerDelegate, SchedulingStrategy,
+    FactoryDelegate, ProcessorDelegate, SchedulerDelegate, SchedulingStrategy,
     ThreadPriority as SchedulerThreadPriority,
 };
 pub use execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
@@ -78,6 +77,9 @@ pub use registry::{
     global_registry, is_processor_registered, list_processors, list_processors_by_tag,
     register_processor, unregister_processor, DescriptorProvider, ProcessorRegistration,
     ProcessorRegistry,
+};
+pub use runtime::delegates::{
+    DefaultFactory, DefaultProcessorDelegate, DefaultScheduler, FactoryAdapter,
 };
 pub use runtime::{CommitMode, RuntimeBuilder, StreamRuntime};
 pub use schema::{

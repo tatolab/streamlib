@@ -9,7 +9,8 @@ use std::thread::JoinHandle;
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 
-use crate::core::link_channel::ProcessFunctionEvent;
+use crate::core::graph::link::LinkState;
+use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::{BoxedProcessor, ProcessorState};
 
 /// The instantiated processor instance.
@@ -46,29 +47,29 @@ impl Default for ShutdownChannel {
     }
 }
 
-/// Channel to invoke the process function.
-pub struct ProcessInvokeChannel {
-    pub sender: Sender<ProcessFunctionEvent>,
-    pub receiver: Option<Receiver<ProcessFunctionEvent>>,
+/// Writer and reader pair for messages from LinkOutput to this processor.
+pub struct LinkOutputToProcessorWriterAndReader {
+    pub writer: Sender<LinkOutputToProcessorMessage>,
+    pub reader: Option<Receiver<LinkOutputToProcessorMessage>>,
 }
 
-impl ProcessInvokeChannel {
-    /// Create a new process invoke channel.
+impl LinkOutputToProcessorWriterAndReader {
+    /// Create a new writer and reader pair.
     pub fn new() -> Self {
-        let (sender, receiver) = crossbeam_channel::unbounded();
+        let (writer, reader) = crossbeam_channel::unbounded();
         Self {
-            sender,
-            receiver: Some(receiver),
+            writer,
+            reader: Some(reader),
         }
     }
 
-    /// Take the receiver (can only be done once).
-    pub fn take_receiver(&mut self) -> Option<Receiver<ProcessFunctionEvent>> {
-        self.receiver.take()
+    /// Take the reader (can only be done once).
+    pub fn take_reader(&mut self) -> Option<Receiver<LinkOutputToProcessorMessage>> {
+        self.reader.take()
     }
 }
 
-impl Default for ProcessInvokeChannel {
+impl Default for LinkOutputToProcessorWriterAndReader {
     fn default() -> Self {
         Self::new()
     }
@@ -107,6 +108,15 @@ pub struct RayonPoolMarker;
 /// Marker for lightweight processors (no dedicated resources).
 pub struct LightweightMarker;
 
+/// Runtime state component for links (attached to link entities).
+pub struct LinkStateComponent(pub LinkState);
+
+impl Default for LinkStateComponent {
+    fn default() -> Self {
+        Self(LinkState::Pending)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,20 +137,19 @@ mod tests {
     }
 
     #[test]
-    fn test_process_invoke_channel() {
-        let mut channel = ProcessInvokeChannel::new();
-        let receiver = channel.take_receiver().expect("should have receiver");
+    fn test_link_output_to_processor_writer_and_reader() {
+        let mut pair = LinkOutputToProcessorWriterAndReader::new();
+        let reader = pair.take_reader().expect("should have reader");
 
-        // Send event
-        channel
-            .sender
-            .send(ProcessFunctionEvent::InvokeFunction)
+        // Send message
+        pair.writer
+            .send(LinkOutputToProcessorMessage::InvokeProcessingNow)
             .unwrap();
 
         // Receive it
         assert!(matches!(
-            receiver.recv(),
-            Ok(ProcessFunctionEvent::InvokeFunction)
+            reader.recv(),
+            Ok(LinkOutputToProcessorMessage::InvokeProcessingNow)
         ));
     }
 

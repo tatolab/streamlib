@@ -1,6 +1,6 @@
 //! Link wiring implementation for the compiler.
 //!
-//! Wiring creates ring buffers between processor ports and sets up
+//! Wiring creates LinkInstances (ring buffers) between processor ports and sets up
 //! process function invoke channels for reactive processing.
 
 use std::sync::Arc;
@@ -9,14 +9,16 @@ use parking_lot::Mutex;
 
 use crate::core::error::{Result, StreamError};
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
-use crate::core::graph::{ProcessInvokeChannel, ProcessorInstance, PropertyGraph};
-use crate::core::link_channel::{LinkChannel, LinkId, LinkPortAddress, LinkPortType};
+use crate::core::graph::{
+    LinkOutputToProcessorWriterAndReader, LinkState, ProcessorInstance, PropertyGraph,
+};
+use crate::core::links::{LinkId, LinkInstanceManager, LinkPortAddress, LinkPortType};
 use crate::core::processors::BoxedProcessor;
 
 /// Wire a link by ID from the graph.
 pub fn wire_link(
     property_graph: &mut PropertyGraph,
-    link_channel: &mut LinkChannel,
+    link_instance_manager: &mut LinkInstanceManager,
     link_id: &LinkId,
 ) -> Result<()> {
     let (from_port, to_port) = {
@@ -26,7 +28,13 @@ pub fn wire_link(
         (link.from_port(), link.to_port())
     };
 
-    wire_link_ports(property_graph, link_channel, &from_port, &to_port, link_id)?;
+    wire_link_ports(
+        property_graph,
+        link_instance_manager,
+        &from_port,
+        &to_port,
+        link_id,
+    )?;
     Ok(())
 }
 
@@ -53,9 +61,9 @@ pub fn unwire_link(property_graph: &mut PropertyGraph, link_id: &LinkId) -> Resu
     // Now we can operate on the cloned Arcs without borrowing property_graph
     if let Some(arc) = source_arc {
         let mut guard = arc.lock();
-        if let Err(e) = guard.unwire_output_producer(&source_port, link_id) {
+        if let Err(e) = guard.remove_link_output_data_writer(&source_port, link_id) {
             tracing::warn!(
-                "Failed to unwire output producer from {}.{}: {}",
+                "Failed to remove data writer from {}.{}: {}",
                 source_proc_id,
                 source_port,
                 e
@@ -65,9 +73,9 @@ pub fn unwire_link(property_graph: &mut PropertyGraph, link_id: &LinkId) -> Resu
 
     if let Some(arc) = dest_arc {
         let mut guard = arc.lock();
-        if let Err(e) = guard.unwire_input_consumer(&dest_port, link_id) {
+        if let Err(e) = guard.remove_link_input_data_reader(&dest_port, link_id) {
             tracing::warn!(
-                "Failed to unwire input consumer from {}.{}: {}",
+                "Failed to remove data reader from {}.{}: {}",
                 dest_proc_id,
                 dest_port,
                 e
@@ -75,10 +83,12 @@ pub fn unwire_link(property_graph: &mut PropertyGraph, link_id: &LinkId) -> Resu
         }
     }
 
-    // Remove link entity if we're tracking link components
-    property_graph.remove_link_entity(link_id);
+    // Set link state to Disconnected (keep entity for state queries)
+    if let Err(e) = property_graph.set_link_state(link_id, LinkState::Disconnected) {
+        tracing::warn!("Failed to set link state to Disconnected: {}", e);
+    }
 
-    tracing::info!("Unwired link: {}", link_id);
+    tracing::info!("Unwired link: {} (state: Disconnected)", link_id);
     Ok(())
 }
 
@@ -99,7 +109,7 @@ pub fn parse_port_address(port: &str) -> Result<(String, String)> {
 
 fn wire_link_ports(
     property_graph: &mut PropertyGraph,
-    link_channel: &mut LinkChannel,
+    link_instance_manager: &mut LinkInstanceManager,
     from_port: &str,
     to_port: &str,
     link_id: &LinkId,
@@ -135,29 +145,31 @@ fn wire_link_ports(
     let dest_addr = LinkPortAddress::new(dest_proc_id.clone(), dest_port.clone());
     let capacity = source_port_type.default_capacity();
 
-    create_link_channel(
-        link_channel,
+    create_link_instance(
+        link_instance_manager,
         source_port_type,
         &source_addr,
         &dest_addr,
         capacity,
+        link_id,
         &source_processor,
         &dest_processor,
         &source_port,
         &dest_port,
     )?;
 
-    setup_process_function_invoke_channel(
+    setup_link_output_to_processor_message_writer(
         property_graph,
         &source_proc_id,
         &dest_proc_id,
         &source_port,
     )?;
 
-    // Create link entity for tracking
+    // Create link entity and set state to Wired
     property_graph.ensure_link_entity(link_id);
+    property_graph.set_link_state(link_id, LinkState::Wired)?;
 
-    tracing::info!("Registered link: {}", link_id);
+    tracing::info!("Registered link: {} (state: Wired)", link_id);
     Ok(())
 }
 
@@ -251,13 +263,26 @@ fn validate_port_types(
     Ok((src_type, dst_type))
 }
 
+/// Wrapper for passing LinkOutputDataWriter with its LinkId through Box<dyn Any>.
+pub struct LinkOutputDataWriterWrapper<T: crate::core::LinkPortMessage> {
+    pub link_id: LinkId,
+    pub data_writer: crate::core::LinkOutputDataWriter<T>,
+}
+
+/// Wrapper for passing LinkInputDataReader with its LinkId through Box<dyn Any>.
+pub struct LinkInputDataReaderWrapper<T: crate::core::LinkPortMessage> {
+    pub link_id: LinkId,
+    pub data_reader: crate::core::LinkInputDataReader<T>,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn create_link_channel(
-    link_channel: &mut LinkChannel,
+fn create_link_instance(
+    link_instance_manager: &mut LinkInstanceManager,
     port_type: LinkPortType,
     source_addr: &LinkPortAddress,
     dest_addr: &LinkPortAddress,
     capacity: usize,
+    link_id: &LinkId,
     source_processor: &Arc<Mutex<BoxedProcessor>>,
     dest_processor: &Arc<Mutex<BoxedProcessor>>,
     source_port: &str,
@@ -265,70 +290,112 @@ fn create_link_channel(
 ) -> Result<()> {
     match port_type {
         LinkPortType::Audio => {
-            let (producer, consumer) = link_channel.create_channel::<AudioFrame>(
-                source_addr.clone(),
-                dest_addr.clone(),
-                capacity,
-            )?;
+            let (data_writer, data_reader) = link_instance_manager
+                .create_link_instance::<AudioFrame>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                    link_id.clone(),
+                )?;
 
             let mut source_guard = source_processor.lock();
-            source_guard.wire_output_producer(source_port, Box::new(producer))?;
+            source_guard.add_link_output_data_writer(
+                source_port,
+                Box::new(LinkOutputDataWriterWrapper {
+                    link_id: link_id.clone(),
+                    data_writer,
+                }),
+            )?;
             drop(source_guard);
 
             let mut dest_guard = dest_processor.lock();
-            dest_guard.wire_input_consumer(dest_port, Box::new(consumer))?;
+            dest_guard.add_link_input_data_reader(
+                dest_port,
+                Box::new(LinkInputDataReaderWrapper {
+                    link_id: link_id.clone(),
+                    data_reader,
+                }),
+            )?;
         }
         LinkPortType::Video => {
-            let (producer, consumer) = link_channel.create_channel::<VideoFrame>(
-                source_addr.clone(),
-                dest_addr.clone(),
-                capacity,
-            )?;
+            let (data_writer, data_reader) = link_instance_manager
+                .create_link_instance::<VideoFrame>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                    link_id.clone(),
+                )?;
 
             let mut source_guard = source_processor.lock();
-            source_guard.wire_output_producer(source_port, Box::new(producer))?;
+            source_guard.add_link_output_data_writer(
+                source_port,
+                Box::new(LinkOutputDataWriterWrapper {
+                    link_id: link_id.clone(),
+                    data_writer,
+                }),
+            )?;
             drop(source_guard);
 
             let mut dest_guard = dest_processor.lock();
-            dest_guard.wire_input_consumer(dest_port, Box::new(consumer))?;
+            dest_guard.add_link_input_data_reader(
+                dest_port,
+                Box::new(LinkInputDataReaderWrapper {
+                    link_id: link_id.clone(),
+                    data_reader,
+                }),
+            )?;
         }
         LinkPortType::Data => {
-            let (producer, consumer) = link_channel.create_channel::<DataFrame>(
-                source_addr.clone(),
-                dest_addr.clone(),
-                capacity,
-            )?;
+            let (data_writer, data_reader) = link_instance_manager
+                .create_link_instance::<DataFrame>(
+                    source_addr.clone(),
+                    dest_addr.clone(),
+                    capacity,
+                    link_id.clone(),
+                )?;
 
             let mut source_guard = source_processor.lock();
-            source_guard.wire_output_producer(source_port, Box::new(producer))?;
+            source_guard.add_link_output_data_writer(
+                source_port,
+                Box::new(LinkOutputDataWriterWrapper {
+                    link_id: link_id.clone(),
+                    data_writer,
+                }),
+            )?;
             drop(source_guard);
 
             let mut dest_guard = dest_processor.lock();
-            dest_guard.wire_input_consumer(dest_port, Box::new(consumer))?;
+            dest_guard.add_link_input_data_reader(
+                dest_port,
+                Box::new(LinkInputDataReaderWrapper {
+                    link_id: link_id.clone(),
+                    data_reader,
+                }),
+            )?;
         }
     }
     Ok(())
 }
 
-fn setup_process_function_invoke_channel(
+fn setup_link_output_to_processor_message_writer(
     property_graph: &PropertyGraph,
     source_proc_id: &str,
     dest_proc_id: &str,
     source_port: &str,
 ) -> Result<()> {
-    // Get destination's process invoke channel sender
-    let dest_channel = property_graph
-        .get::<ProcessInvokeChannel>(&dest_proc_id.to_string())
+    // Get destination's message writer
+    let dest_writer_and_reader = property_graph
+        .get::<LinkOutputToProcessorWriterAndReader>(&dest_proc_id.to_string())
         .ok_or_else(|| {
             StreamError::Configuration(format!(
-                "Destination processor '{}' has no ProcessInvokeChannel",
+                "Destination processor '{}' has no LinkOutputToProcessorWriterAndReader",
                 dest_proc_id
             ))
         })?;
-    let sender = dest_channel.sender.clone();
-    drop(dest_channel);
+    let message_writer = dest_writer_and_reader.writer.clone();
+    drop(dest_writer_and_reader);
 
-    // Get source processor and set its output's invoke sender
+    // Get source processor and set its output's message writer
     let source_instance = property_graph
         .get::<ProcessorInstance>(&source_proc_id.to_string())
         .ok_or_else(|| {
@@ -339,10 +406,10 @@ fn setup_process_function_invoke_channel(
         })?;
 
     let mut source_guard = source_instance.0.lock();
-    source_guard.set_output_process_function_invoke_send(source_port, sender);
+    source_guard.set_link_output_to_processor_message_writer(source_port, message_writer);
 
     tracing::debug!(
-        "Wired process function invoke: {} ({}) → {}",
+        "Set up message writer: {} ({}) → {}",
         source_proc_id,
         source_port,
         dest_proc_id

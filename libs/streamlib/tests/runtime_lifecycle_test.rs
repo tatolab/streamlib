@@ -222,7 +222,9 @@ fn test_runtime_lifecycle_full_flow() {
     // =========================================================================
     print_separator("STEP 1: Create Runtime - Verify Empty Graph");
 
-    let mut runtime = StreamRuntime::with_commit_mode(CommitMode::Manual);
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
 
     // Check initial state
     let status = runtime.status();

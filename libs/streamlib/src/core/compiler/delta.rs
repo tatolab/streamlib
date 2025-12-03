@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::graph::ProcessorId;
-use crate::core::link_channel::LinkId;
+use crate::core::links::LinkId;
 
 /// Represents the difference between desired state (Graph) and running state (ExecutionGraph).
 #[derive(Debug, Default)]
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_delta_with_link_changes() {
-        use crate::core::link_channel::link_id::__private::new_unchecked;
+        use crate::core::links::graph::link_id::__private::new_unchecked;
 
         let graph_procs: HashSet<_> = HashSet::new();
         let running_procs: HashSet<_> = HashSet::new();

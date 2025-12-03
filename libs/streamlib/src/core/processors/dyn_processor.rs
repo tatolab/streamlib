@@ -1,5 +1,5 @@
 use crate::core::execution::ExecutionConfig;
-use crate::core::link_channel::{LinkPortType, ProcessFunctionEvent};
+use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::{Result, RuntimeContext};
 
@@ -22,44 +22,39 @@ pub trait DynProcessor: Send + 'static {
     fn descriptor_instance(&self) -> Option<ProcessorDescriptor>;
 
     /// Returns the execution configuration for this processor.
-    ///
-    /// This determines how and when `process()` is called:
-    /// - `Continuous`: Runtime loops, calling process() repeatedly
-    /// - `Reactive`: Called when input data arrives
-    /// - `Manual`: Called once, then you control timing
     fn execution_config(&self) -> ExecutionConfig;
     fn get_output_port_type(&self, port_name: &str) -> Option<LinkPortType>;
     fn get_input_port_type(&self, port_name: &str) -> Option<LinkPortType>;
 
-    fn wire_output_producer(
+    fn add_link_output_data_writer(
         &mut self,
         port_name: &str,
-        producer: Box<dyn std::any::Any + Send>,
+        data_writer: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()>;
 
-    fn wire_input_consumer(
+    fn add_link_input_data_reader(
         &mut self,
         port_name: &str,
-        consumer: Box<dyn std::any::Any + Send>,
+        data_reader: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()>;
 
-    fn unwire_output_producer(
+    fn remove_link_output_data_writer(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::link_channel::LinkId,
+        link_id: &crate::core::links::LinkId,
     ) -> crate::core::Result<()>;
 
-    fn unwire_input_consumer(
+    fn remove_link_input_data_reader(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::link_channel::LinkId,
+        link_id: &crate::core::links::LinkId,
     ) -> crate::core::Result<()>;
 
-    /// Set the sender for invoking the downstream processor's process() function.
-    fn set_output_process_function_invoke_send(
+    /// Set the message writer for LinkOutput to processor communication.
+    fn set_link_output_to_processor_message_writer(
         &mut self,
         port_name: &str,
-        process_function_invoke_send: crossbeam_channel::Sender<ProcessFunctionEvent>,
+        message_writer: crossbeam_channel::Sender<LinkOutputToProcessorMessage>,
     );
 
     /// Apply a JSON config update at runtime.

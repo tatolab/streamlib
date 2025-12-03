@@ -53,8 +53,8 @@ unsafe impl Sync for FrameHolder {}
 static FRAME_STORAGE: std::sync::OnceLock<Arc<Mutex<Option<FrameHolder>>>> =
     std::sync::OnceLock::new();
 
-static PROCESS_FUNCTION_INVOKE_CHANNEL: std::sync::OnceLock<
-    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::link_channel::ProcessFunctionEvent>>>>,
+static LINK_OUTPUT_TO_PROCESSOR_WRITER_AND_READER: std::sync::OnceLock<
+    Arc<Mutex<Option<crossbeam_channel::Sender<crate::core::links::LinkOutputToProcessorMessage>>>>,
 > = std::sync::OnceLock::new();
 
 define_class!(
@@ -88,10 +88,13 @@ define_class!(
                 let mut latest = storage.lock();
                 *latest = Some(frame_holder);
 
-                if let Some(invoke_storage) = PROCESS_FUNCTION_INVOKE_CHANNEL.get() {
-                    if let Some(tx) = invoke_storage.lock().as_ref() {
-                        let _ = tx
-                            .send(crate::core::link_channel::ProcessFunctionEvent::InvokeFunction);
+                if let Some(message_writer_storage) =
+                    LINK_OUTPUT_TO_PROCESSOR_WRITER_AND_READER.get()
+                {
+                    if let Some(writer) = message_writer_storage.lock().as_ref() {
+                        let _ = writer.send(
+                            crate::core::links::LinkOutputToProcessorMessage::InvokeProcessingNow,
+                        );
                     }
                 }
             } else {
@@ -210,12 +213,12 @@ impl AppleCameraProcessor::Processor {
 
         let _ = FRAME_STORAGE.set(latest_frame);
 
-        let invoke_holder: Arc<
+        let message_writer_holder: Arc<
             Mutex<
-                Option<crossbeam_channel::Sender<crate::core::link_channel::ProcessFunctionEvent>>,
+                Option<crossbeam_channel::Sender<crate::core::links::LinkOutputToProcessorMessage>>,
             >,
         > = Arc::new(Mutex::new(None));
-        let _ = PROCESS_FUNCTION_INVOKE_CHANNEL.set(invoke_holder.clone());
+        let _ = LINK_OUTPUT_TO_PROCESSOR_WRITER_AND_READER.set(message_writer_holder.clone());
 
         let output = unsafe { AVCaptureVideoDataOutput::new() };
 

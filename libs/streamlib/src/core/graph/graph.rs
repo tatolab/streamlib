@@ -1,6 +1,6 @@
 use crate::core::error::{Result, StreamError};
-use crate::core::link_channel::link_id::__private::new_unchecked as new_link_id;
-use crate::core::link_channel::{LinkId, LinkPortType};
+use crate::core::links::graph::link_id::__private::new_unchecked as new_link_id;
+use crate::core::links::{LinkId, LinkPortType};
 use crate::core::processors::Processor;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::Direction;

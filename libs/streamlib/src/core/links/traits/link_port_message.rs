@@ -1,0 +1,33 @@
+//! LinkPortMessage trait for types that can be sent through link ports.
+
+use std::sync::Arc;
+
+use super::link_buffer_read_mode::LinkBufferReadMode;
+use super::link_port_type::LinkPortType;
+use crate::core::Schema;
+
+/// Sealed trait pattern - only known frame types can implement LinkPortMessage.
+pub mod sealed {
+    pub trait Sealed {}
+}
+
+/// Trait for types that can be sent through link ports.
+///
+/// This is a sealed trait - only types in this crate can implement it.
+pub trait LinkPortMessage: sealed::Sealed + Clone + Send + 'static {
+    /// The type of port this message is sent through.
+    fn port_type() -> LinkPortType;
+
+    /// Schema describing this message type.
+    fn schema() -> Arc<Schema>;
+
+    /// Example instances for documentation.
+    fn examples() -> Vec<(&'static str, serde_json::Value)> {
+        Vec::new()
+    }
+
+    /// How this frame type should be read from the link buffer.
+    fn link_read_behavior() -> LinkBufferReadMode {
+        LinkBufferReadMode::SkipToLatest
+    }
+}
