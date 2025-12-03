@@ -3,9 +3,10 @@
 use serde::{Deserialize, Serialize};
 
 /// State of a processor instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ProcessorState {
     /// Waiting to be started (registered but not yet running).
+    #[default]
     Pending,
     /// Setup complete, ready to process but not yet active.
     Idle,
@@ -19,12 +20,6 @@ pub enum ProcessorState {
     Stopped,
     /// Error state (processing failed).
     Error,
-}
-
-impl Default for ProcessorState {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for ProcessorState {

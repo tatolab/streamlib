@@ -62,7 +62,7 @@ impl fmt::Display for CompilePhase {
 }
 
 /// Result of a successful compilation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompileResult {
     /// Number of processors created in this compile cycle.
     pub processors_created: usize,
@@ -74,18 +74,6 @@ pub struct CompileResult {
     pub links_unwired: usize,
     /// Number of processor configs updated.
     pub configs_updated: usize,
-}
-
-impl Default for CompileResult {
-    fn default() -> Self {
-        Self {
-            processors_created: 0,
-            processors_removed: 0,
-            links_wired: 0,
-            links_unwired: 0,
-            configs_updated: 0,
-        }
-    }
 }
 
 impl CompileResult {

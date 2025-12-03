@@ -76,6 +76,7 @@ impl<T: LinkPortMessage> LinkInput<T> {
     }
 
     #[inline]
+    #[allow(clippy::mut_from_ref)] // UnsafeCell provides interior mutability
     unsafe fn upstream_processors_mut(&self) -> &mut Vec<LinkInputFromUpstreamProcessor<T>> {
         &mut *self.inner.upstream_processors.get()
     }

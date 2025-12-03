@@ -14,9 +14,8 @@ use crate::core::delegates::{
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    GraphState, LightweightMarker, LinkOutputToProcessorWriterAndReader, MainThreadMarker,
-    ProcessorId, ProcessorInstance, PropertyGraph, RayonPoolMarker, ShutdownChannel,
-    StateComponent, ThreadHandle,
+    GraphState, LinkOutputToProcessorWriterAndReader, ProcessorId, ProcessorInstance,
+    PropertyGraph, ShutdownChannel, StateComponent, ThreadHandle,
 };
 use crate::core::processors::ProcessorState;
 
@@ -247,25 +246,6 @@ fn spawn_dedicated_thread(
     // Attach thread handle component
     property_graph.insert(processor_id, ThreadHandle(thread))?;
 
-    Ok(())
-}
-
-fn schedule_on_main_thread(
-    property_graph: &mut PropertyGraph,
-    processor_id: &ProcessorId,
-) -> Result<()> {
-    // For main thread processors, we don't spawn a thread
-    // Instead, they'll be driven by the main thread event loop
-    // Just update state to Running
-    let state = property_graph
-        .get::<StateComponent>(processor_id)
-        .ok_or_else(|| {
-            StreamError::Runtime(format!(
-                "Processor '{}' has no StateComponent",
-                processor_id
-            ))
-        })?;
-    *state.0.lock() = ProcessorState::Running;
     Ok(())
 }
 

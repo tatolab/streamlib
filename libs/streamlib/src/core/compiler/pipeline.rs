@@ -460,7 +460,7 @@ impl Compiler {
     /// Publish an event to the global PubSub.
     fn publish_event(&self, event: RuntimeEvent) {
         let event = Event::RuntimeGlobal(event);
-        PUBSUB.publish(&topics::RUNTIME_GLOBAL, &event);
+        PUBSUB.publish(topics::RUNTIME_GLOBAL, &event);
     }
 
     /// Start all processors that have been compiled but not yet started.

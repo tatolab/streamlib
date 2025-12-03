@@ -4,7 +4,7 @@
 //! A LinkInstance (runtime) is the actual ring buffer that carries data.
 
 use std::any::Any;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -222,17 +222,3 @@ impl<T: LinkPortMessage> AnyLinkInstance for LinkInstance<T> {
 
 /// Boxed type-erased LinkInstance.
 pub type BoxedLinkInstance = Box<dyn AnyLinkInstance>;
-
-// Allow LinkInstanceInner to be accessed by handles
-impl<T: LinkPortMessage> LinkInstanceInner<T> {
-    pub(super) fn inner_arc(instance: &LinkInstance<T>) -> &Arc<LinkInstanceInner<T>> {
-        &instance.inner
-    }
-}
-
-/// Helper to create weak reference from LinkInstance (for handles).
-pub(super) fn downgrade_inner<T: LinkPortMessage>(
-    instance: &LinkInstance<T>,
-) -> Weak<LinkInstanceInner<T>> {
-    Arc::downgrade(&instance.inner)
-}
