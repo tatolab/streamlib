@@ -164,25 +164,56 @@ pub enum RuntimeEvent {
         error: String,
     },
 
-    // ===== Graph Processor Events =====
-    /// Emitted when the graph will add a processor
-    GraphWillAddProcessor {
+    // ===== Runtime Processor Events =====
+    // Emitted by Runtime when user adds/removes processors
+    /// Emitted when runtime will add a processor to the graph
+    RuntimeWillAddProcessor {
         processor_id: String,
         processor_type: String,
     },
-    /// Emitted when the graph did add a processor
-    GraphDidAddProcessor {
+    /// Emitted when runtime did add a processor to the graph
+    RuntimeDidAddProcessor {
         processor_id: String,
         processor_type: String,
     },
-    /// Emitted when the graph will remove a processor
-    GraphWillRemoveProcessor {
+    /// Emitted when runtime will remove a processor from the graph
+    RuntimeWillRemoveProcessor {
         processor_id: String,
     },
-    /// Emitted when the graph did remove a processor
-    GraphDidRemoveProcessor {
+    /// Emitted when runtime did remove a processor from the graph
+    RuntimeDidRemoveProcessor {
         processor_id: String,
     },
+
+    // ===== Runtime Link Events =====
+    // Emitted by Runtime when user connects/disconnects ports
+    /// Emitted when runtime will connect two ports
+    RuntimeWillConnect {
+        from_processor: String,
+        from_port: String,
+        to_processor: String,
+        to_port: String,
+    },
+    /// Emitted when runtime did connect two ports
+    RuntimeDidConnect {
+        link_id: String,
+        from_port: String,
+        to_port: String,
+    },
+    /// Emitted when runtime will disconnect a link
+    RuntimeWillDisconnect {
+        link_id: String,
+        from_port: String,
+        to_port: String,
+    },
+    /// Emitted when runtime did disconnect a link
+    RuntimeDidDisconnect {
+        link_id: String,
+        from_port: String,
+        to_port: String,
+    },
+
+    // ===== Processor State Events =====
     /// Emitted when a processor's configuration is updated
     ProcessorConfigDidChange {
         processor_id: String,
@@ -194,42 +225,61 @@ pub enum RuntimeEvent {
         new_state: ProcessorState,
     },
 
-    // ===== Graph Link Events =====
-    /// Emitted when the graph will create a link
-    GraphWillCreateLink {
-        from_processor: String,
-        from_port: String,
-        to_processor: String,
-        to_port: String,
+    // ===== Compiler Events =====
+    // Emitted by Compiler during graph compilation
+    /// Emitted when compiler will compile the graph
+    CompilerWillCompile,
+    /// Emitted when compiler did compile the graph successfully
+    CompilerDidCompile,
+    /// Emitted when compiler failed to compile the graph
+    CompilerDidFail {
+        error: String,
     },
-    /// Emitted when the graph did create a link
-    GraphDidCreateLink {
+    /// Emitted when compiler will create a processor instance
+    CompilerWillCreateProcessor {
+        processor_id: String,
+        processor_type: String,
+    },
+    /// Emitted when compiler did create a processor instance
+    CompilerDidCreateProcessor {
+        processor_id: String,
+        processor_type: String,
+    },
+    /// Emitted when compiler will destroy a processor instance
+    CompilerWillDestroyProcessor {
+        processor_id: String,
+    },
+    /// Emitted when compiler did destroy a processor instance
+    CompilerDidDestroyProcessor {
+        processor_id: String,
+    },
+    /// Emitted when compiler will wire a link (create ring buffer)
+    CompilerWillWireLink {
         link_id: String,
-        from_port: String, // "processor_id.port_name"
+        from_port: String,
         to_port: String,
     },
-    /// Emitted when the graph will remove a link
-    GraphWillRemoveLink {
+    /// Emitted when compiler did wire a link
+    CompilerDidWireLink {
         link_id: String,
         from_port: String,
         to_port: String,
     },
-    /// Emitted when the graph did remove a link
-    GraphDidRemoveLink {
+    /// Emitted when compiler will unwire a link
+    CompilerWillUnwireLink {
+        link_id: String,
+        from_port: String,
+        to_port: String,
+    },
+    /// Emitted when compiler did unwire a link
+    CompilerDidUnwireLink {
         link_id: String,
         from_port: String,
         to_port: String,
     },
 
-    // ===== Graph Compilation Events =====
-    /// Emitted when graph will compile
-    GraphWillCompile,
-    /// Emitted when graph did compile successfully
-    GraphDidCompile,
-    /// Emitted when graph compilation failed
-    GraphCompileFailed {
-        error: String,
-    },
+    // ===== Graph Events =====
+    // Emitted by Graph when topology changes
     /// Emitted when graph topology changed (nodes or edges added/removed)
     GraphTopologyDidChange,
 }

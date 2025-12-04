@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use streamlib::core::frames::{AudioChannelCount, AudioFrame};
-use streamlib::core::graph::{Graph, PropertyGraph};
+use streamlib::core::graph::Graph;
 use streamlib::core::runtime::{CommitMode, RuntimeStatus, StreamRuntime};
 use streamlib::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 
@@ -179,8 +179,7 @@ fn print_separator(title: &str) {
     println!("{}\n", "=".repeat(80));
 }
 
-fn print_graph_json(property_graph: &PropertyGraph, label: &str) {
-    let graph = property_graph.graph().read();
+fn print_graph_json(graph: &Graph, label: &str) {
     let json = graph.to_json();
     println!("[{}] Graph JSON:", label);
     println!(
@@ -197,8 +196,7 @@ fn print_runtime_status(status: &RuntimeStatus, label: &str) {
     println!("  processor_states: {:?}", status.processor_states);
 }
 
-fn print_graph_summary(property_graph: &PropertyGraph, label: &str) {
-    let graph = property_graph.graph().read();
+fn print_graph_summary(graph: &Graph, label: &str) {
     println!("[{}] Graph Summary:", label);
     println!("  processor_count: {}", graph.processor_count());
     println!("  link_count: {}", graph.link_count());
@@ -245,22 +243,22 @@ fn test_runtime_lifecycle_full_flow() {
         assert_eq!(property_graph.link_count(), 0, "Should have 0 links");
 
         // Verify JSON structure has expected fields
-        let json = property_graph.graph().read().to_json();
+        let json = property_graph.to_json();
         assert!(
-            json.get("nodes").is_some(),
-            "JSON should have 'nodes' field"
+            json.get("processors").is_some(),
+            "JSON should have 'processors' field"
         );
         assert!(
             json.get("links").is_some(),
             "JSON should have 'links' field"
         );
 
-        let nodes = json.get("nodes").unwrap().as_array().unwrap();
-        let links = json.get("links").unwrap().as_array().unwrap();
-        assert_eq!(nodes.len(), 0, "nodes array should be empty");
-        assert_eq!(links.len(), 0, "links array should be empty");
+        let processors = json.get("processors").unwrap().as_object().unwrap();
+        let links = json.get("links").unwrap().as_object().unwrap();
+        assert_eq!(processors.len(), 0, "processors should be empty");
+        assert_eq!(links.len(), 0, "links should be empty");
 
-        println!("\n[STEP 1 RESULT] Empty graph is valid with empty nodes/links arrays");
+        println!("\n[STEP 1 RESULT] Empty graph is valid with empty processors/links");
     }
 
     // =========================================================================
@@ -533,11 +531,15 @@ fn test_runtime_lifecycle_full_flow() {
         print_graph_json(&property_graph, "Final State");
 
         // Verify back to empty state
-        let json = property_graph.graph().read().to_json();
-        let nodes = json.get("nodes").unwrap().as_array().unwrap();
-        let links = json.get("links").unwrap().as_array().unwrap();
-        assert_eq!(nodes.len(), 0, "Final state should have empty nodes array");
-        assert_eq!(links.len(), 0, "Final state should have empty links array");
+        let json = property_graph.to_json();
+        let processors = json.get("processors").unwrap().as_object().unwrap();
+        let links = json.get("links").unwrap().as_object().unwrap();
+        assert_eq!(
+            processors.len(),
+            0,
+            "Final state should have empty processors"
+        );
+        assert_eq!(links.len(), 0, "Final state should have empty links");
     }
 
     println!(

@@ -7,7 +7,7 @@ use crate::core::compiler::phase::{CompilePhase, CompileResult};
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::PropertyGraph;
+use crate::core::graph::Graph;
 use crate::core::links::{DefaultLinkFactory, LinkFactoryDelegate};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::runtime::delegates::{
@@ -157,7 +157,7 @@ impl Compiler {
     /// Returns a [`CompileResult`] with statistics about what changed.
     pub fn compile(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
         delta: &GraphDelta,
     ) -> Result<CompileResult> {
@@ -168,7 +168,7 @@ impl Compiler {
     /// Use this during auto-commit; call `start_pending_processors` later.
     pub fn compile_without_start(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
         delta: &GraphDelta,
     ) -> Result<CompileResult> {
@@ -178,7 +178,7 @@ impl Compiler {
     /// Compile with options.
     fn compile_with_options(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
         delta: &GraphDelta,
         run_start_phase: bool,
@@ -201,7 +201,7 @@ impl Compiler {
         );
 
         // Publish compile start event
-        self.publish_event(RuntimeEvent::GraphWillCompile);
+        self.publish_event(RuntimeEvent::CompilerWillCompile);
 
         // Execute compilation with error handling
         let compile_result = self.execute_phases(
@@ -216,12 +216,12 @@ impl Compiler {
             Ok(()) => {
                 // Mark the graph as compiled
                 property_graph.mark_compiled();
-                self.publish_event(RuntimeEvent::GraphDidCompile);
+                self.publish_event(RuntimeEvent::CompilerDidCompile);
                 tracing::info!("Compile complete: {}", result);
                 Ok(result)
             }
             Err(e) => {
-                self.publish_event(RuntimeEvent::GraphCompileFailed {
+                self.publish_event(RuntimeEvent::CompilerDidFail {
                     error: e.to_string(),
                 });
                 tracing::error!("Compile failed: {}", e);
@@ -233,7 +233,7 @@ impl Compiler {
     /// Execute all compilation phases.
     fn execute_phases(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
         delta: &GraphDelta,
         result: &mut CompileResult,
@@ -290,7 +290,7 @@ impl Compiler {
     /// Handle processor and link removals.
     fn handle_removals(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
@@ -301,7 +301,7 @@ impl Compiler {
                 let from_port = link.from_port().to_string();
                 let to_port = link.to_port().to_string();
 
-                self.publish_event(RuntimeEvent::GraphWillRemoveLink {
+                self.publish_event(RuntimeEvent::CompilerWillUnwireLink {
                     link_id: link_id.to_string(),
                     from_port: from_port.clone(),
                     to_port: to_port.clone(),
@@ -318,7 +318,7 @@ impl Compiler {
                 // Call link delegate did_unwire hook
                 self.link_delegate.did_unwire(link_id)?;
 
-                self.publish_event(RuntimeEvent::GraphDidRemoveLink {
+                self.publish_event(RuntimeEvent::CompilerDidUnwireLink {
                     link_id: link_id.to_string(),
                     from_port,
                     to_port,
@@ -330,7 +330,7 @@ impl Compiler {
 
         // Shutdown and remove processors
         for proc_id in &delta.processors_to_remove {
-            self.publish_event(RuntimeEvent::GraphWillRemoveProcessor {
+            self.publish_event(RuntimeEvent::CompilerWillDestroyProcessor {
                 processor_id: proc_id.clone(),
             });
 
@@ -343,7 +343,7 @@ impl Compiler {
 
             self.processor_delegate.did_stop(proc_id)?;
 
-            self.publish_event(RuntimeEvent::GraphDidRemoveProcessor {
+            self.publish_event(RuntimeEvent::CompilerDidDestroyProcessor {
                 processor_id: proc_id.clone(),
             });
 
@@ -356,7 +356,7 @@ impl Compiler {
     /// Phase 1: CREATE - Instantiate processor instances.
     fn phase_create(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
@@ -367,7 +367,7 @@ impl Compiler {
 
             let processor_type = node.processor_type.clone();
 
-            self.publish_event(RuntimeEvent::GraphWillAddProcessor {
+            self.publish_event(RuntimeEvent::CompilerWillCreateProcessor {
                 processor_id: proc_id.clone(),
                 processor_type: processor_type.clone(),
             });
@@ -381,7 +381,7 @@ impl Compiler {
                 proc_id,
             )?;
 
-            self.publish_event(RuntimeEvent::GraphDidAddProcessor {
+            self.publish_event(RuntimeEvent::CompilerDidCreateProcessor {
                 processor_id: proc_id.clone(),
                 processor_type,
             });
@@ -394,7 +394,7 @@ impl Compiler {
     /// Phase 2: WIRE - Create ring buffers and connect ports.
     fn phase_wire(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
@@ -407,17 +407,10 @@ impl Compiler {
             let from_port = link.from_port().to_string();
             let to_port = link.to_port().to_string();
 
-            // Parse port addresses for event
-            let (from_processor, from_port_name) =
-                super::wiring::parse_port_address(&from_port).unwrap_or_default();
-            let (to_processor, to_port_name) =
-                super::wiring::parse_port_address(&to_port).unwrap_or_default();
-
-            self.publish_event(RuntimeEvent::GraphWillCreateLink {
-                from_processor,
-                from_port: from_port_name,
-                to_processor,
-                to_port: to_port_name,
+            self.publish_event(RuntimeEvent::CompilerWillWireLink {
+                link_id: link_id.to_string(),
+                from_port: from_port.clone(),
+                to_port: to_port.clone(),
             });
 
             // Call link delegate will_wire hook
@@ -430,7 +423,7 @@ impl Compiler {
             // Call link delegate did_wire hook
             self.link_delegate.did_wire(&link)?;
 
-            self.publish_event(RuntimeEvent::GraphDidCreateLink {
+            self.publish_event(RuntimeEvent::CompilerDidWireLink {
                 link_id: link_id.to_string(),
                 from_port,
                 to_port,
@@ -444,7 +437,7 @@ impl Compiler {
     /// Phase 3: SETUP - Initialize processors (GPU, devices).
     fn phase_setup(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
         delta: &GraphDelta,
     ) -> Result<()> {
@@ -456,7 +449,7 @@ impl Compiler {
     }
 
     /// Phase 4: START - Spawn processor threads.
-    fn phase_start(&self, property_graph: &mut PropertyGraph, delta: &GraphDelta) -> Result<()> {
+    fn phase_start(&self, property_graph: &mut Graph, delta: &GraphDelta) -> Result<()> {
         for proc_id in &delta.processors_to_add {
             tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
             super::phases::start_processor(
@@ -472,7 +465,7 @@ impl Compiler {
     /// Handle config updates on existing processors.
     fn handle_config_updates(
         &self,
-        property_graph: &mut PropertyGraph,
+        property_graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
@@ -533,7 +526,7 @@ impl Compiler {
     }
 
     /// Start all processors that have been compiled but not yet started.
-    pub fn start_all_processors(&self, property_graph: &mut PropertyGraph) -> Result<()> {
+    pub fn start_all_processors(&self, property_graph: &mut Graph) -> Result<()> {
         use crate::core::graph::{ProcessorInstance, ThreadHandle};
 
         // Find all processors with ProcessorInstance but no ThreadHandle (compiled but not started)

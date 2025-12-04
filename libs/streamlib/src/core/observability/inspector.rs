@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::graph::{
-    Graph, GraphState, ProcessorId, ProcessorMetrics, PropertyGraph, StateComponent,
-};
+use crate::core::graph::{Graph, GraphState, ProcessorId, ProcessorMetrics, StateComponent};
 use crate::core::links::LinkId;
 
 use super::snapshots::{
@@ -18,37 +16,29 @@ use super::snapshots::{
 /// Provides read-only access to graph topology and runtime metrics.
 /// All methods take shared references and are safe to call from any thread.
 pub struct GraphInspector {
-    property_graph: Arc<RwLock<PropertyGraph>>,
+    graph: Arc<RwLock<Graph>>,
 }
 
 impl GraphInspector {
-    /// Create a new inspector for a PropertyGraph.
-    pub fn new(property_graph: Arc<RwLock<PropertyGraph>>) -> Self {
-        Self { property_graph }
-    }
-
-    /// Create an inspector from a Graph reference (for backwards compatibility).
-    pub fn from_graph(graph: Arc<RwLock<Graph>>) -> Self {
-        Self {
-            property_graph: Arc::new(RwLock::new(PropertyGraph::new(graph))),
-        }
+    /// Create a new inspector for a Graph.
+    pub fn new(graph: Arc<RwLock<Graph>>) -> Self {
+        Self { graph }
     }
 
     /// Get a snapshot of a specific processor.
     pub fn processor(&self, id: &ProcessorId) -> Option<ProcessorSnapshot> {
-        let pg = self.property_graph.read();
-        let graph = pg.graph().read();
+        let graph = self.graph.read();
 
         let node = graph.get_processor(id)?;
 
         // Get state from ECS component if available
-        let state = pg
+        let state = graph
             .get::<StateComponent>(id)
             .map(|s| *s.0.lock())
             .unwrap_or_default();
 
         // Get metrics from ECS component if available
-        let metrics = pg
+        let metrics = graph
             .get::<ProcessorMetrics>(id)
             .map(|m| (*m).clone())
             .unwrap_or_default();
@@ -70,8 +60,7 @@ impl GraphInspector {
 
     /// Get a snapshot of a specific link.
     pub fn link(&self, id: &LinkId) -> Option<LinkSnapshot> {
-        let pg = self.property_graph.read();
-        let graph = pg.graph().read();
+        let graph = self.graph.read();
 
         let link = graph.get_link(id)?;
 
@@ -89,8 +78,7 @@ impl GraphInspector {
 
     /// Get overall graph health summary.
     pub fn health(&self) -> GraphHealth {
-        let pg = self.property_graph.read();
-        let graph = pg.graph().read();
+        let graph = self.graph.read();
 
         let processor_count = graph.processor_count();
         let link_count = graph.link_count();
@@ -99,8 +87,8 @@ impl GraphInspector {
         let mut total_dropped = 0u64;
         let mut bottlenecks = Vec::new();
 
-        for id in pg.processor_ids() {
-            if let Some(metrics) = pg.get::<ProcessorMetrics>(id) {
+        for id in graph.processor_ids() {
+            if let Some(metrics) = graph.get::<ProcessorMetrics>(id) {
                 total_dropped += metrics.frames_dropped;
 
                 // Simple bottleneck detection: high drop rate
@@ -115,7 +103,7 @@ impl GraphInspector {
         }
 
         GraphHealth {
-            state: convert_graph_state(pg.state()),
+            state: convert_graph_state(graph.state()),
             processor_count,
             link_count,
             dropped_frames: total_dropped,
@@ -126,22 +114,20 @@ impl GraphInspector {
 
     /// List all processor IDs.
     pub fn processor_ids(&self) -> Vec<ProcessorId> {
-        let pg = self.property_graph.read();
-        let graph = pg.graph().read();
+        let graph = self.graph.read();
         graph.nodes().iter().map(|n| n.id.clone()).collect()
     }
 
     /// List all link IDs.
     pub fn link_ids(&self) -> Vec<LinkId> {
-        let pg = self.property_graph.read();
-        let graph = pg.graph().read();
+        let graph = self.graph.read();
         graph.links().iter().map(|l| l.id.clone()).collect()
     }
 
     /// Get the current graph state.
     pub fn state(&self) -> GraphStateSnapshot {
-        let pg = self.property_graph.read();
-        convert_graph_state(pg.state())
+        let graph = self.graph.read();
+        convert_graph_state(graph.state())
     }
 
     /// Check if the graph is running.
@@ -151,15 +137,13 @@ impl GraphInspector {
 
     /// Get processor count.
     pub fn processor_count(&self) -> usize {
-        let pg = self.property_graph.read();
-        let graph = pg.graph().read();
+        let graph = self.graph.read();
         graph.processor_count()
     }
 
     /// Get link count.
     pub fn link_count(&self) -> usize {
-        let pg = self.property_graph.read();
-        let graph = pg.graph().read();
+        let graph = self.graph.read();
         graph.link_count()
     }
 }
@@ -181,28 +165,18 @@ mod tests {
     #[test]
     fn test_inspector_creation() {
         let graph = Arc::new(RwLock::new(Graph::new()));
-        let pg = Arc::new(RwLock::new(PropertyGraph::new(Arc::clone(&graph))));
 
-        let inspector = GraphInspector::new(pg);
+        let inspector = GraphInspector::new(graph);
         assert_eq!(inspector.processor_count(), 0);
         assert_eq!(inspector.link_count(), 0);
         assert_eq!(inspector.state(), GraphStateSnapshot::Idle);
     }
 
     #[test]
-    fn test_inspector_from_graph() {
-        let graph = Arc::new(RwLock::new(Graph::new()));
-        let inspector = GraphInspector::from_graph(graph);
-
-        assert!(!inspector.is_running());
-    }
-
-    #[test]
     fn test_inspector_health() {
         let graph = Arc::new(RwLock::new(Graph::new()));
-        let pg = Arc::new(RwLock::new(PropertyGraph::new(Arc::clone(&graph))));
 
-        let inspector = GraphInspector::new(pg);
+        let inspector = GraphInspector::new(graph);
         let health = inspector.health();
 
         assert!(health.is_healthy());
@@ -220,8 +194,7 @@ mod tests {
             .write()
             .add_processor("camera".into(), "CameraProcessor".into(), 0);
 
-        let pg = Arc::new(RwLock::new(PropertyGraph::new(Arc::clone(&graph))));
-        let inspector = GraphInspector::new(pg);
+        let inspector = GraphInspector::new(graph);
 
         assert_eq!(inspector.processor_count(), 1);
 

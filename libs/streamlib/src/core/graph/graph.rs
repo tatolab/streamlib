@@ -1,370 +1,65 @@
-use crate::core::error::{Result, StreamError};
-use crate::core::links::graph::link_id::__private::new_unchecked as new_link_id;
-use crate::core::links::{LinkId, LinkPortType};
+//! Unified Graph combining topology with ECS component storage.
+//!
+//! Graph is the public API for the processor pipeline graph. It internally manages:
+//! - [`InternalProcessorLinkGraph`] - the petgraph-based processor/link topology
+//! - [`InternalProcessorLinkGraphEcsExtension`] - hecs ECS world for runtime components
+//!
+//! Users interact only with this `Graph` type - the internal stores are implementation details.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use hecs::{Component, Entity};
+use parking_lot::RwLock;
+use serde_json::Value as JsonValue;
+
+use crate::core::error::Result;
+use crate::core::graph::components::{
+    EcsComponentJson, LinkStateComponent, ProcessorInstance, ProcessorMetrics, StateComponent,
+};
+use crate::core::graph::internal::InternalProcessorLinkGraphEcsExtension;
+use crate::core::graph::link::LinkState;
+use crate::core::graph::link_port_ref::IntoLinkPortRef;
+use crate::core::graph::{
+    GraphChecksum, InternalProcessorLinkGraph, Link, ProcessorId, ProcessorNode,
+};
+use crate::core::links::graph::{LinkInstanceComponent, LinkTypeInfoComponent};
+use crate::core::links::LinkId;
 use crate::core::processors::Processor;
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::Direction;
-use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::link::{Link, LinkDirection};
-use super::link_port_ref::IntoLinkPortRef;
-use super::node::{PortInfo, ProcessorId, ProcessorNode};
-use super::validation;
-
-static PROCESSOR_COUNTER: AtomicU64 = AtomicU64::new(0);
-static LINK_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn generate_processor_id(processor_type: &str) -> ProcessorId {
-    let id = PROCESSOR_COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("{}_{}", processor_type.to_lowercase(), id)
+/// Graph state.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GraphState {
+    #[default]
+    Idle,
+    Running,
+    Paused,
+    Stopping,
 }
 
-fn generate_link_id() -> LinkId {
-    let id = LINK_COUNTER.fetch_add(1, Ordering::SeqCst);
-    new_link_id(format!("link_{}", id))
-}
-
-/// Processor topology graph (DAG).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Unified graph with topology and ECS components.
+///
+/// Graph is the public API combining:
+/// - [`InternalProcessorLinkGraph`] - processor nodes and link edges (topology)
+/// - [`InternalProcessorLinkGraphEcsExtension`] - runtime components via ECS
+///
+/// Components are attached to processor/link entities, allowing flexible
+/// querying and dynamic attachment/detachment.
 pub struct Graph {
-    #[serde(skip)]
-    graph: DiGraph<ProcessorNode, Link>,
-    #[serde(skip)]
-    processor_to_node: HashMap<ProcessorId, NodeIndex>,
-    nodes: Vec<ProcessorNode>,
-    links: Vec<Link>,
-}
+    /// Internal topology store for processor nodes and link edges.
+    processor_link_graph: Arc<RwLock<InternalProcessorLinkGraph>>,
 
-/// Checksum of a graph's structure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GraphChecksum(pub u64);
+    /// ECS extension for runtime components (state, instances, metrics, etc.).
+    ecs_extension: InternalProcessorLinkGraphEcsExtension,
 
-impl Graph {
-    pub fn new() -> Self {
-        Self {
-            graph: DiGraph::new(),
-            processor_to_node: HashMap::new(),
-            nodes: Vec::new(),
-            links: Vec::new(),
-        }
-    }
+    /// When the graph was last compiled.
+    compiled_at: Option<Instant>,
 
-    pub fn add_processor(
-        &mut self,
-        id: ProcessorId,
-        processor_type: String,
-        _config_checksum: u64,
-    ) {
-        let node = ProcessorNode::new(id.clone(), processor_type, None, vec![], vec![]);
+    /// Checksum of the source graph at compile time.
+    source_checksum: Option<GraphChecksum>,
 
-        let node_idx = self.graph.add_node(node.clone());
-        self.processor_to_node.insert(id, node_idx);
-        self.nodes.push(node);
-    }
-
-    /// Add a processor node to the graph.
-    pub fn add_processor_node<P>(&mut self, config: P::Config) -> Result<ProcessorNode>
-    where
-        P: Processor + 'static,
-        P::Config: serde::Serialize,
-    {
-        // Get processor descriptor for type name and port metadata
-        let descriptor = <P as Processor>::descriptor().ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!(
-                "Processor {} has no descriptor",
-                std::any::type_name::<P>()
-            ))
-        })?;
-
-        // Extract port info from descriptor
-        let inputs: Vec<PortInfo> = descriptor
-            .inputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.name.clone(),
-                port_kind: Default::default(),
-            })
-            .collect();
-
-        let outputs: Vec<PortInfo> = descriptor
-            .outputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.name.clone(),
-                port_kind: Default::default(),
-            })
-            .collect();
-
-        // Serialize config to JSON
-        let config_json = serde_json::to_value(&config).ok();
-
-        // Create the node
-        let id = generate_processor_id(&descriptor.name);
-        let node = ProcessorNode::new(
-            id.clone(),
-            descriptor.name.clone(),
-            config_json,
-            inputs,
-            outputs,
-        );
-
-        let node_idx = self.graph.add_node(node.clone());
-        self.processor_to_node.insert(id, node_idx);
-        self.nodes.push(node.clone());
-
-        Ok(node)
-    }
-
-    /// Add a link between two ports.
-    pub fn add_link(
-        &mut self,
-        from: impl IntoLinkPortRef,
-        to: impl IntoLinkPortRef,
-    ) -> Result<Link> {
-        // Convert to LinkPortRef (strings get direction from context)
-        let from = from.into_link_port_ref(LinkDirection::Output)?;
-        let to = to.into_link_port_ref(LinkDirection::Input)?;
-
-        // Validate directions
-        if from.direction != LinkDirection::Output {
-            return Err(StreamError::InvalidLink(format!(
-                "Source port '{}' must be an output, not an input",
-                from.to_address()
-            )));
-        }
-        if to.direction != LinkDirection::Input {
-            return Err(StreamError::InvalidLink(format!(
-                "Destination port '{}' must be an input, not an output",
-                to.to_address()
-            )));
-        }
-
-        let from_addr = from.to_address();
-        let to_addr = to.to_address();
-
-        let id = generate_link_id();
-        let link = Link::new(id, &from_addr, &to_addr);
-
-        // Parse processor IDs and add edge to petgraph
-        if let (Some(&from_idx), Some(&to_idx)) = (
-            self.processor_to_node.get(&link.source.node),
-            self.processor_to_node.get(&link.target.node),
-        ) {
-            self.graph.add_edge(from_idx, to_idx, link.clone());
-        }
-
-        self.links.push(link.clone());
-        Ok(link)
-    }
-
-    /// Remove a processor node and its links.
-    pub fn remove_processor_node(&mut self, id: &ProcessorId) {
-        self.remove_processor(id);
-    }
-
-    pub fn remove_link(&mut self, id: &LinkId) {
-        if let Some(edge_idx) = self.graph.edge_indices().find(|&e| self.graph[e].id == *id) {
-            self.graph.remove_edge(edge_idx);
-            self.links.retain(|l| &l.id != id);
-        }
-    }
-
-    pub fn has_processor(&self, id: &ProcessorId) -> bool {
-        self.processor_to_node.contains_key(id)
-    }
-
-    pub fn get_processor(&self, id: &ProcessorId) -> Option<&ProcessorNode> {
-        self.processor_to_node.get(id).map(|&idx| &self.graph[idx])
-    }
-
-    pub fn remove_processor(&mut self, id: &ProcessorId) {
-        if let Some(node_idx) = self.processor_to_node.remove(id) {
-            self.graph.remove_node(node_idx);
-            self.nodes.retain(|n| &n.id != id);
-            // Also remove links that reference this processor
-            self.links
-                .retain(|l| l.source.node != *id && l.target.node != *id);
-        }
-    }
-
-    /// Add link by port address strings ("processor_id.port_name").
-    pub fn add_link_by_address(&mut self, from_port: String, to_port: String) -> LinkId {
-        let id = generate_link_id();
-        let _ = self.add_link_with_id(id.clone(), from_port, to_port, LinkPortType::Data);
-        id
-    }
-
-    pub fn add_link_with_id(
-        &mut self,
-        id: LinkId,
-        from_port: String,
-        to_port: String,
-        _port_type: LinkPortType,
-    ) -> Result<()> {
-        // Parse processor IDs from port addresses
-        let (source_proc_id, _source_port_name) = from_port
-            .split_once('.')
-            .ok_or_else(|| StreamError::InvalidPortAddress(from_port.clone()))?;
-        let (dest_proc_id, _dest_port_name) = to_port
-            .split_once('.')
-            .ok_or_else(|| StreamError::InvalidPortAddress(to_port.clone()))?;
-
-        let from_node = self.processor_to_node.get(source_proc_id);
-        let to_node = self.processor_to_node.get(dest_proc_id);
-
-        if let (Some(&from_idx), Some(&to_idx)) = (from_node, to_node) {
-            let link = Link::new(id, &from_port, &to_port);
-
-            self.graph.add_edge(from_idx, to_idx, link.clone());
-            self.links.push(link);
-            Ok(())
-        } else {
-            Err(StreamError::ProcessorNotFound(format!(
-                "{} or {}",
-                source_proc_id, dest_proc_id
-            )))
-        }
-    }
-
-    pub fn find_link(&self, from_port: &str, to_port: &str) -> Option<LinkId> {
-        self.find_link_by_ports(from_port, to_port)
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        validation::validate_graph(&self.graph)
-    }
-
-    pub fn to_dot(&self) -> String {
-        use petgraph::dot::{Config, Dot};
-        format!(
-            "{:?}",
-            Dot::with_config(&self.graph, &[Config::EdgeNoLabel])
-        )
-    }
-
-    pub fn to_json(&self) -> serde_json::Value {
-        // Note: to_json() is now redundant since Graph implements Serialize
-        // This method is kept for backwards compatibility but just delegates to serde
-        serde_json::to_value(self).unwrap_or_default()
-    }
-
-    /// Get all processors in topological order.
-    pub fn topological_order(&self) -> Result<Vec<ProcessorId>> {
-        use petgraph::algo::toposort;
-
-        let sorted = toposort(&self.graph, None)
-            .map_err(|_| StreamError::InvalidGraph("Graph contains cycles".into()))?;
-
-        Ok(sorted
-            .into_iter()
-            .map(|idx| self.graph[idx].id.clone())
-            .collect())
-    }
-
-    pub fn find_sources(&self) -> Vec<ProcessorId> {
-        self.graph
-            .node_indices()
-            .filter(|&idx| {
-                self.graph
-                    .neighbors_directed(idx, Direction::Incoming)
-                    .count()
-                    == 0
-            })
-            .map(|idx| self.graph[idx].id.clone())
-            .collect()
-    }
-
-    pub fn find_sinks(&self) -> Vec<ProcessorId> {
-        self.graph
-            .node_indices()
-            .filter(|&idx| {
-                self.graph
-                    .neighbors_directed(idx, Direction::Outgoing)
-                    .count()
-                    == 0
-            })
-            .map(|idx| self.graph[idx].id.clone())
-            .collect()
-    }
-
-    pub fn processor_count(&self) -> usize {
-        self.graph.node_count()
-    }
-
-    pub fn link_count(&self) -> usize {
-        self.graph.edge_count()
-    }
-
-    /// Get a link by its ID.
-    pub fn get_link(&self, link_id: &LinkId) -> Option<&Link> {
-        self.graph
-            .edge_indices()
-            .find(|&e| self.graph[e].id == *link_id)
-            .map(|e| &self.graph[e])
-    }
-
-    /// Get a link by its ID (alias for `get_link` for backwards compatibility).
-    pub fn find_link_by_id(&self, link_id: &LinkId) -> Option<&Link> {
-        self.get_link(link_id)
-    }
-
-    /// Get all processor nodes in the graph.
-    pub fn nodes(&self) -> &[ProcessorNode] {
-        &self.nodes
-    }
-
-    /// Get all links in the graph.
-    pub fn links(&self) -> &[Link] {
-        &self.links
-    }
-
-    pub fn find_link_by_ports(&self, from_port: &str, to_port: &str) -> Option<LinkId> {
-        self.graph
-            .edge_indices()
-            .find(|&e| {
-                let link = &self.graph[e];
-                link.from_port() == from_port && link.to_port() == to_port
-            })
-            .map(|e| self.graph[e].id.clone())
-    }
-
-    /// Update a processor's configuration.
-    ///
-    /// Returns the old checksum if the processor exists (for delta detection).
-    pub fn update_processor_config(
-        &mut self,
-        processor_id: &ProcessorId,
-        config: serde_json::Value,
-    ) -> Result<u64> {
-        let node_idx = self
-            .processor_to_node
-            .get(processor_id)
-            .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.clone()))?;
-
-        let node = &mut self.graph[*node_idx];
-        let old_checksum = node.config_checksum;
-        node.set_config(config.clone());
-
-        // Also update the nodes vec for serialization consistency
-        if let Some(n) = self.nodes.iter_mut().find(|n| &n.id == processor_id) {
-            n.set_config(config);
-        }
-
-        Ok(old_checksum)
-    }
-
-    /// Get a processor's config checksum.
-    pub fn get_processor_config_checksum(&self, processor_id: &ProcessorId) -> Option<u64> {
-        self.processor_to_node
-            .get(processor_id)
-            .map(|&idx| self.graph[idx].config_checksum)
-    }
+    /// Graph-level state.
+    state: GraphState,
 }
 
 impl Default for Graph {
@@ -373,327 +68,882 @@ impl Default for Graph {
     }
 }
 
-impl PartialEq for Graph {
-    fn eq(&self, other: &Self) -> bool {
-        // Compare using serializable nodes/links for equality
-        // This is used for delta computation
-        self.nodes == other.nodes && self.links == other.links
-    }
-}
-
-impl Eq for Graph {}
-
 impl Graph {
-    /// Compute deterministic checksum of graph structure.
-    pub fn checksum(&self) -> GraphChecksum {
-        let mut hasher = DefaultHasher::new();
-
-        // Hash all nodes (sorted by ID for determinism)
-        let mut nodes: Vec<_> = self.graph.node_indices().collect();
-        nodes.sort_by_key(|&idx| &self.graph[idx].id);
-
-        for node_idx in nodes {
-            let node = &self.graph[node_idx];
-            node.id.hash(&mut hasher);
-            node.processor_type.hash(&mut hasher);
-            // Hash config JSON if present
-            if let Some(config) = &node.config {
-                config.to_string().hash(&mut hasher);
-            }
+    /// Create a new empty Graph.
+    pub fn new() -> Self {
+        Self {
+            processor_link_graph: Arc::new(RwLock::new(InternalProcessorLinkGraph::new())),
+            ecs_extension: InternalProcessorLinkGraphEcsExtension::new(),
+            compiled_at: None,
+            source_checksum: None,
+            state: GraphState::Idle,
         }
-
-        // Hash all links (sorted by ID for determinism)
-        let mut edges: Vec<_> = self.graph.edge_indices().collect();
-        edges.sort_by_key(|&idx| &self.graph[idx].id);
-
-        for edge_idx in edges {
-            let link = &self.graph[edge_idx];
-            link.id.hash(&mut hasher);
-            link.from_port().hash(&mut hasher);
-            link.to_port().hash(&mut hasher);
-        }
-
-        GraphChecksum(hasher.finish())
     }
-}
 
-/// Compute a checksum from any Debug-able config.
-pub fn compute_config_checksum<T: std::fmt::Debug>(config: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    format!("{:?}", config).hash(&mut hasher);
-    hasher.finish()
+    /// Create a Graph wrapping an existing internal topology graph.
+    ///
+    /// This is for testing only - external code should use `Graph::new()`.
+    #[cfg(test)]
+    pub(crate) fn new_with_internal(
+        processor_link_graph: Arc<RwLock<InternalProcessorLinkGraph>>,
+    ) -> Self {
+        Self {
+            processor_link_graph,
+            ecs_extension: InternalProcessorLinkGraphEcsExtension::new(),
+            compiled_at: None,
+            source_checksum: None,
+            state: GraphState::Idle,
+        }
+    }
+
+    /// Get the current state.
+    pub fn state(&self) -> GraphState {
+        self.state
+    }
+
+    /// Set the graph state.
+    pub fn set_state(&mut self, state: GraphState) {
+        self.state = state;
+    }
+
+    /// Get when the graph was compiled.
+    pub fn compiled_at(&self) -> Option<Instant> {
+        self.compiled_at
+    }
+
+    /// Mark as compiled with current checksum.
+    pub fn mark_compiled(&mut self) {
+        self.compiled_at = Some(Instant::now());
+        self.source_checksum = Some(self.processor_link_graph.read().checksum());
+    }
+
+    /// Check if recompilation is needed.
+    pub fn needs_recompile(&self) -> bool {
+        match self.source_checksum {
+            Some(checksum) => self.processor_link_graph.read().checksum() != checksum,
+            None => true, // Never compiled
+        }
+    }
+
+    // =========================================================================
+    // Entity Management
+    // =========================================================================
+
+    /// Ensure a processor has an entity in the ECS world.
+    ///
+    /// Creates an entity if one doesn't exist.
+    pub fn ensure_processor_entity(&mut self, id: &ProcessorId) -> Entity {
+        self.ecs_extension.ensure_processor_entity(id)
+    }
+
+    /// Get the entity for a processor, if it exists.
+    pub fn get_processor_entity(&self, id: &ProcessorId) -> Option<Entity> {
+        self.ecs_extension.get_processor_entity(id)
+    }
+
+    /// Remove a processor's entity from the ECS world.
+    pub fn remove_processor_entity(&mut self, id: &ProcessorId) -> Option<Entity> {
+        self.ecs_extension.remove_processor_entity(id)
+    }
+
+    /// Get all processor IDs with entities.
+    pub fn processor_ids(&self) -> impl Iterator<Item = &ProcessorId> {
+        self.ecs_extension.processor_ids()
+    }
+
+    /// Get number of processors with entities.
+    pub fn entity_count(&self) -> usize {
+        self.ecs_extension.processor_entity_count()
+    }
+
+    // =========================================================================
+    // Component Operations
+    // =========================================================================
+
+    /// Attach a component to a processor.
+    pub fn insert<C: Component>(&mut self, id: &ProcessorId, component: C) -> Result<()> {
+        self.ecs_extension.insert_processor_component(id, component)
+    }
+
+    /// Get a component for a processor.
+    pub fn get<C: Component>(&self, id: &ProcessorId) -> Option<hecs::Ref<'_, C>> {
+        self.ecs_extension.get_processor_component(id)
+    }
+
+    /// Get a mutable component for a processor.
+    pub fn get_mut<C: Component>(&mut self, id: &ProcessorId) -> Option<hecs::RefMut<'_, C>> {
+        self.ecs_extension.get_processor_component_mut(id)
+    }
+
+    /// Remove a component from a processor.
+    pub fn remove<C: Component>(&mut self, id: &ProcessorId) -> Option<C> {
+        self.ecs_extension.remove_processor_component(id)
+    }
+
+    /// Check if a processor has a component.
+    pub fn has<C: Component>(&self, id: &ProcessorId) -> bool {
+        self.ecs_extension.processor_has_component::<C>(id)
+    }
+
+    // =========================================================================
+    // Link Entity Management
+    // =========================================================================
+
+    /// Ensure a link has an entity in the ECS world.
+    pub fn ensure_link_entity(&mut self, id: &LinkId) -> Entity {
+        self.ecs_extension.ensure_link_entity(id)
+    }
+
+    /// Get the entity for a link, if it exists.
+    pub fn get_link_entity(&self, id: &LinkId) -> Option<Entity> {
+        self.ecs_extension.get_link_entity(id)
+    }
+
+    /// Remove a link's entity from the ECS world.
+    pub fn remove_link_entity(&mut self, id: &LinkId) -> Option<Entity> {
+        self.ecs_extension.remove_link_entity(id)
+    }
+
+    /// Insert a component on a link entity.
+    pub fn insert_link<C: Component>(&mut self, id: &LinkId, component: C) -> Result<()> {
+        self.ecs_extension.insert_link_component(id, component)
+    }
+
+    /// Remove a component from a link entity.
+    pub fn remove_link_component<C: Component>(&mut self, id: &LinkId) -> Result<()> {
+        self.ecs_extension.remove_link_component::<C>(id)
+    }
+
+    /// Get a component from a link entity.
+    pub fn get_link_component<C: Component>(&self, id: &LinkId) -> Option<hecs::Ref<'_, C>> {
+        self.ecs_extension.get_link_component(id)
+    }
+
+    /// Get the state of a link from its ECS component.
+    pub fn get_link_state(&self, id: &LinkId) -> Option<LinkState> {
+        self.ecs_extension.get_link_state(id)
+    }
+
+    /// Set the state of a link via its ECS component.
+    pub fn set_link_state(&mut self, id: &LinkId, state: LinkState) -> Result<()> {
+        self.ecs_extension.set_link_state(id, state)
+    }
+
+    // =========================================================================
+    // Query Operations
+    // =========================================================================
+
+    /// Find all processors with a specific component type.
+    pub fn processors_with<C: Component>(&self) -> Vec<ProcessorId> {
+        self.ecs_extension.processors_with_component::<C>()
+    }
+
+    /// Clear all ECS state (entities and components).
+    pub fn clear_entities(&mut self) {
+        self.ecs_extension.clear();
+        self.compiled_at = None;
+        self.source_checksum = None;
+    }
+
+    // =========================================================================
+    // Convenience Methods (delegating to topology graph)
+    // =========================================================================
+
+    /// Get a processor node by ID.
+    pub fn get_processor(&self, id: &ProcessorId) -> Option<ProcessorNode> {
+        self.processor_link_graph.read().get_processor(id).cloned()
+    }
+
+    /// Get a link by ID.
+    pub fn get_link(&self, id: &LinkId) -> Option<Link> {
+        self.processor_link_graph.read().get_link(id).cloned()
+    }
+
+    /// Check if processor exists in graph.
+    pub fn has_processor(&self, id: &ProcessorId) -> bool {
+        self.processor_link_graph.read().has_processor(id)
+    }
+
+    /// Get the number of processors in the graph.
+    pub fn processor_count(&self) -> usize {
+        self.processor_link_graph.read().processor_count()
+    }
+
+    /// Get the number of links in the graph.
+    pub fn link_count(&self) -> usize {
+        self.processor_link_graph.read().link_count()
+    }
+
+    /// Get all processor nodes (cloned).
+    pub fn nodes(&self) -> Vec<ProcessorNode> {
+        self.processor_link_graph.read().nodes().to_vec()
+    }
+
+    /// Get all links (cloned).
+    pub fn links(&self) -> Vec<Link> {
+        self.processor_link_graph.read().links().to_vec()
+    }
+
+    // =========================================================================
+    // Topology Mutation Operations
+    // =========================================================================
+
+    /// Add a processor to the graph.
+    ///
+    /// Creates both the topology node and an ECS entity for the processor.
+    pub fn add_processor(
+        &mut self,
+        id: ProcessorId,
+        processor_type: String,
+        port_mask: u64,
+    ) -> ProcessorNode {
+        self.processor_link_graph.write().add_processor(
+            id.clone(),
+            processor_type.clone(),
+            port_mask,
+        );
+
+        // Create ECS entity for this processor
+        self.ensure_processor_entity(&id);
+
+        // Return the created node
+        ProcessorNode::new(id, processor_type, None, vec![], vec![])
+    }
+
+    /// Add a processor node using its type and config.
+    ///
+    /// Creates both the topology node and an ECS entity for the processor.
+    pub fn add_processor_node<P>(&mut self, config: P::Config) -> Result<ProcessorNode>
+    where
+        P: Processor + 'static,
+        P::Config: serde::Serialize,
+    {
+        let node = self
+            .processor_link_graph
+            .write()
+            .add_processor_node::<P>(config)?;
+
+        // Create ECS entity for this processor
+        self.ensure_processor_entity(&node.id);
+
+        Ok(node)
+    }
+
+    /// Remove a processor node from the topology.
+    pub fn remove_processor_node(&mut self, id: &ProcessorId) {
+        self.processor_link_graph.write().remove_processor_node(id);
+    }
+
+    /// Remove a processor completely (topology + ECS entity).
+    pub fn remove_processor(&mut self, id: &ProcessorId) {
+        self.processor_link_graph.write().remove_processor(id);
+        self.remove_processor_entity(id);
+    }
+
+    /// Add a link between two ports.
+    ///
+    /// Creates both the topology edge and an ECS entity for the link.
+    pub fn add_link(
+        &mut self,
+        from: impl IntoLinkPortRef,
+        to: impl IntoLinkPortRef,
+    ) -> Result<Link> {
+        let link = self.processor_link_graph.write().add_link(from, to)?;
+
+        // Create ECS entity for this link
+        self.ensure_link_entity(&link.id);
+
+        Ok(link)
+    }
+
+    /// Remove a link from the topology.
+    pub fn remove_link(&mut self, id: &LinkId) {
+        self.processor_link_graph.write().remove_link(id);
+    }
+
+    /// Remove a link completely (topology + ECS entity).
+    pub fn remove_link_fully(&mut self, id: &LinkId) {
+        self.processor_link_graph.write().remove_link(id);
+        self.remove_link_entity(id);
+    }
+
+    /// Add a link by port address strings.
+    pub fn add_link_by_address(&mut self, from_port: String, to_port: String) -> LinkId {
+        let link_id = self
+            .processor_link_graph
+            .write()
+            .add_link_by_address(from_port, to_port);
+
+        // Create ECS entity for this link
+        self.ensure_link_entity(&link_id);
+
+        link_id
+    }
+
+    /// Find a link by its source and target port addresses.
+    pub fn find_link(&self, from_port: &str, to_port: &str) -> Option<LinkId> {
+        self.processor_link_graph
+            .read()
+            .find_link(from_port, to_port)
+    }
+
+    /// Update a processor's configuration.
+    pub fn update_processor_config(
+        &mut self,
+        processor_id: &ProcessorId,
+        config: serde_json::Value,
+    ) -> Result<()> {
+        self.processor_link_graph
+            .write()
+            .update_processor_config(processor_id, config)?;
+        Ok(())
+    }
+
+    /// Get processor config checksum.
+    pub fn get_processor_config_checksum(&self, processor_id: &ProcessorId) -> Option<u64> {
+        self.processor_link_graph
+            .read()
+            .get_processor_config_checksum(processor_id)
+    }
+
+    /// Get topological order of processors.
+    pub fn topological_order(&self) -> Result<Vec<ProcessorId>> {
+        self.processor_link_graph.read().topological_order()
+    }
+
+    /// Find source processors (no inputs).
+    pub fn find_sources(&self) -> Vec<ProcessorId> {
+        self.processor_link_graph.read().find_sources()
+    }
+
+    /// Find sink processors (no outputs).
+    pub fn find_sinks(&self) -> Vec<ProcessorId> {
+        self.processor_link_graph.read().find_sinks()
+    }
+
+    /// Validate the graph structure.
+    pub fn validate(&self) -> Result<()> {
+        self.processor_link_graph.read().validate()
+    }
+
+    // =========================================================================
+    // Serialization
+    // =========================================================================
+
+    /// Serialize the entire graph to JSON, including topology and ECS components.
+    ///
+    /// Output structure:
+    /// ```json
+    /// {
+    ///   "state": "Running",
+    ///   "processors": {
+    ///     "camera": {
+    ///       "type": "CameraProcessor",
+    ///       "state": "Running",
+    ///       "metrics": { ... },
+    ///       "config": { ... },
+    ///       "runtime": { ... }
+    ///     }
+    ///   },
+    ///   "links": {
+    ///     "link_0": {
+    ///       "from": { "processor": "camera", "port": "output" },
+    ///       "to": { "processor": "display", "port": "input" },
+    ///       "state": "Connected",
+    ///       "type_info": { "type_name": "VideoFrame", "capacity": 4 },
+    ///       "buffer": { "fill_level": 2, "is_empty": false }
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    pub fn to_json(&self) -> JsonValue {
+        let graph = self.processor_link_graph.read();
+        let processor_entities = self.ecs_extension.processor_entities();
+        let link_entities = self.ecs_extension.link_entities();
+        let world = self.ecs_extension.world();
+
+        // Serialize processors
+        let mut processors = serde_json::Map::new();
+        for node in graph.nodes() {
+            let mut proc_json = serde_json::Map::new();
+
+            // Basic topology info
+            proc_json.insert(
+                "type".into(),
+                JsonValue::String(node.processor_type.clone()),
+            );
+
+            // Add ECS components if entity exists
+            if let Some(&entity) = processor_entities.get(&node.id) {
+                // StateComponent
+                if let Ok(state) = world.get::<&StateComponent>(entity) {
+                    proc_json.insert(state.json_key().into(), state.to_json());
+                }
+
+                // ProcessorMetrics
+                if let Ok(metrics) = world.get::<&ProcessorMetrics>(entity) {
+                    proc_json.insert(metrics.json_key().into(), metrics.to_json());
+                }
+
+                // ProcessorInstance - get config and runtime state from the processor itself
+                if let Ok(instance) = world.get::<&ProcessorInstance>(entity) {
+                    let processor = instance.0.lock();
+
+                    // Config JSON
+                    let config = processor.config_json();
+                    if !config.is_null() {
+                        proc_json.insert("config".into(), config);
+                    }
+
+                    // Runtime JSON (custom processor state)
+                    let runtime = processor.to_runtime_json();
+                    if !runtime.is_null() {
+                        proc_json.insert("runtime".into(), runtime);
+                    }
+                }
+            }
+
+            processors.insert(node.id.to_string(), JsonValue::Object(proc_json));
+        }
+
+        // Serialize links
+        let mut links = serde_json::Map::new();
+        for link in graph.links() {
+            let mut link_json = serde_json::Map::new();
+
+            // Topology info
+            link_json.insert(
+                "from".into(),
+                serde_json::json!({
+                    "processor": link.source.node,
+                    "port": link.source.port
+                }),
+            );
+            link_json.insert(
+                "to".into(),
+                serde_json::json!({
+                    "processor": link.target.node,
+                    "port": link.target.port
+                }),
+            );
+
+            // Add ECS components if entity exists
+            if let Some(&entity) = link_entities.get(&link.id) {
+                // LinkStateComponent
+                if let Ok(state) = world.get::<&LinkStateComponent>(entity) {
+                    link_json.insert(state.json_key().into(), state.to_json());
+                }
+
+                // LinkTypeInfoComponent
+                if let Ok(type_info) = world.get::<&LinkTypeInfoComponent>(entity) {
+                    link_json.insert(type_info.json_key().into(), type_info.to_json());
+                }
+
+                // LinkInstanceComponent (buffer stats)
+                if let Ok(instance) = world.get::<&LinkInstanceComponent>(entity) {
+                    link_json.insert(instance.json_key().into(), instance.to_json());
+                }
+            }
+
+            links.insert(link.id.to_string(), JsonValue::Object(link_json));
+        }
+
+        serde_json::json!({
+            "state": format!("{:?}", self.state),
+            "processors": processors,
+            "links": links
+        })
+    }
+
+    /// Generate DOT format for Graphviz visualization.
+    ///
+    /// Includes node labels with processor type and state, and edge labels
+    /// with link type and buffer status.
+    pub fn to_dot(&self) -> String {
+        let graph = self.processor_link_graph.read();
+        let processor_entities = self.ecs_extension.processor_entities();
+        let link_entities = self.ecs_extension.link_entities();
+        let world = self.ecs_extension.world();
+
+        let mut dot = String::new();
+
+        dot.push_str("digraph StreamGraph {\n");
+        dot.push_str("    rankdir=LR;\n");
+        dot.push_str("    node [shape=box, style=rounded];\n\n");
+
+        // Output processor nodes
+        for node in graph.nodes() {
+            let mut label_parts = vec![node.id.to_string(), node.processor_type.clone()];
+
+            // Add state if available
+            if let Some(&entity) = processor_entities.get(&node.id) {
+                if let Ok(state) = world.get::<&StateComponent>(entity) {
+                    let state_str = format!("{:?}", *state.0.lock());
+                    label_parts.push(state_str);
+                }
+            }
+
+            let label = label_parts.join("\\n");
+            dot.push_str(&format!("    \"{}\" [label=\"{}\"];\n", node.id, label));
+        }
+
+        dot.push('\n');
+
+        // Output edges (links)
+        for link in graph.links() {
+            let mut label_parts = Vec::new();
+
+            // Add type info and buffer stats if available
+            if let Some(&entity) = link_entities.get(&link.id) {
+                if let Ok(type_info) = world.get::<&LinkTypeInfoComponent>(entity) {
+                    // Shorten type name (just the last part)
+                    let short_type = type_info
+                        .type_name
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or(type_info.type_name);
+                    label_parts.push(short_type.to_string());
+                }
+
+                if let Ok(instance) = world.get::<&LinkInstanceComponent>(entity) {
+                    label_parts.push(format!("[{}/{}]", instance.0.len(), {
+                        // Get capacity from type_info if available
+                        if let Ok(ti) = world.get::<&LinkTypeInfoComponent>(entity) {
+                            ti.capacity
+                        } else {
+                            0
+                        }
+                    }));
+                }
+            }
+
+            let label = if label_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" [label=\"{}\"]", label_parts.join("\\n"))
+            };
+
+            dot.push_str(&format!(
+                "    \"{}\":\"{}\" -> \"{}\":\"{}\"{};",
+                link.source.node, link.source.port, link.target.node, link.target.port, label
+            ));
+            dot.push('\n');
+        }
+
+        dot.push_str("}\n");
+        dot
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Simple test component
+    struct TestComponent(i32);
+
     #[test]
-    fn test_empty_graph() {
-        let graph = Graph::new();
-        assert!(graph.validate().is_ok());
-        assert_eq!(graph.find_sources().len(), 0);
-        assert_eq!(graph.find_sinks().len(), 0);
-        assert!(graph.topological_order().unwrap().is_empty());
+    fn test_property_graph_creation() {
+        let pg = Graph::new();
+
+        assert_eq!(pg.state(), GraphState::Idle);
+        assert_eq!(pg.entity_count(), 0);
+        assert!(pg.needs_recompile()); // Never compiled
     }
 
     #[test]
-    fn test_single_processor() {
-        let mut graph = Graph::new();
-        graph.add_processor("proc_0".into(), "TestProcessor".into(), 123);
+    fn test_property_graph_entity_management() {
+        let mut pg = Graph::new();
 
-        assert!(graph.validate().is_ok());
-        assert_eq!(graph.find_sources(), vec!["proc_0"]);
-        assert_eq!(graph.find_sinks(), vec!["proc_0"]);
-        assert!(graph.has_processor(&"proc_0".into()));
-        assert!(!graph.has_processor(&"unknown".into()));
+        let id: ProcessorId = "test_proc".into();
+
+        // No entity initially
+        assert!(pg.get_processor_entity(&id).is_none());
+
+        // Create entity
+        let entity = pg.ensure_processor_entity(&id);
+        assert!(pg.get_processor_entity(&id).is_some());
+        assert_eq!(pg.entity_count(), 1);
+
+        // Same entity on second call
+        let entity2 = pg.ensure_processor_entity(&id);
+        assert_eq!(entity, entity2);
+        assert_eq!(pg.entity_count(), 1);
+
+        // Remove entity
+        pg.remove_processor_entity(&id);
+        assert!(pg.get_processor_entity(&id).is_none());
+        assert_eq!(pg.entity_count(), 0);
     }
 
     #[test]
-    fn test_linear_pipeline() {
-        let mut graph = Graph::new();
-        graph.add_processor("source".into(), "SourceProcessor".into(), 0);
-        graph.add_processor("transform".into(), "TransformProcessor".into(), 0);
-        graph.add_processor("sink".into(), "SinkProcessor".into(), 0);
+    fn test_property_graph_components() {
+        let mut pg = Graph::new();
 
-        // Connect: source -> transform -> sink
-        graph.add_link_by_address("source.output".into(), "transform.input".into());
-        graph.add_link_by_address("transform.output".into(), "sink.input".into());
+        let id: ProcessorId = "test_proc".into();
+        pg.ensure_processor_entity(&id);
 
-        assert!(graph.validate().is_ok());
-        assert_eq!(graph.find_sources(), vec!["source"]);
-        assert_eq!(graph.find_sinks(), vec!["sink"]);
+        // Insert component
+        pg.insert(&id, TestComponent(42)).unwrap();
+        assert!(pg.has::<TestComponent>(&id));
 
-        let order = graph.topological_order().unwrap();
-        assert_eq!(order.len(), 3);
-        // Source must come before transform, transform before sink
-        let source_pos = order.iter().position(|x| x == "source").unwrap();
-        let transform_pos = order.iter().position(|x| x == "transform").unwrap();
-        let sink_pos = order.iter().position(|x| x == "sink").unwrap();
-        assert!(source_pos < transform_pos);
-        assert!(transform_pos < sink_pos);
+        // Get component
+        let comp = pg.get::<TestComponent>(&id).unwrap();
+        assert_eq!(comp.0, 42);
+        drop(comp);
+
+        // Remove component
+        let removed = pg.remove::<TestComponent>(&id).unwrap();
+        assert_eq!(removed.0, 42);
+        assert!(!pg.has::<TestComponent>(&id));
     }
 
     #[test]
-    fn test_branching_pipeline() {
-        let mut graph = Graph::new();
-        graph.add_processor("source".into(), "SourceProcessor".into(), 0);
-        graph.add_processor("sink_a".into(), "SinkProcessor".into(), 0);
-        graph.add_processor("sink_b".into(), "SinkProcessor".into(), 0);
+    fn test_property_graph_needs_recompile() {
+        let internal_graph = Arc::new(RwLock::new(InternalProcessorLinkGraph::new()));
+        let mut pg = Graph::new_with_internal(Arc::clone(&internal_graph));
 
-        // source -> sink_a
-        // source -> sink_b
-        graph.add_link_by_address("source.output".into(), "sink_a.input".into());
-        graph.add_link_by_address("source.output".into(), "sink_b.input".into());
+        // Initially needs recompile
+        assert!(pg.needs_recompile());
 
-        assert!(graph.validate().is_ok());
-        assert_eq!(graph.find_sources(), vec!["source"]);
+        // Mark as compiled
+        pg.mark_compiled();
+        assert!(!pg.needs_recompile());
 
-        let sinks = graph.find_sinks();
-        assert_eq!(sinks.len(), 2);
-        assert!(sinks.contains(&"sink_a".into()));
-        assert!(sinks.contains(&"sink_b".into()));
+        // Modify graph
+        internal_graph
+            .write()
+            .add_processor("test".into(), "TestProcessor".into(), 0);
+
+        // Now needs recompile
+        assert!(pg.needs_recompile());
     }
 
     #[test]
-    fn test_cycle_detection() {
-        let mut graph = Graph::new();
-        graph.add_processor("a".into(), "Processor".into(), 0);
-        graph.add_processor("b".into(), "Processor".into(), 0);
-        graph.add_processor("c".into(), "Processor".into(), 0);
+    fn test_property_graph_query() {
+        let mut pg = Graph::new();
 
-        // Create cycle: a -> b -> c -> a
-        graph.add_link_by_address("a.output".into(), "b.input".into());
-        graph.add_link_by_address("b.output".into(), "c.input".into());
-        graph.add_link_by_address("c.output".into(), "a.input".into());
+        let id1: ProcessorId = "proc1".into();
+        let id2: ProcessorId = "proc2".into();
+        let id3: ProcessorId = "proc3".into();
 
-        // Validation should fail due to cycle
-        assert!(graph.validate().is_err());
+        pg.ensure_processor_entity(&id1);
+        pg.ensure_processor_entity(&id2);
+        pg.ensure_processor_entity(&id3);
+
+        // Only attach component to some processors
+        pg.insert(&id1, TestComponent(1)).unwrap();
+        pg.insert(&id3, TestComponent(3)).unwrap();
+
+        // Query for processors with the component
+        let with_component = pg.processors_with::<TestComponent>();
+        assert_eq!(with_component.len(), 2);
+        assert!(with_component.contains(&id1));
+        assert!(!with_component.contains(&id2));
+        assert!(with_component.contains(&id3));
     }
 
     #[test]
-    fn test_remove_processor() {
-        let mut graph = Graph::new();
-        graph.add_processor("proc_0".into(), "TestProcessor".into(), 0);
-        graph.add_processor("proc_1".into(), "TestProcessor".into(), 0);
+    fn test_property_graph_state() {
+        let mut pg = Graph::new();
 
-        assert_eq!(graph.processor_count(), 2);
+        assert_eq!(pg.state(), GraphState::Idle);
 
-        graph.remove_processor(&"proc_0".into());
-        assert_eq!(graph.processor_count(), 1);
+        pg.set_state(GraphState::Running);
+        assert_eq!(pg.state(), GraphState::Running);
+
+        pg.set_state(GraphState::Paused);
+        assert_eq!(pg.state(), GraphState::Paused);
     }
 
     #[test]
-    fn test_remove_link() {
-        let mut graph = Graph::new();
-        graph.add_processor("source".into(), "SourceProcessor".into(), 0);
-        graph.add_processor("sink".into(), "SinkProcessor".into(), 0);
+    fn test_property_graph_to_json_basic() {
+        let graph = Arc::new(RwLock::new(InternalProcessorLinkGraph::new()));
 
-        let link_id = graph.add_link_by_address("source.output".into(), "sink.input".into());
+        // Add processors to graph
+        graph
+            .write()
+            .add_processor("camera".into(), "CameraProcessor".into(), 0);
+        graph
+            .write()
+            .add_processor("display".into(), "DisplayProcessor".into(), 1);
 
-        assert_eq!(graph.link_count(), 1);
+        let mut pg = Graph::new_with_internal(Arc::clone(&graph));
+        pg.set_state(GraphState::Running);
 
-        graph.remove_link(&link_id);
-        assert_eq!(graph.link_count(), 0);
-    }
+        // Create entities for processors
+        pg.ensure_processor_entity(&"camera".into());
+        pg.ensure_processor_entity(&"display".into());
 
-    #[test]
-    fn test_to_json() {
-        let mut graph = Graph::new();
-        graph.add_processor("proc_0".into(), "TestProcessor".into(), 42);
-        graph.add_processor("proc_1".into(), "OtherProcessor".into(), 123);
+        // Add state component
+        pg.insert(&"camera".into(), StateComponent::default())
+            .unwrap();
 
-        graph.add_link_by_address("proc_0.output".into(), "proc_1.input".into());
+        // Add metrics component
+        let mut metrics = ProcessorMetrics::default();
+        metrics.throughput_fps = 30.0;
+        metrics.frames_processed = 100;
+        pg.insert(&"display".into(), metrics).unwrap();
 
-        let json = graph.to_json();
+        let json = pg.to_json();
 
-        // Verify nodes
-        let nodes = json["nodes"].as_array().unwrap();
-        assert_eq!(nodes.len(), 2);
+        // Verify structure
+        assert_eq!(json["state"], "Running");
+        assert!(json["processors"]["camera"].is_object());
+        assert!(json["processors"]["display"].is_object());
+        assert_eq!(json["processors"]["camera"]["type"], "CameraProcessor");
+        assert_eq!(json["processors"]["display"]["type"], "DisplayProcessor");
 
-        // Verify links
-        let links = json["links"].as_array().unwrap();
-        assert_eq!(links.len(), 1);
-    }
+        // Verify state component was serialized
+        assert!(json["processors"]["camera"]["state"].is_string());
 
-    #[test]
-    fn test_to_dot() {
-        let mut graph = Graph::new();
-        graph.add_processor("camera".into(), "CameraProcessor".into(), 0);
-        graph.add_processor("display".into(), "DisplayProcessor".into(), 0);
-
-        graph.add_link_by_address("camera.video_out".into(), "display.video_in".into());
-
-        let dot = graph.to_dot();
-
-        // DOT format should contain digraph keyword
-        assert!(dot.contains("digraph"));
-    }
-
-    #[test]
-    fn test_invalid_port_address() {
-        let mut graph = Graph::new();
-        graph.add_processor("proc_0".into(), "TestProcessor".into(), 0);
-        graph.add_processor("proc_1".into(), "TestProcessor".into(), 0);
-
-        // Missing dot separator - should fail
-        let result = graph.add_link_with_id(
-            new_link_id("link_1"),
-            "proc_0output".into(), // Missing dot
-            "proc_1.input".into(),
-            LinkPortType::Video,
+        // Verify metrics component was serialized
+        assert_eq!(
+            json["processors"]["display"]["metrics"]["throughput_fps"],
+            30.0
         );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_link_to_unknown_processor() {
-        let mut graph = Graph::new();
-        graph.add_processor("proc_0".into(), "TestProcessor".into(), 0);
-
-        // Link to non-existent processor
-        let result = graph.add_link_with_id(
-            new_link_id("link_1"),
-            "proc_0.output".into(),
-            "unknown.input".into(), // Processor doesn't exist
-            LinkPortType::Video,
+        assert_eq!(
+            json["processors"]["display"]["metrics"]["frames_processed"],
+            100
         );
-
-        assert!(result.is_err());
     }
 
     #[test]
-    fn test_find_link() {
-        let mut graph = Graph::new();
-        graph.add_processor("source".into(), "SourceProcessor".into(), 0);
-        graph.add_processor("sink".into(), "SinkProcessor".into(), 0);
+    fn test_property_graph_to_json_with_links() {
+        let graph = Arc::new(RwLock::new(InternalProcessorLinkGraph::new()));
 
-        let link_id = graph.add_link_by_address("source.output".into(), "sink.input".into());
+        // Add processors
+        graph
+            .write()
+            .add_processor("source".into(), "SourceProcessor".into(), 0);
+        graph
+            .write()
+            .add_processor("sink".into(), "SinkProcessor".into(), 1);
 
-        // Find by ports
-        let found = graph.find_link("source.output", "sink.input");
-        assert_eq!(found, Some(link_id.clone()));
+        // Add link - add_link returns the created Link
+        let link = graph
+            .write()
+            .add_link("source.output", "sink.input")
+            .unwrap();
+        let link_id = link.id.clone();
 
-        // Find by ID
-        let link = graph.find_link_by_id(&link_id);
-        assert!(link.is_some());
-        assert_eq!(link.unwrap().from_port(), "source.output");
+        let mut pg = Graph::new_with_internal(Arc::clone(&graph));
+
+        // Create link entity with components
+        pg.ensure_link_entity(&link_id);
+        pg.insert_link(&link_id, LinkStateComponent(LinkState::Wired))
+            .unwrap();
+        pg.insert_link(
+            &link_id,
+            LinkTypeInfoComponent {
+                type_id: std::any::TypeId::of::<u32>(),
+                type_name: "u32",
+                capacity: 8,
+            },
+        )
+        .unwrap();
+
+        let json = pg.to_json();
+
+        // Verify link is in output
+        let links = &json["links"];
+        assert!(links.is_object());
+
+        // Find our link (key is the link_id string)
+        let link_json = &links[link_id.to_string()];
+        assert!(link_json.is_object());
+
+        // Verify from/to
+        assert_eq!(link_json["from"]["processor"], "source");
+        assert_eq!(link_json["from"]["port"], "output");
+        assert_eq!(link_json["to"]["processor"], "sink");
+        assert_eq!(link_json["to"]["port"], "input");
+
+        // Verify ECS components
+        assert!(link_json["state"].is_string());
+        assert_eq!(link_json["type_info"]["type_name"], "u32");
+        assert_eq!(link_json["type_info"]["capacity"], 8);
     }
 
     #[test]
-    fn test_graph_equality() {
-        let mut graph1 = Graph::new();
-        graph1.add_processor("a".into(), "TestProcessor".into(), 0);
+    fn test_property_graph_to_dot() {
+        let graph = Arc::new(RwLock::new(InternalProcessorLinkGraph::new()));
 
-        let mut graph2 = Graph::new();
-        graph2.add_processor("a".into(), "TestProcessor".into(), 0);
+        // Add processors
+        graph
+            .write()
+            .add_processor("camera".into(), "CameraProcessor".into(), 0);
+        graph
+            .write()
+            .add_processor("display".into(), "DisplayProcessor".into(), 1);
 
-        assert_eq!(graph1, graph2);
+        // Add link
+        let link = graph
+            .write()
+            .add_link("camera.output", "display.input")
+            .unwrap();
+        let link_id = link.id.clone();
 
-        // Different processor makes them unequal
-        graph2.add_processor("b".into(), "TestProcessor".into(), 0);
-        assert_ne!(graph1, graph2);
+        let mut pg = Graph::new_with_internal(Arc::clone(&graph));
+
+        // Create entities
+        pg.ensure_processor_entity(&"camera".into());
+        pg.ensure_link_entity(&link_id);
+
+        // Add state to camera
+        pg.insert(&"camera".into(), StateComponent::default())
+            .unwrap();
+
+        // Add type info to link
+        pg.insert_link(
+            &link_id,
+            LinkTypeInfoComponent {
+                type_id: std::any::TypeId::of::<String>(),
+                type_name: "streamlib::core::frames::VideoFrame",
+                capacity: 4,
+            },
+        )
+        .unwrap();
+
+        let dot = pg.to_dot();
+
+        // Basic DOT structure
+        assert!(dot.starts_with("digraph StreamGraph {"));
+        assert!(dot.ends_with("}\n"));
+        assert!(dot.contains("rankdir=LR"));
+
+        // Node declarations
+        assert!(dot.contains("\"camera\""));
+        assert!(dot.contains("\"display\""));
+        assert!(dot.contains("CameraProcessor"));
+
+        // Edge declaration
+        assert!(dot.contains("->"));
+
+        // Type info in edge label (shortened)
+        assert!(dot.contains("VideoFrame"));
     }
 
     #[test]
-    fn test_checksum_deterministic() {
-        let mut graph = Graph::new();
-        graph.add_processor("source".into(), "SourceProcessor".into(), 0);
-        graph.add_processor("sink".into(), "SinkProcessor".into(), 0);
-        graph.add_link_by_address("source.output".into(), "sink.input".into());
+    fn test_property_graph_to_json_handles_missing_components() {
+        // Verify that processors/links without ECS components still serialize
+        let graph = Arc::new(RwLock::new(InternalProcessorLinkGraph::new()));
 
-        // Compute checksum twice - should be identical
-        let checksum1 = graph.checksum();
-        let checksum2 = graph.checksum();
+        graph
+            .write()
+            .add_processor("test".into(), "TestProcessor".into(), 0);
 
-        assert_eq!(checksum1, checksum2);
-    }
+        let pg = Graph::new_with_internal(Arc::clone(&graph));
 
-    #[test]
-    fn test_checksum_changes_with_graph() {
-        let mut graph = Graph::new();
-        graph.add_processor("proc_0".into(), "TestProcessor".into(), 0);
+        // Don't create any entities - just serialize
+        let json = pg.to_json();
 
-        let checksum1 = graph.checksum();
+        // Should still have the processor with basic info
+        assert!(json["processors"]["test"].is_object());
+        assert_eq!(json["processors"]["test"]["type"], "TestProcessor");
 
-        // Add another processor
-        graph.add_processor("proc_1".into(), "TestProcessor".into(), 0);
-
-        let checksum2 = graph.checksum();
-
-        assert_ne!(checksum1, checksum2);
-    }
-
-    #[test]
-    fn test_config_checksum() {
-        #[derive(Debug)]
-        struct Config {
-            value: i32,
-            name: String,
-        }
-
-        let config1 = Config {
-            value: 42,
-            name: "test".into(),
-        };
-        let config2 = Config {
-            value: 42,
-            name: "test".into(),
-        };
-        let config3 = Config {
-            value: 99,
-            name: "test".into(),
-        };
-
-        let checksum1 = compute_config_checksum(&config1);
-        let checksum2 = compute_config_checksum(&config2);
-        let checksum3 = compute_config_checksum(&config3);
-
-        // Same config should produce same checksum
-        assert_eq!(checksum1, checksum2);
-
-        // Different config should produce different checksum
-        assert_ne!(checksum1, checksum3);
+        // But no ECS components (no state, metrics, etc)
+        assert!(json["processors"]["test"]["state"].is_null());
+        assert!(json["processors"]["test"]["metrics"].is_null());
     }
 }

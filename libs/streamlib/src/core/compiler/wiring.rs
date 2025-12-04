@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use crate::core::error::{Result, StreamError};
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{
-    LinkOutputToProcessorWriterAndReader, LinkState, ProcessorInstance, PropertyGraph,
+    Graph, LinkOutputToProcessorWriterAndReader, LinkState, ProcessorInstance,
 };
 use crate::core::links::{
     LinkFactoryDelegate, LinkId, LinkInstanceComponent, LinkPortType, LinkTypeInfoComponent,
@@ -19,7 +19,7 @@ use crate::core::processors::BoxedProcessor;
 
 /// Wire a link by ID from the graph.
 pub fn wire_link(
-    property_graph: &mut PropertyGraph,
+    property_graph: &mut Graph,
     link_factory: &dyn LinkFactoryDelegate,
     link_id: &LinkId,
 ) -> Result<()> {
@@ -35,7 +35,7 @@ pub fn wire_link(
 }
 
 /// Unwire a link by ID.
-pub fn unwire_link(property_graph: &mut PropertyGraph, link_id: &LinkId) -> Result<()> {
+pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkId) -> Result<()> {
     tracing::info!("Unwiring link: {}", link_id);
 
     let link = property_graph
@@ -108,7 +108,7 @@ pub fn parse_port_address(port: &str) -> Result<(String, String)> {
 // ============================================================================
 
 fn wire_link_ports(
-    property_graph: &mut PropertyGraph,
+    property_graph: &mut Graph,
     link_factory: &dyn LinkFactoryDelegate,
     from_port: &str,
     to_port: &str,
@@ -184,7 +184,7 @@ fn wire_link_ports(
 }
 
 fn get_processor_pair(
-    property_graph: &PropertyGraph,
+    property_graph: &Graph,
     source_proc_id: &str,
     dest_proc_id: &str,
 ) -> Result<(Arc<Mutex<BoxedProcessor>>, Arc<Mutex<BoxedProcessor>>)> {
@@ -388,7 +388,7 @@ fn wire_data_reader_to_processor(
 }
 
 fn setup_link_output_to_processor_message_writer(
-    property_graph: &PropertyGraph,
+    property_graph: &Graph,
     source_proc_id: &str,
     dest_proc_id: &str,
     source_port: &str,

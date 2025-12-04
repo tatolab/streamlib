@@ -1,22 +1,31 @@
 mod components;
 #[allow(clippy::module_inception)]
 mod graph;
+#[doc(hidden)]
+pub mod internal;
 mod link;
 mod link_port_markers;
 mod link_port_ref;
 mod node;
-mod property_graph;
 mod validation;
+
+// Internal types - only accessible within the crate
+pub(crate) use internal::{GraphChecksum, InternalProcessorLinkGraph};
+
+// Re-export for testing (used by integration tests)
+#[doc(hidden)]
+pub use internal::processor_link_graph::compute_config_checksum;
 
 // Re-export all public types
 pub use components::{
     EcsComponentJson, LightweightMarker, LinkOutputToProcessorWriterAndReader, LinkStateComponent,
-    MainThreadMarker, ProcessorInstance, ProcessorMetrics, ProcessorPauseGate, RayonPoolMarker,
-    ShutdownChannel, StateComponent, ThreadHandle,
+    MainThreadMarker, PendingDeletion, ProcessorInstance, ProcessorMetrics, ProcessorPauseGate,
+    RayonPoolMarker, ShutdownChannel, StateComponent, ThreadHandle,
 };
-pub use graph::{compute_config_checksum, Graph, GraphChecksum};
 pub use link::{Link, LinkDirection, LinkEndpoint, LinkState};
 pub use link_port_markers::{input, output, InputPortMarker, OutputPortMarker, PortMarker};
 pub use link_port_ref::{IntoLinkPortRef, LinkPortRef};
 pub use node::{NodePorts, PortInfo, PortKind, ProcessorId, ProcessorNode};
-pub use property_graph::{GraphState, PropertyGraph};
+
+// Public API - Graph is the unified interface
+pub use graph::{Graph, GraphState};

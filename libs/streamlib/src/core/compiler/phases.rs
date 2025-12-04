@@ -14,8 +14,8 @@ use crate::core::delegates::{
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    GraphState, LinkOutputToProcessorWriterAndReader, ProcessorId, ProcessorInstance,
-    ProcessorPauseGate, PropertyGraph, ShutdownChannel, StateComponent, ThreadHandle,
+    Graph, GraphState, LinkOutputToProcessorWriterAndReader, ProcessorId, ProcessorInstance,
+    ProcessorPauseGate, ShutdownChannel, StateComponent, ThreadHandle,
 };
 use crate::core::processors::ProcessorState;
 
@@ -26,7 +26,7 @@ use crate::core::processors::ProcessorState;
 pub(crate) fn create_processor(
     factory: &Arc<dyn FactoryDelegate>,
     processor_delegate: &Arc<dyn ProcessorDelegate>,
-    property_graph: &mut PropertyGraph,
+    property_graph: &mut Graph,
     proc_id: &ProcessorId,
 ) -> Result<()> {
     // Get node from the underlying graph
@@ -63,7 +63,7 @@ pub(crate) fn create_processor(
 // ============================================================================
 
 pub(crate) fn setup_processor(
-    property_graph: &mut PropertyGraph,
+    property_graph: &mut Graph,
     runtime_context: &Arc<RuntimeContext>,
     processor_id: &ProcessorId,
 ) -> Result<()> {
@@ -104,7 +104,7 @@ pub(crate) fn setup_processor(
 pub(crate) fn start_processor(
     processor_delegate: &Arc<dyn ProcessorDelegate>,
     scheduler: &Arc<dyn SchedulerDelegate>,
-    property_graph: &mut PropertyGraph,
+    property_graph: &mut Graph,
     processor_id: &ProcessorId,
 ) -> Result<()> {
     // Check if already has a thread (already running)
@@ -169,7 +169,7 @@ pub(crate) fn start_processor(
 }
 
 fn spawn_dedicated_thread(
-    property_graph: &mut PropertyGraph,
+    property_graph: &mut Graph,
     processor_id: &ProcessorId,
     _priority: crate::core::delegates::ThreadPriority,
     _name: Option<String>,
@@ -280,10 +280,7 @@ fn spawn_dedicated_thread(
 // ============================================================================
 
 /// Shutdown a running processor by removing its runtime components.
-pub fn shutdown_processor(
-    property_graph: &mut PropertyGraph,
-    processor_id: &ProcessorId,
-) -> Result<()> {
+pub fn shutdown_processor(property_graph: &mut Graph, processor_id: &ProcessorId) -> Result<()> {
     // Check current state
     if let Some(state) = property_graph.get::<StateComponent>(processor_id) {
         let current = *state.0.lock();
@@ -326,7 +323,7 @@ pub fn shutdown_processor(
 }
 
 /// Shutdown all running processors in the graph.
-pub fn shutdown_all_processors(property_graph: &mut PropertyGraph) -> Result<()> {
+pub fn shutdown_all_processors(property_graph: &mut Graph) -> Result<()> {
     // Get all processor IDs that have instances
     let processor_ids: Vec<ProcessorId> = property_graph.processor_ids().cloned().collect();
 
