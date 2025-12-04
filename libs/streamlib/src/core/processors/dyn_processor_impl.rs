@@ -1,6 +1,6 @@
 use super::{DynProcessor, Processor, ProcessorType};
 use crate::core::execution::ExecutionConfig;
-use crate::core::link_channel::{LinkPortType, ProcessFunctionEvent};
+use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::Result;
 
@@ -48,52 +48,60 @@ where
         <Self as Processor>::get_input_port_type(self, port_name)
     }
 
-    fn wire_output_producer(
+    fn add_link_output_data_writer(
         &mut self,
         port_name: &str,
-        producer: Box<dyn std::any::Any + Send>,
+        data_writer: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()> {
-        <Self as Processor>::wire_output_producer(self, port_name, producer)
+        <Self as Processor>::add_link_output_data_writer(self, port_name, data_writer)
     }
 
-    fn wire_input_consumer(
+    fn add_link_input_data_reader(
         &mut self,
         port_name: &str,
-        consumer: Box<dyn std::any::Any + Send>,
+        data_reader: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()> {
-        <Self as Processor>::wire_input_consumer(self, port_name, consumer)
+        <Self as Processor>::add_link_input_data_reader(self, port_name, data_reader)
     }
 
-    fn unwire_output_producer(
+    fn remove_link_output_data_writer(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::link_channel::LinkId,
+        link_id: &crate::core::links::LinkId,
     ) -> crate::core::Result<()> {
-        <Self as Processor>::unwire_output_producer(self, port_name, link_id)
+        <Self as Processor>::remove_link_output_data_writer(self, port_name, link_id)
     }
 
-    fn unwire_input_consumer(
+    fn remove_link_input_data_reader(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::link_channel::LinkId,
+        link_id: &crate::core::links::LinkId,
     ) -> crate::core::Result<()> {
-        <Self as Processor>::unwire_input_consumer(self, port_name, link_id)
+        <Self as Processor>::remove_link_input_data_reader(self, port_name, link_id)
     }
 
-    fn set_output_process_function_invoke_send(
+    fn set_link_output_to_processor_message_writer(
         &mut self,
         port_name: &str,
-        process_function_invoke_send: crossbeam_channel::Sender<ProcessFunctionEvent>,
+        message_writer: crossbeam_channel::Sender<LinkOutputToProcessorMessage>,
     ) {
-        <Self as Processor>::set_output_process_function_invoke_send(
+        <Self as Processor>::set_link_output_to_processor_message_writer(
             self,
             port_name,
-            process_function_invoke_send,
+            message_writer,
         )
     }
 
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()> {
         <Self as Processor>::apply_config_json(self, config_json)
+    }
+
+    fn to_runtime_json(&self) -> serde_json::Value {
+        <Self as Processor>::to_runtime_json(self)
+    }
+
+    fn config_json(&self) -> serde_json::Value {
+        <Self as Processor>::config_json(self)
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

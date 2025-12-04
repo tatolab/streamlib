@@ -50,6 +50,7 @@ dashmap = "6.1"  # Lock-free concurrent HashMap for event bus topic routing
 rayon = "1.10"  # Parallel task execution for event bus dispatch
 petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
 ahash = "0.8"  # Fast hashing for graph checksum computation
+hecs = "0.10.5"  # Lightweight ECS for PropertyGraph component storage
 
 # Serialization
 serde.workspace = true
@@ -123,6 +124,7 @@ tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 criterion = "0.5"  # Benchmarking framework
 rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
+serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 
 [[bench]]
 name = "connection_bench"

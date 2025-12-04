@@ -26,6 +26,12 @@ pub enum StreamError {
     #[error("Link not found: {0}")]
     LinkNotFound(String),
 
+    #[error("Link not wired: {0}")]
+    LinkNotWired(String),
+
+    #[error("Link already disconnected: {0}")]
+    LinkAlreadyDisconnected(String),
+
     #[error("Invalid link: {0}")]
     InvalidLink(String),
 

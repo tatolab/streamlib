@@ -1,12 +1,12 @@
 use super::metadata::MetadataValue;
-use crate::core::link_channel::{LinkPortMessage, LinkPortType};
+use crate::core::links::{LinkPortMessage, LinkPortType};
 use dasp::Frame;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 // Implement sealed trait for AudioFrame
-impl crate::core::link_channel::link_ports::sealed::Sealed for AudioFrame {}
+impl crate::core::links::traits::link_port_message::sealed::Sealed for AudioFrame {}
 use dasp::slice::{FromSampleSlice, ToSampleSlice};
 use dasp::Signal;
 
@@ -182,9 +182,9 @@ impl LinkPortMessage for AudioFrame {
         )]
     }
 
-    fn consumption_strategy() -> crate::core::link_channel::link_ports::ConsumptionStrategy {
-        // Audio frames must be consumed sequentially to avoid audio dropouts/glitches
-        crate::core::link_channel::link_ports::ConsumptionStrategy::Sequential
+    fn link_read_behavior() -> crate::core::links::LinkBufferReadMode {
+        // Audio frames must be read in order to avoid audio dropouts/glitches
+        crate::core::links::LinkBufferReadMode::ReadNextInOrder
     }
 }
 

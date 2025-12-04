@@ -42,9 +42,10 @@ fn main() -> Result<()> {
 
     // Print the graph as JSON
     let graph = runtime.graph().read();
-    let json = serde_json::to_string_pretty(&*graph).expect("Failed to serialize graph");
+    let json = graph.to_json();
+    let json_str = serde_json::to_string_pretty(&json).expect("Failed to serialize graph");
 
-    println!("{}", json);
+    println!("{}", json_str);
 
     Ok(())
 }

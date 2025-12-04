@@ -35,6 +35,44 @@ This document is a **complete implementation specification**. You MUST follow it
 ### When in Doubt:
 **STOP. ASK. WAIT FOR APPROVAL.**
 
+### Naming Standards - NON-NEGOTIABLE
+
+The naming in this codebase is **empirically validated** to improve AI coding accuracy. These names were designed by humans after extensive review. **Do NOT suggest shorter names.**
+
+#### Core Principle
+Names should be understood with **ZERO context**. An AI agent (or developer) who just woke up with amnesia should understand what something does from the name alone.
+
+#### What Makes a Good Name
+1. **Encodes relationships**: Where it comes from, where it goes
+2. **Encodes role**: What it DOES in the system, not what it IS technically
+3. **Explicit direction**: `FromUpstream`, `ToDownstream`, `Input`, `Output`
+4. **No generic words alone**: Never just `Inner`, `State`, `Manager`, `Handler`, `Context`
+
+#### Validated Examples (DO NOT SHORTEN)
+```rust
+// ✅ CORRECT - explicit, self-documenting
+LinkOutputDataWriter         // writes data from a link output
+LinkInputDataReader          // reads data for a link input
+LinkInputFromUpstreamProcessor   // binding FROM upstream TO this input
+LinkOutputToDownstreamProcessor  // binding FROM this output TO downstream
+LinkOutputToProcessorMessage     // message sent from link output to processor
+add_link_output_data_writer()    // adds a data writer to a link output
+set_link_output_to_processor_message_writer()  // 43 chars is FINE
+
+// ❌ WRONG - too short, requires context
+Writer, Reader, Producer, Consumer
+Connection, Binding, Handle
+ctx, mgr, conn, buf, cfg
+```
+
+#### The Test
+Ask: "If I saw this name 200 lines away from its declaration, would I know exactly what it is?"
+- `LinkOutputDataWriter` → Yes, it writes data from a link output
+- `Writer` → No, writer of what? Where?
+
+#### When Naming New Things
+Use the `/refine-name` command to get suggestions that follow this pattern. The command will suggest MORE explicit names, never shorter ones.
+
 ### Prohibited Patterns - Never Use These:
 1. ❌ `unimplemented!()` or `todo!()` in library code (tests/examples are OK)
 2. ❌ "Temporary" hacks or workarounds
@@ -443,6 +481,38 @@ Some processors only compile on specific platforms:
 - `MP4WriterProcessor` - macOS/iOS only
 
 Use `#[cfg(target_os = "macos")]` in examples that depend on platform-specific processors.
+
+## Tool Preferences
+
+### Rust Analyzer MCP - USE THIS
+
+When working with Rust code, **prefer rust-analyzer MCP tools** over grep/search for understanding code:
+
+```
+mcp__rust-analyzer__rust_analyzer_hover      - Get type info at position
+mcp__rust-analyzer__rust_analyzer_definition - Jump to definition
+mcp__rust-analyzer__rust_analyzer_references - Find all usages
+mcp__rust-analyzer__rust_analyzer_symbols    - List symbols in file
+mcp__rust-analyzer__rust_analyzer_diagnostics - Get compiler errors
+```
+
+**Why**: Rust-analyzer understands the code semantically. It knows types, traits, and relationships. Grep just matches text.
+
+**When to use rust-analyzer**:
+- Understanding what a type is: `rust_analyzer_hover`
+- Finding where something is defined: `rust_analyzer_definition`
+- Finding all usages before renaming: `rust_analyzer_references`
+- Getting an overview of a file: `rust_analyzer_symbols`
+- Checking if code compiles: `rust_analyzer_diagnostics`
+
+**When grep is still fine**:
+- Searching for string literals
+- Finding TODO/FIXME comments
+- Pattern matching across non-Rust files
+
+### Custom Commands
+
+- `/refine-name <current_name>` - Get MORE explicit naming suggestions (never shorter)
 
 ## Additional Resources
 

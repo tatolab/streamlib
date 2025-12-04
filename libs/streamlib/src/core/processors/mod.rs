@@ -1,17 +1,22 @@
-mod base;
+//! Processor infrastructure and implementations.
+
+pub mod graph;
+pub mod traits;
+
 mod dyn_processor;
 mod dyn_processor_impl;
 pub mod factory;
-mod processor;
-mod state;
 
-pub use base::{BaseProcessor, ProcessorType};
+// Re-export graph types
+pub use graph::{ProcessorState, ProcessorStateComponent};
+
+// Re-export traits
+pub use traits::{BaseProcessor, Processor, ProcessorType};
+
 pub use dyn_processor::DynProcessor;
 pub use factory::{BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory};
-pub use processor::Processor;
-pub use state::ProcessorState;
 
-/// Empty config type for processors that don't need configuration
+/// Empty config type for processors that don't need configuration.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct EmptyConfig;
 

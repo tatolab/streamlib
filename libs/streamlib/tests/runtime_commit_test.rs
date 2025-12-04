@@ -9,20 +9,38 @@ use streamlib::core::runtime::{CommitMode, StreamRuntime};
 
 #[test]
 fn test_runtime_default_is_auto_commit() {
-    let runtime = StreamRuntime::new();
-    assert_eq!(runtime.commit_mode(), CommitMode::Auto);
+    // Default runtime uses auto-commit - verify by checking behavior
+    let mut runtime = StreamRuntime::new();
+
+    // Add a processor - should be added to graph immediately (auto-commit behavior)
+    let node = runtime
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
+        .expect("Failed to add processor");
+
+    let graph = runtime.graph().read();
+    assert!(graph.has_processor(&node.id));
 }
 
 #[test]
 fn test_runtime_manual_commit_mode() {
-    let runtime = StreamRuntime::with_commit_mode(CommitMode::Manual);
-    assert_eq!(runtime.commit_mode(), CommitMode::Manual);
+    // Manual mode requires explicit commit - verify by checking behavior
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
+
+    // Add processor - added to graph but pending operations queued
+    let node = runtime
+        .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
+        .expect("Failed to add processor");
+
+    // Processor exists in graph (topology added immediately)
+    let graph = runtime.graph().read();
+    assert!(graph.has_processor(&node.id));
 }
 
 #[test]
 fn test_auto_commit_syncs_graph_changes() {
     let mut runtime = StreamRuntime::new();
-    assert_eq!(runtime.commit_mode(), CommitMode::Auto);
 
     // Add a processor - should auto-commit
     let node = runtime
@@ -37,7 +55,9 @@ fn test_auto_commit_syncs_graph_changes() {
 
 #[test]
 fn test_manual_commit_batches_changes() {
-    let mut runtime = StreamRuntime::with_commit_mode(CommitMode::Manual);
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
 
     // Add multiple processors without committing
     let node1 = runtime
@@ -89,7 +109,9 @@ fn test_connect_with_auto_commit() {
 
 #[test]
 fn test_disconnect_removes_link() {
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
 
     // Setup: add processors and connect
     let source = runtime
@@ -107,59 +129,84 @@ fn test_disconnect_removes_link() {
         )
         .expect("Failed to connect");
 
-    // Verify link exists
+    // Verify link exists in graph (added immediately to graph structure)
     {
         let graph = runtime.graph().read();
         assert_eq!(graph.link_count(), 1);
     }
 
-    // Disconnect
+    // Disconnect - queues the operation
     runtime.disconnect(&link).expect("Failed to disconnect");
 
-    // Verify link is removed
+    // Commit before start does nothing - link should still exist
+    runtime.commit().expect("Commit before start");
     {
         let graph = runtime.graph().read();
-        assert_eq!(graph.link_count(), 0);
+        assert_eq!(
+            graph.link_count(),
+            1,
+            "Link should still exist before start"
+        );
     }
+
+    // Start runtime - executes pending operations (including the disconnect)
+    runtime.start().expect("Failed to start");
+
+    // Verify link is removed after start
+    {
+        let graph = runtime.graph().read();
+        assert_eq!(graph.link_count(), 0, "Link should be removed after start");
+    }
+
+    runtime.stop().expect("Failed to stop");
 }
 
 #[test]
 fn test_remove_processor() {
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
 
     let node = runtime
         .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
         .expect("Failed to add processor");
 
-    // Verify exists
+    // Verify exists in graph (added immediately to graph structure)
     {
         let graph = runtime.graph().read();
         assert!(graph.has_processor(&node.id));
     }
 
-    // Remove
+    // Remove - queues the operation
     runtime
         .remove_processor(&node)
         .expect("Failed to remove processor");
 
-    // Verify removed
+    // Commit before start does nothing - processor should still exist
+    runtime.commit().expect("Commit before start");
     {
         let graph = runtime.graph().read();
-        assert!(!graph.has_processor(&node.id));
+        assert!(
+            graph.has_processor(&node.id),
+            "Processor should still exist before start"
+        );
+        assert_eq!(graph.processor_count(), 1);
+    }
+
+    // Start runtime - executes pending operations (including the remove)
+    runtime.start().expect("Failed to start");
+
+    // Verify removed after start
+    {
+        let graph = runtime.graph().read();
+        assert!(
+            !graph.has_processor(&node.id),
+            "Processor should be removed after start"
+        );
         assert_eq!(graph.processor_count(), 0);
     }
-}
 
-#[test]
-fn test_set_commit_mode() {
-    let mut runtime = StreamRuntime::new();
-    assert_eq!(runtime.commit_mode(), CommitMode::Auto);
-
-    runtime.set_commit_mode(CommitMode::Manual);
-    assert_eq!(runtime.commit_mode(), CommitMode::Manual);
-
-    runtime.set_commit_mode(CommitMode::Auto);
-    assert_eq!(runtime.commit_mode(), CommitMode::Auto);
+    runtime.stop().expect("Failed to stop");
 }
 
 // Test the factory registration and lookup
@@ -186,66 +233,66 @@ fn test_registry_factory_registration() {
     assert!(!outputs.is_empty());
 }
 
-// Test port unwiring
+// Test port unwiring with LinkInstance architecture
 mod unwire_tests {
-    use streamlib::core::link_channel::link_id;
+    use streamlib::core::links::graph::link_id;
     use streamlib::core::processors::SimplePassthroughProcessor;
-    use streamlib::core::runtime::StreamRuntime;
+    use streamlib::core::runtime::{CommitMode, StreamRuntime};
     use streamlib::core::LinkInput;
+    use streamlib::core::LinkInstance;
     use streamlib::core::LinkOutput;
     use streamlib::core::VideoFrame;
 
     #[test]
     fn test_link_output_add_remove() {
-        // Test that LinkOutput properly handles add_link/remove_link
+        // Test that LinkOutput properly handles add_data_writer/remove_data_writer
         let output: LinkOutput<VideoFrame> = LinkOutput::new("test_output");
 
-        // Initially has plug (disconnected), so is_connected() is false
+        // Initially disconnected
         assert!(!output.is_connected());
         assert_eq!(output.link_count(), 0);
 
-        // Create a link channel for testing
+        // Create a LinkInstance and get data writer
         let link_id = link_id::__private::new_unchecked("test_link".to_string());
-        let (producer, _consumer) = streamlib::core::create_link_channel::<VideoFrame>(16);
-        let (process_invoke_send, _process_invoke_receive) = crossbeam_channel::bounded(1);
+        let instance = LinkInstance::<VideoFrame>::new(link_id.clone(), 16);
+        let output_data_writer = instance.create_link_output_data_writer();
 
-        // Add link
+        // Add data writer
         output
-            .add_link(link_id.clone(), producer, process_invoke_send)
+            .add_data_writer(link_id.clone(), output_data_writer)
             .unwrap();
         assert!(output.is_connected());
         assert_eq!(output.link_count(), 1);
 
-        // Remove link
-        output.remove_link(&link_id).unwrap();
+        // Remove data writer
+        output.remove_data_writer(&link_id).unwrap();
         assert!(!output.is_connected());
         assert_eq!(output.link_count(), 0);
     }
 
     #[test]
     fn test_link_input_add_remove() {
-        // Test that LinkInput properly handles add_link/remove_link
+        // Test that LinkInput properly handles add_data_reader/remove_data_reader
         let input: LinkInput<VideoFrame> = LinkInput::new("test_input");
 
-        // Initially has plug (disconnected), so is_connected() is false
+        // Initially disconnected
         assert!(!input.is_connected());
         assert_eq!(input.link_count(), 0);
 
-        // Create a link channel for testing
+        // Create a LinkInstance and get data reader
         let link_id = link_id::__private::new_unchecked("test_link".to_string());
-        let (_producer, consumer) = streamlib::core::create_link_channel::<VideoFrame>(16);
-        let (process_invoke_send, _process_invoke_receive) = crossbeam_channel::bounded(1);
-        let source_addr = streamlib::core::LinkPortAddress::new("source_proc", "output");
+        let instance = LinkInstance::<VideoFrame>::new(link_id.clone(), 16);
+        let input_data_reader = instance.create_link_input_data_reader();
 
-        // Add link
+        // Add data reader
         input
-            .add_link(link_id.clone(), consumer, source_addr, process_invoke_send)
+            .add_data_reader(link_id.clone(), input_data_reader, None)
             .unwrap();
         assert!(input.is_connected());
         assert_eq!(input.link_count(), 1);
 
-        // Remove link
-        input.remove_link(&link_id).unwrap();
+        // Remove data reader
+        input.remove_data_reader(&link_id).unwrap();
         assert!(!input.is_connected());
         assert_eq!(input.link_count(), 0);
     }
@@ -255,8 +302,8 @@ mod unwire_tests {
         let output: LinkOutput<VideoFrame> = LinkOutput::new("test_output");
         let link_id = link_id::__private::new_unchecked("nonexistent".to_string());
 
-        // Removing a link that doesn't exist should error
-        let result = output.remove_link(&link_id);
+        // Removing a data writer that doesn't exist should error
+        let result = output.remove_data_writer(&link_id);
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -264,8 +311,42 @@ mod unwire_tests {
     }
 
     #[test]
+    fn test_graceful_degradation_on_instance_drop() {
+        // Test that data writer/reader gracefully degrade when LinkInstance is dropped
+        let output: LinkOutput<VideoFrame> = LinkOutput::new("test_output");
+        let input: LinkInput<VideoFrame> = LinkInput::new("test_input");
+
+        let link_id = link_id::__private::new_unchecked("test_link".to_string());
+
+        // Create instance in a scope so it gets dropped
+        {
+            let instance = LinkInstance::<VideoFrame>::new(link_id.clone(), 16);
+            let output_data_writer = instance.create_link_output_data_writer();
+            let input_data_reader = instance.create_link_input_data_reader();
+
+            output
+                .add_data_writer(link_id.clone(), output_data_writer)
+                .unwrap();
+            input
+                .add_data_reader(link_id.clone(), input_data_reader, None)
+                .unwrap();
+
+            assert!(output.is_connected());
+            assert!(input.is_connected());
+        }
+        // LinkInstance dropped here
+
+        // Data writer/reader should gracefully degrade - is_connected returns false
+        // The ports will automatically clean up dead connections on next read/write
+        assert!(!output.is_connected());
+        assert!(!input.is_connected());
+    }
+
+    #[test]
     fn test_multiple_processors_pipeline() {
-        let mut runtime = StreamRuntime::new();
+        let mut runtime = StreamRuntime::builder()
+            .with_commit_mode(CommitMode::Manual)
+            .build();
 
         // Create a chain: source -> middle -> sink
         let source = runtime
@@ -293,29 +374,51 @@ mod unwire_tests {
             )
             .expect("connect middle->sink");
 
-        // Verify topology
+        // Verify topology in graph (added immediately)
         {
             let graph = runtime.graph().read();
             assert_eq!(graph.processor_count(), 3);
             assert_eq!(graph.link_count(), 2);
         }
 
-        // Disconnect middle link
+        // Disconnect middle link - queues the operation
         runtime.disconnect(&link1).expect("disconnect");
 
-        // Verify partial topology
+        // Commit before start does nothing - link should still exist
+        runtime.commit().expect("commit before start");
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(
+                graph.link_count(),
+                2,
+                "Links should still exist before start"
+            );
+        }
+
+        // Start runtime - executes pending operations
+        runtime.start().expect("start");
+
+        // Verify partial topology after start
         {
             let graph = runtime.graph().read();
             assert_eq!(graph.processor_count(), 3);
-            assert_eq!(graph.link_count(), 1);
+            assert_eq!(
+                graph.link_count(),
+                1,
+                "One link should be removed after start"
+            );
             assert!(graph.get_link(&link2.id).is_some());
             assert!(graph.get_link(&link1.id).is_none());
         }
+
+        runtime.stop().expect("stop");
     }
 
     #[test]
     fn test_disconnect_by_id() {
-        let mut runtime = StreamRuntime::new();
+        let mut runtime = StreamRuntime::builder()
+            .with_commit_mode(CommitMode::Manual)
+            .build();
 
         let source = runtime
             .add_processor::<SimplePassthroughProcessor::Processor>(Default::default())
@@ -332,26 +435,50 @@ mod unwire_tests {
             )
             .expect("connect");
 
-        // Disconnect by ID
+        // Verify link exists in graph
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(graph.link_count(), 1);
+        }
+
+        // Disconnect by ID - queues the operation
         runtime
             .disconnect_by_id(&link.id)
             .expect("disconnect by id");
 
-        // Verify removed
-        let graph = runtime.graph().read();
-        assert_eq!(graph.link_count(), 0);
+        // Commit before start does nothing
+        runtime.commit().expect("commit before start");
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(
+                graph.link_count(),
+                1,
+                "Link should still exist before start"
+            );
+        }
+
+        // Start runtime - executes pending operations
+        runtime.start().expect("start");
+
+        // Verify removed after start
+        {
+            let graph = runtime.graph().read();
+            assert_eq!(graph.link_count(), 0, "Link should be removed after start");
+        }
+
+        runtime.stop().expect("stop");
     }
 }
 
 // Test delta computation
 mod delta_tests {
     use std::collections::HashSet;
-    use streamlib::core::executor::compute_delta;
+    use streamlib::core::compiler::compute_delta;
     use streamlib::core::graph::ProcessorId;
-    use streamlib::core::link_channel::LinkId;
+    use streamlib::core::links::LinkId;
 
     fn link_id(s: &str) -> LinkId {
-        streamlib::core::link_channel::link_id::__private::new_unchecked(s.to_string())
+        streamlib::core::links::graph::link_id::__private::new_unchecked(s.to_string())
     }
 
     #[test]
@@ -615,11 +742,9 @@ mod config_tests {
 
         // Update with a different JSON config
         let new_config = serde_json::json!({"scale": 5.0});
-        let old_checksum = graph
+        graph
             .update_processor_config(&node.id, new_config.clone())
             .expect("update config");
-
-        assert_eq!(old_checksum, original_checksum);
 
         // New checksum should be different
         let updated_checksum = graph

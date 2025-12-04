@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use streamlib::core::frames::{AudioChannelCount, AudioFrame};
 use streamlib::core::graph::Graph;
-use streamlib::core::runtime::{CommitMode, StreamRuntime};
-use streamlib::core::{LinkInput, LinkOutput, Result, RuntimeContext, RuntimeStatus};
+use streamlib::core::runtime::{CommitMode, RuntimeStatus, StreamRuntime};
+use streamlib::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 
 // =============================================================================
 // Test-only processors (not added to core)
@@ -220,7 +220,9 @@ fn test_runtime_lifecycle_full_flow() {
     // =========================================================================
     print_separator("STEP 1: Create Runtime - Verify Empty Graph");
 
-    let mut runtime = StreamRuntime::with_commit_mode(CommitMode::Manual);
+    let mut runtime = StreamRuntime::builder()
+        .with_commit_mode(CommitMode::Manual)
+        .build();
 
     // Check initial state
     let status = runtime.status();
@@ -228,31 +230,35 @@ fn test_runtime_lifecycle_full_flow() {
 
     // Get graph and verify it's empty but valid
     {
-        let graph = runtime.graph().read();
-        print_graph_json(&graph, "Initial Empty Graph");
-        print_graph_summary(&graph, "Initial");
+        let property_graph = runtime.graph().read();
+        print_graph_json(&property_graph, "Initial Empty Graph");
+        print_graph_summary(&property_graph, "Initial");
 
         // Verify structure exists but is empty
-        assert_eq!(graph.processor_count(), 0, "Should have 0 processors");
-        assert_eq!(graph.link_count(), 0, "Should have 0 links");
+        assert_eq!(
+            property_graph.processor_count(),
+            0,
+            "Should have 0 processors"
+        );
+        assert_eq!(property_graph.link_count(), 0, "Should have 0 links");
 
         // Verify JSON structure has expected fields
-        let json = graph.to_json();
+        let json = property_graph.to_json();
         assert!(
-            json.get("nodes").is_some(),
-            "JSON should have 'nodes' field"
+            json.get("processors").is_some(),
+            "JSON should have 'processors' field"
         );
         assert!(
             json.get("links").is_some(),
             "JSON should have 'links' field"
         );
 
-        let nodes = json.get("nodes").unwrap().as_array().unwrap();
-        let links = json.get("links").unwrap().as_array().unwrap();
-        assert_eq!(nodes.len(), 0, "nodes array should be empty");
-        assert_eq!(links.len(), 0, "links array should be empty");
+        let processors = json.get("processors").unwrap().as_object().unwrap();
+        let links = json.get("links").unwrap().as_object().unwrap();
+        assert_eq!(processors.len(), 0, "processors should be empty");
+        assert_eq!(links.len(), 0, "links should be empty");
 
-        println!("\n[STEP 1 RESULT] Empty graph is valid with empty nodes/links arrays");
+        println!("\n[STEP 1 RESULT] Empty graph is valid with empty processors/links");
     }
 
     // =========================================================================
@@ -285,15 +291,19 @@ fn test_runtime_lifecycle_full_flow() {
 
     // Check graph state (should have processors in graph)
     {
-        let graph = runtime.graph().read();
-        print_graph_json(&graph, "After Adding Processors (Pre-Commit)");
-        print_graph_summary(&graph, "After Adding Processors");
+        let property_graph = runtime.graph().read();
+        print_graph_json(&property_graph, "After Adding Processors (Pre-Commit)");
+        print_graph_summary(&property_graph, "After Adding Processors");
 
-        assert_eq!(graph.processor_count(), 2, "Should have 2 processors");
-        assert_eq!(graph.link_count(), 0, "Should have 0 links");
+        assert_eq!(
+            property_graph.processor_count(),
+            2,
+            "Should have 2 processors"
+        );
+        assert_eq!(property_graph.link_count(), 0, "Should have 0 links");
 
         // Verify processor nodes exist
-        let processor = graph.get_processor(&generator_node.id);
+        let processor = property_graph.get_processor(&generator_node.id);
         assert!(
             processor.is_some(),
             "Generator processor should exist in graph"
@@ -303,7 +313,7 @@ fn test_runtime_lifecycle_full_flow() {
             processor.unwrap()
         );
 
-        let processor = graph.get_processor(&counter_node.id);
+        let processor = property_graph.get_processor(&counter_node.id);
         assert!(
             processor.is_some(),
             "Counter processor should exist in graph"
@@ -357,15 +367,19 @@ fn test_runtime_lifecycle_full_flow() {
 
     // Check graph state (should have link)
     {
-        let graph = runtime.graph().read();
-        print_graph_json(&graph, "After Adding Link (Pre-Commit)");
-        print_graph_summary(&graph, "After Adding Link");
+        let property_graph = runtime.graph().read();
+        print_graph_json(&property_graph, "After Adding Link (Pre-Commit)");
+        print_graph_summary(&property_graph, "After Adding Link");
 
-        assert_eq!(graph.processor_count(), 2, "Should still have 2 processors");
-        assert_eq!(graph.link_count(), 1, "Should have 1 link");
+        assert_eq!(
+            property_graph.processor_count(),
+            2,
+            "Should still have 2 processors"
+        );
+        assert_eq!(property_graph.link_count(), 1, "Should have 1 link");
 
         // Verify link exists
-        let found_link = graph.get_link(&link.id);
+        let found_link = property_graph.get_link(&link.id);
         assert!(found_link.is_some(), "Link should exist in graph");
         println!("[STEP 3] Link in graph: {:?}", found_link.unwrap());
     }
@@ -420,46 +434,42 @@ fn test_runtime_lifecycle_full_flow() {
         generated, received
     );
 
-    // Stop runtime (teardown will signal generator thread to stop)
-    println!("[STEP 4] Stopping runtime...");
-    let stop_result = runtime.stop();
-    println!("[STEP 4] Stop result: {:?}", stop_result);
-
-    let status = runtime.status();
-    print_runtime_status(&status, "After Stop");
-
     println!(
         "\n[STEP 4 RESULT] Generated {} frames, Received {} frames",
         generated, received
     );
 
     // =========================================================================
-    // STEP 5: Remove link, verify graph state
+    // STEP 5: Remove link while running, verify graph state
     // =========================================================================
-    print_separator("STEP 5: Remove Link");
+    print_separator("STEP 5: Remove Link (While Running)");
 
     println!("[STEP 5] Disconnecting link: {:?}", link.id);
     let disconnect_result = runtime.disconnect(&link);
     println!("[STEP 5] Disconnect result: {:?}", disconnect_result);
 
-    // Check graph state
-    {
-        let graph = runtime.graph().read();
-        print_graph_json(&graph, "After Removing Link (Pre-Commit)");
-        print_graph_summary(&graph, "After Removing Link");
-
-        assert_eq!(graph.processor_count(), 2, "Should still have 2 processors");
-        assert_eq!(graph.link_count(), 0, "Should have 0 links");
-
-        // Verify link is gone
-        let found_link = graph.get_link(&link.id);
-        assert!(found_link.is_none(), "Link should not exist in graph");
-    }
-
-    // Commit
-    println!("\n[STEP 5] Committing removal to executor...");
+    // In auto-commit mode, disconnect executes immediately. In manual mode, commit is needed.
+    println!("\n[STEP 5] Committing removal...");
     let commit_result = runtime.commit();
     println!("[STEP 5] Commit result: {:?}", commit_result);
+
+    // Check graph state after commit
+    {
+        let property_graph = runtime.graph().read();
+        print_graph_json(&property_graph, "After Removing Link (Post-Commit)");
+        print_graph_summary(&property_graph, "After Removing Link");
+
+        assert_eq!(
+            property_graph.processor_count(),
+            2,
+            "Should still have 2 processors"
+        );
+        assert_eq!(property_graph.link_count(), 0, "Should have 0 links");
+
+        // Verify link is gone
+        let found_link = property_graph.get_link(&link.id);
+        assert!(found_link.is_none(), "Link should not exist in graph");
+    }
 
     let status = runtime.status();
     print_runtime_status(&status, "After Removing Link (Post-Commit)");
@@ -474,20 +484,14 @@ fn test_runtime_lifecycle_full_flow() {
     );
 
     // =========================================================================
-    // STEP 6: Remove processors, verify cleanup
+    // STEP 6: Remove processors while running, verify cleanup
     // =========================================================================
-    print_separator("STEP 6: Remove Processors");
+    print_separator("STEP 6: Remove Processors (While Running)");
 
     // Remove counter first
     println!("[STEP 6] Removing counter processor: {:?}", counter_node.id);
     let remove_result = runtime.remove_processor(&counter_node);
     println!("[STEP 6] Remove counter result: {:?}", remove_result);
-
-    {
-        let graph = runtime.graph().read();
-        print_graph_summary(&graph, "After Removing Counter");
-        assert_eq!(graph.processor_count(), 1, "Should have 1 processor");
-    }
 
     // Remove generator
     println!(
@@ -497,39 +501,63 @@ fn test_runtime_lifecycle_full_flow() {
     let remove_result = runtime.remove_processor(&generator_node);
     println!("[STEP 6] Remove generator result: {:?}", remove_result);
 
-    {
-        let graph = runtime.graph().read();
-        print_graph_json(&graph, "After Removing All Processors (Pre-Commit)");
-        print_graph_summary(&graph, "After Removing All Processors");
-        assert_eq!(graph.processor_count(), 0, "Should have 0 processors");
-        assert_eq!(graph.link_count(), 0, "Should have 0 links");
-    }
-
-    // Commit
-    println!("\n[STEP 6] Committing removals to executor...");
+    // Commit all removals
+    println!("\n[STEP 6] Committing removals...");
     let commit_result = runtime.commit();
     println!("[STEP 6] Commit result: {:?}", commit_result);
+
+    // Check graph state after commit
+    {
+        let property_graph = runtime.graph().read();
+        print_graph_json(
+            &property_graph,
+            "After Removing All Processors (Post-Commit)",
+        );
+        print_graph_summary(&property_graph, "After Removing All Processors");
+        assert_eq!(
+            property_graph.processor_count(),
+            0,
+            "Should have 0 processors"
+        );
+        assert_eq!(property_graph.link_count(), 0, "Should have 0 links");
+    }
 
     let status = runtime.status();
     print_runtime_status(&status, "After Removing All Processors (Post-Commit)");
 
     // Final verification
     {
-        let graph = runtime.graph().read();
-        print_graph_json(&graph, "Final State");
+        let property_graph = runtime.graph().read();
+        print_graph_json(&property_graph, "Final State");
 
         // Verify back to empty state
-        let json = graph.to_json();
-        let nodes = json.get("nodes").unwrap().as_array().unwrap();
-        let links = json.get("links").unwrap().as_array().unwrap();
-        assert_eq!(nodes.len(), 0, "Final state should have empty nodes array");
-        assert_eq!(links.len(), 0, "Final state should have empty links array");
+        let json = property_graph.to_json();
+        let processors = json.get("processors").unwrap().as_object().unwrap();
+        let links = json.get("links").unwrap().as_object().unwrap();
+        assert_eq!(
+            processors.len(),
+            0,
+            "Final state should have empty processors"
+        );
+        assert_eq!(links.len(), 0, "Final state should have empty links");
     }
 
     println!(
         "\n[STEP 6 RESULT] Graph is back to empty state. Executor has {} processors, {} connections",
         status.processor_count, status.link_count
     );
+
+    // =========================================================================
+    // STEP 7: Stop runtime
+    // =========================================================================
+    print_separator("STEP 7: Stop Runtime");
+
+    println!("[STEP 7] Stopping runtime...");
+    let stop_result = runtime.stop();
+    println!("[STEP 7] Stop result: {:?}", stop_result);
+
+    let status = runtime.status();
+    print_runtime_status(&status, "After Stop");
 
     // =========================================================================
     // FINAL SUMMARY

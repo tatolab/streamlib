@@ -83,6 +83,7 @@ pub struct AppleDisplayProcessor {
 
 impl AppleDisplayProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
+        tracing::trace!("Display: setup() called");
         self.gpu_context = Some(ctx.gpu.clone());
         self.window_id = AppleWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
         self.width = self.config.width;
@@ -93,29 +94,41 @@ impl AppleDisplayProcessor::Processor {
             .clone()
             .unwrap_or_else(|| "streamlib Display".to_string());
 
+        tracing::trace!("Display {}: Creating MetalDevice...", self.window_id.0);
         let metal_device = MetalDevice::new()?;
+        tracing::trace!("Display {}: MetalDevice created", self.window_id.0);
 
         // Create metal crate command queue from objc2 Metal device
+        tracing::trace!(
+            "Display {}: Creating Metal command queue...",
+            self.window_id.0
+        );
         let metal_command_queue = {
             use metal::foreign_types::ForeignTypeRef;
             let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
             let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
             metal_device_ref.new_command_queue()
         };
+        tracing::trace!("Display {}: Metal command queue created", self.window_id.0);
 
         // Create wgpu bridge from shared device
+        tracing::trace!("Display {}: Creating WgpuBridge...", self.window_id.0);
         let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
             metal_device.clone_device(),
             ctx.gpu.device().as_ref().clone(),
             ctx.gpu.queue().as_ref().clone(),
         ));
+        tracing::trace!("Display {}: WgpuBridge created", self.window_id.0);
 
         self.wgpu_bridge = Some(wgpu_bridge);
         self.metal_command_queue = Some(metal_command_queue);
 
         // Initialize CVDisplayLink for vsync
+        tracing::trace!("Display {}: Creating CVDisplayLink...", self.window_id.0);
         let display_link = DisplayLink::new()?;
+        tracing::trace!("Display {}: Starting CVDisplayLink...", self.window_id.0);
         display_link.start()?;
+        tracing::trace!("Display {}: CVDisplayLink started", self.window_id.0);
 
         if let Ok(period) = display_link.get_nominal_output_video_refresh_period() {
             tracing::info!(
@@ -226,19 +239,76 @@ impl AppleDisplayProcessor::Processor {
     // Business logic - called once by macro-generated process() in Pull mode
     // Sets up vsync-driven rendering loop
     fn process(&mut self) -> Result<()> {
+        tracing::trace!(
+            "Display {}: process() called - entering processor main function",
+            self.window_id.0
+        );
+
         // Pull mode: process() is called once to set up the loop
         // Loop continuously, waiting for vsync to drive frame presentation - with shutdown awareness
         use crate::core::{shutdown_aware_loop, LoopControl};
 
+        tracing::trace!(
+            "Display {}: Entering shutdown_aware_loop for vsync rendering",
+            self.window_id.0
+        );
+        let mut loop_iteration = 0u64;
+        let mut frames_received = 0u64;
+
         shutdown_aware_loop(|| {
+            loop_iteration += 1;
+            if loop_iteration == 1 {
+                tracing::trace!(
+                    "Display {}: First iteration of vsync loop",
+                    self.window_id.0
+                );
+            } else if loop_iteration.is_multiple_of(1000) {
+                tracing::trace!(
+                    "Display {}: Vsync loop iteration #{}, frames_received={}",
+                    self.window_id.0,
+                    loop_iteration,
+                    frames_received
+                );
+            }
+
             // Wait for vsync signal from CVDisplayLink
             if let Some(ref display_link) = self.display_link {
+                if loop_iteration == 1 {
+                    tracing::trace!(
+                        "Display {}: Waiting for first vsync signal...",
+                        self.window_id.0
+                    );
+                }
                 display_link.wait_for_frame();
+                if loop_iteration == 1 {
+                    tracing::trace!("Display {}: First vsync signal received!", self.window_id.0);
+                }
+            } else {
+                tracing::warn!("Display {}: No display_link available!", self.window_id.0);
             }
 
             // Render the latest available frame (if any)
             if let Some(frame) = self.video.read() {
+                frames_received += 1;
+                if frames_received == 1 {
+                    tracing::trace!(
+                        "Display {}: Received FIRST frame from input link!",
+                        self.window_id.0
+                    );
+                } else if frames_received.is_multiple_of(60) {
+                    tracing::trace!(
+                        "Display {}: Received frame #{} from input",
+                        self.window_id.0,
+                        frames_received
+                    );
+                }
                 self.render_frame(frame)?;
+            } else if loop_iteration.is_multiple_of(1000) {
+                tracing::trace!(
+                    "Display {}: No frame available at iteration #{}",
+                    self.window_id.0,
+                    loop_iteration
+                );
             }
 
             Ok(LoopControl::Continue)
@@ -259,9 +329,30 @@ impl AppleDisplayProcessor::Processor {
     }
 
     fn render_frame(&mut self, frame: VideoFrame) -> Result<()> {
+        if self.frames_rendered == 0 {
+            tracing::trace!(
+                "Display {}: render_frame() called for FIRST frame",
+                self.window_id.0
+            );
+        }
+
         let layer_addr = self.layer_addr.load(Ordering::Acquire);
         if layer_addr == 0 {
+            if self.frames_rendered == 0 {
+                tracing::trace!(
+                    "Display {}: layer_addr is 0, window not ready yet",
+                    self.window_id.0
+                );
+            }
             return Ok(());
+        }
+
+        if self.frames_rendered == 0 {
+            tracing::trace!(
+                "Display {}: layer_addr={:#x}, proceeding to render",
+                self.window_id.0,
+                layer_addr
+            );
         }
 
         // SAFETY: Layer was created on main thread and address stored atomically
@@ -453,6 +544,7 @@ impl AppleDisplayProcessor::Processor {
     }
 
     fn initialize_window(&mut self) -> Result<()> {
+        tracing::trace!("Display {}: initialize_window() called", self.window_id.0);
         let width = self.width;
         let height = self.height;
         let window_title = self.window_title.clone();
@@ -466,11 +558,20 @@ impl AppleDisplayProcessor::Processor {
 
         use dispatch2::DispatchQueue;
 
+        tracing::trace!(
+            "Display {}: Dispatching window creation to main queue...",
+            window_id.0
+        );
         DispatchQueue::main().exec_async(move || {
+            // NOTE: Cannot use tracing reliably in dispatch queue - use eprintln
+            eprintln!(
+                "[TRACE] Display {}: Main thread dispatch EXECUTING - creating window",
+                window_id.0
+            );
             // SAFETY: This closure executes on the main thread via GCD
             let mtm = unsafe { MainThreadMarker::new_unchecked() };
 
-            tracing::info!("Display {}: Creating window on main thread...", window_id.0);
+            eprintln!("[TRACE] Display {}: Creating NSWindow...", window_id.0);
 
             let frame = NSRect::new(
                 NSPoint::new(100.0, 100.0),
@@ -491,9 +592,14 @@ impl AppleDisplayProcessor::Processor {
                     false,
                 )
             };
+            eprintln!(
+                "[TRACE] Display {}: NSWindow created, setting title...",
+                window_id.0
+            );
 
             window.setTitle(&NSString::from_str(&window_title));
 
+            eprintln!("[TRACE] Display {}: Creating CAMetalLayer...", window_id.0);
             let metal_layer = CAMetalLayer::new();
             metal_layer.setDevice(Some(&metal_device));
             metal_layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
@@ -519,21 +625,46 @@ impl AppleDisplayProcessor::Processor {
 
                 let _: () = msg_send![&metal_layer, setDrawableSize: size];
             }
+            eprintln!(
+                "[TRACE] Display {}: CAMetalLayer configured, attaching to window...",
+                window_id.0
+            );
 
             if let Some(content_view) = window.contentView() {
                 content_view.setWantsLayer(true);
                 content_view.setLayer(Some(&metal_layer));
+                eprintln!(
+                    "[TRACE] Display {}: Metal layer attached to content view",
+                    window_id.0
+                );
+            } else {
+                eprintln!(
+                    "[TRACE] Display {}: WARNING - no content view!",
+                    window_id.0
+                );
             }
 
+            eprintln!(
+                "[TRACE] Display {}: Making window key and ordering front...",
+                window_id.0
+            );
             window.makeKeyAndOrderFront(None);
 
             let app = NSApplication::sharedApplication(mtm);
             #[allow(deprecated)]
             app.activateIgnoringOtherApps(true);
+            eprintln!(
+                "[TRACE] Display {}: App activated, window should be visible",
+                window_id.0
+            );
 
             let _ = Retained::into_raw(window); // Leak window
             let addr = Retained::into_raw(metal_layer) as usize;
             layer_addr.store(addr, Ordering::Release);
+            eprintln!(
+                "[TRACE] Display {}: Window creation complete, layer_addr stored",
+                window_id.0
+            );
         });
 
         self.window_creation_dispatched = true;

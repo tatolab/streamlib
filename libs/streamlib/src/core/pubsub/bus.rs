@@ -16,10 +16,6 @@ const _: () = {
 /// Global pub/sub instance for runtime events.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
-/// Deprecated: Use PUBSUB instead
-#[deprecated(since = "0.2.0", note = "Renamed to PUBSUB for clarity")]
-pub static EVENT_BUS: LazyLock<PubSub> = LazyLock::new(PubSub::new);
-
 /// Lock-free pub/sub with parallel dispatch.
 pub struct PubSub {
     topics: DashMap<String, Vec<Weak<Mutex<dyn EventListener>>>>,
@@ -30,10 +26,6 @@ impl Default for PubSub {
         Self::new()
     }
 }
-
-/// Deprecated alias for PubSub
-#[deprecated(since = "0.2.0", note = "Renamed to PubSub for clarity")]
-pub type EventBus = PubSub;
 
 impl PubSub {
     pub fn new() -> Self {
