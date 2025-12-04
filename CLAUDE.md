@@ -438,10 +438,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 ## Documentation
 
 ### Project Documentation
-- **Main thread dispatch**: [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md)
-- **WebRTC implementation**: [`WEBRTC_IMPLEMENTATION_PLAN.md`](WEBRTC_IMPLEMENTATION_PLAN.md)
-- **Graceful shutdown**: [`docs/graceful_shutdown.md`](docs/graceful_shutdown.md)
-- **Project scorecard**: [`scorecard.md`](scorecard.md)
+- **Main thread dispatch**: [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) - Apple framework threading patterns
+- **Graceful shutdown**: [`docs/graceful_shutdown.md`](docs/graceful_shutdown.md) - macOS signal handling
+- **WebRTC considerations**: [`docs/webrtc_considerations.md`](docs/webrtc_considerations.md) - RTP/RTCP concepts
 
 ### Crate-Specific Documentation
 - **Core library**: [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md)
