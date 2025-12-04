@@ -2,6 +2,7 @@
 //!
 //! Handles the main loop for processor threads based on their execution mode.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -12,6 +13,9 @@ use crate::core::processors::{BoxedProcessor, ProcessorState};
 
 type ProcessorId = String;
 
+/// Duration to sleep when paused (avoids busy-waiting).
+const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
 /// Run the processor thread main loop based on execution mode.
 pub fn run_processor_loop(
     id: ProcessorId,
@@ -19,6 +23,7 @@ pub fn run_processor_loop(
     shutdown_rx: crossbeam_channel::Receiver<()>,
     message_reader: crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
     state: Arc<Mutex<ProcessorState>>,
+    pause_gate: Arc<AtomicBool>,
     exec_config: ExecutionConfig,
 ) {
     tracing::info!(
@@ -36,14 +41,16 @@ pub fn run_processor_loop(
                 id,
                 interval_ms
             );
-            run_continuous_mode(&id, &processor, &shutdown_rx, interval_ms);
+            run_continuous_mode(&id, &processor, &shutdown_rx, &pause_gate, interval_ms);
         }
         ProcessExecution::Reactive => {
             tracing::trace!("[{}] Entering reactive mode", id);
-            run_reactive_mode(&id, &processor, &shutdown_rx, &message_reader);
+            run_reactive_mode(&id, &processor, &shutdown_rx, &message_reader, &pause_gate);
         }
         ProcessExecution::Manual => {
             tracing::trace!("[{}] Entering manual mode", id);
+            // Manual mode doesn't use the pause gate in the thread runner -
+            // the processor is responsible for checking RuntimeContext::is_paused()
             run_manual_mode(&id, &processor, &shutdown_rx, &message_reader);
         }
     }
@@ -68,6 +75,7 @@ fn run_continuous_mode(
     id: &ProcessorId,
     processor: &Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
+    pause_gate: &Arc<AtomicBool>,
     interval_ms: u32,
 ) {
     let sleep_duration = if interval_ms > 0 {
@@ -87,6 +95,13 @@ fn run_continuous_mode(
             break;
         }
 
+        // Check pause gate before processing
+        if pause_gate.load(Ordering::Acquire) {
+            tracing::trace!("[{}] Paused, skipping process()", id);
+            std::thread::sleep(PAUSE_CHECK_INTERVAL);
+            continue;
+        }
+
         {
             let mut guard = processor.lock();
             if let Err(e) = guard.process() {
@@ -103,6 +118,7 @@ fn run_reactive_mode(
     processor: &Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
+    pause_gate: &Arc<AtomicBool>,
 ) {
     tracing::debug!("[{}] Reactive mode: waiting for input data...", id);
 
@@ -114,6 +130,13 @@ fn run_reactive_mode(
                     if message == LinkOutputToProcessorMessage::StopProcessingNow {
                         break;
                     }
+
+                    // Check pause gate before processing
+                    if pause_gate.load(Ordering::Acquire) {
+                        tracing::trace!("[{}] Paused, discarding incoming data", id);
+                        continue;
+                    }
+
                     let mut guard = processor.lock();
                     if let Err(e) = guard.process() {
                         tracing::warn!("[{}] Process error: {}", id, e);

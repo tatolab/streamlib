@@ -1,13 +1,46 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use super::GpuContext;
 
 #[derive(Clone)]
 pub struct RuntimeContext {
     pub gpu: GpuContext,
+    /// Pause gate for this processor (None for shared/global context).
+    pause_gate: Option<Arc<AtomicBool>>,
 }
 
 impl RuntimeContext {
     pub fn new(gpu: GpuContext) -> Self {
-        Self { gpu }
+        Self {
+            gpu,
+            pause_gate: None,
+        }
+    }
+
+    /// Create a processor-specific context with a pause gate.
+    pub fn with_pause_gate(&self, pause_gate: Arc<AtomicBool>) -> Self {
+        Self {
+            gpu: self.gpu.clone(),
+            pause_gate: Some(pause_gate),
+        }
+    }
+
+    /// Check if this processor is paused.
+    ///
+    /// For Manual mode processors, call this in your processing loop/callback
+    /// to respect pause/resume requests. Returns `false` if no pause gate is set.
+    pub fn is_paused(&self) -> bool {
+        self.pause_gate
+            .as_ref()
+            .is_some_and(|gate| gate.load(Ordering::Acquire))
+    }
+
+    /// Check if processing should proceed (not paused).
+    ///
+    /// Convenience method - returns `true` if not paused.
+    pub fn should_process(&self) -> bool {
+        !self.is_paused()
     }
 
     /// Dispatch a closure to execute on the main thread asynchronously.

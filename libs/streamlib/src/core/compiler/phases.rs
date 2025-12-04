@@ -15,7 +15,7 @@ use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
     GraphState, LinkOutputToProcessorWriterAndReader, ProcessorId, ProcessorInstance,
-    PropertyGraph, ShutdownChannel, StateComponent, ThreadHandle,
+    ProcessorPauseGate, PropertyGraph, ShutdownChannel, StateComponent, ThreadHandle,
 };
 use crate::core::processors::ProcessorState;
 
@@ -52,6 +52,7 @@ pub(crate) fn create_processor(
     property_graph.insert(proc_id, ShutdownChannel::new())?;
     property_graph.insert(proc_id, LinkOutputToProcessorWriterAndReader::new())?;
     property_graph.insert(proc_id, StateComponent::default())?;
+    property_graph.insert(proc_id, ProcessorPauseGate::new())?;
 
     tracing::debug!("[{}] Created with ECS components", proc_id);
     Ok(())
@@ -76,9 +77,21 @@ pub(crate) fn setup_processor(
             ))
         })?;
 
+    // Get pause gate to create processor-specific context
+    let pause_gate = property_graph
+        .get::<ProcessorPauseGate>(processor_id)
+        .ok_or_else(|| {
+            StreamError::NotFound(format!(
+                "Processor '{}' has no ProcessorPauseGate component",
+                processor_id
+            ))
+        })?;
+    let processor_context = runtime_context.with_pause_gate(pause_gate.clone_inner());
+    drop(pause_gate);
+
     tracing::trace!("[{}] Calling __generated_setup...", processor_id);
     let mut guard = instance.0.lock();
-    guard.__generated_setup(runtime_context)?;
+    guard.__generated_setup(&processor_context)?;
     tracing::trace!("[{}] __generated_setup completed", processor_id);
 
     Ok(())
@@ -224,6 +237,18 @@ fn spawn_dedicated_thread(
         })?
     };
 
+    // Get pause gate
+    let pause_gate = property_graph
+        .get::<ProcessorPauseGate>(processor_id)
+        .ok_or_else(|| {
+            StreamError::Runtime(format!(
+                "Processor '{}' has no ProcessorPauseGate",
+                processor_id
+            ))
+        })?;
+    let pause_gate_inner = pause_gate.clone_inner();
+    drop(pause_gate);
+
     // Update state to Running
     *state_arc.lock() = ProcessorState::Running;
 
@@ -238,6 +263,7 @@ fn spawn_dedicated_thread(
                 shutdown_rx,
                 message_reader,
                 state_arc,
+                pause_gate_inner,
                 exec_config,
             );
         })

@@ -3,6 +3,7 @@
 //! Each component represents a specific aspect of processor runtime state.
 //! Components are attached to processor entities in the ECS world.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -113,6 +114,74 @@ impl EcsComponentJson for StateComponent {
     }
 }
 
+/// Lock-free pause gate for processors.
+///
+/// Allows pausing individual processors without blocking. The gate is checked
+/// at multiple points (thread runner, link writers/readers) to prevent
+/// unnecessary processing when paused.
+///
+/// This is an ECS component attached to processor entities.
+pub struct ProcessorPauseGate(Arc<AtomicBool>);
+
+impl ProcessorPauseGate {
+    /// Create a new pause gate (not paused by default).
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Returns true if the processor is currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// Returns true if processing should proceed (not paused).
+    pub fn should_process(&self) -> bool {
+        !self.is_paused()
+    }
+
+    /// Set the paused state.
+    pub fn set_paused(&self, paused: bool) {
+        self.0.store(paused, Ordering::Release);
+    }
+
+    /// Pause the processor.
+    pub fn pause(&self) {
+        self.set_paused(true);
+    }
+
+    /// Resume the processor.
+    pub fn resume(&self) {
+        self.set_paused(false);
+    }
+
+    /// Get a clone of the inner Arc for sharing with other threads.
+    pub fn clone_inner(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+}
+
+impl Default for ProcessorPauseGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for ProcessorPauseGate {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl EcsComponentJson for ProcessorPauseGate {
+    fn json_key(&self) -> &'static str {
+        "paused"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        serde_json::json!(self.is_paused())
+    }
+}
+
 /// Runtime metrics for a processor.
 #[derive(Default, Clone)]
 pub struct ProcessorMetrics {
@@ -212,5 +281,91 @@ mod tests {
     fn test_state_component_default() {
         let state = StateComponent::default();
         assert_eq!(*state.0.lock(), ProcessorState::Idle);
+    }
+
+    #[test]
+    fn test_processor_pause_gate_default() {
+        let gate = ProcessorPauseGate::default();
+        assert!(!gate.is_paused());
+        assert!(gate.should_process());
+    }
+
+    #[test]
+    fn test_processor_pause_gate_pause_resume() {
+        let gate = ProcessorPauseGate::new();
+
+        // Initially not paused
+        assert!(!gate.is_paused());
+        assert!(gate.should_process());
+
+        // Pause
+        gate.pause();
+        assert!(gate.is_paused());
+        assert!(!gate.should_process());
+
+        // Resume
+        gate.resume();
+        assert!(!gate.is_paused());
+        assert!(gate.should_process());
+    }
+
+    #[test]
+    fn test_processor_pause_gate_set_paused() {
+        let gate = ProcessorPauseGate::new();
+
+        gate.set_paused(true);
+        assert!(gate.is_paused());
+
+        gate.set_paused(false);
+        assert!(!gate.is_paused());
+    }
+
+    #[test]
+    fn test_processor_pause_gate_clone_shares_state() {
+        let gate1 = ProcessorPauseGate::new();
+        let gate2 = gate1.clone();
+
+        // Both see the same state
+        assert!(!gate1.is_paused());
+        assert!(!gate2.is_paused());
+
+        // Pause via gate1, gate2 sees it
+        gate1.pause();
+        assert!(gate1.is_paused());
+        assert!(gate2.is_paused());
+
+        // Resume via gate2, gate1 sees it
+        gate2.resume();
+        assert!(!gate1.is_paused());
+        assert!(!gate2.is_paused());
+    }
+
+    #[test]
+    fn test_processor_pause_gate_clone_inner_shares_state() {
+        let gate = ProcessorPauseGate::new();
+        let inner = gate.clone_inner();
+
+        // Both see the same state
+        assert!(!gate.is_paused());
+        assert!(!inner.load(Ordering::Acquire));
+
+        // Pause via gate, inner sees it
+        gate.pause();
+        assert!(inner.load(Ordering::Acquire));
+
+        // Resume via inner, gate sees it
+        inner.store(false, Ordering::Release);
+        assert!(!gate.is_paused());
+    }
+
+    #[test]
+    fn test_processor_pause_gate_json() {
+        let gate = ProcessorPauseGate::new();
+
+        assert_eq!(gate.json_key(), "paused");
+        assert_eq!(gate.to_json(), serde_json::json!(false));
+
+        gate.pause();
+        assert_eq!(gate.to_json(), serde_json::json!(true));
     }
 }

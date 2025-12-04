@@ -12,10 +12,15 @@ use crate::core::processors::BoxedProcessor;
 /// - Creation: will_create, did_create
 /// - Starting: will_start, did_start
 /// - Stopping: will_stop, did_stop
+/// - Pausing: will_pause, did_pause
+/// - Resuming: will_resume, did_resume
 /// - Config updates: did_update_config
 ///
 /// All methods have default no-op implementations, so you only need
 /// to override the ones you care about.
+///
+/// The `will_*` methods can return `Err` to reject the operation. For example,
+/// returning `Err` from `will_pause` prevents the processor from being paused.
 ///
 /// A blanket implementation is provided for `Arc<dyn ProcessorDelegate>`,
 /// so you can pass an Arc directly where a `ProcessorDelegate` is expected.
@@ -48,6 +53,26 @@ pub trait ProcessorDelegate: Send + Sync {
     /// Called after a processor stops.
     fn did_stop(&self, _id: &ProcessorId) -> Result<()> {
         Ok(())
+    }
+
+    /// Called before a processor is paused. Return `Err` to reject the pause.
+    fn will_pause(&self, _id: &ProcessorId) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after a processor is paused.
+    fn did_pause(&self, _id: &ProcessorId) {
+        // No-op by default
+    }
+
+    /// Called before a processor is resumed. Return `Err` to reject the resume.
+    fn will_resume(&self, _id: &ProcessorId) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after a processor is resumed.
+    fn did_resume(&self, _id: &ProcessorId) {
+        // No-op by default
     }
 
     /// Called when a processor's config is updated.
@@ -83,6 +108,22 @@ impl ProcessorDelegate for Arc<dyn ProcessorDelegate> {
 
     fn did_stop(&self, id: &ProcessorId) -> Result<()> {
         (**self).did_stop(id)
+    }
+
+    fn will_pause(&self, id: &ProcessorId) -> Result<()> {
+        (**self).will_pause(id)
+    }
+
+    fn did_pause(&self, id: &ProcessorId) {
+        (**self).did_pause(id)
+    }
+
+    fn will_resume(&self, id: &ProcessorId) -> Result<()> {
+        (**self).will_resume(id)
+    }
+
+    fn did_resume(&self, id: &ProcessorId) {
+        (**self).did_resume(id)
     }
 
     fn did_update_config(&self, id: &ProcessorId, config: &serde_json::Value) -> Result<()> {

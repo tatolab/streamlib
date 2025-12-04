@@ -892,7 +892,176 @@ impl StreamRuntime {
         Ok(())
     }
 
-    /// Pause the runtime.
+    // =========================================================================
+    // Per-Processor Pause/Resume
+    // =========================================================================
+
+    /// Pause a specific processor.
+    ///
+    /// The processor's delegate `will_pause` is called first - return `Err` to reject.
+    /// Once paused, the processor's `process()` will not be called until resumed.
+    pub fn pause_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
+        use crate::core::graph::ProcessorPauseGate;
+        use crate::core::processors::ProcessorState;
+        use crate::core::pubsub::{Event, ProcessorEvent, PUBSUB};
+
+        // Get the pause gate's inner Arc (must be done in a separate scope to release borrow)
+        let pause_gate_inner = {
+            let property_graph = self.graph.read();
+
+            // Validate processor exists
+            if !property_graph.has_processor(processor_id) {
+                return Err(StreamError::ProcessorNotFound(processor_id.clone()));
+            }
+
+            // Get the pause gate
+            let pause_gate = property_graph
+                .get::<ProcessorPauseGate>(processor_id)
+                .ok_or_else(|| {
+                    StreamError::Runtime(format!(
+                        "Processor '{}' has no ProcessorPauseGate",
+                        processor_id
+                    ))
+                })?;
+
+            // Check if already paused
+            if pause_gate.is_paused() {
+                return Ok(()); // Already paused, no-op
+            }
+
+            // Clone the inner Arc before dropping the borrow
+            pause_gate.clone_inner()
+        };
+
+        // Delegate callback: will_pause (can reject)
+        self.processor_delegate.will_pause(processor_id)?;
+
+        // Set the pause gate (using the cloned inner Arc)
+        pause_gate_inner.store(true, std::sync::atomic::Ordering::Release);
+
+        // Update processor state
+        {
+            let property_graph = self.graph.read();
+            if let Some(state) =
+                property_graph.get::<crate::core::graph::StateComponent>(processor_id)
+            {
+                *state.0.lock() = ProcessorState::Paused;
+            };
+        }
+
+        // Publish event
+        let event = Event::processor(processor_id, ProcessorEvent::Paused);
+        PUBSUB.publish(&event.topic(), &event);
+
+        // Delegate callback: did_pause
+        self.processor_delegate.did_pause(processor_id);
+
+        tracing::info!("[{}] Processor paused", processor_id);
+        Ok(())
+    }
+
+    /// Resume a specific processor.
+    ///
+    /// The processor's delegate `will_resume` is called first - return `Err` to reject.
+    pub fn resume_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
+        use crate::core::graph::ProcessorPauseGate;
+        use crate::core::processors::ProcessorState;
+        use crate::core::pubsub::{Event, ProcessorEvent, PUBSUB};
+
+        // Get the pause gate's inner Arc (must be done in a separate scope to release borrow)
+        let pause_gate_inner = {
+            let property_graph = self.graph.read();
+
+            // Validate processor exists
+            if !property_graph.has_processor(processor_id) {
+                return Err(StreamError::ProcessorNotFound(processor_id.clone()));
+            }
+
+            // Get the pause gate
+            let pause_gate = property_graph
+                .get::<ProcessorPauseGate>(processor_id)
+                .ok_or_else(|| {
+                    StreamError::Runtime(format!(
+                        "Processor '{}' has no ProcessorPauseGate",
+                        processor_id
+                    ))
+                })?;
+
+            // Check if already running
+            if !pause_gate.is_paused() {
+                return Ok(()); // Already running, no-op
+            }
+
+            // Clone the inner Arc before dropping the borrow
+            pause_gate.clone_inner()
+        };
+
+        // Delegate callback: will_resume (can reject)
+        self.processor_delegate.will_resume(processor_id)?;
+
+        // Clear the pause gate (using the cloned inner Arc)
+        pause_gate_inner.store(false, std::sync::atomic::Ordering::Release);
+
+        // Update processor state and send wake-up message for reactive processors
+        {
+            use crate::core::graph::LinkOutputToProcessorWriterAndReader;
+            use crate::core::links::LinkOutputToProcessorMessage;
+
+            let property_graph = self.graph.read();
+            if let Some(state) =
+                property_graph.get::<crate::core::graph::StateComponent>(processor_id)
+            {
+                *state.0.lock() = ProcessorState::Running;
+            }
+
+            // Send a wake-up message to reactive processors so they can process
+            // any buffered data. Without this, a reactive processor could stay
+            // blocked if its upstream buffer was full during pause (no new
+            // InvokeProcessingNow messages would be sent since writes fail).
+            //
+            // Clone the sender to avoid lifetime issues with hecs::Ref
+            let wake_up_sender = property_graph
+                .get::<LinkOutputToProcessorWriterAndReader>(processor_id)
+                .map(|channel| channel.writer.clone());
+            drop(property_graph);
+
+            if let Some(sender) = wake_up_sender {
+                let _ = sender.send(LinkOutputToProcessorMessage::InvokeProcessingNow);
+            }
+        }
+
+        // Publish event
+        let event = Event::processor(processor_id, ProcessorEvent::Resumed);
+        PUBSUB.publish(&event.topic(), &event);
+
+        // Delegate callback: did_resume
+        self.processor_delegate.did_resume(processor_id);
+
+        tracing::info!("[{}] Processor resumed", processor_id);
+        Ok(())
+    }
+
+    /// Check if a specific processor is paused.
+    pub fn is_processor_paused(&self, processor_id: &ProcessorId) -> Result<bool> {
+        use crate::core::graph::ProcessorPauseGate;
+
+        let property_graph = self.graph.read();
+        let pause_gate = property_graph
+            .get::<ProcessorPauseGate>(processor_id)
+            .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.clone()))?;
+
+        Ok(pause_gate.is_paused())
+    }
+
+    // =========================================================================
+    // Runtime-level Pause/Resume (all processors)
+    // =========================================================================
+
+    /// Pause the runtime (all processors).
+    ///
+    /// Iterates through all processors and pauses each one. If a processor's
+    /// delegate rejects the pause, that processor continues running but others
+    /// are still paused. Check the returned list for any failures.
     pub fn pause(&mut self) -> Result<()> {
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
@@ -901,20 +1070,47 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
         );
 
+        // Get all processor IDs
+        let processor_ids: Vec<ProcessorId> = {
+            let property_graph = self.graph.read();
+            property_graph.processor_ids().cloned().collect()
+        };
+
+        // Pause each processor (delegate can reject individual processors)
+        let mut failures = Vec::new();
+        for processor_id in &processor_ids {
+            if let Err(e) = self.pause_processor(processor_id) {
+                tracing::warn!("[{}] Failed to pause: {}", processor_id, e);
+                failures.push((processor_id.clone(), e));
+            }
+        }
+
         // Set graph state to Paused
         self.graph.write().set_state(GraphState::Paused);
 
-        // TODO: Signal processors to pause (they should check state periodically)
-
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimePaused),
-        );
+        if failures.is_empty() {
+            PUBSUB.publish(
+                topics::RUNTIME_GLOBAL,
+                &Event::RuntimeGlobal(RuntimeEvent::RuntimePaused),
+            );
+        } else {
+            // Partial pause - some processors rejected
+            PUBSUB.publish(
+                topics::RUNTIME_GLOBAL,
+                &Event::RuntimeGlobal(RuntimeEvent::RuntimePauseFailed {
+                    error: format!("{} processor(s) rejected pause", failures.len()),
+                }),
+            );
+        }
 
         Ok(())
     }
 
-    /// Resume the runtime.
+    /// Resume the runtime (all processors).
+    ///
+    /// Iterates through all processors and resumes each one. If a processor's
+    /// delegate rejects the resume, that processor stays paused but others
+    /// are still resumed.
     pub fn resume(&mut self) -> Result<()> {
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
@@ -923,15 +1119,38 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
         );
 
+        // Get all processor IDs
+        let processor_ids: Vec<ProcessorId> = {
+            let property_graph = self.graph.read();
+            property_graph.processor_ids().cloned().collect()
+        };
+
+        // Resume each processor (delegate can reject individual processors)
+        let mut failures = Vec::new();
+        for processor_id in &processor_ids {
+            if let Err(e) = self.resume_processor(processor_id) {
+                tracing::warn!("[{}] Failed to resume: {}", processor_id, e);
+                failures.push((processor_id.clone(), e));
+            }
+        }
+
         // Set graph state to Running
         self.graph.write().set_state(GraphState::Running);
 
-        // TODO: Signal processors to resume
-
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumed),
-        );
+        if failures.is_empty() {
+            PUBSUB.publish(
+                topics::RUNTIME_GLOBAL,
+                &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumed),
+            );
+        } else {
+            // Partial resume - some processors rejected
+            PUBSUB.publish(
+                topics::RUNTIME_GLOBAL,
+                &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumeFailed {
+                    error: format!("{} processor(s) rejected resume", failures.len()),
+                }),
+            );
+        }
 
         Ok(())
     }
