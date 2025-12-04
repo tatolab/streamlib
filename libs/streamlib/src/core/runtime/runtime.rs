@@ -1243,6 +1243,20 @@ impl StreamRuntime {
             processor_states: vec![], // TODO: Implement processor state tracking
         }
     }
+
+    // =========================================================================
+    // Introspection
+    // =========================================================================
+
+    /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
+    pub fn to_json(&self) -> serde_json::Value {
+        self.graph.read().to_json()
+    }
+
+    /// Export graph as Graphviz DOT format for visualization.
+    pub fn to_dot(&self) -> String {
+        self.graph.read().to_dot()
+    }
 }
 
 #[cfg(test)]
