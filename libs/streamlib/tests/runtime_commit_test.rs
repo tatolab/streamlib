@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 /// Integration tests for the commit-based runtime synchronization flow.
 ///
 /// Tests the Auto/Manual commit modes and delta-based synchronization between

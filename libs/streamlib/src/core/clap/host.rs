@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // TODO(@jonathan): CLAP host module has unused structs/fields (HostData, HostShared)
 // Review if these are needed for future CLAP plugin features or can be removed
 #![allow(dead_code)]

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Test complete trait implementation generation
 //!
 //! NOTE: Full integration tests that verify macro-generated code compiles with streamlib

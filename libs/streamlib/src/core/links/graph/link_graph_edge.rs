@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Link graph edge - the blueprint for a connection between processor ports.
 
 use super::link_id::LinkId;

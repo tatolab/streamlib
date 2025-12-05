@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! ECS components for PropertyGraph.
 //!
 //! Each component represents a specific aspect of processor runtime state.

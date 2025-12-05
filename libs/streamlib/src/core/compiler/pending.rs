@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Pending operations for graph mutations.
 //!
 //! Instead of tracking a delta of what changed, we track explicit operations

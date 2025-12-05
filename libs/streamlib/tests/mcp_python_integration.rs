@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Integration test placeholder
 //!
 //! Python bindings have been removed and need to be redesigned for Phase 1 architecture.

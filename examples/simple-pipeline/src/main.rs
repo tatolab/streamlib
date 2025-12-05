@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Simple Pipeline Example
 //!
 //! Demonstrates the simplest possible pipeline using streamlib:

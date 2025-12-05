@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use super::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::Result;

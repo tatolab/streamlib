@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Graph delta computation for incremental execution updates.
 
 use std::collections::{HashMap, HashSet};

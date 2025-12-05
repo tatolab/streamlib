@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! LinkOutputDataWriter - Weak reference for writing to a LinkInstance.
 
 use std::sync::Weak;

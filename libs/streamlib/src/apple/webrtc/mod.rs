@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // WebRTC Implementation for macOS/iOS
 //
 // Provides WHIP (ingress) and WHEP (egress) signaling with WebRTC session management.

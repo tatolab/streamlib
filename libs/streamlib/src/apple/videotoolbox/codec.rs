@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // Video Codec Abstraction
 //
 // Defines video codec types and profiles for VideoToolbox encoding.

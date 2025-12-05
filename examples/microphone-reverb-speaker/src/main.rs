@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Microphone → CLAP Reverb → Speaker Example
 //!
 //! Demonstrates streamlib's audio processing pipeline using CLAP as the "shader language for audio".

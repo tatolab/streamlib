@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // Allow FFI naming conventions - these match CoreVideo's C API
 #![allow(non_snake_case, non_upper_case_globals)]
 

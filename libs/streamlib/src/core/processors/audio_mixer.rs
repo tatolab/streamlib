@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::core::frames::{AudioChannelCount, AudioFrame};
 use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 use dasp::Signal;

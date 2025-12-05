@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! LinkDelegate Integration Tests
 //!
 //! Verifies that LinkDelegate hooks are called during link wiring and unwiring.

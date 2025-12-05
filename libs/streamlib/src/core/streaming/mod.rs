@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // Streaming Utilities
 //
 // Core streaming components for audio/video encoding/decoding and RTP/WebRTC.

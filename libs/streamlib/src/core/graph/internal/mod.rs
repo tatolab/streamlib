@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Internal implementation details for the Graph.
 //!
 //! This module contains the backing stores for the public [`Graph`](super::Graph) API:

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::core::error::Result;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::RuntimeContext;

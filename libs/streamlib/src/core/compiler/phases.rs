@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Compilation phase implementations.
 //!
 //! Individual processor operations for each compilation phase.

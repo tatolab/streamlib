@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Messages sent from LinkOutput to processors.
 
 /// Message sent from a LinkOutput to a processor.

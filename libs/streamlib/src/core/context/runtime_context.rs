@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 

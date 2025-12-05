@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! LinkOutput - Output port for a processor.
 
 use std::cell::UnsafeCell;

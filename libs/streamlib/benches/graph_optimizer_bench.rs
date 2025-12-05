@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // Performance benchmarks for GraphOptimizer
 //
 // Validates that optimizer operations meet performance targets:

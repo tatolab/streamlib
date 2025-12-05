@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // VideoToolbox FFI Bindings
 //
 // Foreign function interface declarations for VideoToolbox, CoreMedia, and CoreFoundation.

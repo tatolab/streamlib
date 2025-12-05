@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // TODO(@jonathan): Main thread module has unused utilities (execute_on_main_thread(), execute_on_main_thread_async())
 // Review if these GCD dispatch queue utilities are needed for future UI features or can be removed
 #![allow(dead_code)]

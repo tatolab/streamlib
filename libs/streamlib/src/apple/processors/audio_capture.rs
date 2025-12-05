@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::core::frames::AudioChannelCount;
 use crate::core::{AudioFrame, LinkOutput, Result, RuntimeContext, StreamError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

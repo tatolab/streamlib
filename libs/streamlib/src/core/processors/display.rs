@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // Platform-specific re-exports with unified names
 // Users import these common names and get the appropriate platform implementation
 #[cfg(target_os = "macos")]

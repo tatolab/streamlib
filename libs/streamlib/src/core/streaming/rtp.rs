@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::apple::videotoolbox::{parse_nal_units, EncodedVideoFrame};
 use crate::core::streaming::opus::EncodedAudioFrame;
 use crate::core::{Result, StreamError};

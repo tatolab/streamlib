@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Default scheduler delegate implementation.
 
 use crate::core::delegates::{SchedulerDelegate, SchedulingStrategy, ThreadPriority};

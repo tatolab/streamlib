@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! WHEP Player using StreamLib's WebRtcWhepProcessor
 //!
 //! This example demonstrates receiving H.264 video and Opus audio from a WHEP endpoint

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Audio Mixer Demo
 //!
 //! Demonstrates mixing multiple audio streams using AudioMixerProcessor.

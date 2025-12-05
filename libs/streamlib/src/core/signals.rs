@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 #[cfg(all(unix, not(target_os = "macos")))]
 use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Processor Pause/Resume Integration Tests
 //!
 //! Tests the per-processor and runtime-level pause/resume functionality:

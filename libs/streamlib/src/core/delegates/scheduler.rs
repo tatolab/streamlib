@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Scheduler delegate trait for processor scheduling decisions.
 
 use std::sync::Arc;

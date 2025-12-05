@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! LinkInstance - Runtime materialization of a Link.
 //!
 //! A Link (graph) is a blueprint describing a connection between processor ports.
