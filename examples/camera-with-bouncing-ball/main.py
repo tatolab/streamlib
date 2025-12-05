@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
 """
 Camera with animated bouncing ball overlay - Direct API Example.
 

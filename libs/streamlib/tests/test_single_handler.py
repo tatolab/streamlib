@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
 #!/usr/bin/env python3
 """
 Minimal test with single handler to find CPU busy loop.
