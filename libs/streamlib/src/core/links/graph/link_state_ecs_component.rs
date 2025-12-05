@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! LinkState and LinkStateComponent - ECS component for link state.
 
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // WebRTC WHIP Streaming Processor
 //
 // This file contains the WebRTC WHIP processor that integrates:

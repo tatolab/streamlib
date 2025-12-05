@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Dynamic tap points for runtime observation.
 
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -1,0 +1,61 @@
+name: License Header Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Rust files for copyright header
+        run: |
+          missing_files=()
+          while IFS= read -r -d '' file; do
+            if ! head -1 "$file" | grep -q "// Copyright (c) 2025 Jonathan Fontanez"; then
+              missing_files+=("$file")
+            fi
+          done < <(find libs examples -name "*.rs" -print0)
+
+          if [ ${#missing_files[@]} -ne 0 ]; then
+            echo "❌ The following files are missing the required copyright header:"
+            echo ""
+            for file in "${missing_files[@]}"; do
+              echo "  - $file"
+            done
+            echo ""
+            echo "Required header (first two lines of file):"
+            echo "  // Copyright (c) 2025 Jonathan Fontanez"
+            echo "  // SPDX-License-Identifier: BUSL-1.1"
+            exit 1
+          fi
+
+          echo "✅ All Rust files have the required copyright header"
+
+      - name: Check Python files for copyright header
+        run: |
+          missing_files=()
+          while IFS= read -r -d '' file; do
+            if ! head -1 "$file" | grep -q "# Copyright (c) 2025 Jonathan Fontanez"; then
+              missing_files+=("$file")
+            fi
+          done < <(find . -name "*.py" -not -path "./node_modules/*" -not -path "./.venv/*" -not -path "./target/*" -print0 2>/dev/null || true)
+
+          if [ ${#missing_files[@]} -ne 0 ]; then
+            echo "❌ The following Python files are missing the required copyright header:"
+            echo ""
+            for file in "${missing_files[@]}"; do
+              echo "  - $file"
+            done
+            echo ""
+            echo "Required header (first two lines of file):"
+            echo "  # Copyright (c) 2025 Jonathan Fontanez"
+            echo "  # SPDX-License-Identifier: BUSL-1.1"
+            exit 1
+          fi
+
+          echo "✅ All Python files have the required copyright header (or none exist)"

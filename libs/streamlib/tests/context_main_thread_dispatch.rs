@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Integration test for RuntimeContext main thread dispatch utilities
 //!
 //! This test creates a minimal processor that uses the RuntimeContext

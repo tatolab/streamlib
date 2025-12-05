@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::core::{execution::ThreadPriority, Result, StreamError};
 
 /// Apply thread priority to the current thread on macOS/iOS

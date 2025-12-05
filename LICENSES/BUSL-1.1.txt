@@ -1,0 +1,101 @@
+License text copyright (c) 2020 MariaDB Corporation Ab, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
+
+Parameters
+
+Licensor:             Jonathan Fontanez
+Licensed Work:        StreamLib
+                      The Licensed Work is (c) 2025 Jonathan Fontanez.
+Additional Use Grant: You may make production use of the Licensed Work, provided
+                      that you do not use the Licensed Work for a Streaming Service.
+
+                      A "Streaming Service" is a commercial offering that allows
+                      third parties to access the functionality of the Licensed
+                      Work by performing any of the following:
+
+                      (a) Offering a managed or hosted media streaming platform
+                          that uses StreamLib to process, encode, decode, or
+                          transmit audio/video content as a service to third
+                          parties;
+
+                      (b) Providing a commercial API or SaaS product where the
+                          core value proposition is powered by StreamLib's
+                          streaming capabilities;
+
+                      (c) Redistributing StreamLib as part of a commercial SDK,
+                          framework, or library that competes with StreamLib.
+
+                      The following uses are explicitly permitted without a
+                      commercial license:
+
+                      (a) Personal, educational, and research use;
+
+                      (b) Internal business use for evaluation and development;
+
+                      (c) Use in open source projects licensed under OSI-approved
+                          licenses;
+
+                      (d) Use in commercial products where StreamLib is not the
+                          primary value proposition (e.g., a video conferencing
+                          app, a security camera system, a robotics application).
+
+                      For any use not covered above, you must obtain a commercial
+                      license. Two options are available:
+
+                      - Commercial License: For production use in your products.
+                      - Partner License: For consulting companies, integrators,
+                        and strategic partners with additional benefits including
+                        early access, roadmap input, and co-marketing rights.
+
+Change Date:          January 1, 2029
+
+Change License:       Apache License, Version 2.0
+
+For information about alternative licensing arrangements for the Licensed Work,
+please contact: fontanezj1@gmail.com
+
+Notice
+
+Business Source License 1.1
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you rights under
+the terms of the Change License, and the rights granted in the paragraph
+above terminate.
+
+If your use of the Licensed Work does not comply with the requirements
+currently in effect as described in this License, you must purchase a
+commercial license from the Licensor, its affiliated entities, or authorized
+resellers, or you must refrain from using the Licensed Work.
+
+All copies of the original and modified Licensed Work, and derivative works
+of the Licensed Work, are subject to this License. This License applies
+separately for each version of the Licensed Work and the Change Date may vary
+for each version of the Licensed Work released by Licensor.
+
+You must conspicuously display this License on each original or modified copy
+of the Licensed Work. If you receive the Licensed Work in original or
+modified form from a third party, the terms and conditions set forth in this
+License apply to your use of that work.
+
+Any use of the Licensed Work in violation of this License will automatically
+terminate your rights under this License for the current and all other
+versions of the Licensed Work.
+
+This License does not grant you any right in any trademark or logo of
+Licensor or its affiliates (provided that you may use a trademark or logo of
+Licensor as expressly required by this License).
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON
+AN "AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS,
+EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
+TITLE.

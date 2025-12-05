@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ LICENSING NOTICE ⚠️
+
+StreamLib is licensed under the **Business Source License 1.1** (BUSL-1.1).
+
+**When implementing features:**
+- All new Rust files must include the copyright header (see existing files)
+- Do NOT suggest MIT, Apache, or other licenses for this codebase
+- Commercial use restrictions are intentional and must remain
+- Do NOT modify license files without explicit approval
+
+**Copyright header for new files:**
+```rust
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+```
+
+See [LICENSE](LICENSE) and [docs/license/](docs/license/) for full terms.
+
+---
+
 ## ⚠️ CRITICAL IMPLEMENTATION INSTRUCTIONS FOR CLAUDE CODE ⚠️
 
 This document is a **complete implementation specification**. You MUST follow it exactly as written.

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // TODO(@jonathan): Metal texture module has unused create_metal_texture() function
 // Review if this texture creation utility is needed or can be removed
 #![allow(dead_code)]

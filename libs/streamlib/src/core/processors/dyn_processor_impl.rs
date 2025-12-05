@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use super::{DynProcessor, Processor, ProcessorType};
 use crate::core::execution::ExecutionConfig;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};

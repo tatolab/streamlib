@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Processor thread runner.
 //!
 //! Handles the main loop for processor threads based on their execution mode.

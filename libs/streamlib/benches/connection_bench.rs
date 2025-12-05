@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use streamlib::core::bus::connection::ProcessorConnection;
 

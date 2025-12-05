@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // H.264 Format Conversion Utilities
 //
 // Functions for converting between different H.264 NAL unit formats:

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // VideoToolbox H.264 Decoder
 //
 // Hardware-accelerated H.264 decoding using Apple's VideoToolbox framework.

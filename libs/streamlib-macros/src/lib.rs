@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Procedural macros for streamlib
 //!
 //! Attribute macros for defining processors:

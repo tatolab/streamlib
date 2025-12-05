@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 /// VideoToolbox H.264 encoder for generating valid test video
 ///
 /// Creates synthetic colored frames and encodes them with hardware H.264 encoder

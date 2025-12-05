@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // TODO(@jonathan): Mach time module has unused utilities (mach_absolute_time(), mach_ticks_to_ns(), etc.)
 // Review if these high-precision timing functions are needed or can be removed
 #![allow(dead_code)]

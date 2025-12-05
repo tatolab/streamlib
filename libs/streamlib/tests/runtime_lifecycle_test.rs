@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Runtime Lifecycle Integration Test
 //!
 //! This test verifies the complete runtime lifecycle:

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::core::pubsub::{topics, Event, EventListener, RuntimeEvent, PUBSUB};
 use crate::core::Result;
 use parking_lot::Mutex;

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 pub mod arkit;
 pub mod audio_utils;
 pub mod iosurface;

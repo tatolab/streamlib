@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 /// Minimal WebRTC audio-only test with PSYCHO MODE logging
 ///
 /// Tests WebRTC in complete isolation from streamlib to verify it's not a threading bug.

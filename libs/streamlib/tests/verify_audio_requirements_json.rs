@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Verify AudioRequirements serialize to JSON correctly for MCP
 //!
 //! Run with: cargo test --test verify_audio_requirements_json

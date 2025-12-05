@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::core::error::{Result, StreamError};
 use crate::core::links::graph::link_id::__private::new_unchecked as new_link_id;
 use crate::core::links::{LinkId, LinkPortType};

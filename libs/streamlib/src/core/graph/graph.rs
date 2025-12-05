@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Unified Graph combining topology with ECS component storage.
 //!
 //! Graph is the public API for the processor pipeline graph. It internally manages:

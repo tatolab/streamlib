@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Runtime link infrastructure for actual data flow.
 //!
 //! - `LinkInstance`: Owns the ring buffer

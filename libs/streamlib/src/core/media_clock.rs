@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 #[cfg(target_os = "macos")]
 pub use crate::apple::media_clock::MediaClock;
 

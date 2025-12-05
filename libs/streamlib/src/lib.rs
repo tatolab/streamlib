@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // Suppress pedantic clippy warnings that are intentional design choices
 #![allow(clippy::too_many_arguments)] // Some APIs need many parameters (e.g., video encoding config)
 #![allow(clippy::type_complexity)] // Complex types are clear in context

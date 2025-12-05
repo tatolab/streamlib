@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Field analysis for processor attribute macro
 //!
 //! Classifies struct fields as ports, config, or state fields.

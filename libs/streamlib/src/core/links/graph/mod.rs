@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Graph-related types for links.
 //!
 //! Contains the link blueprint (graph edge) and ECS components.

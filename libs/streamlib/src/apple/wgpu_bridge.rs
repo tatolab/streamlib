@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::{Result, StreamError};
 use metal;
 use metal::foreign_types::ForeignTypeRef;

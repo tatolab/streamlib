@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! News-Cast Example
 //!
 //! Demonstrates GPU-native video effects with a news-style lower third overlay.

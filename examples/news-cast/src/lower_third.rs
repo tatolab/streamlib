@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Lower Third Processor
 //!
 //! GPU-native video effects processor using Vello for 2D rendering.

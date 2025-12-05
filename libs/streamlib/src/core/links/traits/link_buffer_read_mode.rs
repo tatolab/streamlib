@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Link buffer read mode for reading from link ports.
 
 /// How a frame type should be read from the link buffer.

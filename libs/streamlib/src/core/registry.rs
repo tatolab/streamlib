@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // TODO(jonathan): Redesign processor registry for Phase 1 architecture
 //
 // This is a processor TYPE registry (catalog of available processor types),

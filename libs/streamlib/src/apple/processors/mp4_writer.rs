@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use crate::apple::{metal::MetalDevice, WgpuBridge};
 use crate::core::{
     sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, LinkInput, Result, RuntimeContext, StreamError,

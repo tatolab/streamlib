@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Link infrastructure for processor communication.
 //!
 //! This module provides the complete link infrastructure:

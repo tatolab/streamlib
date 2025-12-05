@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! ECS extension for the processor-link graph.
 //!
 //! This module provides runtime component storage via hecs ECS, extending

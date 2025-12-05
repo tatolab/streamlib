@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 //! Test for new #[streamlib::processor] attribute macro syntax
 //!
 //! This test verifies the module-based processor generation works correctly.
