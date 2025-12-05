@@ -3,36 +3,49 @@
 
 //! Graph query interface.
 //!
-//! **STATUS: DESIGN ONLY - NOT YET IMPLEMENTED**
-//!
-//! This module contains trait definitions and query builder types for a future
-//! graph query interface. The design captures how users would interact with
-//! the graph without knowing about internal data structures.
-//!
-//! See `README.md` in this directory for the full design document.
+//! Provides a unified query interface over property graph and ECS components.
+//! Users see one graph with queryable properties on nodes/edges.
 //!
 //! # Overview
 //!
-//! The query interface provides a Gremlin-inspired fluent API:
+//! Build reusable queries with `Query::build()`, then execute against a graph:
 //!
 //! ```ignore
-//! // Future API - not yet implemented
-//! let running_cameras = graph.query()
-//!     .V()                                    // All processors
-//!     .of_type("CameraProcessor")             // Filter by type
-//!     .in_state(ProcessorState::Running)      // Filter by state
-//!     .ids();                                 // Execute query
+//! use streamlib::core::graph::query::Query;
+//!
+//! // Build a reusable query
+//! let camera_query = Query::build()
+//!     .V()
+//!     .of_type("CameraProcessor")
+//!     .in_state(ProcessorState::Running)
+//!     .ids();
+//!
+//! // Execute on a graph
+//! let cameras = graph.execute(&camera_query);
 //! ```
 //!
 //! # Architecture
 //!
-//! - [`GraphQueryInterface`] - Trait defining primitive operations
-//! - [`GraphQuery`] - Entry point returned by `graph.query()`
-//! - [`ProcessorQuery`] - Lazy query builder for processors
-//! - [`LinkQuery`] - Lazy query builder for links
+//! - [`Query`] - Entry point for building queries
+//! - [`ProcessorQueryBuilder`] - Builder for processor queries
+//! - [`LinkQueryBuilder`] - Builder for link queries
+//! - [`ProcessorQuery`] / [`LinkQuery`] - Finalized queries ready for execution
+//! - [`GraphQueryInterface`] - Primitive operations trait (implemented by Graph)
+//! - [`FieldResolver`] - Unified field access across property graph and ECS
 
+pub mod builder;
+pub mod executor;
+pub mod field_resolver;
 mod traits;
 
-pub use traits::{
-    GraphQuery, GraphQueryInterface, LinkQuery, LinkSelection, ProcessorQuery, ProcessorSelection,
+#[cfg(test)]
+mod tests;
+
+// Re-export main types for convenience
+pub use builder::{
+    LinkQuery, LinkQueryBuilder, ProcessorQuery, ProcessorQueryBuilder, Query, QueryBuilder,
 };
+pub use executor::{
+    GraphQueryExecutor, GraphQueryInterface, LinkQueryResult, ProcessorQueryResult,
+};
+pub use field_resolver::FieldResolver;

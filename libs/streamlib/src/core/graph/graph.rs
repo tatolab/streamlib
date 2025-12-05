@@ -638,6 +638,261 @@ impl Graph {
     }
 }
 
+// =============================================================================
+// Query Interface Implementation
+// =============================================================================
+
+use super::internal::InternalProcessorLinkGraphQueryOperations;
+use super::query::executor::{
+    GraphQueryExecutor, GraphQueryInterface, LinkQueryResult, ProcessorQueryResult,
+};
+use super::query::field_resolver::{resolve_json_path, FieldResolver};
+use super::query::{LinkQuery, ProcessorQuery};
+use crate::core::processors::ProcessorState;
+
+impl FieldResolver for Graph {
+    fn resolve_processor_field(&self, processor_id: &ProcessorId, path: &str) -> Option<JsonValue> {
+        self.processor_to_json(processor_id)
+            .and_then(|json| resolve_json_path(&json, path))
+    }
+
+    fn resolve_link_field(&self, link_id: &LinkId, path: &str) -> Option<JsonValue> {
+        self.link_to_json(link_id)
+            .and_then(|json| resolve_json_path(&json, path))
+    }
+
+    fn processor_to_json(&self, processor_id: &ProcessorId) -> Option<JsonValue> {
+        let graph = self.processor_link_graph.read();
+        let node = graph.get_processor(processor_id)?;
+
+        let mut proc_json = serde_json::Map::new();
+        proc_json.insert(
+            "type".into(),
+            JsonValue::String(node.processor_type.clone()),
+        );
+
+        if let Some(config) = &node.config {
+            proc_json.insert("config".into(), config.clone());
+        }
+
+        // Add ECS components
+        if let Some(&entity) = self.ecs_extension.processor_entities().get(processor_id) {
+            let world = self.ecs_extension.world();
+
+            if let Ok(state) = world.get::<&StateComponent>(entity) {
+                proc_json.insert(state.json_key().into(), state.to_json());
+            }
+
+            if let Ok(metrics) = world.get::<&ProcessorMetrics>(entity) {
+                proc_json.insert(metrics.json_key().into(), metrics.to_json());
+            }
+
+            if let Ok(instance) = world.get::<&ProcessorInstance>(entity) {
+                let processor = instance.0.lock();
+
+                let config = processor.config_json();
+                if !config.is_null() {
+                    proc_json.insert("config".into(), config);
+                }
+
+                let runtime = processor.to_runtime_json();
+                if !runtime.is_null() {
+                    proc_json.insert("runtime".into(), runtime);
+                }
+            }
+        }
+
+        Some(JsonValue::Object(proc_json))
+    }
+
+    fn link_to_json(&self, link_id: &LinkId) -> Option<JsonValue> {
+        let graph = self.processor_link_graph.read();
+        let link = graph.get_link(link_id)?;
+
+        let mut link_json = serde_json::Map::new();
+
+        link_json.insert(
+            "from".into(),
+            serde_json::json!({
+                "processor": link.source.node,
+                "port": link.source.port
+            }),
+        );
+        link_json.insert(
+            "to".into(),
+            serde_json::json!({
+                "processor": link.target.node,
+                "port": link.target.port
+            }),
+        );
+
+        // Add ECS components
+        if let Some(&entity) = self.ecs_extension.link_entities().get(link_id) {
+            let world = self.ecs_extension.world();
+
+            if let Ok(state) = world.get::<&LinkStateComponent>(entity) {
+                link_json.insert(state.json_key().into(), state.to_json());
+            }
+
+            if let Ok(type_info) = world.get::<&LinkTypeInfoComponent>(entity) {
+                link_json.insert(type_info.json_key().into(), type_info.to_json());
+            }
+
+            if let Ok(instance) = world.get::<&LinkInstanceComponent>(entity) {
+                link_json.insert(instance.json_key().into(), instance.to_json());
+            }
+        }
+
+        Some(JsonValue::Object(link_json))
+    }
+}
+
+impl GraphQueryInterface for Graph {
+    fn all_processor_ids(&self) -> Vec<ProcessorId> {
+        self.processor_link_graph
+            .read()
+            .nodes()
+            .iter()
+            .map(|n| n.id.clone())
+            .collect()
+    }
+
+    fn get_processor_node(&self, id: &ProcessorId) -> Option<ProcessorNode> {
+        self.processor_link_graph.read().get_processor(id).cloned()
+    }
+
+    fn has_processor(&self, id: &ProcessorId) -> bool {
+        self.processor_link_graph.read().has_processor(id)
+    }
+
+    fn get_processor_type(&self, id: &ProcessorId) -> Option<String> {
+        self.processor_link_graph
+            .read()
+            .get_processor(id)
+            .map(|n| n.processor_type.clone())
+    }
+
+    fn get_processor_state(&self, id: &ProcessorId) -> Option<ProcessorState> {
+        self.ecs_extension
+            .get_processor_component::<StateComponent>(id)
+            .map(|sc| *sc.0.lock())
+    }
+
+    fn get_processor_config(&self, id: &ProcessorId) -> Option<JsonValue> {
+        self.processor_link_graph
+            .read()
+            .get_processor(id)
+            .and_then(|n| n.config.clone())
+    }
+
+    fn all_link_ids(&self) -> Vec<LinkId> {
+        self.processor_link_graph.read().query_all_link_ids()
+    }
+
+    fn get_link(&self, id: &LinkId) -> Option<Link> {
+        self.processor_link_graph.read().get_link(id).cloned()
+    }
+
+    fn has_link(&self, id: &LinkId) -> bool {
+        self.processor_link_graph.read().get_link(id).is_some()
+    }
+
+    fn get_link_source(&self, id: &LinkId) -> Option<ProcessorId> {
+        self.processor_link_graph
+            .read()
+            .get_link(id)
+            .map(|l| l.source.node.clone())
+    }
+
+    fn get_link_target(&self, id: &LinkId) -> Option<ProcessorId> {
+        self.processor_link_graph
+            .read()
+            .get_link(id)
+            .map(|l| l.target.node.clone())
+    }
+
+    fn downstream_processor_ids(&self, id: &ProcessorId) -> Vec<ProcessorId> {
+        self.processor_link_graph
+            .read()
+            .query_downstream_processor_ids(id)
+    }
+
+    fn upstream_processor_ids(&self, id: &ProcessorId) -> Vec<ProcessorId> {
+        self.processor_link_graph
+            .read()
+            .query_upstream_processor_ids(id)
+    }
+
+    fn outgoing_link_ids(&self, id: &ProcessorId) -> Vec<LinkId> {
+        self.processor_link_graph.read().query_outgoing_link_ids(id)
+    }
+
+    fn incoming_link_ids(&self, id: &ProcessorId) -> Vec<LinkId> {
+        self.processor_link_graph.read().query_incoming_link_ids(id)
+    }
+
+    fn topological_order(&self) -> Option<Vec<ProcessorId>> {
+        self.processor_link_graph.read().topological_order().ok()
+    }
+
+    fn source_processor_ids(&self) -> Vec<ProcessorId> {
+        self.processor_link_graph.read().find_sources()
+    }
+
+    fn sink_processor_ids(&self) -> Vec<ProcessorId> {
+        self.processor_link_graph.read().find_sinks()
+    }
+}
+
+impl GraphQueryExecutor for Graph {
+    fn execute_processor_query<T>(&self, query: &ProcessorQuery<T>) -> T
+    where
+        T: ProcessorQueryResult,
+    {
+        let ids = super::query::executor::execute_processor_query_full(query, self);
+        T::from_terminal(query.terminal, ids, self)
+    }
+
+    fn execute_link_query<T>(&self, query: &LinkQuery<T>) -> T
+    where
+        T: LinkQueryResult,
+    {
+        let ids = super::query::executor::execute_link_query_full(query, self);
+        T::from_terminal(query.terminal, ids, self)
+    }
+}
+
+impl Graph {
+    /// Start building a query on this graph.
+    ///
+    /// Returns a [`Query`] entry point for the fluent query API.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let query = Query::build()
+    ///     .V()
+    ///     .of_type("CameraProcessor")
+    ///     .ids();
+    ///
+    /// let cameras = graph.execute(&query);
+    /// ```
+    pub fn execute<T>(&self, query: &ProcessorQuery<T>) -> T
+    where
+        T: ProcessorQueryResult,
+    {
+        self.execute_processor_query(query)
+    }
+
+    /// Execute a link query.
+    pub fn execute_link<T>(&self, query: &LinkQuery<T>) -> T
+    where
+        T: LinkQueryResult,
+    {
+        self.execute_link_query(query)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

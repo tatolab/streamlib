@@ -333,6 +333,16 @@ impl InternalProcessorLinkGraph {
         &self.links
     }
 
+    /// Get the internal petgraph DiGraph.
+    pub(crate) fn graph(&self) -> &DiGraph<ProcessorNode, Link> {
+        &self.graph
+    }
+
+    /// Get the NodeIndex for a processor ID.
+    pub(crate) fn processor_to_node_index(&self, id: &ProcessorId) -> Option<NodeIndex> {
+        self.processor_to_node.get(id).copied()
+    }
+
     pub(crate) fn find_link_by_ports(&self, from_port: &str, to_port: &str) -> Option<LinkId> {
         self.graph
             .edge_indices()

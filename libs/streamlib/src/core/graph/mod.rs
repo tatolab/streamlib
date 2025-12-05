@@ -33,3 +33,10 @@ pub use node::{NodePorts, PortInfo, PortKind, ProcessorId, ProcessorNode};
 
 // Public API - Graph is the unified interface
 pub use graph::{Graph, GraphState};
+
+// Query interface
+pub use query::{
+    FieldResolver, GraphQueryExecutor, GraphQueryInterface, LinkQuery, LinkQueryBuilder,
+    LinkQueryResult, ProcessorQuery, ProcessorQueryBuilder, ProcessorQueryResult, Query,
+    QueryBuilder,
+};

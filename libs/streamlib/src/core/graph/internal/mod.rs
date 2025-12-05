@@ -11,7 +11,8 @@
 
 pub mod processor_link_graph;
 mod processor_link_graph_ecs_extension;
+mod processor_link_graph_query;
 
 pub(crate) use processor_link_graph::{GraphChecksum, InternalProcessorLinkGraph};
-
 pub(crate) use processor_link_graph_ecs_extension::InternalProcessorLinkGraphEcsExtension;
+pub(crate) use processor_link_graph_query::InternalProcessorLinkGraphQueryOperations;
