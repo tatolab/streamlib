@@ -9,7 +9,6 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -35,14 +34,65 @@ fn generate_link_id() -> LinkId {
 ///
 /// This is an internal implementation detail - do not use directly.
 /// Use [`Graph`](super::Graph) (the public API) instead.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The graph is the single source of truth - no secondary indices are maintained.
+/// All lookups scan the graph directly to ensure consistency after modifications.
+#[derive(Debug, Clone)]
 pub(crate) struct InternalProcessorLinkGraph {
-    #[serde(skip)]
     graph: DiGraph<ProcessorNode, Link>,
-    #[serde(skip)]
-    processor_to_node: HashMap<ProcessorId, NodeIndex>,
+}
+
+/// Serialization helper - stores nodes and links for JSON representation.
+#[derive(Serialize, Deserialize)]
+struct SerializedGraph {
     nodes: Vec<ProcessorNode>,
     links: Vec<Link>,
+}
+
+impl Serialize for InternalProcessorLinkGraph {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let nodes: Vec<_> = self
+            .graph
+            .node_indices()
+            .map(|idx| self.graph[idx].clone())
+            .collect();
+        let links: Vec<_> = self
+            .graph
+            .edge_indices()
+            .map(|idx| self.graph[idx].clone())
+            .collect();
+        SerializedGraph { nodes, links }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InternalProcessorLinkGraph {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let serialized = SerializedGraph::deserialize(deserializer)?;
+        let mut graph_impl = InternalProcessorLinkGraph::new();
+
+        // Add all nodes first
+        for node in serialized.nodes {
+            graph_impl.graph.add_node(node);
+        }
+
+        // Then add all links
+        for link in serialized.links {
+            if let (Some(from_idx), Some(to_idx)) = (
+                graph_impl.find_node_index(&link.source.node),
+                graph_impl.find_node_index(&link.target.node),
+            ) {
+                graph_impl.graph.add_edge(from_idx, to_idx, link);
+            }
+        }
+
+        Ok(graph_impl)
+    }
 }
 
 /// Checksum of a graph's structure.
@@ -53,10 +103,14 @@ impl InternalProcessorLinkGraph {
     pub(crate) fn new() -> Self {
         Self {
             graph: DiGraph::new(),
-            processor_to_node: HashMap::new(),
-            nodes: Vec::new(),
-            links: Vec::new(),
         }
+    }
+
+    /// Find a node index by processor ID (scans the graph).
+    fn find_node_index(&self, id: &ProcessorId) -> Option<NodeIndex> {
+        self.graph
+            .node_indices()
+            .find(|&idx| &self.graph[idx].id == id)
     }
 
     pub(crate) fn add_processor(
@@ -65,11 +119,8 @@ impl InternalProcessorLinkGraph {
         processor_type: String,
         _config_checksum: u64,
     ) {
-        let node = ProcessorNode::new(id.clone(), processor_type, None, vec![], vec![]);
-
-        let node_idx = self.graph.add_node(node.clone());
-        self.processor_to_node.insert(id, node_idx);
-        self.nodes.push(node);
+        let node = ProcessorNode::new(id, processor_type, None, vec![], vec![]);
+        self.graph.add_node(node);
     }
 
     /// Add a processor node to the graph.
@@ -112,18 +163,9 @@ impl InternalProcessorLinkGraph {
 
         // Create the node
         let id = generate_processor_id(&descriptor.name);
-        let node = ProcessorNode::new(
-            id.clone(),
-            descriptor.name.clone(),
-            config_json,
-            inputs,
-            outputs,
-        );
+        let node = ProcessorNode::new(id, descriptor.name.clone(), config_json, inputs, outputs);
 
-        let node_idx = self.graph.add_node(node.clone());
-        self.processor_to_node.insert(id, node_idx);
-        self.nodes.push(node.clone());
-
+        self.graph.add_node(node.clone());
         Ok(node)
     }
 
@@ -157,16 +199,20 @@ impl InternalProcessorLinkGraph {
         let id = generate_link_id();
         let link = Link::new(id, &from_addr, &to_addr);
 
-        // Parse processor IDs and add edge to petgraph
-        if let (Some(&from_idx), Some(&to_idx)) = (
-            self.processor_to_node.get(&link.source.node),
-            self.processor_to_node.get(&link.target.node),
-        ) {
-            self.graph.add_edge(from_idx, to_idx, link.clone());
-        }
+        // Find node indices by scanning the graph
+        let from_idx = self.find_node_index(&link.source.node);
+        let to_idx = self.find_node_index(&link.target.node);
 
-        self.links.push(link.clone());
-        Ok(link)
+        match (from_idx, to_idx) {
+            (Some(from_idx), Some(to_idx)) => {
+                self.graph.add_edge(from_idx, to_idx, link.clone());
+                Ok(link)
+            }
+            _ => Err(StreamError::ProcessorNotFound(format!(
+                "{} or {}",
+                link.source.node, link.target.node
+            ))),
+        }
     }
 
     /// Remove a processor node and its links.
@@ -177,25 +223,21 @@ impl InternalProcessorLinkGraph {
     pub(crate) fn remove_link(&mut self, id: &LinkId) {
         if let Some(edge_idx) = self.graph.edge_indices().find(|&e| self.graph[e].id == *id) {
             self.graph.remove_edge(edge_idx);
-            self.links.retain(|l| &l.id != id);
         }
     }
 
     pub(crate) fn has_processor(&self, id: &ProcessorId) -> bool {
-        self.processor_to_node.contains_key(id)
+        self.find_node_index(id).is_some()
     }
 
     pub(crate) fn get_processor(&self, id: &ProcessorId) -> Option<&ProcessorNode> {
-        self.processor_to_node.get(id).map(|&idx| &self.graph[idx])
+        self.find_node_index(id).map(|idx| &self.graph[idx])
     }
 
     pub(crate) fn remove_processor(&mut self, id: &ProcessorId) {
-        if let Some(node_idx) = self.processor_to_node.remove(id) {
+        if let Some(node_idx) = self.find_node_index(id) {
+            // Removing a node in DiGraph also removes all edges connected to it
             self.graph.remove_node(node_idx);
-            self.nodes.retain(|n| &n.id != id);
-            // Also remove links that reference this processor
-            self.links
-                .retain(|l| l.source.node != *id && l.target.node != *id);
         }
     }
 
@@ -221,20 +263,20 @@ impl InternalProcessorLinkGraph {
             .split_once('.')
             .ok_or_else(|| StreamError::InvalidPortAddress(to_port.clone()))?;
 
-        let from_node = self.processor_to_node.get(source_proc_id);
-        let to_node = self.processor_to_node.get(dest_proc_id);
+        // Find node indices by scanning the graph
+        let from_idx = self.find_node_index(&source_proc_id.to_string());
+        let to_idx = self.find_node_index(&dest_proc_id.to_string());
 
-        if let (Some(&from_idx), Some(&to_idx)) = (from_node, to_node) {
-            let link = Link::new(id, &from_port, &to_port);
-
-            self.graph.add_edge(from_idx, to_idx, link.clone());
-            self.links.push(link);
-            Ok(())
-        } else {
-            Err(StreamError::ProcessorNotFound(format!(
+        match (from_idx, to_idx) {
+            (Some(from_idx), Some(to_idx)) => {
+                let link = Link::new(id, &from_port, &to_port);
+                self.graph.add_edge(from_idx, to_idx, link);
+                Ok(())
+            }
+            _ => Err(StreamError::ProcessorNotFound(format!(
                 "{} or {}",
                 source_proc_id, dest_proc_id
-            )))
+            ))),
         }
     }
 
@@ -324,13 +366,19 @@ impl InternalProcessorLinkGraph {
     }
 
     /// Get all processor nodes in the graph.
-    pub(crate) fn nodes(&self) -> &[ProcessorNode] {
-        &self.nodes
+    pub(crate) fn nodes(&self) -> Vec<&ProcessorNode> {
+        self.graph
+            .node_indices()
+            .map(|idx| &self.graph[idx])
+            .collect()
     }
 
     /// Get all links in the graph.
-    pub(crate) fn links(&self) -> &[Link] {
-        &self.links
+    pub(crate) fn links(&self) -> Vec<&Link> {
+        self.graph
+            .edge_indices()
+            .map(|idx| &self.graph[idx])
+            .collect()
     }
 
     /// Get the internal petgraph DiGraph.
@@ -340,7 +388,7 @@ impl InternalProcessorLinkGraph {
 
     /// Get the NodeIndex for a processor ID.
     pub(crate) fn processor_to_node_index(&self, id: &ProcessorId) -> Option<NodeIndex> {
-        self.processor_to_node.get(id).copied()
+        self.find_node_index(id)
     }
 
     pub(crate) fn find_link_by_ports(&self, from_port: &str, to_port: &str) -> Option<LinkId> {
@@ -362,27 +410,20 @@ impl InternalProcessorLinkGraph {
         config: serde_json::Value,
     ) -> Result<u64> {
         let node_idx = self
-            .processor_to_node
-            .get(processor_id)
+            .find_node_index(processor_id)
             .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.clone()))?;
 
-        let node = &mut self.graph[*node_idx];
+        let node = &mut self.graph[node_idx];
         let old_checksum = node.config_checksum;
-        node.set_config(config.clone());
-
-        // Also update the nodes vec for serialization consistency
-        if let Some(n) = self.nodes.iter_mut().find(|n| &n.id == processor_id) {
-            n.set_config(config);
-        }
+        node.set_config(config);
 
         Ok(old_checksum)
     }
 
     /// Get a processor's config checksum.
     pub(crate) fn get_processor_config_checksum(&self, processor_id: &ProcessorId) -> Option<u64> {
-        self.processor_to_node
-            .get(processor_id)
-            .map(|&idx| self.graph[idx].config_checksum)
+        self.find_node_index(processor_id)
+            .map(|idx| self.graph[idx].config_checksum)
     }
 }
 
@@ -394,9 +435,41 @@ impl Default for InternalProcessorLinkGraph {
 
 impl PartialEq for InternalProcessorLinkGraph {
     fn eq(&self, other: &Self) -> bool {
-        // Compare using serializable nodes/links for equality
-        // This is used for delta computation
-        self.nodes == other.nodes && self.links == other.links
+        // Compare node counts first for quick inequality check
+        if self.graph.node_count() != other.graph.node_count() {
+            return false;
+        }
+        if self.graph.edge_count() != other.graph.edge_count() {
+            return false;
+        }
+
+        // Compare all nodes by ID and content
+        for idx in self.graph.node_indices() {
+            let node = &self.graph[idx];
+            match other.find_node_index(&node.id) {
+                Some(other_idx) => {
+                    if self.graph[idx] != other.graph[other_idx] {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        // Compare all edges by ID and content
+        for idx in self.graph.edge_indices() {
+            let link = &self.graph[idx];
+            match other.get_link(&link.id) {
+                Some(other_link) => {
+                    if link != other_link {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
     }
 }
 

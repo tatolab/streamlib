@@ -279,12 +279,22 @@ impl Graph {
 
     /// Get all processor nodes (cloned).
     pub fn nodes(&self) -> Vec<ProcessorNode> {
-        self.processor_link_graph.read().nodes().to_vec()
+        self.processor_link_graph
+            .read()
+            .nodes()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// Get all links (cloned).
     pub fn links(&self) -> Vec<Link> {
-        self.processor_link_graph.read().links().to_vec()
+        self.processor_link_graph
+            .read()
+            .links()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     // =========================================================================

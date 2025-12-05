@@ -5088,4 +5088,123 @@ mod dynamic_graph_modification {
         let total_links = graph.execute_link(&Query::build().E().count());
         assert_eq!(total_links, 0);
     }
+
+    /// Regression test: removing a processor should not corrupt the graph's
+    /// internal index, allowing subsequent operations on remaining processors.
+    #[test]
+    fn test_processor_removal_then_link_remaining_processors() {
+        let mut graph = Graph::new();
+
+        // Add three processors: A, B, C
+        graph.add_processor("A".into(), "Source".into(), 0);
+        graph.add_processor("B".into(), "Middle".into(), 0);
+        graph.add_processor("C".into(), "Sink".into(), 0);
+
+        assert_eq!(graph.execute(&Query::build().V().count()), 3);
+
+        // Remove B (the middle one)
+        graph.remove_processor(&pid("B"));
+
+        assert_eq!(graph.execute(&Query::build().V().count()), 2);
+        assert!(graph.execute(&Query::build().V().ids()).contains(&pid("A")));
+        assert!(graph.execute(&Query::build().V().ids()).contains(&pid("C")));
+
+        // This is the critical test: can we still add a link between A and C?
+        // With the buggy secondary index, this would panic because C's NodeIndex
+        // was invalidated when B was removed.
+        let link = graph.add_link("A.out", "C.in").unwrap();
+
+        // Verify the link was created correctly
+        assert_eq!(graph.execute_link(&Query::build().E().count()), 1);
+
+        let downstream = graph.execute(&Query::build().V_from(vec![pid("A")]).downstream().ids());
+        assert_eq!(downstream.len(), 1);
+        assert!(downstream.contains(&pid("C")));
+
+        // Also verify we can remove and re-add
+        graph.remove_link(&link.id);
+        assert_eq!(graph.execute_link(&Query::build().E().count()), 0);
+
+        graph.add_link("A.another", "C.another").unwrap();
+        assert_eq!(graph.execute_link(&Query::build().E().count()), 1);
+    }
+
+    /// Regression test: multiple processor removals should not corrupt indices.
+    #[test]
+    fn test_multiple_processor_removals_then_operations() {
+        let mut graph = Graph::new();
+
+        // Add five processors
+        graph.add_processor("A".into(), "Type1".into(), 0);
+        graph.add_processor("B".into(), "Type2".into(), 0);
+        graph.add_processor("C".into(), "Type3".into(), 0);
+        graph.add_processor("D".into(), "Type4".into(), 0);
+        graph.add_processor("E".into(), "Type5".into(), 0);
+
+        // Add some links
+        graph.add_link("A.out", "B.in").unwrap();
+        graph.add_link("B.out", "C.in").unwrap();
+        graph.add_link("C.out", "D.in").unwrap();
+        graph.add_link("D.out", "E.in").unwrap();
+
+        assert_eq!(graph.execute(&Query::build().V().count()), 5);
+        assert_eq!(graph.execute_link(&Query::build().E().count()), 4);
+
+        // Remove B and D (non-adjacent processors)
+        graph.remove_processor(&pid("B"));
+        graph.remove_processor(&pid("D"));
+
+        assert_eq!(graph.execute(&Query::build().V().count()), 3);
+        // A->B (gone), B->C (gone), C->D (gone), D->E (gone)
+        // All links involved B or D, so all should be gone
+        assert_eq!(graph.execute_link(&Query::build().E().count()), 0);
+
+        // Now add new links between remaining processors A, C, E
+        graph.add_link("A.out", "C.in").unwrap();
+        graph.add_link("C.out", "E.in").unwrap();
+
+        assert_eq!(graph.execute_link(&Query::build().E().count()), 2);
+
+        // Verify structure
+        let downstream_a = graph.execute(&Query::build().V_from(vec![pid("A")]).downstream().ids());
+        assert_eq!(downstream_a.len(), 1);
+        assert!(downstream_a.contains(&pid("C")));
+
+        let downstream_c = graph.execute(&Query::build().V_from(vec![pid("C")]).downstream().ids());
+        assert_eq!(downstream_c.len(), 1);
+        assert!(downstream_c.contains(&pid("E")));
+    }
+
+    /// Regression test: remove processor, add new processor, then link them.
+    #[test]
+    fn test_remove_processor_add_new_then_link() {
+        let mut graph = Graph::new();
+
+        graph.add_processor("A".into(), "Source".into(), 0);
+        graph.add_processor("B".into(), "ToRemove".into(), 0);
+        graph.add_processor("C".into(), "Sink".into(), 0);
+
+        // Remove B
+        graph.remove_processor(&pid("B"));
+
+        // Add a new processor D
+        graph.add_processor("D".into(), "NewProcessor".into(), 0);
+
+        assert_eq!(graph.execute(&Query::build().V().count()), 3); // A, C, D
+
+        // Link A -> D -> C
+        graph.add_link("A.out", "D.in").unwrap();
+        graph.add_link("D.out", "C.in").unwrap();
+
+        assert_eq!(graph.execute_link(&Query::build().E().count()), 2);
+
+        // Verify chain
+        let sources = graph.execute(&Query::build().V().sources().ids());
+        assert_eq!(sources.len(), 1);
+        assert!(sources.contains(&pid("A")));
+
+        let sinks = graph.execute(&Query::build().V().sinks().ids());
+        assert_eq!(sinks.len(), 1);
+        assert!(sinks.contains(&pid("C")));
+    }
 }
