@@ -10,6 +10,7 @@ mod link;
 mod link_port_markers;
 mod link_port_ref;
 mod node;
+pub mod query;
 mod validation;
 
 // Internal types - only accessible within the crate

@@ -14,8 +14,30 @@ pre-commit:
       run: cargo check --workspace --all-features
 
 pre-push:
-  parallel: false  # Run sequentially to see errors in order
+  parallel: false # Run sequentially to see errors in order
   commands:
+    # 0. License check - ensure all Rust files have copyright header
+    license-check:
+      run: |
+        missing_files=()
+        for file in $(find libs -name "*.rs" -type f); do
+          if ! head -2 "$file" | grep -q "Copyright (c) 2025 Jonathan Fontanez"; then
+            missing_files+=("$file")
+          fi
+        done
+        if [ ${#missing_files[@]} -ne 0 ]; then
+          echo "❌ The following files are missing the required copyright header:"
+          echo ""
+          for f in "${missing_files[@]}"; do
+            echo "  - $f"
+          done
+          echo ""
+          echo "Required header (first two lines of file):"
+          echo "  // Copyright (c) 2025 Jonathan Fontanez"
+          echo "  // SPDX-License-Identifier: BUSL-1.1"
+          exit 1
+        fi
+
     # 1. Fast check - ensure code compiles
     check:
       run: cargo check --workspace --all-features
