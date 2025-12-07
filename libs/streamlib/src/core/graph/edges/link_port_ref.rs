@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::link::LinkDirection;
-use super::ProcessorId;
+use super::super::edges::LinkDirection;
+use super::super::nodes::ProcessorId;
 use crate::core::error::{Result, StreamError};
 
 /// Reference to a port on a processor node.
@@ -14,17 +14,17 @@ pub struct LinkPortRef {
 }
 
 impl LinkPortRef {
-    pub fn output(processor_id: ProcessorId, port_name: impl Into<String>) -> Self {
+    pub fn output(processor_id: impl Into<ProcessorId>, port_name: impl Into<String>) -> Self {
         Self {
-            processor_id,
+            processor_id: processor_id.into(),
             port_name: port_name.into(),
             direction: LinkDirection::Output,
         }
     }
 
-    pub fn input(processor_id: ProcessorId, port_name: impl Into<String>) -> Self {
+    pub fn input(processor_id: impl Into<ProcessorId>, port_name: impl Into<String>) -> Self {
         Self {
-            processor_id,
+            processor_id: processor_id.into(),
             port_name: port_name.into(),
             direction: LinkDirection::Input,
         }
@@ -70,7 +70,7 @@ impl LinkPortRef {
         }
 
         Ok(Self {
-            processor_id: processor_id.to_string(),
+            processor_id: processor_id.into(),
             port_name: port_name.to_string(),
             direction,
         })
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_link_port_ref_output() {
-        let port = LinkPortRef::output("camera_0".to_string(), "video");
+        let port = LinkPortRef::output("camera_0", "video");
         assert_eq!(port.processor_id, "camera_0");
         assert_eq!(port.port_name, "video");
         assert!(port.is_output());
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_link_port_ref_input() {
-        let port = LinkPortRef::input("display_0".to_string(), "video");
+        let port = LinkPortRef::input("display_0", "video");
         assert_eq!(port.processor_id, "display_0");
         assert_eq!(port.port_name, "video");
         assert!(port.is_input());
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_into_link_port_ref_preserves_direction() {
-        let original = LinkPortRef::output("cam_0".to_string(), "video");
+        let original = LinkPortRef::output("cam_0", "video");
         // Even if we pass Input direction, LinkPortRef keeps its own direction
         let converted = original.into_link_port_ref(LinkDirection::Input).unwrap();
         assert!(converted.is_output());

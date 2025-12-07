@@ -11,10 +11,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::graph::ProcessorId;
 use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::{BoxedProcessor, ProcessorState};
-
-type ProcessorId = String;
 
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);

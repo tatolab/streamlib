@@ -13,7 +13,8 @@ use parking_lot::Mutex;
 use crate::core::error::{Result, StreamError};
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{
-    Graph, LinkOutputToProcessorWriterAndReader, LinkState, ProcessorInstance,
+    Graph, GraphEdge, GraphNode, LinkOutputToProcessorWriterAndReader, LinkState,
+    LinkStateComponent, ProcessorInstanceComponent,
 };
 use crate::core::links::{
     LinkFactoryDelegate, LinkId, LinkInstanceComponent, LinkPortType, LinkTypeInfoComponent,
@@ -27,9 +28,13 @@ pub fn wire_link(
     link_id: &LinkId,
 ) -> Result<()> {
     let (from_port, to_port) = {
-        let link = property_graph.get_link(link_id).ok_or_else(|| {
-            StreamError::LinkNotFound(format!("Link '{}' not found in graph", link_id))
-        })?;
+        let link = property_graph
+            .query()
+            .E_id(link_id)
+            .first()
+            .ok_or_else(|| {
+                StreamError::LinkNotFound(format!("Link '{}' not found in graph", link_id))
+            })?;
         (link.from_port(), link.to_port())
     };
 
@@ -41,20 +46,30 @@ pub fn wire_link(
 pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkId) -> Result<()> {
     tracing::info!("Unwiring link: {}", link_id);
 
-    let link = property_graph
-        .get_link(link_id)
-        .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+    let (from_port, to_port) = {
+        let link = property_graph
+            .query()
+            .E_id(link_id)
+            .first()
+            .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+        (link.from_port(), link.to_port())
+    };
 
-    let (source_proc_id, source_port) = parse_port_address(&link.from_port())?;
-    let (dest_proc_id, dest_port) = parse_port_address(&link.to_port())?;
+    let (source_proc_id, source_port) = parse_port_address(&from_port)?;
+    let (dest_proc_id, dest_port) = parse_port_address(&to_port)?;
 
     // Get processor instance arcs first (clone them to release borrow)
     let source_arc = property_graph
-        .get::<ProcessorInstance>(&source_proc_id)
-        .map(|instance| instance.0.clone());
+        .query()
+        .V_id(&source_proc_id)
+        .first()
+        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()));
+
     let dest_arc = property_graph
-        .get::<ProcessorInstance>(&dest_proc_id)
-        .map(|instance| instance.0.clone());
+        .query()
+        .V_id(&dest_proc_id)
+        .first()
+        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()));
 
     // Now we can operate on the cloned Arcs without borrowing property_graph
     if let Some(arc) = source_arc {
@@ -81,14 +96,11 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkId) -> Result<()> {
         }
     }
 
-    // Remove the LinkInstanceComponent - this drops the ring buffer
-    // and all handles will gracefully degrade
-    property_graph.remove_link_component::<LinkInstanceComponent>(link_id)?;
-    property_graph.remove_link_component::<LinkTypeInfoComponent>(link_id)?;
-
-    // Set link state to Disconnected (keep entity for state queries)
-    if let Err(e) = property_graph.set_link_state(link_id, LinkState::Disconnected) {
-        tracing::warn!("Failed to set link state to Disconnected: {}", e);
+    // Remove link components and set state to Disconnected
+    if let Some(link) = property_graph.query_mut().E_id(link_id).first_mut() {
+        link.remove::<LinkInstanceComponent>();
+        link.remove::<LinkTypeInfoComponent>();
+        link.insert(LinkStateComponent(LinkState::Disconnected));
     }
 
     tracing::info!("Unwired link: {} (state: Disconnected)", link_id);
@@ -149,10 +161,14 @@ fn wire_link_ports(
     // Create link instance via factory
     let creation_result = link_factory.create(link_id.clone(), source_port_type, capacity)?;
 
-    // Store instance and type info as ECS components on the link entity
-    property_graph.ensure_link_entity(link_id);
-    property_graph.insert_link(link_id, LinkInstanceComponent(creation_result.instance))?;
-    property_graph.insert_link(link_id, creation_result.type_info)?;
+    // Store instance and type info as components on the link
+    let link = property_graph
+        .query_mut()
+        .E_id(link_id)
+        .first_mut()
+        .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+    link.insert(LinkInstanceComponent(creation_result.instance));
+    link.insert(creation_result.type_info);
 
     // Wire data writer to source processor
     wire_data_writer_to_processor(
@@ -180,7 +196,12 @@ fn wire_link_ports(
     )?;
 
     // Set link state to Wired
-    property_graph.set_link_state(link_id, LinkState::Wired)?;
+    let link = property_graph
+        .query_mut()
+        .E_id(link_id)
+        .first_mut()
+        .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+    link.insert(LinkStateComponent(LinkState::Wired));
 
     tracing::info!("Registered link: {} (state: Wired)", link_id);
     Ok(())
@@ -191,14 +212,20 @@ fn get_processor_pair(
     source_proc_id: &str,
     dest_proc_id: &str,
 ) -> Result<(Arc<Mutex<BoxedProcessor>>, Arc<Mutex<BoxedProcessor>>)> {
-    let source_instance = property_graph
-        .get::<ProcessorInstance>(&source_proc_id.to_string())
+    let source_arc = property_graph
+        .query()
+        .V_id(&source_proc_id.to_string())
+        .first()
+        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()))
         .ok_or_else(|| {
             StreamError::Configuration(format!("Source processor '{}' not found", source_proc_id))
         })?;
 
-    let dest_instance = property_graph
-        .get::<ProcessorInstance>(&dest_proc_id.to_string())
+    let dest_arc = property_graph
+        .query()
+        .V_id(&dest_proc_id.to_string())
+        .first()
+        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()))
         .ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Destination processor '{}' not found",
@@ -206,7 +233,7 @@ fn get_processor_pair(
             ))
         })?;
 
-    Ok((Arc::clone(&source_instance.0), Arc::clone(&dest_instance.0)))
+    Ok((source_arc, dest_arc))
 }
 
 fn validate_audio_compatibility(
@@ -391,26 +418,33 @@ fn wire_data_reader_to_processor(
 }
 
 fn setup_link_output_to_processor_message_writer(
-    property_graph: &Graph,
+    property_graph: &mut Graph,
     source_proc_id: &str,
     dest_proc_id: &str,
     source_port: &str,
 ) -> Result<()> {
     // Get destination's message writer
-    let dest_writer_and_reader = property_graph
-        .get::<LinkOutputToProcessorWriterAndReader>(&dest_proc_id.to_string())
+    let message_writer = property_graph
+        .query()
+        .V_id(&dest_proc_id.to_string())
+        .first()
+        .and_then(|node| {
+            node.get::<LinkOutputToProcessorWriterAndReader>()
+                .map(|w| w.writer.clone())
+        })
         .ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Destination processor '{}' has no LinkOutputToProcessorWriterAndReader",
                 dest_proc_id
             ))
         })?;
-    let message_writer = dest_writer_and_reader.writer.clone();
-    drop(dest_writer_and_reader);
 
     // Get source processor and set its output's message writer
-    let source_instance = property_graph
-        .get::<ProcessorInstance>(&source_proc_id.to_string())
+    let source_arc = property_graph
+        .query()
+        .V_id(&source_proc_id.to_string())
+        .first()
+        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()))
         .ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Source processor '{}' has no ProcessorInstance",
@@ -418,7 +452,7 @@ fn setup_link_output_to_processor_message_writer(
             ))
         })?;
 
-    let mut source_guard = source_instance.0.lock();
+    let mut source_guard = source_arc.lock();
     source_guard.set_link_output_to_processor_message_writer(source_port, message_writer);
 
     tracing::debug!(

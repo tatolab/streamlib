@@ -173,7 +173,7 @@ mod tests {
         pubsub.publish(
             "processor:audio",
             &Event::ProcessorEvent {
-                processor_id: "audio".to_string(),
+                processor_id: crate::core::graph::ProcessorId::from("audio"),
                 event: super::super::events::ProcessorEvent::Started,
             },
         );

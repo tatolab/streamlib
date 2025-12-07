@@ -14,20 +14,11 @@ use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
-use crate::core::graph::link::LinkState;
+use crate::core::graph::edges::LinkState;
 use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::{BoxedProcessor, ProcessorState};
 
-// ============================================================================
-// ECS Component JSON Serialization
-// ============================================================================
-
-/// Trait for ECS components that can serialize to JSON.
-///
-/// Components implement this trait to opt-in to JSON serialization.
-/// Components that don't implement this trait are simply skipped during
-/// serialization - they don't cause errors.
-pub trait EcsComponentJson {
+pub trait JsonComponent {
     /// The component's key in the JSON output.
     fn json_key(&self) -> &'static str;
 
@@ -36,18 +27,18 @@ pub trait EcsComponentJson {
 }
 
 /// The instantiated processor instance.
-pub struct ProcessorInstance(pub Arc<Mutex<BoxedProcessor>>);
+pub struct ProcessorInstanceComponent(pub Arc<Mutex<BoxedProcessor>>);
 
 /// Thread handle for dedicated-thread processors.
-pub struct ThreadHandle(pub JoinHandle<()>);
+pub struct ThreadHandleComponent(pub JoinHandle<()>);
 
 /// Channel to signal processor shutdown.
-pub struct ShutdownChannel {
+pub struct ShutdownChannelComponent {
     pub sender: Sender<()>,
     pub receiver: Option<Receiver<()>>,
 }
 
-impl ShutdownChannel {
+impl ShutdownChannelComponent {
     /// Create a new shutdown channel.
     pub fn new() -> Self {
         let (sender, receiver) = crossbeam_channel::bounded(1);
@@ -63,7 +54,7 @@ impl ShutdownChannel {
     }
 }
 
-impl Default for ShutdownChannel {
+impl Default for ShutdownChannelComponent {
     fn default() -> Self {
         Self::new()
     }
@@ -106,7 +97,7 @@ impl Default for StateComponent {
     }
 }
 
-impl EcsComponentJson for StateComponent {
+impl JsonComponent for StateComponent {
     fn json_key(&self) -> &'static str {
         "state"
     }
@@ -124,9 +115,9 @@ impl EcsComponentJson for StateComponent {
 /// unnecessary processing when paused.
 ///
 /// This is an ECS component attached to processor entities.
-pub struct ProcessorPauseGate(Arc<AtomicBool>);
+pub struct ProcessorPauseGateComponent(Arc<AtomicBool>);
 
-impl ProcessorPauseGate {
+impl ProcessorPauseGateComponent {
     /// Create a new pause gate (not paused by default).
     pub fn new() -> Self {
         Self(Arc::new(AtomicBool::new(false)))
@@ -163,19 +154,19 @@ impl ProcessorPauseGate {
     }
 }
 
-impl Default for ProcessorPauseGate {
+impl Default for ProcessorPauseGateComponent {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Clone for ProcessorPauseGate {
+impl Clone for ProcessorPauseGateComponent {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl EcsComponentJson for ProcessorPauseGate {
+impl JsonComponent for ProcessorPauseGateComponent {
     fn json_key(&self) -> &'static str {
         "paused"
     }
@@ -200,7 +191,7 @@ pub struct ProcessorMetrics {
     pub frames_dropped: u64,
 }
 
-impl EcsComponentJson for ProcessorMetrics {
+impl JsonComponent for ProcessorMetrics {
     fn json_key(&self) -> &'static str {
         "metrics"
     }
@@ -217,10 +208,10 @@ impl EcsComponentJson for ProcessorMetrics {
 }
 
 /// Marker for processors that must run on main thread (Apple frameworks).
-pub struct MainThreadMarker;
+pub struct MainThreadMarkerComponent;
 
 /// Marker for processors using Rayon work-stealing pool.
-pub struct RayonPoolMarker;
+pub struct RayonPoolMarkerComponent;
 
 /// Marker for lightweight processors (no dedicated resources).
 pub struct LightweightMarker;
@@ -235,9 +226,9 @@ pub struct LightweightMarker;
 ///
 /// External observers can check for this component to know if an entity
 /// is scheduled for removal but not yet fully deleted.
-pub struct PendingDeletion;
+pub struct PendingDeletionComponent;
 
-impl EcsComponentJson for PendingDeletion {
+impl JsonComponent for PendingDeletionComponent {
     fn json_key(&self) -> &'static str {
         "pending_deletion"
     }
@@ -256,7 +247,7 @@ impl Default for LinkStateComponent {
     }
 }
 
-impl EcsComponentJson for LinkStateComponent {
+impl JsonComponent for LinkStateComponent {
     fn json_key(&self) -> &'static str {
         "state"
     }
@@ -272,7 +263,7 @@ mod tests {
 
     #[test]
     fn test_shutdown_channel() {
-        let mut channel = ShutdownChannel::new();
+        let mut channel = ShutdownChannelComponent::new();
         let receiver = channel.take_receiver().expect("should have receiver");
 
         // Send shutdown signal
@@ -310,14 +301,14 @@ mod tests {
 
     #[test]
     fn test_processor_pause_gate_default() {
-        let gate = ProcessorPauseGate::default();
+        let gate = ProcessorPauseGateComponent::default();
         assert!(!gate.is_paused());
         assert!(gate.should_process());
     }
 
     #[test]
     fn test_processor_pause_gate_pause_resume() {
-        let gate = ProcessorPauseGate::new();
+        let gate = ProcessorPauseGateComponent::new();
 
         // Initially not paused
         assert!(!gate.is_paused());
@@ -336,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_processor_pause_gate_set_paused() {
-        let gate = ProcessorPauseGate::new();
+        let gate = ProcessorPauseGateComponent::new();
 
         gate.set_paused(true);
         assert!(gate.is_paused());
@@ -347,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_processor_pause_gate_clone_shares_state() {
-        let gate1 = ProcessorPauseGate::new();
+        let gate1 = ProcessorPauseGateComponent::new();
         let gate2 = gate1.clone();
 
         // Both see the same state
@@ -367,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_processor_pause_gate_clone_inner_shares_state() {
-        let gate = ProcessorPauseGate::new();
+        let gate = ProcessorPauseGateComponent::new();
         let inner = gate.clone_inner();
 
         // Both see the same state
@@ -385,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_processor_pause_gate_json() {
-        let gate = ProcessorPauseGate::new();
+        let gate = ProcessorPauseGateComponent::new();
 
         assert_eq!(gate.json_key(), "paused");
         assert_eq!(gate.to_json(), serde_json::json!(false));

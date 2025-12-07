@@ -1,9 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::link::LinkDirection;
-use super::link_port_ref::LinkPortRef;
-use super::node::ProcessorNode;
+use super::super::{LinkDirection, LinkPortRef, ProcessorNode};
 
 /// Marker trait for output ports.
 pub trait OutputPortMarker {
@@ -64,34 +62,22 @@ mod tests {
 
     #[test]
     fn test_output_marker() {
-        let node = ProcessorNode::new(
-            "camera_0".to_string(),
-            "MockProcessor".to_string(),
-            None,
-            vec![],
-            vec![],
-        );
+        let node = ProcessorNode::new("MockProcessor", None, vec![], vec![]);
 
         let port_ref = output::<MockVideoOutput>(&node);
 
-        assert_eq!(port_ref.processor_id, "camera_0");
+        assert_eq!(port_ref.processor_id, node.id.as_str());
         assert_eq!(port_ref.port_name, "video");
         assert!(port_ref.is_output());
     }
 
     #[test]
     fn test_input_marker() {
-        let node = ProcessorNode::new(
-            "display_0".to_string(),
-            "MockProcessor".to_string(),
-            None,
-            vec![],
-            vec![],
-        );
+        let node = ProcessorNode::new("MockProcessor", None, vec![], vec![]);
 
         let port_ref = input::<MockVideoInput>(&node);
 
-        assert_eq!(port_ref.processor_id, "display_0");
+        assert_eq!(port_ref.processor_id, node.id.as_str());
         assert_eq!(port_ref.port_name, "video");
         assert!(port_ref.is_input());
     }

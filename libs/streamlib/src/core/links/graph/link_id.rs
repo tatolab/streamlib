@@ -31,6 +31,12 @@ pub mod __private {
 )]
 pub struct LinkId(String);
 
+impl PartialEq<LinkId> for &LinkId {
+    fn eq(&self, other: &LinkId) -> bool {
+        **self == *other;
+    }
+}
+
 /// Errors that can occur when parsing a [`LinkId`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkIdError {

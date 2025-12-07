@@ -64,11 +64,7 @@ mod tests {
     #[test]
     fn test_default_link_delegate_does_nothing() {
         let delegate = DefaultLinkDelegate;
-        let link = Link::new(
-            LinkId::from_string("test_link").unwrap(),
-            "source.output",
-            "target.input",
-        );
+        let link = Link::new("source.output", "target.input");
 
         assert!(delegate.will_wire(&link).is_ok());
         assert!(delegate.did_wire(&link).is_ok());
@@ -79,11 +75,7 @@ mod tests {
     #[test]
     fn test_counting_link_delegate() {
         let delegate = Arc::new(CountingLinkDelegate::new());
-        let link = Link::new(
-            LinkId::from_string("test_link").unwrap(),
-            "source.output",
-            "target.input",
-        );
+        let link = Link::new("source.output", "target.input");
 
         delegate.will_wire(&link).unwrap();
         delegate.did_wire(&link).unwrap();

@@ -40,7 +40,7 @@ pub use frames::{
     AudioChannelCount, AudioFrame, DataFrame, DynamicFrame, MetadataValue, VideoFrame,
 };
 pub use graph::{
-    input, output, EcsComponentJson, Graph, InputPortMarker, Link, LinkPortRef, OutputPortMarker,
+    input, output, JsonComponent, Graph, InputPortMarker, Link, LinkPortRef, OutputPortMarker,
     ProcessorId, ProcessorNode,
 };
 pub use links::{

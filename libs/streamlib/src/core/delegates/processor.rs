@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::core::error::Result;
-use crate::core::graph::{ProcessorId, ProcessorNode};
+use crate::core::graph::ProcessorNode;
 use crate::core::processors::BoxedProcessor;
 
 /// Delegate for processor lifecycle events.
@@ -39,47 +39,47 @@ pub trait ProcessorDelegate: Send + Sync {
     }
 
     /// Called before a processor starts.
-    fn will_start(&self, _id: &ProcessorId) -> Result<()> {
+    fn will_start(&self, _id: &str) -> Result<()> {
         Ok(())
     }
 
     /// Called after a processor starts successfully.
-    fn did_start(&self, _id: &ProcessorId) -> Result<()> {
+    fn did_start(&self, _id: &str) -> Result<()> {
         Ok(())
     }
 
     /// Called before a processor stops.
-    fn will_stop(&self, _id: &ProcessorId) -> Result<()> {
+    fn will_stop(&self, _id: &str) -> Result<()> {
         Ok(())
     }
 
     /// Called after a processor stops.
-    fn did_stop(&self, _id: &ProcessorId) -> Result<()> {
+    fn did_stop(&self, _id: &str) -> Result<()> {
         Ok(())
     }
 
     /// Called before a processor is paused. Return `Err` to reject the pause.
-    fn will_pause(&self, _id: &ProcessorId) -> Result<()> {
+    fn will_pause(&self, _id: &str) -> Result<()> {
         Ok(())
     }
 
     /// Called after a processor is paused.
-    fn did_pause(&self, _id: &ProcessorId) {
+    fn did_pause(&self, _id: &str) {
         // No-op by default
     }
 
     /// Called before a processor is resumed. Return `Err` to reject the resume.
-    fn will_resume(&self, _id: &ProcessorId) -> Result<()> {
+    fn will_resume(&self, _id: &str) -> Result<()> {
         Ok(())
     }
 
     /// Called after a processor is resumed.
-    fn did_resume(&self, _id: &ProcessorId) {
+    fn did_resume(&self, _id: &str) {
         // No-op by default
     }
 
     /// Called when a processor's config is updated.
-    fn did_update_config(&self, _id: &ProcessorId, _config: &serde_json::Value) -> Result<()> {
+    fn did_update_config(&self, _id: &str, _config: &serde_json::Value) -> Result<()> {
         Ok(())
     }
 }
@@ -97,39 +97,39 @@ impl ProcessorDelegate for Arc<dyn ProcessorDelegate> {
         (**self).did_create(node, processor)
     }
 
-    fn will_start(&self, id: &ProcessorId) -> Result<()> {
+    fn will_start(&self, id: &str) -> Result<()> {
         (**self).will_start(id)
     }
 
-    fn did_start(&self, id: &ProcessorId) -> Result<()> {
+    fn did_start(&self, id: &str) -> Result<()> {
         (**self).did_start(id)
     }
 
-    fn will_stop(&self, id: &ProcessorId) -> Result<()> {
+    fn will_stop(&self, id: &str) -> Result<()> {
         (**self).will_stop(id)
     }
 
-    fn did_stop(&self, id: &ProcessorId) -> Result<()> {
+    fn did_stop(&self, id: &str) -> Result<()> {
         (**self).did_stop(id)
     }
 
-    fn will_pause(&self, id: &ProcessorId) -> Result<()> {
+    fn will_pause(&self, id: &str) -> Result<()> {
         (**self).will_pause(id)
     }
 
-    fn did_pause(&self, id: &ProcessorId) {
+    fn did_pause(&self, id: &str) {
         (**self).did_pause(id)
     }
 
-    fn will_resume(&self, id: &ProcessorId) -> Result<()> {
+    fn will_resume(&self, id: &str) -> Result<()> {
         (**self).will_resume(id)
     }
 
-    fn did_resume(&self, id: &ProcessorId) {
+    fn did_resume(&self, id: &str) {
         (**self).did_resume(id)
     }
 
-    fn did_update_config(&self, id: &ProcessorId, config: &serde_json::Value) -> Result<()> {
+    fn did_update_config(&self, id: &str, config: &serde_json::Value) -> Result<()> {
         (**self).did_update_config(id, config)
     }
 }

@@ -8,7 +8,7 @@ use std::any::TypeId;
 use serde_json::Value as JsonValue;
 
 use super::super::runtime::BoxedLinkInstance;
-use crate::core::graph::EcsComponentJson;
+use crate::core::graph::JsonComponent;
 
 /// ECS component storing the link instance (ring buffer ownership).
 ///
@@ -16,7 +16,7 @@ use crate::core::graph::EcsComponentJson;
 /// and all handles (data writers/readers) gracefully degrade.
 pub struct LinkInstanceComponent(pub BoxedLinkInstance);
 
-impl EcsComponentJson for LinkInstanceComponent {
+impl JsonComponent for LinkInstanceComponent {
     fn json_key(&self) -> &'static str {
         "buffer"
     }
@@ -53,7 +53,7 @@ impl LinkTypeInfoComponent {
     }
 }
 
-impl EcsComponentJson for LinkTypeInfoComponent {
+impl JsonComponent for LinkTypeInfoComponent {
     fn json_key(&self) -> &'static str {
         "type_info"
     }

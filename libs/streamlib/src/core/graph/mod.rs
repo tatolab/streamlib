@@ -4,39 +4,34 @@
 mod components;
 #[allow(clippy::module_inception)]
 mod graph;
-#[doc(hidden)]
-pub mod internal;
-mod link;
-mod link_port_markers;
-mod link_port_ref;
-mod node;
-pub mod query;
+mod internal;
+
+mod edges;
+mod nodes;
+mod query;
+mod traits;
 mod validation;
 
-// Internal types - only accessible within the crate
-pub(crate) use internal::{GraphChecksum, InternalProcessorLinkGraph};
-
-// Re-export for testing (used by integration tests)
-#[doc(hidden)]
-pub use internal::processor_link_graph::compute_config_checksum;
-
-// Re-export all public types
-pub use components::{
-    EcsComponentJson, LightweightMarker, LinkOutputToProcessorWriterAndReader, LinkStateComponent,
-    MainThreadMarker, PendingDeletion, ProcessorInstance, ProcessorMetrics, ProcessorPauseGate,
-    RayonPoolMarker, ShutdownChannel, StateComponent, ThreadHandle,
-};
-pub use link::{Link, LinkDirection, LinkEndpoint, LinkState};
-pub use link_port_markers::{input, output, InputPortMarker, OutputPortMarker, PortMarker};
-pub use link_port_ref::{IntoLinkPortRef, LinkPortRef};
-pub use node::{NodePorts, PortInfo, PortKind, ProcessorId, ProcessorNode};
+pub use traits::{GraphEdge, GraphNode, GraphWeight};
 
 // Public API - Graph is the unified interface
 pub use graph::{Graph, GraphState};
 
 // Query interface
 pub use query::{
-    FieldResolver, GraphQueryExecutor, GraphQueryInterface, LinkQuery, LinkQueryBuilder,
-    LinkQueryResult, ProcessorQuery, ProcessorQueryBuilder, ProcessorQueryResult, Query,
-    QueryBuilder,
+    LinkQuery, LinkQueryMut, ProcessorQuery, ProcessorQueryMut, QueryBuilder, QueryBuilderMut,
+};
+
+pub use edges::{
+    input, output, InputPortMarker, IntoLinkPortRef, Link, LinkDirection, LinkEndpoint,
+    LinkPortRef, LinkState, OutputPortMarker, PortMarker,
+};
+
+pub use nodes::{NodePorts, PortInfo, PortKind, ProcessorId, ProcessorNode};
+
+pub use components::{
+    JsonComponent, LightweightMarker, LinkOutputToProcessorWriterAndReader, LinkStateComponent,
+    MainThreadMarkerComponent, PendingDeletionComponent, ProcessorInstanceComponent,
+    ProcessorMetrics, ProcessorPauseGateComponent, RayonPoolMarkerComponent,
+    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
 };
