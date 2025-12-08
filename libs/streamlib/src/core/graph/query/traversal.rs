@@ -8,11 +8,11 @@ use crate::core::graph::{Link, ProcessorNode};
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
 /// Entry point for graph queries.
-pub struct QueryBuilder<'a> {
+pub struct TraversalSource<'a> {
     pub(in crate::core::graph::query) graph: &'a DiGraph<ProcessorNode, Link>,
 }
 
-impl<'a> QueryBuilder<'a> {
+impl<'a> TraversalSource<'a> {
     /// Create a new query builder for the given graph.
     pub(in crate::core::graph) fn new(graph: &'a DiGraph<ProcessorNode, Link>) -> Self {
         Self { graph }
@@ -20,13 +20,13 @@ impl<'a> QueryBuilder<'a> {
 }
 
 /// Read-only query over processor nodes.
-pub struct ProcessorQuery<'a> {
+pub struct ProcessorTraversal<'a> {
     pub(in crate::core::graph::query) graph: &'a DiGraph<ProcessorNode, Link>,
     pub(in crate::core::graph::query) ids: Vec<NodeIndex>,
 }
 
 /// Read-only query over links.
-pub struct LinkQuery<'a> {
+pub struct LinkTraversal<'a> {
     pub(in crate::core::graph::query) graph: &'a DiGraph<ProcessorNode, Link>,
     pub(in crate::core::graph::query) ids: Vec<EdgeIndex>,
 }

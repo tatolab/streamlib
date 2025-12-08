@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{execution::ThreadPriority, Result, StreamError};
+use crate::core::{Result, StreamError};
 
 #[cfg(target_os = "macos")]
 fn set_realtime_priority() -> Result<()> {

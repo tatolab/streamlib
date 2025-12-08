@@ -33,7 +33,7 @@ impl GraphInspector {
     pub fn processor(&self, id: &ProcessorUniqueId) -> Option<ProcessorSnapshot> {
         let graph = self.graph.read();
 
-        let node = graph.query().v(id).first()?;
+        let node = graph.traversal().v(id).first()?;
 
         // Get state from node's component storage if available
         let state = node
@@ -63,7 +63,7 @@ impl GraphInspector {
     pub fn link(&self, id: &LinkUniqueId) -> Option<LinkSnapshot> {
         let graph = self.graph.read();
 
-        let link = graph.query().e(id).first()?;
+        let link = graph.traversal().e(id).first()?;
 
         Some(LinkSnapshot {
             id: id.clone(),
@@ -81,14 +81,14 @@ impl GraphInspector {
     pub fn health(&self) -> GraphHealth {
         let graph = self.graph.read();
 
-        let processor_count = graph.query().v().count();
-        let link_count = graph.query().e().count();
+        let processor_count = graph.traversal().v(()).count();
+        let link_count = graph.traversal().e(()).count();
 
         // Aggregate metrics from all processors
         let mut total_dropped = 0u64;
         let mut bottlenecks = Vec::new();
 
-        for node in graph.query().v().iter() {
+        for node in graph.traversal().v(()).iter() {
             if let Some(metrics) = node.get::<ProcessorMetrics>() {
                 total_dropped += metrics.frames_dropped;
 
@@ -116,13 +116,13 @@ impl GraphInspector {
     /// List all processor IDs.
     pub fn processor_ids(&self) -> Vec<ProcessorUniqueId> {
         let graph = self.graph.read();
-        graph.query().v().ids()
+        graph.traversal().v(()).ids()
     }
 
     /// List all link IDs.
     pub fn link_ids(&self) -> Vec<LinkUniqueId> {
         let graph = self.graph.read();
-        graph.query().e().ids()
+        graph.traversal().e(()).ids()
     }
 
     /// Get the current graph state.
@@ -139,13 +139,13 @@ impl GraphInspector {
     /// Get processor count.
     pub fn processor_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.query().v().count()
+        graph.traversal().v(()).count()
     }
 
     /// Get link count.
     pub fn link_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.query().e().count()
+        graph.traversal().e(()).count()
     }
 }
 

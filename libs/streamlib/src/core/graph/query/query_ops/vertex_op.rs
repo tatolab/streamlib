@@ -32,27 +32,27 @@ mod private {
 
 use petgraph::visit::IntoNodeReferences;
 
-use crate::core::graph::{ProcessorQuery, QueryBuilder};
+use crate::core::graph::{ProcessorTraversal, TraversalSource};
 
-impl<'a> QueryBuilder<'a> {
+impl<'a> TraversalSource<'a> {
     /// Start traversal from vertices.
     ///
     /// Accepts:
     /// - `()` - all vertices
     /// - `&str` - vertex by ID string
     /// - `ProcessorUniqueId` - vertex by ID
-    pub fn v(self, filter: impl private::IntoVertexFilter) -> ProcessorQuery<'a> {
+    pub fn v(self, filter: impl private::IntoVertexFilter) -> ProcessorTraversal<'a> {
         match filter.into_filter() {
             Some(id) => {
                 // code for some
                 self.graph
                     .node_references()
                     .find(|(_, processor_node)| processor_node.id == id)
-                    .map(|(idx, _)| ProcessorQuery {
+                    .map(|(idx, _)| ProcessorTraversal {
                         graph: self.graph,
                         ids: vec![idx],
                     })
-                    .unwrap_or_else(|| ProcessorQuery {
+                    .unwrap_or_else(|| ProcessorTraversal {
                         graph: self.graph,
                         ids: vec![],
                     })
@@ -63,7 +63,7 @@ impl<'a> QueryBuilder<'a> {
                     .node_references()
                     .map(|(idx, _)| idx)
                     .collect::<Vec<_>>();
-                ProcessorQuery {
+                ProcessorTraversal {
                     graph: self.graph,
                     ids,
                 }

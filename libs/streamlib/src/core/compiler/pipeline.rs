@@ -301,8 +301,8 @@ impl Compiler {
         for link_id in &delta.links_to_remove {
             // Get link info for event before removal
             if let Some(link) = graph
-                .query()
-                .e()
+                .traversal()
+                .e(())
                 .filter(|link| link.id == *link_id)
                 .first()
             {
@@ -409,13 +409,9 @@ impl Compiler {
         for link_id in &delta.links_to_add {
             // Get link info for event - extract what we need then drop the borrow
             let (from_port, to_port) = {
-                let link = property_graph
-                    .query()
-                    .e(link_id)
-                    .first()
-                    .ok_or_else(|| {
-                        StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
-                    })?;
+                let link = property_graph.traversal().e(link_id).first().ok_or_else(|| {
+                    StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                })?;
                 (link.from_port().to_string(), link.to_port().to_string())
             };
 
@@ -427,13 +423,9 @@ impl Compiler {
 
             // Call link delegate will_wire hook
             {
-                let link = property_graph
-                    .query()
-                    .e(link_id)
-                    .first()
-                    .ok_or_else(|| {
-                        StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
-                    })?;
+                let link = property_graph.traversal().e(link_id).first().ok_or_else(|| {
+                    StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                })?;
                 self.link_delegate.will_wire(link)?;
             }
 
@@ -443,13 +435,9 @@ impl Compiler {
 
             // Call link delegate did_wire hook
             {
-                let link = property_graph
-                    .query()
-                    .e(link_id)
-                    .first()
-                    .ok_or_else(|| {
-                        StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
-                    })?;
+                let link = property_graph.traversal().e(link_id).first().ok_or_else(|| {
+                    StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                })?;
                 self.link_delegate.did_wire(link)?;
             }
 
@@ -505,7 +493,7 @@ impl Compiler {
             let proc_id = &update.id;
 
             // Get config from the ProcessorNode in the graph - clone it to avoid borrow issues
-            let config_json = match property_graph.query().v(proc_id).first() {
+            let config_json = match property_graph.traversal().v(proc_id).first() {
                 Some(node) => match &node.config {
                     Some(config) => config.clone(),
                     None => {
@@ -521,7 +509,7 @@ impl Compiler {
 
             // Get the ProcessorInstance and apply config
             let processor_arc = property_graph
-                .query()
+                .traversal()
                 .v(proc_id)
                 .first()
                 .and_then(|node| {
@@ -564,8 +552,8 @@ impl Compiler {
 
         // Find all processors with ProcessorInstance but no ThreadHandle (compiled but not started)
         let processors_to_start: Vec<ProcessorUniqueId> = property_graph
-            .query()
-            .v()
+            .traversal()
+            .v(())
             .has_component::<ProcessorInstanceComponent>()
             .filter(|node| !node.has::<ThreadHandleComponent>())
             .ids();

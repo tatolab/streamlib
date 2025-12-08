@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::edges::Link;
 use super::nodes::ProcessorNode;
 
-use super::query::QueryBuilder;
+use super::query::TraversalSource;
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,8 +66,8 @@ impl Graph {
     // =========================================================================
 
     /// Start a read-only query on the graph.
-    pub fn query(&self) -> QueryBuilder<'_> {
-        QueryBuilder::new(&self.digraph)
+    pub fn traversal(&self) -> TraversalSource<'_> {
+        TraversalSource::new(&self.digraph)
     }
 
     // =========================================================================

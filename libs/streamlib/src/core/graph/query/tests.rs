@@ -273,7 +273,7 @@ mod builder_construction {
 
     #[test]
     fn test_v_creates_all_start() {
-        let query = Query::build().v().ids();
+        let query = Query::build().v(()).ids();
         assert!(matches!(query.start, ProcessorStart::All));
     }
 
@@ -323,20 +323,20 @@ mod builder_construction {
 
     #[test]
     fn test_no_steps_initially() {
-        let query = Query::build().v().ids();
+        let query = Query::build().v(()).ids();
         assert!(query.steps.is_empty());
     }
 
     #[test]
     fn test_single_step_added() {
-        let query = Query::build().v().of_type("Test").ids();
+        let query = Query::build().v(()).of_type("Test").ids();
         assert_eq!(query.steps.len(), 1);
     }
 
     #[test]
     fn test_multiple_steps_added() {
         let query = Query::build()
-            .v()
+            .v(())
             .of_type("Test")
             .sources()
             .downstream()
@@ -347,7 +347,7 @@ mod builder_construction {
     #[test]
     fn test_ten_steps_chain() {
         let query = Query::build()
-            .v()
+            .v(())
             .of_type("A")
             .sources()
             .sinks()
@@ -375,14 +375,14 @@ mod terminal_operations {
     #[test]
     fn test_ids_empty_graph() {
         let graph = empty_graph();
-        let result = graph.execute(&Query::build().v().ids());
+        let result = graph.execute(&Query::build().v(()).ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_ids_single_processor() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().ids());
+        let result = graph.execute(&Query::build().v(()).ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("A")));
     }
@@ -390,14 +390,14 @@ mod terminal_operations {
     #[test]
     fn test_ids_linear_graph() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().ids());
+        let result = graph.execute(&Query::build().v(()).ids());
         assert_eq!(result.len(), 3);
     }
 
     #[test]
     fn test_ids_complex_graph() {
         let graph = complex_graph();
-        let result = graph.execute(&Query::build().v().ids());
+        let result = graph.execute(&Query::build().v(()).ids());
         assert_eq!(result.len(), 7);
     }
 
@@ -406,35 +406,35 @@ mod terminal_operations {
     #[test]
     fn test_count_empty_graph() {
         let graph = empty_graph();
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 0);
     }
 
     #[test]
     fn test_count_single_processor() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 1);
     }
 
     #[test]
     fn test_count_linear_graph() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 3);
     }
 
     #[test]
     fn test_count_diamond_graph() {
         let graph = diamond_graph();
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 4);
     }
 
     #[test]
     fn test_count_complex_graph() {
         let graph = complex_graph();
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 7);
     }
 
@@ -443,35 +443,35 @@ mod terminal_operations {
     #[test]
     fn test_first_empty_graph() {
         let graph = empty_graph();
-        let result = graph.execute(&Query::build().v().first());
+        let result = graph.execute(&Query::build().v(()).first());
         assert_eq!(result, None);
     }
 
     #[test]
     fn test_first_single_processor() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().first());
+        let result = graph.execute(&Query::build().v(()).first());
         assert!(result.is_some());
     }
 
     #[test]
     fn test_first_linear_graph() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().first());
+        let result = graph.execute(&Query::build().v(()).first());
         assert!(result.is_some());
     }
 
     #[test]
     fn test_first_with_filter_match() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").first());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").first());
         assert_eq!(result, Some(pid("A")));
     }
 
     #[test]
     fn test_first_with_filter_no_match() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("NonExistent").first());
+        let result = graph.execute(&Query::build().v(()).of_type("NonExistent").first());
         assert_eq!(result, None);
     }
 
@@ -480,28 +480,28 @@ mod terminal_operations {
     #[test]
     fn test_exists_empty_graph() {
         let graph = empty_graph();
-        let result = graph.execute(&Query::build().v().exists());
+        let result = graph.execute(&Query::build().v(()).exists());
         assert!(!result);
     }
 
     #[test]
     fn test_exists_single_processor() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().exists());
+        let result = graph.execute(&Query::build().v(()).exists());
         assert!(result);
     }
 
     #[test]
     fn test_exists_with_filter_match() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").exists());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").exists());
         assert!(result);
     }
 
     #[test]
     fn test_exists_with_filter_no_match() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("NonExistent").exists());
+        let result = graph.execute(&Query::build().v(()).of_type("NonExistent").exists());
         assert!(!result);
     }
 
@@ -510,14 +510,14 @@ mod terminal_operations {
     #[test]
     fn test_nodes_empty_graph() {
         let graph = empty_graph();
-        let result = graph.execute(&Query::build().v().nodes());
+        let result = graph.execute(&Query::build().v(()).nodes());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_nodes_single_processor() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().nodes());
+        let result = graph.execute(&Query::build().v(()).nodes());
         assert_eq!(result.len(), 1);
         assert_eq!(&result[0].id, "A");
         assert_eq!(&result[0].processor_type, "TestProcessor");
@@ -526,14 +526,14 @@ mod terminal_operations {
     #[test]
     fn test_nodes_linear_graph() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().nodes());
+        let result = graph.execute(&Query::build().v(()).nodes());
         assert_eq!(result.len(), 3);
     }
 
     #[test]
     fn test_nodes_preserves_type_info() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").nodes());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").nodes());
         assert_eq!(result.len(), 1);
         assert_eq!(&result[0].processor_type, "SourceProcessor");
     }
@@ -657,14 +657,14 @@ mod filter_of_type {
     #[test]
     fn test_of_type_no_match() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("NonExistent").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("NonExistent").ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_of_type_single_match() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("A")));
     }
@@ -672,7 +672,7 @@ mod filter_of_type {
     #[test]
     fn test_of_type_multiple_matches() {
         let graph = diamond_graph();
-        let result = graph.execute(&Query::build().v().of_type("EncoderProcessor").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("EncoderProcessor").ids());
         assert_eq!(result.len(), 2);
         assert!(result.contains(&pid("B")));
         assert!(result.contains(&pid("C")));
@@ -681,35 +681,35 @@ mod filter_of_type {
     #[test]
     fn test_of_type_all_match() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().of_type("TestProcessor").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("TestProcessor").ids());
         assert_eq!(result.len(), 1);
     }
 
     #[test]
     fn test_of_type_case_sensitive() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("sourceprocessor").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("sourceprocessor").ids());
         assert!(result.is_empty()); // Case doesn't match
     }
 
     #[test]
     fn test_of_type_empty_string() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("").ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_of_type_partial_match_fails() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("Source").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("Source").ids());
         assert!(result.is_empty()); // "Source" != "SourceProcessor"
     }
 
     #[test]
     fn test_of_type_with_complex_graph() {
         let graph = complex_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").ids());
         assert_eq!(result.len(), 2);
         assert!(result.contains(&pid("src1")));
         assert!(result.contains(&pid("src2")));
@@ -719,13 +719,13 @@ mod filter_of_type {
     fn test_of_type_mixed_type_graph() {
         let graph = mixed_type_graph();
 
-        let cameras = graph.execute(&Query::build().v().of_type("CameraProcessor").ids());
+        let cameras = graph.execute(&Query::build().v(()).of_type("CameraProcessor").ids());
         assert_eq!(cameras.len(), 1);
 
-        let encoders_h264 = graph.execute(&Query::build().v().of_type("H264Encoder").ids());
+        let encoders_h264 = graph.execute(&Query::build().v(()).of_type("H264Encoder").ids());
         assert_eq!(encoders_h264.len(), 1);
 
-        let encoders_opus = graph.execute(&Query::build().v().of_type("OpusEncoder").ids());
+        let encoders_opus = graph.execute(&Query::build().v(()).of_type("OpusEncoder").ids());
         assert_eq!(encoders_opus.len(), 1);
     }
 }
@@ -736,14 +736,14 @@ mod filter_sources {
     #[test]
     fn test_sources_empty_graph() {
         let graph = empty_graph();
-        let result = graph.execute(&Query::build().v().sources().ids());
+        let result = graph.execute(&Query::build().v(()).sources().ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_sources_single_processor() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().sources().ids());
+        let result = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("A")));
     }
@@ -751,7 +751,7 @@ mod filter_sources {
     #[test]
     fn test_sources_linear_graph() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().sources().ids());
+        let result = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("A")));
     }
@@ -759,7 +759,7 @@ mod filter_sources {
     #[test]
     fn test_sources_diamond_graph() {
         let graph = diamond_graph();
-        let result = graph.execute(&Query::build().v().sources().ids());
+        let result = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("A")));
     }
@@ -767,7 +767,7 @@ mod filter_sources {
     #[test]
     fn test_sources_complex_graph() {
         let graph = complex_graph();
-        let result = graph.execute(&Query::build().v().sources().ids());
+        let result = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(result.len(), 2);
         assert!(result.contains(&pid("src1")));
         assert!(result.contains(&pid("src2")));
@@ -779,7 +779,7 @@ mod filter_sources {
         graph.add_processor("A".into(), "Test".into(), 0);
         graph.add_processor("B".into(), "Test".into(), 0);
         graph.add_processor("C".into(), "Test".into(), 0);
-        let result = graph.execute(&Query::build().v().sources().ids());
+        let result = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(result.len(), 3);
     }
 }
@@ -790,14 +790,14 @@ mod filter_sinks {
     #[test]
     fn test_sinks_empty_graph() {
         let graph = empty_graph();
-        let result = graph.execute(&Query::build().v().sinks().ids());
+        let result = graph.execute(&Query::build().v(()).sinks().ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_sinks_single_processor() {
         let graph = single_processor_graph();
-        let result = graph.execute(&Query::build().v().sinks().ids());
+        let result = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("A")));
     }
@@ -805,7 +805,7 @@ mod filter_sinks {
     #[test]
     fn test_sinks_linear_graph() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().sinks().ids());
+        let result = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("C")));
     }
@@ -813,7 +813,7 @@ mod filter_sinks {
     #[test]
     fn test_sinks_diamond_graph() {
         let graph = diamond_graph();
-        let result = graph.execute(&Query::build().v().sinks().ids());
+        let result = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("D")));
     }
@@ -821,7 +821,7 @@ mod filter_sinks {
     #[test]
     fn test_sinks_complex_graph() {
         let graph = complex_graph();
-        let result = graph.execute(&Query::build().v().sinks().ids());
+        let result = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(result.len(), 2);
         assert!(result.contains(&pid("sink1")));
         assert!(result.contains(&pid("sink2")));
@@ -832,7 +832,7 @@ mod filter_sinks {
         let mut graph = Graph::new();
         graph.add_processor("A".into(), "Test".into(), 0);
         graph.add_processor("B".into(), "Test".into(), 0);
-        let result = graph.execute(&Query::build().v().sinks().ids());
+        let result = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(result.len(), 2);
     }
 }
@@ -843,14 +843,14 @@ mod filter_in_state {
     #[test]
     fn test_in_state_no_components() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().in_state(ProcessorState::Running).ids());
+        let result = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_in_state_running() {
         let graph = graph_with_states();
-        let result = graph.execute(&Query::build().v().in_state(ProcessorState::Running).ids());
+        let result = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).ids());
         assert_eq!(result.len(), 2);
         assert!(result.contains(&pid("running1")));
         assert!(result.contains(&pid("running2")));
@@ -859,7 +859,7 @@ mod filter_in_state {
     #[test]
     fn test_in_state_idle() {
         let graph = graph_with_states();
-        let result = graph.execute(&Query::build().v().in_state(ProcessorState::Idle).ids());
+        let result = graph.execute(&Query::build().v(()).in_state(ProcessorState::Idle).ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("idle1")));
     }
@@ -867,7 +867,7 @@ mod filter_in_state {
     #[test]
     fn test_in_state_stopped() {
         let graph = graph_with_states();
-        let result = graph.execute(&Query::build().v().in_state(ProcessorState::Stopped).ids());
+        let result = graph.execute(&Query::build().v(()).in_state(ProcessorState::Stopped).ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("stopped1")));
     }
@@ -875,7 +875,7 @@ mod filter_in_state {
     #[test]
     fn test_in_state_no_match() {
         let graph = graph_with_states();
-        let result = graph.execute(&Query::build().v().in_state(ProcessorState::Paused).ids());
+        let result = graph.execute(&Query::build().v(()).in_state(ProcessorState::Paused).ids());
         assert!(result.is_empty());
     }
 }
@@ -886,14 +886,14 @@ mod filter_custom {
     #[test]
     fn test_filter_by_id_prefix() {
         let graph = complex_graph();
-        let result = graph.execute(&Query::build().v().filter(|n| n.id.starts_with("src")).ids());
+        let result = graph.execute(&Query::build().v(()).filter(|n| n.id.starts_with("src")).ids());
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn test_filter_by_id_suffix() {
         let graph = complex_graph();
-        let result = graph.execute(&Query::build().v().filter(|n| n.id.ends_with("1")).ids());
+        let result = graph.execute(&Query::build().v(()).filter(|n| n.id.ends_with("1")).ids());
         assert_eq!(result.len(), 3); // src1, proc1, sink1
     }
 
@@ -902,7 +902,7 @@ mod filter_custom {
         let graph = mixed_type_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| n.processor_type.contains("Encoder"))
                 .ids(),
         );
@@ -912,21 +912,21 @@ mod filter_custom {
     #[test]
     fn test_filter_always_true() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().filter(|_| true).ids());
+        let result = graph.execute(&Query::build().v(()).filter(|_| true).ids());
         assert_eq!(result.len(), 3);
     }
 
     #[test]
     fn test_filter_always_false() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().filter(|_| false).ids());
+        let result = graph.execute(&Query::build().v(()).filter(|_| false).ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_filter_by_id_length() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().filter(|n| n.id.len() == 1).ids());
+        let result = graph.execute(&Query::build().v(()).filter(|n| n.id.len() == 1).ids());
         assert_eq!(result.len(), 3); // A, B, C
     }
 }
@@ -939,7 +939,7 @@ mod filter_where_field {
         let graph = mixed_type_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str() == Some("CameraProcessor"))
                 .ids(),
         );
@@ -952,7 +952,7 @@ mod filter_where_field {
         let graph = linear_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str() == Some("NonExistent"))
                 .ids(),
         );
@@ -964,7 +964,7 @@ mod filter_where_field {
         let graph = diamond_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str() == Some("EncoderProcessor"))
                 .ids(),
         );
@@ -976,7 +976,7 @@ mod filter_where_field {
         let graph = linear_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("nonexistent", |_| true)
                 .ids(),
         );
@@ -988,7 +988,7 @@ mod filter_where_field {
         let graph = linear_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| {
                     v.as_str().map(|s| s.contains("Processor")).unwrap_or(false)
                 })
@@ -1004,21 +1004,21 @@ mod filter_has_field {
     #[test]
     fn test_has_field_type() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().has_field("type").ids());
+        let result = graph.execute(&Query::build().v(()).has_field("type").ids());
         assert_eq!(result.len(), 3);
     }
 
     #[test]
     fn test_has_field_missing() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().has_field("nonexistent").ids());
+        let result = graph.execute(&Query::build().v(()).has_field("nonexistent").ids());
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_has_field_nested_missing() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().has_field("config.missing").ids());
+        let result = graph.execute(&Query::build().v(()).has_field("config.missing").ids());
         assert!(result.is_empty());
     }
 }
@@ -1421,7 +1421,7 @@ mod combined_filter_traversal {
         let graph = mixed_type_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("CameraProcessor")
                 .downstream()
                 .ids(),
@@ -1433,7 +1433,7 @@ mod combined_filter_traversal {
     #[test]
     fn test_of_type_then_upstream() {
         let graph = mixed_type_graph();
-        let result = graph.execute(&Query::build().v().of_type("MP4Muxer").upstream().ids());
+        let result = graph.execute(&Query::build().v(()).of_type("MP4Muxer").upstream().ids());
         assert_eq!(result.len(), 2);
     }
 
@@ -1468,7 +1468,7 @@ mod combined_filter_traversal {
     #[test]
     fn test_sources_then_downstream() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().sources().downstream().ids());
+        let result = graph.execute(&Query::build().v(()).sources().downstream().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("B")));
     }
@@ -1476,7 +1476,7 @@ mod combined_filter_traversal {
     #[test]
     fn test_sinks_then_upstream() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().sinks().upstream().ids());
+        let result = graph.execute(&Query::build().v(()).sinks().upstream().ids());
         assert_eq!(result.len(), 1);
         assert!(result.contains(&pid("B")));
     }
@@ -1518,7 +1518,7 @@ mod combined_filter_traversal {
         let graph = complex_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| n.id.starts_with("src"))
                 .downstream()
                 .ids(),
@@ -1546,7 +1546,7 @@ mod combined_filter_traversal {
         let graph = graph_with_states();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("TestProcessor")
                 .in_state(ProcessorState::Running)
                 .ids(),
@@ -1559,7 +1559,7 @@ mod combined_filter_traversal {
         let graph = graph_with_states();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("TestProcessor")
                 .in_state(ProcessorState::Running)
                 .filter(|n| n.id.contains("1"))
@@ -1670,7 +1670,7 @@ mod cross_query {
         let graph = mixed_type_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("CameraProcessor")
                 .out_links()
                 .target_processors()
@@ -1690,7 +1690,7 @@ mod query_reuse {
 
     #[test]
     fn test_reuse_across_graphs() {
-        let query = Query::build().v().of_type("SourceProcessor").ids();
+        let query = Query::build().v(()).of_type("SourceProcessor").ids();
 
         let graph1 = linear_graph();
         let result1 = graph1.execute(&query);
@@ -1708,7 +1708,7 @@ mod query_reuse {
     #[test]
     fn test_reuse_same_graph_multiple() {
         let graph = linear_graph();
-        let query = Query::build().v().sources().ids();
+        let query = Query::build().v(()).sources().ids();
 
         for _ in 0..10 {
             let result = graph.execute(&query);
@@ -1719,7 +1719,7 @@ mod query_reuse {
     #[test]
     fn test_reuse_complex_query() {
         let query = Query::build()
-            .v()
+            .v(())
             .sources()
             .downstream()
             .downstream()
@@ -1743,7 +1743,7 @@ mod edge_cases {
     #[test]
     fn test_filter_eliminates_all() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("NonExistent").downstream().ids());
+        let result = graph.execute(&Query::build().v(()).of_type("NonExistent").downstream().ids());
         assert!(result.is_empty());
     }
 
@@ -1764,7 +1764,7 @@ mod edge_cases {
         let graph = linear_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("NonExistent")
                 .downstream()
                 .upstream()
@@ -1847,27 +1847,27 @@ mod permutation_of_type {
     #[test]
     fn test_of_type_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let _ = graph.execute(&Query::build().v(()).of_type("SourceProcessor").ids());
     }
     #[test]
     fn test_of_type_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().of_type("SourceProcessor").count());
+        let _ = graph.execute(&Query::build().v(()).of_type("SourceProcessor").count());
     }
     #[test]
     fn test_of_type_first() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().of_type("SourceProcessor").first());
+        let _ = graph.execute(&Query::build().v(()).of_type("SourceProcessor").first());
     }
     #[test]
     fn test_of_type_exists() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().of_type("SourceProcessor").exists());
+        let _ = graph.execute(&Query::build().v(()).of_type("SourceProcessor").exists());
     }
     #[test]
     fn test_of_type_nodes() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().of_type("SourceProcessor").nodes());
+        let _ = graph.execute(&Query::build().v(()).of_type("SourceProcessor").nodes());
     }
 
     // of_type × downstream × terminals
@@ -1876,7 +1876,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .downstream()
                 .ids(),
@@ -1887,7 +1887,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .downstream()
                 .count(),
@@ -1898,7 +1898,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .downstream()
                 .first(),
@@ -1909,7 +1909,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .downstream()
                 .exists(),
@@ -1920,7 +1920,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .downstream()
                 .nodes(),
@@ -1931,14 +1931,14 @@ mod permutation_of_type {
     #[test]
     fn test_of_type_upstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().of_type("SinkProcessor").upstream().ids());
+        let _ = graph.execute(&Query::build().v(()).of_type("SinkProcessor").upstream().ids());
     }
     #[test]
     fn test_of_type_upstream_count() {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SinkProcessor")
                 .upstream()
                 .count(),
@@ -1949,7 +1949,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SinkProcessor")
                 .upstream()
                 .first(),
@@ -1960,7 +1960,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SinkProcessor")
                 .upstream()
                 .exists(),
@@ -1971,7 +1971,7 @@ mod permutation_of_type {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SinkProcessor")
                 .upstream()
                 .nodes(),
@@ -1986,66 +1986,66 @@ mod permutation_sources {
     #[test]
     fn test_sources_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().ids());
+        let _ = graph.execute(&Query::build().v(()).sources().ids());
     }
     #[test]
     fn test_sources_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().count());
+        let _ = graph.execute(&Query::build().v(()).sources().count());
     }
     #[test]
     fn test_sources_first() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().first());
+        let _ = graph.execute(&Query::build().v(()).sources().first());
     }
     #[test]
     fn test_sources_exists() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().exists());
+        let _ = graph.execute(&Query::build().v(()).sources().exists());
     }
     #[test]
     fn test_sources_nodes() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().nodes());
+        let _ = graph.execute(&Query::build().v(()).sources().nodes());
     }
 
     // sources × downstream × terminals
     #[test]
     fn test_sources_downstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().downstream().ids());
+        let _ = graph.execute(&Query::build().v(()).sources().downstream().ids());
     }
     #[test]
     fn test_sources_downstream_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().downstream().count());
+        let _ = graph.execute(&Query::build().v(()).sources().downstream().count());
     }
     #[test]
     fn test_sources_downstream_first() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().downstream().first());
+        let _ = graph.execute(&Query::build().v(()).sources().downstream().first());
     }
     #[test]
     fn test_sources_downstream_exists() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().downstream().exists());
+        let _ = graph.execute(&Query::build().v(()).sources().downstream().exists());
     }
     #[test]
     fn test_sources_downstream_nodes() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().downstream().nodes());
+        let _ = graph.execute(&Query::build().v(()).sources().downstream().nodes());
     }
 
     // sources × upstream × terminals
     #[test]
     fn test_sources_upstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().upstream().ids());
+        let _ = graph.execute(&Query::build().v(()).sources().upstream().ids());
     }
     #[test]
     fn test_sources_upstream_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sources().upstream().count());
+        let _ = graph.execute(&Query::build().v(()).sources().upstream().count());
     }
 }
 
@@ -2056,61 +2056,61 @@ mod permutation_sinks {
     #[test]
     fn test_sinks_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().ids());
+        let _ = graph.execute(&Query::build().v(()).sinks().ids());
     }
     #[test]
     fn test_sinks_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().count());
+        let _ = graph.execute(&Query::build().v(()).sinks().count());
     }
     #[test]
     fn test_sinks_first() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().first());
+        let _ = graph.execute(&Query::build().v(()).sinks().first());
     }
     #[test]
     fn test_sinks_exists() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().exists());
+        let _ = graph.execute(&Query::build().v(()).sinks().exists());
     }
     #[test]
     fn test_sinks_nodes() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().nodes());
+        let _ = graph.execute(&Query::build().v(()).sinks().nodes());
     }
 
     // sinks × upstream × terminals
     #[test]
     fn test_sinks_upstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().upstream().ids());
+        let _ = graph.execute(&Query::build().v(()).sinks().upstream().ids());
     }
     #[test]
     fn test_sinks_upstream_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().upstream().count());
+        let _ = graph.execute(&Query::build().v(()).sinks().upstream().count());
     }
     #[test]
     fn test_sinks_upstream_first() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().upstream().first());
+        let _ = graph.execute(&Query::build().v(()).sinks().upstream().first());
     }
     #[test]
     fn test_sinks_upstream_exists() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().upstream().exists());
+        let _ = graph.execute(&Query::build().v(()).sinks().upstream().exists());
     }
     #[test]
     fn test_sinks_upstream_nodes() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().upstream().nodes());
+        let _ = graph.execute(&Query::build().v(()).sinks().upstream().nodes());
     }
 
     // sinks × downstream × terminals
     #[test]
     fn test_sinks_downstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().downstream().ids());
+        let _ = graph.execute(&Query::build().v(()).sinks().downstream().ids());
     }
 }
 
@@ -2123,7 +2123,7 @@ mod permutation_two_filters {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .sources()
                 .ids(),
@@ -2134,7 +2134,7 @@ mod permutation_two_filters {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .of_type("SourceProcessor")
                 .ids(),
@@ -2145,24 +2145,24 @@ mod permutation_two_filters {
     #[test]
     fn test_of_type_sinks() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().of_type("SinkProcessor").sinks().ids());
+        let _ = graph.execute(&Query::build().v(()).of_type("SinkProcessor").sinks().ids());
     }
     #[test]
     fn test_sinks_of_type() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().sinks().of_type("SinkProcessor").ids());
+        let _ = graph.execute(&Query::build().v(()).sinks().of_type("SinkProcessor").ids());
     }
 
     // sources + sinks
     #[test]
     fn test_sources_sinks() {
         let graph = single_processor_graph();
-        let _ = graph.execute(&Query::build().v().sources().sinks().ids());
+        let _ = graph.execute(&Query::build().v(()).sources().sinks().ids());
     }
     #[test]
     fn test_sinks_sources() {
         let graph = single_processor_graph();
-        let _ = graph.execute(&Query::build().v().sinks().sources().ids());
+        let _ = graph.execute(&Query::build().v(()).sinks().sources().ids());
     }
 
     // of_type + of_type
@@ -2171,7 +2171,7 @@ mod permutation_two_filters {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .of_type("SourceProcessor")
                 .ids(),
@@ -2182,7 +2182,7 @@ mod permutation_two_filters {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .of_type("SinkProcessor")
                 .ids(),
@@ -2196,31 +2196,31 @@ mod permutation_has_field_where_field {
     #[test]
     fn test_has_field_type_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").ids());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").ids());
     }
 
     #[test]
     fn test_has_field_type_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").count());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").count());
     }
 
     #[test]
     fn test_has_field_type_first() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").first());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").first());
     }
 
     #[test]
     fn test_has_field_type_exists() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").exists());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").exists());
     }
 
     #[test]
     fn test_has_field_downstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").downstream().ids());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").downstream().ids());
     }
 
     #[test]
@@ -2228,7 +2228,7 @@ mod permutation_has_field_where_field {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str().is_some())
                 .downstream()
                 .ids(),
@@ -2240,7 +2240,7 @@ mod permutation_has_field_where_field {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .has_field("type")
                 .where_field("type", |v| v.as_str() == Some("SourceProcessor"))
                 .ids(),
@@ -2373,73 +2373,73 @@ mod permutation_out_in_links {
     #[test]
     fn test_v_out_links_ids() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().ids());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().ids());
     }
 
     #[test]
     fn test_v_out_links_count() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().count());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().count());
     }
 
     #[test]
     fn test_v_out_links_first() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().first());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().first());
     }
 
     #[test]
     fn test_v_out_links_exists() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().exists());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().exists());
     }
 
     #[test]
     fn test_v_out_links_links() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().links());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().links());
     }
 
     #[test]
     fn test_v_in_links_ids() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().ids());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().ids());
     }
 
     #[test]
     fn test_v_in_links_count() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().count());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().count());
     }
 
     #[test]
     fn test_v_in_links_first() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().first());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().first());
     }
 
     #[test]
     fn test_v_in_links_exists() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().exists());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().exists());
     }
 
     #[test]
     fn test_v_in_links_links() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().links());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().links());
     }
 
     #[test]
     fn test_sources_out_links_ids() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().sources().out_links().ids());
+        let _ = graph.execute_link(&Query::build().v(()).sources().out_links().ids());
     }
 
     #[test]
     fn test_sinks_in_links_ids() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().sinks().in_links().ids());
+        let _ = graph.execute_link(&Query::build().v(()).sinks().in_links().ids());
     }
 
     #[test]
@@ -2447,7 +2447,7 @@ mod permutation_out_in_links {
         let graph = linear_graph();
         let _ = graph.execute_link(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .out_links()
                 .ids(),
@@ -2457,7 +2457,7 @@ mod permutation_out_in_links {
     #[test]
     fn test_of_type_in_links_ids() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().of_type("SinkProcessor").in_links().ids());
+        let _ = graph.execute_link(&Query::build().v(()).of_type("SinkProcessor").in_links().ids());
     }
 }
 
@@ -2573,7 +2573,7 @@ mod complex_permutations {
         let graph = mixed_type_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .downstream()
                 .of_type("H264Encoder")
@@ -2586,7 +2586,7 @@ mod complex_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .downstream()
                 .downstream()
@@ -2600,7 +2600,7 @@ mod complex_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .upstream()
                 .upstream()
@@ -2614,7 +2614,7 @@ mod complex_permutations {
         let graph = long_chain_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| n.id == "B")
                 .downstream()
                 .of_type("ProcessorType2")
@@ -2687,7 +2687,7 @@ mod complex_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("TestProcessor")
                 .in_state(ProcessorState::Running)
                 .has_field("type")
@@ -2702,7 +2702,7 @@ mod complex_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .of_type("TestProcessor")
                 .in_state(ProcessorState::Running)
@@ -2717,7 +2717,7 @@ mod complex_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .of_type("TestProcessor")
                 .in_state(ProcessorState::Idle)
@@ -2737,89 +2737,89 @@ mod all_graphs_key_queries {
 
     #[test]
     fn test_v_ids_empty() {
-        let _ = empty_graph().execute(&Query::build().v().ids());
+        let _ = empty_graph().execute(&Query::build().v(()).ids());
     }
     #[test]
     fn test_v_ids_single() {
-        let _ = single_processor_graph().execute(&Query::build().v().ids());
+        let _ = single_processor_graph().execute(&Query::build().v(()).ids());
     }
     #[test]
     fn test_v_ids_linear() {
-        let _ = linear_graph().execute(&Query::build().v().ids());
+        let _ = linear_graph().execute(&Query::build().v(()).ids());
     }
     #[test]
     fn test_v_ids_diamond() {
-        let _ = diamond_graph().execute(&Query::build().v().ids());
+        let _ = diamond_graph().execute(&Query::build().v(()).ids());
     }
     #[test]
     fn test_v_ids_mixed() {
-        let _ = mixed_type_graph().execute(&Query::build().v().ids());
+        let _ = mixed_type_graph().execute(&Query::build().v(()).ids());
     }
     #[test]
     fn test_v_ids_complex() {
-        let _ = complex_graph().execute(&Query::build().v().ids());
+        let _ = complex_graph().execute(&Query::build().v(()).ids());
     }
     #[test]
     fn test_v_ids_chain() {
-        let _ = long_chain_graph().execute(&Query::build().v().ids());
+        let _ = long_chain_graph().execute(&Query::build().v(()).ids());
     }
 
     #[test]
     fn test_sources_empty() {
-        let _ = empty_graph().execute(&Query::build().v().sources().ids());
+        let _ = empty_graph().execute(&Query::build().v(()).sources().ids());
     }
     #[test]
     fn test_sources_single() {
-        let _ = single_processor_graph().execute(&Query::build().v().sources().ids());
+        let _ = single_processor_graph().execute(&Query::build().v(()).sources().ids());
     }
     #[test]
     fn test_sources_linear() {
-        let _ = linear_graph().execute(&Query::build().v().sources().ids());
+        let _ = linear_graph().execute(&Query::build().v(()).sources().ids());
     }
     #[test]
     fn test_sources_diamond() {
-        let _ = diamond_graph().execute(&Query::build().v().sources().ids());
+        let _ = diamond_graph().execute(&Query::build().v(()).sources().ids());
     }
     #[test]
     fn test_sources_mixed() {
-        let _ = mixed_type_graph().execute(&Query::build().v().sources().ids());
+        let _ = mixed_type_graph().execute(&Query::build().v(()).sources().ids());
     }
     #[test]
     fn test_sources_complex() {
-        let _ = complex_graph().execute(&Query::build().v().sources().ids());
+        let _ = complex_graph().execute(&Query::build().v(()).sources().ids());
     }
     #[test]
     fn test_sources_chain() {
-        let _ = long_chain_graph().execute(&Query::build().v().sources().ids());
+        let _ = long_chain_graph().execute(&Query::build().v(()).sources().ids());
     }
 
     #[test]
     fn test_sinks_empty() {
-        let _ = empty_graph().execute(&Query::build().v().sinks().ids());
+        let _ = empty_graph().execute(&Query::build().v(()).sinks().ids());
     }
     #[test]
     fn test_sinks_single() {
-        let _ = single_processor_graph().execute(&Query::build().v().sinks().ids());
+        let _ = single_processor_graph().execute(&Query::build().v(()).sinks().ids());
     }
     #[test]
     fn test_sinks_linear() {
-        let _ = linear_graph().execute(&Query::build().v().sinks().ids());
+        let _ = linear_graph().execute(&Query::build().v(()).sinks().ids());
     }
     #[test]
     fn test_sinks_diamond() {
-        let _ = diamond_graph().execute(&Query::build().v().sinks().ids());
+        let _ = diamond_graph().execute(&Query::build().v(()).sinks().ids());
     }
     #[test]
     fn test_sinks_mixed() {
-        let _ = mixed_type_graph().execute(&Query::build().v().sinks().ids());
+        let _ = mixed_type_graph().execute(&Query::build().v(()).sinks().ids());
     }
     #[test]
     fn test_sinks_complex() {
-        let _ = complex_graph().execute(&Query::build().v().sinks().ids());
+        let _ = complex_graph().execute(&Query::build().v(()).sinks().ids());
     }
     #[test]
     fn test_sinks_chain() {
-        let _ = long_chain_graph().execute(&Query::build().v().sinks().ids());
+        let _ = long_chain_graph().execute(&Query::build().v(()).sinks().ids());
     }
 
     #[test]
@@ -2863,24 +2863,24 @@ mod additional_filter_permutations {
     #[test]
     fn test_in_state_running_ids() {
         let graph = graph_with_states();
-        let _ = graph.execute(&Query::build().v().in_state(ProcessorState::Running).ids());
+        let _ = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).ids());
     }
     #[test]
     fn test_in_state_running_count() {
         let graph = graph_with_states();
-        let _ = graph.execute(&Query::build().v().in_state(ProcessorState::Running).count());
+        let _ = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).count());
     }
     #[test]
     fn test_in_state_running_first() {
         let graph = graph_with_states();
-        let _ = graph.execute(&Query::build().v().in_state(ProcessorState::Running).first());
+        let _ = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).first());
     }
     #[test]
     fn test_in_state_running_exists() {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .in_state(ProcessorState::Running)
                 .exists(),
         );
@@ -2888,22 +2888,22 @@ mod additional_filter_permutations {
     #[test]
     fn test_in_state_running_nodes() {
         let graph = graph_with_states();
-        let _ = graph.execute(&Query::build().v().in_state(ProcessorState::Running).nodes());
+        let _ = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).nodes());
     }
     #[test]
     fn test_in_state_idle_ids() {
         let graph = graph_with_states();
-        let _ = graph.execute(&Query::build().v().in_state(ProcessorState::Idle).ids());
+        let _ = graph.execute(&Query::build().v(()).in_state(ProcessorState::Idle).ids());
     }
     #[test]
     fn test_in_state_idle_count() {
         let graph = graph_with_states();
-        let _ = graph.execute(&Query::build().v().in_state(ProcessorState::Idle).count());
+        let _ = graph.execute(&Query::build().v(()).in_state(ProcessorState::Idle).count());
     }
     #[test]
     fn test_in_state_stopped_ids() {
         let graph = graph_with_states();
-        let _ = graph.execute(&Query::build().v().in_state(ProcessorState::Stopped).ids());
+        let _ = graph.execute(&Query::build().v(()).in_state(ProcessorState::Stopped).ids());
     }
 
     // in_state × traversals × terminals
@@ -2912,7 +2912,7 @@ mod additional_filter_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .in_state(ProcessorState::Running)
                 .downstream()
                 .ids(),
@@ -2923,7 +2923,7 @@ mod additional_filter_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .in_state(ProcessorState::Running)
                 .downstream()
                 .count(),
@@ -2934,7 +2934,7 @@ mod additional_filter_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .in_state(ProcessorState::Idle)
                 .upstream()
                 .ids(),
@@ -2945,24 +2945,24 @@ mod additional_filter_permutations {
     #[test]
     fn test_filter_closure_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().filter(|n| n.id.starts_with("A")).ids());
+        let _ = graph.execute(&Query::build().v(()).filter(|n| n.id.starts_with("A")).ids());
     }
     #[test]
     fn test_filter_closure_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().filter(|n| n.id.starts_with("A")).count());
+        let _ = graph.execute(&Query::build().v(()).filter(|n| n.id.starts_with("A")).count());
     }
     #[test]
     fn test_filter_closure_first() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().filter(|n| n.id.starts_with("A")).first());
+        let _ = graph.execute(&Query::build().v(()).filter(|n| n.id.starts_with("A")).first());
     }
     #[test]
     fn test_filter_closure_exists() {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| n.id.starts_with("A"))
                 .exists(),
         );
@@ -2970,7 +2970,7 @@ mod additional_filter_permutations {
     #[test]
     fn test_filter_closure_nodes() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().filter(|n| n.id.starts_with("A")).nodes());
+        let _ = graph.execute(&Query::build().v(()).filter(|n| n.id.starts_with("A")).nodes());
     }
 
     // filter × traversals × terminals
@@ -2979,7 +2979,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| n.id == "A")
                 .downstream()
                 .ids(),
@@ -2990,7 +2990,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| n.id == "A")
                 .downstream()
                 .count(),
@@ -2999,14 +2999,14 @@ mod additional_filter_permutations {
     #[test]
     fn test_filter_upstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().filter(|n| n.id == "C").upstream().ids());
+        let _ = graph.execute(&Query::build().v(()).filter(|n| n.id == "C").upstream().ids());
     }
     #[test]
     fn test_filter_upstream_count() {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| n.id == "C")
                 .upstream()
                 .count(),
@@ -3017,22 +3017,22 @@ mod additional_filter_permutations {
     #[test]
     fn test_has_field_downstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").downstream().ids());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").downstream().ids());
     }
     #[test]
     fn test_has_field_downstream_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").downstream().count());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").downstream().count());
     }
     #[test]
     fn test_has_field_upstream_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").upstream().ids());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").upstream().ids());
     }
     #[test]
     fn test_has_field_upstream_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("type").upstream().count());
+        let _ = graph.execute(&Query::build().v(()).has_field("type").upstream().count());
     }
 
     // where_field × terminals
@@ -3041,7 +3041,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str().is_some())
                 .ids(),
         );
@@ -3051,7 +3051,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str().is_some())
                 .count(),
         );
@@ -3061,7 +3061,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str().is_some())
                 .first(),
         );
@@ -3071,7 +3071,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str().is_some())
                 .exists(),
         );
@@ -3081,7 +3081,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str().is_some())
                 .nodes(),
         );
@@ -3093,7 +3093,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str() == Some("SourceProcessor"))
                 .downstream()
                 .ids(),
@@ -3104,7 +3104,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str() == Some("SourceProcessor"))
                 .downstream()
                 .count(),
@@ -3115,7 +3115,7 @@ mod additional_filter_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str() == Some("SinkProcessor"))
                 .upstream()
                 .ids(),
@@ -3194,54 +3194,54 @@ mod additional_link_permutations {
     #[test]
     fn test_out_links_count_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().count());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().count());
     }
     #[test]
     fn test_out_links_count_diamond() {
         let graph = diamond_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().count());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().count());
     }
     #[test]
     fn test_out_links_first_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().first());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().first());
     }
     #[test]
     fn test_out_links_exists_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().exists());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().exists());
     }
     #[test]
     fn test_out_links_links_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().out_links().links());
+        let _ = graph.execute_link(&Query::build().v(()).out_links().links());
     }
 
     // in_links × various terminals
     #[test]
     fn test_in_links_count_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().count());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().count());
     }
     #[test]
     fn test_in_links_count_diamond() {
         let graph = diamond_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().count());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().count());
     }
     #[test]
     fn test_in_links_first_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().first());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().first());
     }
     #[test]
     fn test_in_links_exists_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().exists());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().exists());
     }
     #[test]
     fn test_in_links_links_linear() {
         let graph = linear_graph();
-        let _ = graph.execute_link(&Query::build().v().in_links().links());
+        let _ = graph.execute_link(&Query::build().v(()).in_links().links());
     }
 
     // source_processors × terminals on all graph types
@@ -3332,7 +3332,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .sources()
                 .downstream()
@@ -3344,7 +3344,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .of_type("SourceProcessor")
                 .downstream()
@@ -3356,7 +3356,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .downstream()
                 .of_type("PassthroughProcessor")
@@ -3370,7 +3370,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SinkProcessor")
                 .sinks()
                 .upstream()
@@ -3382,7 +3382,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .of_type("SinkProcessor")
                 .upstream()
@@ -3394,7 +3394,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .upstream()
                 .of_type("PassthroughProcessor")
@@ -3408,7 +3408,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .has_field("type")
                 .of_type("SourceProcessor")
                 .downstream()
@@ -3420,7 +3420,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .has_field("type")
                 .downstream()
@@ -3434,7 +3434,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str().is_some())
                 .of_type("SourceProcessor")
                 .downstream()
@@ -3446,7 +3446,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .where_field("type", |v| v.as_str().is_some())
                 .downstream()
@@ -3460,7 +3460,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| !n.id.is_empty())
                 .sources()
                 .downstream()
@@ -3472,7 +3472,7 @@ mod three_filter_combinations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .filter(|n| !n.id.is_empty())
                 .downstream()
@@ -3486,7 +3486,7 @@ mod three_filter_combinations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .in_state(ProcessorState::Running)
                 .of_type("TestProcessor")
                 .downstream()
@@ -3498,7 +3498,7 @@ mod three_filter_combinations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("TestProcessor")
                 .in_state(ProcessorState::Running)
                 .downstream()
@@ -3512,7 +3512,7 @@ mod three_filter_combinations {
         let graph = single_processor_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .sinks()
                 .of_type("TestProcessor")
@@ -3692,152 +3692,152 @@ mod graph_type_query_matrix {
     // downstream × all graph types
     #[test]
     fn test_downstream_empty() {
-        let _ = empty_graph().execute(&Query::build().v().downstream().ids());
+        let _ = empty_graph().execute(&Query::build().v(()).downstream().ids());
     }
     #[test]
     fn test_downstream_single() {
-        let _ = single_processor_graph().execute(&Query::build().v().downstream().ids());
+        let _ = single_processor_graph().execute(&Query::build().v(()).downstream().ids());
     }
     #[test]
     fn test_downstream_linear() {
-        let _ = linear_graph().execute(&Query::build().v().downstream().ids());
+        let _ = linear_graph().execute(&Query::build().v(()).downstream().ids());
     }
     #[test]
     fn test_downstream_diamond() {
-        let _ = diamond_graph().execute(&Query::build().v().downstream().ids());
+        let _ = diamond_graph().execute(&Query::build().v(()).downstream().ids());
     }
     #[test]
     fn test_downstream_mixed() {
-        let _ = mixed_type_graph().execute(&Query::build().v().downstream().ids());
+        let _ = mixed_type_graph().execute(&Query::build().v(()).downstream().ids());
     }
     #[test]
     fn test_downstream_complex() {
-        let _ = complex_graph().execute(&Query::build().v().downstream().ids());
+        let _ = complex_graph().execute(&Query::build().v(()).downstream().ids());
     }
     #[test]
     fn test_downstream_chain() {
-        let _ = long_chain_graph().execute(&Query::build().v().downstream().ids());
+        let _ = long_chain_graph().execute(&Query::build().v(()).downstream().ids());
     }
 
     // upstream × all graph types
     #[test]
     fn test_upstream_empty() {
-        let _ = empty_graph().execute(&Query::build().v().upstream().ids());
+        let _ = empty_graph().execute(&Query::build().v(()).upstream().ids());
     }
     #[test]
     fn test_upstream_single() {
-        let _ = single_processor_graph().execute(&Query::build().v().upstream().ids());
+        let _ = single_processor_graph().execute(&Query::build().v(()).upstream().ids());
     }
     #[test]
     fn test_upstream_linear() {
-        let _ = linear_graph().execute(&Query::build().v().upstream().ids());
+        let _ = linear_graph().execute(&Query::build().v(()).upstream().ids());
     }
     #[test]
     fn test_upstream_diamond() {
-        let _ = diamond_graph().execute(&Query::build().v().upstream().ids());
+        let _ = diamond_graph().execute(&Query::build().v(()).upstream().ids());
     }
     #[test]
     fn test_upstream_mixed() {
-        let _ = mixed_type_graph().execute(&Query::build().v().upstream().ids());
+        let _ = mixed_type_graph().execute(&Query::build().v(()).upstream().ids());
     }
     #[test]
     fn test_upstream_complex() {
-        let _ = complex_graph().execute(&Query::build().v().upstream().ids());
+        let _ = complex_graph().execute(&Query::build().v(()).upstream().ids());
     }
     #[test]
     fn test_upstream_chain() {
-        let _ = long_chain_graph().execute(&Query::build().v().upstream().ids());
+        let _ = long_chain_graph().execute(&Query::build().v(()).upstream().ids());
     }
 
     // of_type × all graph types
     #[test]
     fn test_of_type_empty() {
-        let _ = empty_graph().execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let _ = empty_graph().execute(&Query::build().v(()).of_type("SourceProcessor").ids());
     }
     #[test]
     fn test_of_type_single() {
         let _ =
-            single_processor_graph().execute(&Query::build().v().of_type("TestProcessor").ids());
+            single_processor_graph().execute(&Query::build().v(()).of_type("TestProcessor").ids());
     }
     #[test]
     fn test_of_type_linear() {
-        let _ = linear_graph().execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let _ = linear_graph().execute(&Query::build().v(()).of_type("SourceProcessor").ids());
     }
     #[test]
     fn test_of_type_diamond() {
-        let _ = diamond_graph().execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let _ = diamond_graph().execute(&Query::build().v(()).of_type("SourceProcessor").ids());
     }
     #[test]
     fn test_of_type_mixed() {
-        let _ = mixed_type_graph().execute(&Query::build().v().of_type("CameraProcessor").ids());
+        let _ = mixed_type_graph().execute(&Query::build().v(()).of_type("CameraProcessor").ids());
     }
     #[test]
     fn test_of_type_complex() {
-        let _ = complex_graph().execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let _ = complex_graph().execute(&Query::build().v(()).of_type("SourceProcessor").ids());
     }
     #[test]
     fn test_of_type_chain() {
-        let _ = long_chain_graph().execute(&Query::build().v().of_type("SourceProcessor").ids());
+        let _ = long_chain_graph().execute(&Query::build().v(()).of_type("SourceProcessor").ids());
     }
 
     // out_links × all graph types
     #[test]
     fn test_out_links_empty() {
-        let _ = empty_graph().execute_link(&Query::build().v().out_links().ids());
+        let _ = empty_graph().execute_link(&Query::build().v(()).out_links().ids());
     }
     #[test]
     fn test_out_links_single() {
-        let _ = single_processor_graph().execute_link(&Query::build().v().out_links().ids());
+        let _ = single_processor_graph().execute_link(&Query::build().v(()).out_links().ids());
     }
     #[test]
     fn test_out_links_linear() {
-        let _ = linear_graph().execute_link(&Query::build().v().out_links().ids());
+        let _ = linear_graph().execute_link(&Query::build().v(()).out_links().ids());
     }
     #[test]
     fn test_out_links_diamond() {
-        let _ = diamond_graph().execute_link(&Query::build().v().out_links().ids());
+        let _ = diamond_graph().execute_link(&Query::build().v(()).out_links().ids());
     }
     #[test]
     fn test_out_links_mixed() {
-        let _ = mixed_type_graph().execute_link(&Query::build().v().out_links().ids());
+        let _ = mixed_type_graph().execute_link(&Query::build().v(()).out_links().ids());
     }
     #[test]
     fn test_out_links_complex() {
-        let _ = complex_graph().execute_link(&Query::build().v().out_links().ids());
+        let _ = complex_graph().execute_link(&Query::build().v(()).out_links().ids());
     }
     #[test]
     fn test_out_links_chain() {
-        let _ = long_chain_graph().execute_link(&Query::build().v().out_links().ids());
+        let _ = long_chain_graph().execute_link(&Query::build().v(()).out_links().ids());
     }
 
     // in_links × all graph types
     #[test]
     fn test_in_links_empty() {
-        let _ = empty_graph().execute_link(&Query::build().v().in_links().ids());
+        let _ = empty_graph().execute_link(&Query::build().v(()).in_links().ids());
     }
     #[test]
     fn test_in_links_single() {
-        let _ = single_processor_graph().execute_link(&Query::build().v().in_links().ids());
+        let _ = single_processor_graph().execute_link(&Query::build().v(()).in_links().ids());
     }
     #[test]
     fn test_in_links_linear() {
-        let _ = linear_graph().execute_link(&Query::build().v().in_links().ids());
+        let _ = linear_graph().execute_link(&Query::build().v(()).in_links().ids());
     }
     #[test]
     fn test_in_links_diamond() {
-        let _ = diamond_graph().execute_link(&Query::build().v().in_links().ids());
+        let _ = diamond_graph().execute_link(&Query::build().v(()).in_links().ids());
     }
     #[test]
     fn test_in_links_mixed() {
-        let _ = mixed_type_graph().execute_link(&Query::build().v().in_links().ids());
+        let _ = mixed_type_graph().execute_link(&Query::build().v(()).in_links().ids());
     }
     #[test]
     fn test_in_links_complex() {
-        let _ = complex_graph().execute_link(&Query::build().v().in_links().ids());
+        let _ = complex_graph().execute_link(&Query::build().v(()).in_links().ids());
     }
     #[test]
     fn test_in_links_chain() {
-        let _ = long_chain_graph().execute_link(&Query::build().v().in_links().ids());
+        let _ = long_chain_graph().execute_link(&Query::build().v(()).in_links().ids());
     }
 }
 
@@ -3852,13 +3852,13 @@ mod additional_edge_cases {
     #[test]
     fn test_of_type_empty_string() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("").ids());
+        let result = graph.execute(&Query::build().v(()).of_type("").ids());
         assert!(result.is_empty());
     }
     #[test]
     fn test_has_field_empty_path() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().has_field("").ids());
+        let _ = graph.execute(&Query::build().v(()).has_field("").ids());
     }
 
     // Chained traversals reaching end of graph
@@ -3881,7 +3881,7 @@ mod additional_edge_cases {
         let graph = linear_graph();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .of_type("SinkProcessor")
                 .ids(),
@@ -3891,7 +3891,7 @@ mod additional_edge_cases {
     #[test]
     fn test_sources_and_sinks_in_connected_graph() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().sources().sinks().ids());
+        let result = graph.execute(&Query::build().v(()).sources().sinks().ids());
         assert!(result.is_empty()); // A is source but not sink, C is sink but not source
     }
 
@@ -3899,13 +3899,13 @@ mod additional_edge_cases {
     #[test]
     fn test_exists_empty_result() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("NonExistent").exists());
+        let result = graph.execute(&Query::build().v(()).of_type("NonExistent").exists());
         assert!(!result);
     }
     #[test]
     fn test_exists_non_empty_result() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").exists());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").exists());
         assert!(result);
     }
 
@@ -3913,19 +3913,19 @@ mod additional_edge_cases {
     #[test]
     fn test_count_empty() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("NonExistent").count());
+        let result = graph.execute(&Query::build().v(()).of_type("NonExistent").count());
         assert_eq!(result, 0);
     }
     #[test]
     fn test_count_single() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").count());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").count());
         assert_eq!(result, 1);
     }
     #[test]
     fn test_count_multiple() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 3);
     }
 
@@ -3933,40 +3933,40 @@ mod additional_edge_cases {
     #[test]
     fn test_first_empty() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("NonExistent").first());
+        let result = graph.execute(&Query::build().v(()).of_type("NonExistent").first());
         assert!(result.is_none());
     }
     #[test]
     fn test_first_non_empty() {
         let graph = linear_graph();
-        let result = graph.execute(&Query::build().v().of_type("SourceProcessor").first());
+        let result = graph.execute(&Query::build().v(()).of_type("SourceProcessor").first());
         assert!(result.is_some());
     }
 
     // All terminals on empty graph
     #[test]
     fn test_empty_graph_ids() {
-        let result = empty_graph().execute(&Query::build().v().ids());
+        let result = empty_graph().execute(&Query::build().v(()).ids());
         assert!(result.is_empty());
     }
     #[test]
     fn test_empty_graph_count() {
-        let result = empty_graph().execute(&Query::build().v().count());
+        let result = empty_graph().execute(&Query::build().v(()).count());
         assert_eq!(result, 0);
     }
     #[test]
     fn test_empty_graph_first() {
-        let result = empty_graph().execute(&Query::build().v().first());
+        let result = empty_graph().execute(&Query::build().v(()).first());
         assert!(result.is_none());
     }
     #[test]
     fn test_empty_graph_exists() {
-        let result = empty_graph().execute(&Query::build().v().exists());
+        let result = empty_graph().execute(&Query::build().v(()).exists());
         assert!(!result);
     }
     #[test]
     fn test_empty_graph_nodes() {
-        let result = empty_graph().execute(&Query::build().v().nodes());
+        let result = empty_graph().execute(&Query::build().v(()).nodes());
         assert!(result.is_empty());
     }
 
@@ -4011,7 +4011,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .sources()
                 .downstream()
@@ -4023,7 +4023,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .sources()
                 .downstream()
@@ -4035,7 +4035,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .sources()
                 .downstream()
@@ -4047,7 +4047,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .sources()
                 .downstream()
@@ -4061,7 +4061,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .of_type("SinkProcessor")
                 .upstream()
@@ -4073,7 +4073,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .of_type("SinkProcessor")
                 .upstream()
@@ -4085,7 +4085,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .of_type("SinkProcessor")
                 .upstream()
@@ -4097,7 +4097,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .of_type("SinkProcessor")
                 .upstream()
@@ -4111,7 +4111,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .has_field("type")
                 .where_field("type", |v| v.as_str().is_some())
                 .downstream()
@@ -4123,7 +4123,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .has_field("type")
                 .where_field("type", |v| v.as_str().is_some())
                 .downstream()
@@ -4137,7 +4137,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| !n.id.is_empty())
                 .of_type("SourceProcessor")
                 .downstream()
@@ -4149,7 +4149,7 @@ mod four_step_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .filter(|n| !n.id.is_empty())
                 .of_type("SourceProcessor")
                 .downstream()
@@ -4187,7 +4187,7 @@ mod four_step_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .in_state(ProcessorState::Running)
                 .filter(|n| !n.id.is_empty())
                 .downstream()
@@ -4199,7 +4199,7 @@ mod four_step_permutations {
         let graph = graph_with_states();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .in_state(ProcessorState::Running)
                 .filter(|n| !n.id.is_empty())
                 .downstream()
@@ -4330,44 +4330,44 @@ mod cross_query_permutations {
     #[test]
     fn test_v_out_source_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().out_links().source_processors().ids());
+        let _ = graph.execute(&Query::build().v(()).out_links().source_processors().ids());
     }
     #[test]
     fn test_v_out_source_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().out_links().source_processors().count());
+        let _ = graph.execute(&Query::build().v(()).out_links().source_processors().count());
     }
     #[test]
     fn test_v_out_target_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().out_links().target_processors().ids());
+        let _ = graph.execute(&Query::build().v(()).out_links().target_processors().ids());
     }
     #[test]
     fn test_v_out_target_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().out_links().target_processors().count());
+        let _ = graph.execute(&Query::build().v(()).out_links().target_processors().count());
     }
 
     // v().in_links().source_processors() variations
     #[test]
     fn test_v_in_source_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().in_links().source_processors().ids());
+        let _ = graph.execute(&Query::build().v(()).in_links().source_processors().ids());
     }
     #[test]
     fn test_v_in_source_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().in_links().source_processors().count());
+        let _ = graph.execute(&Query::build().v(()).in_links().source_processors().count());
     }
     #[test]
     fn test_v_in_target_ids() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().in_links().target_processors().ids());
+        let _ = graph.execute(&Query::build().v(()).in_links().target_processors().ids());
     }
     #[test]
     fn test_v_in_target_count() {
         let graph = linear_graph();
-        let _ = graph.execute(&Query::build().v().in_links().target_processors().count());
+        let _ = graph.execute(&Query::build().v(()).in_links().target_processors().count());
     }
 
     // sources().out_links().target_processors() chain
@@ -4376,7 +4376,7 @@ mod cross_query_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .out_links()
                 .target_processors()
@@ -4388,7 +4388,7 @@ mod cross_query_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sources()
                 .out_links()
                 .target_processors()
@@ -4402,7 +4402,7 @@ mod cross_query_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .in_links()
                 .source_processors()
@@ -4414,7 +4414,7 @@ mod cross_query_permutations {
         let graph = linear_graph();
         let _ = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .sinks()
                 .in_links()
                 .source_processors()
@@ -4501,7 +4501,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("type", |v| v.as_str() == Some("SourceProcessor"))
                 .ids(),
         );
@@ -4512,7 +4512,7 @@ mod json_field_queryability {
     #[test]
     fn test_query_processor_type_has_field() {
         let graph = graph_with_ecs_components();
-        let result = graph.execute(&Query::build().v().has_field("type").count());
+        let result = graph.execute(&Query::build().v(()).has_field("type").count());
         assert_eq!(result, 3); // All processors have type
     }
 
@@ -4521,7 +4521,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("state", |v| v.as_str() == Some("Running"))
                 .ids(),
         );
@@ -4533,7 +4533,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("state", |v| v.as_str() == Some("Idle"))
                 .ids(),
         );
@@ -4546,7 +4546,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("metrics.throughput_fps", |v| {
                     v.as_f64().map(|f| f > 25.0).unwrap_or(false)
                 })
@@ -4560,7 +4560,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("metrics.latency_p50_ms", |v| {
                     v.as_f64().map(|f| f < 10.0).unwrap_or(false)
                 })
@@ -4574,7 +4574,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("metrics.latency_p99_ms", |v| {
                     v.as_f64().map(|f| f > 10.0).unwrap_or(false)
                 })
@@ -4588,7 +4588,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("metrics.frames_processed", |v| {
                     v.as_u64().map(|n| n >= 1000).unwrap_or(false)
                 })
@@ -4602,7 +4602,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("metrics.frames_dropped", |v| {
                     v.as_u64().map(|n| n < 5).unwrap_or(false)
                 })
@@ -4614,7 +4614,7 @@ mod json_field_queryability {
     #[test]
     fn test_query_processor_has_metrics() {
         let graph = graph_with_ecs_components();
-        let result = graph.execute(&Query::build().v().has_field("metrics").count());
+        let result = graph.execute(&Query::build().v(()).has_field("metrics").count());
         assert_eq!(result, 2); // Only A and B have metrics
     }
 
@@ -4624,7 +4624,7 @@ mod json_field_queryability {
         // C doesn't have metrics
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("metrics.throughput_fps", |_| true)
                 .ids(),
         );
@@ -4716,7 +4716,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .where_field("state", |v| v.as_str() == Some("Running"))
                 .where_field("metrics.throughput_fps", |v| {
                     v.as_f64().map(|f| f > 20.0).unwrap_or(false)
@@ -4731,7 +4731,7 @@ mod json_field_queryability {
         let graph = graph_with_ecs_components();
         let result = graph.execute(
             &Query::build()
-                .v()
+                .v(())
                 .of_type("SourceProcessor")
                 .where_field("state", |v| v.as_str() == Some("Running"))
                 .ids(),
@@ -4768,29 +4768,29 @@ mod dynamic_graph_modification {
         let mut graph = Graph::new();
 
         // Initially empty
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 0);
 
         // Add first processor
         graph.add_processor("A".into(), "TestProcessor".into(), 0);
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 1);
 
         // Add second processor
         graph.add_processor("B".into(), "TestProcessor".into(), 0);
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 2);
 
         // Add third processor of different type
         graph.add_processor("C".into(), "OtherProcessor".into(), 0);
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 3);
 
         // Type filter should update
-        let result = graph.execute(&Query::build().v().of_type("TestProcessor").count());
+        let result = graph.execute(&Query::build().v(()).of_type("TestProcessor").count());
         assert_eq!(result, 2);
 
-        let result = graph.execute(&Query::build().v().of_type("OtherProcessor").count());
+        let result = graph.execute(&Query::build().v(()).of_type("OtherProcessor").count());
         assert_eq!(result, 1);
     }
 
@@ -4801,16 +4801,16 @@ mod dynamic_graph_modification {
         graph.add_processor("B".into(), "TestProcessor".into(), 0);
         graph.add_processor("C".into(), "TestProcessor".into(), 0);
 
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 3);
 
         // Remove processor
         graph.remove_processor(&pid("B"));
-        let result = graph.execute(&Query::build().v().count());
+        let result = graph.execute(&Query::build().v(()).count());
         assert_eq!(result, 2);
 
         // Verify correct processors remain
-        let ids = graph.execute(&Query::build().v().ids());
+        let ids = graph.execute(&Query::build().v(()).ids());
         assert!(ids.contains(&pid("A")));
         assert!(!ids.contains(&pid("B")));
         assert!(ids.contains(&pid("C")));
@@ -4824,16 +4824,16 @@ mod dynamic_graph_modification {
         graph.add_processor("C".into(), "SinkProcessor".into(), 0);
 
         // Initially all are sources and sinks (no links)
-        let sources = graph.execute(&Query::build().v().sources().count());
-        let sinks = graph.execute(&Query::build().v().sinks().count());
+        let sources = graph.execute(&Query::build().v(()).sources().count());
+        let sinks = graph.execute(&Query::build().v(()).sinks().count());
         assert_eq!(sources, 3);
         assert_eq!(sinks, 3);
 
         // Add first link
         graph.add_link("A.out", "B.in").unwrap();
 
-        let sources = graph.execute(&Query::build().v().sources().count());
-        let sinks = graph.execute(&Query::build().v().sinks().count());
+        let sources = graph.execute(&Query::build().v(()).sources().count());
+        let sinks = graph.execute(&Query::build().v(()).sinks().count());
         assert_eq!(sources, 2); // A and C are sources
         assert_eq!(sinks, 2); // B and C are sinks
 
@@ -4845,8 +4845,8 @@ mod dynamic_graph_modification {
         // Add second link
         graph.add_link("B.out", "C.in").unwrap();
 
-        let sources = graph.execute(&Query::build().v().sources().count());
-        let sinks = graph.execute(&Query::build().v().sinks().count());
+        let sources = graph.execute(&Query::build().v(()).sources().count());
+        let sinks = graph.execute(&Query::build().v(()).sinks().count());
         assert_eq!(sources, 1); // Only A
         assert_eq!(sinks, 1); // Only C
 
@@ -4874,7 +4874,7 @@ mod dynamic_graph_modification {
         let link_count = graph.execute_link(&Query::build().E().count());
         assert_eq!(link_count, 2);
 
-        let sources = graph.execute(&Query::build().v().sources().count());
+        let sources = graph.execute(&Query::build().v(()).sources().count());
         assert_eq!(sources, 1);
 
         // Remove second link using its LinkUniqueId
@@ -4884,7 +4884,7 @@ mod dynamic_graph_modification {
         assert_eq!(link_count, 1);
 
         // C is now a source (no incoming links)
-        let sources = graph.execute(&Query::build().v().sources().count());
+        let sources = graph.execute(&Query::build().v(()).sources().count());
         assert_eq!(sources, 2); // A and C
 
         // Downstream from A should only include B now
@@ -4904,34 +4904,34 @@ mod dynamic_graph_modification {
         graph.add_processor("C".into(), "Sink".into(), 0);
 
         // Initially all are sources and sinks (no links)
-        assert_eq!(graph.execute(&Query::build().v().count()), 3);
+        assert_eq!(graph.execute(&Query::build().v(()).count()), 3);
         assert_eq!(graph.execute_link(&Query::build().E().count()), 0);
-        assert_eq!(graph.execute(&Query::build().v().sources().count()), 3);
-        assert_eq!(graph.execute(&Query::build().v().sinks().count()), 3);
+        assert_eq!(graph.execute(&Query::build().v(()).sources().count()), 3);
+        assert_eq!(graph.execute(&Query::build().v(()).sinks().count()), 3);
 
         // Cycle 1: Add first link A -> B
         let link_ab = graph.add_link("A.out", "B.in").unwrap();
         assert_eq!(graph.execute_link(&Query::build().E().count()), 1);
-        assert_eq!(graph.execute(&Query::build().v().sources().count()), 2); // A, C
-        assert_eq!(graph.execute(&Query::build().v().sinks().count()), 2); // B, C
+        assert_eq!(graph.execute(&Query::build().v(()).sources().count()), 2); // A, C
+        assert_eq!(graph.execute(&Query::build().v(()).sinks().count()), 2); // B, C
 
         // Cycle 2: Add second link B -> C
         let link_bc = graph.add_link("B.out", "C.in").unwrap();
         assert_eq!(graph.execute_link(&Query::build().E().count()), 2);
-        assert_eq!(graph.execute(&Query::build().v().sources().count()), 1); // A only
-        assert_eq!(graph.execute(&Query::build().v().sinks().count()), 1); // C only
+        assert_eq!(graph.execute(&Query::build().v(()).sources().count()), 1); // A only
+        assert_eq!(graph.execute(&Query::build().v(()).sinks().count()), 1); // C only
 
         // Cycle 3: Remove link B -> C
         graph.remove_link(&link_bc.id);
         assert_eq!(graph.execute_link(&Query::build().E().count()), 1);
-        assert_eq!(graph.execute(&Query::build().v().sources().count()), 2); // A, C
-        assert_eq!(graph.execute(&Query::build().v().sinks().count()), 2); // B, C
+        assert_eq!(graph.execute(&Query::build().v(()).sources().count()), 2); // A, C
+        assert_eq!(graph.execute(&Query::build().v(()).sinks().count()), 2); // B, C
 
         // Cycle 4: Remove link A -> B
         graph.remove_link(&link_ab.id);
         assert_eq!(graph.execute_link(&Query::build().E().count()), 0);
-        assert_eq!(graph.execute(&Query::build().v().sources().count()), 3);
-        assert_eq!(graph.execute(&Query::build().v().sinks().count()), 3);
+        assert_eq!(graph.execute(&Query::build().v(()).sources().count()), 3);
+        assert_eq!(graph.execute(&Query::build().v(()).sinks().count()), 3);
 
         // Cycle 5: Add new direct link A -> C
         graph.add_link("A.direct", "C.direct").unwrap();
@@ -4947,7 +4947,7 @@ mod dynamic_graph_modification {
         graph.add_processor("A".into(), "TestProcessor".into(), 0);
 
         // Initially no state component
-        let running = graph.execute(&Query::build().v().in_state(ProcessorState::Running).count());
+        let running = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).count());
         assert_eq!(running, 0);
 
         // Add state component
@@ -4955,7 +4955,7 @@ mod dynamic_graph_modification {
             .insert(&pid("A"), state(ProcessorState::Running))
             .unwrap();
 
-        let running = graph.execute(&Query::build().v().in_state(ProcessorState::Running).count());
+        let running = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).count());
         assert_eq!(running, 1);
 
         // Update state by inserting new component
@@ -4963,8 +4963,8 @@ mod dynamic_graph_modification {
             .insert(&pid("A"), state(ProcessorState::Idle))
             .unwrap();
 
-        let running = graph.execute(&Query::build().v().in_state(ProcessorState::Running).count());
-        let idle = graph.execute(&Query::build().v().in_state(ProcessorState::Idle).count());
+        let running = graph.execute(&Query::build().v(()).in_state(ProcessorState::Running).count());
+        let idle = graph.execute(&Query::build().v(()).in_state(ProcessorState::Idle).count());
         assert_eq!(running, 0);
         assert_eq!(idle, 1);
     }
@@ -4987,12 +4987,12 @@ mod dynamic_graph_modification {
         let link_c_d = graph.add_link("C.out", "D.audio").unwrap();
 
         // Verify diamond structure
-        let sources = graph.execute(&Query::build().v().sources().ids());
+        let sources = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(sources.len(), 2); // A and E (E not connected yet)
         assert!(sources.contains(&pid("A")));
         assert!(sources.contains(&pid("E")));
 
-        let sinks = graph.execute(&Query::build().v().sinks().ids());
+        let sinks = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(sinks.len(), 2); // D and E
         assert!(sinks.contains(&pid("D")));
         assert!(sinks.contains(&pid("E")));
@@ -5006,10 +5006,10 @@ mod dynamic_graph_modification {
         // Phase 2: Add parallel output path to E
         graph.add_link("A.preview", "E.in").unwrap();
 
-        let sinks = graph.execute(&Query::build().v().sinks().ids());
+        let sinks = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(sinks.len(), 2); // D and E
 
-        let sources = graph.execute(&Query::build().v().sources().ids());
+        let sources = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(sources.len(), 1); // Only A now (E has incoming link)
 
         // Phase 3: Remove audio path links (C becomes isolated but still exists)
@@ -5017,13 +5017,13 @@ mod dynamic_graph_modification {
         graph.remove_link(&link_c_d.id);
 
         // All processors still exist
-        assert_eq!(graph.execute(&Query::build().v().count()), 5);
+        assert_eq!(graph.execute(&Query::build().v(()).count()), 5);
         // C is now isolated (source and sink)
-        let sources = graph.execute(&Query::build().v().sources().ids());
+        let sources = graph.execute(&Query::build().v(()).sources().ids());
         assert!(sources.contains(&pid("A")));
         assert!(sources.contains(&pid("C"))); // C is now a source (no incoming)
 
-        let sinks = graph.execute(&Query::build().v().sinks().ids());
+        let sinks = graph.execute(&Query::build().v(()).sinks().ids());
         assert!(sinks.contains(&pid("C"))); // C is now a sink (no outgoing)
         assert!(sinks.contains(&pid("D")));
         assert!(sinks.contains(&pid("E")));
@@ -5043,7 +5043,7 @@ mod dynamic_graph_modification {
         graph.add_processor("B".into(), "Sink".into(), 0);
 
         // Create a reusable query
-        let sources_query = Query::build().v().sources().ids();
+        let sources_query = Query::build().v(()).sources().ids();
 
         // Execute before adding link
         let result1 = graph.execute(&sources_query);
@@ -5100,14 +5100,14 @@ mod dynamic_graph_modification {
         graph.add_processor("B".into(), "Middle".into(), 0);
         graph.add_processor("C".into(), "Sink".into(), 0);
 
-        assert_eq!(graph.execute(&Query::build().v().count()), 3);
+        assert_eq!(graph.execute(&Query::build().v(()).count()), 3);
 
         // Remove B (the middle one)
         graph.remove_processor(&pid("B"));
 
-        assert_eq!(graph.execute(&Query::build().v().count()), 2);
-        assert!(graph.execute(&Query::build().v().ids()).contains(&pid("A")));
-        assert!(graph.execute(&Query::build().v().ids()).contains(&pid("C")));
+        assert_eq!(graph.execute(&Query::build().v(()).count()), 2);
+        assert!(graph.execute(&Query::build().v(()).ids()).contains(&pid("A")));
+        assert!(graph.execute(&Query::build().v(()).ids()).contains(&pid("C")));
 
         // This is the critical test: can we still add a link between A and C?
         // With the buggy secondary index, this would panic because C's NodeIndex
@@ -5147,14 +5147,14 @@ mod dynamic_graph_modification {
         graph.add_link("C.out", "D.in").unwrap();
         graph.add_link("D.out", "E.in").unwrap();
 
-        assert_eq!(graph.execute(&Query::build().v().count()), 5);
+        assert_eq!(graph.execute(&Query::build().v(()).count()), 5);
         assert_eq!(graph.execute_link(&Query::build().E().count()), 4);
 
         // Remove B and D (non-adjacent processors)
         graph.remove_processor(&pid("B"));
         graph.remove_processor(&pid("D"));
 
-        assert_eq!(graph.execute(&Query::build().v().count()), 3);
+        assert_eq!(graph.execute(&Query::build().v(()).count()), 3);
         // A->B (gone), B->C (gone), C->D (gone), D->E (gone)
         // All links involved B or D, so all should be gone
         assert_eq!(graph.execute_link(&Query::build().E().count()), 0);
@@ -5190,7 +5190,7 @@ mod dynamic_graph_modification {
         // Add a new processor D
         graph.add_processor("D".into(), "NewProcessor".into(), 0);
 
-        assert_eq!(graph.execute(&Query::build().v().count()), 3); // A, C, D
+        assert_eq!(graph.execute(&Query::build().v(()).count()), 3); // A, C, D
 
         // Link A -> D -> C
         graph.add_link("A.out", "D.in").unwrap();
@@ -5199,11 +5199,11 @@ mod dynamic_graph_modification {
         assert_eq!(graph.execute_link(&Query::build().E().count()), 2);
 
         // Verify chain
-        let sources = graph.execute(&Query::build().v().sources().ids());
+        let sources = graph.execute(&Query::build().v(()).sources().ids());
         assert_eq!(sources.len(), 1);
         assert!(sources.contains(&pid("A")));
 
-        let sinks = graph.execute(&Query::build().v().sinks().ids());
+        let sinks = graph.execute(&Query::build().v(()).sinks().ids());
         assert_eq!(sinks.len(), 1);
         assert!(sinks.contains(&pid("C")));
     }

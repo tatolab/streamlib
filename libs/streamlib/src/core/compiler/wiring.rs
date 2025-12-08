@@ -27,7 +27,7 @@ pub fn wire_link(
 ) -> Result<()> {
     let (from_port, to_port) = {
         let link = property_graph
-            .query()
+            .traversal()
             .e(link_id)
             .first()
             .ok_or_else(|| {
@@ -46,7 +46,7 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result
 
     let (from_port, to_port) = {
         let link = property_graph
-            .query()
+            .traversal()
             .e(link_id)
             .first()
             .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
@@ -58,7 +58,7 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result
 
     // Get processor instance arcs first (clone them to release borrow)
     let source_arc = property_graph
-        .query()
+        .traversal()
         .v(&source_proc_id)
         .first()
         .and_then(|node| {
@@ -67,7 +67,7 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result
         });
 
     let dest_arc = property_graph
-        .query()
+        .traversal()
         .v(&dest_proc_id)
         .first()
         .and_then(|node| {
@@ -101,7 +101,7 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result
     }
 
     // Remove link components and set state to Disconnected
-    if let Some(link) = property_graph.query().e(link_id).first() {
+    if let Some(link) = property_graph.traversal().e(link_id).first() {
         link.remove::<LinkInstanceComponent>();
         link.remove::<LinkTypeInfoComponent>();
         link.insert(LinkStateComponent(LinkState::Disconnected));
@@ -167,7 +167,7 @@ fn wire_link_ports(
 
     // Store instance and type info as components on the link
     let link = property_graph
-        .query()
+        .traversal()
         .e(link_id)
         .first()
         .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
@@ -201,7 +201,7 @@ fn wire_link_ports(
 
     // Set link state to Wired
     let link = property_graph
-        .query()
+        .traversal()
         .e(link_id)
         .first()
         .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
@@ -217,7 +217,7 @@ fn get_processor_pair(
     dest_proc_id: &str,
 ) -> Result<(Arc<Mutex<BoxedProcessor>>, Arc<Mutex<BoxedProcessor>>)> {
     let source_arc = property_graph
-        .query()
+        .traversal()
         .v(&source_proc_id.to_string())
         .first()
         .and_then(|node| {
@@ -229,7 +229,7 @@ fn get_processor_pair(
         })?;
 
     let dest_arc = property_graph
-        .query()
+        .traversal()
         .v(&dest_proc_id.to_string())
         .first()
         .and_then(|node| {
@@ -435,7 +435,7 @@ fn setup_link_output_to_processor_message_writer(
 ) -> Result<()> {
     // Get destination's message writer
     let message_writer = property_graph
-        .query()
+        .traversal()
         .v(&dest_proc_id.to_string())
         .first()
         .and_then(|node| {
@@ -451,7 +451,7 @@ fn setup_link_output_to_processor_message_writer(
 
     // Get source processor and set its output's message writer
     let source_arc = property_graph
-        .query()
+        .traversal()
         .v(&source_proc_id.to_string())
         .first()
         .and_then(|node| {
