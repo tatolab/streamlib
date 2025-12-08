@@ -8,9 +8,8 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::graph::{
-    Graph, GraphNode, GraphState, NodeIndex, ProcessorMetrics, StateComponent,
+    Graph, GraphNode, GraphState, LinkUniqueId, ProcessorMetrics, ProcessorUniqueId, StateComponent,
 };
-use crate::core::links::LinkId;
 
 use super::snapshots::{
     GraphHealth, GraphStateSnapshot, LatencyStats, LinkSnapshot, ProcessorSnapshot,
@@ -61,7 +60,7 @@ impl GraphInspector {
     }
 
     /// Get a snapshot of a specific link.
-    pub fn link(&self, id: &LinkId) -> Option<LinkSnapshot> {
+    pub fn link(&self, id: &LinkUniqueId) -> Option<LinkSnapshot> {
         let graph = self.graph.read();
 
         let link = graph.query().E_id(id).first()?;
@@ -121,7 +120,7 @@ impl GraphInspector {
     }
 
     /// List all link IDs.
-    pub fn link_ids(&self) -> Vec<LinkId> {
+    pub fn link_ids(&self) -> Vec<LinkUniqueId> {
         let graph = self.graph.read();
         graph.query().e().ids()
     }

@@ -194,8 +194,9 @@ impl StreamRuntime {
         runtime_ctx: &Arc<RuntimeContext>,
     ) -> Result<()> {
         use crate::core::compiler::GraphDelta;
-        use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
-        use crate::core::links::LinkInstanceComponent;
+        use crate::core::graph::{
+            LinkInstanceComponent, PendingDeletionComponent, ProcessorInstanceComponent,
+        };
 
         // Separate operations by type
         let mut processors_to_add = Vec::new();

@@ -58,7 +58,7 @@ impl ResamplerState {
 }
 
 #[crate::processor(
-    execution = Manual,
+    execution = ProcessExecution::Manual,
     description = "Plays audio through speakers/headphones using CoreAudio",
     unsafe_send
 )]

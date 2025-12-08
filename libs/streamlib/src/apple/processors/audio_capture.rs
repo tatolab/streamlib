@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::core::execution::ProcessExecution;
 use crate::core::frames::AudioChannelCount;
 use crate::core::{AudioFrame, LinkOutput, Result, RuntimeContext, StreamError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -23,7 +24,7 @@ pub struct AppleAudioInputDevice {
 }
 
 #[crate::processor(
-    execution = Manual,
+    execution = ProcessExecution::Manual,
     description = "Captures mono audio from macOS microphones in device-native format - driven by CoreAudio callback",
     unsafe_send
 )]

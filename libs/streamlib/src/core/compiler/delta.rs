@@ -5,20 +5,19 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::graph::NodeIndex;
-use crate::core::links::LinkId;
+use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 
 /// Represents the difference between desired state (Graph) and running state (ExecutionGraph).
 #[derive(Debug, Default)]
 pub struct GraphDelta {
     /// Processors in Graph but not yet spawned
-    pub processors_to_add: Vec<NodeIndex>,
+    pub processors_to_add: Vec<ProcessorUniqueId>,
     /// Processors spawned but no longer in Graph
-    pub processors_to_remove: Vec<NodeIndex>,
+    pub processors_to_remove: Vec<ProcessorUniqueId>,
     /// Links in Graph but not yet wired
-    pub links_to_add: Vec<LinkId>,
+    pub links_to_add: Vec<LinkUniqueId>,
     /// Links wired but no longer in Graph
-    pub links_to_remove: Vec<LinkId>,
+    pub links_to_remove: Vec<LinkUniqueId>,
     /// Processors with config changes (future use)
     pub processors_to_update: Vec<ProcessorConfigChange>,
     /// Links with config changes (future use)
@@ -50,7 +49,7 @@ impl GraphDelta {
 /// Processor config change (for hot-reload, future use).
 #[derive(Debug, Clone)]
 pub struct ProcessorConfigChange {
-    pub id: NodeIndex,
+    pub id: ProcessorUniqueId,
     pub old_config_checksum: u64,
     pub new_config_checksum: u64,
 }
@@ -58,16 +57,16 @@ pub struct ProcessorConfigChange {
 /// Link config change (capacity, buffer strategy, future use).
 #[derive(Debug, Clone)]
 pub struct LinkConfigChange {
-    pub id: LinkId,
+    pub id: LinkUniqueId,
     pub new_capacity: Option<usize>,
 }
 
 /// Compute delta between desired (Graph) and running (ExecutionGraph) state.
 pub fn compute_delta(
-    graph_processor_ids: &HashSet<NodeIndex>,
-    graph_link_ids: &HashSet<LinkId>,
-    running_processor_ids: &HashSet<NodeIndex>,
-    wired_link_ids: &HashSet<LinkId>,
+    graph_processor_ids: &HashSet<ProcessorUniqueId>,
+    graph_link_ids: &HashSet<LinkUniqueId>,
+    running_processor_ids: &HashSet<ProcessorUniqueId>,
+    wired_link_ids: &HashSet<LinkUniqueId>,
 ) -> GraphDelta {
     compute_delta_with_config(
         graph_processor_ids,
@@ -84,12 +83,12 @@ pub fn compute_delta(
 /// Compares processor add/remove, link add/remove, and detects config checksums
 /// that have changed for processors that exist in both desired and running state.
 pub fn compute_delta_with_config(
-    graph_processor_ids: &HashSet<NodeIndex>,
-    graph_link_ids: &HashSet<LinkId>,
-    running_processor_ids: &HashSet<NodeIndex>,
-    wired_link_ids: &HashSet<LinkId>,
-    graph_config_checksums: &HashMap<NodeIndex, u64>,
-    running_config_checksums: &HashMap<NodeIndex, u64>,
+    graph_processor_ids: &HashSet<ProcessorUniqueId>,
+    graph_link_ids: &HashSet<LinkUniqueId>,
+    running_processor_ids: &HashSet<ProcessorUniqueId>,
+    wired_link_ids: &HashSet<LinkUniqueId>,
+    graph_config_checksums: &HashMap<ProcessorUniqueId, u64>,
+    running_config_checksums: &HashMap<ProcessorUniqueId, u64>,
 ) -> GraphDelta {
     let processors_to_add: Vec<_> = graph_processor_ids
         .difference(running_processor_ids)
@@ -146,48 +145,46 @@ mod tests {
 
     #[test]
     fn test_delta_with_additions() {
-        let graph_procs: HashSet<NodeIndex> = ["a", "b", "c"]
+        let graph_procs: HashSet<ProcessorUniqueId> = ["a", "b", "c"]
             .iter()
-            .map(|s| NodeIndex::from(*s))
+            .map(|s| ProcessorUniqueId::from(*s))
             .collect();
-        let running_procs: HashSet<NodeIndex> =
-            ["a"].iter().map(|s| NodeIndex::from(*s)).collect();
-        let graph_links: HashSet<LinkId> = HashSet::new();
-        let wired_links: HashSet<LinkId> = HashSet::new();
+        let running_procs: HashSet<ProcessorUniqueId> = ["a"].iter().map(|s| ProcessorUniqueId::from(*s)).collect();
+        let graph_links: HashSet<LinkUniqueId> = HashSet::new();
+        let wired_links: HashSet<LinkUniqueId> = HashSet::new();
 
         let delta = compute_delta(&graph_procs, &graph_links, &running_procs, &wired_links);
 
         assert_eq!(delta.processors_to_add.len(), 2);
-        assert!(delta.processors_to_add.contains(&NodeIndex::from("b")));
-        assert!(delta.processors_to_add.contains(&NodeIndex::from("c")));
+        assert!(delta.processors_to_add.contains(&ProcessorUniqueId::from("b")));
+        assert!(delta.processors_to_add.contains(&ProcessorUniqueId::from("c")));
         assert!(delta.processors_to_remove.is_empty());
     }
 
     #[test]
     fn test_delta_with_removals() {
-        let graph_procs: HashSet<NodeIndex> =
-            ["a"].iter().map(|s| NodeIndex::from(*s)).collect();
-        let running_procs: HashSet<NodeIndex> = ["a", "b", "c"]
+        let graph_procs: HashSet<ProcessorUniqueId> = ["a"].iter().map(|s| ProcessorUniqueId::from(*s)).collect();
+        let running_procs: HashSet<ProcessorUniqueId> = ["a", "b", "c"]
             .iter()
-            .map(|s| NodeIndex::from(*s))
+            .map(|s| ProcessorUniqueId::from(*s))
             .collect();
-        let graph_links: HashSet<LinkId> = HashSet::new();
-        let wired_links: HashSet<LinkId> = HashSet::new();
+        let graph_links: HashSet<LinkUniqueId> = HashSet::new();
+        let wired_links: HashSet<LinkUniqueId> = HashSet::new();
 
         let delta = compute_delta(&graph_procs, &graph_links, &running_procs, &wired_links);
 
         assert!(delta.processors_to_add.is_empty());
         assert_eq!(delta.processors_to_remove.len(), 2);
-        assert!(delta.processors_to_remove.contains(&NodeIndex::from("b")));
-        assert!(delta.processors_to_remove.contains(&NodeIndex::from("c")));
+        assert!(delta.processors_to_remove.contains(&ProcessorUniqueId::from("b")));
+        assert!(delta.processors_to_remove.contains(&ProcessorUniqueId::from("c")));
     }
 
     #[test]
     fn test_delta_with_link_changes() {
         use crate::core::links::graph::link_id::__private::new_unchecked;
 
-        let graph_procs: HashSet<NodeIndex> = HashSet::new();
-        let running_procs: HashSet<NodeIndex> = HashSet::new();
+        let graph_procs: HashSet<ProcessorUniqueId> = HashSet::new();
+        let running_procs: HashSet<ProcessorUniqueId> = HashSet::new();
 
         let link1 = new_unchecked("link_1".to_string());
         let link2 = new_unchecked("link_2".to_string());
@@ -206,9 +203,8 @@ mod tests {
 
     #[test]
     fn test_delta_no_changes() {
-        let procs: HashSet<NodeIndex> =
-            ["a", "b"].iter().map(|s| NodeIndex::from(*s)).collect();
-        let links: HashSet<LinkId> = HashSet::new();
+        let procs: HashSet<ProcessorUniqueId> = ["a", "b"].iter().map(|s| ProcessorUniqueId::from(*s)).collect();
+        let links: HashSet<LinkUniqueId> = HashSet::new();
 
         let delta = compute_delta(&procs, &links, &procs, &links);
 
@@ -217,24 +213,24 @@ mod tests {
 
     #[test]
     fn test_delta_with_config_changes() {
-        let procs: HashSet<NodeIndex> = ["a", "b", "c"]
+        let procs: HashSet<ProcessorUniqueId> = ["a", "b", "c"]
             .iter()
-            .map(|s| NodeIndex::from(*s))
+            .map(|s| ProcessorUniqueId::from(*s))
             .collect();
-        let links: HashSet<LinkId> = HashSet::new();
+        let links: HashSet<LinkUniqueId> = HashSet::new();
 
         // a: same checksum (no change)
         // b: different checksum (config changed)
         // c: same checksum (no change)
-        let mut graph_checksums: HashMap<NodeIndex, u64> = HashMap::new();
-        graph_checksums.insert(NodeIndex::from("a"), 100);
-        graph_checksums.insert(NodeIndex::from("b"), 200); // changed from 150
-        graph_checksums.insert(NodeIndex::from("c"), 300);
+        let mut graph_checksums: HashMap<ProcessorUniqueId, u64> = HashMap::new();
+        graph_checksums.insert(ProcessorUniqueId::from("a"), 100);
+        graph_checksums.insert(ProcessorUniqueId::from("b"), 200); // changed from 150
+        graph_checksums.insert(ProcessorUniqueId::from("c"), 300);
 
-        let mut running_checksums: HashMap<NodeIndex, u64> = HashMap::new();
-        running_checksums.insert(NodeIndex::from("a"), 100);
-        running_checksums.insert(NodeIndex::from("b"), 150); // old value
-        running_checksums.insert(NodeIndex::from("c"), 300);
+        let mut running_checksums: HashMap<ProcessorUniqueId, u64> = HashMap::new();
+        running_checksums.insert(ProcessorUniqueId::from("a"), 100);
+        running_checksums.insert(ProcessorUniqueId::from("b"), 150); // old value
+        running_checksums.insert(ProcessorUniqueId::from("c"), 300);
 
         let delta = compute_delta_with_config(
             &procs,
@@ -259,18 +255,17 @@ mod tests {
     #[test]
     fn test_delta_config_change_only_for_existing_processors() {
         // New processor should be in "add", not "update"
-        let graph_procs: HashSet<NodeIndex> =
-            ["a", "b"].iter().map(|s| NodeIndex::from(*s)).collect();
-        let running_procs: HashSet<NodeIndex> =
-            ["a"].iter().map(|s| NodeIndex::from(*s)).collect();
-        let links: HashSet<LinkId> = HashSet::new();
+        let graph_procs: HashSet<ProcessorUniqueId> =
+            ["a", "b"].iter().map(|s| ProcessorUniqueId::from(*s)).collect();
+        let running_procs: HashSet<ProcessorUniqueId> = ["a"].iter().map(|s| ProcessorUniqueId::from(*s)).collect();
+        let links: HashSet<LinkUniqueId> = HashSet::new();
 
-        let mut graph_checksums: HashMap<NodeIndex, u64> = HashMap::new();
-        graph_checksums.insert(NodeIndex::from("a"), 100);
-        graph_checksums.insert(NodeIndex::from("b"), 200);
+        let mut graph_checksums: HashMap<ProcessorUniqueId, u64> = HashMap::new();
+        graph_checksums.insert(ProcessorUniqueId::from("a"), 100);
+        graph_checksums.insert(ProcessorUniqueId::from("b"), 200);
 
-        let mut running_checksums: HashMap<NodeIndex, u64> = HashMap::new();
-        running_checksums.insert(NodeIndex::from("a"), 100);
+        let mut running_checksums: HashMap<ProcessorUniqueId, u64> = HashMap::new();
+        running_checksums.insert(ProcessorUniqueId::from("a"), 100);
 
         let delta = compute_delta_with_config(
             &graph_procs,
@@ -283,7 +278,7 @@ mod tests {
 
         // b is new, not an update
         assert_eq!(delta.processors_to_add.len(), 1);
-        assert!(delta.processors_to_add.contains(&NodeIndex::from("b")));
+        assert!(delta.processors_to_add.contains(&ProcessorUniqueId::from("b")));
         assert!(delta.processors_to_update.is_empty());
     }
 }
