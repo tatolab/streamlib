@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::edges::Link;
 use super::nodes::ProcessorNode;
 
-use super::query::TraversalSource;
+use super::traversal::TraversalSource;
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]

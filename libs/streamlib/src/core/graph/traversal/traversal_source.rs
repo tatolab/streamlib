@@ -9,7 +9,7 @@ use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
 /// Entry point for graph queries.
 pub struct TraversalSource<'a> {
-    pub(in crate::core::graph::query) graph: &'a DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
 }
 
 impl<'a> TraversalSource<'a> {
@@ -21,12 +21,12 @@ impl<'a> TraversalSource<'a> {
 
 /// Read-only query over processor nodes.
 pub struct ProcessorTraversal<'a> {
-    pub(in crate::core::graph::query) graph: &'a DiGraph<ProcessorNode, Link>,
-    pub(in crate::core::graph::query) ids: Vec<NodeIndex>,
+    pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) ids: Vec<NodeIndex>,
 }
 
 /// Read-only query over links.
 pub struct LinkTraversal<'a> {
-    pub(in crate::core::graph::query) graph: &'a DiGraph<ProcessorNode, Link>,
-    pub(in crate::core::graph::query) ids: Vec<EdgeIndex>,
+    pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) ids: Vec<EdgeIndex>,
 }

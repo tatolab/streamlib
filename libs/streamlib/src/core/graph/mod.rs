@@ -6,7 +6,7 @@ mod data_structure;
 
 mod edges;
 mod nodes;
-mod query;
+mod traversal;
 mod traits;
 mod validation;
 
@@ -18,4 +18,4 @@ pub use validation::validate_graph;
 pub use components::*;
 pub use edges::*;
 pub use nodes::*;
-pub use query::*;
+pub use traversal::*;
