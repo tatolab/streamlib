@@ -3,16 +3,6 @@
 
 use crate::core::{execution::ThreadPriority, Result, StreamError};
 
-/// Apply thread priority to the current thread on macOS/iOS
-#[allow(dead_code)]
-pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
-    match priority {
-        ThreadPriority::RealTime => set_realtime_priority(),
-        ThreadPriority::High => set_high_priority(),
-        ThreadPriority::Normal => Ok(()), // Normal priority is default, no action needed
-    }
-}
-
 #[cfg(target_os = "macos")]
 fn set_realtime_priority() -> Result<()> {
     use mach2::kern_return::KERN_SUCCESS;
@@ -159,24 +149,4 @@ fn set_high_priority() -> Result<()> {
 
     tracing::info!("Applied high thread priority (SCHED_RR, priority 50)");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_apply_normal_priority() {
-        // Normal priority should always succeed (it's a no-op)
-        assert!(apply_thread_priority(ThreadPriority::Normal).is_ok());
-    }
-
-    #[test]
-    fn test_apply_high_priority() {
-        // High priority may fail without privileges, but shouldn't crash
-        let _ = apply_thread_priority(ThreadPriority::High);
-    }
-
-    // Note: We don't test RealTime priority in automated tests as it requires
-    // special system configuration and could interfere with other processes
 }

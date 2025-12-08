@@ -9,7 +9,7 @@
 // - optimize(): <100μs for typical graphs (5-20 processors)
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use streamlib::core::{GraphOptimizer, ProcessorId};
+use streamlib::core::{GraphOptimizer, NodeIndex};
 
 fn bench_add_processor(c: &mut Criterion) {
     c.bench_function("add_processor", |b| {

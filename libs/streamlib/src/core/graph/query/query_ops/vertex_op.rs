@@ -1,31 +1,31 @@
 mod private {
-    use crate::core::graph::ProcessorId;
+    use crate::core::graph::ProcessorUniqueId;
 
     pub trait IntoVertexFilter {
-        fn into_filter(self) -> Option<ProcessorId>;
+        fn into_filter(self) -> Option<ProcessorUniqueId>;
     }
 
     impl IntoVertexFilter for () {
-        fn into_filter(self) -> Option<ProcessorId> {
+        fn into_filter(self) -> Option<ProcessorUniqueId> {
             None
         }
     }
 
-    impl IntoVertexFilter for ProcessorId {
-        fn into_filter(self) -> Option<ProcessorId> {
+    impl IntoVertexFilter for ProcessorUniqueId {
+        fn into_filter(self) -> Option<ProcessorUniqueId> {
             Some(self)
         }
     }
 
-    impl IntoVertexFilter for &ProcessorId {
-        fn into_filter(self) -> Option<ProcessorId> {
+    impl IntoVertexFilter for &ProcessorUniqueId {
+        fn into_filter(self) -> Option<ProcessorUniqueId> {
             Some(self.clone())
         }
     }
 
     impl IntoVertexFilter for &str {
-        fn into_filter(self) -> Option<ProcessorId> {
-            Some(ProcessorId::from(self))
+        fn into_filter(self) -> Option<ProcessorUniqueId> {
+            Some(ProcessorUniqueId::from(self))
         }
     }
 }
@@ -40,19 +40,17 @@ impl<'a> QueryBuilder<'a> {
     /// Accepts:
     /// - `()` - all vertices
     /// - `&str` - vertex by ID string
-    /// - `ProcessorId` - vertex by ID
-    pub fn V(self, filter: impl private::IntoVertexFilter) -> ProcessorQuery<'a> {
+    /// - `ProcessorUniqueId` - vertex by ID
+    pub fn v(self, filter: impl private::IntoVertexFilter) -> ProcessorQuery<'a> {
         match filter.into_filter() {
             Some(id) => {
                 // code for some
                 self.graph
-                    .internal_graph()
-                    .graph()
                     .node_references()
                     .find(|(_, processor_node)| processor_node.id == id)
-                    .map(|(_, processor_node)| ProcessorQuery {
+                    .map(|(idx, _)| ProcessorQuery {
                         graph: self.graph,
-                        ids: vec![processor_node.id.clone()],
+                        ids: vec![idx],
                     })
                     .unwrap_or_else(|| ProcessorQuery {
                         graph: self.graph,
@@ -62,10 +60,8 @@ impl<'a> QueryBuilder<'a> {
             None => {
                 let ids = self
                     .graph
-                    .internal_graph()
-                    .graph()
                     .node_references()
-                    .map(|(_, processor_node)| processor_node.id.clone())
+                    .map(|(idx, _)| idx)
                     .collect::<Vec<_>>();
                 ProcessorQuery {
                     graph: self.graph,

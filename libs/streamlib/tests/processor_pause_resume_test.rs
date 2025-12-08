@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use streamlib::core::delegates::ProcessorDelegate;
 use streamlib::core::frames::{AudioChannelCount, AudioFrame};
-use streamlib::core::graph::ProcessorId;
+use streamlib::core::graph::NodeIndex;
 use streamlib::core::pubsub::{topics, Event, EventListener, ProcessorEvent, PUBSUB};
 use streamlib::core::runtime::{CommitMode, StreamRuntime};
 use streamlib::core::{LinkInput, LinkOutput, Result, RuntimeContext, StreamError};
@@ -290,7 +290,7 @@ fn test_pause_stops_continuous_processor() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add producer (Continuous mode)
@@ -365,7 +365,7 @@ fn test_pause_stops_reactive_processor() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add producer and consumer
@@ -443,7 +443,7 @@ fn test_pubsub_notifications_on_pause_resume() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add producer
@@ -519,7 +519,7 @@ fn test_delegate_rejection_prevents_pause() {
     }
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .with_processor_delegate(RejectAllPausesDelegate)
         .build();
 
@@ -565,7 +565,7 @@ fn test_runtime_pause_resume_all_processors() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add multiple producers
@@ -646,7 +646,7 @@ fn test_pause_resume_idempotent() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     let producer = runtime
@@ -683,7 +683,7 @@ fn test_manual_processor_checks_is_paused() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add manual processor

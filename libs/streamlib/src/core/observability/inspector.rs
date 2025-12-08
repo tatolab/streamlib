@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::graph::{
-    Graph, GraphNode, GraphState, ProcessorId, ProcessorMetrics, StateComponent,
+    Graph, GraphNode, GraphState, NodeIndex, ProcessorMetrics, StateComponent,
 };
 use crate::core::links::LinkId;
 
@@ -31,7 +31,7 @@ impl GraphInspector {
     }
 
     /// Get a snapshot of a specific processor.
-    pub fn processor(&self, id: &ProcessorId) -> Option<ProcessorSnapshot> {
+    pub fn processor(&self, id: &NodeIndex) -> Option<ProcessorSnapshot> {
         let graph = self.graph.read();
 
         let node = graph.query().V_id(id).first()?;
@@ -82,14 +82,14 @@ impl GraphInspector {
     pub fn health(&self) -> GraphHealth {
         let graph = self.graph.read();
 
-        let processor_count = graph.query().V().count();
-        let link_count = graph.query().E().count();
+        let processor_count = graph.query().v().count();
+        let link_count = graph.query().e().count();
 
         // Aggregate metrics from all processors
         let mut total_dropped = 0u64;
         let mut bottlenecks = Vec::new();
 
-        for node in graph.query().V().iter() {
+        for node in graph.query().v().iter() {
             if let Some(metrics) = node.get::<ProcessorMetrics>() {
                 total_dropped += metrics.frames_dropped;
 
@@ -115,15 +115,15 @@ impl GraphInspector {
     }
 
     /// List all processor IDs.
-    pub fn processor_ids(&self) -> Vec<ProcessorId> {
+    pub fn processor_ids(&self) -> Vec<NodeIndex> {
         let graph = self.graph.read();
-        graph.query().V().ids()
+        graph.query().v().ids()
     }
 
     /// List all link IDs.
     pub fn link_ids(&self) -> Vec<LinkId> {
         let graph = self.graph.read();
-        graph.query().E().ids()
+        graph.query().e().ids()
     }
 
     /// Get the current graph state.
@@ -140,13 +140,13 @@ impl GraphInspector {
     /// Get processor count.
     pub fn processor_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.query().V().count()
+        graph.query().v().count()
     }
 
     /// Get link count.
     pub fn link_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.query().E().count()
+        graph.query().e().count()
     }
 }
 

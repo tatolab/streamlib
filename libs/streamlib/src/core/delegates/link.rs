@@ -6,8 +6,7 @@
 use std::sync::Arc;
 
 use crate::core::error::Result;
-use crate::core::graph::Link;
-use crate::core::links::LinkId;
+use crate::core::graph::{Link, LinkUniqueId};
 
 /// Delegate for link wiring lifecycle events.
 ///
@@ -32,12 +31,12 @@ pub trait LinkDelegate: Send + Sync {
     }
 
     /// Called before a link is unwired (ring buffer destroyed).
-    fn will_unwire(&self, _link_id: &LinkId) -> Result<()> {
+    fn will_unwire(&self, _link_id: &LinkUniqueId) -> Result<()> {
         Ok(())
     }
 
     /// Called after a link is unwired.
-    fn did_unwire(&self, _link_id: &LinkId) -> Result<()> {
+    fn did_unwire(&self, _link_id: &LinkUniqueId) -> Result<()> {
         Ok(())
     }
 }
@@ -55,11 +54,11 @@ impl LinkDelegate for Arc<dyn LinkDelegate> {
         (**self).did_wire(link)
     }
 
-    fn will_unwire(&self, link_id: &LinkId) -> Result<()> {
+    fn will_unwire(&self, link_id: &LinkUniqueId) -> Result<()> {
         (**self).will_unwire(link_id)
     }
 
-    fn did_unwire(&self, link_id: &LinkId) -> Result<()> {
+    fn did_unwire(&self, link_id: &LinkUniqueId) -> Result<()> {
         (**self).did_unwire(link_id)
     }
 }

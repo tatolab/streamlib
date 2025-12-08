@@ -11,7 +11,7 @@ pub use crate::core::{
     frames::{AudioFrame, DataFrame, VideoFrame},
 
     // Graph
-    graph::ProcessorId,
+    graph::ProcessorUniqueId,
     links::LinkId,
     // Processors
     processors::Processor,

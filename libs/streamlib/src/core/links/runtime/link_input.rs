@@ -7,13 +7,13 @@ use std::cell::UnsafeCell;
 use std::sync::Arc;
 
 use super::link_input_data_reader::LinkInputDataReader;
-use crate::core::links::graph::LinkId;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::traits::{LinkPortAddress, LinkPortMessage};
 use crate::core::{Result, StreamError};
 
 /// Binding between a LinkInput port and an upstream processor via a specific link.
 struct LinkInputFromUpstreamProcessor<T: LinkPortMessage> {
-    link_id: LinkId,
+    link_id: LinkUniqueId,
     data_reader: LinkInputDataReader<T>,
     #[allow(dead_code)]
     source_address: Option<LinkPortAddress>,
@@ -21,7 +21,7 @@ struct LinkInputFromUpstreamProcessor<T: LinkPortMessage> {
 
 impl<T: LinkPortMessage> LinkInputFromUpstreamProcessor<T> {
     fn new(
-        link_id: LinkId,
+        link_id: LinkUniqueId,
         data_reader: LinkInputDataReader<T>,
         source_address: Option<LinkPortAddress>,
     ) -> Self {
@@ -92,7 +92,7 @@ impl<T: LinkPortMessage> LinkInput<T> {
     /// Add a data reader from an upstream processor.
     pub fn add_data_reader(
         &self,
-        link_id: LinkId,
+        link_id: LinkUniqueId,
         data_reader: LinkInputDataReader<T>,
         source_address: Option<LinkPortAddress>,
     ) -> Result<()> {
@@ -113,7 +113,7 @@ impl<T: LinkPortMessage> LinkInput<T> {
     }
 
     /// Remove a data reader by link ID.
-    pub fn remove_data_reader(&self, link_id: &LinkId) -> Result<()> {
+    pub fn remove_data_reader(&self, link_id: &LinkUniqueId) -> Result<()> {
         unsafe {
             let upstream = self.upstream_processors_mut();
             let idx = upstream

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::frames::AudioFrame;
-use crate::core::utils::audio_frame::AudioRechunker;
+use crate::core::utils::audio_utils::AudioRechunker;
 use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 use serde::{Deserialize, Serialize};
 

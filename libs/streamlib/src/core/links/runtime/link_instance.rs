@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::link_input_data_reader::LinkInputDataReader;
 use super::link_output_data_writer::LinkOutputDataWriter;
-use crate::core::links::graph::LinkId;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::traits::{LinkBufferReadMode, LinkPortMessage};
 
 /// Default ring buffer capacity for links.
@@ -26,12 +26,12 @@ pub struct LinkInstanceInner<T: LinkPortMessage> {
     producer: Mutex<Producer<T>>,
     consumer: Mutex<Consumer<T>>,
     cached_size: AtomicUsize,
-    link_id: LinkId,
+    link_id: LinkUniqueId,
     read_mode: LinkBufferReadMode,
 }
 
 impl<T: LinkPortMessage> LinkInstanceInner<T> {
-    fn new(link_id: LinkId, capacity: usize) -> Self {
+    fn new(link_id: LinkUniqueId, capacity: usize) -> Self {
         let (producer, consumer) = RingBuffer::new(capacity);
         Self {
             producer: Mutex::new(producer),
@@ -129,7 +129,7 @@ impl<T: LinkPortMessage> LinkInstanceInner<T> {
     }
 
     #[inline]
-    pub fn link_id(&self) -> &LinkId {
+    pub fn link_id(&self) -> &LinkUniqueId {
         &self.link_id
     }
 
@@ -154,14 +154,14 @@ pub struct LinkInstance<T: LinkPortMessage> {
 
 impl<T: LinkPortMessage> LinkInstance<T> {
     /// Create a new LinkInstance with the given capacity.
-    pub fn new(link_id: LinkId, capacity: usize) -> Self {
+    pub fn new(link_id: LinkUniqueId, capacity: usize) -> Self {
         Self {
             inner: Arc::new(LinkInstanceInner::new(link_id, capacity)),
         }
     }
 
     /// Create with default capacity.
-    pub fn with_default_capacity(link_id: LinkId) -> Self {
+    pub fn with_default_capacity(link_id: LinkUniqueId) -> Self {
         Self::new(link_id, DEFAULT_LINK_CAPACITY)
     }
 
@@ -176,7 +176,7 @@ impl<T: LinkPortMessage> LinkInstance<T> {
     }
 
     #[inline]
-    pub fn link_id(&self) -> &LinkId {
+    pub fn link_id(&self) -> &LinkUniqueId {
         self.inner.link_id()
     }
 
@@ -218,7 +218,7 @@ impl<T: LinkPortMessage> Clone for LinkInstance<T> {
 
 /// Type-erased LinkInstance for storage in collections.
 pub trait AnyLinkInstance: Send + Sync {
-    fn link_id(&self) -> &LinkId;
+    fn link_id(&self) -> &LinkUniqueId;
     fn has_data(&self) -> bool;
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool;
@@ -229,7 +229,7 @@ pub trait AnyLinkInstance: Send + Sync {
 }
 
 impl<T: LinkPortMessage> AnyLinkInstance for LinkInstance<T> {
-    fn link_id(&self) -> &LinkId {
+    fn link_id(&self) -> &LinkUniqueId {
         self.link_id()
     }
 
@@ -269,11 +269,6 @@ pub type BoxedLinkInstance = Box<dyn AnyLinkInstance>;
 mod tests {
     use super::*;
     use crate::core::frames::{AudioChannelCount, AudioFrame};
-
-    /// Helper to create a test LinkId
-    fn test_link_id(name: &str) -> LinkId {
-        LinkId::from_string(name).expect("valid link id")
-    }
 
     #[test]
     fn test_push_under_capacity() {
@@ -532,7 +527,7 @@ mod tests {
     #[test]
     fn test_read_mode_matches_frame_type() {
         // AudioFrame should use ReadNextInOrder
-        let audio_link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-9"), 4);
+        let audio_link = LinkInstance::<AudioFrame>::new(LinkUniqueId::from("test-link-9"), 4);
         assert_eq!(
             audio_link.inner.read_mode,
             LinkBufferReadMode::ReadNextInOrder

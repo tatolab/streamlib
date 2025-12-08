@@ -2,6 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod builder;
-mod vertex_op;
+mod query_ops;
 
-pub use builder::*;
+pub use builder::{LinkQuery, ProcessorQuery, QueryBuilder};

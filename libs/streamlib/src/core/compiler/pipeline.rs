@@ -10,7 +10,7 @@ use crate::core::compiler::phase::{CompilePhase, CompileResult};
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::{Graph, GraphNode, ProcessorId};
+use crate::core::graph::{Graph, GraphNode, NodeIndex};
 use crate::core::links::{DefaultLinkFactory, LinkFactoryDelegate};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::runtime::delegates::{
@@ -302,7 +302,7 @@ impl Compiler {
             // Get link info for event before removal
             if let Some(link) = graph
                 .query()
-                .E()
+                .e()
                 .filter(|link| link.id == *link_id)
                 .first()
             {
@@ -563,9 +563,9 @@ impl Compiler {
         use crate::core::graph::{GraphNode, ProcessorInstanceComponent, ThreadHandleComponent};
 
         // Find all processors with ProcessorInstance but no ThreadHandle (compiled but not started)
-        let processors_to_start: Vec<ProcessorId> = property_graph
+        let processors_to_start: Vec<NodeIndex> = property_graph
             .query()
-            .V()
+            .v()
             .has_component::<ProcessorInstanceComponent>()
             .filter(|node| !node.has::<ThreadHandleComponent>())
             .ids();

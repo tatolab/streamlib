@@ -96,7 +96,7 @@ impl Default for WebRtcWhepConfig {
 }
 
 #[crate::processor(
-    execution = Continuous,
+    execution = ExecutionMode::Continuous,
     description = "Receives video and audio from WHEP endpoint (WebRTC egress)"
 )]
 pub struct WebRtcWhepProcessor {

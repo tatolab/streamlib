@@ -17,7 +17,7 @@ use crate::core::delegates::{
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNode, GraphState, LinkOutputToProcessorWriterAndReader, ProcessorId,
+    Graph, GraphNode, GraphState, LinkOutputToProcessorWriterAndReader, NodeIndex,
     ProcessorInstanceComponent, ProcessorPauseGateComponent, ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
@@ -30,7 +30,7 @@ pub(crate) fn create_processor(
     factory: &Arc<dyn FactoryDelegate>,
     processor_delegate: &Arc<dyn ProcessorDelegate>,
     property_graph: &mut Graph,
-    proc_id: &ProcessorId,
+    proc_id: &NodeIndex,
 ) -> Result<()> {
     // Get node from the graph
     let node = property_graph
@@ -78,7 +78,7 @@ pub(crate) fn create_processor(
 pub(crate) fn setup_processor(
     property_graph: &mut Graph,
     runtime_context: &Arc<RuntimeContext>,
-    processor_id: &ProcessorId,
+    processor_id: &NodeIndex,
 ) -> Result<()> {
     // Get processor instance and pause gate
     let node = property_graph
@@ -268,7 +268,7 @@ fn spawn_dedicated_thread(
     *state_arc.lock() = ProcessorState::Running;
 
     // Spawn the thread
-    let id_clone: ProcessorId = processor_id.into();
+    let id_clone: NodeIndex = processor_id.into();
     let thread = std::thread::Builder::new()
         .name(format!("processor-{}", processor_id))
         .spawn(move || {
@@ -302,7 +302,7 @@ fn spawn_dedicated_thread(
 // ============================================================================
 
 /// Shutdown a running processor by removing its runtime components.
-pub fn shutdown_processor(property_graph: &mut Graph, processor_id: &ProcessorId) -> Result<()> {
+pub fn shutdown_processor(property_graph: &mut Graph, processor_id: &NodeIndex) -> Result<()> {
     // Check current state and set to stopping
     let node = match property_graph.query_mut().V_id(processor_id).first_mut() {
         Some(n) => n,
@@ -357,7 +357,7 @@ pub fn shutdown_processor(property_graph: &mut Graph, processor_id: &ProcessorId
 /// Shutdown all running processors in the graph.
 pub fn shutdown_all_processors(property_graph: &mut Graph) -> Result<()> {
     // Get all processor IDs first
-    let processor_ids: Vec<ProcessorId> = property_graph.query().V().ids();
+    let processor_ids: Vec<NodeIndex> = property_graph.query().v().ids();
 
     for id in processor_ids {
         if let Err(e) = shutdown_processor(property_graph, &id) {

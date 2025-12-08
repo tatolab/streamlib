@@ -13,9 +13,10 @@ use crate::core::compiler::{
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{
-    Graph, GraphEdge, GraphNode, GraphState, IntoLinkPortRef, Link, ProcessorId, ProcessorNode,
+    Graph, GraphEdge, GraphNode, GraphState, IntoLinkPortRef, Link, LinkUniqueId, ProcessorNode,
+    ProcessorUniqueId,
 };
-use crate::core::links::LinkId;
+
 use crate::core::processors::Processor;
 use crate::core::runtime::delegates::DefaultFactory;
 use crate::core::{Result, StreamError};
@@ -26,7 +27,7 @@ pub struct RuntimeStatus {
     pub running: bool,
     pub processor_count: usize,
     pub link_count: usize,
-    pub processor_states: Vec<(ProcessorId, String)>,
+    pub processor_states: Vec<(ProcessorUniqueId, String)>,
 }
 
 /// Controls when graph mutations are applied to the executor.
@@ -34,9 +35,9 @@ pub struct RuntimeStatus {
 pub enum CommitMode {
     /// Changes apply immediately after each mutation.
     #[default]
-    Auto,
+    BatchAutomatically,
     /// Changes batch until explicit `commit()` call.
-    Manual,
+    BatchManually,
 }
 
 /// The main stream processing runtime.
@@ -92,7 +93,7 @@ impl Default for StreamRuntime {
             factory,
             processor_delegate,
             scheduler,
-            commit_mode: CommitMode::Auto,
+            commit_mode: CommitMode::BatchAutomatically,
             runtime_context: None,
             pending_operations: PendingOperationQueue::new(),
             started: false,
@@ -246,7 +247,9 @@ impl StreamRuntime {
                         let wired = link
                             .map(|l| l.has::<LinkInstanceComponent>())
                             .unwrap_or(false);
-                        let pending = link.map(|l| l.has::<PendingDeletionComponent>()).unwrap_or(false);
+                        let pending = link
+                            .map(|l| l.has::<PendingDeletionComponent>())
+                            .unwrap_or(false);
                         (exists, wired, pending)
                     };
                     if pending_deletion {
@@ -312,8 +315,7 @@ impl StreamRuntime {
             );
 
             let mut graph = self.graph.write();
-            self.compiler
-                .compile(&mut graph, runtime_ctx, &add_delta)?;
+            self.compiler.compile(&mut graph, runtime_ctx, &add_delta)?;
         }
 
         // Handle config updates (can be done on running processors)
@@ -325,7 +327,7 @@ impl StreamRuntime {
     }
 
     /// Apply a config update to a running processor.
-    fn apply_config_update(&mut self, proc_id: &ProcessorId) -> Result<()> {
+    fn apply_config_update(&mut self, proc_id: &NodeIndex) -> Result<()> {
         use crate::core::graph::ProcessorInstanceComponent;
 
         let (config_json, processor_arc) = {
@@ -352,8 +354,8 @@ impl StreamRuntime {
     /// Central handler for graph mutations - respects commit mode.
     fn on_graph_changed(&mut self) -> Result<()> {
         match self.commit_mode {
-            CommitMode::Auto => self.commit(),
-            CommitMode::Manual => Ok(()),
+            CommitMode::BatchAutomatically => self.commit(),
+            CommitMode::BatchManually => Ok(()),
         }
     }
 
@@ -362,7 +364,7 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Add a processor to the graph with its config. Returns the processor ID.
-    pub fn add_processor<P>(&mut self, config: P::Config) -> Result<ProcessorId>
+    pub fn add_processor<P>(&mut self, config: P::Config) -> Result<NodeIndex>
     where
         P: Processor + 'static,
         P::Config: Serialize + for<'de> serde::Deserialize<'de> + Default,
@@ -526,7 +528,7 @@ impl StreamRuntime {
         self.remove_processor_by_id(&node.id)
     }
 
-    pub fn remove_processor_by_id(&mut self, processor_id: &ProcessorId) -> Result<()> {
+    pub fn remove_processor_by_id(&mut self, processor_id: &NodeIndex) -> Result<()> {
         use crate::core::graph::PendingDeletionComponent;
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
@@ -575,7 +577,7 @@ impl StreamRuntime {
     /// Update a processor's configuration at runtime.
     pub fn update_processor_config<C: Serialize>(
         &mut self,
-        processor_id: &ProcessorId,
+        processor_id: &NodeIndex,
         config: C,
     ) -> Result<()> {
         let config_json = serde_json::to_value(&config)
@@ -716,7 +718,7 @@ impl StreamRuntime {
     ///
     /// The processor's delegate `will_pause` is called first - return `Err` to reject.
     /// Once paused, the processor's `process()` will not be called until resumed.
-    pub fn pause_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
+    pub fn pause_processor(&mut self, processor_id: &NodeIndex) -> Result<()> {
         use crate::core::graph::ProcessorPauseGateComponent;
         use crate::core::processors::ProcessorState;
         use crate::core::pubsub::{Event, ProcessorEvent, PUBSUB};
@@ -783,7 +785,7 @@ impl StreamRuntime {
     /// Resume a specific processor.
     ///
     /// The processor's delegate `will_resume` is called first - return `Err` to reject.
-    pub fn resume_processor(&mut self, processor_id: &ProcessorId) -> Result<()> {
+    pub fn resume_processor(&mut self, processor_id: &NodeIndex) -> Result<()> {
         use crate::core::graph::ProcessorPauseGateComponent;
         use crate::core::processors::ProcessorState;
         use crate::core::pubsub::{Event, ProcessorEvent, PUBSUB};
@@ -868,7 +870,7 @@ impl StreamRuntime {
     }
 
     /// Check if a specific processor is paused.
-    pub fn is_processor_paused(&self, processor_id: &ProcessorId) -> Result<bool> {
+    pub fn is_processor_paused(&self, processor_id: &NodeIndex) -> Result<bool> {
         use crate::core::graph::ProcessorPauseGateComponent;
 
         let property_graph = self.graph.read();
@@ -903,9 +905,9 @@ impl StreamRuntime {
         );
 
         // Get all processor IDs
-        let processor_ids: Vec<ProcessorId> = {
+        let processor_ids: Vec<NodeIndex> = {
             let property_graph = self.graph.read();
-            property_graph.query().V().ids()
+            property_graph.query().v().ids()
         };
 
         // Pause each processor (delegate can reject individual processors)
@@ -952,9 +954,9 @@ impl StreamRuntime {
         );
 
         // Get all processor IDs
-        let processor_ids: Vec<ProcessorId> = {
+        let processor_ids: Vec<NodeIndex> = {
             let property_graph = self.graph.read();
-            property_graph.query().V().ids()
+            property_graph.query().v().ids()
         };
 
         // Resume each processor (delegate can reject individual processors)
@@ -1069,8 +1071,8 @@ impl StreamRuntime {
 
         RuntimeStatus {
             running: graph.state() == GraphState::Running,
-            processor_count: graph.query().V().count(),
-            link_count: graph.query().E().count(),
+            processor_count: graph.query().v().count(),
+            link_count: graph.query().e().count(),
             processor_states: vec![], // TODO: Implement processor state tracking
         }
     }
@@ -1105,7 +1107,7 @@ mod tests {
     #[test]
     fn test_runtime_builder() {
         let _runtime = StreamRuntime::builder()
-            .with_commit_mode(CommitMode::Manual)
+            .with_commit_mode(CommitMode::BatchManually)
             .build();
         // Builder creates runtime successfully
     }

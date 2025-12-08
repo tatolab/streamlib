@@ -1,170 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use anymap2::Map;
 use serde::{Deserialize, Serialize};
-use std::borrow::Borrow;
-use std::collections::hash_map::DefaultHasher;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 
+use super::super::components::{default_components, ComponentMap};
 use super::super::{GraphNode, GraphWeight, LinkPortRef};
-
-/// Compute a deterministic checksum from a JSON value.
-fn compute_json_checksum(value: &serde_json::Value) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    // Use canonical string representation for deterministic hashing
-    value.to_string().hash(&mut hasher);
-    hasher.finish()
-}
-
-/// Unique identifier for a processor node.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ProcessorId(String);
-
-impl ProcessorId {
-    /// Create a new ProcessorId from a string.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    /// Get the inner string value.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Deref for ProcessorId {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Borrow<str> for ProcessorId {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<str> for ProcessorId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ProcessorId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for ProcessorId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for ProcessorId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl From<ProcessorId> for String {
-    fn from(id: ProcessorId) -> Self {
-        id.0
-    }
-}
-
-impl From<&ProcessorId> for String {
-    fn from(id: &ProcessorId) -> Self {
-        id.0.clone()
-    }
-}
-
-impl From<&ProcessorId> for ProcessorId {
-    fn from(id: &ProcessorId) -> Self {
-        Self(id.0.clone())
-    }
-}
-
-impl PartialEq<str> for ProcessorId {
-    fn eq(&self, other: &str) -> bool {
-        self.0 == other
-    }
-}
-
-impl PartialEq<ProcessorId> for str {
-    fn eq(&self, other: &ProcessorId) -> bool {
-        self == other.0
-    }
-}
-
-impl PartialEq<&str> for ProcessorId {
-    fn eq(&self, other: &&str) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<ProcessorId> for &str {
-    fn eq(&self, other: &ProcessorId) -> bool {
-        *self == other.0
-    }
-}
-
-impl PartialEq<String> for ProcessorId {
-    fn eq(&self, other: &String) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<ProcessorId> for String {
-    fn eq(&self, other: &ProcessorId) -> bool {
-        *self == other.0
-    }
-}
-
-/// The kind of port - determines how data flows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum PortKind {
-    #[default]
-    Data,
-    Event,
-    Control,
-}
-
-/// Metadata about a port (input or output).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PortInfo {
-    pub name: String,
-    pub data_type: String,
-    #[serde(default)]
-    pub port_kind: PortKind,
-}
-
-/// Container for a node's input and output ports.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct NodePorts {
-    pub inputs: Vec<PortInfo>,
-    pub outputs: Vec<PortInfo>,
-}
-
-/// TypeMap for component storage (Send + Sync).
-type ComponentMap = Map<dyn anymap2::any::Any + Send + Sync>;
-
-fn default_components() -> ComponentMap {
-    ComponentMap::new()
-}
+use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
+use crate::core::utils::compute_json_checksum;
 
 /// Node in the processor graph with embedded component storage.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProcessorNode {
-    pub id: ProcessorId,
+    pub id: ProcessorUniqueId,
     #[serde(rename = "type")]
     pub processor_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,7 +19,7 @@ pub struct ProcessorNode {
     /// Checksum of config for change detection.
     #[serde(default)]
     pub config_checksum: u64,
-    pub ports: NodePorts,
+    pub ports: ProcessorNodePorts,
     /// Runtime components (not serialized).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
@@ -200,14 +47,14 @@ impl ProcessorNode {
         outputs: Vec<PortInfo>,
     ) -> Self {
         let processor_type = processor_type.into();
-        let id = ProcessorId(cuid2::create_id());
+
         let config_checksum = config.as_ref().map(compute_json_checksum).unwrap_or(0);
         Self {
-            id,
+            id: ProcessorUniqueId::new(),
             processor_type,
             config,
             config_checksum,
-            ports: NodePorts { inputs, outputs },
+            ports: ProcessorNodePorts { inputs, outputs },
             components: ComponentMap::new(),
         }
     }

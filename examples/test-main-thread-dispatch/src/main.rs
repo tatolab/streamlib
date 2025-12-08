@@ -16,7 +16,7 @@ static PROCESS_COUNT: OnceLock<Arc<AtomicU64>> = OnceLock::new();
 
 /// Test processor that validates main thread dispatch functionality
 #[streamlib::processor(
-    execution = Continuous,
+    execution = ExecutionMode::Continuous,
     description = "Test processor for main thread dispatch"
 )]
 pub struct MainThreadTestProcessor {

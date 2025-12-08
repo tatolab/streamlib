@@ -1,8 +1,10 @@
+mod component_map;
 mod components;
-// Re-export all public types
+
+pub use component_map::{default_components, ComponentMap};
 pub use components::{
     JsonComponent, LightweightMarker, LinkOutputToProcessorWriterAndReader, LinkStateComponent,
-    MainThreadMarkerComponent, PendingDeletionComponent, ProcessorInstanceComponent, ProcessorMetrics,
-    ProcessorPauseGateComponent, RayonPoolMarkerComponent, ShutdownChannelComponent,
-    StateComponent, ThreadHandleComponent,
+    MainThreadMarkerComponent, PendingDeletionComponent, ProcessorInstanceComponent,
+    ProcessorMetrics, ProcessorPauseGateComponent, RayonPoolMarkerComponent,
+    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
 };

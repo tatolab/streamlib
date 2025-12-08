@@ -1,3 +1,11 @@
+mod port_info;
+mod port_kind;
 mod processor_node;
+mod processor_node_ports;
+mod processor_unique_id;
 
-pub use processor_node::{NodePorts, PortInfo, PortKind, ProcessorId, ProcessorNode};
+pub use port_info::*;
+pub use port_kind::*;
+pub use processor_node::*;
+pub use processor_node_ports::*;
+pub use processor_unique_id::*;

@@ -328,7 +328,7 @@ StreamLib uses a **graph-based processing pipeline** where processors are nodes 
 ### Critical Design Patterns
 
 These patterns are fundamental to working with StreamLib. For detailed implementation guidance, see the respective crate documentation.
-
+"
 #### 1. Main Thread Dispatch (macOS/iOS)
 Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) **require** main thread execution.
 

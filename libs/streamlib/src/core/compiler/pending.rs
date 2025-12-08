@@ -7,7 +7,7 @@
 //! that the user requested. Each operation is validated against the current
 //! Graph + ECS state before execution.
 
-use crate::core::graph::ProcessorId;
+use crate::core::graph::NodeIndex;
 use crate::core::links::LinkId;
 
 /// A pending graph mutation operation.
@@ -19,10 +19,10 @@ use crate::core::links::LinkId;
 #[derive(Debug, Clone)]
 pub enum PendingOperation {
     /// Add a processor that exists in the Graph but isn't running yet.
-    AddProcessor(ProcessorId),
+    AddProcessor(NodeIndex),
 
     /// Remove a processor that is currently running.
-    RemoveProcessor(ProcessorId),
+    RemoveProcessor(NodeIndex),
 
     /// Wire a link that exists in the Graph but isn't wired yet.
     AddLink(LinkId),
@@ -31,12 +31,12 @@ pub enum PendingOperation {
     RemoveLink(LinkId),
 
     /// Update a processor's configuration.
-    UpdateProcessorConfig(ProcessorId),
+    UpdateProcessorConfig(NodeIndex),
 }
 
 impl PendingOperation {
     /// Get the processor ID if this operation involves a processor.
-    pub fn processor_id(&self) -> Option<&ProcessorId> {
+    pub fn processor_id(&self) -> Option<&NodeIndex> {
         match self {
             PendingOperation::AddProcessor(id) => Some(id),
             PendingOperation::RemoveProcessor(id) => Some(id),
@@ -135,7 +135,7 @@ impl PendingOperationQueue {
     ///
     /// This is useful when a processor is removed - we should also remove
     /// any pending operations that reference it.
-    pub fn remove_processor_operations(&mut self, processor_id: &ProcessorId) {
+    pub fn remove_processor_operations(&mut self, processor_id: &NodeIndex) {
         self.operations
             .retain(|op| op.processor_id() != Some(processor_id));
     }

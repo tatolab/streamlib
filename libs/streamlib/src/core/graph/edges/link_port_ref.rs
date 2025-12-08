@@ -1,20 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::super::edges::LinkDirection;
-use super::super::nodes::ProcessorId;
 use crate::core::error::{Result, StreamError};
+use crate::core::graph::{LinkDirection, ProcessorUniqueId};
 
 /// Reference to a port on a processor node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkPortRef {
-    pub processor_id: ProcessorId,
+    pub processor_id: ProcessorUniqueId,
     pub port_name: String,
     pub direction: LinkDirection,
 }
 
 impl LinkPortRef {
-    pub fn output(processor_id: impl Into<ProcessorId>, port_name: impl Into<String>) -> Self {
+    pub fn output(
+        processor_id: impl Into<ProcessorUniqueId>,
+        port_name: impl Into<String>,
+    ) -> Self {
         Self {
             processor_id: processor_id.into(),
             port_name: port_name.into(),
@@ -22,7 +24,7 @@ impl LinkPortRef {
         }
     }
 
-    pub fn input(processor_id: impl Into<ProcessorId>, port_name: impl Into<String>) -> Self {
+    pub fn input(processor_id: impl Into<ProcessorUniqueId>, port_name: impl Into<String>) -> Self {
         Self {
             processor_id: processor_id.into(),
             port_name: port_name.into(),

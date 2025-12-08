@@ -19,4 +19,7 @@ mod scheduler;
 pub use factory::FactoryDelegate;
 pub use link::LinkDelegate;
 pub use processor::ProcessorDelegate;
-pub use scheduler::{SchedulerDelegate, SchedulingStrategy, ThreadPriority};
+pub use scheduler::{SchedulerDelegate, SchedulingStrategy};
+
+// Re-export ThreadPriority from execution (single source of truth)
+pub use crate::core::execution::ThreadPriority;
