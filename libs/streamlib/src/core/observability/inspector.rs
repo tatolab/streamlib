@@ -30,10 +30,10 @@ impl GraphInspector {
     }
 
     /// Get a snapshot of a specific processor.
-    pub fn processor(&self, id: &NodeIndex) -> Option<ProcessorSnapshot> {
+    pub fn processor(&self, id: &ProcessorUniqueId) -> Option<ProcessorSnapshot> {
         let graph = self.graph.read();
 
-        let node = graph.query().V_id(id).first()?;
+        let node = graph.query().v(id).first()?;
 
         // Get state from node's component storage if available
         let state = node
@@ -63,7 +63,7 @@ impl GraphInspector {
     pub fn link(&self, id: &LinkUniqueId) -> Option<LinkSnapshot> {
         let graph = self.graph.read();
 
-        let link = graph.query().E_id(id).first()?;
+        let link = graph.query().e(id).first()?;
 
         Some(LinkSnapshot {
             id: id.clone(),
@@ -114,7 +114,7 @@ impl GraphInspector {
     }
 
     /// List all processor IDs.
-    pub fn processor_ids(&self) -> Vec<NodeIndex> {
+    pub fn processor_ids(&self) -> Vec<ProcessorUniqueId> {
         let graph = self.graph.read();
         graph.query().v().ids()
     }

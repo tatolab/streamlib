@@ -17,8 +17,9 @@ use crate::core::delegates::{
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNode, GraphState, LinkOutputToProcessorWriterAndReader, NodeIndex,
-    ProcessorInstanceComponent, ProcessorPauseGateComponent, ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+    Graph, GraphNode, GraphState, LinkOutputToProcessorWriterAndReader, ProcessorInstanceComponent,
+    ProcessorPauseGateComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
+    ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
 
@@ -29,17 +30,13 @@ use crate::core::processors::ProcessorState;
 pub(crate) fn create_processor(
     factory: &Arc<dyn FactoryDelegate>,
     processor_delegate: &Arc<dyn ProcessorDelegate>,
-    property_graph: &mut Graph,
-    proc_id: &NodeIndex,
+    graph: &mut Graph,
+    proc_id: &ProcessorUniqueId,
 ) -> Result<()> {
     // Get node from the graph
-    let node = property_graph
-        .query()
-        .V_id(proc_id)
-        .first()
-        .ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
-        })?;
+    let node = graph.query().v(proc_id).first().ok_or_else(|| {
+        StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
+    })?;
 
     // Delegate callback: will_create
     processor_delegate.will_create(node)?;
@@ -53,13 +50,9 @@ pub(crate) fn create_processor(
     // Attach components to processor node
     let processor_arc = Arc::new(Mutex::new(processor));
 
-    let node_mut = property_graph
-        .query_mut()
-        .V_id(proc_id)
-        .first_mut()
-        .ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
-        })?;
+    let node_mut = graph.query().v(proc_id).first().ok_or_else(|| {
+        StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
+    })?;
 
     node_mut.insert(ProcessorInstanceComponent(processor_arc));
     node_mut.insert(ShutdownChannelComponent::new());
@@ -78,13 +71,13 @@ pub(crate) fn create_processor(
 pub(crate) fn setup_processor(
     property_graph: &mut Graph,
     runtime_context: &Arc<RuntimeContext>,
-    processor_id: &NodeIndex,
+    processor_id: &ProcessorUniqueId,
 ) -> Result<()> {
     // Get processor instance and pause gate
     let node = property_graph
-        .query_mut()
-        .V_id(processor_id)
-        .first_mut()
+        .query()
+        .v(processor_id)
+        .first()
         .ok_or_else(|| {
             StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
@@ -129,7 +122,7 @@ pub(crate) fn start_processor(
     // Check if already has a thread (already running)
     let has_thread = property_graph
         .query()
-        .V_id(processor_id)
+        .v(processor_id)
         .first()
         .map(|n| n.has::<ThreadHandleComponent>())
         .unwrap_or(false);
@@ -141,7 +134,7 @@ pub(crate) fn start_processor(
     // Get the node to determine scheduling strategy
     let node = property_graph
         .query()
-        .V_id(processor_id)
+        .v(processor_id)
         .first()
         .ok_or_else(|| {
             StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
@@ -202,9 +195,9 @@ fn spawn_dedicated_thread(
     let processor_id = processor_id.as_ref();
     // Get mutable node and extract all required data
     let node = property_graph
-        .query_mut()
-        .V_id(processor_id)
-        .first_mut()
+        .query()
+        .v(processor_id)
+        .first()
         .ok_or_else(|| {
             StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
@@ -268,7 +261,7 @@ fn spawn_dedicated_thread(
     *state_arc.lock() = ProcessorState::Running;
 
     // Spawn the thread
-    let id_clone: NodeIndex = processor_id.into();
+    let id_clone: ProcessorUniqueId = processor_id.into();
     let thread = std::thread::Builder::new()
         .name(format!("processor-{}", processor_id))
         .spawn(move || {
@@ -286,9 +279,9 @@ fn spawn_dedicated_thread(
 
     // Attach thread handle - need to get node again since we consumed the reference
     let node = property_graph
-        .query_mut()
-        .V_id(processor_id)
-        .first_mut()
+        .query()
+        .v(processor_id)
+        .first()
         .ok_or_else(|| {
             StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
@@ -302,9 +295,12 @@ fn spawn_dedicated_thread(
 // ============================================================================
 
 /// Shutdown a running processor by removing its runtime components.
-pub fn shutdown_processor(property_graph: &mut Graph, processor_id: &NodeIndex) -> Result<()> {
+pub fn shutdown_processor(
+    property_graph: &mut Graph,
+    processor_id: &ProcessorUniqueId,
+) -> Result<()> {
     // Check current state and set to stopping
-    let node = match property_graph.query_mut().V_id(processor_id).first_mut() {
+    let node = match property_graph.query().v(processor_id).first() {
         Some(n) => n,
         None => return Ok(()), // Processor not found, nothing to shut down
     };
@@ -344,7 +340,7 @@ pub fn shutdown_processor(property_graph: &mut Graph, processor_id: &NodeIndex) 
     }
 
     // Update state to stopped - need to get node again
-    if let Some(node) = property_graph.query_mut().V_id(processor_id).first_mut() {
+    if let Some(node) = property_graph.query().v(processor_id).first() {
         if let Some(state) = node.get::<StateComponent>() {
             *state.0.lock() = ProcessorState::Stopped;
         }
@@ -357,7 +353,7 @@ pub fn shutdown_processor(property_graph: &mut Graph, processor_id: &NodeIndex) 
 /// Shutdown all running processors in the graph.
 pub fn shutdown_all_processors(property_graph: &mut Graph) -> Result<()> {
     // Get all processor IDs first
-    let processor_ids: Vec<NodeIndex> = property_graph.query().v().ids();
+    let processor_ids: Vec<ProcessorUniqueId> = property_graph.query().v().ids();
 
     for id in processor_ids {
         if let Err(e) = shutdown_processor(property_graph, &id) {

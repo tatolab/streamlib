@@ -5,6 +5,8 @@ use std::any::TypeId;
 
 use serde_json::Value as JsonValue;
 
+use crate::core::graph::LinkCapacity;
+
 use super::JsonComponent;
 
 /// ECS component storing link type information for debugging and validation.
@@ -19,7 +21,7 @@ pub struct LinkTypeInfoComponent {
 
 impl LinkTypeInfoComponent {
     /// Create new link type info.
-    pub fn new<T: 'static>(capacity: usize) -> Self {
+    pub fn new<T: 'static>(capacity: LinkCapacity) -> Self {
         Self {
             type_id: TypeId::of::<T>(),
             type_name: std::any::type_name::<T>(),

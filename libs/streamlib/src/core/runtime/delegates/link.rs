@@ -20,8 +20,8 @@ impl Default for DefaultLinkDelegate {
 mod tests {
     use super::*;
     use crate::core::delegates::LinkDelegate;
-    use crate::core::graph::Link;
-    use crate::core::links::LinkId;
+    use crate::core::graph::{Link, LinkUniqueId};
+
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -50,12 +50,12 @@ mod tests {
             Ok(())
         }
 
-        fn will_unwire(&self, _link_id: &LinkId) -> crate::core::Result<()> {
+        fn will_unwire(&self, _link_id: &LinkUniqueId) -> crate::core::Result<()> {
             self.unwire_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
-        fn did_unwire(&self, _link_id: &LinkId) -> crate::core::Result<()> {
+        fn did_unwire(&self, _link_id: &LinkUniqueId) -> crate::core::Result<()> {
             self.unwire_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }

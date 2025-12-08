@@ -48,7 +48,7 @@ Graph
 └── ecs_extension: InternalProcessorLinkGraphEcsExtension
     ├── world: hecs::World            ← component storage
     ├── processor_entities: HashMap<ProcessorId, Entity>  ← secondary index
-    └── link_entities: HashMap<LinkId, Entity>            ← secondary index
+    └── link_entities: HashMap<LinkUniqueId, Entity>            ← secondary index
 ```
 
 ### After: Embedded Component Storage
@@ -118,7 +118,7 @@ pub trait GraphEdge: GraphWeight {
 ```
 
 **Decisions:**
-- `ProcessorId` and `LinkId` type aliases removed - both are just `String`
+- `ProcessorId` and `LinkUniqueId` type aliases removed - both are just `String`
 - Unified `id()` method provides consistent access
 - Traits go in `core/graph/traits.rs`
 - Rename `node.rs` → `processor_node.rs` for clarity
@@ -310,7 +310,7 @@ graph.processor_mut(id)?.get_mut::<C>();
 
 1. Remove `hecs` from Cargo.toml
 2. Remove all `hecs::` imports
-3. Remove `ProcessorId`/`LinkId` type aliases (use `String`)
+3. Remove `ProcessorId`/`LinkUniqueId` type aliases (use `String`)
 4. Run all tests, fix any remaining issues
 
 ---
@@ -331,7 +331,7 @@ graph.processor_mut(id)?.get_mut::<C>();
 | `graph.get::<C>(id)` | Use `processor(id)?.get::<C>()` |
 | `graph.get_mut::<C>(id)` | Use `processor_mut(id)?.get_mut::<C>()` |
 | `ProcessorId` type alias | Use `String` directly |
-| `LinkId` type alias | Use `String` directly |
+| `LinkUniqueId` type alias | Use `String` directly |
 
 ### Added
 

@@ -6,10 +6,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::graph::{LinkId, LinkTypeInfoComponent};
 use super::runtime::{BoxedLinkInstance, LinkInstance};
 use super::traits::LinkPortType;
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
+use crate::core::graph::{LinkCapacity, LinkTypeInfoComponent};
 use crate::core::Result;
 
 /// Result of creating a link instance.
@@ -32,9 +32,8 @@ pub trait LinkFactoryDelegate: Send + Sync {
     /// Create a link instance for the given port type.
     fn create(
         &self,
-        link_id: LinkId,
         port_type: LinkPortType,
-        capacity: usize,
+        capacity: LinkCapacity,
     ) -> Result<LinkInstanceCreationResult>;
 }
 
@@ -58,24 +57,23 @@ impl Default for DefaultLinkFactory {
 impl LinkFactoryDelegate for DefaultLinkFactory {
     fn create(
         &self,
-        link_id: LinkId,
         port_type: LinkPortType,
-        capacity: usize,
+        capacity: LinkCapacity,
     ) -> Result<LinkInstanceCreationResult> {
         match port_type {
-            LinkPortType::Audio => create_typed_instance::<AudioFrame>(link_id, capacity),
-            LinkPortType::Video => create_typed_instance::<VideoFrame>(link_id, capacity),
-            LinkPortType::Data => create_typed_instance::<DataFrame>(link_id, capacity),
+            LinkPortType::Audio => create_typed_instance::<AudioFrame>(capacity),
+            LinkPortType::Video => create_typed_instance::<VideoFrame>(capacity),
+            LinkPortType::Data => create_typed_instance::<DataFrame>(capacity),
         }
     }
 }
 
 /// Create a typed link instance and return boxed components.
-fn create_typed_instance<T>(link_id: LinkId, capacity: usize) -> Result<LinkInstanceCreationResult>
+fn create_typed_instance<T>(capacity: LinkCapacity) -> Result<LinkInstanceCreationResult>
 where
     T: crate::core::LinkPortMessage + 'static,
 {
-    let instance = LinkInstance::<T>::new(link_id.clone(), capacity);
+    let instance = LinkInstance::<T>::new(capacity);
     let data_writer = instance.create_link_output_data_writer();
     let data_reader = instance.create_link_input_data_reader();
 
@@ -91,11 +89,10 @@ where
 impl<T: LinkFactoryDelegate + ?Sized> LinkFactoryDelegate for Arc<T> {
     fn create(
         &self,
-        link_id: LinkId,
         port_type: LinkPortType,
-        capacity: usize,
+        capacity: LinkCapacity,
     ) -> Result<LinkInstanceCreationResult> {
-        (**self).create(link_id, port_type, capacity)
+        (**self).create(port_type, capacity)
     }
 }
 
@@ -106,10 +103,9 @@ mod tests {
     #[test]
     fn test_default_factory_audio() {
         let factory = DefaultLinkFactory::new();
-        let link_id = super::super::graph::link_id::__private::new_unchecked("test_link");
 
         let result = factory
-            .create(link_id, LinkPortType::Audio, 4)
+            .create(LinkPortType::Audio, 4)
             .expect("should create audio link");
 
         assert_eq!(result.type_info.capacity, 4);
@@ -119,10 +115,9 @@ mod tests {
     #[test]
     fn test_default_factory_video() {
         let factory = DefaultLinkFactory::new();
-        let link_id = super::super::graph::link_id::__private::new_unchecked("test_link");
 
         let result = factory
-            .create(link_id, LinkPortType::Video, 8)
+            .create(LinkPortType::Video, LinkCapacity::from(8))
             .expect("should create video link");
 
         assert_eq!(result.type_info.capacity, 8);
@@ -132,10 +127,9 @@ mod tests {
     #[test]
     fn test_default_factory_data() {
         let factory = DefaultLinkFactory::new();
-        let link_id = super::super::graph::link_id::__private::new_unchecked("test_link");
 
         let result = factory
-            .create(link_id, LinkPortType::Data, 16)
+            .create(LinkPortType::Data, LinkCapacity::from(16))
             .expect("should create data link");
 
         assert_eq!(result.type_info.capacity, 16);

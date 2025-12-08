@@ -29,7 +29,7 @@ pub struct GraphChecksum(pub u64);
 ///
 /// All access goes through the query interface:
 /// - `graph.query()` for read operations
-/// - `graph.query_mut()` for mutations
+/// - `graph.query()` for mutations
 pub struct Graph {
     /// The petgraph DiGraph storing processors as nodes and links as edges.
     digraph: DiGraph<ProcessorNode, Link>,

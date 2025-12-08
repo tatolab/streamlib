@@ -581,7 +581,7 @@ fn generate_remove_link_output_data_writer(analysis: &AnalysisResult) -> TokenSt
     }
 
     quote! {
-        fn remove_link_output_data_writer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+        fn remove_link_output_data_writer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkUniqueId) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown output port: {}", port_name)))
@@ -614,7 +614,7 @@ fn generate_remove_link_input_data_reader(analysis: &AnalysisResult) -> TokenStr
     }
 
     quote! {
-        fn remove_link_input_data_reader(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+        fn remove_link_input_data_reader(&mut self, port_name: &str, link_id: &::streamlib::core::LinkUniqueId) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown input port: {}", port_name)))

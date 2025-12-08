@@ -32,7 +32,7 @@ pub struct ProcessorSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkSnapshot {
     /// Link identifier.
-    pub id: LinkId,
+    pub id: LinkUniqueId,
     /// Source processor.
     pub source_processor: ProcessorUniqueId,
     /// Source port name.

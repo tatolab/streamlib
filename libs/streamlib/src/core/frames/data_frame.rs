@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // Implement sealed trait
-impl crate::core::links::traits::link_port_message::sealed::Sealed for DataFrame {}
+impl crate::core::links::LinkPortMessageImplementor for DataFrame {}
 
 #[derive(Clone)]
 pub struct DataFrame {

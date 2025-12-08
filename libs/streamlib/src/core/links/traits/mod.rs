@@ -10,5 +10,5 @@ mod link_port_type;
 
 pub use link_buffer_read_mode::LinkBufferReadMode;
 pub use link_port_address::LinkPortAddress;
-pub use link_port_message::{sealed, LinkPortMessage};
+pub use link_port_message::LinkPortMessage;
 pub use link_port_type::LinkPortType;

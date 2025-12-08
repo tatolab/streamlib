@@ -22,7 +22,7 @@ pub struct ProcessorNode {
 }
 
 pub struct Link {
-    pub id: LinkId,
+    pub id: LinkUniqueId,
     // ... other fields
     components: ComponentMap,  // embedded storage
 }
@@ -142,7 +142,7 @@ graph.with_link_mut(&link_id, |link| {
            F: FnOnce(&mut ProcessorNode) -> R;
        
        /// Mutate a link via callback.
-       pub fn with_link_mut<F, R>(&self, id: &LinkId, f: F) -> Option<R>
+       pub fn with_link_mut<F, R>(&self, id: &LinkUniqueId, f: F) -> Option<R>
        where
            F: FnOnce(&mut Link) -> R;
    }

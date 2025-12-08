@@ -4877,7 +4877,7 @@ mod dynamic_graph_modification {
         let sources = graph.execute(&Query::build().v().sources().count());
         assert_eq!(sources, 1);
 
-        // Remove second link using its LinkId
+        // Remove second link using its LinkUniqueId
         graph.remove_link(&link_bc.id);
 
         let link_count = graph.execute_link(&Query::build().E().count());
@@ -5056,7 +5056,7 @@ mod dynamic_graph_modification {
         let result2 = graph.execute(&sources_query);
         assert_eq!(result2.len(), 1); // Only A is source now
 
-        // Remove link using its LinkId
+        // Remove link using its LinkUniqueId
         graph.remove_link(&link.id);
 
         // Back to original state

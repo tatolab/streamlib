@@ -7,6 +7,7 @@ use serde_json::Value as JsonValue;
 use super::BaseProcessor;
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 
@@ -79,7 +80,7 @@ pub trait Processor: BaseProcessor {
     fn remove_link_output_data_writer(
         &mut self,
         _port_name: &str,
-        _link_id: &crate::core::links::LinkId,
+        _link_id: &LinkUniqueId,
     ) -> Result<()> {
         Ok(())
     }
@@ -88,7 +89,7 @@ pub trait Processor: BaseProcessor {
     fn remove_link_input_data_reader(
         &mut self,
         _port_name: &str,
-        _link_id: &crate::core::links::LinkId,
+        _link_id: &LinkUniqueId,
     ) -> Result<()> {
         Ok(())
     }

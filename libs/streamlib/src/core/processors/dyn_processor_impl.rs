@@ -3,6 +3,7 @@
 
 use super::{DynProcessor, Processor, ProcessorType};
 use crate::core::execution::ExecutionConfig;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::Result;
@@ -70,7 +71,7 @@ where
     fn remove_link_output_data_writer(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::links::LinkId,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<()> {
         <Self as Processor>::remove_link_output_data_writer(self, port_name, link_id)
     }
@@ -78,7 +79,7 @@ where
     fn remove_link_input_data_reader(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::links::LinkId,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<()> {
         <Self as Processor>::remove_link_input_data_reader(self, port_name, link_id)
     }

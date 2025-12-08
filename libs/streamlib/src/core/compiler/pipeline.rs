@@ -10,7 +10,7 @@ use crate::core::compiler::phase::{CompilePhase, CompileResult};
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::{Graph, GraphNode, NodeIndex};
+use crate::core::graph::{Graph, GraphNode, ProcessorUniqueId};
 use crate::core::links::{DefaultLinkFactory, LinkFactoryDelegate};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::runtime::delegates::{
@@ -411,7 +411,7 @@ impl Compiler {
             let (from_port, to_port) = {
                 let link = property_graph
                     .query()
-                    .E_id(link_id)
+                    .e(link_id)
                     .first()
                     .ok_or_else(|| {
                         StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
@@ -429,7 +429,7 @@ impl Compiler {
             {
                 let link = property_graph
                     .query()
-                    .E_id(link_id)
+                    .e(link_id)
                     .first()
                     .ok_or_else(|| {
                         StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
@@ -445,7 +445,7 @@ impl Compiler {
             {
                 let link = property_graph
                     .query()
-                    .E_id(link_id)
+                    .e(link_id)
                     .first()
                     .ok_or_else(|| {
                         StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
@@ -505,7 +505,7 @@ impl Compiler {
             let proc_id = &update.id;
 
             // Get config from the ProcessorNode in the graph - clone it to avoid borrow issues
-            let config_json = match property_graph.query().V_id(proc_id).first() {
+            let config_json = match property_graph.query().v(proc_id).first() {
                 Some(node) => match &node.config {
                     Some(config) => config.clone(),
                     None => {
@@ -522,7 +522,7 @@ impl Compiler {
             // Get the ProcessorInstance and apply config
             let processor_arc = property_graph
                 .query()
-                .V_id(proc_id)
+                .v(proc_id)
                 .first()
                 .and_then(|node| {
                     node.get::<ProcessorInstanceComponent>()
@@ -563,7 +563,7 @@ impl Compiler {
         use crate::core::graph::{GraphNode, ProcessorInstanceComponent, ThreadHandleComponent};
 
         // Find all processors with ProcessorInstance but no ThreadHandle (compiled but not started)
-        let processors_to_start: Vec<NodeIndex> = property_graph
+        let processors_to_start: Vec<ProcessorUniqueId> = property_graph
             .query()
             .v()
             .has_component::<ProcessorInstanceComponent>()

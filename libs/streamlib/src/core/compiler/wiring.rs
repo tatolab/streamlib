@@ -13,24 +13,22 @@ use parking_lot::Mutex;
 use crate::core::error::{Result, StreamError};
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{
-    Graph, GraphEdge, GraphNode, LinkOutputToProcessorWriterAndReader, LinkState,
-    LinkStateComponent, ProcessorInstanceComponent,
+    Graph, GraphEdge, GraphNode, LinkInstanceComponent, LinkOutputToProcessorWriterAndReader,
+    LinkState, LinkStateComponent, LinkTypeInfoComponent, LinkUniqueId, ProcessorInstanceComponent,
 };
-use crate::core::links::{
-    LinkFactoryDelegate, LinkId, LinkInstanceComponent, LinkPortType, LinkTypeInfoComponent,
-};
+use crate::core::links::{LinkFactoryDelegate, LinkPortType};
 use crate::core::processors::BoxedProcessor;
 
 /// Wire a link by ID from the graph.
 pub fn wire_link(
     property_graph: &mut Graph,
     link_factory: &dyn LinkFactoryDelegate,
-    link_id: &LinkId,
+    link_id: &LinkUniqueId,
 ) -> Result<()> {
     let (from_port, to_port) = {
         let link = property_graph
             .query()
-            .E_id(link_id)
+            .e(link_id)
             .first()
             .ok_or_else(|| {
                 StreamError::LinkNotFound(format!("Link '{}' not found in graph", link_id))
@@ -43,13 +41,13 @@ pub fn wire_link(
 }
 
 /// Unwire a link by ID.
-pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkId) -> Result<()> {
+pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Unwiring link: {}", link_id);
 
     let (from_port, to_port) = {
         let link = property_graph
             .query()
-            .E_id(link_id)
+            .e(link_id)
             .first()
             .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
         (link.from_port(), link.to_port())
@@ -61,15 +59,21 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkId) -> Result<()> {
     // Get processor instance arcs first (clone them to release borrow)
     let source_arc = property_graph
         .query()
-        .V_id(&source_proc_id)
+        .v(&source_proc_id)
         .first()
-        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()));
+        .and_then(|node| {
+            node.get::<ProcessorInstanceComponent>()
+                .map(|i| i.0.clone())
+        });
 
     let dest_arc = property_graph
         .query()
-        .V_id(&dest_proc_id)
+        .v(&dest_proc_id)
         .first()
-        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()));
+        .and_then(|node| {
+            node.get::<ProcessorInstanceComponent>()
+                .map(|i| i.0.clone())
+        });
 
     // Now we can operate on the cloned Arcs without borrowing property_graph
     if let Some(arc) = source_arc {
@@ -97,7 +101,7 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkId) -> Result<()> {
     }
 
     // Remove link components and set state to Disconnected
-    if let Some(link) = property_graph.query_mut().E_id(link_id).first_mut() {
+    if let Some(link) = property_graph.query().e(link_id).first() {
         link.remove::<LinkInstanceComponent>();
         link.remove::<LinkTypeInfoComponent>();
         link.insert(LinkStateComponent(LinkState::Disconnected));
@@ -127,7 +131,7 @@ fn wire_link_ports(
     link_factory: &dyn LinkFactoryDelegate,
     from_port: &str,
     to_port: &str,
-    link_id: &LinkId,
+    link_id: &LinkUniqueId,
 ) -> Result<()> {
     let (source_proc_id, source_port) = parse_port_address(from_port)?;
     let (dest_proc_id, dest_port) = parse_port_address(to_port)?;
@@ -163,9 +167,9 @@ fn wire_link_ports(
 
     // Store instance and type info as components on the link
     let link = property_graph
-        .query_mut()
-        .E_id(link_id)
-        .first_mut()
+        .query()
+        .e(link_id)
+        .first()
         .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
     link.insert(LinkInstanceComponent(creation_result.instance));
     link.insert(creation_result.type_info);
@@ -197,9 +201,9 @@ fn wire_link_ports(
 
     // Set link state to Wired
     let link = property_graph
-        .query_mut()
-        .E_id(link_id)
-        .first_mut()
+        .query()
+        .e(link_id)
+        .first()
         .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
     link.insert(LinkStateComponent(LinkState::Wired));
 
@@ -214,18 +218,24 @@ fn get_processor_pair(
 ) -> Result<(Arc<Mutex<BoxedProcessor>>, Arc<Mutex<BoxedProcessor>>)> {
     let source_arc = property_graph
         .query()
-        .V_id(&source_proc_id.to_string())
+        .v(&source_proc_id.to_string())
         .first()
-        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()))
+        .and_then(|node| {
+            node.get::<ProcessorInstanceComponent>()
+                .map(|i| i.0.clone())
+        })
         .ok_or_else(|| {
             StreamError::Configuration(format!("Source processor '{}' not found", source_proc_id))
         })?;
 
     let dest_arc = property_graph
         .query()
-        .V_id(&dest_proc_id.to_string())
+        .v(&dest_proc_id.to_string())
         .first()
-        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()))
+        .and_then(|node| {
+            node.get::<ProcessorInstanceComponent>()
+                .map(|i| i.0.clone())
+        })
         .ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Destination processor '{}' not found",
@@ -303,22 +313,22 @@ fn validate_port_types(
     Ok((src_type, dst_type))
 }
 
-/// Wrapper for passing LinkOutputDataWriter with its LinkId through Box<dyn Any>.
+/// Wrapper for passing LinkOutputDataWriter with its LinkUniqueId through Box<dyn Any>.
 pub struct LinkOutputDataWriterWrapper<T: crate::core::LinkPortMessage> {
-    pub link_id: LinkId,
+    pub link_id: LinkUniqueId,
     pub data_writer: crate::core::LinkOutputDataWriter<T>,
 }
 
-/// Wrapper for passing LinkInputDataReader with its LinkId through Box<dyn Any>.
+/// Wrapper for passing LinkInputDataReader with its LinkUniqueId through Box<dyn Any>.
 pub struct LinkInputDataReaderWrapper<T: crate::core::LinkPortMessage> {
-    pub link_id: LinkId,
+    pub link_id: LinkUniqueId,
     pub data_reader: crate::core::LinkInputDataReader<T>,
 }
 
 fn wire_data_writer_to_processor(
     processor: &Arc<Mutex<BoxedProcessor>>,
     port_name: &str,
-    link_id: &LinkId,
+    link_id: &LinkUniqueId,
     port_type: LinkPortType,
     data_writer: Box<dyn std::any::Any + Send>,
 ) -> Result<()> {
@@ -369,7 +379,7 @@ fn wire_data_writer_to_processor(
 fn wire_data_reader_to_processor(
     processor: &Arc<Mutex<BoxedProcessor>>,
     port_name: &str,
-    link_id: &LinkId,
+    link_id: &LinkUniqueId,
     port_type: LinkPortType,
     data_reader: Box<dyn std::any::Any + Send>,
 ) -> Result<()> {
@@ -426,7 +436,7 @@ fn setup_link_output_to_processor_message_writer(
     // Get destination's message writer
     let message_writer = property_graph
         .query()
-        .V_id(&dest_proc_id.to_string())
+        .v(&dest_proc_id.to_string())
         .first()
         .and_then(|node| {
             node.get::<LinkOutputToProcessorWriterAndReader>()
@@ -442,9 +452,12 @@ fn setup_link_output_to_processor_message_writer(
     // Get source processor and set its output's message writer
     let source_arc = property_graph
         .query()
-        .V_id(&source_proc_id.to_string())
+        .v(&source_proc_id.to_string())
         .first()
-        .and_then(|node| node.get::<ProcessorInstanceComponent>().map(|i| i.0.clone()))
+        .and_then(|node| {
+            node.get::<ProcessorInstanceComponent>()
+                .map(|i| i.0.clone())
+        })
         .ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Source processor '{}' has no ProcessorInstance",

@@ -211,16 +211,16 @@ impl StreamRuntime {
                     // Validate: must exist in graph, not already running, and not pending deletion
                     let (exists, running, pending_deletion) = {
                         let pg = self.graph.read();
-                        let exists = pg.query().V_id(&id).exists();
+                        let exists = pg.query().v(&id).exists();
                         let running = pg
                             .query()
-                            .V_id(&id)
+                            .v(&id)
                             .first()
                             .map(|n| n.has::<ProcessorInstanceComponent>())
                             .unwrap_or(false);
                         let pending = pg
                             .query()
-                            .V_id(&id)
+                            .v(&id)
                             .first()
                             .map(|n| n.has::<PendingDeletionComponent>())
                             .unwrap_or(false);
@@ -243,7 +243,7 @@ impl StreamRuntime {
                     // Validate: must exist in graph, not already wired, and not pending deletion
                     let (exists, wired, pending_deletion) = {
                         let pg = self.graph.read();
-                        let link = pg.query().E_id(&id).first();
+                        let link = pg.query().e(&id).first();
                         let exists = link.is_some();
                         let wired = link
                             .map(|l| l.has::<LinkInstanceComponent>())
@@ -328,12 +328,12 @@ impl StreamRuntime {
     }
 
     /// Apply a config update to a running processor.
-    fn apply_config_update(&mut self, proc_id: &NodeIndex) -> Result<()> {
+    fn apply_config_update(&mut self, proc_id: &ProcessorUniqueId) -> Result<()> {
         use crate::core::graph::ProcessorInstanceComponent;
 
         let (config_json, processor_arc) = {
             let graph = self.graph.read();
-            let node = graph.query().V_id(proc_id).first();
+            let node = graph.query().v(proc_id).first();
             let config = node.and_then(|n| n.config.clone());
             let proc = node.and_then(|n| {
                 n.get::<ProcessorInstanceComponent>()
@@ -365,7 +365,7 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Add a processor to the graph with its config. Returns the processor ID.
-    pub fn add_processor<P>(&mut self, config: P::Config) -> Result<NodeIndex>
+    pub fn add_processor<P>(&mut self, config: P::Config) -> Result<ProcessorUniqueId>
     where
         P: Processor + 'static,
         P::Config: Serialize + for<'de> serde::Deserialize<'de> + Default,
@@ -422,7 +422,7 @@ impl StreamRuntime {
         &mut self,
         from: impl IntoLinkPortRef,
         to: impl IntoLinkPortRef,
-    ) -> Result<LinkId> {
+    ) -> Result<LinkUniqueId> {
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
         // Convert to LinkPortRef to get port info for WillConnect event
@@ -474,7 +474,7 @@ impl StreamRuntime {
         self.disconnect_by_id(&link.id)
     }
 
-    pub fn disconnect_by_id(&mut self, link_id: &LinkId) -> Result<()> {
+    pub fn disconnect_by_id(&mut self, link_id: &LinkUniqueId) -> Result<()> {
         use crate::core::graph::PendingDeletionComponent;
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
@@ -483,7 +483,7 @@ impl StreamRuntime {
             let property_graph = self.graph.read();
             property_graph
                 .query()
-                .E_id(link_id)
+                .e(link_id)
                 .first()
                 .map(|l| (l.from_port(), l.to_port()))
                 .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", link_id)))?
@@ -502,7 +502,7 @@ impl StreamRuntime {
         // Mark for soft-delete by adding PendingDeletion component to link
         {
             let mut graph = self.graph.write();
-            if let Some(link) = graph.query_mut().E_id(link_id).first_mut() {
+            if let Some(link) = graph.query().e(link_id).first() {
                 link.insert(PendingDeletionComponent);
             }
         }
@@ -529,14 +529,14 @@ impl StreamRuntime {
         self.remove_processor_by_id(&node.id)
     }
 
-    pub fn remove_processor_by_id(&mut self, processor_id: &NodeIndex) -> Result<()> {
+    pub fn remove_processor_by_id(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
         use crate::core::graph::PendingDeletionComponent;
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
         // Validate processor exists in graph
         let processor_exists = {
             let property_graph = self.graph.read();
-            property_graph.query().V_id(processor_id).exists()
+            property_graph.query().v(processor_id).exists()
         };
 
         if !processor_exists {
@@ -554,7 +554,7 @@ impl StreamRuntime {
         // Mark for soft-delete by adding PendingDeletion component
         {
             let mut graph = self.graph.write();
-            if let Some(node) = graph.query_mut().V_id(processor_id).first_mut() {
+            if let Some(node) = graph.query().v(processor_id).first() {
                 node.insert(PendingDeletionComponent);
             }
         }
@@ -578,7 +578,7 @@ impl StreamRuntime {
     /// Update a processor's configuration at runtime.
     pub fn update_processor_config<C: Serialize>(
         &mut self,
-        processor_id: &NodeIndex,
+        processor_id: &ProcessorUniqueId,
         config: C,
     ) -> Result<()> {
         let config_json = serde_json::to_value(&config)
@@ -719,7 +719,7 @@ impl StreamRuntime {
     ///
     /// The processor's delegate `will_pause` is called first - return `Err` to reject.
     /// Once paused, the processor's `process()` will not be called until resumed.
-    pub fn pause_processor(&mut self, processor_id: &NodeIndex) -> Result<()> {
+    pub fn pause_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
         use crate::core::graph::ProcessorPauseGateComponent;
         use crate::core::processors::ProcessorState;
         use crate::core::pubsub::{Event, ProcessorEvent, PUBSUB};
@@ -729,14 +729,14 @@ impl StreamRuntime {
             let property_graph = self.graph.read();
 
             // Validate processor exists
-            if !property_graph.query().V_id(processor_id).exists() {
+            if !property_graph.query().v(processor_id).exists() {
                 return Err(StreamError::ProcessorNotFound(processor_id.to_string()));
             }
 
             // Get the pause gate from the processor node
             let node = property_graph
                 .query()
-                .V_id(processor_id)
+                .v(processor_id)
                 .first()
                 .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.to_string()))?;
 
@@ -765,7 +765,7 @@ impl StreamRuntime {
         // Update processor state
         {
             let property_graph = self.graph.read();
-            if let Some(node) = property_graph.query().V_id(processor_id).first() {
+            if let Some(node) = property_graph.query().v(processor_id).first() {
                 if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
                     *state.0.lock() = ProcessorState::Paused;
                 }
@@ -786,7 +786,7 @@ impl StreamRuntime {
     /// Resume a specific processor.
     ///
     /// The processor's delegate `will_resume` is called first - return `Err` to reject.
-    pub fn resume_processor(&mut self, processor_id: &NodeIndex) -> Result<()> {
+    pub fn resume_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
         use crate::core::graph::ProcessorPauseGateComponent;
         use crate::core::processors::ProcessorState;
         use crate::core::pubsub::{Event, ProcessorEvent, PUBSUB};
@@ -796,14 +796,14 @@ impl StreamRuntime {
             let property_graph = self.graph.read();
 
             // Validate processor exists
-            if !property_graph.query().V_id(processor_id).exists() {
+            if !property_graph.query().v(processor_id).exists() {
                 return Err(StreamError::ProcessorNotFound(processor_id.to_string()));
             }
 
             // Get the pause gate from the processor node
             let node = property_graph
                 .query()
-                .V_id(processor_id)
+                .v(processor_id)
                 .first()
                 .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.to_string()))?;
 
@@ -835,7 +835,7 @@ impl StreamRuntime {
             use crate::core::links::LinkOutputToProcessorMessage;
 
             let property_graph = self.graph.read();
-            let node = property_graph.query().V_id(processor_id).first();
+            let node = property_graph.query().v(processor_id).first();
 
             if let Some(node) = node {
                 if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
@@ -871,13 +871,13 @@ impl StreamRuntime {
     }
 
     /// Check if a specific processor is paused.
-    pub fn is_processor_paused(&self, processor_id: &NodeIndex) -> Result<bool> {
+    pub fn is_processor_paused(&self, processor_id: &ProcessorUniqueId) -> Result<bool> {
         use crate::core::graph::ProcessorPauseGateComponent;
 
         let property_graph = self.graph.read();
         let node = property_graph
             .query()
-            .V_id(processor_id)
+            .v(processor_id)
             .first()
             .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.to_string()))?;
 
@@ -906,7 +906,7 @@ impl StreamRuntime {
         );
 
         // Get all processor IDs
-        let processor_ids: Vec<NodeIndex> = {
+        let processor_ids: Vec<ProcessorUniqueId> = {
             let property_graph = self.graph.read();
             property_graph.query().v().ids()
         };
@@ -955,7 +955,7 @@ impl StreamRuntime {
         );
 
         // Get all processor IDs
-        let processor_ids: Vec<NodeIndex> = {
+        let processor_ids: Vec<ProcessorUniqueId> = {
             let property_graph = self.graph.read();
             property_graph.query().v().ids()
         };
