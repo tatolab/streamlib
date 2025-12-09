@@ -1,6 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
-
+c
 mod private {
     use crate::core::graph::LinkUniqueId;
 
