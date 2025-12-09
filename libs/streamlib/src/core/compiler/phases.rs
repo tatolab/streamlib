@@ -69,12 +69,12 @@ pub(crate) fn create_processor(
 // ============================================================================
 
 pub(crate) fn setup_processor(
-    property_graph: &mut Graph,
+    graph: &mut Graph,
     runtime_context: &Arc<RuntimeContext>,
     processor_id: &ProcessorUniqueId,
 ) -> Result<()> {
     // Get processor instance and pause gate
-    let node = property_graph
+    let node = graph
         .traversal()
         .v(processor_id)
         .first()

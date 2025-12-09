@@ -65,7 +65,7 @@ impl Graph {
     // Query Interface
     // =========================================================================
 
-    /// Start a read-only query on the graph.
+    /// Start a traversal on the graph.
     pub fn traversal(&self) -> TraversalSource<'_> {
         TraversalSource::new(&self.digraph)
     }

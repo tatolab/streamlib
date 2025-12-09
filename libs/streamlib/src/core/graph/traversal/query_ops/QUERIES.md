@@ -14,11 +14,11 @@ One operator per file, following vertex_op.rs pattern.
 [x] - in_e() - get incoming edges
 
 ## Edge Traversals (LinkQuery → ProcessorQuery)
-- out_v() - get source vertices
-- in_v() - get target vertices
+[x] - out_v() - get source vertices
+[x] - in_v() - get target vertices
 
 ## Edge Narrowing (LinkQuery → LinkQuery)
-- first() - narrow to first edge (stays in graph)
+[x] - first() - narrow to first edge (stays in graph)
 
 ## Filters (ProcessorQuery & LinkQuery → same type)
 - filter(predicate) - filter by closure on node/edge
@@ -28,8 +28,8 @@ One operator per file, following vertex_op.rs pattern.
 ## Terminals - Exit Graph (return data, cannot chain)
 
 ### ProcessorQuery Terminals
-- value() → Option<&ProcessorNode>
-- collect() → Vec<&ProcessorNode>
+[x] - value() → Option<&ProcessorNode>
+[x] - collect() → Vec<&ProcessorNode>
 - count() → usize
 - exists() → bool
 
