@@ -91,7 +91,7 @@ Filter elements by a predicate closure.
 - **LinkTraversal**: `filter(|link| ...) -> LinkTraversal`
 - **ProcessorTraversal**: `filter(|node| ...) -> ProcessorTraversal`
 
-Status: [ ] Not implemented
+Status: [x] Not implemented
 
 ---
 
@@ -102,7 +102,7 @@ Filter by component existence or property value.
 - **LinkTraversal**: `has::<Component>() -> LinkTraversal`
 - **ProcessorTraversal**: `has::<Component>() -> ProcessorTraversal`
 
-Status: [ ] Not implemented
+Status: [x] Not implemented
 
 ---
 ---

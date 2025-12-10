@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::super::components::{default_components, ComponentMap};
+use super::super::components::{default_components, Component, ComponentMap};
 use super::super::{GraphNode, GraphWeight, LinkPortRef};
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
 use crate::core::utils::compute_json_checksum;
@@ -137,23 +137,23 @@ impl GraphWeight for ProcessorNode {
 }
 
 impl GraphNode for ProcessorNode {
-    fn insert<C: Send + Sync + 'static>(&mut self, component: C) {
+    fn insert<C: Component>(&mut self, component: C) {
         self.components.insert(component);
     }
 
-    fn get<C: Send + Sync + 'static>(&self) -> Option<&C> {
+    fn get<C: Component>(&self) -> Option<&C> {
         self.components.get::<C>()
     }
 
-    fn get_mut<C: Send + Sync + 'static>(&mut self) -> Option<&mut C> {
+    fn get_mut<C: Component>(&mut self) -> Option<&mut C> {
         self.components.get_mut::<C>()
     }
 
-    fn remove<C: Send + Sync + 'static>(&mut self) -> Option<C> {
+    fn remove<C: Component>(&mut self) -> Option<C> {
         self.components.remove::<C>()
     }
 
-    fn has<C: Send + Sync + 'static>(&self) -> bool {
+    fn has<C: Component>(&self) -> bool {
         self.components.contains::<C>()
     }
 }
