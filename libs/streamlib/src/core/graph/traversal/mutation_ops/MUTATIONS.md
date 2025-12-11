@@ -4,11 +4,11 @@ Files to create/update in `mutation_ops/`.
 
 ---
 
-## add_v.rs
+## add_v_op.rs
 
 Add a new processor vertex to the graph.
 
-- [ ] `TraversalSourceMut::add_v::<P>(config) -> ProcessorTraversalMut`
+- [x] `TraversalSourceMut::add_v::<P>(config) -> ProcessorTraversalMut`
 
 ```rust
 graph.traversal_mut().add_v::<Encoder>(config)
@@ -16,11 +16,11 @@ graph.traversal_mut().add_v::<Encoder>(config)
 
 ---
 
-## add_e.rs
+## add_e_op.rs
 
 Add a new edge between ports.
 
-- [ ] `TraversalSourceMut::add_e(from, to) -> LinkTraversalMut`
+- [x] `TraversalSourceMut::add_e(from, to) -> LinkTraversalMut`
 
 ```rust
 graph.traversal_mut().add_e("encoder.output", "decoder.input")
@@ -28,7 +28,7 @@ graph.traversal_mut().add_e("encoder.output", "decoder.input")
 
 ---
 
-## drop.rs
+## drop_op.rs
 
 Remove matched vertices/edges from the graph.
 
@@ -38,18 +38,5 @@ Remove matched vertices/edges from the graph.
 ```rust
 graph.traversal_mut().v(()).filter(|n| n.is_stale()).drop()
 graph.traversal_mut().e(()).filter(|e| e.is_disconnected()).drop()
-```
-
----
-
-## property.rs
-
-Set a property/component on matched vertices/edges.
-
-- [ ] `ProcessorTraversalMut::property(name, value) -> ProcessorTraversalMut`
-- [ ] `LinkTraversalMut::property(name, value) -> LinkTraversalMut`
-
-```rust
-graph.traversal_mut().v(()).filter(|n| n.is_failed()).property("state", "stopped")
 ```
 
