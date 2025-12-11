@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::edges::Link;
 use super::nodes::ProcessorNode;
 
-use super::traversal::TraversalSource;
+use super::traversal::{TraversalSource, TraversalSourceMut};
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,6 +68,11 @@ impl Graph {
     /// Start a traversal on the graph.
     pub fn traversal(&self) -> TraversalSource<'_> {
         TraversalSource::new(&self.digraph)
+    }
+
+    /// Start a mutable traversal on the graph.
+    pub fn traversal_mut(&mut self) -> TraversalSourceMut<'_> {
+        TraversalSourceMut::new(&mut self.digraph)
     }
 
     // =========================================================================

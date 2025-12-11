@@ -32,7 +32,7 @@ pub struct EncodedVideoFrame {
 }
 
 /// Video encoder configuration
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct VideoEncoderConfig {
     pub width: u32,
     pub height: u32,

@@ -1,38 +1,55 @@
 # Mutation Operations
 
-Mutations chain like queries. All use petgraph directly via `&mut DiGraph`.
+Files to create/update in `mutation_ops/`.
 
-## Entry Points (QueryBuilder)
-- add_v<P>(config) → ProcessorQuery (adds node, returns query with new node)
-- add_e(from, to) → LinkQuery (adds edge, returns query with new edge)
+---
 
-## Node Mutations (ProcessorQuery)
-- property(name, value) → ProcessorQuery (set property on matched nodes)
-- drop() → () (remove matched nodes and their edges)
+## add_v.rs
 
-## Edge Mutations (LinkQuery)
-- property(name, value) → LinkQuery (set property on matched edges)
-- drop() → () (remove matched edges)
+Add a new processor vertex to the graph.
 
-## Chained Examples
+- [ ] `TraversalSourceMut::add_v::<P>(config) -> ProcessorTraversalMut`
+
 ```rust
-// Add a node
-graph.query().add_v::<Encoder>(config)
-
-// Add edge between existing nodes
-graph.query().add_e("encoder.output", "decoder.input")
-
-// Update property on filtered nodes
-graph.query().v(()).filter(|n| n.is_failed()).property("state", "stopped")
-
-// Delete all matching
-graph.query().v(()).filter(|n| n.is_stale()).drop()
-
-// Add edge from traversal
-graph.query().v("encoder").add_e("feeds").to("decoder")
+graph.traversal_mut().add_v::<Encoder>(config)
 ```
 
-## Graph-Level (on Graph directly, not query)
-- validate() → Result<()>
-- checksum() → GraphChecksum
-- topological_order() → Result<Vec<ProcessorUniqueId>>
+---
+
+## add_e.rs
+
+Add a new edge between ports.
+
+- [ ] `TraversalSourceMut::add_e(from, to) -> LinkTraversalMut`
+
+```rust
+graph.traversal_mut().add_e("encoder.output", "decoder.input")
+```
+
+---
+
+## drop.rs
+
+Remove matched vertices/edges from the graph.
+
+- [x] `ProcessorTraversalMut::drop() -> ProcessorTraversalMut`
+- [x] `LinkTraversalMut::drop() -> LinkTraversalMut`
+
+```rust
+graph.traversal_mut().v(()).filter(|n| n.is_stale()).drop()
+graph.traversal_mut().e(()).filter(|e| e.is_disconnected()).drop()
+```
+
+---
+
+## property.rs
+
+Set a property/component on matched vertices/edges.
+
+- [ ] `ProcessorTraversalMut::property(name, value) -> ProcessorTraversalMut`
+- [ ] `LinkTraversalMut::property(name, value) -> LinkTraversalMut`
+
+```rust
+graph.traversal_mut().v(()).filter(|n| n.is_failed()).property("state", "stopped")
+```
+

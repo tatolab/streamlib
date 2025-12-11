@@ -9,4 +9,7 @@ mod out_e_op;
 mod out_v_op;
 mod vertex_op;
 mod filter_op;
+mod first_op;
 mod has_op;
+mod last_op;
+mod nth_op;

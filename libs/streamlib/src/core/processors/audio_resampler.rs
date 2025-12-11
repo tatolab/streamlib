@@ -6,7 +6,7 @@ use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioResamplerConfig {
     pub source_sample_rate: u32,
     pub target_sample_rate: u32,

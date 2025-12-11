@@ -87,7 +87,7 @@ impl VideoEncoderH264 for VideoToolboxH264Encoder {
 // MAIN WEBRTC WHIP PROCESSOR
 // ============================================================================
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebRtcWhipConfig {
     pub whip: WhipConfig,
     pub video: VideoEncoderConfig,

@@ -33,7 +33,7 @@ mod private {
 
 use petgraph::visit::EdgeRef;
 
-use crate::core::{graph::TraversalSource, LinkTraversal};
+use crate::core::graph::{LinkTraversal, LinkTraversalMut, TraversalSource, TraversalSourceMut};
 impl<'a> TraversalSource<'a> {
     /// Start traversal from edges.
     ///
@@ -64,6 +64,41 @@ impl<'a> TraversalSource<'a> {
                     .map(|edge_ref| edge_ref.id())
                     .collect::<Vec<_>>();
                 LinkTraversal {
+                    graph: self.graph,
+                    ids,
+                }
+            }
+        }
+    }
+}
+
+impl<'a> TraversalSourceMut<'a> {
+    /// Start traversal from edges.
+    ///
+    /// Accepts:
+    /// - `()` - all edges
+    /// - `&str` - edge by ID string
+    /// - `LinkUniqueId` - edge by ID
+    pub fn e(self, filter: impl private::IntoEdgeFilter) -> LinkTraversalMut<'a> {
+        match filter.into_filter() {
+            Some(id) => {
+                let found = self
+                    .graph
+                    .edge_references()
+                    .find(|edge_ref| edge_ref.weight().id == id)
+                    .map(|edge_ref| edge_ref.id());
+                LinkTraversalMut {
+                    graph: self.graph,
+                    ids: found.map(|idx| vec![idx]).unwrap_or_default(),
+                }
+            }
+            None => {
+                let ids = self
+                    .graph
+                    .edge_references()
+                    .map(|edge_ref| edge_ref.id())
+                    .collect::<Vec<_>>();
+                LinkTraversalMut {
                     graph: self.graph,
                     ids,
                 }

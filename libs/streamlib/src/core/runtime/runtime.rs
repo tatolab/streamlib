@@ -385,8 +385,13 @@ impl StreamRuntime {
         // Add to underlying graph and get the ID
         let processor_id = {
             let mut graph = self.graph.write();
-            let node_ref = graph.add_node::<P>(config)?;
-            node_ref.id.clone()
+            let result = graph
+                .traversal_mut()
+                .add_v::<P>(config)
+                .first()
+                .ok_or_else(|| StreamError::GraphError("Could not create node".into()))?;
+
+            result.id.clone()
         };
 
         // Emit WillAddProcessor
@@ -414,7 +419,7 @@ impl StreamRuntime {
         // Handle commit mode
         self.on_graph_changed()?;
 
-        Ok(processor_id)
+        Ok(processor_id.clone())
     }
 
     /// Connect two ports - adds a link to the graph. Returns the link ID.

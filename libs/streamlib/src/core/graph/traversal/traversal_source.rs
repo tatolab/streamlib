@@ -30,3 +30,31 @@ pub struct LinkTraversal<'a> {
     pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
     pub(in crate::core::graph::traversal) ids: Vec<EdgeIndex>,
 }
+
+// =============================================================================
+// Mutable Traversal Types
+// =============================================================================
+
+/// Entry point for mutable graph traversals.
+pub struct TraversalSourceMut<'a> {
+    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
+}
+
+impl<'a> TraversalSourceMut<'a> {
+    /// Create a new mutable traversal source for the given graph.
+    pub(in crate::core::graph) fn new(graph: &'a mut DiGraph<ProcessorNode, Link>) -> Self {
+        Self { graph }
+    }
+}
+
+/// Mutable query over processor nodes.
+pub struct ProcessorTraversalMut<'a> {
+    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) ids: Vec<NodeIndex>,
+}
+
+/// Mutable query over links.
+pub struct LinkTraversalMut<'a> {
+    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) ids: Vec<EdgeIndex>,
+}

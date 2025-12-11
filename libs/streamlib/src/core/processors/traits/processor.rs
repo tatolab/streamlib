@@ -1,10 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use super::BaseProcessor;
+use super::{BaseProcessor, Config};
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::LinkUniqueId;
@@ -12,7 +11,7 @@ use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 
 pub trait Processor: BaseProcessor {
-    type Config: Serialize + for<'de> Deserialize<'de> + Default;
+    type Config: Config;
 
     fn from_config(config: Self::Config) -> Result<Self>
     where
