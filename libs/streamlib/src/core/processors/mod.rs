@@ -14,7 +14,7 @@ pub mod factory;
 pub use graph::{ProcessorState, ProcessorStateComponent};
 
 // Re-export traits
-pub use traits::{BaseProcessor, Config, ConfigValidationError, Processor, ProcessorType};
+pub use traits::{Config, ConfigValidationError, Processor};
 
 pub use dyn_processor::DynProcessor;
 pub use factory::{BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory};

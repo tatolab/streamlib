@@ -7,8 +7,6 @@ use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::{Result, RuntimeContext};
 
-use super::ProcessorType;
-
 pub trait DynProcessor: Send + 'static {
     fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
@@ -21,7 +19,6 @@ pub trait DynProcessor: Send + 'static {
     fn process(&mut self) -> Result<()>;
 
     fn name(&self) -> &str;
-    fn processor_type(&self) -> ProcessorType;
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
     fn descriptor_instance(&self) -> Option<ProcessorDescriptor>;
 

@@ -3,15 +3,19 @@
 
 use serde_json::Value as JsonValue;
 
-use super::{BaseProcessor, Config};
+use super::Config;
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::LinkUniqueId;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
+use crate::core::RuntimeContext;
 
-pub trait Processor: BaseProcessor {
+pub trait Processor: Send + 'static {
     type Config: Config;
+
+    /// Returns the processor name.
+    fn name(&self) -> &str;
 
     fn from_config(config: Self::Config) -> Result<Self>
     where
@@ -102,9 +106,6 @@ pub trait Processor: BaseProcessor {
     }
 
     /// Serialize processor-specific runtime state to JSON.
-    ///
-    /// Override this method to include custom runtime state in JSON serialization.
-    /// The default implementation returns the current config.
     fn to_runtime_json(&self) -> JsonValue {
         JsonValue::Null
     }
@@ -115,5 +116,15 @@ pub trait Processor: BaseProcessor {
         Self: Sized,
     {
         JsonValue::Null
+    }
+
+    /// Generated setup hook called by runtime.
+    fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+        Ok(())
+    }
+
+    /// Generated teardown hook called by runtime.
+    fn __generated_teardown(&mut self) -> Result<()> {
+        Ok(())
     }
 }
