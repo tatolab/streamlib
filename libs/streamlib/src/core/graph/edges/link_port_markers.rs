@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::super::{InputLinkPortRef, OutputLinkPortRef, ProcessorNode};
+use crate::core::ProcessorUniqueId;
+
+use super::super::{InputLinkPortRef, OutputLinkPortRef};
 
 /// Marker trait for output ports.
 pub trait OutputPortMarker {
@@ -16,13 +18,13 @@ pub trait InputPortMarker {
 }
 
 /// Create an [`OutputLinkPortRef`] using compile-time validated marker types.
-pub fn output<M: OutputPortMarker>(node: &ProcessorNode) -> OutputLinkPortRef {
-    OutputLinkPortRef::new(node.id.clone(), M::PORT_NAME)
+pub fn output<M: OutputPortMarker>(processor_id: &ProcessorUniqueId) -> OutputLinkPortRef {
+    OutputLinkPortRef::new(processor_id.clone(), M::PORT_NAME)
 }
 
 /// Create an [`InputLinkPortRef`] using compile-time validated marker types.
-pub fn input<M: InputPortMarker>(node: &ProcessorNode) -> InputLinkPortRef {
-    InputLinkPortRef::new(node.id.clone(), M::PORT_NAME)
+pub fn input<M: InputPortMarker>(processor_id: &ProcessorUniqueId) -> InputLinkPortRef {
+    InputLinkPortRef::new(processor_id.clone(), M::PORT_NAME)
 }
 
 /// Wrapper trait for port markers.

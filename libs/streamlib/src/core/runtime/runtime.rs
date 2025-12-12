@@ -1112,9 +1112,10 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
-    pub fn to_json(&self) -> serde_json::Value {
+    pub fn to_json(&self) -> Result<serde_json::Value> {
         let graph = self.graph.read();
-        serde_json::to_value(&*graph).unwrap_or_default()
+        serde_json::to_value(&*graph)
+            .map_err(|_| StreamError::GraphError("Unable to serialize graph".into()))
     }
 
     // /// Export graph as Graphviz DOT format for visualization.

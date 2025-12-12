@@ -10,7 +10,6 @@ members = [
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare
     "examples/whep-player",     # Example: WHEP (WebRTC egress) player
-    "examples/test-main-thread-dispatch", # Test: Main thread dispatch validation
     "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization
     "examples/graph-json-export",         # Example: Graph data structure JSON export (no runtime)
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
