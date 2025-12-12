@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod edge_op;
+mod exists_op;
 mod filter_op;
 mod first_op;
-mod has_op;
+mod has_component_op;
 mod ids_op;
 mod in_e_op;
 mod in_v_op;

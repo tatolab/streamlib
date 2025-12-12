@@ -67,10 +67,10 @@ impl GraphInspector {
 
         Some(LinkSnapshot {
             id: id.clone(),
-            source_processor: link.source.node.clone(),
-            source_port: link.source.port.clone(),
-            target_processor: link.target.node.clone(),
-            target_port: link.target.port.clone(),
+            source_processor: link.source.processor_id.clone(),
+            source_port: link.source.port_name.clone(),
+            target_processor: link.target.processor_id.clone(),
+            target_port: link.target.port_name.clone(),
             queue_depth: 0,      // TODO: Get from link metrics component
             capacity: 16,        // Default capacity
             throughput_fps: 0.0, // TODO: Get from link metrics component

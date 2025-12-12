@@ -3,11 +3,11 @@
 
 use std::time::Instant;
 
-use petgraph::graph::DiGraph;
-use serde::Serialize;
-
 use super::edges::Link;
 use super::nodes::ProcessorNode;
+use petgraph::graph::DiGraph;
+
+use serde::Serialize;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
 
@@ -42,6 +42,13 @@ pub struct Graph {
 
     /// Graph-level state.
     state: GraphState,
+}
+
+/// Serialization helper - stores references to nodes and links.
+#[derive(Serialize)]
+struct SerializedGraphRef<'a> {
+    nodes: Vec<&'a ProcessorNode>,
+    links: Vec<&'a Link>,
 }
 
 impl Default for Graph {
@@ -122,20 +129,6 @@ impl Graph {
     }
 }
 
-impl Serialize for Graph {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // TODO: implement proper serialization
-        serde_json::json!({
-            "nodes": [],
-            "links": []
-        })
-        .serialize(serializer)
-    }
-}
-
 impl std::fmt::Debug for Graph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -155,5 +148,24 @@ impl std::fmt::Display for Graph {
             self.digraph.node_count(),
             self.digraph.edge_count()
         )
+    }
+}
+
+impl Serialize for Graph {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let nodes: Vec<_> = self
+            .digraph
+            .node_indices()
+            .map(|idx| &self.digraph[idx])
+            .collect();
+        let links: Vec<_> = self
+            .digraph
+            .edge_indices()
+            .map(|idx| &self.digraph[idx])
+            .collect();
+        SerializedGraphRef { nodes, links }.serialize(serializer)
     }
 }

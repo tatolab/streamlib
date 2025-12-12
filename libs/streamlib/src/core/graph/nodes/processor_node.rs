@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::components::{default_components, Component, ComponentMap};
-use super::super::{GraphNode, GraphWeight, LinkPortRef};
+use super::super::{GraphNode, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
 use crate::core::utils::compute_json_checksum;
 
@@ -78,7 +78,7 @@ impl ProcessorNode {
     }
 
     /// Create a reference to an output port. Panics if port doesn't exist.
-    pub fn output(&self, port_name: &str) -> LinkPortRef {
+    pub fn output(&self, port_name: &str) -> OutputLinkPortRef {
         if !self.has_output(port_name) {
             panic!(
                 "Processor '{}' ({}) has no output port '{}'. Available outputs: {:?}",
@@ -92,11 +92,11 @@ impl ProcessorNode {
                     .collect::<Vec<_>>()
             );
         }
-        LinkPortRef::output(self.id.to_string(), port_name)
+        OutputLinkPortRef::new(self.id.to_string(), port_name)
     }
 
     /// Create a reference to an input port. Panics if port doesn't exist.
-    pub fn input(&self, port_name: &str) -> LinkPortRef {
+    pub fn input(&self, port_name: &str) -> InputLinkPortRef {
         if !self.has_input(port_name) {
             panic!(
                 "Processor '{}' ({}) has no input port '{}'. Available inputs: {:?}",
@@ -110,20 +110,20 @@ impl ProcessorNode {
                     .collect::<Vec<_>>()
             );
         }
-        LinkPortRef::input(self.id.to_string(), port_name)
+        InputLinkPortRef::new(self.id.to_string(), port_name)
     }
 
-    pub fn try_output(&self, port_name: &str) -> Option<LinkPortRef> {
+    pub fn try_output(&self, port_name: &str) -> Option<OutputLinkPortRef> {
         if self.has_output(port_name) {
-            Some(LinkPortRef::output(self.id.to_string(), port_name))
+            Some(OutputLinkPortRef::new(self.id.to_string(), port_name))
         } else {
             None
         }
     }
 
-    pub fn try_input(&self, port_name: &str) -> Option<LinkPortRef> {
+    pub fn try_input(&self, port_name: &str) -> Option<InputLinkPortRef> {
         if self.has_input(port_name) {
-            Some(LinkPortRef::input(self.id.to_string(), port_name))
+            Some(InputLinkPortRef::new(self.id.to_string(), port_name))
         } else {
             None
         }

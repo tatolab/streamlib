@@ -2,93 +2,62 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::graph::{
-    LinkPortRef, Link, LinkDirection, LinkTraversalMut, TraversalSourceMut,
+    InputLinkPortRef, Link, LinkTraversalMut, OutputLinkPortRef, TraversalSourceMut,
 };
-use crate::core::{Result, StreamError};
 
 impl<'a> TraversalSourceMut<'a> {
     /// Add a new edge (link) between two ports.
     ///
-    /// Accepts port addresses in "processor_id.port_name" format.
-    pub fn add_e(
-        self,
-        from: impl IntoLinkPortRef,
-        to: impl IntoLinkPortRef,
-    ) -> Result<LinkTraversalMut<'a>> {
-        // 1. Parse port references with default directions
-        let from_ref = from.into_link_port_ref(LinkDirection::Output)?;
-        let to_ref = to.into_link_port_ref(LinkDirection::Input)?;
-
-        // 2. Validate directions
-        if from_ref.direction != LinkDirection::Output {
-            return Err(StreamError::InvalidLink(format!(
-                "Source port '{}' must be an output, not an input",
-                from_ref.to_address()
-            )));
-        }
-        if to_ref.direction != LinkDirection::Input {
-            return Err(StreamError::InvalidLink(format!(
-                "Target port '{}' must be an input, not an output",
-                to_ref.to_address()
-            )));
-        }
-
-        // 3. Find source and target node indices
-        let from_idx = self
+    /// Type-safe: `from` must be an output port, `to` must be an input port.
+    pub fn add_e(self, from: OutputLinkPortRef, to: InputLinkPortRef) -> LinkTraversalMut<'a> {
+        // 1. Find source and target node indices
+        let Some(from_idx) = self
             .graph
             .node_indices()
-            .find(|&idx| self.graph[idx].id.as_str() == from_ref.processor_id.as_str())
-            .ok_or_else(|| {
-                StreamError::ProcessorNotFound(from_ref.processor_id.to_string())
-            })?;
+            .find(|&idx| self.graph[idx].id.as_str() == from.processor_id.as_str())
+        else {
+            return LinkTraversalMut {
+                graph: self.graph,
+                ids: vec![],
+            };
+        };
 
-        let to_idx = self
+        let Some(to_idx) = self
             .graph
             .node_indices()
-            .find(|&idx| self.graph[idx].id.as_str() == to_ref.processor_id.as_str())
-            .ok_or_else(|| {
-                StreamError::ProcessorNotFound(to_ref.processor_id.to_string())
-            })?;
+            .find(|&idx| self.graph[idx].id.as_str() == to.processor_id.as_str())
+        else {
+            return LinkTraversalMut {
+                graph: self.graph,
+                ids: vec![],
+            };
+        };
 
-        // 4. Validate ports exist on the processors
+        // 2. Validate ports exist on the processors
         let from_node = &self.graph[from_idx];
-        if !from_node.has_output(&from_ref.port_name) {
-            return Err(StreamError::InvalidLink(format!(
-                "Processor '{}' has no output port '{}'. Available: {:?}",
-                from_ref.processor_id,
-                from_ref.port_name,
-                from_node
-                    .ports
-                    .outputs
-                    .iter()
-                    .map(|p| &p.name)
-                    .collect::<Vec<_>>()
-            )));
+        if !from_node.has_output(&from.port_name) {
+            return LinkTraversalMut {
+                graph: self.graph,
+                ids: vec![],
+            };
         }
 
         let to_node = &self.graph[to_idx];
-        if !to_node.has_input(&to_ref.port_name) {
-            return Err(StreamError::InvalidLink(format!(
-                "Processor '{}' has no input port '{}'. Available: {:?}",
-                to_ref.processor_id,
-                to_ref.port_name,
-                to_node
-                    .ports
-                    .inputs
-                    .iter()
-                    .map(|p| &p.name)
-                    .collect::<Vec<_>>()
-            )));
+        if !to_node.has_input(&to.port_name) {
+            return LinkTraversalMut {
+                graph: self.graph,
+                ids: vec![],
+            };
         }
 
-        // 5. Create link and add edge
-        let link = Link::new(&from_ref.to_address(), &to_ref.to_address());
+        // 3. Create link and add edge
+        let link = Link::new(&format!("{}", from), &format!("{}", to));
         let edge_idx = self.graph.add_edge(from_idx, to_idx, link);
 
-        // 6. Return traversal with new edge
-        Ok(LinkTraversalMut {
+        // 4. Return traversal with new edge
+        LinkTraversalMut {
             graph: self.graph,
             ids: vec![edge_idx],
-        })
+        }
     }
 }

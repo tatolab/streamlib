@@ -554,7 +554,7 @@ impl Compiler {
         let processors_to_start: Vec<ProcessorUniqueId> = property_graph
             .traversal()
             .v(())
-            .has_component::<ProcessorInstanceComponent>()
+            .filter(|node| node.has::<ProcessorInstanceComponent>())
             .filter(|node| !node.has::<ThreadHandleComponent>())
             .ids();
 

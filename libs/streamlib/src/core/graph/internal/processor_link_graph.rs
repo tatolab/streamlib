@@ -40,51 +40,6 @@ struct SerializedGraphOwned {
     links: Vec<Link>,
 }
 
-impl Serialize for InternalProcessorLinkGraph {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let nodes: Vec<_> = self
-            .graph
-            .node_indices()
-            .map(|idx| &self.graph[idx])
-            .collect();
-        let links: Vec<_> = self
-            .graph
-            .edge_indices()
-            .map(|idx| &self.graph[idx])
-            .collect();
-        SerializedGraphRef { nodes, links }.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for InternalProcessorLinkGraph {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let serialized = SerializedGraphOwned::deserialize(deserializer)?;
-        let mut graph_impl = InternalProcessorLinkGraph::new();
-
-        // Add all nodes first
-        for node in serialized.nodes {
-            graph_impl.graph.add_node(node);
-        }
-
-        // Then add all links
-        for link in serialized.links {
-            if let (Some(from_idx), Some(to_idx)) = (
-                graph_impl.find_node_index(&link.source.node),
-                graph_impl.find_node_index(&link.target.node),
-            ) {
-                graph_impl.graph.add_edge(from_idx, to_idx, link);
-            }
-        }
-
-        Ok(graph_impl)
-    }
-}
 
 /// Checksum of a graph's structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

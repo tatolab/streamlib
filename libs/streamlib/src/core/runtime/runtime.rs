@@ -13,13 +13,14 @@ use crate::core::compiler::{
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{
-    Graph, GraphEdge, GraphNode, GraphState, IntoLinkPortRef, Link, LinkUniqueId, ProcessorNode,
-    ProcessorUniqueId,
+    Graph, GraphEdge, GraphNode, GraphState, Link, LinkUniqueId, ProcessorNode, ProcessorUniqueId,
 };
 
 use crate::core::processors::Processor;
 use crate::core::runtime::delegates::DefaultFactory;
-use crate::core::{Result, StreamError};
+use crate::core::{
+    InputLinkPortRef, OutputLinkPortRef, ProcessorState, Result, StateComponent, StreamError,
+};
 
 /// Runtime status information.
 #[derive(Debug, Clone, Default)]
@@ -27,7 +28,7 @@ pub struct RuntimeStatus {
     pub running: bool,
     pub processor_count: usize,
     pub link_count: usize,
-    pub processor_states: Vec<(ProcessorUniqueId, String)>,
+    pub processor_states: Vec<(ProcessorUniqueId, ProcessorState)>,
 }
 
 /// Controls when graph mutations are applied to the executor.
@@ -210,15 +211,15 @@ impl StreamRuntime {
                 PendingOperation::AddProcessor(id) => {
                     // Validate: must exist in graph, not already running, and not pending deletion
                     let (exists, running, pending_deletion) = {
-                        let pg = self.graph.read();
-                        let exists = pg.traversal().v(&id).exists();
-                        let running = pg
+                        let graph = self.graph.read();
+                        let exists = graph.traversal().v(&id).exists();
+                        let running = graph
                             .traversal()
                             .v(&id)
                             .first()
                             .map(|n| n.has::<ProcessorInstanceComponent>())
                             .unwrap_or(false);
-                        let pending = pg
+                        let pending = graph
                             .traversal()
                             .v(&id)
                             .first()
@@ -292,10 +293,14 @@ impl StreamRuntime {
 
                 // Clean up graph after removal
                 for link_id in &links_to_remove {
-                    graph.remove_link(link_id);
+                    if graph.traversal_mut().e(link_id).drop().exists() {
+                        return Err(StreamError::GraphError("value was not dropped".into()));
+                    }
                 }
                 for proc_id in &processors_to_remove {
-                    graph.remove_processor(proc_id);
+                    if graph.traversal_mut().v(proc_id).drop().exists() {
+                        return Err(StreamError::GraphError("value was not dropped".into()));
+                    }
                 }
             }
         }
@@ -425,34 +430,37 @@ impl StreamRuntime {
     /// Connect two ports - adds a link to the graph. Returns the link ID.
     pub fn connect(
         &mut self,
-        from: impl IntoLinkPortRef,
-        to: impl IntoLinkPortRef,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
     ) -> Result<LinkUniqueId> {
         use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
-        // Convert to LinkPortRef to get port info for WillConnect event
-        let from_ref = from.into_link_port_ref(crate::core::graph::LinkDirection::Output)?;
-        let to_ref = to.into_link_port_ref(crate::core::graph::LinkDirection::Input)?;
-
-        // Capture port addresses for events before moving refs
-        let from_port = from_ref.to_address();
-        let to_port = to_ref.to_address();
+        // Capture for events before moving into add_e
+        let from_processor = from.processor_id.clone();
+        let from_port = from.port_name.clone();
+        let to_processor = to.processor_id.clone();
+        let to_port = to.port_name.clone();
 
         // Emit WillConnect before the action
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-                from_processor: from_ref.processor_id.clone(),
-                from_port: from_ref.port_name.clone(),
-                to_processor: to_ref.processor_id.clone(),
-                to_port: to_ref.port_name.clone(),
+                from_processor,
+                from_port: from_port.clone(),
+                to_processor,
+                to_port: to_port.clone(),
             }),
         );
 
         // Add to underlying graph
         let link_id = {
             let mut graph = self.graph.write();
-            graph.add_edge(from_ref, to_ref)?
+            graph
+                .traversal_mut()
+                .add_e(from, to)
+                .first()
+                .map(|link| link.id.clone())
+                .ok_or_else(|| StreamError::GraphError("failed to create link".into()))?
         };
 
         // Queue operation for commit
@@ -485,13 +493,17 @@ impl StreamRuntime {
 
         // Validate link exists and get info for events
         let link_info = {
-            let property_graph = self.graph.read();
-            property_graph
+            let inner_graph = self.graph.read();
+            let (from_value, to_value) = inner_graph
                 .traversal()
                 .e(link_id)
                 .first()
                 .map(|l| (l.from_port(), l.to_port()))
-                .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", link_id)))?
+                .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", link_id)))?;
+            (
+                OutputLinkPortRef::new(from_value.processor_id.clone(), to_value.port_name.clone()),
+                InputLinkPortRef::new(to_value.processor_id.clone(), to_value.port_name.clone()),
+            )
         };
 
         // Emit WillDisconnect before the action
@@ -499,15 +511,15 @@ impl StreamRuntime {
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillDisconnect {
                 link_id: link_id.to_string(),
-                from_port: link_info.0.clone(),
-                to_port: link_info.1.clone(),
+                from_port: link_info.0.to_string(),
+                to_port: link_info.1.to_string(),
             }),
         );
 
         // Mark for soft-delete by adding PendingDeletion component to link
         {
             let mut graph = self.graph.write();
-            if let Some(link) = graph.traversal().e(link_id).first() {
+            if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
                 link.insert(PendingDeletionComponent);
             }
         }
@@ -521,8 +533,8 @@ impl StreamRuntime {
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidDisconnect {
                 link_id: link_id.to_string(),
-                from_port: link_info.0,
-                to_port: link_info.1,
+                from_port: link_info.0.to_string(),
+                to_port: link_info.1.to_string(),
             }),
         );
 
@@ -559,7 +571,7 @@ impl StreamRuntime {
         // Mark for soft-delete by adding PendingDeletion component
         {
             let mut graph = self.graph.write();
-            if let Some(node) = graph.traversal().v(processor_id).first() {
+            if let Some(node) = graph.traversal_mut().v(processor_id).first_mut() {
                 node.insert(PendingDeletionComponent);
             }
         }
@@ -592,7 +604,9 @@ impl StreamRuntime {
         // Update config in graph
         {
             let mut graph = self.graph.write();
-            graph.update_processor_config(processor_id, config_json)?;
+            if let Some(processor) = graph.traversal_mut().v(processor_id).first_mut() {
+                processor.set_config(config_json);
+            }
         }
 
         // Queue operation for commit
@@ -1077,9 +1091,18 @@ impl StreamRuntime {
 
         RuntimeStatus {
             running: graph.state() == GraphState::Running,
-            processor_count: graph.traversal().v(()).count(),
-            link_count: graph.traversal().e(()).count(),
-            processor_states: vec![], // TODO: Implement processor state tracking
+            processor_count: graph.traversal().v(()).iter().count(),
+            link_count: graph.traversal().e(()).iter().count(),
+            processor_states: graph
+                .traversal()
+                .v(())
+                .has_component::<StateComponent>()
+                .iter()
+                .filter_map(|node| {
+                    let state = node.get::<StateComponent>()?;
+                    Some((node.id.clone(), *state.0.lock()))
+                })
+                .collect(),
         }
     }
 
@@ -1090,14 +1113,14 @@ impl StreamRuntime {
     /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
     pub fn to_json(&self) -> serde_json::Value {
         let graph = self.graph.read();
-        graph.to_json()
+        serde_json::to_value(&*graph).unwrap_or_default()
     }
 
-    /// Export graph as Graphviz DOT format for visualization.
-    pub fn to_dot(&self) -> String {
-        let graph = self.graph.read();
-        graph.to_dot()
-    }
+    // /// Export graph as Graphviz DOT format for visualization.
+    // pub fn to_dot(&self) -> String {
+    //     let graph = self.graph.read();
+    //     graph.to_dot()
+    // }
 }
 
 #[cfg(test)]

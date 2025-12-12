@@ -3,25 +3,31 @@
 
 use crate::core::graph::{PortInfo, ProcessorNode, ProcessorTraversalMut, TraversalSourceMut};
 use crate::core::processors::{Config, Processor};
-use crate::core::{Result, StreamError};
 
 impl<'a> TraversalSourceMut<'a> {
-    pub fn add_v<P>(self, config: P::Config) -> Result<ProcessorTraversalMut<'a>>
+    /// Add a new processor node to the graph.
+    ///
+    /// Returns a traversal with the new node, or an empty traversal if creation failed
+    /// (e.g., config validation failed, no descriptor).
+    pub fn add_v<P>(self, config: P::Config) -> ProcessorTraversalMut<'a>
     where
         P: Processor + 'static,
     {
         // 1. Validate config round-trips through JSON (catches #[serde(skip)] fields)
-        config
-            .validate_round_trip()
-            .map_err(|e| StreamError::Config(e.to_string()))?;
+        if config.validate_round_trip().is_err() {
+            return ProcessorTraversalMut {
+                graph: self.graph,
+                ids: vec![],
+            };
+        }
 
         // 2. Get processor descriptor
-        let descriptor = P::descriptor().ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!(
-                "Processor {} has no descriptor",
-                std::any::type_name::<P>()
-            ))
-        })?;
+        let Some(descriptor) = P::descriptor() else {
+            return ProcessorTraversalMut {
+                graph: self.graph,
+                ids: vec![],
+            };
+        };
 
         // 3. Build port info from descriptor
         let inputs: Vec<PortInfo> = descriptor
@@ -54,9 +60,9 @@ impl<'a> TraversalSourceMut<'a> {
         let node_idx = self.graph.add_node(node);
 
         // 7. Return traversal with new node
-        Ok(ProcessorTraversalMut {
+        ProcessorTraversalMut {
             graph: self.graph,
             ids: vec![node_idx],
-        })
+        }
     }
 }
