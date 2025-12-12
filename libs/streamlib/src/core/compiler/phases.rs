@@ -189,7 +189,7 @@ pub(crate) fn start_processor(
 fn spawn_dedicated_thread(
     property_graph: &mut Graph,
     processor_id: impl AsRef<str>,
-    _priority: crate::core::delegates::ThreadPriority,
+    priority: crate::core::delegates::ThreadPriority,
     _name: Option<String>,
 ) -> Result<()> {
     let processor_id = processor_id.as_ref();
@@ -265,6 +265,17 @@ fn spawn_dedicated_thread(
     let thread = std::thread::Builder::new()
         .name(format!("processor-{}", processor_id))
         .spawn(move || {
+            // Apply thread priority (platform-specific)
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let Err(e) = crate::apple::thread_priority::apply_thread_priority(priority) {
+                tracing::warn!(
+                    "[{}] Failed to apply {:?} thread priority: {}",
+                    id_clone,
+                    priority,
+                    e
+                );
+            }
+
             run_processor_loop(
                 id_clone,
                 processor_arc,

@@ -321,7 +321,7 @@ mod tests {
             }
 
             assert!(
-                devices.len() > 0,
+                !devices.is_empty(),
                 "Expected at least one audio input device"
             );
         }

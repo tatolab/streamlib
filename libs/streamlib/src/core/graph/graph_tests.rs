@@ -6,8 +6,6 @@
 //! Tests verify Graph operates as a standalone data structure.
 //! MockProcessor implements the Processor trait to work with add_v.
 
-#![cfg(test)]
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 

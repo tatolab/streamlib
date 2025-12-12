@@ -1,7 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::core::delegates::ThreadPriority;
 use crate::core::{Result, StreamError};
+
+/// Apply thread priority to the current thread based on the specified priority level.
+///
+/// This should be called from within a spawned thread to set its scheduling priority.
+/// - `RealTime`: Uses Mach time-constraint policy for strict latency guarantees
+/// - `High`: Uses POSIX SCHED_RR with elevated priority
+/// - `Normal`: No changes (default OS scheduling)
+pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
+    match priority {
+        ThreadPriority::RealTime => set_realtime_priority(),
+        ThreadPriority::High => set_high_priority(),
+        ThreadPriority::Normal => Ok(()), // No-op for normal priority
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn set_realtime_priority() -> Result<()> {

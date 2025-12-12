@@ -19,10 +19,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use streamlib::core::delegates::ProcessorDelegate;
 use streamlib::core::frames::{AudioChannelCount, AudioFrame};
-use streamlib::core::graph::NodeIndex;
 use streamlib::core::pubsub::{topics, Event, EventListener, ProcessorEvent, PUBSUB};
 use streamlib::core::runtime::{CommitMode, StreamRuntime};
-use streamlib::core::{LinkInput, LinkOutput, Result, RuntimeContext, StreamError};
+use streamlib::core::{
+    InputLinkPortRef, LinkInput, LinkOutput, OutputLinkPortRef, Result, RuntimeContext, StreamError,
+};
 
 // =============================================================================
 // Test Counters
@@ -74,7 +75,7 @@ fn consumer_process_calls() -> u64 {
 // ProducerProcessor - Generates frames continuously
 // -----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Deserialize, Default)]
 pub struct ProducerConfig {
     pub label: String,
 }
@@ -121,7 +122,7 @@ impl ProducerProcessor::Processor {
 // ConsumerProcessor - Receives frames reactively
 // -----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Deserialize, Default)]
 pub struct ConsumerConfig {
     pub label: String,
 }
@@ -161,7 +162,7 @@ impl ConsumerProcessor::Processor {
 // ManualProcessor - Runs its own loop, checks is_paused()
 // -----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Deserialize, Default)]
 pub struct ManualConfig {
     pub label: String,
 }
@@ -381,11 +382,11 @@ fn test_pause_stops_reactive_processor() {
         })
         .expect("Failed to add consumer");
 
-    // Connect them using string format
+    // Connect them
     runtime
         .connect(
-            format!("{}.output", producer),
-            format!("{}.input", consumer),
+            OutputLinkPortRef::new(producer.clone(), "output"),
+            InputLinkPortRef::new(consumer.clone(), "input"),
         )
         .expect("Failed to connect");
 

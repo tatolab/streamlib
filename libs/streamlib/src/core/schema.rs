@@ -521,112 +521,6 @@ impl ProcessorDescriptor {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_semantic_version_compatibility() {
-        let v1_0_0 = SemanticVersion::new(1, 0, 0);
-        let v1_1_0 = SemanticVersion::new(1, 1, 0);
-        let v1_0_1 = SemanticVersion::new(1, 0, 1);
-        let v2_0_0 = SemanticVersion::new(2, 0, 0);
-
-        assert!(v1_1_0.compatible_with(&v1_0_0));
-        assert!(v1_1_0.compatible_with(&v1_1_0));
-
-        assert!(!v1_0_0.compatible_with(&v1_1_0));
-
-        assert!(v1_0_1.compatible_with(&v1_0_0));
-        assert!(v1_0_0.compatible_with(&v1_0_1));
-
-        assert!(!v2_0_0.compatible_with(&v1_0_0));
-        assert!(!v1_0_0.compatible_with(&v2_0_0));
-    }
-
-    #[test]
-    fn test_schema_compatibility() {
-        let schema_v1 = Schema::new(
-            "TestSchema",
-            SemanticVersion::new(1, 0, 0),
-            vec![
-                Field::new("id", FieldType::Int32),
-                Field::new("name", FieldType::String),
-            ],
-            SerializationFormat::Json,
-        );
-
-        let schema_v1_1 = Schema::new(
-            "TestSchema",
-            SemanticVersion::new(1, 1, 0),
-            vec![
-                Field::new("id", FieldType::Int32),
-                Field::new("name", FieldType::String),
-                Field::new("age", FieldType::Int32).optional(),
-            ],
-            SerializationFormat::Json,
-        );
-
-        assert!(schema_v1_1.compatible_with(&schema_v1));
-
-        assert!(!schema_v1.compatible_with(&schema_v1_1));
-    }
-
-    #[test]
-    fn test_field_type_compatibility() {
-        use FieldType::*;
-
-        assert!(Schema::types_compatible(&Int32, &Int32));
-        assert!(!Schema::types_compatible(&Int32, &Int64));
-
-        assert!(Schema::types_compatible(&Optional(Box::new(Int32)), &Int32));
-        assert!(Schema::types_compatible(&Int32, &Optional(Box::new(Int32))));
-
-        assert!(Schema::types_compatible(
-            &Array(Box::new(Int32)),
-            &Array(Box::new(Int32))
-        ));
-        assert!(!Schema::types_compatible(
-            &Array(Box::new(Int32)),
-            &Array(Box::new(Int64))
-        ));
-    }
-
-    #[test]
-    fn test_processor_descriptor_builder() {
-        let descriptor = ProcessorDescriptor::new("TestProcessor", "A test processor")
-            .with_usage_context("Use for testing")
-            .with_tag("test")
-            .with_tag("example");
-
-        assert_eq!(descriptor.name, "TestProcessor");
-        assert_eq!(descriptor.description, "A test processor");
-        assert_eq!(descriptor.usage_context, Some("Use for testing".into()));
-        assert_eq!(descriptor.tags, vec!["test", "example"]);
-    }
-
-    #[test]
-    fn test_schema_serialization() {
-        let schema = Schema::new(
-            "TestSchema",
-            SemanticVersion::new(1, 0, 0),
-            vec![
-                Field::new("id", FieldType::Int32).with_description("Unique identifier"),
-                Field::new("name", FieldType::String).with_description("Name field"),
-            ],
-            SerializationFormat::Json,
-        )
-        .with_description("A test schema");
-
-        let json = schema.to_json().expect("Failed to serialize to JSON");
-        assert!(json.contains("TestSchema"));
-        assert!(json.contains("Unique identifier"));
-
-        let yaml = schema.to_yaml().expect("Failed to serialize to YAML");
-        assert!(yaml.contains("TestSchema"));
-    }
-}
-
 pub static SCHEMA_VIDEO_FRAME: LazyLock<Arc<Schema>> = LazyLock::new(|| {
     Arc::new(
         Schema::new(
@@ -761,3 +655,109 @@ pub static SCHEMA_OBJECT_DETECTIONS: LazyLock<Arc<Schema>> = LazyLock::new(|| {
         ),
     )
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_semantic_version_compatibility() {
+        let v1_0_0 = SemanticVersion::new(1, 0, 0);
+        let v1_1_0 = SemanticVersion::new(1, 1, 0);
+        let v1_0_1 = SemanticVersion::new(1, 0, 1);
+        let v2_0_0 = SemanticVersion::new(2, 0, 0);
+
+        assert!(v1_1_0.compatible_with(&v1_0_0));
+        assert!(v1_1_0.compatible_with(&v1_1_0));
+
+        assert!(!v1_0_0.compatible_with(&v1_1_0));
+
+        assert!(v1_0_1.compatible_with(&v1_0_0));
+        assert!(v1_0_0.compatible_with(&v1_0_1));
+
+        assert!(!v2_0_0.compatible_with(&v1_0_0));
+        assert!(!v1_0_0.compatible_with(&v2_0_0));
+    }
+
+    #[test]
+    fn test_schema_compatibility() {
+        let schema_v1 = Schema::new(
+            "TestSchema",
+            SemanticVersion::new(1, 0, 0),
+            vec![
+                Field::new("id", FieldType::Int32),
+                Field::new("name", FieldType::String),
+            ],
+            SerializationFormat::Json,
+        );
+
+        let schema_v1_1 = Schema::new(
+            "TestSchema",
+            SemanticVersion::new(1, 1, 0),
+            vec![
+                Field::new("id", FieldType::Int32),
+                Field::new("name", FieldType::String),
+                Field::new("age", FieldType::Int32).optional(),
+            ],
+            SerializationFormat::Json,
+        );
+
+        assert!(schema_v1_1.compatible_with(&schema_v1));
+
+        assert!(!schema_v1.compatible_with(&schema_v1_1));
+    }
+
+    #[test]
+    fn test_field_type_compatibility() {
+        use FieldType::*;
+
+        assert!(Schema::types_compatible(&Int32, &Int32));
+        assert!(!Schema::types_compatible(&Int32, &Int64));
+
+        assert!(Schema::types_compatible(&Optional(Box::new(Int32)), &Int32));
+        assert!(Schema::types_compatible(&Int32, &Optional(Box::new(Int32))));
+
+        assert!(Schema::types_compatible(
+            &Array(Box::new(Int32)),
+            &Array(Box::new(Int32))
+        ));
+        assert!(!Schema::types_compatible(
+            &Array(Box::new(Int32)),
+            &Array(Box::new(Int64))
+        ));
+    }
+
+    #[test]
+    fn test_processor_descriptor_builder() {
+        let descriptor = ProcessorDescriptor::new("TestProcessor", "A test processor")
+            .with_usage_context("Use for testing")
+            .with_tag("test")
+            .with_tag("example");
+
+        assert_eq!(descriptor.name, "TestProcessor");
+        assert_eq!(descriptor.description, "A test processor");
+        assert_eq!(descriptor.usage_context, Some("Use for testing".into()));
+        assert_eq!(descriptor.tags, vec!["test", "example"]);
+    }
+
+    #[test]
+    fn test_schema_serialization() {
+        let schema = Schema::new(
+            "TestSchema",
+            SemanticVersion::new(1, 0, 0),
+            vec![
+                Field::new("id", FieldType::Int32).with_description("Unique identifier"),
+                Field::new("name", FieldType::String).with_description("Name field"),
+            ],
+            SerializationFormat::Json,
+        )
+        .with_description("A test schema");
+
+        let json = schema.to_json().expect("Failed to serialize to JSON");
+        assert!(json.contains("TestSchema"));
+        assert!(json.contains("Unique identifier"));
+
+        let yaml = schema.to_yaml().expect("Failed to serialize to YAML");
+        assert!(yaml.contains("TestSchema"));
+    }
+}

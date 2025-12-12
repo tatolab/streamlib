@@ -20,7 +20,6 @@
 #[cfg(target_os = "macos")]
 #[cfg(test)]
 mod whip_client_tests {
-    use http_body_util::BodyExt;
     use streamlib::core::error::Result;
 
     /// Type alias for boxed body used by hyper client
@@ -259,7 +258,7 @@ mod whip_client_tests {
         println!("Step 2: PATCH ICE candidates");
 
         // Simulate ICE candidates in SDP fragment format
-        let ice_candidates = vec![
+        let ice_candidates = [
             "a=candidate:1 1 UDP 2130706431 192.168.1.100 54321 typ host",
             "a=candidate:2 1 UDP 1694498815 203.0.113.1 54322 typ srflx raddr 192.168.1.100 rport 54321",
         ];

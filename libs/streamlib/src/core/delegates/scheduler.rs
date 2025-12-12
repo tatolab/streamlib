@@ -113,8 +113,14 @@ mod tests {
 
     #[test]
     fn test_thread_priority_description() {
-        assert_eq!(ThreadPriority::RealTime.description(), "real-time priority");
-        assert_eq!(ThreadPriority::Normal.description(), "normal priority");
+        assert_eq!(
+            ThreadPriority::RealTime.description(),
+            "Real-time (< 10ms latency, time-constrained)"
+        );
+        assert_eq!(
+            ThreadPriority::Normal.description(),
+            "Normal priority (no strict latency)"
+        );
     }
 
     #[test]

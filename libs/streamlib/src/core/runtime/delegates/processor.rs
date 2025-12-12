@@ -74,7 +74,7 @@ mod tests {
 
         delegate.will_create(&node).unwrap();
         delegate.will_create(&node).unwrap();
-        delegate.will_start(&"test".to_string()).unwrap();
+        delegate.will_start("test").unwrap();
 
         assert_eq!(delegate.create_count.load(Ordering::SeqCst), 2);
         assert_eq!(delegate.start_count.load(Ordering::SeqCst), 1);
