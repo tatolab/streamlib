@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::super::LinkUniqueId;
 use super::super::{GraphEdge, GraphWeight};
 use super::LinkCapacity;
-use super::{LinkEndpoint, LinkState};
+use super::{LinkPortRef, LinkState};
 
 /// Link in the processor graph (connection between two ports) with embedded component storage.
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,9 +16,9 @@ pub struct Link {
     /// Unique link identifier
     pub id: LinkUniqueId,
     /// Source endpoint (output port)
-    pub source: LinkEndpoint,
+    pub source: LinkPortRef,
     /// Target endpoint (input port)
-    pub target: LinkEndpoint,
+    pub target: LinkPortRef,
     /// Ring buffer capacity for the channel.
     #[serde(default)]
     pub capacity: LinkCapacity,
@@ -56,8 +56,8 @@ impl Link {
 
         Self {
             id: LinkUniqueId::new(),
-            source: LinkEndpoint::source(source_node, source_port),
-            target: LinkEndpoint::target(target_node, target_port),
+            source: LinkPortRef::source(source_node, source_port),
+            target: LinkPortRef::target(target_node, target_port),
             capacity,
             state: LinkState::Pending,
             components: ComponentMap::new(),
@@ -69,14 +69,14 @@ impl Link {
         self.state = state;
     }
 
-    /// Get source port address in "node.port" format
-    pub fn from_port(&self) -> String {
-        self.source.to_address()
+    /// Get source endpoint reference.
+    pub fn from_port(&self) -> &LinkPortRef {
+        &self.source
     }
 
-    /// Get target port address in "node.port" format
-    pub fn to_port(&self) -> String {
-        self.target.to_address()
+    /// Get target endpoint reference.
+    pub fn to_port(&self) -> &LinkPortRef {
+        &self.target
     }
 }
 

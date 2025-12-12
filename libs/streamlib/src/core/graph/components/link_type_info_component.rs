@@ -16,7 +16,7 @@ pub struct LinkTypeInfoComponent {
     /// Human-readable type name.
     pub type_name: &'static str,
     /// Ring buffer capacity.
-    pub capacity: usize,
+    pub capacity: LinkCapacity,
 }
 
 impl LinkTypeInfoComponent {

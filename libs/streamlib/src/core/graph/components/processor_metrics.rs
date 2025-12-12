@@ -3,7 +3,6 @@
 
 use serde_json::Value as JsonValue;
 
-use super::Component;
 use super::JsonComponent;
 
 /// Runtime metrics for a processor.

@@ -105,10 +105,10 @@ mod tests {
         let factory = DefaultLinkFactory::new();
 
         let result = factory
-            .create(LinkPortType::Audio, 4)
+            .create(LinkPortType::Audio, 4.into())
             .expect("should create audio link");
 
-        assert_eq!(result.type_info.capacity, 4);
+        assert_eq!(result.type_info.capacity, 4.into());
         assert!(result.type_info.type_name.contains("AudioFrame"));
     }
 
@@ -120,7 +120,7 @@ mod tests {
             .create(LinkPortType::Video, LinkCapacity::from(8))
             .expect("should create video link");
 
-        assert_eq!(result.type_info.capacity, 8);
+        assert_eq!(result.type_info.capacity, 8.into());
         assert!(result.type_info.type_name.contains("VideoFrame"));
     }
 
@@ -132,7 +132,7 @@ mod tests {
             .create(LinkPortType::Data, LinkCapacity::from(16))
             .expect("should create data link");
 
-        assert_eq!(result.type_info.capacity, 16);
+        assert_eq!(result.type_info.capacity, 16.into());
         assert!(result.type_info.type_name.contains("DataFrame"));
     }
 }

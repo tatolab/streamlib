@@ -29,7 +29,7 @@ pub struct LinkInstanceInner<T: LinkPortMessage> {
 
 impl<T: LinkPortMessage> LinkInstanceInner<T> {
     fn new(capacity: LinkCapacity) -> Self {
-        let (producer, consumer) = RingBuffer::new(capacity);
+        let (producer, consumer) = RingBuffer::new(capacity.into());
         Self {
             producer: Mutex::new(producer),
             consumer: Mutex::new(consumer),
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_interleaved_read_write_sequential() {
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-7"), 3);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(3));
 
         // Write 2 frames with timestamps 0, 1
         link.inner.push(AudioFrame::new(

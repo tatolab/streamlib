@@ -364,12 +364,12 @@ impl Compiler {
     /// Phase 1: CREATE - Instantiate processor instances.
     fn phase_create(
         &self,
-        property_graph: &mut Graph,
+        graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
         for proc_id in &delta.processors_to_add {
-            let node = property_graph.get_processor(proc_id).ok_or_else(|| {
+            let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
                 StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
             })?;
 
@@ -385,7 +385,7 @@ impl Compiler {
             super::phases::create_processor(
                 &self.factory,
                 &self.processor_delegate,
-                property_graph,
+                graph,
                 proc_id,
             )?;
 
@@ -402,14 +402,14 @@ impl Compiler {
     /// Phase 2: WIRE - Create ring buffers and connect ports.
     fn phase_wire(
         &self,
-        property_graph: &mut Graph,
+        graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
         for link_id in &delta.links_to_add {
             // Get link info for event - extract what we need then drop the borrow
             let (from_port, to_port) = {
-                let link = property_graph.traversal().e(link_id).first().ok_or_else(|| {
+                let link = graph.traversal().e(link_id).first().ok_or_else(|| {
                     StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
                 })?;
                 (link.from_port().to_string(), link.to_port().to_string())
@@ -423,7 +423,7 @@ impl Compiler {
 
             // Call link delegate will_wire hook
             {
-                let link = property_graph.traversal().e(link_id).first().ok_or_else(|| {
+                let link = graph.traversal().e(link_id).first().ok_or_else(|| {
                     StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
                 })?;
                 self.link_delegate.will_wire(link)?;
@@ -431,11 +431,11 @@ impl Compiler {
 
             tracing::info!("[{}] Wiring {}", CompilePhase::Wire, link_id);
 
-            super::wiring::wire_link(property_graph, self.link_factory.as_ref(), link_id)?;
+            super::wiring::wire_link(graph, self.link_factory.as_ref(), link_id)?;
 
             // Call link delegate did_wire hook
             {
-                let link = property_graph.traversal().e(link_id).first().ok_or_else(|| {
+                let link = graph.traversal().e(link_id).first().ok_or_else(|| {
                     StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
                 })?;
                 self.link_delegate.did_wire(link)?;

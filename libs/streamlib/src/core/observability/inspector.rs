@@ -81,8 +81,8 @@ impl GraphInspector {
     pub fn health(&self) -> GraphHealth {
         let graph = self.graph.read();
 
-        let processor_count = graph.traversal().v(()).count();
-        let link_count = graph.traversal().e(()).count();
+        let processor_count = graph.traversal().v(()).iter().count();
+        let link_count = graph.traversal().e(()).iter().count();
 
         // Aggregate metrics from all processors
         let mut total_dropped = 0u64;
@@ -139,13 +139,13 @@ impl GraphInspector {
     /// Get processor count.
     pub fn processor_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.traversal().v(()).count()
+        graph.traversal().v(()).iter().count()
     }
 
     /// Get link count.
     pub fn link_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.traversal().e(()).count()
+        graph.traversal().e(()).iter().count()
     }
 }
 

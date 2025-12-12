@@ -50,9 +50,13 @@ pub(crate) fn create_processor(
     // Attach components to processor node
     let processor_arc = Arc::new(Mutex::new(processor));
 
-    let node_mut = graph.traversal().v(proc_id).first().ok_or_else(|| {
-        StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
-    })?;
+    let node_mut = graph
+        .traversal_mut()
+        .v(proc_id)
+        .first_mut()
+        .ok_or_else(|| {
+            StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
+        })?;
 
     node_mut.insert(ProcessorInstanceComponent(processor_arc));
     node_mut.insert(ShutdownChannelComponent::new());
@@ -74,13 +78,9 @@ pub(crate) fn setup_processor(
     processor_id: &ProcessorUniqueId,
 ) -> Result<()> {
     // Get processor instance and pause gate
-    let node = graph
-        .traversal()
-        .v(processor_id)
-        .first()
-        .ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
-        })?;
+    let node = graph.traversal().v(processor_id).first().ok_or_else(|| {
+        StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
+    })?;
 
     let instance = node.get::<ProcessorInstanceComponent>().ok_or_else(|| {
         StreamError::NotFound(format!(
@@ -195,9 +195,9 @@ fn spawn_dedicated_thread(
     let processor_id = processor_id.as_ref();
     // Get mutable node and extract all required data
     let node = property_graph
-        .traversal()
+        .traversal_mut()
         .v(processor_id)
-        .first()
+        .first_mut()
         .ok_or_else(|| {
             StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
@@ -279,9 +279,9 @@ fn spawn_dedicated_thread(
 
     // Attach thread handle - need to get node again since we consumed the reference
     let node = property_graph
-        .traversal()
+        .traversal_mut()
         .v(processor_id)
-        .first()
+        .first_mut()
         .ok_or_else(|| {
             StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
@@ -300,7 +300,7 @@ pub fn shutdown_processor(
     processor_id: &ProcessorUniqueId,
 ) -> Result<()> {
     // Check current state and set to stopping
-    let node = match property_graph.traversal().v(processor_id).first() {
+    let node = match property_graph.traversal_mut().v(processor_id).first_mut() {
         Some(n) => n,
         None => return Ok(()), // Processor not found, nothing to shut down
     };

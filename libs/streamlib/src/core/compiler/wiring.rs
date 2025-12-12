@@ -18,6 +18,7 @@ use crate::core::graph::{
 };
 use crate::core::links::{LinkFactoryDelegate, LinkPortType};
 use crate::core::processors::BoxedProcessor;
+use crate::core::ProcessorUniqueId;
 
 /// Wire a link by ID from the graph.
 pub fn wire_link(
@@ -46,9 +47,9 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result
 
     let (from_port, to_port) = {
         let link = property_graph
-            .traversal()
+            .traversal_mut()
             .e(link_id)
-            .first()
+            .first_mut()
             .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
         (link.from_port(), link.to_port())
     };
@@ -101,7 +102,7 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result
     }
 
     // Remove link components and set state to Disconnected
-    if let Some(link) = property_graph.traversal().e(link_id).first() {
+    if let Some(link) = property_graph.traversal_mut().e(link_id).first_mut() {
         link.remove::<LinkInstanceComponent>();
         link.remove::<LinkTypeInfoComponent>();
         link.insert(LinkStateComponent(LinkState::Disconnected));
@@ -112,14 +113,17 @@ pub fn unwire_link(property_graph: &mut Graph, link_id: &LinkUniqueId) -> Result
 }
 
 /// Parse a port address string into (processor_id, port_name).
-pub fn parse_port_address(port: &str) -> Result<(String, String)> {
+pub fn parse_port_address(port: &str) -> Result<(ProcessorUniqueId, String)> {
     let (proc_id, port_name) = port.split_once('.').ok_or_else(|| {
         StreamError::Configuration(format!(
             "Invalid port format '{}'. Expected 'processor_id.port_name'",
             port
         ))
     })?;
-    Ok((proc_id.to_string(), port_name.to_string()))
+    Ok((
+        ProcessorUniqueId::from(proc_id.to_string()),
+        port_name.to_string(),
+    ))
 }
 
 // ============================================================================

@@ -1,11 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use serde::{Deserialize, Serialize};
+
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{LinkDirection, ProcessorUniqueId};
+use std::fmt;
 
 /// Reference to a port on a processor node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkPortRef {
     pub processor_id: ProcessorUniqueId,
     pub port_name: String,
@@ -16,7 +19,7 @@ impl LinkPortRef {
     pub fn output(
         processor_id: impl Into<ProcessorUniqueId>,
         port_name: impl Into<String>,
-    ) -> Self {
+    ) -> Option<Self> {
         Self {
             processor_id: processor_id.into(),
             port_name: port_name.into(),
@@ -32,8 +35,20 @@ impl LinkPortRef {
         }
     }
 
-    pub fn to_address(&self) -> String {
-        format!("{}.{}", self.processor_id, self.port_name)
+    /// Alias for [`Self::output`] - creates a source endpoint for link construction.
+    pub fn source(
+        processor_id: impl Into<ProcessorUniqueId>,
+        port_name: impl Into<String>,
+    ) -> Self {
+        Self::output(processor_id, port_name)
+    }
+
+    /// Alias for [`Self::input`] - creates a target endpoint for link construction.
+    pub fn target(
+        processor_id: impl Into<ProcessorUniqueId>,
+        port_name: impl Into<String>,
+    ) -> Self {
+        Self::input(processor_id, port_name)
     }
 
     pub fn is_output(&self) -> bool {
@@ -87,33 +102,10 @@ impl LinkPortRef {
     }
 }
 
-/// Trait for types that can be converted into a [`LinkPortRef`].
-pub trait IntoLinkPortRef {
-    fn into_link_port_ref(self, direction: LinkDirection) -> Result<LinkPortRef>;
-}
-
-impl IntoLinkPortRef for LinkPortRef {
-    fn into_link_port_ref(self, _direction: LinkDirection) -> Result<LinkPortRef> {
-        // LinkPortRef already has direction, use its own
-        Ok(self)
-    }
-}
-
-impl IntoLinkPortRef for &str {
-    fn into_link_port_ref(self, direction: LinkDirection) -> Result<LinkPortRef> {
-        LinkPortRef::parse(self, direction)
-    }
-}
-
-impl IntoLinkPortRef for String {
-    fn into_link_port_ref(self, direction: LinkDirection) -> Result<LinkPortRef> {
-        LinkPortRef::parse(&self, direction)
-    }
-}
-
-impl IntoLinkPortRef for &String {
-    fn into_link_port_ref(self, direction: LinkDirection) -> Result<LinkPortRef> {
-        LinkPortRef::parse(self, direction)
+impl std::fmt::Display for LinkPortRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Use write! macro to format the output into the formatter 'f'
+        write!(f, "{}.{}", self.processor_id, self.port_name)
     }
 }
 
@@ -128,7 +120,10 @@ mod tests {
         assert_eq!(port.port_name, "video");
         assert!(port.is_output());
         assert!(!port.is_input());
-        assert_eq!(port.to_address(), "camera_0.video");
+        assert_eq!(
+            format!("{}.{}", port.processor_id, port.port_name),
+            "camera_0.video"
+        );
     }
 
     #[test]
@@ -138,7 +133,10 @@ mod tests {
         assert_eq!(port.port_name, "video");
         assert!(port.is_input());
         assert!(!port.is_output());
-        assert_eq!(port.to_address(), "display_0.video");
+        assert_eq!(
+            format!("{}.{}", port.processor_id, port.port_name),
+            "display_0.video"
+        );
     }
 
     #[test]

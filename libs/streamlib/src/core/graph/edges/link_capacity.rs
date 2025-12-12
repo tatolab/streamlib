@@ -14,10 +14,26 @@ impl LinkCapacity {
     pub fn get(&self) -> usize {
         self.0
     }
+    pub fn index(&self) -> usize {
+        self.0
+    }
 }
 
 impl From<usize> for LinkCapacity {
     fn from(value: usize) -> Self {
         Self(value)
+    }
+}
+
+impl From<LinkCapacity> for usize {
+    fn from(cap: LinkCapacity) -> Self {
+        cap.0
+    }
+}
+
+impl std::ops::Deref for LinkCapacity {
+    type Target = usize;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
