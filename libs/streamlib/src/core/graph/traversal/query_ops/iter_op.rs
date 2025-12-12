@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal,
-    ProcessorTraversalMut,
+    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
 
 // =============================================================================

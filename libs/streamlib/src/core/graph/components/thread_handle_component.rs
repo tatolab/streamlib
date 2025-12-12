@@ -5,12 +5,12 @@ use std::thread::JoinHandle;
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Thread handle for dedicated-thread processors.
 pub struct ThreadHandleComponent(pub JoinHandle<()>);
 
-impl JsonComponent for ThreadHandleComponent {
+impl JsonSerializableComponent for ThreadHandleComponent {
     fn json_key(&self) -> &'static str {
         "thread_handle"
     }

@@ -3,7 +3,7 @@
 
 use serde_json::Value as JsonValue;
 
-pub trait JsonComponent {
+pub trait JsonSerializableComponent {
     /// The component's key in the JSON output.
     fn json_key(&self) -> &'static str;
 

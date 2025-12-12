@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Lock-free pause gate for processors.
 ///
@@ -66,7 +66,7 @@ impl Clone for ProcessorPauseGateComponent {
     }
 }
 
-impl JsonComponent for ProcessorPauseGateComponent {
+impl JsonSerializableComponent for ProcessorPauseGateComponent {
     fn json_key(&self) -> &'static str {
         "paused"
     }

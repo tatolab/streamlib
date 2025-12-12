@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 use crate::core::processors::ProcessorState;
 
 /// Current state of the processor.
@@ -18,7 +18,7 @@ impl Default for StateComponent {
     }
 }
 
-impl JsonComponent for StateComponent {
+impl JsonSerializableComponent for StateComponent {
     fn json_key(&self) -> &'static str {
         "state"
     }

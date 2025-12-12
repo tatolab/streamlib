@@ -13,9 +13,9 @@ use parking_lot::Mutex;
 use crate::core::error::{Result, StreamError};
 use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{
-    Graph, GraphEdge, GraphNode, InputLinkPortRef, LinkInstanceComponent,
-    LinkOutputToProcessorWriterAndReader, LinkState, LinkStateComponent, LinkTypeInfoComponent,
-    LinkUniqueId, OutputLinkPortRef, ProcessorInstanceComponent,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef,
+    LinkInstanceComponent, LinkOutputToProcessorWriterAndReader, LinkState, LinkStateComponent,
+    LinkTypeInfoComponent, LinkUniqueId, OutputLinkPortRef, ProcessorInstanceComponent,
 };
 use crate::core::links::{LinkFactoryDelegate, LinkPortType};
 use crate::core::processors::BoxedProcessor;

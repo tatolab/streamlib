@@ -58,6 +58,12 @@ impl From<String> for LinkUniqueId {
     }
 }
 
+impl From<&String> for LinkUniqueId {
+    fn from(s: &String) -> Self {
+        Self(s.clone())
+    }
+}
+
 impl From<&str> for LinkUniqueId {
     fn from(s: &str) -> Self {
         Self(s.to_string())

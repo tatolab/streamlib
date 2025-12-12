@@ -17,9 +17,9 @@ use crate::core::delegates::{
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNode, GraphState, LinkOutputToProcessorWriterAndReader, ProcessorInstanceComponent,
-    ProcessorPauseGateComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
-    ThreadHandleComponent,
+    Graph, GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader,
+    ProcessorInstanceComponent, ProcessorPauseGateComponent, ProcessorUniqueId,
+    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
 

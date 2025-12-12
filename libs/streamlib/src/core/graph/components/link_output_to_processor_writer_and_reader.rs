@@ -4,7 +4,7 @@
 use crossbeam_channel::{Receiver, Sender};
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 use crate::core::links::LinkOutputToProcessorMessage;
 
 /// Writer and reader pair for messages from LinkOutput to this processor.
@@ -35,7 +35,7 @@ impl Default for LinkOutputToProcessorWriterAndReader {
     }
 }
 
-impl JsonComponent for LinkOutputToProcessorWriterAndReader {
+impl JsonSerializableComponent for LinkOutputToProcessorWriterAndReader {
     fn json_key(&self) -> &'static str {
         "link_output_to_processor_channel"
     }

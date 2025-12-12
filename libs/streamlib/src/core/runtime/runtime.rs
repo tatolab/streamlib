@@ -13,7 +13,8 @@ use crate::core::compiler::{
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::graph::{
-    Graph, GraphEdge, GraphNode, GraphState, Link, LinkUniqueId, ProcessorNode, ProcessorUniqueId,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphState, Link, LinkUniqueId,
+    ProcessorNode, ProcessorUniqueId,
 };
 
 use crate::core::processors::Processor;

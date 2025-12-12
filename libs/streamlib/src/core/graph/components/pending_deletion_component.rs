@@ -3,7 +3,7 @@
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Marker component indicating an entity is pending deletion (soft-delete).
 ///
@@ -17,7 +17,7 @@ use super::JsonComponent;
 /// is scheduled for removal but not yet fully deleted.
 pub struct PendingDeletionComponent;
 
-impl JsonComponent for PendingDeletionComponent {
+impl JsonSerializableComponent for PendingDeletionComponent {
     fn json_key(&self) -> &'static str {
         "pending_deletion"
     }

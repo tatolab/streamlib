@@ -17,10 +17,7 @@ impl InputLinkPortRef {
     /// Direction is always Input for input ports.
     pub const DIRECTION: LinkDirection = LinkDirection::Input;
 
-    pub fn new(
-        processor_id: impl Into<ProcessorUniqueId>,
-        port_name: impl Into<String>,
-    ) -> Self {
+    pub fn new(processor_id: impl Into<ProcessorUniqueId>, port_name: impl Into<String>) -> Self {
         Self {
             processor_id: processor_id.into(),
             port_name: port_name.into(),

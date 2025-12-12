@@ -4,7 +4,7 @@
 use crossbeam_channel::{Receiver, Sender};
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Channel to signal processor shutdown.
 pub struct ShutdownChannelComponent {
@@ -34,7 +34,7 @@ impl Default for ShutdownChannelComponent {
     }
 }
 
-impl JsonComponent for ShutdownChannelComponent {
+impl JsonSerializableComponent for ShutdownChannelComponent {
     fn json_key(&self) -> &'static str {
         "shutdown_channel"
     }

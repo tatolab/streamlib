@@ -3,12 +3,12 @@
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Lightweight processors (no dedicated resources).
 pub struct ExecutionLightweightComponent;
 
-impl JsonComponent for ExecutionLightweightComponent {
+impl JsonSerializableComponent for ExecutionLightweightComponent {
     fn json_key(&self) -> &'static str {
         "execution_lightweight"
     }

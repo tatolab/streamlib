@@ -3,12 +3,12 @@
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Processors using Rayon work-stealing pool.
 pub struct ExecutionRayonPoolComponent;
 
-impl JsonComponent for ExecutionRayonPoolComponent {
+impl JsonSerializableComponent for ExecutionRayonPoolComponent {
     fn json_key(&self) -> &'static str {
         "execution_rayon_pool"
     }

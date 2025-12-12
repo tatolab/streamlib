@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::graph::{
-    Component, GraphEdge, GraphNode, LinkTraversal, LinkTraversalMut, ProcessorTraversal,
-    ProcessorTraversalMut,
+    Component, GraphEdgeWithComponents, GraphNodeWithComponents, LinkTraversal, LinkTraversalMut,
+    ProcessorTraversal, ProcessorTraversalMut,
 };
 
 impl<'a> ProcessorTraversal<'a> {

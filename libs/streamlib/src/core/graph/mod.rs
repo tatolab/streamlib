@@ -6,13 +6,16 @@ mod data_structure;
 
 mod edges;
 mod nodes;
-mod traversal;
 mod traits;
+mod traversal;
 mod validation;
+
+#[cfg(test)]
+mod graph_tests;
 
 // top level
 pub use data_structure::{Graph, GraphState};
-pub use traits::{GraphEdge, GraphNode, GraphWeight};
+pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
 
 pub use components::*;

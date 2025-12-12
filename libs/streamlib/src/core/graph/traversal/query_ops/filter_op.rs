@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::graph::{Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut};
+use crate::core::graph::{
+    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+};
 
 impl<'a> ProcessorTraversal<'a> {
     pub fn filter(self, predicate: impl Fn(&ProcessorNode) -> bool) -> ProcessorTraversal<'a> {

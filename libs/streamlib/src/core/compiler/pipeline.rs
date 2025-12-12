@@ -10,7 +10,7 @@ use crate::core::compiler::phase::{CompilePhase, CompileResult};
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::{Graph, GraphNode, ProcessorUniqueId};
+use crate::core::graph::{Graph, GraphNodeWithComponents, ProcessorUniqueId};
 use crate::core::links::{DefaultLinkFactory, LinkFactoryDelegate};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::runtime::delegates::{
@@ -548,7 +548,9 @@ impl Compiler {
 
     /// Start all processors that have been compiled but not yet started.
     pub fn start_all_processors(&self, property_graph: &mut Graph) -> Result<()> {
-        use crate::core::graph::{GraphNode, ProcessorInstanceComponent, ThreadHandleComponent};
+        use crate::core::graph::{
+            GraphNodeWithComponents, ProcessorInstanceComponent, ThreadHandleComponent,
+        };
 
         // Find all processors with ProcessorInstance but no ThreadHandle (compiled but not started)
         let processors_to_start: Vec<ProcessorUniqueId> = property_graph

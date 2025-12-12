@@ -3,13 +3,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::super::components::{default_components, Component, ComponentMap};
-use super::super::{GraphNode, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
+use super::super::components::{
+    default_component_serializers, default_components, ComponentMap, ComponentSerializer,
+};
+use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
 use crate::core::utils::compute_json_checksum;
 
 /// Node in the processor graph with embedded component storage.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ProcessorNode {
     pub id: ProcessorUniqueId,
     #[serde(rename = "type")]
@@ -20,9 +22,12 @@ pub struct ProcessorNode {
     #[serde(default)]
     pub config_checksum: u64,
     pub ports: ProcessorNodePorts,
-    /// Runtime components (not serialized).
+    /// Runtime components (not serialized by derive, but via serialize_components).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
+    /// Serializers for each inserted component type.
+    #[serde(skip, default = "default_component_serializers")]
+    component_serializers: Vec<ComponentSerializer>,
 }
 
 impl PartialEq for ProcessorNode {
@@ -37,6 +42,19 @@ impl PartialEq for ProcessorNode {
 }
 
 impl Eq for ProcessorNode {}
+
+impl std::fmt::Debug for ProcessorNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProcessorNode")
+            .field("id", &self.id)
+            .field("processor_type", &self.processor_type)
+            .field("config", &self.config)
+            .field("config_checksum", &self.config_checksum)
+            .field("ports", &self.ports)
+            // Skip: components, component_serializers (runtime-only)
+            .finish()
+    }
+}
 
 impl ProcessorNode {
     /// Create a new processor node. The ID is generated automatically using cuid2.
@@ -56,6 +74,7 @@ impl ProcessorNode {
             config_checksum,
             ports: ProcessorNodePorts { inputs, outputs },
             components: ComponentMap::new(),
+            component_serializers: Vec::new(),
         }
     }
 
@@ -136,24 +155,20 @@ impl GraphWeight for ProcessorNode {
     }
 }
 
-impl GraphNode for ProcessorNode {
-    fn insert<C: Component>(&mut self, component: C) {
-        self.components.insert(component);
+impl GraphNodeWithComponents for ProcessorNode {
+    fn components(&self) -> &ComponentMap {
+        &self.components
     }
 
-    fn get<C: Component>(&self) -> Option<&C> {
-        self.components.get::<C>()
+    fn components_mut(&mut self) -> &mut ComponentMap {
+        &mut self.components
     }
 
-    fn get_mut<C: Component>(&mut self) -> Option<&mut C> {
-        self.components.get_mut::<C>()
+    fn component_serializers(&self) -> &[ComponentSerializer] {
+        &self.component_serializers
     }
 
-    fn remove<C: Component>(&mut self) -> Option<C> {
-        self.components.remove::<C>()
-    }
-
-    fn has<C: Component>(&self) -> bool {
-        self.components.contains::<C>()
+    fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer> {
+        &mut self.component_serializers
     }
 }

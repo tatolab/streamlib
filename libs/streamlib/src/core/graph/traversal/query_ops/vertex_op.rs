@@ -35,7 +35,9 @@ mod private {
 
 use petgraph::visit::IntoNodeReferences;
 
-use crate::core::graph::{ProcessorTraversal, ProcessorTraversalMut, TraversalSource, TraversalSourceMut};
+use crate::core::graph::{
+    ProcessorTraversal, ProcessorTraversalMut, TraversalSource, TraversalSourceMut,
+};
 
 impl<'a> TraversalSource<'a> {
     /// Start traversal from vertices.

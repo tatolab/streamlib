@@ -1,17 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::super::components::default_components;
-use crate::core::graph::ComponentMap;
 use serde::{Deserialize, Serialize};
 
+use super::super::components::{
+    default_component_serializers, default_components, ComponentMap, ComponentSerializer,
+};
 use super::super::LinkUniqueId;
-use super::super::{GraphEdge, GraphWeight};
+use super::super::{GraphEdgeWithComponents, GraphWeight};
 use super::LinkCapacity;
 use super::{InputLinkPortRef, LinkState, OutputLinkPortRef};
 
 /// Link in the processor graph (connection between two ports) with embedded component storage.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Link {
     /// Unique link identifier
     pub id: LinkUniqueId,
@@ -25,9 +26,12 @@ pub struct Link {
     /// Current state of the link.
     #[serde(default)]
     pub state: LinkState,
-    /// Runtime components (not serialized).
+    /// Runtime components (not serialized by derive, but via serialize_components).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
+    /// Serializers for each inserted component type.
+    #[serde(skip, default = "default_component_serializers")]
+    component_serializers: Vec<ComponentSerializer>,
 }
 
 impl PartialEq for Link {
@@ -42,6 +46,19 @@ impl PartialEq for Link {
 }
 
 impl Eq for Link {}
+
+impl std::fmt::Debug for Link {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Link")
+            .field("id", &self.id)
+            .field("source", &self.source)
+            .field("target", &self.target)
+            .field("capacity", &self.capacity)
+            .field("state", &self.state)
+            // Skip: components, component_serializers (runtime-only)
+            .finish()
+    }
+}
 
 impl Link {
     /// Create a new link from port addresses with default capacity. ID is generated automatically.
@@ -61,6 +78,7 @@ impl Link {
             capacity,
             state: LinkState::Pending,
             components: ComponentMap::new(),
+            component_serializers: Vec::new(),
         }
     }
 
@@ -86,24 +104,20 @@ impl GraphWeight for Link {
     }
 }
 
-impl GraphEdge for Link {
-    fn insert<C: Send + Sync + 'static>(&mut self, component: C) {
-        self.components.insert(component);
+impl GraphEdgeWithComponents for Link {
+    fn components(&self) -> &ComponentMap {
+        &self.components
     }
 
-    fn get<C: Send + Sync + 'static>(&self) -> Option<&C> {
-        self.components.get::<C>()
+    fn components_mut(&mut self) -> &mut ComponentMap {
+        &mut self.components
     }
 
-    fn get_mut<C: Send + Sync + 'static>(&mut self) -> Option<&mut C> {
-        self.components.get_mut::<C>()
+    fn component_serializers(&self) -> &[ComponentSerializer] {
+        &self.component_serializers
     }
 
-    fn remove<C: Send + Sync + 'static>(&mut self) -> Option<C> {
-        self.components.remove::<C>()
-    }
-
-    fn has<C: Send + Sync + 'static>(&self) -> bool {
-        self.components.contains::<C>()
+    fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer> {
+        &mut self.component_serializers
     }
 }

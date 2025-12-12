@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::graph::{LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut};
+use crate::core::graph::{
+    LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut,
+};
 
 impl<'a> ProcessorTraversal<'a> {
     /// Returns true if the traversal contains any nodes.

@@ -3,7 +3,7 @@
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Runtime metrics for a processor.
 #[derive(Default, Clone)]
@@ -20,7 +20,7 @@ pub struct ProcessorMetrics {
     pub frames_dropped: u64,
 }
 
-impl JsonComponent for ProcessorMetrics {
+impl JsonSerializableComponent for ProcessorMetrics {
     fn json_key(&self) -> &'static str {
         "metrics"
     }

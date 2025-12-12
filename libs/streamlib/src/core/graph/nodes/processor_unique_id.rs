@@ -60,6 +60,12 @@ impl From<String> for ProcessorUniqueId {
     }
 }
 
+impl From<&String> for ProcessorUniqueId {
+    fn from(s: &String) -> Self {
+        Self(s.clone())
+    }
+}
+
 impl From<&str> for ProcessorUniqueId {
     fn from(s: &str) -> Self {
         Self(s.to_string())

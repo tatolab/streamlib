@@ -6,13 +6,13 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 use crate::core::processors::BoxedProcessor;
 
 /// The instantiated processor instance.
 pub struct ProcessorInstanceComponent(pub Arc<Mutex<BoxedProcessor>>);
 
-impl JsonComponent for ProcessorInstanceComponent {
+impl JsonSerializableComponent for ProcessorInstanceComponent {
     fn json_key(&self) -> &'static str {
         "processor_instance"
     }

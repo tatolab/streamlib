@@ -7,7 +7,7 @@ use serde_json::Value as JsonValue;
 
 use crate::core::graph::LinkCapacity;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// ECS component storing link type information for debugging and validation.
 pub struct LinkTypeInfoComponent {
@@ -30,7 +30,7 @@ impl LinkTypeInfoComponent {
     }
 }
 
-impl JsonComponent for LinkTypeInfoComponent {
+impl JsonSerializableComponent for LinkTypeInfoComponent {
     fn json_key(&self) -> &'static str {
         "type_info"
     }

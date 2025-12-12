@@ -22,6 +22,64 @@ See [LICENSE](LICENSE) and [docs/license/](docs/license/) for full terms.
 
 ---
 
+## 🚨 ABSOLUTE RESTRICTIONS - READ FIRST 🚨
+
+**Claude Code operates as a CODE HELPER ONLY. The user is the principal architect and implementor.**
+
+### BANNED Actions (Applies to ALL files in the codebase):
+
+1. **NO NEW ABSTRACTIONS**: You are BANNED from creating:
+   - New helper methods
+   - New utility functions
+   - New structs
+   - New traits
+   - New modules
+   - Any abstraction "for convenience"
+
+2. **NO DRY REFACTORING**: Do NOT follow the DRY principle. Duplicate code is acceptable. Do NOT extract common code into helpers.
+
+3. **NO AUTO-FIXING**: After running `cargo check`, `cargo test`, `cargo clippy`, etc.:
+   - Report errors/warnings to the user
+   - Do NOT automatically fix them
+   - Wait for explicit instructions on what to fix
+
+4. **SCOPE RESTRICTIONS**:
+   - You may ONLY modify code within the exact scope of your current task
+   - Before editing ANY file outside the immediate scope: **STOP and ask permission**
+   - Before making changes that affect other files: **STOP and ask permission**
+
+5. **MODIFICATION LIMITS**:
+   - Simple in-method fixes: Allowed
+   - Rewriting a file or large sections: **STOP and summarize your plan first**
+   - Adding new public API: **STOP and get approval**
+   - Changing existing signatures: **STOP and get approval**
+
+### When You Think You Need Something Banned:
+
+If you believe a new struct, trait, helper, or abstraction is genuinely required, you MUST:
+
+1. **STOP IMMEDIATELY** - Do not implement it
+2. Provide:
+   - **Why**: Description of the problem
+   - **What**: What you want to create
+   - **Example**: Code example of what it would look like
+   - **Changes**: What existing code would change
+   - **Risks**: Potential issues or breaking changes
+3. **WAIT** for explicit approval before proceeding
+
+### Violations of These Rules Are Unacceptable
+
+Previous violations included:
+- Creating "helper" traits that bypass the API
+- Adding structs "for convenience"
+- Refactoring to reduce duplication without permission
+- Auto-fixing test failures
+- Modifying files outside the requested scope
+
+**These rules override ALL other instructions in this document.**
+
+---
+
 ## ⚠️ CRITICAL IMPLEMENTATION INSTRUCTIONS FOR CLAUDE CODE ⚠️
 
 This document is a **complete implementation specification**. You MUST follow it exactly as written.
@@ -99,8 +157,37 @@ Use the `/refine-name` command to get suggestions that follow this pattern. The 
 3. ❌ Methods that do nothing: `fn foo() { /* no-op */ }`
 4. ❌ Compatibility shims for "old code" in new implementations
 5. ❌ Bypassing type safety "just to make it compile"
+6. ❌ Modifying source code to make tests work (tests must adapt to the API, not vice versa)
+7. ❌ Adding `#[cfg(test)]` to any source file (only the user may add test-only code to source)
 
 **Instead**: Stop, explain the problem, present options, and wait for guidance.
+
+**For testing issues**: When you encounter a situation where the existing API doesn't support what you need to test, STOP and ask the user. Provide:
+1. What you're trying to test
+2. What the current API requires
+3. Why this is a problem
+4. Potential options (without implementing them)
+
+### Test Philosophy - CRITICAL
+
+**Tests are a GATING FUNCTION, not a goal.**
+
+The purpose of running tests is NOT to "get them passing." The API is actively evolving, and tests serve to:
+1. **Identify cracks** - Where does the current API fall short?
+2. **Surface missing pieces** - What's not implemented yet?
+3. **Validate design decisions** - Does the API feel right when used?
+
+**When tests fail:**
+1. **DO NOT** automatically fix the test or the code
+2. **DO NOT** add workarounds to make tests pass
+3. **DO** report the failure clearly
+4. **DO** analyze what the failure reveals about the API
+5. **DO** think carefully about the implications
+6. **DO** present options and wait for direction
+
+**The correct response to a failing test is analysis, not action.**
+
+Ask: "What is this failure telling us about the design?" - not "How do I make this pass?"
 
 ### Documentation Standards - MANDATORY
 

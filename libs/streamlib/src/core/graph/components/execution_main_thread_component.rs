@@ -3,12 +3,12 @@
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 
 /// Processors that must run on main thread (Apple frameworks).
 pub struct ExecutionMainThreadComponent;
 
-impl JsonComponent for ExecutionMainThreadComponent {
+impl JsonSerializableComponent for ExecutionMainThreadComponent {
     fn json_key(&self) -> &'static str {
         "execution_main_thread"
     }

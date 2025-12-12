@@ -3,7 +3,7 @@
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 use crate::core::links::BoxedLinkInstance;
 
 /// ECS component storing the link instance (ring buffer ownership).
@@ -12,7 +12,7 @@ use crate::core::links::BoxedLinkInstance;
 /// and all handles (data writers/readers) gracefully degrade.
 pub struct LinkInstanceComponent(pub BoxedLinkInstance);
 
-impl JsonComponent for LinkInstanceComponent {
+impl JsonSerializableComponent for LinkInstanceComponent {
     fn json_key(&self) -> &'static str {
         "buffer"
     }

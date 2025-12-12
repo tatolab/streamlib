@@ -3,7 +3,7 @@
 
 use serde_json::Value as JsonValue;
 
-use super::JsonComponent;
+use super::JsonSerializableComponent;
 use crate::core::graph::edges::LinkState;
 
 pub struct LinkStateComponent(pub LinkState);
@@ -14,7 +14,7 @@ impl Default for LinkStateComponent {
     }
 }
 
-impl JsonComponent for LinkStateComponent {
+impl JsonSerializableComponent for LinkStateComponent {
     fn json_key(&self) -> &'static str {
         "state"
     }

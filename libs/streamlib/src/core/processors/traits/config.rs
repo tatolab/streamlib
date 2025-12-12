@@ -34,7 +34,10 @@ impl std::fmt::Display for ConfigValidationError {
         match self {
             Self::SerializationFailed(e) => write!(f, "Config serialization failed: {}", e),
             Self::DeserializationFailed(e) => write!(f, "Config deserialization failed: {}", e),
-            Self::RoundTripMismatch => write!(f, "Config round-trip mismatch: some fields may be skipped during serialization"),
+            Self::RoundTripMismatch => write!(
+                f,
+                "Config round-trip mismatch: some fields may be skipped during serialization"
+            ),
         }
     }
 }
@@ -42,4 +45,7 @@ impl std::fmt::Display for ConfigValidationError {
 impl std::error::Error for ConfigValidationError {}
 
 /// Blanket implementation for all types meeting the requirements.
-impl<T> Config for T where T: Send + Sync + 'static + Default + Serialize + DeserializeOwned + PartialEq {}
+impl<T> Config for T where
+    T: Send + Sync + 'static + Default + Serialize + DeserializeOwned + PartialEq
+{
+}
