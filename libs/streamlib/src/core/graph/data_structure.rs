@@ -21,10 +21,6 @@ pub enum GraphState {
     Stopping,
 }
 
-/// Checksum of a graph's structure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GraphChecksum(pub u64);
-
 /// Unified graph with topology and embedded component storage.
 ///
 /// All access goes through the query interface:
@@ -36,9 +32,6 @@ pub struct Graph {
 
     /// When the graph was last compiled.
     compiled_at: Option<Instant>,
-
-    /// Checksum of the source graph at compile time.
-    source_checksum: Option<GraphChecksum>,
 
     /// Graph-level state.
     state: GraphState,
@@ -63,7 +56,6 @@ impl Graph {
         Self {
             digraph: DiGraph::new(),
             compiled_at: None,
-            source_checksum: None,
             state: GraphState::Idle,
         }
     }
@@ -80,20 +72,6 @@ impl Graph {
     /// Start a mutable traversal on the graph.
     pub fn traversal_mut(&mut self) -> TraversalSourceMut<'_> {
         TraversalSourceMut::new(&mut self.digraph)
-    }
-
-    // =========================================================================
-    // Direct DiGraph Access (for query builders)
-    // =========================================================================
-
-    /// Get read access to the underlying DiGraph.
-    pub(crate) fn digraph(&self) -> &DiGraph<ProcessorNode, Link> {
-        &self.digraph
-    }
-
-    /// Get mutable access to the underlying DiGraph.
-    pub(crate) fn digraph_mut(&mut self) -> &mut DiGraph<ProcessorNode, Link> {
-        &mut self.digraph
     }
 
     // =========================================================================
@@ -115,16 +93,14 @@ impl Graph {
         self.compiled_at
     }
 
-    /// Mark as compiled with current checksum.
+    /// Mark as compiled.
     pub fn mark_compiled(&mut self) {
         self.compiled_at = Some(Instant::now());
-        // TODO: implement checksum
-        // self.source_checksum = Some(self.checksum());
     }
 
     /// Check if recompilation is needed.
     pub fn needs_recompile(&self) -> bool {
-        // TODO: implement checksum comparison
+        // TODO: implement checksum-based change detection
         true
     }
 }
