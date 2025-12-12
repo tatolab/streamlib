@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal,
+    ProcessorTraversalMut,
 };
-use petgraph::graph::{EdgeIndex, NodeIndex};
 
 // =============================================================================
 // ProcessorTraversal (immutable)
@@ -13,31 +13,6 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 impl<'a> ProcessorTraversal<'a> {
     pub fn iter(self) -> impl Iterator<Item = &'a ProcessorNode> {
         self.into_iter()
-    }
-
-    pub fn first(self) -> Option<&'a ProcessorNode> {
-        self.ids
-            .into_iter()
-            .next()
-            .and_then(|idx| self.graph.node_weight(idx))
-    }
-
-    pub fn last(self) -> Option<&'a ProcessorNode> {
-        self.ids
-            .into_iter()
-            .last()
-            .and_then(|idx| self.graph.node_weight(idx))
-    }
-
-    pub fn nth(self, n: usize) -> Option<&'a ProcessorNode> {
-        self.ids
-            .into_iter()
-            .nth(n)
-            .and_then(|idx| self.graph.node_weight(idx))
-    }
-
-    pub fn node_ids(self) -> Vec<NodeIndex> {
-        self.ids
     }
 }
 
@@ -62,31 +37,6 @@ impl<'a> LinkTraversal<'a> {
     pub fn iter(self) -> impl Iterator<Item = &'a Link> {
         self.into_iter()
     }
-
-    pub fn first(self) -> Option<&'a Link> {
-        self.ids
-            .into_iter()
-            .next()
-            .and_then(|idx| self.graph.edge_weight(idx))
-    }
-
-    pub fn last(self) -> Option<&'a Link> {
-        self.ids
-            .into_iter()
-            .last()
-            .and_then(|idx| self.graph.edge_weight(idx))
-    }
-
-    pub fn nth(self, n: usize) -> Option<&'a Link> {
-        self.ids
-            .into_iter()
-            .nth(n)
-            .and_then(|idx| self.graph.edge_weight(idx))
-    }
-
-    pub fn edge_ids(self) -> Vec<EdgeIndex> {
-        self.ids
-    }
 }
 
 impl<'a> IntoIterator for LinkTraversal<'a> {
@@ -110,31 +60,6 @@ impl<'a> ProcessorTraversalMut<'a> {
     pub fn iter(self) -> impl Iterator<Item = &'a ProcessorNode> {
         self.into_iter()
     }
-
-    pub fn first(self) -> Option<&'a ProcessorNode> {
-        self.ids
-            .into_iter()
-            .next()
-            .and_then(|idx| self.graph.node_weight(idx))
-    }
-
-    pub fn last(self) -> Option<&'a ProcessorNode> {
-        self.ids
-            .into_iter()
-            .last()
-            .and_then(|idx| self.graph.node_weight(idx))
-    }
-
-    pub fn nth(self, n: usize) -> Option<&'a ProcessorNode> {
-        self.ids
-            .into_iter()
-            .nth(n)
-            .and_then(|idx| self.graph.node_weight(idx))
-    }
-
-    pub fn node_ids(self) -> Vec<NodeIndex> {
-        self.ids
-    }
 }
 
 impl<'a> IntoIterator for ProcessorTraversalMut<'a> {
@@ -157,31 +82,6 @@ impl<'a> IntoIterator for ProcessorTraversalMut<'a> {
 impl<'a> LinkTraversalMut<'a> {
     pub fn iter(self) -> impl Iterator<Item = &'a Link> {
         self.into_iter()
-    }
-
-    pub fn first(self) -> Option<&'a Link> {
-        self.ids
-            .into_iter()
-            .next()
-            .and_then(|idx| self.graph.edge_weight(idx))
-    }
-
-    pub fn last(self) -> Option<&'a Link> {
-        self.ids
-            .into_iter()
-            .last()
-            .and_then(|idx| self.graph.edge_weight(idx))
-    }
-
-    pub fn nth(self, n: usize) -> Option<&'a Link> {
-        self.ids
-            .into_iter()
-            .nth(n)
-            .and_then(|idx| self.graph.edge_weight(idx))
-    }
-
-    pub fn edge_ids(self) -> Vec<EdgeIndex> {
-        self.ids
     }
 }
 

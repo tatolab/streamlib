@@ -4,4 +4,3 @@
 mod add_e_op;
 mod add_v_op;
 mod drop_op;
-mod iter_mut_op;
