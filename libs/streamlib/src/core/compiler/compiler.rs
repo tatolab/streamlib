@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
+use crate::core::compiler::compilation_plan::CompilationPlan;
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
@@ -116,11 +117,7 @@ impl Compiler {
         // =====================================================================
         // 1. Validate and categorize operations
         // =====================================================================
-        let mut processors_to_add = Vec::new();
-        let mut processors_to_remove = Vec::new();
-        let mut links_to_add = Vec::new();
-        let mut links_to_remove = Vec::new();
-        let mut config_updates = Vec::new();
+        let mut plan = CompilationPlan::default();
 
         for op in operations {
             match op {
@@ -144,7 +141,7 @@ impl Compiler {
                     if pending_deletion {
                         tracing::debug!("AddProcessor({}): pending deletion, skipping add", id);
                     } else if exists && !running {
-                        processors_to_add.push(id);
+                        plan.processors_to_add.push(id);
                     } else if !exists {
                         tracing::warn!("AddProcessor({}): not in graph, skipping", id);
                     } else {
@@ -152,7 +149,7 @@ impl Compiler {
                     }
                 }
                 PendingOperation::RemoveProcessor(id) => {
-                    processors_to_remove.push(id);
+                    plan.processors_to_remove.push(id);
                 }
                 PendingOperation::AddLink(id) => {
                     let graph = graph_arc.read();
@@ -169,7 +166,7 @@ impl Compiler {
                     if pending_deletion {
                         tracing::debug!("AddLink({}): pending deletion, skipping add", id);
                     } else if exists && !wired {
-                        links_to_add.push(id);
+                        plan.links_to_add.push(id);
                     } else if !exists {
                         tracing::warn!("AddLink({}): not in graph, skipping", id);
                     } else {
@@ -177,32 +174,27 @@ impl Compiler {
                     }
                 }
                 PendingOperation::RemoveLink(id) => {
-                    links_to_remove.push(id);
+                    plan.links_to_remove.push(id);
                 }
                 PendingOperation::UpdateProcessorConfig(id) => {
-                    config_updates.push(id);
+                    plan.config_updates.push(id);
                 }
             }
         }
 
         // Early return if nothing to do
-        if processors_to_add.is_empty()
-            && processors_to_remove.is_empty()
-            && links_to_add.is_empty()
-            && links_to_remove.is_empty()
-            && config_updates.is_empty()
-        {
+        if plan.is_empty() {
             tracing::debug!("No changes to compile");
             return Ok(());
         }
 
         tracing::info!(
             "Compiling: +{} -{} processors, +{} -{} links, {} config updates",
-            processors_to_add.len(),
-            processors_to_remove.len(),
-            links_to_add.len(),
-            links_to_remove.len(),
-            config_updates.len(),
+            plan.processors_to_add.len(),
+            plan.processors_to_remove.len(),
+            plan.links_to_add.len(),
+            plan.links_to_remove.len(),
+            plan.config_updates.len(),
         );
 
         // Publish compile start event
@@ -214,15 +206,15 @@ impl Compiler {
         // =====================================================================
         // 2. Handle removals FIRST (before adding new processors)
         // =====================================================================
-        if !links_to_remove.is_empty() || !processors_to_remove.is_empty() {
+        if !plan.links_to_remove.is_empty() || !plan.processors_to_remove.is_empty() {
             tracing::debug!(
                 "[commit] Removing {} processors, {} links",
-                processors_to_remove.len(),
-                links_to_remove.len()
+                plan.processors_to_remove.len(),
+                plan.links_to_remove.len()
             );
 
             // Unwire links first (before removing processors)
-            for link_id in &links_to_remove {
+            for link_id in &plan.links_to_remove {
                 let mut graph = graph_arc.write();
                 if let Some(link) = graph
                     .traversal()
@@ -268,7 +260,7 @@ impl Compiler {
             }
 
             // Shutdown and remove processors
-            for proc_id in &processors_to_remove {
+            for proc_id in &plan.processors_to_remove {
                 PUBSUB.publish(
                     topics::RUNTIME_GLOBAL,
                     &Event::RuntimeGlobal(RuntimeEvent::CompilerWillDestroyProcessor {
@@ -305,9 +297,9 @@ impl Compiler {
         // =====================================================================
         // 3. Phase 1: CREATE - Instantiate processor instances
         // =====================================================================
-        if !processors_to_add.is_empty() {
+        if !plan.processors_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Create);
-            for proc_id in &processors_to_add {
+            for proc_id in &plan.processors_to_add {
                 let mut graph = graph_arc.write();
                 let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
                     StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
@@ -343,9 +335,9 @@ impl Compiler {
         // =====================================================================
         // 4. Phase 2: WIRE - Create ring buffers and connect ports
         // =====================================================================
-        if !links_to_add.is_empty() {
+        if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
-            for link_id in &links_to_add {
+            for link_id in &plan.links_to_add {
                 let mut graph = graph_arc.write();
                 let (from_port, to_port) = {
                     let link = graph.traversal().e(link_id).first().ok_or_else(|| {
@@ -384,9 +376,9 @@ impl Compiler {
         // =====================================================================
         // 5. Phase 3: SETUP - Initialize processors (GPU, devices)
         // =====================================================================
-        if !processors_to_add.is_empty() {
+        if !plan.processors_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Setup);
-            for proc_id in &processors_to_add {
+            for proc_id in &plan.processors_to_add {
                 tracing::info!("[{}] Setting up {}", CompilePhase::Setup, proc_id);
                 let mut graph = graph_arc.write();
                 super::compiler_ops::setup_processor(&mut graph, runtime_ctx, proc_id)?;
@@ -397,9 +389,9 @@ impl Compiler {
         // =====================================================================
         // 6. Phase 4: START - Spawn processor threads
         // =====================================================================
-        if !processors_to_add.is_empty() {
+        if !plan.processors_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Start);
-            for proc_id in &processors_to_add {
+            for proc_id in &plan.processors_to_add {
                 tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
                 let mut graph = graph_arc.write();
                 super::compiler_ops::start_processor(&mut graph, proc_id)?;
@@ -410,7 +402,7 @@ impl Compiler {
         // =====================================================================
         // 7. Config updates - for each config_update
         // =====================================================================
-        for proc_id in config_updates {
+        for proc_id in plan.config_updates {
             let graph = graph_arc.read();
             let config_json = match graph.traversal().v(&proc_id).first() {
                 Some(node) => match &node.config {

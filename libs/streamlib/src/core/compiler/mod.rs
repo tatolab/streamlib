@@ -10,6 +10,7 @@
 //! 3. SETUP - Call __generated_setup on each processor
 //! 4. START - Spawn threads based on execution config
 
+mod compilation_plan;
 mod compile_phase;
 mod compile_result;
 #[allow(clippy::module_inception)]
