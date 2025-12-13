@@ -381,51 +381,54 @@ impl StreamRuntime {
         // Ensure type is registered with factory
         self.default_factory.register::<P>();
 
-        // Get processor type name for events
+        // Processor type name for events
         let processor_type = std::any::type_name::<P>()
             .rsplit("::")
             .next()
             .unwrap_or("Unknown")
             .to_string();
 
-        // Add to underlying graph and get the ID
-        let processor_id = {
-            let mut graph = self.graph.write();
-            let result = graph
-                .traversal_mut()
-                .add_v::<P>(config)
-                .first()
-                .ok_or_else(|| StreamError::GraphError("Could not create node".into()))?;
-
-            result.id.clone()
+        // Declare side effects upfront
+        let emit_will_add = |id: &ProcessorUniqueId, ptype: &str| {
+            PUBSUB.publish(
+                topics::RUNTIME_GLOBAL,
+                &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillAddProcessor {
+                    processor_id: id.clone(),
+                    processor_type: ptype.to_string(),
+                }),
+            );
         };
 
-        // Emit WillAddProcessor
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillAddProcessor {
-                processor_id: processor_id.clone(),
-                processor_type: processor_type.clone(),
-            }),
-        );
+        let emit_did_add = |id: &ProcessorUniqueId, ptype: &str| {
+            PUBSUB.publish(
+                topics::RUNTIME_GLOBAL,
+                &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidAddProcessor {
+                    processor_id: id.clone(),
+                    processor_type: ptype.to_string(),
+                }),
+            );
+        };
 
-        // Queue operation for commit
-        self.pending_operations
-            .push(PendingOperation::AddProcessor(processor_id.clone()));
+        // Split borrows to allow pending_operations access during graph mutation
+        let pending_ops = &mut self.pending_operations;
+        let graph_arc = Arc::clone(&self.graph);
 
-        // Emit DidAddProcessor
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidAddProcessor {
-                processor_id: processor_id.clone(),
-                processor_type,
-            }),
-        );
+        // Single chain: graph mutation + all side effects
+        let processor_id = graph_arc
+            .write()
+            .traversal_mut()
+            .add_v::<P>(config)
+            .inspect(|node| emit_will_add(&node.id, &processor_type))
+            .inspect(|node| pending_ops.push(PendingOperation::AddProcessor(node.id.clone())))
+            .inspect(|node| emit_did_add(&node.id, &processor_type))
+            .first()
+            .map(|node| node.id.clone())
+            .ok_or_else(|| StreamError::GraphError("Could not create node".into()))?;
 
         // Handle commit mode
         self.on_graph_changed()?;
 
-        Ok(processor_id.clone())
+        Ok(processor_id)
     }
 
     /// Connect two ports - adds a link to the graph. Returns the link ID.

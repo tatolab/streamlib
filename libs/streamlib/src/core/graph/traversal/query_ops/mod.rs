@@ -9,6 +9,7 @@ mod has_component_op;
 mod ids_op;
 mod in_e_op;
 mod in_v_op;
+mod inspect_op;
 mod iter_op;
 mod last_op;
 mod nth_op;
