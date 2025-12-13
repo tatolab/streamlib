@@ -5,7 +5,6 @@ pub mod clap;
 pub mod compat;
 pub mod compiler;
 pub mod context;
-pub mod delegates;
 pub mod error;
 pub mod execution;
 
@@ -38,7 +37,6 @@ pub use processors::*;
 pub use pubsub::*;
 pub use utils::*;
 
-pub use delegates::*;
 pub use execution::*;
 pub use observability::*;
 pub use registry::*;

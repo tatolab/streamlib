@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::delegates::ThreadPriority;
+use crate::core::execution::ThreadPriority;
 use crate::core::{Result, StreamError};
 
 /// Apply thread priority to the current thread based on the specified priority level.

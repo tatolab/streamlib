@@ -49,11 +49,6 @@ impl PubSub {
     /// Publish event to topic (non-blocking, parallel dispatch).
     pub fn publish(&self, topic: &str, event: &Event) {
         if let Some(subscribers) = self.topics.get(topic) {
-            eprintln!(
-                "[PUBSUB] Publishing to topic '{}', {} subscribers registered",
-                topic,
-                subscribers.len()
-            );
             tracing::info!(
                 "PUBSUB: Publishing to topic '{}', {} subscribers registered",
                 topic,
@@ -69,14 +64,10 @@ impl PubSub {
                 if let Some(listener) = weak_listener.upgrade() {
                     live_listeners.push(listener);
                 } else {
-                    eprintln!("[PUBSUB]   - Weak ref upgrade failed (listener dropped)");
+                    tracing::info!("[PUBSUB]   - Weak ref upgrade failed (listener dropped)");
                 }
             }
 
-            eprintln!(
-                "[PUBSUB]   - {} live listeners (weak refs upgraded successfully)",
-                live_listeners.len()
-            );
             tracing::info!(
                 "PUBSUB: {} live listeners (weak refs upgraded successfully)",
                 live_listeners.len()
@@ -90,17 +81,14 @@ impl PubSub {
                     // Try lock without blocking
                     // If listener is busy, skip (fire-and-forget)
                     if let Some(mut guard) = listener.try_lock() {
-                        eprintln!("[PUBSUB]   - Calling on_event for listener");
                         tracing::info!("PUBSUB: Calling on_event for listener");
                         let _ = guard.on_event(&event);
                     } else {
-                        eprintln!("[PUBSUB]   - Listener mutex locked, skipping (fire-and-forget)");
                         tracing::warn!("PUBSUB: Listener mutex locked, skipping (fire-and-forget)");
                     }
                 });
             }
         } else {
-            eprintln!("[PUBSUB] No subscribers for topic '{}'", topic);
             tracing::warn!("PUBSUB: No subscribers for topic '{}'", topic);
         }
         // If no subscribers, event is dropped (true fire-and-forget)

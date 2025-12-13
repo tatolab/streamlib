@@ -1,0 +1,457 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+use std::sync::Arc;
+
+use parking_lot::{Mutex, RwLock};
+
+use crate::core::compiler::compilation_plan::CompilationPlan;
+use crate::core::compiler::compile_phase::CompilePhase;
+use crate::core::compiler::compile_result::CompileResult;
+use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
+use crate::core::compiler::PendingOperation;
+use crate::core::context::RuntimeContext;
+use crate::core::error::{Result, StreamError};
+use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
+use crate::core::links::DefaultLinkFactory;
+use crate::core::processors::{Processor, RegistryBackedFactory};
+use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
+
+/// Compiles graph changes into running processor state.
+pub struct Compiler {
+    // Graph ownership (moved from Runtime)
+    graph: Arc<RwLock<Graph>>,
+    // Transaction accumulates operations until commit
+    transaction: Arc<Mutex<Vec<PendingOperation>>>,
+    // Factory for creating processor instances (internal)
+    factory: Arc<RegistryBackedFactory>,
+    // Factory for creating link instances (ring buffers)
+    link_factory: Arc<DefaultLinkFactory>,
+}
+
+impl Default for Compiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Compiler {
+    /// Create a new compiler.
+    pub fn new() -> Self {
+        Self {
+            graph: Arc::new(RwLock::new(Graph::new())),
+            transaction: Arc::new(Mutex::new(Vec::new())),
+            factory: Arc::new(RegistryBackedFactory::new()),
+            link_factory: Arc::new(DefaultLinkFactory),
+        }
+    }
+
+    /// Register a processor type with the internal factory.
+    pub fn register<P>(&self)
+    where
+        P: Processor + 'static,
+        P::Config: serde::Serialize + for<'de> serde::Deserialize<'de> + Default,
+    {
+        self.factory.register::<P>();
+    }
+
+    // =========================================================================
+    // Transaction API
+    // =========================================================================
+
+    /// Access graph and transaction for mutations. Callable from any thread.
+    pub fn scope<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Graph, &CompilerTransactionHandle) -> R,
+    {
+        let mut graph = self.graph.write();
+        let tx = CompilerTransactionHandle::new(Arc::clone(&self.transaction));
+        f(&mut graph, &tx)
+    }
+
+    /// Flush transaction. Callable from any thread - compile() is dispatched to main thread.
+    pub fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
+        let operations = std::mem::take(&mut *self.transaction.lock());
+        if operations.is_empty() {
+            tracing::info!("[commit] No pending operations");
+            return Ok(());
+        }
+
+        tracing::debug!(
+            "[commit] Processing {} pending operations (batched)",
+            operations.len()
+        );
+
+        // Clone Arcs for the closure (required for 'static lifetime)
+        let graph = Arc::clone(&self.graph);
+        let factory = Arc::clone(&self.factory);
+        let link_factory = Arc::clone(&self.link_factory);
+        let runtime_ctx_clone = Arc::clone(runtime_ctx);
+
+        // Dispatch compile to main thread (required for thread spawning, Apple frameworks)
+        runtime_ctx.run_on_main_blocking(move || {
+            tracing::debug!("[commit] Running compile on main thread");
+            Self::compile(graph, factory, link_factory, operations, &runtime_ctx_clone)
+        })
+    }
+
+    // =========================================================================
+    // Compilation - ONE method, ALL logic inlined
+    // =========================================================================
+
+    /// Single compile method - ALL orchestration logic here, no helper methods.
+    /// Calls compiler_ops::* for actual operations.
+    fn compile(
+        graph_arc: Arc<RwLock<Graph>>,
+        factory: Arc<RegistryBackedFactory>,
+        link_factory: Arc<DefaultLinkFactory>,
+        operations: Vec<PendingOperation>,
+        runtime_ctx: &Arc<RuntimeContext>,
+    ) -> Result<()> {
+        use crate::core::graph::{
+            LinkInstanceComponent, PendingDeletionComponent, ProcessorInstanceComponent,
+        };
+
+        let mut result = CompileResult::default();
+
+        // =====================================================================
+        // 1. Validate and categorize operations
+        // =====================================================================
+        let mut plan = CompilationPlan::default();
+
+        for op in operations {
+            match op {
+                PendingOperation::AddProcessor(id) => {
+                    let graph = graph_arc.read();
+                    let exists = graph.traversal().v(&id).exists();
+                    let running = graph
+                        .traversal()
+                        .v(&id)
+                        .first()
+                        .map(|n| n.has::<ProcessorInstanceComponent>())
+                        .unwrap_or(false);
+                    let pending_deletion = graph
+                        .traversal()
+                        .v(&id)
+                        .first()
+                        .map(|n| n.has::<PendingDeletionComponent>())
+                        .unwrap_or(false);
+                    drop(graph);
+
+                    if pending_deletion {
+                        tracing::debug!("AddProcessor({}): pending deletion, skipping add", id);
+                    } else if exists && !running {
+                        plan.processors_to_add.push(id);
+                    } else if !exists {
+                        tracing::warn!("AddProcessor({}): not in graph, skipping", id);
+                    } else {
+                        tracing::debug!("AddProcessor({}): already running, skipping", id);
+                    }
+                }
+                PendingOperation::RemoveProcessor(id) => {
+                    plan.processors_to_remove.push(id);
+                }
+                PendingOperation::AddLink(id) => {
+                    let graph = graph_arc.read();
+                    let link = graph.traversal().e(&id).first();
+                    let exists = link.is_some();
+                    let wired = link
+                        .map(|l| l.has::<LinkInstanceComponent>())
+                        .unwrap_or(false);
+                    let pending_deletion = link
+                        .map(|l| l.has::<PendingDeletionComponent>())
+                        .unwrap_or(false);
+                    drop(graph);
+
+                    if pending_deletion {
+                        tracing::debug!("AddLink({}): pending deletion, skipping add", id);
+                    } else if exists && !wired {
+                        plan.links_to_add.push(id);
+                    } else if !exists {
+                        tracing::warn!("AddLink({}): not in graph, skipping", id);
+                    } else {
+                        tracing::debug!("AddLink({}): already wired, skipping", id);
+                    }
+                }
+                PendingOperation::RemoveLink(id) => {
+                    plan.links_to_remove.push(id);
+                }
+                PendingOperation::UpdateProcessorConfig(id) => {
+                    plan.config_updates.push(id);
+                }
+            }
+        }
+
+        // Early return if nothing to do
+        if plan.is_empty() {
+            tracing::debug!("No changes to compile");
+            return Ok(());
+        }
+
+        tracing::info!(
+            "Compiling: +{} -{} processors, +{} -{} links, {} config updates",
+            plan.processors_to_add.len(),
+            plan.processors_to_remove.len(),
+            plan.links_to_add.len(),
+            plan.links_to_remove.len(),
+            plan.config_updates.len(),
+        );
+
+        // Publish compile start event
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::CompilerWillCompile),
+        );
+
+        // =====================================================================
+        // 2. Handle removals FIRST (before adding new processors)
+        // =====================================================================
+        if !plan.links_to_remove.is_empty() || !plan.processors_to_remove.is_empty() {
+            tracing::debug!(
+                "[commit] Removing {} processors, {} links",
+                plan.processors_to_remove.len(),
+                plan.links_to_remove.len()
+            );
+
+            // Unwire links first (before removing processors)
+            for link_id in &plan.links_to_remove {
+                let mut graph = graph_arc.write();
+                if let Some(link) = graph
+                    .traversal()
+                    .e(())
+                    .filter(|link| link.id == *link_id)
+                    .first()
+                {
+                    let from_port = link.from_port().to_string();
+                    let to_port = link.to_port().to_string();
+
+                    PUBSUB.publish(
+                        topics::RUNTIME_GLOBAL,
+                        &Event::RuntimeGlobal(RuntimeEvent::CompilerWillUnwireLink {
+                            link_id: link_id.to_string(),
+                            from_port: from_port.clone(),
+                            to_port: to_port.clone(),
+                        }),
+                    );
+
+                    tracing::info!("[UNWIRE] {}", link_id);
+                    if let Err(e) = super::compiler_ops::unwire_link(&mut graph, link_id) {
+                        tracing::warn!("Failed to unwire link {}: {}", link_id, e);
+                    }
+
+                    PUBSUB.publish(
+                        topics::RUNTIME_GLOBAL,
+                        &Event::RuntimeGlobal(RuntimeEvent::CompilerDidUnwireLink {
+                            link_id: link_id.to_string(),
+                            from_port,
+                            to_port,
+                        }),
+                    );
+
+                    result.links_unwired += 1;
+                }
+                drop(graph);
+
+                // Clean up graph after unwiring
+                let mut graph = graph_arc.write();
+                if graph.traversal_mut().e(link_id).drop().exists() {
+                    return Err(StreamError::GraphError("value was not dropped".into()));
+                }
+            }
+
+            // Shutdown and remove processors
+            for proc_id in &plan.processors_to_remove {
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::CompilerWillDestroyProcessor {
+                        processor_id: proc_id.clone(),
+                    }),
+                );
+
+                tracing::info!("[REMOVE] {}", proc_id);
+
+                {
+                    let mut graph = graph_arc.write();
+                    if let Err(e) = super::compiler_ops::shutdown_processor(&mut graph, proc_id) {
+                        tracing::warn!("Failed to shutdown processor {}: {}", proc_id, e);
+                    }
+                }
+
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::CompilerDidDestroyProcessor {
+                        processor_id: proc_id.clone(),
+                    }),
+                );
+
+                result.processors_removed += 1;
+
+                // Clean up graph after removal
+                let mut graph = graph_arc.write();
+                if graph.traversal_mut().v(proc_id).drop().exists() {
+                    return Err(StreamError::GraphError("value was not dropped".into()));
+                }
+            }
+        }
+
+        // =====================================================================
+        // 3. Phase 1: CREATE - Instantiate processor instances
+        // =====================================================================
+        if !plan.processors_to_add.is_empty() {
+            tracing::debug!("[{}] Starting", CompilePhase::Create);
+            for proc_id in &plan.processors_to_add {
+                let mut graph = graph_arc.write();
+                let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
+                    StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
+                })?;
+
+                let processor_type = node.processor_type.clone();
+
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::CompilerWillCreateProcessor {
+                        processor_id: proc_id.clone(),
+                        processor_type: processor_type.clone(),
+                    }),
+                );
+
+                tracing::info!("[{}] Creating {}", CompilePhase::Create, proc_id);
+
+                super::compiler_ops::create_processor(&factory, &mut graph, proc_id)?;
+
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::CompilerDidCreateProcessor {
+                        processor_id: proc_id.clone(),
+                        processor_type,
+                    }),
+                );
+
+                result.processors_created += 1;
+            }
+            tracing::debug!("[{}] Completed", CompilePhase::Create);
+        }
+
+        // =====================================================================
+        // 4. Phase 2: WIRE - Create ring buffers and connect ports
+        // =====================================================================
+        if !plan.links_to_add.is_empty() {
+            tracing::debug!("[{}] Starting", CompilePhase::Wire);
+            for link_id in &plan.links_to_add {
+                let mut graph = graph_arc.write();
+                let (from_port, to_port) = {
+                    let link = graph.traversal().e(link_id).first().ok_or_else(|| {
+                        StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                    })?;
+                    (link.from_port().to_string(), link.to_port().to_string())
+                };
+
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::CompilerWillWireLink {
+                        link_id: link_id.to_string(),
+                        from_port: from_port.clone(),
+                        to_port: to_port.clone(),
+                    }),
+                );
+
+                tracing::info!("[{}] Wiring {}", CompilePhase::Wire, link_id);
+
+                super::compiler_ops::wire_link(&mut graph, link_factory.as_ref(), link_id)?;
+
+                PUBSUB.publish(
+                    topics::RUNTIME_GLOBAL,
+                    &Event::RuntimeGlobal(RuntimeEvent::CompilerDidWireLink {
+                        link_id: link_id.to_string(),
+                        from_port,
+                        to_port,
+                    }),
+                );
+
+                result.links_wired += 1;
+            }
+            tracing::debug!("[{}] Completed", CompilePhase::Wire);
+        }
+
+        // =====================================================================
+        // 5. Phase 3: SETUP - Initialize processors (GPU, devices)
+        // =====================================================================
+        if !plan.processors_to_add.is_empty() {
+            tracing::debug!("[{}] Starting", CompilePhase::Setup);
+            for proc_id in &plan.processors_to_add {
+                tracing::info!("[{}] Setting up {}", CompilePhase::Setup, proc_id);
+                let mut graph = graph_arc.write();
+                super::compiler_ops::setup_processor(&mut graph, runtime_ctx, proc_id)?;
+            }
+            tracing::debug!("[{}] Completed", CompilePhase::Setup);
+        }
+
+        // =====================================================================
+        // 6. Phase 4: START - Spawn processor threads
+        // =====================================================================
+        if !plan.processors_to_add.is_empty() {
+            tracing::debug!("[{}] Starting", CompilePhase::Start);
+            for proc_id in &plan.processors_to_add {
+                tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
+                let mut graph = graph_arc.write();
+                super::compiler_ops::start_processor(&mut graph, proc_id)?;
+            }
+            tracing::debug!("[{}] Completed", CompilePhase::Start);
+        }
+
+        // =====================================================================
+        // 7. Config updates - for each config_update
+        // =====================================================================
+        for proc_id in plan.config_updates {
+            let graph = graph_arc.read();
+            let config_json = match graph.traversal().v(&proc_id).first() {
+                Some(node) => match &node.config {
+                    Some(config) => config.clone(),
+                    None => {
+                        tracing::debug!("[CONFIG] {} has no config to update", proc_id);
+                        continue;
+                    }
+                },
+                None => {
+                    tracing::warn!("[CONFIG] Processor {} not found in graph", proc_id);
+                    continue;
+                }
+            };
+
+            let processor_arc = graph
+                .traversal()
+                .v(&proc_id)
+                .first()
+                .and_then(|node| {
+                    node.get::<ProcessorInstanceComponent>()
+                        .map(|i| i.0.clone())
+                })
+                .ok_or_else(|| {
+                    StreamError::ProcessorNotFound(format!(
+                        "Processor '{}' not found for config update",
+                        proc_id
+                    ))
+                })?;
+            drop(graph);
+
+            {
+                let mut guard = processor_arc.lock();
+                guard.apply_config_json(&config_json)?;
+            }
+
+            tracing::info!("[CONFIG] Updated config for {}", proc_id);
+            result.configs_updated += 1;
+        }
+
+        // Mark the graph as compiled
+        graph_arc.write().mark_compiled();
+
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::CompilerDidCompile),
+        );
+        tracing::info!("Compile complete: {}", result);
+
+        Ok(())
+    }
+}
