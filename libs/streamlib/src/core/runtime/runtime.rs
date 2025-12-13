@@ -17,30 +17,11 @@ use crate::core::graph::{
     ProcessorNode, ProcessorUniqueId,
 };
 
+use super::CommitMode;
+use super::RuntimeStatus;
 use crate::core::processors::Processor;
 use crate::core::runtime::delegates::DefaultFactory;
-use crate::core::{
-    InputLinkPortRef, OutputLinkPortRef, ProcessorState, Result, StateComponent, StreamError,
-};
-
-/// Runtime status information.
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeStatus {
-    pub running: bool,
-    pub processor_count: usize,
-    pub link_count: usize,
-    pub processor_states: Vec<(ProcessorUniqueId, ProcessorState)>,
-}
-
-/// Controls when graph mutations are applied to the executor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CommitMode {
-    /// Changes apply immediately after each mutation.
-    #[default]
-    BatchAutomatically,
-    /// Changes batch until explicit `commit()` call.
-    BatchManually,
-}
+use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StateComponent, StreamError};
 
 /// The main stream processing runtime.
 pub struct StreamRuntime {
@@ -167,7 +148,7 @@ impl StreamRuntime {
             })?
             .clone();
 
-        // Batch all operations into a single GraphDelta.
+        // Batch all operations into a single OperationBatch.
         // This ensures the compile phases run in order:
         // 1. CREATE all processors
         // 2. WIRE all links (before any threads start!)
@@ -184,7 +165,7 @@ impl StreamRuntime {
 
     /// Execute all pending operations as a single batched compilation.
     ///
-    /// This collects all add/remove operations into a single GraphDelta,
+    /// This collects all add/remove operations into a single OperationBatch,
     /// ensuring the 4-phase compilation happens in the correct order:
     /// CREATE → WIRE → SETUP → START
     ///
@@ -195,7 +176,7 @@ impl StreamRuntime {
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
     ) -> Result<()> {
-        use crate::core::compiler::GraphDelta;
+        use crate::core::compiler::OperationBatch;
         use crate::core::graph::{
             LinkInstanceComponent, PendingDeletionComponent, ProcessorInstanceComponent,
         };
@@ -276,7 +257,7 @@ impl StreamRuntime {
 
         // Handle removals first (separate delta to ensure clean shutdown)
         if !processors_to_remove.is_empty() || !links_to_remove.is_empty() {
-            let remove_delta = GraphDelta {
+            let remove_delta = OperationBatch {
                 processors_to_remove: processors_to_remove.clone(),
                 links_to_remove: links_to_remove.clone(),
                 ..Default::default()
@@ -309,7 +290,7 @@ impl StreamRuntime {
         // Handle additions as a single batched delta
         // This ensures: CREATE all → WIRE all → SETUP all → START all
         if !processors_to_add.is_empty() || !links_to_add.is_empty() {
-            let add_delta = GraphDelta {
+            let add_delta = OperationBatch {
                 processors_to_add,
                 links_to_add,
                 ..Default::default()

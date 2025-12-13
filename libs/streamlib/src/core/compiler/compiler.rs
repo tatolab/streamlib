@@ -5,8 +5,9 @@
 
 use std::sync::Arc;
 
-use crate::core::compiler::delta::GraphDelta;
-use crate::core::compiler::phase::{CompilePhase, CompileResult};
+use crate::core::compiler::compile_phase::CompilePhase;
+use crate::core::compiler::compile_result::CompileResult;
+use crate::core::compiler::operation_batch::OperationBatch;
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
@@ -162,7 +163,7 @@ impl Compiler {
         &self,
         property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
     ) -> Result<CompileResult> {
         self.compile_with_options(property_graph, runtime_context, delta, true)
     }
@@ -173,7 +174,7 @@ impl Compiler {
         &self,
         property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
     ) -> Result<CompileResult> {
         self.compile_with_options(property_graph, runtime_context, delta, false)
     }
@@ -183,7 +184,7 @@ impl Compiler {
         &self,
         property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
         run_start_phase: bool,
     ) -> Result<CompileResult> {
         let mut result = CompileResult::default();
@@ -238,7 +239,7 @@ impl Compiler {
         &self,
         property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
         result: &mut CompileResult,
         run_start_phase: bool,
     ) -> Result<()> {
@@ -294,7 +295,7 @@ impl Compiler {
     fn handle_removals(
         &self,
         graph: &mut Graph,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
         result: &mut CompileResult,
     ) -> Result<()> {
         // Unwire links first (before removing processors)
@@ -319,7 +320,7 @@ impl Compiler {
                 self.link_delegate.will_unwire(link_id)?;
 
                 tracing::info!("[UNWIRE] {}", link_id);
-                if let Err(e) = super::wiring::unwire_link(graph, link_id) {
+                if let Err(e) = super::compiler_ops::unwire_link(graph, link_id) {
                     tracing::warn!("Failed to unwire link {}: {}", link_id, e);
                 }
 
@@ -345,7 +346,7 @@ impl Compiler {
             tracing::info!("[REMOVE] {}", proc_id);
             self.processor_delegate.will_stop(proc_id)?;
 
-            if let Err(e) = super::phases::shutdown_processor(graph, proc_id) {
+            if let Err(e) = super::compiler_ops::shutdown_processor(graph, proc_id) {
                 tracing::warn!("Failed to shutdown processor {}: {}", proc_id, e);
             }
 
@@ -365,7 +366,7 @@ impl Compiler {
     fn phase_create(
         &self,
         graph: &mut Graph,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
         result: &mut CompileResult,
     ) -> Result<()> {
         for proc_id in &delta.processors_to_add {
@@ -382,7 +383,7 @@ impl Compiler {
 
             tracing::info!("[{}] Creating {}", CompilePhase::Create, proc_id);
 
-            super::phases::create_processor(
+            super::compiler_ops::create_processor(
                 &self.factory,
                 &self.processor_delegate,
                 graph,
@@ -403,7 +404,7 @@ impl Compiler {
     fn phase_wire(
         &self,
         graph: &mut Graph,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
         result: &mut CompileResult,
     ) -> Result<()> {
         for link_id in &delta.links_to_add {
@@ -431,7 +432,7 @@ impl Compiler {
 
             tracing::info!("[{}] Wiring {}", CompilePhase::Wire, link_id);
 
-            super::wiring::wire_link(graph, self.link_factory.as_ref(), link_id)?;
+            super::compiler_ops::wire_link(graph, self.link_factory.as_ref(), link_id)?;
 
             // Call link delegate did_wire hook
             {
@@ -457,20 +458,20 @@ impl Compiler {
         &self,
         property_graph: &mut Graph,
         runtime_context: &Arc<RuntimeContext>,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
     ) -> Result<()> {
         for proc_id in &delta.processors_to_add {
             tracing::info!("[{}] Setting up {}", CompilePhase::Setup, proc_id);
-            super::phases::setup_processor(property_graph, runtime_context, proc_id)?;
+            super::compiler_ops::setup_processor(property_graph, runtime_context, proc_id)?;
         }
         Ok(())
     }
 
     /// Phase 4: START - Spawn processor threads.
-    fn phase_start(&self, property_graph: &mut Graph, delta: &GraphDelta) -> Result<()> {
+    fn phase_start(&self, property_graph: &mut Graph, delta: &OperationBatch) -> Result<()> {
         for proc_id in &delta.processors_to_add {
             tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
-            super::phases::start_processor(
+            super::compiler_ops::start_processor(
                 &self.processor_delegate,
                 &self.scheduler,
                 property_graph,
@@ -484,7 +485,7 @@ impl Compiler {
     fn handle_config_updates(
         &self,
         property_graph: &mut Graph,
-        delta: &GraphDelta,
+        delta: &OperationBatch,
         result: &mut CompileResult,
     ) -> Result<()> {
         use crate::core::graph::ProcessorInstanceComponent;
@@ -562,7 +563,7 @@ impl Compiler {
 
         for proc_id in processors_to_start {
             tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
-            super::phases::start_processor(
+            super::compiler_ops::start_processor(
                 &self.processor_delegate,
                 &self.scheduler,
                 property_graph,

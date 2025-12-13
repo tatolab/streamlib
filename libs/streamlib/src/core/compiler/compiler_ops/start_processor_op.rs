@@ -1,116 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Compilation phase implementations.
-//!
-//! Individual processor operations for each compilation phase.
-//! The Compiler orchestrates these operations with event publishing.
-
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-
-use crate::core::context::RuntimeContext;
-use crate::core::delegates::{
-    FactoryDelegate, ProcessorDelegate, SchedulerDelegate, SchedulingStrategy,
-};
+use crate::core::delegates::{ProcessorDelegate, SchedulerDelegate, SchedulingStrategy};
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader,
+    Graph, GraphNodeWithComponents, LinkOutputToProcessorWriterAndReader,
     ProcessorInstanceComponent, ProcessorPauseGateComponent, ProcessorUniqueId,
     ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
-
-// ============================================================================
-// Phase 1: CREATE implementation
-// ============================================================================
-
-pub(crate) fn create_processor(
-    factory: &Arc<dyn FactoryDelegate>,
-    processor_delegate: &Arc<dyn ProcessorDelegate>,
-    graph: &mut Graph,
-    proc_id: &ProcessorUniqueId,
-) -> Result<()> {
-    // Get node from the graph
-    let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
-        StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
-    })?;
-
-    // Delegate callback: will_create
-    processor_delegate.will_create(node)?;
-
-    // Create processor instance via factory
-    let processor = factory.create(node)?;
-
-    // Delegate callback: did_create
-    processor_delegate.did_create(node, &processor)?;
-
-    // Attach components to processor node
-    let processor_arc = Arc::new(Mutex::new(processor));
-
-    let node_mut = graph
-        .traversal_mut()
-        .v(proc_id)
-        .first_mut()
-        .ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
-        })?;
-
-    node_mut.insert(ProcessorInstanceComponent(processor_arc));
-    node_mut.insert(ShutdownChannelComponent::new());
-    node_mut.insert(LinkOutputToProcessorWriterAndReader::new());
-    node_mut.insert(StateComponent::default());
-    node_mut.insert(ProcessorPauseGateComponent::new());
-
-    tracing::debug!("[{}] Created with components", proc_id);
-    Ok(())
-}
-
-// ============================================================================
-// Phase 3: SETUP implementation
-// ============================================================================
-
-pub(crate) fn setup_processor(
-    graph: &mut Graph,
-    runtime_context: &Arc<RuntimeContext>,
-    processor_id: &ProcessorUniqueId,
-) -> Result<()> {
-    // Get processor instance and pause gate
-    let node = graph.traversal().v(processor_id).first().ok_or_else(|| {
-        StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
-    })?;
-
-    let instance = node.get::<ProcessorInstanceComponent>().ok_or_else(|| {
-        StreamError::NotFound(format!(
-            "Processor '{}' has no ProcessorInstance component",
-            processor_id
-        ))
-    })?;
-    let processor_arc = instance.0.clone();
-
-    let pause_gate = node.get::<ProcessorPauseGateComponent>().ok_or_else(|| {
-        StreamError::NotFound(format!(
-            "Processor '{}' has no ProcessorPauseGate component",
-            processor_id
-        ))
-    })?;
-    let pause_gate_inner = pause_gate.clone_inner();
-
-    let processor_context = runtime_context.with_pause_gate(pause_gate_inner);
-
-    tracing::trace!("[{}] Calling __generated_setup...", processor_id);
-    let mut guard = processor_arc.lock();
-    guard.__generated_setup(&processor_context)?;
-    tracing::trace!("[{}] __generated_setup completed", processor_id);
-
-    Ok(())
-}
-
-// ============================================================================
-// Phase 4: START implementation
-// ============================================================================
 
 pub(crate) fn start_processor(
     processor_delegate: &Arc<dyn ProcessorDelegate>,
@@ -298,80 +199,5 @@ fn spawn_dedicated_thread(
         })?;
     node.insert(ThreadHandleComponent(thread));
 
-    Ok(())
-}
-
-// ============================================================================
-// Shutdown
-// ============================================================================
-
-/// Shutdown a running processor by removing its runtime components.
-pub fn shutdown_processor(
-    property_graph: &mut Graph,
-    processor_id: &ProcessorUniqueId,
-) -> Result<()> {
-    // Check current state and set to stopping
-    let node = match property_graph.traversal_mut().v(processor_id).first_mut() {
-        Some(n) => n,
-        None => return Ok(()), // Processor not found, nothing to shut down
-    };
-
-    if let Some(state) = node.get::<StateComponent>() {
-        let current = *state.0.lock();
-        if current == ProcessorState::Stopped || current == ProcessorState::Stopping {
-            return Ok(()); // Already stopped or stopping
-        }
-        *state.0.lock() = ProcessorState::Stopping;
-    }
-
-    tracing::info!("[{}] Shutting down processor...", processor_id);
-
-    // Send shutdown signal
-    if let Some(channel) = node.get::<ShutdownChannelComponent>() {
-        let _ = channel.sender.send(());
-    }
-
-    // Take thread handle
-    let thread_handle = node.remove::<ThreadHandleComponent>();
-
-    // Join thread if exists
-    if let Some(handle) = thread_handle {
-        match handle.0.join() {
-            Ok(_) => {
-                tracing::info!("[{}] Processor thread joined successfully", processor_id);
-            }
-            Err(panic_err) => {
-                tracing::error!(
-                    "[{}] Processor thread panicked: {:?}",
-                    processor_id,
-                    panic_err
-                );
-            }
-        }
-    }
-
-    // Update state to stopped - need to get node again
-    if let Some(node) = property_graph.traversal().v(processor_id).first() {
-        if let Some(state) = node.get::<StateComponent>() {
-            *state.0.lock() = ProcessorState::Stopped;
-        }
-    }
-
-    tracing::info!("[{}] Processor shut down", processor_id);
-    Ok(())
-}
-
-/// Shutdown all running processors in the graph.
-pub fn shutdown_all_processors(property_graph: &mut Graph) -> Result<()> {
-    // Get all processor IDs first
-    let processor_ids: Vec<ProcessorUniqueId> = property_graph.traversal().v(()).ids();
-
-    for id in processor_ids {
-        if let Err(e) = shutdown_processor(property_graph, &id) {
-            tracing::warn!("Error shutting down processor {}: {}", id, e);
-        }
-    }
-
-    property_graph.set_state(GraphState::Idle);
     Ok(())
 }

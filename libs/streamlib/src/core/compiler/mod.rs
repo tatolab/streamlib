@@ -10,18 +10,24 @@
 //! 3. SETUP - Call __generated_setup on each processor
 //! 4. START - Spawn threads based on execution config
 
-pub(crate) mod delta;
-mod pending;
-mod phase;
-pub(crate) mod phases;
-mod pipeline;
+mod compile_phase;
+mod compile_result;
+mod compiler;
+pub(crate) mod compiler_ops;
+mod link_config_change;
+mod operation_batch;
+mod pending_operation;
+mod pending_operation_queue;
+mod processor_config_change;
 pub mod wiring;
 
-pub use self::pipeline::Compiler;
-pub use delta::{
-    compute_delta, compute_delta_with_config, GraphDelta, LinkConfigChange, ProcessorConfigChange,
-};
-pub use pending::{PendingOperation, PendingOperationQueue};
-pub use phase::{CompilePhase, CompileResult};
-pub use phases::{shutdown_all_processors, shutdown_processor};
-pub use wiring::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper};
+pub use compile_phase::CompilePhase;
+pub use compile_result::CompileResult;
+pub use compiler::Compiler;
+pub use compiler_ops::{shutdown_all_processors, shutdown_processor};
+pub use compiler_ops::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper};
+pub use link_config_change::LinkConfigChange;
+pub use operation_batch::OperationBatch;
+pub use pending_operation::PendingOperation;
+pub use pending_operation_queue::PendingOperationQueue;
+pub use processor_config_change::ProcessorConfigChange;
