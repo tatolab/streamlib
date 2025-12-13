@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 // WHIP CONFIGURATION
 // ============================================================================
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WhipConfig {
     pub endpoint_url: String,
     /// Optional Bearer token for authentication.

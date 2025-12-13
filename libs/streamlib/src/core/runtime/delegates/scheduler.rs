@@ -73,7 +73,7 @@ mod tests {
     #[test]
     fn test_default_scheduler_camera() {
         let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new("cam".into(), "CameraProcessor".into(), None, vec![], vec![]);
+        let node = ProcessorNode::new("CameraProcessor", None, vec![], vec![]);
 
         match scheduler.scheduling_strategy(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
@@ -86,13 +86,7 @@ mod tests {
     #[test]
     fn test_default_scheduler_audio() {
         let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new(
-            "mic".into(),
-            "AudioCaptureProcessor".into(),
-            None,
-            vec![],
-            vec![],
-        );
+        let node = ProcessorNode::new("AudioCaptureProcessor", None, vec![], vec![]);
 
         match scheduler.scheduling_strategy(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
@@ -105,7 +99,7 @@ mod tests {
     #[test]
     fn test_default_scheduler_encoder() {
         let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new("enc".into(), "H264Encoder".into(), None, vec![], vec![]);
+        let node = ProcessorNode::new("H264Encoder", None, vec![], vec![]);
 
         match scheduler.scheduling_strategy(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
@@ -118,7 +112,7 @@ mod tests {
     #[test]
     fn test_default_scheduler_generic() {
         let scheduler = DefaultScheduler;
-        let node = ProcessorNode::new("proc".into(), "SomeProcessor".into(), None, vec![], vec![]);
+        let node = ProcessorNode::new("SomeProcessor", None, vec![], vec![]);
 
         match scheduler.scheduling_strategy(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {

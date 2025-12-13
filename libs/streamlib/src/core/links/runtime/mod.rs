@@ -7,12 +7,12 @@
 //! - `LinkOutputDataWriter`/`LinkInputDataReader`: Weak references for graceful degradation
 //! - `LinkOutput`/`LinkInput`: Processor-facing port API
 
-pub mod link_input;
-pub mod link_input_data_reader;
-pub mod link_instance;
-pub mod link_output;
-pub mod link_output_data_writer;
-pub mod link_output_to_processor_message;
+mod link_input;
+mod link_input_data_reader;
+mod link_instance;
+mod link_output;
+mod link_output_data_writer;
+mod link_output_to_processor_message;
 
 pub use link_input::LinkInput;
 pub use link_input_data_reader::LinkInputDataReader;

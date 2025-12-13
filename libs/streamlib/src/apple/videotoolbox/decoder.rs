@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 /// Decoded video frame configuration
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VideoDecoderConfig {
     pub width: u32,
     pub height: u32,

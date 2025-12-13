@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // Implement sealed trait
-impl crate::core::links::traits::link_port_message::sealed::Sealed for VideoFrame {}
+impl crate::core::links::LinkPortMessageImplementor for VideoFrame {}
 
 #[derive(Clone)]
 pub struct VideoFrame {

@@ -6,7 +6,7 @@
 use std::sync::Weak;
 
 use super::link_instance::LinkInstanceInner;
-use crate::core::links::graph::LinkId;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::traits::LinkPortMessage;
 
 /// Writes data to a LinkInstance from a LinkOutput port.
@@ -42,7 +42,7 @@ impl<T: LinkPortMessage> LinkOutputDataWriter<T> {
     }
 
     /// Get the link ID if still connected.
-    pub fn link_id(&self) -> Option<LinkId> {
+    pub fn link_id(&self) -> Option<LinkUniqueId> {
         self.inner.upgrade().map(|inner| inner.link_id().clone())
     }
 }

@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 // WHEP CONFIGURATION
 // ============================================================================
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WhepConfig {
     pub endpoint_url: String,
     /// Optional Bearer token for authentication (per RFC 6750 Section 2.1).

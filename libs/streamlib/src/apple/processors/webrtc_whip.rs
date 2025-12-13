@@ -87,7 +87,7 @@ impl VideoEncoderH264 for VideoToolboxH264Encoder {
 // MAIN WEBRTC WHIP PROCESSOR
 // ============================================================================
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebRtcWhipConfig {
     pub whip: WhipConfig,
     pub video: VideoEncoderConfig,
@@ -764,7 +764,7 @@ mod tests {
         let calc = RtpTimestampCalculator::new(start_ns, 90000);
 
         // Simulate 1 hour of video @ 30fps
-        let one_hour_ns = 3600_000_000_000i64;
+        let one_hour_ns = 3_600_000_000_000i64;
         let rtp_ts = calc.calculate(one_hour_ns);
 
         // Should handle large elapsed times without overflow
@@ -798,8 +798,10 @@ mod tests {
 
     #[test]
     fn test_opus_encoder_invalid_sample_rate() {
-        let mut config = AudioEncoderConfig::default();
-        config.sample_rate = 44100; // Not supported
+        let config = AudioEncoderConfig {
+            sample_rate: 44100, // Not supported
+            ..Default::default()
+        };
         let encoder = OpusEncoder::new(config);
         assert!(encoder.is_err());
         let err = encoder.unwrap_err().to_string();
@@ -808,8 +810,10 @@ mod tests {
 
     #[test]
     fn test_opus_encoder_invalid_channels() {
-        let mut config = AudioEncoderConfig::default();
-        config.channels = 1; // Mono not supported
+        let config = AudioEncoderConfig {
+            channels: 1, // Mono not supported
+            ..Default::default()
+        };
         let encoder = OpusEncoder::new(config);
         assert!(encoder.is_err());
         let err = encoder.unwrap_err().to_string();
@@ -837,7 +841,7 @@ mod tests {
         assert!(result.is_ok());
 
         let encoded = result.unwrap();
-        assert!(encoded.data.len() > 0);
+        assert!(!encoded.data.is_empty());
         assert_eq!(encoded.timestamp_ns, 0);
         assert_eq!(encoded.sample_count, 960);
     }
@@ -952,7 +956,7 @@ mod tests {
             );
 
             let encoded = encoder.encode(&frame).unwrap();
-            assert!(encoded.data.len() > 0);
+            assert!(!encoded.data.is_empty());
             assert_eq!(encoded.timestamp_ns, timestamp_ns);
             assert_eq!(encoded.sample_count, 960);
         }

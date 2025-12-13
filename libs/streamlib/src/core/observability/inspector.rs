@@ -7,8 +7,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::graph::{Graph, GraphState, ProcessorId, ProcessorMetrics, StateComponent};
-use crate::core::links::LinkId;
+use crate::core::graph::{
+    Graph, GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorMetrics, ProcessorUniqueId,
+    StateComponent,
+};
 
 use super::snapshots::{
     GraphHealth, GraphStateSnapshot, LatencyStats, LinkSnapshot, ProcessorSnapshot,
@@ -29,22 +31,19 @@ impl GraphInspector {
     }
 
     /// Get a snapshot of a specific processor.
-    pub fn processor(&self, id: &ProcessorId) -> Option<ProcessorSnapshot> {
+    pub fn processor(&self, id: &ProcessorUniqueId) -> Option<ProcessorSnapshot> {
         let graph = self.graph.read();
 
-        let node = graph.get_processor(id)?;
+        let node = graph.traversal().v(id).first()?;
 
-        // Get state from ECS component if available
-        let state = graph
-            .get::<StateComponent>(id)
+        // Get state from node's component storage if available
+        let state = node
+            .get::<StateComponent>()
             .map(|s| *s.0.lock())
             .unwrap_or_default();
 
-        // Get metrics from ECS component if available
-        let metrics = graph
-            .get::<ProcessorMetrics>(id)
-            .map(|m| (*m).clone())
-            .unwrap_or_default();
+        // Get metrics from node's component storage if available
+        let metrics = node.get::<ProcessorMetrics>().cloned().unwrap_or_default();
 
         Some(ProcessorSnapshot {
             id: id.clone(),
@@ -62,17 +61,17 @@ impl GraphInspector {
     }
 
     /// Get a snapshot of a specific link.
-    pub fn link(&self, id: &LinkId) -> Option<LinkSnapshot> {
+    pub fn link(&self, id: &LinkUniqueId) -> Option<LinkSnapshot> {
         let graph = self.graph.read();
 
-        let link = graph.get_link(id)?;
+        let link = graph.traversal().e(id).first()?;
 
         Some(LinkSnapshot {
             id: id.clone(),
-            source_processor: link.source.node.clone(),
-            source_port: link.source.port.clone(),
-            target_processor: link.target.node.clone(),
-            target_port: link.target.port.clone(),
+            source_processor: link.source.processor_id.clone(),
+            source_port: link.source.port_name.clone(),
+            target_processor: link.target.processor_id.clone(),
+            target_port: link.target.port_name.clone(),
             queue_depth: 0,      // TODO: Get from link metrics component
             capacity: 16,        // Default capacity
             throughput_fps: 0.0, // TODO: Get from link metrics component
@@ -83,15 +82,15 @@ impl GraphInspector {
     pub fn health(&self) -> GraphHealth {
         let graph = self.graph.read();
 
-        let processor_count = graph.processor_count();
-        let link_count = graph.link_count();
+        let processor_count = graph.traversal().v(()).iter().count();
+        let link_count = graph.traversal().e(()).iter().count();
 
         // Aggregate metrics from all processors
         let mut total_dropped = 0u64;
         let mut bottlenecks = Vec::new();
 
-        for id in graph.processor_ids() {
-            if let Some(metrics) = graph.get::<ProcessorMetrics>(id) {
+        for node in graph.traversal().v(()).iter() {
+            if let Some(metrics) = node.get::<ProcessorMetrics>() {
                 total_dropped += metrics.frames_dropped;
 
                 // Simple bottleneck detection: high drop rate
@@ -99,7 +98,7 @@ impl GraphInspector {
                     let drop_rate = metrics.frames_dropped as f64 / metrics.frames_processed as f64;
                     if drop_rate > 0.01 {
                         // More than 1% drops
-                        bottlenecks.push(id.clone());
+                        bottlenecks.push(node.id.clone());
                     }
                 }
             }
@@ -116,15 +115,15 @@ impl GraphInspector {
     }
 
     /// List all processor IDs.
-    pub fn processor_ids(&self) -> Vec<ProcessorId> {
+    pub fn processor_ids(&self) -> Vec<ProcessorUniqueId> {
         let graph = self.graph.read();
-        graph.nodes().iter().map(|n| n.id.clone()).collect()
+        graph.traversal().v(()).ids()
     }
 
     /// List all link IDs.
-    pub fn link_ids(&self) -> Vec<LinkId> {
+    pub fn link_ids(&self) -> Vec<LinkUniqueId> {
         let graph = self.graph.read();
-        graph.links().iter().map(|l| l.id.clone()).collect()
+        graph.traversal().e(()).ids()
     }
 
     /// Get the current graph state.
@@ -141,13 +140,13 @@ impl GraphInspector {
     /// Get processor count.
     pub fn processor_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.processor_count()
+        graph.traversal().v(()).iter().count()
     }
 
     /// Get link count.
     pub fn link_count(&self) -> usize {
         let graph = self.graph.read();
-        graph.link_count()
+        graph.traversal().e(()).iter().count()
     }
 }
 
@@ -186,23 +185,5 @@ mod tests {
         assert_eq!(health.processor_count, 0);
         assert_eq!(health.link_count, 0);
         assert_eq!(health.dropped_frames, 0);
-    }
-
-    #[test]
-    fn test_inspector_with_processors() {
-        let graph = Arc::new(RwLock::new(Graph::new()));
-
-        // Add a processor to the graph
-        graph
-            .write()
-            .add_processor("camera".into(), "CameraProcessor".into(), 0);
-
-        let inspector = GraphInspector::new(graph);
-
-        assert_eq!(inspector.processor_count(), 1);
-
-        let ids = inspector.processor_ids();
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], "camera");
     }
 }

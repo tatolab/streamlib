@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     let camera = runtime.add_processor::<CameraProcessor::Processor>(CameraConfig {
         device_id: None, // Use default camera
     })?;
-    println!("✓ Camera added: {}\n", camera.id);
+    println!("✓ Camera added: {}\n", camera);
 
     println!("🖥️  Adding display processor...");
     let display = runtime.add_processor::<DisplayProcessor::Processor>(DisplayConfig {
@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         title: Some("streamlib Camera Display".to_string()),
         scaling_mode: Default::default(),
     })?;
-    println!("✓ Display added: {}\n", display.id);
+    println!("✓ Display added: {}\n", display);
 
     // =========================================================================
     // Connect ports

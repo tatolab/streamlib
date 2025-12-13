@@ -15,29 +15,26 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::link_input_data_reader::LinkInputDataReader;
 use super::link_output_data_writer::LinkOutputDataWriter;
-use crate::core::links::graph::LinkId;
+use crate::core::graph::{LinkCapacity, LinkUniqueId};
 use crate::core::links::traits::{LinkBufferReadMode, LinkPortMessage};
-
-/// Default ring buffer capacity for links.
-pub const DEFAULT_LINK_CAPACITY: usize = 4;
 
 /// Inner state of a link instance, holding the ring buffer.
 pub struct LinkInstanceInner<T: LinkPortMessage> {
     producer: Mutex<Producer<T>>,
     consumer: Mutex<Consumer<T>>,
     cached_size: AtomicUsize,
-    link_id: LinkId,
+    link_id: LinkUniqueId,
     read_mode: LinkBufferReadMode,
 }
 
 impl<T: LinkPortMessage> LinkInstanceInner<T> {
-    fn new(link_id: LinkId, capacity: usize) -> Self {
-        let (producer, consumer) = RingBuffer::new(capacity);
+    fn new(capacity: LinkCapacity) -> Self {
+        let (producer, consumer) = RingBuffer::new(capacity.into());
         Self {
             producer: Mutex::new(producer),
             consumer: Mutex::new(consumer),
             cached_size: AtomicUsize::new(0),
-            link_id,
+            link_id: LinkUniqueId::new(),
             read_mode: T::link_read_behavior(),
         }
     }
@@ -129,7 +126,7 @@ impl<T: LinkPortMessage> LinkInstanceInner<T> {
     }
 
     #[inline]
-    pub fn link_id(&self) -> &LinkId {
+    pub fn link_id(&self) -> &LinkUniqueId {
         &self.link_id
     }
 
@@ -154,15 +151,15 @@ pub struct LinkInstance<T: LinkPortMessage> {
 
 impl<T: LinkPortMessage> LinkInstance<T> {
     /// Create a new LinkInstance with the given capacity.
-    pub fn new(link_id: LinkId, capacity: usize) -> Self {
+    pub fn new(capacity: LinkCapacity) -> Self {
         Self {
-            inner: Arc::new(LinkInstanceInner::new(link_id, capacity)),
+            inner: Arc::new(LinkInstanceInner::new(capacity)),
         }
     }
 
     /// Create with default capacity.
-    pub fn with_default_capacity(link_id: LinkId) -> Self {
-        Self::new(link_id, DEFAULT_LINK_CAPACITY)
+    pub fn with_default_capacity() -> Self {
+        Self::new(LinkCapacity::default())
     }
 
     /// Create a data writer for LinkOutput to use.
@@ -176,7 +173,7 @@ impl<T: LinkPortMessage> LinkInstance<T> {
     }
 
     #[inline]
-    pub fn link_id(&self) -> &LinkId {
+    pub fn link_id(&self) -> &LinkUniqueId {
         self.inner.link_id()
     }
 
@@ -218,7 +215,7 @@ impl<T: LinkPortMessage> Clone for LinkInstance<T> {
 
 /// Type-erased LinkInstance for storage in collections.
 pub trait AnyLinkInstance: Send + Sync {
-    fn link_id(&self) -> &LinkId;
+    fn link_id(&self) -> &LinkUniqueId;
     fn has_data(&self) -> bool;
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool;
@@ -229,7 +226,7 @@ pub trait AnyLinkInstance: Send + Sync {
 }
 
 impl<T: LinkPortMessage> AnyLinkInstance for LinkInstance<T> {
-    fn link_id(&self) -> &LinkId {
+    fn link_id(&self) -> &LinkUniqueId {
         self.link_id()
     }
 
@@ -270,14 +267,9 @@ mod tests {
     use super::*;
     use crate::core::frames::{AudioChannelCount, AudioFrame};
 
-    /// Helper to create a test LinkId
-    fn test_link_id(name: &str) -> LinkId {
-        LinkId::from_string(name).expect("valid link id")
-    }
-
     #[test]
     fn test_push_under_capacity() {
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-1"), 4);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(4));
 
         // Push 3 frames into capacity-4 buffer
         for i in 0..3 {
@@ -292,7 +284,7 @@ mod tests {
     #[test]
     fn test_push_at_capacity_evicts_oldest_read_next_in_order() {
         // AudioFrame uses ReadNextInOrder (sliding window)
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-2"), 3);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(3));
 
         // Fill buffer to capacity with timestamps 0, 1, 2
         for i in 0..3 {
@@ -335,7 +327,7 @@ mod tests {
     #[test]
     fn test_skip_to_latest_drains_all_returns_newest() {
         // Test SkipToLatest behavior using read_latest directly
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-3"), 3);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(3));
 
         // Fill buffer with timestamps 10, 20, 30
         for i in 1..=3 {
@@ -368,7 +360,7 @@ mod tests {
     #[test]
     fn test_skip_to_latest_temporal_gate_no_going_back_in_time() {
         // Once you read timestamp T, all frames with timestamp < T are inaccessible
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-4"), 5);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(5));
 
         // Push frames with timestamps 100, 200, 300
         for ts in [100, 200, 300] {
@@ -403,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_continuous_overflow_skip_to_latest() {
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-5"), 2);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(2));
 
         // Push 100 frames into capacity-2 buffer - should never block
         // Timestamps will be 0, 1, 2, ..., 99
@@ -434,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_continuous_overflow_read_next_in_order() {
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-6"), 2);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(2));
 
         // Push 100 frames into capacity-2 buffer - should never block
         for i in 0..100i64 {
@@ -466,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_interleaved_read_write_sequential() {
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-7"), 3);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(3));
 
         // Write 2 frames with timestamps 0, 1
         link.inner.push(AudioFrame::new(
@@ -521,7 +513,7 @@ mod tests {
 
     #[test]
     fn test_empty_buffer_returns_none() {
-        let link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-8"), 4);
+        let link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(4));
 
         // Empty buffer - both read modes should return None
         assert!(link.inner.read_sequential().is_none());
@@ -532,7 +524,7 @@ mod tests {
     #[test]
     fn test_read_mode_matches_frame_type() {
         // AudioFrame should use ReadNextInOrder
-        let audio_link = LinkInstance::<AudioFrame>::new(test_link_id("test-link-9"), 4);
+        let audio_link = LinkInstance::<AudioFrame>::new(LinkCapacity::from(4));
         assert_eq!(
             audio_link.inner.read_mode,
             LinkBufferReadMode::ReadNextInOrder

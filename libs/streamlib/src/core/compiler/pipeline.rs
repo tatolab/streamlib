@@ -10,7 +10,7 @@ use crate::core::compiler::phase::{CompilePhase, CompileResult};
 use crate::core::context::RuntimeContext;
 use crate::core::delegates::{FactoryDelegate, LinkDelegate, ProcessorDelegate, SchedulerDelegate};
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::Graph;
+use crate::core::graph::{Graph, GraphNodeWithComponents, ProcessorUniqueId};
 use crate::core::links::{DefaultLinkFactory, LinkFactoryDelegate};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::runtime::delegates::{
@@ -293,14 +293,19 @@ impl Compiler {
     /// Handle processor and link removals.
     fn handle_removals(
         &self,
-        property_graph: &mut Graph,
+        graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
         // Unwire links first (before removing processors)
         for link_id in &delta.links_to_remove {
             // Get link info for event before removal
-            if let Some(link) = property_graph.get_link(link_id) {
+            if let Some(link) = graph
+                .traversal()
+                .e(())
+                .filter(|link| link.id == *link_id)
+                .first()
+            {
                 let from_port = link.from_port().to_string();
                 let to_port = link.to_port().to_string();
 
@@ -314,7 +319,7 @@ impl Compiler {
                 self.link_delegate.will_unwire(link_id)?;
 
                 tracing::info!("[UNWIRE] {}", link_id);
-                if let Err(e) = super::wiring::unwire_link(property_graph, link_id) {
+                if let Err(e) = super::wiring::unwire_link(graph, link_id) {
                     tracing::warn!("Failed to unwire link {}: {}", link_id, e);
                 }
 
@@ -340,7 +345,7 @@ impl Compiler {
             tracing::info!("[REMOVE] {}", proc_id);
             self.processor_delegate.will_stop(proc_id)?;
 
-            if let Err(e) = super::phases::shutdown_processor(property_graph, proc_id) {
+            if let Err(e) = super::phases::shutdown_processor(graph, proc_id) {
                 tracing::warn!("Failed to shutdown processor {}: {}", proc_id, e);
             }
 
@@ -359,12 +364,12 @@ impl Compiler {
     /// Phase 1: CREATE - Instantiate processor instances.
     fn phase_create(
         &self,
-        property_graph: &mut Graph,
+        graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
         for proc_id in &delta.processors_to_add {
-            let node = property_graph.get_processor(proc_id).ok_or_else(|| {
+            let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
                 StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
             })?;
 
@@ -380,7 +385,7 @@ impl Compiler {
             super::phases::create_processor(
                 &self.factory,
                 &self.processor_delegate,
-                property_graph,
+                graph,
                 proc_id,
             )?;
 
@@ -397,18 +402,18 @@ impl Compiler {
     /// Phase 2: WIRE - Create ring buffers and connect ports.
     fn phase_wire(
         &self,
-        property_graph: &mut Graph,
+        graph: &mut Graph,
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
         for link_id in &delta.links_to_add {
-            // Get link info for event
-            let link = property_graph.get_link(link_id).ok_or_else(|| {
-                StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
-            })?;
-
-            let from_port = link.from_port().to_string();
-            let to_port = link.to_port().to_string();
+            // Get link info for event - extract what we need then drop the borrow
+            let (from_port, to_port) = {
+                let link = graph.traversal().e(link_id).first().ok_or_else(|| {
+                    StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                })?;
+                (link.from_port().to_string(), link.to_port().to_string())
+            };
 
             self.publish_event(RuntimeEvent::CompilerWillWireLink {
                 link_id: link_id.to_string(),
@@ -417,14 +422,24 @@ impl Compiler {
             });
 
             // Call link delegate will_wire hook
-            self.link_delegate.will_wire(&link)?;
+            {
+                let link = graph.traversal().e(link_id).first().ok_or_else(|| {
+                    StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                })?;
+                self.link_delegate.will_wire(link)?;
+            }
 
             tracing::info!("[{}] Wiring {}", CompilePhase::Wire, link_id);
 
-            super::wiring::wire_link(property_graph, self.link_factory.as_ref(), link_id)?;
+            super::wiring::wire_link(graph, self.link_factory.as_ref(), link_id)?;
 
             // Call link delegate did_wire hook
-            self.link_delegate.did_wire(&link)?;
+            {
+                let link = graph.traversal().e(link_id).first().ok_or_else(|| {
+                    StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                })?;
+                self.link_delegate.did_wire(link)?;
+            }
 
             self.publish_event(RuntimeEvent::CompilerDidWireLink {
                 link_id: link_id.to_string(),
@@ -472,15 +487,15 @@ impl Compiler {
         delta: &GraphDelta,
         result: &mut CompileResult,
     ) -> Result<()> {
-        use crate::core::graph::ProcessorInstance;
+        use crate::core::graph::ProcessorInstanceComponent;
 
         for update in &delta.processors_to_update {
             let proc_id = &update.id;
 
-            // Get config from the ProcessorNode in the graph
-            let config_json = match property_graph.get_processor(proc_id) {
-                Some(node) => match node.config {
-                    Some(config) => config,
+            // Get config from the ProcessorNode in the graph - clone it to avoid borrow issues
+            let config_json = match property_graph.traversal().v(proc_id).first() {
+                Some(node) => match &node.config {
+                    Some(config) => config.clone(),
                     None => {
                         tracing::debug!("[CONFIG] {} has no config to update", proc_id);
                         continue;
@@ -492,9 +507,15 @@ impl Compiler {
                 }
             };
 
-            // Get the ProcessorInstance from ECS
-            let instance = property_graph
-                .get::<ProcessorInstance>(proc_id)
+            // Get the ProcessorInstance and apply config
+            let processor_arc = property_graph
+                .traversal()
+                .v(proc_id)
+                .first()
+                .and_then(|node| {
+                    node.get::<ProcessorInstanceComponent>()
+                        .map(|i| i.0.clone())
+                })
                 .ok_or_else(|| {
                     StreamError::ProcessorNotFound(format!(
                         "Processor '{}' not found for config update",
@@ -503,9 +524,6 @@ impl Compiler {
                 })?;
 
             // Apply config update
-            let processor_arc = instance.0.clone();
-            drop(instance); // Release borrow before locking
-
             {
                 let mut guard = processor_arc.lock();
                 guard.apply_config_json(&config_json)?;
@@ -530,17 +548,17 @@ impl Compiler {
 
     /// Start all processors that have been compiled but not yet started.
     pub fn start_all_processors(&self, property_graph: &mut Graph) -> Result<()> {
-        use crate::core::graph::{ProcessorInstance, ThreadHandle};
+        use crate::core::graph::{
+            GraphNodeWithComponents, ProcessorInstanceComponent, ThreadHandleComponent,
+        };
 
         // Find all processors with ProcessorInstance but no ThreadHandle (compiled but not started)
-        let processors_to_start: Vec<String> = property_graph
-            .processor_ids()
-            .filter(|proc_id| {
-                property_graph.has::<ProcessorInstance>(proc_id)
-                    && !property_graph.has::<ThreadHandle>(proc_id)
-            })
-            .cloned()
-            .collect();
+        let processors_to_start: Vec<ProcessorUniqueId> = property_graph
+            .traversal()
+            .v(())
+            .filter(|node| node.has::<ProcessorInstanceComponent>())
+            .filter(|node| !node.has::<ThreadHandleComponent>())
+            .ids();
 
         for proc_id in processors_to_start {
             tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);

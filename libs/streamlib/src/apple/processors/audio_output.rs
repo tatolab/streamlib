@@ -9,7 +9,7 @@ use cpal::Stream;
 use std::sync::{Arc, Mutex};
 
 // Apple-specific configuration and device types
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct AppleAudioOutputConfig {
     pub device_id: Option<String>,
 }
@@ -58,7 +58,7 @@ impl ResamplerState {
 }
 
 #[crate::processor(
-    execution = Manual,
+    execution = ProcessExecution::Manual,
     description = "Plays audio through speakers/headphones using CoreAudio",
     unsafe_send
 )]

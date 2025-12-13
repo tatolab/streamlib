@@ -41,7 +41,7 @@ impl RuntimeBuilder {
             processor_delegate: None,
             link_delegate: None,
             scheduler: None,
-            commit_mode: CommitMode::Auto,
+            commit_mode: CommitMode::BatchAutomatically,
         }
     }
 
@@ -148,7 +148,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::core::graph::Link;
-    use crate::core::LinkId;
+    use crate::core::LinkUniqueId;
 
     #[test]
     fn test_builder_default() {
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn test_builder_with_commit_mode() {
         let _runtime = RuntimeBuilder::new()
-            .with_commit_mode(CommitMode::Manual)
+            .with_commit_mode(CommitMode::BatchManually)
             .build();
         // Build with manual commit mode succeeds
     }
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn test_builder_via_runtime() {
         let _runtime = StreamRuntime::builder()
-            .with_commit_mode(CommitMode::Manual)
+            .with_commit_mode(CommitMode::BatchManually)
             .build();
         // Build via StreamRuntime::builder() succeeds
     }
@@ -220,12 +220,12 @@ mod tests {
             Ok(())
         }
 
-        fn will_unwire(&self, _link_id: &LinkId) -> crate::core::error::Result<()> {
+        fn will_unwire(&self, _link_id: &LinkUniqueId) -> crate::core::error::Result<()> {
             self.will_unwire_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
-        fn did_unwire(&self, _link_id: &LinkId) -> crate::core::error::Result<()> {
+        fn did_unwire(&self, _link_id: &LinkUniqueId) -> crate::core::error::Result<()> {
             self.did_unwire_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }

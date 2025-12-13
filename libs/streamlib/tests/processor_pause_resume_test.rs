@@ -19,10 +19,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use streamlib::core::delegates::ProcessorDelegate;
 use streamlib::core::frames::{AudioChannelCount, AudioFrame};
-use streamlib::core::graph::ProcessorId;
 use streamlib::core::pubsub::{topics, Event, EventListener, ProcessorEvent, PUBSUB};
 use streamlib::core::runtime::{CommitMode, StreamRuntime};
-use streamlib::core::{LinkInput, LinkOutput, Result, RuntimeContext, StreamError};
+use streamlib::core::{
+    InputLinkPortRef, LinkInput, LinkOutput, OutputLinkPortRef, Result, RuntimeContext, StreamError,
+};
 
 // =============================================================================
 // Test Counters
@@ -74,7 +75,7 @@ fn consumer_process_calls() -> u64 {
 // ProducerProcessor - Generates frames continuously
 // -----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Deserialize, Default)]
 pub struct ProducerConfig {
     pub label: String,
 }
@@ -121,7 +122,7 @@ impl ProducerProcessor::Processor {
 // ConsumerProcessor - Receives frames reactively
 // -----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Deserialize, Default)]
 pub struct ConsumerConfig {
     pub label: String,
 }
@@ -161,7 +162,7 @@ impl ConsumerProcessor::Processor {
 // ManualProcessor - Runs its own loop, checks is_paused()
 // -----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Deserialize, Default)]
 pub struct ManualConfig {
     pub label: String,
 }
@@ -290,7 +291,7 @@ fn test_pause_stops_continuous_processor() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add producer (Continuous mode)
@@ -313,12 +314,12 @@ fn test_pause_stops_continuous_processor() {
 
     // Pause the producer
     runtime
-        .pause_processor(&producer.id)
+        .pause_processor(&producer)
         .expect("Failed to pause producer");
 
     // Verify processor is paused
     assert!(
-        runtime.is_processor_paused(&producer.id).unwrap(),
+        runtime.is_processor_paused(&producer).unwrap(),
         "Producer should be paused"
     );
 
@@ -337,11 +338,11 @@ fn test_pause_stops_continuous_processor() {
 
     // Resume and verify frames start flowing again
     runtime
-        .resume_processor(&producer.id)
+        .resume_processor(&producer)
         .expect("Failed to resume producer");
 
     assert!(
-        !runtime.is_processor_paused(&producer.id).unwrap(),
+        !runtime.is_processor_paused(&producer).unwrap(),
         "Producer should not be paused"
     );
 
@@ -365,7 +366,7 @@ fn test_pause_stops_reactive_processor() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add producer and consumer
@@ -381,11 +382,11 @@ fn test_pause_stops_reactive_processor() {
         })
         .expect("Failed to add consumer");
 
-    // Connect them using string format
+    // Connect them
     runtime
         .connect(
-            format!("{}.output", producer.id),
-            format!("{}.input", consumer.id),
+            OutputLinkPortRef::new(producer.clone(), "output"),
+            InputLinkPortRef::new(consumer.clone(), "input"),
         )
         .expect("Failed to connect");
 
@@ -402,7 +403,7 @@ fn test_pause_stops_reactive_processor() {
 
     // Pause the consumer
     runtime
-        .pause_processor(&consumer.id)
+        .pause_processor(&consumer)
         .expect("Failed to pause consumer");
 
     // Wait and check that consumer stops receiving
@@ -420,7 +421,7 @@ fn test_pause_stops_reactive_processor() {
 
     // Resume and verify frames start flowing again
     runtime
-        .resume_processor(&consumer.id)
+        .resume_processor(&consumer)
         .expect("Failed to resume consumer");
 
     std::thread::sleep(Duration::from_millis(50));
@@ -443,7 +444,7 @@ fn test_pubsub_notifications_on_pause_resume() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add producer
@@ -456,7 +457,7 @@ fn test_pubsub_notifications_on_pause_resume() {
     // Subscribe to processor events
     let listener = Arc::new(Mutex::new(PauseResumeEventListener::new()));
     PUBSUB.subscribe(
-        &topics::processor(&producer.id),
+        &topics::processor(&producer),
         Arc::clone(&listener) as Arc<Mutex<dyn EventListener>>,
     );
 
@@ -465,9 +466,7 @@ fn test_pubsub_notifications_on_pause_resume() {
     std::thread::sleep(Duration::from_millis(20));
 
     // Pause - should trigger Paused event
-    runtime
-        .pause_processor(&producer.id)
-        .expect("Failed to pause");
+    runtime.pause_processor(&producer).expect("Failed to pause");
     std::thread::sleep(Duration::from_millis(10)); // Give event time to propagate
 
     assert_eq!(
@@ -483,7 +482,7 @@ fn test_pubsub_notifications_on_pause_resume() {
 
     // Resume - should trigger Resumed event
     runtime
-        .resume_processor(&producer.id)
+        .resume_processor(&producer)
         .expect("Failed to resume");
     std::thread::sleep(Duration::from_millis(10));
 
@@ -512,7 +511,7 @@ fn test_delegate_rejection_prevents_pause() {
     struct RejectAllPausesDelegate;
 
     impl ProcessorDelegate for RejectAllPausesDelegate {
-        fn will_pause(&self, id: &ProcessorId) -> Result<()> {
+        fn will_pause(&self, id: &str) -> Result<()> {
             Err(StreamError::Runtime(format!(
                 "Pause rejected for processor '{}'",
                 id
@@ -521,7 +520,7 @@ fn test_delegate_rejection_prevents_pause() {
     }
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .with_processor_delegate(RejectAllPausesDelegate)
         .build();
 
@@ -537,12 +536,12 @@ fn test_delegate_rejection_prevents_pause() {
     let frames_before = producer_frames();
 
     // Try to pause - should fail due to delegate rejection
-    let result = runtime.pause_processor(&producer.id);
+    let result = runtime.pause_processor(&producer);
     assert!(result.is_err(), "Pause should be rejected by delegate");
 
     // Verify processor is NOT paused
     assert!(
-        !runtime.is_processor_paused(&producer.id).unwrap(),
+        !runtime.is_processor_paused(&producer).unwrap(),
         "Producer should not be paused after rejection"
     );
 
@@ -567,7 +566,7 @@ fn test_runtime_pause_resume_all_processors() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add multiple producers
@@ -595,11 +594,11 @@ fn test_runtime_pause_resume_all_processors() {
 
     // Verify both processors are paused
     assert!(
-        runtime.is_processor_paused(&producer1.id).unwrap(),
+        runtime.is_processor_paused(&producer1).unwrap(),
         "Producer1 should be paused"
     );
     assert!(
-        runtime.is_processor_paused(&producer2.id).unwrap(),
+        runtime.is_processor_paused(&producer2).unwrap(),
         "Producer2 should be paused"
     );
 
@@ -619,11 +618,11 @@ fn test_runtime_pause_resume_all_processors() {
 
     // Verify both processors are resumed
     assert!(
-        !runtime.is_processor_paused(&producer1.id).unwrap(),
+        !runtime.is_processor_paused(&producer1).unwrap(),
         "Producer1 should not be paused"
     );
     assert!(
-        !runtime.is_processor_paused(&producer2.id).unwrap(),
+        !runtime.is_processor_paused(&producer2).unwrap(),
         "Producer2 should not be paused"
     );
 
@@ -648,7 +647,7 @@ fn test_pause_resume_idempotent() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     let producer = runtime
@@ -660,22 +659,20 @@ fn test_pause_resume_idempotent() {
     runtime.start().expect("Failed to start runtime");
 
     // Pause twice - second should be no-op
-    runtime.pause_processor(&producer.id).expect("First pause");
+    runtime.pause_processor(&producer).expect("First pause");
     runtime
-        .pause_processor(&producer.id)
+        .pause_processor(&producer)
         .expect("Second pause should succeed (no-op)");
 
-    assert!(runtime.is_processor_paused(&producer.id).unwrap());
+    assert!(runtime.is_processor_paused(&producer).unwrap());
 
     // Resume twice - second should be no-op
+    runtime.resume_processor(&producer).expect("First resume");
     runtime
-        .resume_processor(&producer.id)
-        .expect("First resume");
-    runtime
-        .resume_processor(&producer.id)
+        .resume_processor(&producer)
         .expect("Second resume should succeed (no-op)");
 
-    assert!(!runtime.is_processor_paused(&producer.id).unwrap());
+    assert!(!runtime.is_processor_paused(&producer).unwrap());
 
     runtime.stop().expect("Failed to stop runtime");
 }
@@ -687,7 +684,7 @@ fn test_manual_processor_checks_is_paused() {
     reset_counters();
 
     let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::Auto)
+        .with_commit_mode(CommitMode::BatchAutomatically)
         .build();
 
     // Add manual processor
@@ -710,12 +707,12 @@ fn test_manual_processor_checks_is_paused() {
 
     // Pause the manual processor
     runtime
-        .pause_processor(&manual.id)
+        .pause_processor(&manual)
         .expect("Failed to pause manual processor");
 
     // Verify processor is paused
     assert!(
-        runtime.is_processor_paused(&manual.id).unwrap(),
+        runtime.is_processor_paused(&manual).unwrap(),
         "Manual processor should be paused"
     );
 
@@ -734,11 +731,11 @@ fn test_manual_processor_checks_is_paused() {
 
     // Resume and verify iterations restart
     runtime
-        .resume_processor(&manual.id)
+        .resume_processor(&manual)
         .expect("Failed to resume manual processor");
 
     assert!(
-        !runtime.is_processor_paused(&manual.id).unwrap(),
+        !runtime.is_processor_paused(&manual).unwrap(),
         "Manual processor should not be paused"
     );
 

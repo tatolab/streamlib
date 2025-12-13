@@ -14,13 +14,13 @@ pub mod factory;
 pub use graph::{ProcessorState, ProcessorStateComponent};
 
 // Re-export traits
-pub use traits::{BaseProcessor, Processor, ProcessorType};
+pub use traits::{Config, ConfigValidationError, Processor};
 
 pub use dyn_processor::DynProcessor;
 pub use factory::{BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory};
 
 /// Empty config type for processors that don't need configuration.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EmptyConfig;
 
 // Sources

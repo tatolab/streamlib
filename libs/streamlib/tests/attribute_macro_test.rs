@@ -81,12 +81,12 @@ fn test_processor_instantiation() {
     let processor = TestProcessor::Processor::from_config(EmptyConfig).unwrap();
 
     // Verify it has the expected name
-    use streamlib::core::BaseProcessor;
+
     assert_eq!(processor.name(), "TestProcessor");
 }
 
 // Test with config field
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MyConfig {
     pub threshold: f32,
 }

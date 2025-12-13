@@ -7,15 +7,15 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::graph::ProcessorId;
-use crate::core::links::LinkId;
+use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
+
 use crate::core::processors::ProcessorState;
 
 /// Point-in-time snapshot of a processor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorSnapshot {
     /// Processor identifier.
-    pub id: ProcessorId,
+    pub id: ProcessorUniqueId,
     /// Processor type name.
     pub processor_type: String,
     /// Current state.
@@ -32,13 +32,13 @@ pub struct ProcessorSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkSnapshot {
     /// Link identifier.
-    pub id: LinkId,
+    pub id: LinkUniqueId,
     /// Source processor.
-    pub source_processor: ProcessorId,
+    pub source_processor: ProcessorUniqueId,
     /// Source port name.
     pub source_port: String,
     /// Target processor.
-    pub target_processor: ProcessorId,
+    pub target_processor: ProcessorUniqueId,
     /// Target port name.
     pub target_port: String,
     /// Current queue depth.
@@ -76,7 +76,7 @@ pub struct GraphHealth {
     /// Total error count.
     pub error_count: u64,
     /// Processors identified as bottlenecks.
-    pub bottlenecks: Vec<ProcessorId>,
+    pub bottlenecks: Vec<ProcessorUniqueId>,
 }
 
 /// Snapshot of graph state (serializable version).

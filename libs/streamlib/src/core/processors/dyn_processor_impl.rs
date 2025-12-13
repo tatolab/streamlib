@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::{DynProcessor, Processor, ProcessorType};
+use super::{DynProcessor, Processor};
 use crate::core::execution::ExecutionConfig;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::Result;
@@ -12,11 +13,11 @@ where
     T: Processor,
 {
     fn __generated_setup(&mut self, ctx: &crate::core::RuntimeContext) -> Result<()> {
-        <Self as super::BaseProcessor>::__generated_setup(self, ctx)
+        <Self as Processor>::__generated_setup(self, ctx)
     }
 
     fn __generated_teardown(&mut self) -> Result<()> {
-        <Self as super::BaseProcessor>::__generated_teardown(self)
+        <Self as Processor>::__generated_teardown(self)
     }
 
     fn process(&mut self) -> Result<()> {
@@ -24,11 +25,7 @@ where
     }
 
     fn name(&self) -> &str {
-        <Self as super::BaseProcessor>::name(self)
-    }
-
-    fn processor_type(&self) -> ProcessorType {
-        <Self as super::BaseProcessor>::processor_type(self)
+        <Self as Processor>::name(self)
     }
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
@@ -70,7 +67,7 @@ where
     fn remove_link_output_data_writer(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::links::LinkId,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<()> {
         <Self as Processor>::remove_link_output_data_writer(self, port_name, link_id)
     }
@@ -78,7 +75,7 @@ where
     fn remove_link_input_data_reader(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::links::LinkId,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<()> {
         <Self as Processor>::remove_link_input_data_reader(self, port_name, link_id)
     }

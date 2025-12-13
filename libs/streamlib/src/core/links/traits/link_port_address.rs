@@ -5,18 +5,21 @@
 
 use std::borrow::Cow;
 
-use crate::core::graph::ProcessorId;
+use crate::core::graph::ProcessorUniqueId;
 
 /// Strongly-typed link port address combining processor ID and port name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LinkPortAddress {
-    pub processor_id: ProcessorId,
+    pub processor_id: ProcessorUniqueId,
     pub port_name: Cow<'static, str>,
 }
 
 impl LinkPortAddress {
     /// Create a new link port address.
-    pub fn new(processor: impl Into<ProcessorId>, port: impl Into<Cow<'static, str>>) -> Self {
+    pub fn new(
+        processor: impl Into<ProcessorUniqueId>,
+        port: impl Into<Cow<'static, str>>,
+    ) -> Self {
         Self {
             processor_id: processor.into(),
             port_name: port.into(),
@@ -24,7 +27,7 @@ impl LinkPortAddress {
     }
 
     /// Create a link port address with a static string port name (zero allocation).
-    pub fn with_static(processor: impl Into<ProcessorId>, port: &'static str) -> Self {
+    pub fn with_static(processor: impl Into<ProcessorUniqueId>, port: &'static str) -> Self {
         Self {
             processor_id: processor.into(),
             port_name: Cow::Borrowed(port),

@@ -10,19 +10,19 @@ use crossbeam_channel::Sender;
 
 use super::link_output_data_writer::LinkOutputDataWriter;
 use super::link_output_to_processor_message::LinkOutputToProcessorMessage;
-use crate::core::links::graph::LinkId;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::traits::LinkPortMessage;
 use crate::core::{Result, StreamError};
 
 /// Binding between a LinkOutput port and a downstream processor via a specific link.
 struct LinkOutputToDownstreamProcessor<T: LinkPortMessage> {
-    link_id: LinkId,
+    link_id: LinkUniqueId,
     data_writer: LinkOutputDataWriter<T>,
     message_writer: Option<Sender<LinkOutputToProcessorMessage>>,
 }
 
 impl<T: LinkPortMessage> LinkOutputToDownstreamProcessor<T> {
-    fn new(link_id: LinkId, data_writer: LinkOutputDataWriter<T>) -> Self {
+    fn new(link_id: LinkUniqueId, data_writer: LinkOutputDataWriter<T>) -> Self {
         Self {
             link_id,
             data_writer,
@@ -96,7 +96,7 @@ impl<T: LinkPortMessage> LinkOutput<T> {
     /// Add a data writer for a downstream processor.
     pub fn add_data_writer(
         &self,
-        link_id: LinkId,
+        link_id: LinkUniqueId,
         data_writer: LinkOutputDataWriter<T>,
     ) -> Result<()> {
         unsafe {
@@ -112,7 +112,7 @@ impl<T: LinkPortMessage> LinkOutput<T> {
     }
 
     /// Remove a data writer by link ID.
-    pub fn remove_data_writer(&self, link_id: &LinkId) -> Result<()> {
+    pub fn remove_data_writer(&self, link_id: &LinkUniqueId) -> Result<()> {
         unsafe {
             let downstream = self.downstream_processors_mut();
             let idx = downstream

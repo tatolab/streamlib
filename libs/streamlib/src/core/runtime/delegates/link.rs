@@ -20,8 +20,8 @@ impl Default for DefaultLinkDelegate {
 mod tests {
     use super::*;
     use crate::core::delegates::LinkDelegate;
-    use crate::core::graph::Link;
-    use crate::core::links::LinkId;
+    use crate::core::graph::{Link, LinkUniqueId};
+
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -50,12 +50,12 @@ mod tests {
             Ok(())
         }
 
-        fn will_unwire(&self, _link_id: &LinkId) -> crate::core::Result<()> {
+        fn will_unwire(&self, _link_id: &LinkUniqueId) -> crate::core::Result<()> {
             self.unwire_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
-        fn did_unwire(&self, _link_id: &LinkId) -> crate::core::Result<()> {
+        fn did_unwire(&self, _link_id: &LinkUniqueId) -> crate::core::Result<()> {
             self.unwire_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -64,11 +64,7 @@ mod tests {
     #[test]
     fn test_default_link_delegate_does_nothing() {
         let delegate = DefaultLinkDelegate;
-        let link = Link::new(
-            LinkId::from_string("test_link").unwrap(),
-            "source.output",
-            "target.input",
-        );
+        let link = Link::new("source.output", "target.input");
 
         assert!(delegate.will_wire(&link).is_ok());
         assert!(delegate.did_wire(&link).is_ok());
@@ -79,11 +75,7 @@ mod tests {
     #[test]
     fn test_counting_link_delegate() {
         let delegate = Arc::new(CountingLinkDelegate::new());
-        let link = Link::new(
-            LinkId::from_string("test_link").unwrap(),
-            "source.output",
-            "target.input",
-        );
+        let link = Link::new("source.output", "target.input");
 
         delegate.will_wire(&link).unwrap();
         delegate.did_wire(&link).unwrap();

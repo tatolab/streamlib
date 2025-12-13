@@ -78,7 +78,7 @@ impl H264NalFormat {
 // MAIN WEBRTC WHEP PROCESSOR
 // ============================================================================
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebRtcWhepConfig {
     pub whep: WhepConfig,
 }

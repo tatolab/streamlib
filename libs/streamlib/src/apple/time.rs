@@ -51,7 +51,7 @@ mod tests {
 
         assert!(ns2 > ns1);
         let elapsed = ns2 - ns1;
-        assert!(elapsed >= 10_000_000 && elapsed < 20_000_000);
+        assert!((10_000_000..20_000_000).contains(&elapsed));
     }
 
     #[test]

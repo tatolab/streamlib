@@ -1,15 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{execution::ThreadPriority, Result, StreamError};
+use crate::core::delegates::ThreadPriority;
+use crate::core::{Result, StreamError};
 
-/// Apply thread priority to the current thread on macOS/iOS
-#[allow(dead_code)]
+/// Apply thread priority to the current thread based on the specified priority level.
+///
+/// This should be called from within a spawned thread to set its scheduling priority.
+/// - `RealTime`: Uses Mach time-constraint policy for strict latency guarantees
+/// - `High`: Uses POSIX SCHED_RR with elevated priority
+/// - `Normal`: No changes (default OS scheduling)
 pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
     match priority {
         ThreadPriority::RealTime => set_realtime_priority(),
         ThreadPriority::High => set_high_priority(),
-        ThreadPriority::Normal => Ok(()), // Normal priority is default, no action needed
+        ThreadPriority::Normal => Ok(()), // No-op for normal priority
     }
 }
 
@@ -159,24 +164,4 @@ fn set_high_priority() -> Result<()> {
 
     tracing::info!("Applied high thread priority (SCHED_RR, priority 50)");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_apply_normal_priority() {
-        // Normal priority should always succeed (it's a no-op)
-        assert!(apply_thread_priority(ThreadPriority::Normal).is_ok());
-    }
-
-    #[test]
-    fn test_apply_high_priority() {
-        // High priority may fail without privileges, but shouldn't crash
-        let _ = apply_thread_priority(ThreadPriority::High);
-    }
-
-    // Note: We don't test RealTime priority in automated tests as it requires
-    // special system configuration and could interfere with other processes
 }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::error::Result;
+use crate::core::graph::ProcessorUniqueId;
 use serde::{Deserialize, Serialize};
 
 /// Common topic constants for system events
@@ -33,7 +34,7 @@ pub trait EventListener: Send {
 pub enum Event {
     RuntimeGlobal(RuntimeEvent),
     ProcessorEvent {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
         event: ProcessorEvent,
     },
     Custom {
@@ -58,7 +59,7 @@ impl Event {
                     _ => topics::RUNTIME_GLOBAL.to_string(),
                 }
             }
-            Event::ProcessorEvent { processor_id, .. } => topics::processor(processor_id),
+            Event::ProcessorEvent { processor_id, .. } => topics::processor(processor_id.as_str()),
             Event::Custom { topic, .. } => topic.clone(),
         }
     }
@@ -87,7 +88,7 @@ impl Event {
     }
 
     /// Create a processor event
-    pub fn processor(processor_id: impl Into<String>, event: ProcessorEvent) -> Self {
+    pub fn processor(processor_id: impl Into<ProcessorUniqueId>, event: ProcessorEvent) -> Self {
         Event::ProcessorEvent {
             processor_id: processor_id.into(),
             event,
@@ -171,30 +172,30 @@ pub enum RuntimeEvent {
     // Emitted by Runtime when user adds/removes processors
     /// Emitted when runtime will add a processor to the graph
     RuntimeWillAddProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
         processor_type: String,
     },
     /// Emitted when runtime did add a processor to the graph
     RuntimeDidAddProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
         processor_type: String,
     },
     /// Emitted when runtime will remove a processor from the graph
     RuntimeWillRemoveProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
     },
     /// Emitted when runtime did remove a processor from the graph
     RuntimeDidRemoveProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
     },
 
     // ===== Runtime Link Events =====
     // Emitted by Runtime when user connects/disconnects ports
     /// Emitted when runtime will connect two ports
     RuntimeWillConnect {
-        from_processor: String,
+        from_processor: ProcessorUniqueId,
         from_port: String,
-        to_processor: String,
+        to_processor: ProcessorUniqueId,
         to_port: String,
     },
     /// Emitted when runtime did connect two ports
@@ -219,11 +220,11 @@ pub enum RuntimeEvent {
     // ===== Processor State Events =====
     /// Emitted when a processor's configuration is updated
     ProcessorConfigDidChange {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
     },
     /// Emitted when a processor's state changes (started, stopped, paused, etc.)
     ProcessorStateDidChange {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
         old_state: ProcessorState,
         new_state: ProcessorState,
     },
@@ -240,21 +241,21 @@ pub enum RuntimeEvent {
     },
     /// Emitted when compiler will create a processor instance
     CompilerWillCreateProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
         processor_type: String,
     },
     /// Emitted when compiler did create a processor instance
     CompilerDidCreateProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
         processor_type: String,
     },
     /// Emitted when compiler will destroy a processor instance
     CompilerWillDestroyProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
     },
     /// Emitted when compiler did destroy a processor instance
     CompilerDidDestroyProcessor {
-        processor_id: String,
+        processor_id: ProcessorUniqueId,
     },
     /// Emitted when compiler will wire a link (create ring buffer)
     CompilerWillWireLink {

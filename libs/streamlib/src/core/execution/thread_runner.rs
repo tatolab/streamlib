@@ -11,17 +11,16 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::graph::ProcessorUniqueId;
 use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::{BoxedProcessor, ProcessorState};
-
-type ProcessorId = String;
 
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Run the processor thread main loop based on execution mode.
 pub fn run_processor_loop(
-    id: ProcessorId,
+    id: ProcessorUniqueId,
     processor: Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: crossbeam_channel::Receiver<()>,
     message_reader: crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
@@ -75,7 +74,7 @@ pub fn run_processor_loop(
 }
 
 fn run_continuous_mode(
-    id: &ProcessorId,
+    id: &ProcessorUniqueId,
     processor: &Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     pause_gate: &Arc<AtomicBool>,
@@ -117,7 +116,7 @@ fn run_continuous_mode(
 }
 
 fn run_reactive_mode(
-    id: &ProcessorId,
+    id: &ProcessorUniqueId,
     processor: &Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
@@ -151,7 +150,7 @@ fn run_reactive_mode(
 }
 
 fn run_manual_mode(
-    id: &ProcessorId,
+    id: &ProcessorUniqueId,
     processor: &Arc<Mutex<BoxedProcessor>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,

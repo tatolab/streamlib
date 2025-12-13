@@ -16,7 +16,7 @@ pub enum ChannelConversionMode {
     RightOnly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioChannelConverterConfig {
     pub mode: ChannelConversionMode,
 }

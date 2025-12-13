@@ -45,6 +45,9 @@ docs/internal/
 target/
 Cargo.lock
 
+# Claude Code personal commands
+.claude/commands/mentor.md
+
 # Node/Nx
 node_modules/
 .nx/

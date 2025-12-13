@@ -180,7 +180,7 @@ mod tests {
     use crate::core::ProcessorDescriptor;
 
     fn create_test_descriptor(name: &str) -> ProcessorDescriptor {
-        ProcessorDescriptor::new(name, &format!("{} description", name))
+        ProcessorDescriptor::new(name, format!("{} description", name))
             .with_tags(vec!["test", "mock"])
     }
 

@@ -5,33 +5,8 @@
 
 use std::sync::Arc;
 
+use crate::core::execution::ThreadPriority;
 use crate::core::graph::ProcessorNode;
-
-/// Thread priority levels for processor scheduling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ThreadPriority {
-    /// Real-time priority for audio/timing-critical processors.
-    RealTime,
-    /// High priority for latency-sensitive processors.
-    High,
-    /// Normal priority (default).
-    #[default]
-    Normal,
-    /// Background priority for non-time-sensitive work.
-    Background,
-}
-
-impl ThreadPriority {
-    /// Get a human-readable description.
-    pub fn description(&self) -> &'static str {
-        match self {
-            ThreadPriority::RealTime => "real-time priority",
-            ThreadPriority::High => "high priority",
-            ThreadPriority::Normal => "normal priority",
-            ThreadPriority::Background => "background priority",
-        }
-    }
-}
 
 /// How a processor should be scheduled at runtime.
 ///
@@ -138,8 +113,14 @@ mod tests {
 
     #[test]
     fn test_thread_priority_description() {
-        assert_eq!(ThreadPriority::RealTime.description(), "real-time priority");
-        assert_eq!(ThreadPriority::Normal.description(), "normal priority");
+        assert_eq!(
+            ThreadPriority::RealTime.description(),
+            "Real-time (< 10ms latency, time-constrained)"
+        );
+        assert_eq!(
+            ThreadPriority::Normal.description(),
+            "Normal priority (no strict latency)"
+        );
     }
 
     #[test]

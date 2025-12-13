@@ -81,7 +81,7 @@ use syn::{parse_macro_input, ItemStruct};
 /// ```ignore
 /// #[streamlib::processor(execution = Reactive)]
 /// pub struct MyProcessor {
-///     #[streamlib::input]
+///     #[streamlib::input]"
 ///     audio_in: LinkInput<AudioFrame>,
 ///
 ///     #[streamlib::output]

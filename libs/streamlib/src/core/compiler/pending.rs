@@ -7,8 +7,7 @@
 //! that the user requested. Each operation is validated against the current
 //! Graph + ECS state before execution.
 
-use crate::core::graph::ProcessorId;
-use crate::core::links::LinkId;
+use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 
 /// A pending graph mutation operation.
 ///
@@ -19,24 +18,24 @@ use crate::core::links::LinkId;
 #[derive(Debug, Clone)]
 pub enum PendingOperation {
     /// Add a processor that exists in the Graph but isn't running yet.
-    AddProcessor(ProcessorId),
+    AddProcessor(ProcessorUniqueId),
 
     /// Remove a processor that is currently running.
-    RemoveProcessor(ProcessorId),
+    RemoveProcessor(ProcessorUniqueId),
 
     /// Wire a link that exists in the Graph but isn't wired yet.
-    AddLink(LinkId),
+    AddLink(LinkUniqueId),
 
     /// Unwire and remove a link that is currently wired.
-    RemoveLink(LinkId),
+    RemoveLink(LinkUniqueId),
 
     /// Update a processor's configuration.
-    UpdateProcessorConfig(ProcessorId),
+    UpdateProcessorConfig(ProcessorUniqueId),
 }
 
 impl PendingOperation {
     /// Get the processor ID if this operation involves a processor.
-    pub fn processor_id(&self) -> Option<&ProcessorId> {
+    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
         match self {
             PendingOperation::AddProcessor(id) => Some(id),
             PendingOperation::RemoveProcessor(id) => Some(id),
@@ -46,7 +45,7 @@ impl PendingOperation {
     }
 
     /// Get the link ID if this operation involves a link.
-    pub fn link_id(&self) -> Option<&LinkId> {
+    pub fn link_id(&self) -> Option<&LinkUniqueId> {
         match self {
             PendingOperation::AddLink(id) => Some(id),
             PendingOperation::RemoveLink(id) => Some(id),
@@ -135,13 +134,13 @@ impl PendingOperationQueue {
     ///
     /// This is useful when a processor is removed - we should also remove
     /// any pending operations that reference it.
-    pub fn remove_processor_operations(&mut self, processor_id: &ProcessorId) {
+    pub fn remove_processor_operations(&mut self, processor_id: &ProcessorUniqueId) {
         self.operations
             .retain(|op| op.processor_id() != Some(processor_id));
     }
 
     /// Remove operations that reference the given link ID.
-    pub fn remove_link_operations(&mut self, link_id: &LinkId) {
+    pub fn remove_link_operations(&mut self, link_id: &LinkUniqueId) {
         self.operations.retain(|op| op.link_id() != Some(link_id));
     }
 }

@@ -3,15 +3,15 @@
 
 use super::metadata::MetadataValue;
 use crate::core::links::{LinkPortMessage, LinkPortType};
+use dasp::slice::{FromSampleSlice, ToSampleSlice};
 use dasp::Frame;
+use dasp::Signal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 // Implement sealed trait for AudioFrame
-impl crate::core::links::traits::link_port_message::sealed::Sealed for AudioFrame {}
-use dasp::slice::{FromSampleSlice, ToSampleSlice};
-use dasp::Signal;
+impl crate::core::links::LinkPortMessageImplementor for AudioFrame {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]

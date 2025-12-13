@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::execution::ExecutionConfig;
+use crate::core::graph::LinkUniqueId;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::{Result, RuntimeContext};
-
-use super::ProcessorType;
 
 pub trait DynProcessor: Send + 'static {
     fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
@@ -20,7 +19,6 @@ pub trait DynProcessor: Send + 'static {
     fn process(&mut self) -> Result<()>;
 
     fn name(&self) -> &str;
-    fn processor_type(&self) -> ProcessorType;
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
     fn descriptor_instance(&self) -> Option<ProcessorDescriptor>;
 
@@ -44,13 +42,13 @@ pub trait DynProcessor: Send + 'static {
     fn remove_link_output_data_writer(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::links::LinkId,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<()>;
 
     fn remove_link_input_data_reader(
         &mut self,
         port_name: &str,
-        link_id: &crate::core::links::LinkId,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<()>;
 
     /// Set the message writer for LinkOutput to processor communication.

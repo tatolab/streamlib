@@ -7,7 +7,7 @@
 //! - `Processor` struct with public fields
 //! - `InputLink` module with port markers
 //! - `OutputLink` module with port markers
-//! - Trait implementations (BaseProcessor, Processor)
+//! - Processor trait implementation
 
 use crate::analysis::{AnalysisResult, PortDirection};
 use crate::attributes::ExecutionMode;
@@ -21,7 +21,6 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
     let processor_struct = generate_processor_struct(analysis);
     let input_link_module = generate_input_link_module(analysis);
     let output_link_module = generate_output_link_module(analysis);
-    let base_processor_impl = generate_base_processor_impl(analysis);
     let processor_impl = generate_processor_impl(analysis);
 
     let unsafe_send_impl = if analysis.processor_attrs.unsafe_send {
@@ -42,8 +41,6 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
             #input_link_module
 
             #output_link_module
-
-            #base_processor_impl
 
             #processor_impl
 
@@ -156,46 +153,10 @@ fn generate_output_link_module(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate BaseProcessor trait implementation
-fn generate_base_processor_impl(analysis: &AnalysisResult) -> TokenStream {
-    let processor_name = analysis.struct_name.to_string();
-
-    let has_inputs = analysis.input_ports().next().is_some();
-    let has_outputs = analysis.output_ports().next().is_some();
-
-    let processor_type = match (has_inputs, has_outputs) {
-        (false, true) => quote! { ::streamlib::core::ProcessorType::Source },
-        (true, false) => quote! { ::streamlib::core::ProcessorType::Sink },
-        _ => quote! { ::streamlib::core::ProcessorType::Transform },
-    };
-
-    quote! {
-        impl ::streamlib::core::BaseProcessor for Processor {
-            fn name(&self) -> &str {
-                #processor_name
-            }
-
-            fn processor_type(&self) -> ::streamlib::core::ProcessorType {
-                #processor_type
-            }
-
-            fn descriptor(&self) -> Option<::streamlib::core::ProcessorDescriptor> {
-                <Self as ::streamlib::core::Processor>::descriptor()
-            }
-
-            fn __generated_setup(&mut self, ctx: &::streamlib::core::RuntimeContext) -> ::streamlib::core::Result<()> {
-                self.setup(ctx)
-            }
-
-            fn __generated_teardown(&mut self) -> ::streamlib::core::Result<()> {
-                self.teardown()
-            }
-        }
-    }
-}
-
 /// Generate Processor trait implementation
 fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
+    let processor_name = analysis.struct_name.to_string();
+
     let config_type = analysis
         .config_field_type
         .as_ref()
@@ -274,6 +235,10 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
         impl ::streamlib::core::Processor for Processor {
             type Config = #config_type;
 
+            fn name(&self) -> &str {
+                #processor_name
+            }
+
             #from_config_body
 
             fn process(&mut self) -> ::streamlib::core::Result<()> {
@@ -297,6 +262,14 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #remove_link_output_data_writer
             #remove_link_input_data_reader
             #set_link_output_to_processor_message_writer
+
+            fn __generated_setup(&mut self, ctx: &::streamlib::core::RuntimeContext) -> ::streamlib::core::Result<()> {
+                self.setup(ctx)
+            }
+
+            fn __generated_teardown(&mut self) -> ::streamlib::core::Result<()> {
+                self.teardown()
+            }
         }
     }
 }
@@ -581,7 +554,7 @@ fn generate_remove_link_output_data_writer(analysis: &AnalysisResult) -> TokenSt
     }
 
     quote! {
-        fn remove_link_output_data_writer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+        fn remove_link_output_data_writer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkUniqueId) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown output port: {}", port_name)))
@@ -614,7 +587,7 @@ fn generate_remove_link_input_data_reader(analysis: &AnalysisResult) -> TokenStr
     }
 
     quote! {
-        fn remove_link_input_data_reader(&mut self, port_name: &str, link_id: &::streamlib::core::LinkId) -> ::streamlib::core::Result<()> {
+        fn remove_link_input_data_reader(&mut self, port_name: &str, link_id: &::streamlib::core::LinkUniqueId) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown input port: {}", port_name)))

@@ -24,7 +24,7 @@ pub struct EncodedAudioFrame {
 // OPUS ENCODING CONFIGURATION
 // ============================================================================
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioEncoderConfig {
     pub sample_rate: u32,
     pub channels: u16,
