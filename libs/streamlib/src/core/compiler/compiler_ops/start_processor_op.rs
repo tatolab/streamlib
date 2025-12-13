@@ -1,9 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::sync::Arc;
-
-use crate::core::delegates::{ProcessorDelegate, SchedulerDelegate, SchedulingStrategy};
+use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
@@ -14,8 +12,6 @@ use crate::core::graph::{
 use crate::core::processors::ProcessorState;
 
 pub(crate) fn start_processor(
-    processor_delegate: &Arc<dyn ProcessorDelegate>,
-    scheduler: &Arc<dyn SchedulerDelegate>,
     property_graph: &mut Graph,
     processor_id: impl AsRef<str>,
 ) -> Result<()> {
@@ -41,48 +37,18 @@ pub(crate) fn start_processor(
             StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
 
-    let strategy = scheduler.scheduling_strategy(node);
+    let strategy = scheduling_strategy_for_processor(node);
     tracing::info!(
         "[{}] Starting with strategy: {}",
         processor_id,
         strategy.description()
     );
 
-    // Delegate callback: will_start
-    processor_delegate.will_start(processor_id)?;
-
     match strategy {
         SchedulingStrategy::DedicatedThread { priority, name } => {
             spawn_dedicated_thread(property_graph, processor_id, priority, name)?;
         }
-        SchedulingStrategy::MainThread => {
-            spawn_dedicated_thread(
-                property_graph,
-                processor_id,
-                crate::core::delegates::ThreadPriority::Normal,
-                None,
-            )?;
-        }
-        SchedulingStrategy::WorkStealingPool => {
-            spawn_dedicated_thread(
-                property_graph,
-                processor_id,
-                crate::core::delegates::ThreadPriority::Normal,
-                None,
-            )?;
-        }
-        SchedulingStrategy::Lightweight => {
-            spawn_dedicated_thread(
-                property_graph,
-                processor_id,
-                crate::core::delegates::ThreadPriority::Normal,
-                None,
-            )?;
-        }
     }
-
-    // Delegate callback: did_start
-    processor_delegate.did_start(processor_id)?;
 
     Ok(())
 }
@@ -90,7 +56,7 @@ pub(crate) fn start_processor(
 fn spawn_dedicated_thread(
     property_graph: &mut Graph,
     processor_id: impl AsRef<str>,
-    priority: crate::core::delegates::ThreadPriority,
+    priority: crate::core::execution::ThreadPriority,
     _name: Option<String>,
 ) -> Result<()> {
     let processor_id = processor_id.as_ref();

@@ -12,13 +12,15 @@
 
 mod compile_phase;
 mod compile_result;
+#[allow(clippy::module_inception)]
 mod compiler;
 pub(crate) mod compiler_ops;
+mod compiler_transaction;
 mod link_config_change;
-mod operation_batch;
 mod pending_operation;
 mod pending_operation_queue;
 mod processor_config_change;
+pub(crate) mod scheduling;
 pub mod wiring;
 
 pub use compile_phase::CompilePhase;
@@ -26,8 +28,8 @@ pub use compile_result::CompileResult;
 pub use compiler::Compiler;
 pub use compiler_ops::{shutdown_all_processors, shutdown_processor};
 pub use compiler_ops::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper};
+pub use compiler_transaction::CompilerTransactionHandle;
 pub use link_config_change::LinkConfigChange;
-pub use operation_batch::OperationBatch;
 pub use pending_operation::PendingOperation;
 pub use pending_operation_queue::PendingOperationQueue;
 pub use processor_config_change::ProcessorConfigChange;

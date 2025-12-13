@@ -5,17 +5,16 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::delegates::{FactoryDelegate, ProcessorDelegate};
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, LinkOutputToProcessorWriterAndReader,
     ProcessorInstanceComponent, ProcessorPauseGateComponent, ProcessorUniqueId,
     ShutdownChannelComponent, StateComponent,
 };
+use crate::core::processors::{ProcessorNodeFactory, RegistryBackedFactory};
 
 pub(crate) fn create_processor(
-    factory: &Arc<dyn FactoryDelegate>,
-    processor_delegate: &Arc<dyn ProcessorDelegate>,
+    factory: &Arc<RegistryBackedFactory>,
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
 ) -> Result<()> {
@@ -24,14 +23,8 @@ pub(crate) fn create_processor(
         StreamError::ProcessorNotFound(format!("Processor '{}' not found in graph", proc_id))
     })?;
 
-    // Delegate callback: will_create
-    processor_delegate.will_create(node)?;
-
     // Create processor instance via factory
     let processor = factory.create(node)?;
-
-    // Delegate callback: did_create
-    processor_delegate.did_create(node, &processor)?;
 
     // Attach components to processor node
     let processor_arc = Arc::new(Mutex::new(processor));

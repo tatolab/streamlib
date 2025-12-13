@@ -173,12 +173,10 @@ pub enum RuntimeEvent {
     /// Emitted when runtime will add a processor to the graph
     RuntimeWillAddProcessor {
         processor_id: ProcessorUniqueId,
-        processor_type: String,
     },
     /// Emitted when runtime did add a processor to the graph
     RuntimeDidAddProcessor {
         processor_id: ProcessorUniqueId,
-        processor_type: String,
     },
     /// Emitted when runtime will remove a processor from the graph
     RuntimeWillRemoveProcessor {

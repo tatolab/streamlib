@@ -52,6 +52,31 @@ impl RuntimeContext {
     where
         F: FnOnce() + Send + 'static,
     {
+        use objc2_foundation::NSThread;
+
+        let is_main = NSThread::currentThread().isMainThread();
+        let thread_id = std::thread::current().id();
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string();
+
+        // If already on main thread, execute directly
+        if is_main {
+            tracing::debug!(
+                "[run_on_main_async] already on main thread ({:?} '{}'), executing directly",
+                thread_id,
+                thread_name
+            );
+            f();
+            return;
+        }
+
+        tracing::debug!(
+            "[run_on_main_async] on background thread ({:?} '{}'), dispatching to main",
+            thread_id,
+            thread_name
+        );
         dispatch2::DispatchQueue::main().exec_async(f);
     }
 
@@ -62,7 +87,27 @@ impl RuntimeContext {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
+        use objc2_foundation::NSThread;
         use std::sync::mpsc::channel;
+
+        let is_main = NSThread::currentThread().isMainThread();
+        let thread_id = std::thread::current().id();
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string();
+
+        // If already on main thread, execute directly to avoid deadlock
+        if is_main {
+            tracing::debug!(
+                "[run_on_main_blocking] already on main thread ({:?} '{}'), executing directly",
+                thread_id,
+                thread_name
+            );
+            return f();
+        }
+
+        tracing::debug!("[run_on_main_blocking] on background thread ({:?} '{}'), dispatching to main and waiting", thread_id, thread_name);
         let (tx, rx) = channel();
 
         dispatch2::DispatchQueue::main().exec_async(move || {
@@ -79,7 +124,13 @@ impl RuntimeContext {
     where
         F: FnOnce() + Send + 'static,
     {
-        // Just execute immediately on current thread
+        let thread_id = std::thread::current().id();
+        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        tracing::debug!(
+            "[run_on_main_async] non-macOS, executing directly on thread ({:?} '{}')",
+            thread_id,
+            thread_name
+        );
         f();
     }
 
@@ -89,7 +140,13 @@ impl RuntimeContext {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        // Just execute immediately on current thread
+        let thread_id = std::thread::current().id();
+        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        tracing::debug!(
+            "[run_on_main_blocking] non-macOS, executing directly on thread ({:?} '{}')",
+            thread_id,
+            thread_name
+        );
         f()
     }
 }

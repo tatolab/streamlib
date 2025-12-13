@@ -17,12 +17,11 @@ use serial_test::serial;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use streamlib::core::delegates::ProcessorDelegate;
 use streamlib::core::frames::{AudioChannelCount, AudioFrame};
 use streamlib::core::pubsub::{topics, Event, EventListener, ProcessorEvent, PUBSUB};
-use streamlib::core::runtime::{CommitMode, StreamRuntime};
+use streamlib::core::runtime::StreamRuntime;
 use streamlib::core::{
-    InputLinkPortRef, LinkInput, LinkOutput, OutputLinkPortRef, Result, RuntimeContext, StreamError,
+    InputLinkPortRef, LinkInput, LinkOutput, OutputLinkPortRef, Result, RuntimeContext,
 };
 
 // =============================================================================
@@ -290,9 +289,7 @@ impl EventListener for PauseResumeEventListener {
 fn test_pause_stops_continuous_processor() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::BatchAutomatically)
-        .build();
+    let mut runtime = StreamRuntime::new();
 
     // Add producer (Continuous mode)
     let producer = runtime
@@ -365,9 +362,7 @@ fn test_pause_stops_continuous_processor() {
 fn test_pause_stops_reactive_processor() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::BatchAutomatically)
-        .build();
+    let mut runtime = StreamRuntime::new();
 
     // Add producer and consumer
     let producer = runtime
@@ -443,9 +438,7 @@ fn test_pause_stops_reactive_processor() {
 fn test_pubsub_notifications_on_pause_resume() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::BatchAutomatically)
-        .build();
+    let mut runtime = StreamRuntime::new();
 
     // Add producer
     let producer = runtime
@@ -501,73 +494,13 @@ fn test_pubsub_notifications_on_pause_resume() {
     runtime.stop().expect("Failed to stop runtime");
 }
 
-/// Test that delegate rejection prevents pause
-#[test]
-#[serial]
-fn test_delegate_rejection_prevents_pause() {
-    reset_counters();
-
-    // Create a delegate that rejects ALL pause requests
-    struct RejectAllPausesDelegate;
-
-    impl ProcessorDelegate for RejectAllPausesDelegate {
-        fn will_pause(&self, id: &str) -> Result<()> {
-            Err(StreamError::Runtime(format!(
-                "Pause rejected for processor '{}'",
-                id
-            )))
-        }
-    }
-
-    let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::BatchAutomatically)
-        .with_processor_delegate(RejectAllPausesDelegate)
-        .build();
-
-    let producer = runtime
-        .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
-            label: "producer".to_string(),
-        })
-        .expect("Failed to add producer");
-
-    runtime.start().expect("Failed to start runtime");
-    std::thread::sleep(Duration::from_millis(30));
-
-    let frames_before = producer_frames();
-
-    // Try to pause - should fail due to delegate rejection
-    let result = runtime.pause_processor(&producer);
-    assert!(result.is_err(), "Pause should be rejected by delegate");
-
-    // Verify processor is NOT paused
-    assert!(
-        !runtime.is_processor_paused(&producer).unwrap(),
-        "Producer should not be paused after rejection"
-    );
-
-    // Verify frames continue flowing
-    std::thread::sleep(Duration::from_millis(30));
-    let frames_after = producer_frames();
-    assert!(
-        frames_after > frames_before + 5,
-        "Frames should continue flowing after rejected pause. Before: {}, After: {}",
-        frames_before,
-        frames_after
-    );
-
-    // Cleanup
-    runtime.stop().expect("Failed to stop runtime");
-}
-
 /// Test runtime-level pause/resume affects all processors
 #[test]
 #[serial]
 fn test_runtime_pause_resume_all_processors() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::BatchAutomatically)
-        .build();
+    let mut runtime = StreamRuntime::new();
 
     // Add multiple producers
     let producer1 = runtime
@@ -646,9 +579,7 @@ fn test_runtime_pause_resume_all_processors() {
 fn test_pause_resume_idempotent() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::BatchAutomatically)
-        .build();
+    let mut runtime = StreamRuntime::new();
 
     let producer = runtime
         .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
@@ -683,9 +614,7 @@ fn test_pause_resume_idempotent() {
 fn test_manual_processor_checks_is_paused() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::builder()
-        .with_commit_mode(CommitMode::BatchAutomatically)
-        .build();
+    let mut runtime = StreamRuntime::new();
 
     // Add manual processor
     let manual = runtime
