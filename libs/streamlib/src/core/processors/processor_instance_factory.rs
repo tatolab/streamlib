@@ -15,11 +15,11 @@ pub type ProcessorInstance = Box<dyn DynProcessor + Send>;
 
 /// Types used by macro-generated code. Not for direct use.
 pub mod macro_codegen {
-    use super::ProcessorRegistryFactory;
+    use super::ProcessorInstanceFactory;
 
     /// Registration entry for auto-registration of processor factories via inventory.
     pub struct FactoryRegistration {
-        pub register_fn: fn(&ProcessorRegistryFactory),
+        pub register_fn: fn(&ProcessorInstanceFactory),
     }
 
     inventory::collect!(FactoryRegistration);
@@ -33,18 +33,18 @@ mod private {
 }
 
 /// Factory for compile-time registered Rust processors.
-pub struct ProcessorRegistryFactory {
+pub struct ProcessorInstanceFactory {
     constructors: RwLock<HashMap<String, private::ConstructorFn>>,
     port_info: RwLock<HashMap<String, (Vec<PortInfo>, Vec<PortInfo>)>>,
 }
 
-impl Default for ProcessorRegistryFactory {
+impl Default for ProcessorInstanceFactory {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ProcessorRegistryFactory {
+impl ProcessorInstanceFactory {
     pub fn new() -> Self {
         let instance = Self {
             constructors: RwLock::new(HashMap::new()),
