@@ -8,7 +8,7 @@ pub mod traits;
 
 mod dyn_processor;
 mod dyn_processor_impl;
-pub mod factory;
+mod processor_instance_factory;
 
 // Re-export graph types
 pub use graph::{ProcessorState, ProcessorStateComponent};
@@ -17,7 +17,7 @@ pub use graph::{ProcessorState, ProcessorStateComponent};
 pub use traits::{Config, ConfigValidationError, Processor};
 
 pub use dyn_processor::DynProcessor;
-pub use factory::{BoxedProcessor, CompositeFactory, ProcessorNodeFactory, RegistryBackedFactory};
+pub use processor_instance_factory::{macro_codegen, ProcessorInstance, ProcessorInstanceFactory};
 
 /// Empty config type for processors that don't need configuration.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]

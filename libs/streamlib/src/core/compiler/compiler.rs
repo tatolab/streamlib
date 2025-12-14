@@ -14,7 +14,7 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
 use crate::core::links::DefaultLinkFactory;
-use crate::core::processors::{Processor, RegistryBackedFactory};
+use crate::core::processors::ProcessorInstanceFactory;
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
 /// Compiles graph changes into running processor state.
@@ -24,7 +24,7 @@ pub struct Compiler {
     // Transaction accumulates operations until commit
     transaction: Arc<Mutex<Vec<PendingOperation>>>,
     // Factory for creating processor instances (internal)
-    factory: Arc<RegistryBackedFactory>,
+    factory: Arc<ProcessorInstanceFactory>,
     // Factory for creating link instances (ring buffers)
     link_factory: Arc<DefaultLinkFactory>,
 }
@@ -41,18 +41,9 @@ impl Compiler {
         Self {
             graph: Arc::new(RwLock::new(Graph::new())),
             transaction: Arc::new(Mutex::new(Vec::new())),
-            factory: Arc::new(RegistryBackedFactory::new()),
+            factory: Arc::new(ProcessorInstanceFactory::new()),
             link_factory: Arc::new(DefaultLinkFactory),
         }
-    }
-
-    /// Register a processor type with the internal factory.
-    pub fn register<P>(&self)
-    where
-        P: Processor + 'static,
-        P::Config: serde::Serialize + for<'de> serde::Deserialize<'de> + Default,
-    {
-        self.factory.register::<P>();
     }
 
     // =========================================================================
@@ -103,7 +94,7 @@ impl Compiler {
     /// Calls compiler_ops::* for actual operations.
     fn compile(
         graph_arc: Arc<RwLock<Graph>>,
-        factory: Arc<RegistryBackedFactory>,
+        factory: Arc<ProcessorInstanceFactory>,
         link_factory: Arc<DefaultLinkFactory>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
@@ -113,6 +104,9 @@ impl Compiler {
         };
 
         let mut result = CompileResult::default();
+
+        // Ensure all inventory-registered processors are loaded
+        factory.register_all_processors();
 
         // =====================================================================
         // 1. Validate and categorize operations

@@ -11,10 +11,10 @@ use crate::core::graph::{
     ProcessorInstanceComponent, ProcessorPauseGateComponent, ProcessorUniqueId,
     ShutdownChannelComponent, StateComponent,
 };
-use crate::core::processors::{ProcessorNodeFactory, RegistryBackedFactory};
+use crate::core::processors::ProcessorInstanceFactory;
 
 pub(crate) fn create_processor(
-    factory: &Arc<RegistryBackedFactory>,
+    factory: &Arc<ProcessorInstanceFactory>,
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
 ) -> Result<()> {

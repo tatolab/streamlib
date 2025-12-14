@@ -18,7 +18,7 @@ use crate::core::graph::{
     LinkTypeInfoComponent, LinkUniqueId, OutputLinkPortRef, ProcessorInstanceComponent,
 };
 use crate::core::links::{LinkFactoryDelegate, LinkPortType};
-use crate::core::processors::BoxedProcessor;
+use crate::core::processors::ProcessorInstance;
 use crate::core::ProcessorUniqueId;
 use crate::LinkCapacity;
 
@@ -201,7 +201,7 @@ fn get_processor_pair(
     property_graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
     dest_proc_id: &ProcessorUniqueId,
-) -> Result<(Arc<Mutex<BoxedProcessor>>, Arc<Mutex<BoxedProcessor>>)> {
+) -> Result<(Arc<Mutex<ProcessorInstance>>, Arc<Mutex<ProcessorInstance>>)> {
     let source_arc = property_graph
         .traversal_mut()
         .v(source_proc_id)
@@ -233,8 +233,8 @@ fn get_processor_pair(
 }
 
 fn validate_audio_compatibility(
-    source_processor: &Arc<Mutex<BoxedProcessor>>,
-    dest_processor: &Arc<Mutex<BoxedProcessor>>,
+    source_processor: &Arc<Mutex<ProcessorInstance>>,
+    dest_processor: &Arc<Mutex<ProcessorInstance>>,
     from_port: &OutputLinkPortRef,
     to_port: &InputLinkPortRef,
 ) -> Result<()> {
@@ -263,8 +263,8 @@ fn validate_audio_compatibility(
 }
 
 fn validate_port_types(
-    source_processor: &Arc<Mutex<BoxedProcessor>>,
-    dest_processor: &Arc<Mutex<BoxedProcessor>>,
+    source_processor: &Arc<Mutex<ProcessorInstance>>,
+    dest_processor: &Arc<Mutex<ProcessorInstance>>,
     source_port: &str,
     dest_port: &str,
     from_port: &OutputLinkPortRef,
@@ -312,7 +312,7 @@ pub struct LinkInputDataReaderWrapper<T: crate::core::LinkPortMessage> {
 }
 
 fn wire_data_writer_to_processor(
-    processor: &Arc<Mutex<BoxedProcessor>>,
+    processor: &Arc<Mutex<ProcessorInstance>>,
     port_name: &str,
     link_id: &LinkUniqueId,
     port_type: LinkPortType,
@@ -363,7 +363,7 @@ fn wire_data_writer_to_processor(
 }
 
 fn wire_data_reader_to_processor(
-    processor: &Arc<Mutex<BoxedProcessor>>,
+    processor: &Arc<Mutex<ProcessorInstance>>,
     port_name: &str,
     link_id: &LinkUniqueId,
     port_type: LinkPortType,

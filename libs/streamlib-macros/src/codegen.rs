@@ -31,6 +31,15 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
         quote! {}
     };
 
+    // Auto-registration via inventory crate
+    let inventory_submit = quote! {
+        ::streamlib::inventory::submit! {
+            ::streamlib::core::processors::macro_codegen::FactoryRegistration {
+                register_fn: |factory| factory.register::<Processor>(),
+            }
+        }
+    };
+
     quote! {
         #[allow(non_snake_case)]
         pub mod #module_name {
@@ -45,6 +54,8 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
             #processor_impl
 
             #unsafe_send_impl
+
+            #inventory_submit
         }
     }
 }

@@ -110,9 +110,6 @@ impl StreamRuntime {
             );
         };
 
-        // TODO(@Jonathan): Remove this manual register call when inventory-based auto-registration is restored in #[streamlib::processor] macro
-        self.compiler.register::<P>();
-
         // Use compiler.scope() to access graph and transaction
         let processor_id = self.compiler.scope(|graph, tx| {
             graph

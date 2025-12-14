@@ -89,7 +89,11 @@ impl PubSub {
                 });
             }
         } else {
-            tracing::warn!("PUBSUB: No subscribers for topic '{}'", topic);
+            tracing::debug!(
+                "PUBSUB: No subscribers for topic '{}', event: {:?}",
+                topic,
+                event
+            );
         }
         // If no subscribers, event is dropped (true fire-and-forget)
 

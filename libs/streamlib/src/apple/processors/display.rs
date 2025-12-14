@@ -679,5 +679,3 @@ impl AppleDisplayProcessor::Processor {
         Ok(())
     }
 }
-
-crate::register_processor_type!(AppleDisplayProcessor::Processor);

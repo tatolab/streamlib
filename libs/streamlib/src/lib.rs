@@ -16,6 +16,7 @@ extern crate self as streamlib;
 
 // Re-export crossbeam_channel for macro-generated code
 pub use crossbeam_channel;
+pub use inventory;
 
 pub mod core;
 
@@ -30,17 +31,11 @@ pub use core::{
     are_synchronized,
     convert_audio_to_sample,
     convert_video_to_samples,
-    global_registry,
     // Port marker traits and helpers for compile-time safe connections
     input,
-    is_processor_registered,
-    list_processors,
-    list_processors_by_tag,
     media_clock::MediaClock,
     output,
-    register_processor,
     timestamp_delta_ms,
-    unregister_processor,
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
@@ -70,7 +65,6 @@ pub use core::{
     ClapPluginInfo,
     ClapScanner,
     DataFrame,
-    DescriptorProvider,
     DisplayConfig,
     DynProcessor,
     EncodedAudioFrame,
@@ -101,8 +95,6 @@ pub use core::{
     Processor,
     ProcessorDescriptor,
     ProcessorExample,
-    ProcessorRegistration,
-    ProcessorRegistry,
     ResamplingQuality,
     Result,
     RtpTimestampCalculator,
