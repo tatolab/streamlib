@@ -284,6 +284,12 @@ pub enum RuntimeEvent {
     // Emitted by Graph when topology changes
     /// Emitted when graph topology changed (nodes or edges added/removed)
     GraphTopologyDidChange,
+
+    // ===== Factory/Registration Events =====
+    /// Emitted when a new processor type is registered with the factory
+    RuntimeDidRegisterProcessorType {
+        processor_type: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -16,7 +16,6 @@ pub mod observability;
 pub mod prelude;
 pub mod processors;
 pub mod pubsub;
-pub mod registry;
 pub mod runtime;
 pub mod schema;
 pub mod signals;
@@ -39,7 +38,6 @@ pub use utils::*;
 
 pub use execution::*;
 pub use observability::*;
-pub use registry::*;
 pub use runtime::*;
 pub use schema::*;
 pub use streaming::*;

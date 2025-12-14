@@ -685,5 +685,3 @@ impl AppleCameraProcessor::Processor {
         }
     }
 }
-
-crate::register_processor_type!(AppleCameraProcessor::Processor);
