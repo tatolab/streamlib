@@ -160,11 +160,11 @@ impl StreamRuntime {
             let id = graph
                 .traversal_mut()
                 .add_e(from, to)
+                .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
                 .first()
                 .map(|link| link.id.clone())
                 .ok_or_else(|| StreamError::GraphError("failed to create link".into()))?;
 
-            tx.log(PendingOperation::AddLink(id.clone()));
             Ok::<_, StreamError>(id)
         })?;
 
