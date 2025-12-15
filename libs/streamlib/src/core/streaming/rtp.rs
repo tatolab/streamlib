@@ -1,13 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::videotoolbox::{parse_nal_units, EncodedVideoFrame};
 use crate::core::streaming::opus::EncodedAudioFrame;
 use crate::core::{Result, StreamError};
 use bytes::Bytes;
 use std::time::Duration;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use crate::apple::videotoolbox::{parse_nal_units, EncodedVideoFrame};
+
 /// Converts encoded H.264 video frame to webrtc Sample(s).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn convert_video_to_samples(
     frame: &EncodedVideoFrame,
     fps: u32,
