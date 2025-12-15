@@ -30,7 +30,6 @@ pub use streamlib_macros::{config, input, output, processor};
 pub use core::{
     are_synchronized,
     convert_audio_to_sample,
-    convert_video_to_samples,
     // Port marker traits and helpers for compile-time safe connections
     input,
     media_clock::MediaClock,
@@ -117,6 +116,9 @@ pub use core::{
     SCHEMA_OBJECT_DETECTIONS,
     SCHEMA_VIDEO_FRAME,
 };
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use core::convert_video_to_samples;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
