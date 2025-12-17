@@ -47,8 +47,15 @@ pub struct ProcessorInstanceFactory {
 }
 
 /// Global processor registry for runtime lookups.
-pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
-    LazyLock::new(ProcessorInstanceFactory::new);
+/// Auto-registers all processors collected via inventory on first access.
+pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> = LazyLock::new(|| {
+    let factory = ProcessorInstanceFactory::new();
+    // Auto-register all processors; ignore errors here (StreamRuntime::new checks for empty registry)
+    for registration in inventory::iter::<macro_codegen::FactoryRegistration> {
+        (registration.register_fn)(&factory);
+    }
+    factory
+});
 
 impl Default for ProcessorInstanceFactory {
     fn default() -> Self {
