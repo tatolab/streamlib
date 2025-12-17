@@ -16,7 +16,7 @@ use vello::{
 };
 
 /// Configuration for lower third processor
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LowerThirdConfig {
     pub headline: String,
     pub subtitle: String,

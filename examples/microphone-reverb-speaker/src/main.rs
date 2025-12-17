@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");
 
     // Create runtime first
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new()?;
 
     // Request microphone permission (must be on main thread before adding audio processors)
     println!("🔒 Requesting microphone permission...");
@@ -88,56 +88,60 @@ fn main() -> Result<()> {
 
     // Step 3: Add microphone input processor
     println!("\n🎤 Adding microphone input...");
-    let mic = runtime.add_processor::<AudioCaptureProcessor::Processor>(AudioCaptureConfig {
-        device_id: None,
-    })?;
+    let mic =
+        runtime.add_processor(AudioCaptureProcessor::Processor::node(AudioCaptureConfig {
+            device_id: None,
+        }))?;
     println!("✅ Microphone processor added (mono output at 24kHz)");
 
     // Step 4: Add resampler (24kHz → 48kHz)
     println!("\n🔄 Adding resampler (24kHz → 48kHz)...");
-    let resampler =
-        runtime.add_processor::<AudioResamplerProcessor::Processor>(AudioResamplerConfig {
+    let resampler = runtime.add_processor(AudioResamplerProcessor::Processor::node(
+        AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
-        })?;
+        },
+    ))?;
     println!("✅ Resampler added (upsamples to 48kHz)");
 
     // Step 5: Add channel converter (mono → stereo)
     println!("\n🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor::<AudioChannelConverterProcessor::Processor>(
-        AudioChannelConverterConfig {
+    let channel_converter = runtime.add_processor(
+        AudioChannelConverterProcessor::Processor::node(AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
-        },
+        }),
     )?;
     println!("✅ Channel converter added (duplicates mono to L+R)");
 
     // Step 6: Add buffer rechunker (variable → fixed size)
     println!("\n🔧 Adding buffer rechunker (normalizes buffer sizes)...");
-    let rechunker =
-        runtime.add_processor::<BufferRechunkerProcessor::Processor>(BufferRechunkerConfig {
+    let rechunker = runtime.add_processor(BufferRechunkerProcessor::Processor::node(
+        BufferRechunkerConfig {
             target_buffer_size: 512, // Fixed buffer size for CLAP plugin
-        })?;
+        },
+    ))?;
     println!("✅ Buffer rechunker added (ensures fixed 512 sample chunks)");
 
     // Step 7: Add CLAP reverb plugin
     println!("\n🎛️  Adding CLAP plugin...");
-    let reverb = runtime.add_processor::<ClapEffectProcessor::Processor>(ClapEffectConfig {
+    let reverb = runtime.add_processor(ClapEffectProcessor::Processor::node(ClapEffectConfig {
         plugin_path,
         plugin_name: None, // Use first plugin in bundle
         plugin_index: None,
         sample_rate: 48000, // Explicit sample rate for CLAP activation
         buffer_size: 512,   // Explicit buffer size for CLAP activation
-    })?;
+    }))?;
     println!("✅ CLAP effect processor added");
     println!("   Note: Plugin activated with explicit 48kHz/512 samples config");
     println!("   Note: Use parameter automation API for runtime parameter changes");
 
     // Step 8: Add speaker output processor
     println!("\n🔊 Adding speaker output...");
-    let speaker = runtime.add_processor::<AudioOutputProcessor::Processor>(AudioOutputConfig {
-        device_id: None, // Use default speaker
-    })?;
+    let speaker =
+        runtime.add_processor(AudioOutputProcessor::Processor::node(AudioOutputConfig {
+            device_id: None, // Use default speaker
+        }))?;
     println!("✅ Speaker processor added (will query hardware for native config)");
 
     // Step 9: Connect the pipeline using type-safe port markers

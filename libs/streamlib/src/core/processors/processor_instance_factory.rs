@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use parking_lot::RwLock;
 
@@ -32,11 +33,22 @@ mod private {
     pub type ConstructorFn = Box<dyn Fn(&ProcessorNode) -> Result<ProcessorInstance> + Send + Sync>;
 }
 
+/// Result of processor registration.
+#[derive(Debug, Clone)]
+pub struct RegisterResult {
+    /// Number of processors registered.
+    pub count: usize,
+}
+
 /// Factory for compile-time registered Rust processors.
 pub struct ProcessorInstanceFactory {
     constructors: RwLock<HashMap<String, private::ConstructorFn>>,
     port_info: RwLock<HashMap<String, (Vec<PortInfo>, Vec<PortInfo>)>>,
 }
+
+/// Global processor registry for runtime lookups.
+pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
+    LazyLock::new(ProcessorInstanceFactory::new);
 
 impl Default for ProcessorInstanceFactory {
     fn default() -> Self {
@@ -46,20 +58,26 @@ impl Default for ProcessorInstanceFactory {
 
 impl ProcessorInstanceFactory {
     pub fn new() -> Self {
-        let instance = Self {
+        Self {
             constructors: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
-        };
-        instance.register_all_processors();
-        instance
+        }
     }
 
     /// Register all processors collected via inventory at link time.
-    /// Safe to call multiple times - duplicates are skipped with a warning.
-    pub fn register_all_processors(&self) {
+    /// Safe to call multiple times - duplicates are skipped.
+    /// Returns registration result with count, or an error if registration failed.
+    pub fn register_all_processors(&self) -> crate::Result<RegisterResult> {
         for registration in inventory::iter::<macro_codegen::FactoryRegistration> {
             (registration.register_fn)(self);
         }
+        let count = self.constructors.read().len();
+        if count == 0 {
+            return Err(crate::core::StreamError::RegistryFailed(
+                "No processors registered. Ensure processor crates are linked and use #[streamlib::processor]".into()
+            ));
+        }
+        Ok(RegisterResult { count })
     }
 
     /// Register a processor type with its constructor.

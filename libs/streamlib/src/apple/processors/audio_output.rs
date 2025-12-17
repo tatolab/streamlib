@@ -58,6 +58,7 @@ impl ResamplerState {
 }
 
 #[crate::processor(
+    name = "AudioOutputProcessor",
     execution = ProcessExecution::Manual,
     description = "Plays audio through speakers/headphones using CoreAudio",
     unsafe_send

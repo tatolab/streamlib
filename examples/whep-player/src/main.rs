@@ -50,7 +50,7 @@ fn run_whep_player() -> Result<()> {
     tracing::info!("   {}\n", whep_url);
 
     // Create StreamRuntime
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new()?;
 
     // Configure WHEP processor
     let whep_config = WebRtcWhepConfig {
@@ -63,23 +63,24 @@ fn run_whep_player() -> Result<()> {
 
     // Create WHEP processor
     tracing::info!("🎬 Creating WHEP processor...");
-    let whep_processor = runtime.add_processor::<WebRtcWhepProcessor::Processor>(whep_config)?;
+    let whep_processor =
+        runtime.add_processor(WebRtcWhepProcessor::Processor::node(whep_config))?;
     tracing::info!("✅ WHEP processor created\n");
 
     // Create display processor for video output
     tracing::info!("📺 Creating display processor...");
-    let display = runtime.add_processor::<DisplayProcessor::Processor>(DisplayConfig {
+    let display = runtime.add_processor(DisplayProcessor::Processor::node(DisplayConfig {
         width: 1920,
         height: 1080,
         title: Some("WHEP Player".to_string()),
         scaling_mode: Default::default(), // Use default scaling (Stretch)
-    })?;
+    }))?;
     tracing::info!("✅ Display processor created\n");
 
     // Create audio output processor
     tracing::info!("🔊 Creating audio output processor...");
     let audio_output =
-        runtime.add_processor::<AudioOutputProcessor::Processor>(Default::default())?;
+        runtime.add_processor(AudioOutputProcessor::Processor::node(Default::default()))?;
     tracing::info!("✅ Audio output processor created\n");
 
     // Connect processors using type-safe port markers

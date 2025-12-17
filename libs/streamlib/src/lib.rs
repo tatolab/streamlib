@@ -17,6 +17,7 @@ extern crate self as streamlib;
 // Re-export crossbeam_channel for macro-generated code
 pub use crossbeam_channel;
 pub use inventory;
+pub use serde_json;
 
 pub mod core;
 
@@ -94,6 +95,7 @@ pub use core::{
     Processor,
     ProcessorDescriptor,
     ProcessorExample,
+    ProcessorSpec,
     ResamplingQuality,
     Result,
     RtpTimestampCalculator,
@@ -110,6 +112,7 @@ pub use core::{
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
+    PROCESSOR_REGISTRY,
     SCHEMA_AUDIO_FRAME,
     SCHEMA_BOUNDING_BOX,
     SCHEMA_DATA_MESSAGE,

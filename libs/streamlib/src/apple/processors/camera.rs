@@ -175,6 +175,7 @@ impl CameraDelegate {
 }
 
 #[crate::processor(
+    name = "CameraProcessor",
     execution = Manual,
     description = "Captures video from macOS cameras using AVFoundation"
 )]

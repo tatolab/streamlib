@@ -166,7 +166,12 @@ fn generate_output_link_module(analysis: &AnalysisResult) -> TokenStream {
 
 /// Generate Processor trait implementation
 fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
-    let processor_name = analysis.struct_name.to_string();
+    // Use custom name from attribute, or fall back to struct name
+    let processor_name = analysis
+        .processor_attrs
+        .name
+        .clone()
+        .unwrap_or_else(|| analysis.struct_name.to_string());
 
     let config_type = analysis
         .config_field_type
@@ -228,6 +233,18 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
 
     quote! {
         impl Processor {
+            /// Processor name for registration and lookup.
+            pub const NAME: &'static str = #processor_name;
+
+            /// Create a ProcessorSpec for adding this processor to a runtime.
+            pub fn node(config: #config_type) -> ::streamlib::core::ProcessorSpec {
+                ::streamlib::core::ProcessorSpec {
+                    name: Self::NAME.to_string(),
+                    config: ::streamlib::serde_json::to_value(&config)
+                        .expect("Config serialization failed"),
+                }
+            }
+
             /// Returns the execution mode for this processor.
             ///
             /// Useful for debugging and logging to understand when `process()` will be called.
@@ -247,7 +264,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             type Config = #config_type;
 
             fn name(&self) -> &str {
-                #processor_name
+                Self::NAME
             }
 
             #from_config_body
@@ -350,7 +367,12 @@ fn generate_from_config(analysis: &AnalysisResult) -> TokenStream {
 
 /// Generate descriptor method
 fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
-    let name = analysis.struct_name.to_string();
+    // Use custom name from attribute, or fall back to struct name
+    let name = analysis
+        .processor_attrs
+        .name
+        .clone()
+        .unwrap_or_else(|| analysis.struct_name.to_string());
 
     let desc = analysis
         .processor_attrs

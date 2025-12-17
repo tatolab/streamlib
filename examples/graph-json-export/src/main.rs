@@ -10,19 +10,17 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use streamlib::core::context::RuntimeContext;
+use streamlib::core::frames::DataFrame;
 use streamlib::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, OutputLinkPortRef,
 };
-use streamlib::core::processors::{Processor, ProcessorState};
-use streamlib::core::schema::{
-    Field, FieldType, PortDescriptor, ProcessorDescriptor, Schema, SemanticVersion,
-    SerializationFormat,
-};
+use streamlib::core::links::{LinkInput, LinkOutput};
+use streamlib::core::processors::ProcessorState;
 use streamlib::core::JsonSerializableComponent;
 use streamlib::Result;
 
@@ -31,17 +29,8 @@ use streamlib::Result;
 // =============================================================================
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct MockConfig {
-    label: String,
-}
-
-fn test_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(
-        "TestData",
-        SemanticVersion::new(1, 0, 0),
-        vec![Field::new("value", FieldType::Int32)],
-        SerializationFormat::Json,
-    ))
+pub struct MockConfig {
+    pub label: String,
 }
 
 // =============================================================================
@@ -49,137 +38,68 @@ fn test_schema() -> Arc<Schema> {
 // =============================================================================
 
 /// Source processor with output ports only.
-struct SourceProcessor;
+#[streamlib::processor(execution = Manual, description = "Generates data for downstream processors")]
+struct SourceProcessor {
+    #[streamlib::output(description = "Video output")]
+    video_out: LinkOutput<DataFrame>,
 
-impl Processor for SourceProcessor {
-    type Config = MockConfig;
+    #[streamlib::output(description = "Audio output")]
+    audio_out: LinkOutput<DataFrame>,
 
-    fn name(&self) -> &str {
-        "SourceProcessor"
-    }
+    #[streamlib::config]
+    config: MockConfig,
+}
 
-    fn from_config(_config: Self::Config) -> Result<Self> {
-        Ok(Self)
-    }
-
-    fn process(&mut self) -> Result<()> {
+impl SourceProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        Some(ProcessorDescriptor {
-            name: "SourceProcessor".to_string(),
-            description: "Generates data for downstream processors".to_string(),
-            usage_context: None,
-            inputs: vec![],
-            outputs: vec![
-                PortDescriptor {
-                    name: "video_out".to_string(),
-                    schema: test_schema(),
-                    required: false,
-                    description: "Video output".to_string(),
-                },
-                PortDescriptor {
-                    name: "audio_out".to_string(),
-                    schema: test_schema(),
-                    required: false,
-                    description: "Audio output".to_string(),
-                },
-            ],
-            examples: vec![],
-            tags: vec![],
-            audio_requirements: None,
-            metadata: None,
-        })
+    fn teardown(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 
 /// Transform processor with both input and output ports.
-struct TransformProcessor;
+#[streamlib::processor(execution = Manual, description = "Transforms data from input to output")]
+struct TransformProcessor {
+    #[streamlib::input(description = "Data input")]
+    input: LinkInput<DataFrame>,
 
-impl Processor for TransformProcessor {
-    type Config = MockConfig;
+    #[streamlib::output(description = "Transformed output")]
+    output: LinkOutput<DataFrame>,
 
-    fn name(&self) -> &str {
-        "TransformProcessor"
-    }
+    #[streamlib::config]
+    config: MockConfig,
+}
 
-    fn from_config(_config: Self::Config) -> Result<Self> {
-        Ok(Self)
-    }
-
-    fn process(&mut self) -> Result<()> {
+impl TransformProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        Some(ProcessorDescriptor {
-            name: "TransformProcessor".to_string(),
-            description: "Transforms data from input to output".to_string(),
-            usage_context: None,
-            inputs: vec![PortDescriptor {
-                name: "input".to_string(),
-                schema: test_schema(),
-                required: true,
-                description: "Data input".to_string(),
-            }],
-            outputs: vec![PortDescriptor {
-                name: "output".to_string(),
-                schema: test_schema(),
-                required: false,
-                description: "Transformed output".to_string(),
-            }],
-            examples: vec![],
-            tags: vec![],
-            audio_requirements: None,
-            metadata: None,
-        })
+    fn teardown(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 
 /// Sink processor with input ports only.
-struct SinkProcessor;
+#[streamlib::processor(execution = Manual, description = "Consumes data from upstream processors")]
+struct SinkProcessor {
+    #[streamlib::input(description = "Video input")]
+    video_in: LinkInput<DataFrame>,
 
-impl Processor for SinkProcessor {
-    type Config = MockConfig;
+    #[streamlib::input(description = "Audio input")]
+    audio_in: LinkInput<DataFrame>,
 
-    fn name(&self) -> &str {
-        "SinkProcessor"
-    }
+    #[streamlib::config]
+    config: MockConfig,
+}
 
-    fn from_config(_config: Self::Config) -> Result<Self> {
-        Ok(Self)
-    }
-
-    fn process(&mut self) -> Result<()> {
+impl SinkProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
-
-    fn descriptor() -> Option<ProcessorDescriptor> {
-        Some(ProcessorDescriptor {
-            name: "SinkProcessor".to_string(),
-            description: "Consumes data from upstream processors".to_string(),
-            usage_context: None,
-            inputs: vec![
-                PortDescriptor {
-                    name: "video_in".to_string(),
-                    schema: test_schema(),
-                    required: false,
-                    description: "Video input".to_string(),
-                },
-                PortDescriptor {
-                    name: "audio_in".to_string(),
-                    schema: test_schema(),
-                    required: false,
-                    description: "Audio input".to_string(),
-                },
-            ],
-            outputs: vec![],
-            examples: vec![],
-            tags: vec![],
-            audio_requirements: None,
-            metadata: None,
-        })
+    fn teardown(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -303,9 +223,9 @@ fn main() {
 
     let source_id = graph
         .traversal_mut()
-        .add_v::<SourceProcessor>(MockConfig {
+        .add_v(SourceProcessor::Processor::node(MockConfig {
             label: "Camera Source".to_string(),
-        })
+        }))
         .first()
         .expect("should create source processor")
         .id
@@ -314,9 +234,9 @@ fn main() {
 
     let video_transform_id = graph
         .traversal_mut()
-        .add_v::<TransformProcessor>(MockConfig {
+        .add_v(TransformProcessor::Processor::node(MockConfig {
             label: "Video Encoder".to_string(),
-        })
+        }))
         .first()
         .expect("should create video transform processor")
         .id
@@ -328,9 +248,9 @@ fn main() {
 
     let audio_transform_id = graph
         .traversal_mut()
-        .add_v::<TransformProcessor>(MockConfig {
+        .add_v(TransformProcessor::Processor::node(MockConfig {
             label: "Audio Encoder".to_string(),
-        })
+        }))
         .first()
         .expect("should create audio transform processor")
         .id
@@ -342,9 +262,9 @@ fn main() {
 
     let sink_id = graph
         .traversal_mut()
-        .add_v::<SinkProcessor>(MockConfig {
+        .add_v(SinkProcessor::Processor::node(MockConfig {
             label: "File Writer".to_string(),
-        })
+        }))
         .first()
         .expect("should create sink processor")
         .id
