@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     println!("=== WebRTC WHIP Streaming to Cloudflare Stream ===\n");
 
     // Create runtime first
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new()?;
 
     // Request camera and microphone permissions (must be on main thread)
     println!("🔒 Requesting camera permission...");
@@ -48,44 +48,46 @@ fn main() -> Result<()> {
     let whip_url = "https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce/webRTC/publish";
 
     println!("📹 Adding camera processor...");
-    let camera = runtime.add_processor::<CameraProcessor::Processor>(CameraConfig {
+    let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
         device_id: None, // Use default camera
-    })?;
+    }))?;
     println!("✓ Camera added (capturing video @ 1280x720)\n");
 
     println!("🎤 Adding audio capture processor...");
     let audio_capture =
-        runtime.add_processor::<AudioCaptureProcessor::Processor>(AudioCaptureConfig {
+        runtime.add_processor(AudioCaptureProcessor::Processor::node(AudioCaptureConfig {
             device_id: None, // Use default microphone
-        })?;
+        }))?;
     println!("✓ Audio capture added (mono @ 24kHz)\n");
 
     println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
-    let resampler =
-        runtime.add_processor::<AudioResamplerProcessor::Processor>(AudioResamplerConfig {
+    let resampler = runtime.add_processor(AudioResamplerProcessor::Processor::node(
+        AudioResamplerConfig {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
             quality: ResamplingQuality::High,
-        })?;
+        },
+    ))?;
     println!("✓ Resampler added\n");
 
     println!("🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor::<AudioChannelConverterProcessor::Processor>(
-        AudioChannelConverterConfig {
+    let channel_converter = runtime.add_processor(
+        AudioChannelConverterProcessor::Processor::node(AudioChannelConverterConfig {
             mode: ChannelConversionMode::Duplicate,
-        },
+        }),
     )?;
     println!("✓ Channel converter added\n");
 
     println!("📦 Adding buffer rechunker (512 samples → 960 samples for Opus)...");
-    let rechunker =
-        runtime.add_processor::<BufferRechunkerProcessor::Processor>(BufferRechunkerConfig {
+    let rechunker = runtime.add_processor(BufferRechunkerProcessor::Processor::node(
+        BufferRechunkerConfig {
             target_buffer_size: 960, // 20ms @ 48kHz (Opus requirement)
-        })?;
+        },
+    ))?;
     println!("✓ Buffer rechunker added\n");
 
     println!("🌐 Adding WebRTC WHIP streaming processor...");
-    let webrtc = runtime.add_processor::<WebRtcWhipProcessor::Processor>(WebRtcWhipConfig {
+    let webrtc = runtime.add_processor(WebRtcWhipProcessor::Processor::node(WebRtcWhipConfig {
         whip: WhipConfig {
             endpoint_url: whip_url.to_string(),
             auth_token: None, // Cloudflare endpoint doesn't require authentication
@@ -108,7 +110,7 @@ fn main() -> Result<()> {
             complexity: 10,        // Maximum quality
             vbr: false,            // Constant bitrate for consistent streaming
         },
-    })?;
+    }))?;
     println!("✓ WebRTC WHIP processor added\n");
 
     println!("🔗 Connecting pipeline:");

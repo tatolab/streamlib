@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     println!("  • Handle-based type-safe connections\n");
 
     // Create runtime (no FPS parameter - event-driven!)
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new()?;
 
     // Audio configuration
     let sample_rate = 48000;
@@ -44,20 +44,21 @@ fn main() -> Result<()> {
 
     // Create a chord generator (C major: C4 + E4 + G4)
     println!("🎵 Adding chord generator (C major - C4, E4, G4)...");
-    let chord =
-        runtime.add_processor::<ChordGeneratorProcessor::Processor>(ChordGeneratorConfig {
+    let chord = runtime.add_processor(ChordGeneratorProcessor::Processor::node(
+        ChordGeneratorConfig {
             amplitude: 0.15, // 15% volume to avoid clipping
             sample_rate,
             buffer_size,
-        })?;
+        },
+    ))?;
     println!("✓ Chord generator added\n");
 
     // Create audio output processor
     println!("🔊 Adding audio output processor...");
     let audio_out =
-        runtime.add_processor::<AudioOutputProcessor::Processor>(AudioOutputConfig {
+        runtime.add_processor(AudioOutputProcessor::Processor::node(AudioOutputConfig {
             device_id: None, // Use default audio device
-        })?;
+        }))?;
     println!("✓ Audio output added\n");
 
     // Connect processors using type-safe port markers

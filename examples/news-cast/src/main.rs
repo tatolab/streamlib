@@ -31,30 +31,30 @@ fn main() -> Result<()> {
     tracing::info!("Pipeline: Camera → Lower Third → Display");
 
     // Create runtime (event-driven, no FPS parameter!)
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new()?;
 
     // 1. Add camera processor
     tracing::info!("Adding camera processor...");
-    let camera = runtime.add_processor::<CameraProcessor::Processor>(CameraConfig {
+    let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
         device_id: Some("0x1424001bcf2284".to_string()),
-    })?;
+    }))?;
 
     // 2. Add lower third effect processor
     tracing::info!("Adding lower third effect processor...");
     let lower_third =
-        runtime.add_processor::<LowerThirdProcessor::Processor>(lower_third::LowerThirdConfig {
+        runtime.add_processor(LowerThirdProcessor::Processor::node(lower_third::LowerThirdConfig {
             headline: "BREAKING NEWS".to_string(),
             subtitle: "StreamLib Rust Migration Complete".to_string(),
-        })?;
+        }))?;
 
     // 3. Add display processor
     tracing::info!("Adding display processor...");
-    let display = runtime.add_processor::<DisplayProcessor::Processor>(DisplayConfig {
+    let display = runtime.add_processor(DisplayProcessor::Processor::node(DisplayConfig {
         width: 1920,
         height: 1080,
         title: Some("News Cast - StreamLib Demo".to_string()),
         scaling_mode: Default::default(), // Use default scaling (Stretch)
-    })?;
+    }))?;
 
     // Connect pipeline using type-safe port markers: Camera → Lower Third → Display
     tracing::info!("Connecting pipeline...");

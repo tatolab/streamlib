@@ -14,7 +14,7 @@ use crate::core::graph::{
 use crate::core::processors::ProcessorInstanceFactory;
 
 pub(crate) fn create_processor(
-    factory: &Arc<ProcessorInstanceFactory>,
+    factory: &ProcessorInstanceFactory,
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
 ) -> Result<()> {

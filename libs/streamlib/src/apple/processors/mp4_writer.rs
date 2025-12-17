@@ -53,6 +53,7 @@ impl Default for AppleMp4WriterConfig {
 }
 
 #[crate::processor(
+    name = "Mp4WriterProcessor",
     execution = Reactive,
     description = "Writes stereo audio and video to MP4 file with A/V synchronization",
     unsafe_send

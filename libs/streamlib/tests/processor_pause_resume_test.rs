@@ -293,9 +293,9 @@ fn test_pause_stops_continuous_processor() {
 
     // Add producer (Continuous mode)
     let producer = runtime
-        .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
+        .add_processor(ProducerProcessor::Processor::node(ProducerConfig {
             label: "producer".to_string(),
-        })
+        }))
         .expect("Failed to add producer");
 
     // Start the runtime
@@ -366,15 +366,15 @@ fn test_pause_stops_reactive_processor() {
 
     // Add producer and consumer
     let producer = runtime
-        .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
+        .add_processor(ProducerProcessor::Processor::node(ProducerConfig {
             label: "producer".to_string(),
-        })
+        }))
         .expect("Failed to add producer");
 
     let consumer = runtime
-        .add_processor::<ConsumerProcessor::Processor>(ConsumerConfig {
+        .add_processor(ConsumerProcessor::Processor::node(ConsumerConfig {
             label: "consumer".to_string(),
-        })
+        }))
         .expect("Failed to add consumer");
 
     // Connect them
@@ -442,9 +442,9 @@ fn test_pubsub_notifications_on_pause_resume() {
 
     // Add producer
     let producer = runtime
-        .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
+        .add_processor(ProducerProcessor::Processor::node(ProducerConfig {
             label: "producer".to_string(),
-        })
+        }))
         .expect("Failed to add producer");
 
     // Subscribe to processor events
@@ -504,15 +504,15 @@ fn test_runtime_pause_resume_all_processors() {
 
     // Add multiple producers
     let producer1 = runtime
-        .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
+        .add_processor(ProducerProcessor::Processor::node(ProducerConfig {
             label: "producer1".to_string(),
-        })
+        }))
         .expect("Failed to add producer1");
 
     let producer2 = runtime
-        .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
+        .add_processor(ProducerProcessor::Processor::node(ProducerConfig {
             label: "producer2".to_string(),
-        })
+        }))
         .expect("Failed to add producer2");
 
     // Start
@@ -582,9 +582,9 @@ fn test_pause_resume_idempotent() {
     let mut runtime = StreamRuntime::new();
 
     let producer = runtime
-        .add_processor::<ProducerProcessor::Processor>(ProducerConfig {
+        .add_processor(ProducerProcessor::Processor::node(ProducerConfig {
             label: "producer".to_string(),
-        })
+        }))
         .expect("Failed to add producer");
 
     runtime.start().expect("Failed to start runtime");
@@ -618,9 +618,9 @@ fn test_manual_processor_checks_is_paused() {
 
     // Add manual processor
     let manual = runtime
-        .add_processor::<ManualProcessor::Processor>(ManualConfig {
+        .add_processor(ManualProcessor::Processor::node(ManualConfig {
             label: "manual".to_string(),
-        })
+        }))
         .expect("Failed to add manual processor");
 
     // Start the runtime

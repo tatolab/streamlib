@@ -37,6 +37,10 @@ pub struct ProcessorAttributes {
 
     /// Generate unsafe impl Send: `unsafe_send`
     pub unsafe_send: bool,
+
+    /// Custom processor name: `name = "..."`
+    /// If not specified, defaults to the struct name.
+    pub name: Option<String>,
 }
 
 /// Parsed attributes from `#[input(...)]` or `#[output(...)]`
@@ -79,6 +83,13 @@ impl ProcessorAttributes {
             if meta.path.is_ident("description") {
                 let value = parse_string_value(&meta)?;
                 result.description = Some(value);
+                return Ok(());
+            }
+
+            // name = "..." (custom processor name)
+            if meta.path.is_ident("name") {
+                let value = parse_string_value(&meta)?;
+                result.name = Some(value);
                 return Ok(());
             }
 

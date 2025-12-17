@@ -1,8 +1,26 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use streamlib::core::{CameraConfig, DisplayConfig};
-use streamlib::{input, output, CameraProcessor, DisplayProcessor, Result, StreamRuntime};
+//! Camera → Display Pipeline Example
+//!
+//! Demonstrates both typed and string-based processor creation APIs.
+//!
+//! ## Usage
+//!
+//! **Typed mode (default)** - compile-time type safety:
+//! ```bash
+//! cargo run -p camera-display
+//! ```
+//!
+//! **String mode** - REST API style with string names and JSON configs:
+//! ```bash
+//! cargo run -p camera-display -- --string-mode
+//! ```
+
+use streamlib::core::{CameraConfig, DisplayConfig, InputLinkPortRef, OutputLinkPortRef};
+use streamlib::{
+    input, output, CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
+};
 
 fn main() -> Result<()> {
     // Initialize tracing
@@ -10,49 +28,117 @@ fn main() -> Result<()> {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    println!("=== Camera → Display Pipeline ===\n");
+    // Check for --string-mode argument
+    let use_string_mode = std::env::args().any(|arg| arg == "--string-mode");
 
-    let mut runtime = StreamRuntime::new();
+    if use_string_mode {
+        println!("=== Camera → Display Pipeline (STRING MODE) ===\n");
+        println!("This mode simulates REST API usage with string-based processor names.\n");
+        run_string_mode()
+    } else {
+        println!("=== Camera → Display Pipeline (TYPED MODE) ===\n");
+        println!("Use --string-mode to test REST API style string-based creation.\n");
+        run_typed_mode()
+    }
+}
+
+/// Typed mode - uses compile-time type safety with ::node() methods
+fn run_typed_mode() -> Result<()> {
+    let mut runtime = StreamRuntime::new()?;
 
     // =========================================================================
-    // Add processors
+    // Add processors using typed API
     // =========================================================================
 
     println!("📷 Adding camera processor...");
-    let camera = runtime.add_processor::<CameraProcessor::Processor>(CameraConfig {
-        device_id: None, // Use default camera
-    })?;
+    let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
+        device_id: None,
+    }))?;
     println!("✓ Camera added: {}\n", camera);
 
     println!("🖥️  Adding display processor...");
-    let display = runtime.add_processor::<DisplayProcessor::Processor>(DisplayConfig {
+    let display = runtime.add_processor(DisplayProcessor::Processor::node(DisplayConfig {
         width: 3840,
         height: 2160,
         title: Some("streamlib Camera Display".to_string()),
         scaling_mode: Default::default(),
-    })?;
+    }))?;
     println!("✓ Display added: {}\n", display);
 
     // =========================================================================
-    // Connect ports
+    // Connect ports using typed API
     // =========================================================================
 
     println!("🔗 Connecting camera → display...");
-
-    // Type-safe connection using ProcessorNode methods
-    // - Port names validated at runtime against node's port metadata
-    // - Panics if port doesn't exist (use try_output/try_input for Result)
     runtime.connect(
         output::<CameraProcessor::OutputLink::video>(&camera),
         input::<DisplayProcessor::InputLink::video>(&display),
     )?;
-
     println!("✓ Pipeline connected\n");
 
     // =========================================================================
     // Run the pipeline
     // =========================================================================
 
+    run_pipeline(runtime)
+}
+
+/// String mode - simulates REST API with string-based processor names and JSON configs
+fn run_string_mode() -> Result<()> {
+    let mut runtime = StreamRuntime::new()?;
+
+    // =========================================================================
+    // Add processors using string-based API (REST API style)
+    // =========================================================================
+
+    // Simulate receiving JSON from REST API:
+    // { "processor": "CameraProcessor", "config": { "device_id": null } }
+    println!("📷 Adding camera processor (string mode)...");
+    let camera_spec = ProcessorSpec::new(
+        "CameraProcessor",
+        serde_json::json!({
+            "device_id": null
+        }),
+    );
+    let camera = runtime.add_processor(camera_spec)?;
+    println!("✓ Camera added: {}\n", camera);
+
+    // Simulate receiving JSON from REST API:
+    // { "processor": "DisplayProcessor", "config": { "width": 3840, "height": 2160, ... } }
+    println!("🖥️  Adding display processor (string mode)...");
+    let display_spec = ProcessorSpec::new(
+        "DisplayProcessor",
+        serde_json::json!({
+            "width": 3840,
+            "height": 2160,
+            "title": "streamlib Camera Display (String Mode)",
+            "scaling_mode": "Stretch"
+        }),
+    );
+    let display = runtime.add_processor(display_spec)?;
+    println!("✓ Display added: {}\n", display);
+
+    // =========================================================================
+    // Connect ports using string-based API (REST API style)
+    // =========================================================================
+
+    // Simulate receiving JSON from REST API:
+    // { "from": { "processor_id": "...", "port": "video" }, "to": { "processor_id": "...", "port": "video" } }
+    println!("🔗 Connecting camera → display (string mode)...");
+    runtime.connect(
+        OutputLinkPortRef::new(&camera, "video"),
+        InputLinkPortRef::new(&display, "video"),
+    )?;
+    println!("✓ Pipeline connected\n");
+
+    // =========================================================================
+    // Run the pipeline
+    // =========================================================================
+
+    run_pipeline(runtime)
+}
+
+fn run_pipeline(mut runtime: StreamRuntime) -> Result<()> {
     println!("▶️  Starting pipeline...");
     #[cfg(target_os = "macos")]
     println!("   Press Cmd+Q to stop\n");

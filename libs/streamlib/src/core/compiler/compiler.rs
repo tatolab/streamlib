@@ -14,7 +14,7 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
 use crate::core::links::DefaultLinkFactory;
-use crate::core::processors::ProcessorInstanceFactory;
+use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
 /// Compiles graph changes into running processor state.
@@ -23,8 +23,6 @@ pub struct Compiler {
     graph: Arc<RwLock<Graph>>,
     // Transaction accumulates operations until commit
     transaction: Arc<Mutex<Vec<PendingOperation>>>,
-    // Factory for creating processor instances (internal)
-    factory: Arc<ProcessorInstanceFactory>,
     // Factory for creating link instances (ring buffers)
     link_factory: Arc<DefaultLinkFactory>,
 }
@@ -41,7 +39,6 @@ impl Compiler {
         Self {
             graph: Arc::new(RwLock::new(Graph::new())),
             transaction: Arc::new(Mutex::new(Vec::new())),
-            factory: Arc::new(ProcessorInstanceFactory::new()),
             link_factory: Arc::new(DefaultLinkFactory),
         }
     }
@@ -75,14 +72,13 @@ impl Compiler {
 
         // Clone Arcs for the closure (required for 'static lifetime)
         let graph = Arc::clone(&self.graph);
-        let factory = Arc::clone(&self.factory);
         let link_factory = Arc::clone(&self.link_factory);
         let runtime_ctx_clone = Arc::clone(runtime_ctx);
 
         // Dispatch compile to main thread (required for thread spawning, Apple frameworks)
         runtime_ctx.run_on_main_blocking(move || {
             tracing::debug!("[commit] Running compile on main thread");
-            Self::compile(graph, factory, link_factory, operations, &runtime_ctx_clone)
+            Self::compile(graph, link_factory, operations, &runtime_ctx_clone)
         })
     }
 
@@ -94,7 +90,6 @@ impl Compiler {
     /// Calls compiler_ops::* for actual operations.
     fn compile(
         graph_arc: Arc<RwLock<Graph>>,
-        factory: Arc<ProcessorInstanceFactory>,
         link_factory: Arc<DefaultLinkFactory>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
@@ -104,9 +99,6 @@ impl Compiler {
         };
 
         let mut result = CompileResult::default();
-
-        // Ensure all inventory-registered processors are loaded
-        factory.register_all_processors();
 
         // =====================================================================
         // 1. Validate and categorize operations
@@ -311,7 +303,7 @@ impl Compiler {
 
                 tracing::info!("[{}] Creating {}", CompilePhase::Create, proc_id);
 
-                super::compiler_ops::create_processor(&factory, &mut graph, proc_id)?;
+                super::compiler_ops::create_processor(&PROCESSOR_REGISTRY, &mut graph, proc_id)?;
 
                 PUBSUB.publish(
                     topics::RUNTIME_GLOBAL,

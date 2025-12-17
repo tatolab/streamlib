@@ -23,6 +23,7 @@ pub struct AppleAudioInputDevice {
 }
 
 #[crate::processor(
+    name = "AudioCaptureProcessor",
     execution = Manual,
     description = "Captures mono audio from macOS microphones in device-native format - driven by CoreAudio callback",
     unsafe_send

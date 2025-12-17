@@ -21,23 +21,25 @@ fn main() -> Result<()> {
 
     // Step 1: Create runtime (event-driven, no FPS parameter!)
     println!("🎛️  Creating audio runtime...");
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new()?;
 
     // Step 2: Add chord generator (now outputs pre-mixed stereo)
     println!("🎹 Adding chord generator (C major chord)...");
     println!("   Generates stereo output with C4 + E4 + G4 pre-mixed");
 
-    let chord_gen = runtime
-        .add_processor::<ChordGeneratorProcessor::Processor>(ChordGeneratorConfig::default())?;
+    let chord_gen = runtime.add_processor(ChordGeneratorProcessor::Processor::node(
+        ChordGeneratorConfig::default(),
+    ))?;
     println!("   ✅ C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)");
     println!("   ✅ Pre-mixed stereo output on port 'chord'");
     println!("   All 3 tones generated from single synchronized source\n");
 
     // Step 3: Add speaker output
     println!("🔊 Adding speaker output...");
-    let speaker = runtime.add_processor::<AudioOutputProcessor::Processor>(AudioOutputConfig {
-        device_id: None, // Use default speaker
-    })?;
+    let speaker =
+        runtime.add_processor(AudioOutputProcessor::Processor::node(AudioOutputConfig {
+            device_id: None, // Use default speaker
+        }))?;
     println!("   Using default audio device\n");
 
     // Step 4: Connect the audio pipeline using type-safe port markers

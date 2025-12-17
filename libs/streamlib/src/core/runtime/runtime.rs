@@ -16,7 +16,7 @@ use crate::core::graph::{
     ProcessorPauseGateComponent, ProcessorUniqueId,
 };
 use crate::core::links::LinkOutputToProcessorMessage;
-use crate::core::processors::{Processor, ProcessorState};
+use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 
@@ -30,19 +30,18 @@ pub struct StreamRuntime {
     pub(crate) status: RuntimeStatus,
 }
 
-impl Default for StreamRuntime {
-    fn default() -> Self {
-        Self {
+impl StreamRuntime {
+    pub fn new() -> Result<Self> {
+        // Register all processors from inventory before any add_processor calls.
+        // This populates the global registry with link-time registered processors.
+        let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors()?;
+        tracing::debug!("Registered {} processors from inventory", result.count);
+
+        Ok(Self {
             compiler: Compiler::new(),
             runtime_context: None,
             status: RuntimeStatus::Initial,
-        }
-    }
-}
-
-impl StreamRuntime {
-    pub fn new() -> Self {
-        Self::default()
+        })
     }
 
     // =========================================================================
@@ -85,12 +84,8 @@ impl StreamRuntime {
     // Graph Mutations
     // =========================================================================
 
-    /// Add a processor to the graph with its config. Returns the processor ID.
-    pub fn add_processor<P>(&mut self, config: P::Config) -> Result<ProcessorUniqueId>
-    where
-        P: Processor + 'static,
-        P::Config: Serialize + for<'de> serde::Deserialize<'de> + Default,
-    {
+    /// Add a processor to the graph with its spec. Returns the processor ID.
+    pub fn add_processor(&mut self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         // Declare side effects upfront
         let emit_will_add = |id: &ProcessorUniqueId| {
             PUBSUB.publish(
@@ -114,7 +109,7 @@ impl StreamRuntime {
         let processor_id = self.compiler.scope(|graph, tx| {
             graph
                 .traversal_mut()
-                .add_v::<P>(config)
+                .add_v(spec)
                 .inspect(|node| emit_will_add(&node.id))
                 .inspect(|node| tx.log(PendingOperation::AddProcessor(node.id.clone())))
                 .inspect(|node| emit_did_add(&node.id))

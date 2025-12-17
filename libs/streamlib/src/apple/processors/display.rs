@@ -52,6 +52,7 @@ pub struct AppleWindowId(pub u64);
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[crate::processor(
+    name = "DisplayProcessor",
     execution = Manual,
     description = "Displays video frames in a window using Metal with vsync",
     unsafe_send
