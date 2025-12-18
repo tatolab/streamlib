@@ -6,13 +6,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiServerConfig {
-    pub host: &str,
+    pub host: String,
     pub port: u16,
 }
 
 impl Default for ApiServerConfig {
     fn default() -> Self {
-        Self { port: 9000 }
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 9000,
+        }
     }
 }
 

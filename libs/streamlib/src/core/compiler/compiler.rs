@@ -70,16 +70,16 @@ impl Compiler {
             operations.len()
         );
 
-        // Clone Arcs for the closure (required for 'static lifetime)
-        let graph = Arc::clone(&self.graph);
-        let link_factory = Arc::clone(&self.link_factory);
-        let runtime_ctx_clone = Arc::clone(runtime_ctx);
-
-        // Dispatch compile to main thread (required for thread spawning, Apple frameworks)
-        runtime_ctx.run_on_main_blocking(move || {
-            tracing::debug!("[commit] Running compile on main thread");
-            Self::compile(graph, link_factory, operations, &runtime_ctx_clone)
-        })
+        // Compile directly - processors handle their own main thread needs
+        // via RuntimeContext::run_on_main_blocking() in their setup() if required.
+        // This avoids forcing all compilation to main thread when most processors
+        // don't need it (only Apple framework processors like Camera, Display).
+        Self::compile(
+            Arc::clone(&self.graph),
+            Arc::clone(&self.link_factory),
+            operations,
+            runtime_ctx,
+        )
     }
 
     // =========================================================================

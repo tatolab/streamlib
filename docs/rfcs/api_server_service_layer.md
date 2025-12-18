@@ -1,122 +1,201 @@
-# RFC: API Server and Service Layer Architecture
+# Lab: Building an API Server for StreamRuntime
 
-## Status: Draft
+## Status: Draft (Lab Format)
 
-## Summary
+## Overview
 
-Thread-safe service layer for controlling StreamRuntime from external clients (HTTP/WebSocket). Treats the API server as a processor type, isolating Tokio to background threads while maintaining main thread control for platform hardware.
+This lab teaches you how to build a thread-safe API server that controls StreamRuntime from HTTP/WebSocket clients. You'll learn:
+
+- **Tokio**: Async runtime fundamentals
+- **Axum**: HTTP server and routing
+- **Channels**: Cross-thread communication patterns
+- **RuntimeProxy**: Async facade over sync runtime
+
+By the end, you'll understand how to expose StreamRuntime operations via REST API while ensuring the runtime never blocks.
 
 ---
 
-## Dependencies
+## Prerequisites Completed
 
-This RFC depends on:
-- [Dynamic Processor and Link Creation API](api_dynamic_creation.md) - ProcessorNodeFactory for string-based processor creation
+The following foundational changes have already been made to enable this lab:
+
+### 1. Interior Mutability Refactor ✅
+
+StreamRuntime methods now take `&self` instead of `&mut self`, enabling concurrent access:
+
+```rust
+// OLD - required exclusive mutable access
+pub fn add_processor(&mut self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>
+
+// NEW - allows shared access via Arc<StreamRuntime>
+pub fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>
+```
+
+**Why this matters**: The RuntimeProxy command handler can call these methods without needing exclusive access. Multiple commands can be processed concurrently.
+
+**Internal locking strategy**:
+- `status: Mutex<RuntimeStatus>` - lifecycle state
+- `runtime_context: OnceLock<Arc<RuntimeContext>>` - set once at start()
+- Graph operations use `Arc<RwLock<Graph>>` via Compiler
+- Pending operations use `Arc<Mutex<Vec<PendingOperation>>>`
+
+### 2. Compiler Main Thread Dispatch Removed ✅
+
+The compiler no longer forces all compilation to the main thread:
+
+```rust
+// OLD - forced everything to main thread
+runtime_ctx.run_on_main_blocking(move || {
+    Self::compile(...)
+})
+
+// NEW - processors handle their own main thread needs
+Self::compile(...)
+```
+
+**Why this matters**: Only Apple framework processors (Camera, Display) need main thread. They call `ctx.run_on_main_blocking()` in their own `setup()`. This keeps the compiler simple and allows non-Apple processors to run without main thread constraints.
+
+### 3. Cross-Platform Main Thread Documentation ✅
+
+`RuntimeContext` now has documented stubs for Windows and Linux:
+
+- **macOS**: Uses `dispatch2::DispatchQueue::main()` (implemented)
+- **Windows**: TODO - `PostMessage` to Win32 message loop
+- **Linux**: TODO - `glib::MainContext` or eventfd
+- **Other**: Passthrough (executes directly)
 
 ---
 
-## Threading Model
+## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  MAIN THREAD (OS thread 0)                                  │
-│  - StreamRuntime owns command channel                       │
-│  - Polls commands in event loop                             │
-│  - Executes: add_processor(), connect(), start(), etc.      │
-│  - macOS: NSApplication event loop                          │
-└─────────────────────────────────────────────────────────────┘
-                           ▲
-                           │ commands via flume channel
-                           │ responses via oneshot
-┌──────────────────────────┴──────────────────────────────────┐
-│  TOKIO RUNTIME (background thread)                          │
-│  - ApiServerProcessor runs HTTP/WS server                   │
-│  - Uses RuntimeService to send commands                     │
-│  - Broadcasts events to WebSocket clients                   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  StreamRuntime (single instance)                                │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  ApiServerProcessor                                       │  │
+│  │  - Runs HTTP/WS server on Tokio (background thread)       │  │
+│  │  - Uses RuntimeProxy to send commands                     │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                              │                                  │
+│                              │ RuntimeCommand via flume channel │
+│                              │ CommandResult via oneshot        │
+│                              ▼                                  │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  Command Handler (polls channel)                          │  │
+│  │  - Calls runtime.add_processor(), connect(), etc.         │  │
+│  │  - Sends result back via oneshot                          │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Why This Architecture
+### Key Insight: RuntimeProxy is NOT a Duplicate
 
-Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) require main thread execution. Tokio must be isolated to background threads to avoid blocking hardware access.
+The proxy is a **cross-thread communication facade**, not a duplicate of StreamRuntime:
 
-### Key Insight: Not Duplicating Runtime
-
-The service layer is **not** a duplicate of StreamRuntime. It's a thread-safe async facade:
-
-1. Processor calls `service.add_processor(spec).await`
-2. Service serializes this into a `RuntimeCommand::AddProcessor`
-3. Command sent over channel to main thread
-4. Main thread executes `runtime.add_processor(spec)` (the real implementation)
+1. HTTP handler calls `proxy.add_processor(spec).await`
+2. Proxy serializes into `RuntimeCommand::AddProcessor`
+3. Command sent over channel
+4. Handler receives command, calls `runtime.add_processor(spec)` (the real implementation)
 5. Result sent back via oneshot channel
 
-The service contains **zero business logic** - it's purely a cross-thread communication mechanism.
+The proxy contains **zero business logic**.
 
 ---
 
-## RuntimeService
+## Lab 1: Understanding the Problem
 
-Ergonomic async interface for controlling the runtime from any thread. Obtained via `RuntimeContext`.
+### Why Can't We Just Use Arc<StreamRuntime>?
+
+With the `&self` refactor, you might think we can do:
 
 ```rust
-/// Thread-safe async facade for StreamRuntime operations.
-///
-/// Obtained from `RuntimeContext::runtime_service()` in processor setup.
-/// All methods are async and safe to call from Tokio threads.
-#[derive(Clone)]
-pub struct RuntimeService {
-    command_tx: flume::Sender<(RuntimeCommand, oneshot::Sender<CommandResult>)>,
-    event_tx: broadcast::Sender<RuntimeEvent>,
-}
+let runtime = Arc::new(StreamRuntime::new()?);
+let runtime_clone = Arc::clone(&runtime);
 
-impl RuntimeService {
-    /// Add a processor to the runtime.
-    pub async fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>;
+tokio::spawn(async move {
+    runtime_clone.add_processor(spec); // This works syntactically...
+});
+```
 
-    /// Remove a processor from the runtime.
-    pub async fn remove_processor(&self, id: ProcessorUniqueId) -> Result<()>;
+**Problem**: `add_processor()` is a **sync** function. Calling it from async context:
+- Blocks the Tokio worker thread
+- Prevents other async tasks from running
+- Can cause deadlocks if the operation takes time
 
-    /// Connect two ports.
-    pub async fn connect(
-        &self,
-        from: OutputLinkPortRef,
-        to: InputLinkPortRef
-    ) -> Result<LinkUniqueId>;
+### Why Not Make add_processor() Async?
 
-    /// Disconnect a link.
-    pub async fn disconnect(&self, link_id: LinkUniqueId) -> Result<()>;
+StreamRuntime is intentionally **synchronous**:
+- Apple frameworks require main thread execution
+- GPU operations have specific threading requirements
+- Simpler mental model for processor authors
 
-    /// Start the runtime.
-    pub async fn start(&self) -> Result<()>;
+### The Solution: Channel-Based Proxy
 
-    /// Stop the runtime.
-    pub async fn stop(&self) -> Result<()>;
+Decouple the async world (Tokio/Axum) from the sync world (StreamRuntime):
 
-    /// Get current runtime state.
-    pub async fn get_state(&self) -> Result<RuntimeState>;
+```
+Async World                    Sync World
+┌─────────────┐               ┌─────────────┐
+│ Axum Handler │──command──▶  │ StreamRuntime│
+│   (async)   │◀──result───  │   (sync)    │
+└─────────────┘               └─────────────┘
+        │                           │
+     Tokio                    Main Thread
+```
 
-    /// Subscribe to runtime events (for WebSocket broadcasting).
-    pub fn subscribe_events(&self) -> broadcast::Receiver<RuntimeEvent>;
+---
+
+## Lab 2: Channel Fundamentals
+
+### Types of Channels
+
+| Channel Type | Use Case | Crate |
+|--------------|----------|-------|
+| **mpsc** | Multiple producers, single consumer | `flume`, `tokio::sync` |
+| **oneshot** | Single value, one-time response | `tokio::sync::oneshot` |
+| **broadcast** | Multiple consumers, all receive | `tokio::sync::broadcast` |
+
+### Why flume for Commands?
+
+```rust
+// flume works in both sync and async contexts
+let (tx, rx) = flume::unbounded::<RuntimeCommand>();
+
+// Async send (from Tokio)
+tx.send_async(command).await?;
+
+// Sync receive (from main thread)
+while let Ok(command) = rx.try_recv() {
+    // process command
 }
 ```
 
-### How Processors Obtain RuntimeService
+`flume` is a multi-producer, multi-consumer channel that bridges sync/async seamlessly. Unlike `tokio::sync::mpsc`, it doesn't require a Tokio runtime to function.
+
+### Request-Response Pattern
 
 ```rust
-impl crate::core::Processor for MyProcessor::Processor {
-    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        // RuntimeContext provides the service
-        self.runtime_service = Some(ctx.runtime_service());
-        Ok(())
-    }
-}
+// Sender side (async)
+let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+command_tx.send_async((command, response_tx)).await?;
+let result = response_rx.await?;  // Wait for response
+
+// Receiver side (sync)
+let (command, response_tx) = command_rx.recv()?;
+let result = execute_command(command);
+response_tx.send(result).ok();  // Send response back
 ```
 
-### Internal Command Types
+---
+
+## Lab 3: RuntimeProxy Design
+
+### Command and Result Types
 
 ```rust
-/// Internal command enum - not exposed to users.
-/// Users interact via RuntimeService's ergonomic methods.
+/// Commands sent from async world to sync runtime.
+/// Internal to the service layer - not exposed publicly.
 pub(crate) enum RuntimeCommand {
     AddProcessor { spec: ProcessorSpec },
     RemoveProcessor { id: ProcessorUniqueId },
@@ -127,6 +206,7 @@ pub(crate) enum RuntimeCommand {
     GetState,
 }
 
+/// Results returned from runtime to async caller.
 pub(crate) enum CommandResult {
     ProcessorAdded(ProcessorUniqueId),
     ProcessorRemoved,
@@ -139,35 +219,112 @@ pub(crate) enum CommandResult {
 }
 ```
 
----
-
-## StreamRuntime Integration
-
-The runtime owns the command channel and polls it in its event loop.
+### RuntimeProxy Implementation
 
 ```rust
-impl StreamRuntime {
-    /// Create runtime with service layer enabled.
-    pub fn new() -> Result<Self> {
-        let (command_tx, command_rx) = flume::unbounded();
-        let (event_tx, _) = broadcast::channel(256);
+/// Async facade for StreamRuntime operations.
+///
+/// Obtained from `RuntimeContext::runtime_proxy()` in processor setup.
+/// All methods are async and safe to call from Tokio.
+#[derive(Clone)]
+pub struct RuntimeProxy {
+    command_tx: flume::Sender<(RuntimeCommand, oneshot::Sender<CommandResult>)>,
+    event_tx: broadcast::Sender<RuntimeEvent>,
+}
 
-        Self {
-            // ... existing fields ...
-            command_rx,
-            runtime_service: RuntimeService { command_tx, event_tx },
+impl RuntimeProxy {
+    /// Add a processor to the runtime.
+    pub async fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.command_tx
+            .send_async((RuntimeCommand::AddProcessor { spec }, response_tx))
+            .await
+            .map_err(|_| StreamError::Runtime("Command channel closed".into()))?;
+
+        match response_rx.await {
+            Ok(CommandResult::ProcessorAdded(id)) => Ok(id),
+            Ok(CommandResult::Error(e)) => Err(e),
+            Ok(_) => Err(StreamError::Runtime("Unexpected response".into())),
+            Err(_) => Err(StreamError::Runtime("Response channel closed".into())),
         }
     }
 
-    /// Poll and execute pending commands. Called from main thread event loop.
-    pub fn poll_commands(&mut self) {
+    /// Subscribe to runtime events (for WebSocket broadcasting).
+    pub fn subscribe_events(&self) -> broadcast::Receiver<RuntimeEvent> {
+        self.event_tx.subscribe()
+    }
+
+    // Similar implementations for connect(), disconnect(), start(), stop(), etc.
+}
+```
+
+### How Processors Obtain RuntimeProxy
+
+```rust
+impl crate::core::Processor for ApiServerProcessor::Processor {
+    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
+        // RuntimeContext provides the proxy
+        self.runtime_proxy = Some(ctx.runtime_proxy());
+        Ok(())
+    }
+}
+```
+
+---
+
+## Lab 4: StreamRuntime Integration
+
+### Adding Command Channel to Runtime
+
+```rust
+pub struct StreamRuntime {
+    pub(crate) compiler: Compiler,
+    pub(crate) runtime_context: OnceLock<Arc<RuntimeContext>>,
+    pub(crate) status: Mutex<RuntimeStatus>,
+
+    // NEW: Command channel for RuntimeProxy
+    command_rx: flume::Receiver<(RuntimeCommand, oneshot::Sender<CommandResult>)>,
+    runtime_proxy: RuntimeProxy,  // Cloneable, given to processors
+}
+
+impl StreamRuntime {
+    pub fn new() -> Result<Self> {
+        // ... existing initialization ...
+
+        // Create command channel
+        let (command_tx, command_rx) = flume::unbounded();
+        let (event_tx, _) = broadcast::channel(256);
+
+        let runtime_proxy = RuntimeProxy { command_tx, event_tx };
+
+        Ok(Self {
+            compiler: Compiler::new(),
+            runtime_context: OnceLock::new(),
+            status: Mutex::new(RuntimeStatus::Initial),
+            command_rx,
+            runtime_proxy,
+        })
+    }
+}
+```
+
+### Polling Commands
+
+The runtime polls for commands in its event loop:
+
+```rust
+impl StreamRuntime {
+    /// Poll and execute pending commands.
+    /// Call this from your main loop or integrate with platform event loop.
+    pub fn poll_commands(&self) {
         while let Ok((command, response_tx)) = self.command_rx.try_recv() {
             let result = self.execute_command(command);
             let _ = response_tx.send(result);
         }
     }
 
-    fn execute_command(&mut self, command: RuntimeCommand) -> CommandResult {
+    fn execute_command(&self, command: RuntimeCommand) -> CommandResult {
         match command {
             RuntimeCommand::AddProcessor { spec } => {
                 match self.add_processor(spec) {
@@ -177,11 +334,17 @@ impl StreamRuntime {
             }
             RuntimeCommand::Connect { from, to } => {
                 match self.connect(from, to) {
-                    Ok(link) => CommandResult::Connected(link.id()),
+                    Ok(id) => CommandResult::Connected(id),
                     Err(e) => CommandResult::Error(e),
                 }
             }
-            // ... other commands delegate to existing runtime methods ...
+            RuntimeCommand::Start => {
+                match self.start() {
+                    Ok(()) => CommandResult::Started,
+                    Err(e) => CommandResult::Error(e),
+                }
+            }
+            // ... other commands ...
         }
     }
 }
@@ -191,187 +354,268 @@ impl StreamRuntime {
 
 ```rust
 impl RuntimeContext {
-    /// Get a RuntimeService for cross-thread runtime control.
+    /// Get a RuntimeProxy for cross-thread runtime control.
     ///
     /// Use this in processors that need to modify the graph dynamically
     /// (e.g., API servers, orchestration processors).
-    pub fn runtime_service(&self) -> RuntimeService {
-        self.runtime_service.clone()
+    pub fn runtime_proxy(&self) -> RuntimeProxy {
+        self.runtime_proxy.clone()
     }
 }
 ```
 
 ---
 
-## ApiServerProcessor
+## Lab 5: Tokio Runtime Isolation
 
-API server as a processor type, fitting the streamlib pattern.
+### Why Isolate Tokio?
 
-```rust
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ApiServerConfig {
-    pub host: String,
-    pub port: u16,
-}
-
-impl Default for ApiServerConfig {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 9000,
-        }
-    }
-}
-
-#[streamlib::processor(
-    execution = Manual,
-    description = "HTTP/WebSocket API server for runtime control"
-)]
-pub struct ApiServerProcessor {
-    #[streamlib::config]
-    config: ApiServerConfig,
-
-    // Obtained from RuntimeContext in setup()
-    runtime_service: Option<RuntimeService>,
-
-    // Handle to shutdown Tokio runtime
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-}
-```
-
-### Lifecycle
-
-1. **setup()**: Obtain RuntimeService from context, spawn Tokio runtime on background thread, start HTTP server
-2. **process()**: No-op (server runs independently on Tokio runtime)
-3. **teardown()**: Signal shutdown, wait for graceful termination
+StreamRuntime runs on the main thread (required for macOS). Tokio wants to run its own thread pool. Solution: spawn Tokio on a background thread.
 
 ```rust
 impl crate::core::Processor for ApiServerProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        // Get the service for communicating with runtime
-        self.runtime_service = Some(ctx.runtime_service());
+        self.runtime_proxy = Some(ctx.runtime_proxy());
 
         let config = self.config.clone();
-        let service = self.runtime_service.clone().unwrap();
+        let proxy = self.runtime_proxy.clone().unwrap();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-        // Spawn Tokio runtime on background thread
+        // Spawn Tokio on a background thread - NOT the main thread
         std::thread::spawn(move || {
+            // Build a new Tokio runtime for this thread
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()
                 .expect("Failed to create Tokio runtime");
 
+            // block_on runs the async server until completion
             rt.block_on(async move {
-                run_http_server(config, service, shutdown_rx).await;
+                run_http_server(config, proxy, shutdown_rx).await;
             });
         });
 
         self.shutdown_tx = Some(shutdown_tx);
-        tracing::info!("API server starting on {}:{}", config.host, config.port);
-        Ok(())
-    }
-
-    fn process(&mut self) -> Result<()> {
-        // Server runs independently on Tokio runtime
         Ok(())
     }
 
     fn teardown(&mut self) -> Result<()> {
+        // Signal shutdown to the Tokio runtime
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
-            tracing::info!("API server shutdown signal sent");
         }
         Ok(())
     }
 }
 ```
 
+### Key Points
+
+1. **`std::thread::spawn`** - Creates an OS thread separate from main
+2. **`tokio::runtime::Builder`** - Creates a new Tokio runtime on that thread
+3. **`rt.block_on`** - Runs async code, blocking the thread until complete
+4. **Shutdown via oneshot** - Clean signal to stop the server
+
 ---
 
-## HTTP Server (Axum)
+## Lab 6: Axum HTTP Server
+
+### Router Setup
 
 ```rust
+use axum::{
+    routing::{get, post, delete},
+    Router,
+    extract::{State, Path, Json},
+};
+
 async fn run_http_server(
     config: ApiServerConfig,
-    service: RuntimeService,
-    mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    proxy: RuntimeProxy,
+    shutdown_rx: oneshot::Receiver<()>,
 ) {
     let app = Router::new()
+        // Processor endpoints
         .route("/api/processors", post(create_processor).get(list_processors))
         .route("/api/processors/:id", get(get_processor).delete(remove_processor))
+        // Connection endpoints
         .route("/api/connections", post(create_connection).get(list_connections))
         .route("/api/connections/:id", delete(remove_connection))
+        // Lifecycle endpoints
         .route("/api/runtime/start", post(start_runtime))
         .route("/api/runtime/stop", post(stop_runtime))
         .route("/api/runtime/state", get(get_state))
+        // WebSocket for events
         .route("/api/events", get(websocket_handler))
-        .with_state(service);
+        // Attach the proxy as shared state
+        .with_state(proxy);
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
 
+    tracing::info!("API server listening on {}", addr);
+
+    // Graceful shutdown when shutdown_rx receives signal
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = shutdown_rx.await;
+            tracing::info!("API server shutting down");
         })
         .await
         .unwrap();
 }
 ```
 
-### Example Handler
+### Handler Implementation
 
 ```rust
+#[derive(Deserialize)]
+struct CreateProcessorRequest {
+    processor_type: String,
+    config: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct CreateProcessorResponse {
+    processor_id: String,
+}
+
 async fn create_processor(
-    State(service): State<RuntimeService>,
+    State(proxy): State<RuntimeProxy>,
     Json(request): Json<CreateProcessorRequest>,
 ) -> Result<Json<CreateProcessorResponse>, AppError> {
-    // Use the factory to create processor from type name
-    let spec = PROCESSOR_REGISTRY.create(&request.processor_type, request.config)?;
+    // Create ProcessorSpec from request
+    let spec = ProcessorSpec::new(&request.processor_type, request.config);
 
-    // Send command to main thread, await response
-    let processor_id = service.add_processor(spec).await?;
+    // Send command to runtime via proxy, await response
+    let processor_id = proxy.add_processor(spec).await?;
 
-    Ok(Json(CreateProcessorResponse { processor_id }))
+    Ok(Json(CreateProcessorResponse {
+        processor_id: processor_id.to_string(),
+    }))
+}
+```
+
+### Error Handling
+
+```rust
+struct AppError(StreamError);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let status = match &self.0 {
+            StreamError::ProcessorNotFound(_) => StatusCode::NOT_FOUND,
+            StreamError::LinkNotFound(_) => StatusCode::NOT_FOUND,
+            StreamError::Config(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        let body = Json(serde_json::json!({
+            "error": self.0.to_string()
+        }));
+
+        (status, body).into_response()
+    }
+}
+
+impl From<StreamError> for AppError {
+    fn from(err: StreamError) -> Self {
+        AppError(err)
+    }
 }
 ```
 
 ---
 
-## HTTP API Endpoints
+## Lab 7: WebSocket Event Streaming
+
+### Broadcast Pattern
+
+```rust
+use axum::extract::ws::{WebSocket, WebSocketUpgrade, Message};
+
+async fn websocket_handler(
+    ws: WebSocketUpgrade,
+    State(proxy): State<RuntimeProxy>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_websocket(socket, proxy))
+}
+
+async fn handle_websocket(mut socket: WebSocket, proxy: RuntimeProxy) {
+    // Subscribe to runtime events
+    let mut event_rx = proxy.subscribe_events();
+
+    loop {
+        tokio::select! {
+            // Forward runtime events to WebSocket client
+            result = event_rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        let json = serde_json::to_string(&event).unwrap();
+                        if socket.send(Message::Text(json)).await.is_err() {
+                            break; // Client disconnected
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // Client too slow, some events dropped
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break; // Channel closed
+                    }
+                }
+            }
+
+            // Handle incoming WebSocket messages (if needed)
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Ping(data))) => {
+                        let _ = socket.send(Message::Pong(data)).await;
+                    }
+                    _ => {} // Ignore other messages
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## API Reference
 
 ### Processors
 
-```
-POST   /api/processors          Create processor
-GET    /api/processors          List processors
-GET    /api/processors/:id      Get processor details
-DELETE /api/processors/:id      Remove processor
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/processors` | Create processor |
+| GET | `/api/processors` | List all processors |
+| GET | `/api/processors/:id` | Get processor details |
+| DELETE | `/api/processors/:id` | Remove processor |
 
 ### Connections
 
-```
-POST   /api/connections         Create connection
-GET    /api/connections         List connections
-DELETE /api/connections/:id     Remove connection
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/connections` | Create connection |
+| GET | `/api/connections` | List all connections |
+| DELETE | `/api/connections/:id` | Remove connection |
 
 ### Lifecycle
 
-```
-POST   /api/runtime/start       Start runtime
-POST   /api/runtime/stop        Stop runtime
-GET    /api/runtime/state       Get runtime state
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/runtime/start` | Start runtime |
+| POST | `/api/runtime/stop` | Stop runtime |
+| GET | `/api/runtime/state` | Get runtime state |
 
 ### WebSocket
 
-```
-WS     /api/events              Subscribe to runtime events
-```
+| Endpoint | Description |
+|----------|-------------|
+| `/api/events` | Subscribe to runtime events |
 
 ---
 
@@ -419,52 +663,49 @@ Content-Type: application/json
 
 ---
 
-## Files to Create
+## Implementation Checklist
 
-### Service Layer (in `libs/streamlib/src/core/service/`)
+### Files to Create
 
-1. `mod.rs` - Module exports
-2. `command.rs` - RuntimeCommand, CommandResult (internal)
-3. `runtime_service.rs` - RuntimeService (public API)
+**Service Layer** (`libs/streamlib/src/core/service/`):
+- [ ] `mod.rs` - Module exports
+- [ ] `command.rs` - RuntimeCommand, CommandResult
+- [ ] `runtime_proxy.rs` - RuntimeProxy
 
-### Processor
+**Runtime Integration**:
+- [ ] Update `StreamRuntime` with command channel
+- [ ] Add `poll_commands()` method
+- [ ] Update `RuntimeContext` with `runtime_proxy()`
 
-4. `libs/streamlib/src/core/processors/api_server.rs` - ApiServerProcessor
+**HTTP Server** (feature-gated: `api-server`):
+- [ ] `libs/streamlib/src/core/service/http/mod.rs` - Server setup
+- [ ] `libs/streamlib/src/core/service/http/handlers.rs` - Route handlers
+- [ ] `libs/streamlib/src/core/service/http/websocket.rs` - WebSocket handling
 
-### HTTP Server (feature-gated)
+**Processor**:
+- [ ] Complete `libs/streamlib/src/core/processors/api_server.rs`
 
-5. `libs/streamlib/src/core/service/http/mod.rs` - Axum server setup
-6. `libs/streamlib/src/core/service/http/handlers.rs` - Route handlers
-7. `libs/streamlib/src/core/service/http/websocket.rs` - WebSocket event streaming
+### Dependencies to Add
 
----
+```toml
+[dependencies]
+# Channel for sync/async bridging
+flume = "0.11"
 
-## Implementation Order
+# HTTP server (feature-gated)
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
 
-1. **Service layer foundation**
-   - `RuntimeCommand` and `CommandResult` enums
-   - `RuntimeService` struct with async methods
-
-2. **Runtime integration**
-   - Add command channel to `StreamRuntime`
-   - Add `poll_commands()` method
-   - Add `runtime_service()` to `RuntimeContext`
-
-3. **ApiServerProcessor**
-   - Fix existing skeleton
-   - Implement `setup()`, `process()`, `teardown()`
-   - Spawn Tokio runtime
-
-4. **HTTP server**
-   - Axum router setup
-   - Handlers using `RuntimeService`
-   - WebSocket event streaming
+[features]
+api-server = ["axum", "tokio"]
+```
 
 ---
 
 ## Open Questions
 
-1. **Feature flag**: Should the API server be behind a feature flag (e.g., `api-server`)?
+1. **Feature flag**: Should require `--features api-server` to include HTTP dependencies?
 2. **WebSocket filtering**: Should clients subscribe to specific event types?
-3. **Authentication**: Add auth middleware for production use?
-4. **Rate limiting**: Protect against abuse?
+3. **Authentication**: Add auth middleware for production?
+4. **Rate limiting**: Protect against API abuse?
+5. **CORS**: Configure for browser clients?
