@@ -31,7 +31,7 @@ fn main() -> Result<()> {
     tracing::info!("Pipeline: Camera → Lower Third → Display");
 
     // Create runtime (event-driven, no FPS parameter!)
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // 1. Add camera processor
     tracing::info!("Adding camera processor...");

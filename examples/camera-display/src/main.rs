@@ -44,7 +44,7 @@ fn main() -> Result<()> {
 
 /// Typed mode - uses compile-time type safety with ::node() methods
 fn run_typed_mode() -> Result<()> {
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // =========================================================================
     // Add processors using typed API
@@ -85,7 +85,7 @@ fn run_typed_mode() -> Result<()> {
 
 /// String mode - simulates REST API with string-based processor names and JSON configs
 fn run_string_mode() -> Result<()> {
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // =========================================================================
     // Add processors using string-based API (REST API style)
@@ -138,7 +138,7 @@ fn run_string_mode() -> Result<()> {
     run_pipeline(runtime)
 }
 
-fn run_pipeline(mut runtime: StreamRuntime) -> Result<()> {
+fn run_pipeline(runtime: StreamRuntime) -> Result<()> {
     println!("▶️  Starting pipeline...");
     #[cfg(target_os = "macos")]
     println!("   Press Cmd+Q to stop\n");

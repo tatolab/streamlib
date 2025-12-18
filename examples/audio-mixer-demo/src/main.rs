@@ -21,7 +21,7 @@ fn main() -> Result<()> {
 
     // Step 1: Create runtime (event-driven, no FPS parameter!)
     println!("🎛️  Creating audio runtime...");
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // Step 2: Add chord generator (now outputs pre-mixed stereo)
     println!("🎹 Adding chord generator (C major chord)...");

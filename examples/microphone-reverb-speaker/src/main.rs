@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");
 
     // Create runtime first
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // Request microphone permission (must be on main thread before adding audio processors)
     println!("🔒 Requesting microphone permission...");

@@ -3,8 +3,9 @@
 
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use parking_lot::Mutex;
 use serde::Serialize;
 
 use super::RuntimeStatus;
@@ -21,13 +22,28 @@ use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeE
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 
 /// The main stream processing runtime.
+///
+/// # Thread Safety
+///
+/// `StreamRuntime` is designed for concurrent access from multiple threads.
+/// All public methods take `&self` (not `&mut self`), allowing the runtime
+/// to be shared via `Arc<StreamRuntime>` without external synchronization.
+///
+/// Internal state uses fine-grained locking:
+/// - Graph operations: `RwLock` (multiple readers OR one writer)
+/// - Pending operations: `Mutex` (batched for compilation)
+/// - Status: `Mutex` (lifecycle state)
+/// - Runtime context: `OnceLock` (set once at start, read thereafter)
+///
+/// This means multiple threads can concurrently call `add_processor()`,
+/// `connect()`, etc. without blocking each other on an outer lock.
 pub struct StreamRuntime {
     /// Compiles graph changes into running processors. Owns the graph and transaction.
     pub(crate) compiler: Compiler,
-    /// Runtime context (GPU, audio config).
-    pub(crate) runtime_context: Option<Arc<RuntimeContext>>,
-    /// Runtime lifecycle status.
-    pub(crate) status: RuntimeStatus,
+    /// Runtime context (GPU, audio config). Set once during start().
+    pub(crate) runtime_context: OnceLock<Arc<RuntimeContext>>,
+    /// Runtime lifecycle status. Protected by Mutex for interior mutability.
+    pub(crate) status: Mutex<RuntimeStatus>,
 }
 
 impl StreamRuntime {
@@ -39,8 +55,8 @@ impl StreamRuntime {
 
         Ok(Self {
             compiler: Compiler::new(),
-            runtime_context: None,
-            status: RuntimeStatus::Initial,
+            runtime_context: OnceLock::new(),
+            status: Mutex::new(RuntimeStatus::Initial),
         })
     }
 
@@ -57,9 +73,9 @@ impl StreamRuntime {
     /// All pending operations are batched into a single compilation pass.
     /// This ensures processors are wired BEFORE their threads start,
     /// avoiding deadlocks when wiring tries to lock a running processor.
-    pub fn commit(&mut self) -> Result<()> {
+    pub fn commit(&self) -> Result<()> {
         // Only compile when runtime is started
-        if self.status != RuntimeStatus::Started {
+        if *self.status.lock() != RuntimeStatus::Started {
             tracing::info!("[commit] Runtime not started, operations queued, operations will be performed after starting runtime. If this is unexpected please call runtime.start(). On start a commit will automatically be submitted for you.");
             return Ok(());
         } else {
@@ -69,7 +85,7 @@ impl StreamRuntime {
         // Runtime is started - delegate to compiler
         let runtime_ctx = self
             .runtime_context
-            .as_ref()
+            .get()
             .ok_or_else(|| {
                 crate::core::error::StreamError::Runtime(
                     "Runtime context not initialized".to_string(),
@@ -85,7 +101,7 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Add a processor to the graph with its spec. Returns the processor ID.
-    pub fn add_processor(&mut self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+    pub fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         // Declare side effects upfront
         let emit_will_add = |id: &ProcessorUniqueId| {
             PUBSUB.publish(
@@ -125,11 +141,7 @@ impl StreamRuntime {
     }
 
     /// Connect two ports - adds a link to the graph. Returns the link ID.
-    pub fn connect(
-        &mut self,
-        from: OutputLinkPortRef,
-        to: InputLinkPortRef,
-    ) -> Result<LinkUniqueId> {
+    pub fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
         // Capture for events before moving into add_e
         let from_processor = from.processor_id.clone();
         let from_port = from.port_name.clone();
@@ -176,7 +188,7 @@ impl StreamRuntime {
         Ok(link_id)
     }
 
-    pub fn disconnect(&mut self, link_id: &LinkUniqueId) -> Result<()> {
+    pub fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
         // Validate link exists and get info for events, then mark for deletion
         let link_info = self.compiler.scope(|graph, tx| {
             let (from_value, to_value) = graph
@@ -226,7 +238,7 @@ impl StreamRuntime {
         self.commit()
     }
 
-    pub fn remove_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    pub fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         // Validate processor exists and mark for deletion
         self.compiler.scope(|graph, tx| {
             if !graph.traversal().v(processor_id).exists() {
@@ -266,7 +278,7 @@ impl StreamRuntime {
 
     /// Update a processor's configuration at runtime.
     pub fn update_processor_config<C: Serialize>(
-        &mut self,
+        &self,
         processor_id: &ProcessorUniqueId,
         config: C,
     ) -> Result<()> {
@@ -301,8 +313,8 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Start the runtime.
-    pub fn start(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Starting;
+    pub fn start(&self) -> Result<()> {
+        *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
@@ -312,11 +324,12 @@ impl StreamRuntime {
         // Initialize GPU context FIRST, before any macOS app setup.
         // wgpu's Metal backend uses async operations that need to complete
         // before NSApplication configuration changes thread behavior.
-        if self.runtime_context.is_none() {
+        if self.runtime_context.get().is_none() {
             tracing::info!("[start] Initializing GPU context...");
             let gpu = GpuContext::init_for_platform_sync()?;
             tracing::info!("[start] GPU context initialized");
-            self.runtime_context = Some(Arc::new(RuntimeContext::new(gpu)));
+            // OnceLock::set returns Err if already set, which is fine - we checked above
+            let _ = self.runtime_context.set(Arc::new(RuntimeContext::new(gpu)));
         }
 
         // macOS standalone app setup: detect if we're running as a standalone app
@@ -357,7 +370,7 @@ impl StreamRuntime {
         });
 
         // Mark runtime as started so commit() will actually compile
-        self.status = RuntimeStatus::Started;
+        *self.status.lock() = RuntimeStatus::Started;
 
         // Compile any pending changes (includes Phase 4: START)
         // This is now safe because we've verified the platform is ready above.
@@ -373,8 +386,8 @@ impl StreamRuntime {
     }
 
     /// Stop the runtime.
-    pub fn stop(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Stopping;
+    pub fn stop(&self) -> Result<()> {
+        *self.status.lock() = RuntimeStatus::Stopping;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
@@ -384,7 +397,7 @@ impl StreamRuntime {
         self.compiler
             .scope(|graph, _tx| shutdown_all_processors(graph))?;
 
-        self.status = RuntimeStatus::Stopped;
+        *self.status.lock() = RuntimeStatus::Stopped;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
@@ -398,7 +411,7 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Pause a specific processor.
-    pub fn pause_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    pub fn pause_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         self.compiler.scope(|graph, _tx| {
             // Validate processor exists
             let node = graph
@@ -439,7 +452,7 @@ impl StreamRuntime {
     }
 
     /// Resume a specific processor.
-    pub fn resume_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    pub fn resume_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         self.compiler.scope(|graph, _tx| {
             // Validate processor exists
             let node = graph
@@ -511,8 +524,8 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Pause the runtime (all processors).
-    pub fn pause(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Pausing;
+    pub fn pause(&self) -> Result<()> {
+        *self.status.lock() = RuntimeStatus::Pausing;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
@@ -537,7 +550,7 @@ impl StreamRuntime {
             graph.set_state(GraphState::Paused);
         });
 
-        self.status = RuntimeStatus::Paused;
+        *self.status.lock() = RuntimeStatus::Paused;
         if failures.is_empty() {
             PUBSUB.publish(
                 topics::RUNTIME_GLOBAL,
@@ -556,8 +569,8 @@ impl StreamRuntime {
     }
 
     /// Resume the runtime (all processors).
-    pub fn resume(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Starting;
+    pub fn resume(&self) -> Result<()> {
+        *self.status.lock() = RuntimeStatus::Starting;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
@@ -582,7 +595,7 @@ impl StreamRuntime {
             graph.set_state(GraphState::Running);
         });
 
-        self.status = RuntimeStatus::Started;
+        *self.status.lock() = RuntimeStatus::Started;
         if failures.is_empty() {
             PUBSUB.publish(
                 topics::RUNTIME_GLOBAL,
@@ -601,15 +614,15 @@ impl StreamRuntime {
     }
 
     /// Block until shutdown signal (Ctrl+C, SIGTERM, Cmd+Q).
-    pub fn wait_for_signal(&mut self) -> Result<()> {
+    pub fn wait_for_signal(&self) -> Result<()> {
         self.wait_for_signal_with(|_| ControlFlow::Continue(()))
     }
 
     /// Block until shutdown signal, with periodic callback for dynamic control.
     #[allow(unused_variables, unused_mut)]
-    pub fn wait_for_signal_with<F>(&mut self, mut callback: F) -> Result<()>
+    pub fn wait_for_signal_with<F>(&self, mut callback: F) -> Result<()>
     where
-        F: FnMut(&mut Self) -> ControlFlow<()>,
+        F: FnMut(&Self) -> ControlFlow<()>,
     {
         // Install signal handlers
         crate::core::signals::install_signal_handlers().map_err(|e| {
@@ -674,7 +687,7 @@ impl StreamRuntime {
     }
 
     pub fn status(&self) -> RuntimeStatus {
-        self.status
+        *self.status.lock()
     }
 
     // =========================================================================

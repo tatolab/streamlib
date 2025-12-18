@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     println!("=== Camera + Audio → MP4 Recorder Pipeline ===\n");
 
     // Create runtime first
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // Request camera and microphone permissions (must be on main thread)
     println!("🔒 Requesting camera permission...");
