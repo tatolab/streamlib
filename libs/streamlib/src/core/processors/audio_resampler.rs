@@ -42,7 +42,7 @@ pub struct AudioResamplerProcessor {
     frame_counter: u64,
 }
 
-impl AudioResamplerProcessor::Processor {
+impl crate::core::Processor for AudioResamplerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         self.output_sample_rate = self.config.target_sample_rate;
 

@@ -6,18 +6,22 @@
 pub mod graph;
 pub mod traits;
 
-mod dyn_processor;
-mod dyn_processor_impl;
+#[doc(hidden)]
+pub mod __generated_private;
+
 mod processor_instance_factory;
 mod processor_spec;
 
 // Re-export graph types
 pub use graph::{ProcessorState, ProcessorStateComponent};
 
-// Re-export traits
+// Re-export user-facing trait
 pub use traits::{Config, ConfigValidationError, Processor};
 
-pub use dyn_processor::DynProcessor;
+// Re-export internal traits (doc-hidden but needed by macro and runtime)
+#[doc(hidden)]
+pub use __generated_private::{DynGeneratedProcessor, GeneratedProcessor};
+
 pub use processor_instance_factory::{
     macro_codegen, ProcessorInstance, ProcessorInstanceFactory, RegisterResult, PROCESSOR_REGISTRY,
 };

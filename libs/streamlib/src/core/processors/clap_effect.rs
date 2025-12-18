@@ -126,7 +126,9 @@ impl ClapEffectProcessor::Processor {
 
         Ok(output_frame)
     }
+}
 
+impl crate::core::Processor for ClapEffectProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         self.sample_rate = self.config.sample_rate;
         self.buffer_size = self.config.buffer_size;

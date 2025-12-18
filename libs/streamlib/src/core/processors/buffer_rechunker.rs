@@ -37,7 +37,7 @@ pub struct BufferRechunkerProcessor {
     rechunker: Option<AudioRechunker>,
 }
 
-impl BufferRechunkerProcessor::Processor {
+impl crate::core::Processor for BufferRechunkerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         tracing::info!(
             "[BufferRechunker] Initialized with target buffer size: {} samples per channel",

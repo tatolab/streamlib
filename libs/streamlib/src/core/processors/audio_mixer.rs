@@ -49,7 +49,7 @@ pub struct AudioMixerProcessor {
     frame_counter: u64,
 }
 
-impl AudioMixerProcessor::Processor {
+impl crate::core::Processor for AudioMixerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         self.sample_rate = 0;
         self.buffer_size = 0;

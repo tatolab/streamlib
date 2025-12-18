@@ -5,6 +5,7 @@
 //!
 //! This test verifies the module-based processor generation works correctly.
 
+use streamlib::core::GeneratedProcessor;
 use streamlib::core::{EmptyConfig, LinkInput, LinkOutput, Result, RuntimeContext, VideoFrame};
 
 // Define a simple processor using the new attribute macro syntax
@@ -17,8 +18,8 @@ pub struct TestProcessor {
     video_out: LinkOutput<VideoFrame>,
 }
 
-// User implements methods on the generated Processor struct
-impl TestProcessor::Processor {
+// User implements the Processor trait on the generated Processor struct
+impl streamlib::Processor for TestProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
@@ -75,8 +76,6 @@ fn test_port_marker_names() {
 
 #[test]
 fn test_processor_instantiation() {
-    use streamlib::core::Processor;
-
     // Create processor from empty config
     let processor = TestProcessor::Processor::from_config(EmptyConfig).unwrap();
 
@@ -100,7 +99,7 @@ pub struct ConfiguredProcessor {
     config: MyConfig,
 }
 
-impl ConfiguredProcessor::Processor {
+impl streamlib::Processor for ConfiguredProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
@@ -118,8 +117,6 @@ impl ConfiguredProcessor::Processor {
 
 #[test]
 fn test_config_field_access() {
-    use streamlib::core::Processor;
-
     let config = MyConfig { threshold: 0.5 };
     let processor = ConfiguredProcessor::Processor::from_config(config).unwrap();
 
@@ -129,8 +126,6 @@ fn test_config_field_access() {
 
 #[test]
 fn test_config_update() {
-    use streamlib::core::Processor;
-
     let config = MyConfig { threshold: 0.5 };
     let mut processor = ConfiguredProcessor::Processor::from_config(config).unwrap();
 

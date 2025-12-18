@@ -81,7 +81,7 @@ pub struct AppleAudioOutputProcessor {
     resampler_state: Arc<Mutex<Option<ResamplerState>>>,
 }
 
-impl AppleAudioOutputProcessor::Processor {
+impl crate::core::Processor for AppleAudioOutputProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         self.device_id = self
             .config
@@ -100,7 +100,6 @@ impl AppleAudioOutputProcessor::Processor {
         Ok(())
     }
 
-    // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
         if self.stream_setup_done {
             return Ok(());

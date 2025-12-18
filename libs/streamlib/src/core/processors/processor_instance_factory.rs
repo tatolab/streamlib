@@ -8,11 +8,11 @@ use parking_lot::RwLock;
 
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{PortInfo, ProcessorNode};
-use crate::core::processors::{DynProcessor, Processor};
+use crate::core::processors::{DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
 /// A created processor instance for runtime use.
-pub type ProcessorInstance = Box<dyn DynProcessor + Send>;
+pub type ProcessorInstance = Box<dyn DynGeneratedProcessor + Send>;
 
 /// Types used by macro-generated code. Not for direct use.
 pub mod macro_codegen {
@@ -90,10 +90,10 @@ impl ProcessorInstanceFactory {
     /// Register a processor type with its constructor.
     pub fn register<P>(&self)
     where
-        P: Processor + 'static,
+        P: GeneratedProcessor + 'static,
         P::Config: for<'de> serde::Deserialize<'de> + Default,
     {
-        let descriptor = match <P as Processor>::descriptor() {
+        let descriptor = match <P as GeneratedProcessor>::descriptor() {
             Some(d) => d,
             None => {
                 tracing::warn!(

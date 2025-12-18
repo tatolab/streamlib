@@ -88,7 +88,9 @@ impl ChordGeneratorProcessor::Processor {
     const FREQ_C4: f64 = 261.63;
     const FREQ_E4: f64 = 329.63;
     const FREQ_G4: f64 = 392.00;
+}
 
+impl crate::core::Processor for ChordGeneratorProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         self.buffer_size = self.config.buffer_size;
         self.sample_rate = self.config.sample_rate;

@@ -14,7 +14,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use streamlib::core::context::RuntimeContext;
 use streamlib::core::frames::DataFrame;
 use streamlib::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, OutputLinkPortRef,
@@ -50,11 +49,8 @@ struct SourceProcessor {
     config: MockConfig,
 }
 
-impl SourceProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
-    }
-    fn teardown(&mut self) -> Result<()> {
+impl streamlib::Processor for SourceProcessor::Processor {
+    fn process(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -72,11 +68,8 @@ struct TransformProcessor {
     config: MockConfig,
 }
 
-impl TransformProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
-    }
-    fn teardown(&mut self) -> Result<()> {
+impl streamlib::Processor for TransformProcessor::Processor {
+    fn process(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -94,11 +87,8 @@ struct SinkProcessor {
     config: MockConfig,
 }
 
-impl SinkProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
-    }
-    fn teardown(&mut self) -> Result<()> {
+impl streamlib::Processor for SinkProcessor::Processor {
+    fn process(&mut self) -> Result<()> {
         Ok(())
     }
 }

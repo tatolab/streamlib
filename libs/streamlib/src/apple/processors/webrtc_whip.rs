@@ -151,7 +151,7 @@ pub struct WebRtcWhipProcessor {
     last_audio_packets_sent: u64,
 }
 
-impl WebRtcWhipProcessor::Processor {
+impl crate::core::Processor for WebRtcWhipProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         self.ctx = Some(ctx.clone());
@@ -223,7 +223,9 @@ impl WebRtcWhipProcessor::Processor {
 
         Ok(())
     }
+}
 
+impl WebRtcWhipProcessor::Processor {
     /// Starts the WebRTC WHIP session.
     fn start_session(&mut self) -> Result<()> {
         // Initialize VideoToolbox encoder lazily

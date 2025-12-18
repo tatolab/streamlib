@@ -23,6 +23,12 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
     let output_link_module = generate_output_link_module(analysis);
     let processor_impl = generate_processor_impl(analysis);
 
+    let config_type = analysis
+        .config_field_type
+        .as_ref()
+        .map(|ty| quote! { #ty })
+        .unwrap_or_else(|| quote! { ::streamlib::core::EmptyConfig });
+
     let unsafe_send_impl = if analysis.processor_attrs.unsafe_send {
         quote! {
             unsafe impl Send for Processor {}
@@ -44,6 +50,16 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
         #[allow(non_snake_case)]
         pub mod #module_name {
             use super::*;
+
+            /// Configuration type for this processor.
+            pub type Config = #config_type;
+
+            /// Create a [`ProcessorSpec`] for adding this processor to a runtime.
+            ///
+            /// Convenience wrapper around [`Processor::node`].
+            pub fn node(config: Config) -> ::streamlib::core::ProcessorSpec {
+                Processor::node(config)
+            }
 
             #processor_struct
 
@@ -260,7 +276,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             }
         }
 
-        impl ::streamlib::core::Processor for Processor {
+        impl ::streamlib::core::__generated_private::GeneratedProcessor for Processor {
             type Config = #config_type;
 
             fn name(&self) -> &str {
@@ -270,7 +286,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #from_config_body
 
             fn process(&mut self) -> ::streamlib::core::Result<()> {
-                self.process()
+                <Self as ::streamlib::core::Processor>::process(self)
             }
 
             #update_config
@@ -292,11 +308,11 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #set_link_output_to_processor_message_writer
 
             fn __generated_setup(&mut self, ctx: &::streamlib::core::RuntimeContext) -> ::streamlib::core::Result<()> {
-                self.setup(ctx)
+                <Self as ::streamlib::core::Processor>::setup(self, ctx)
             }
 
             fn __generated_teardown(&mut self) -> ::streamlib::core::Result<()> {
-                self.teardown()
+                <Self as ::streamlib::core::Processor>::teardown(self)
             }
         }
     }
