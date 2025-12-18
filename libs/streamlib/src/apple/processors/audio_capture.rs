@@ -45,7 +45,7 @@ pub struct AppleAudioCaptureProcessor {
     stream_setup_done: bool,
 }
 
-impl AppleAudioCaptureProcessor::Processor {
+impl crate::core::Processor for AppleAudioCaptureProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         tracing::info!("[AudioCapture] setup() called - will set up stream in process()");
         self.stream_setup_done = false;
@@ -73,7 +73,6 @@ impl AppleAudioCaptureProcessor::Processor {
         Ok(())
     }
 
-    // Business logic - called by macro-generated process()
     fn process(&mut self) -> Result<()> {
         // Pull mode: process() is called once to set up the stream, then cpal callback drives everything
         if !self.stream_setup_done {
@@ -90,7 +89,9 @@ impl AppleAudioCaptureProcessor::Processor {
         // We don't do anything here - the callback writes frames directly to output
         Ok(())
     }
+}
 
+impl AppleAudioCaptureProcessor::Processor {
     // Separate method for actual stream setup (called from process())
     fn setup_stream(&mut self) -> Result<()> {
         let host = cpal::default_host();
@@ -299,7 +300,7 @@ impl AppleAudioCaptureProcessor::Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::processors::Processor;
+    use crate::core::GeneratedProcessor;
 
     #[test]
     #[ignore] // Requires real audio hardware - not available in CI

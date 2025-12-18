@@ -92,7 +92,7 @@ pub struct ProducerProcessor {
     config: ProducerConfig,
 }
 
-impl ProducerProcessor::Processor {
+impl streamlib::Processor for ProducerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
@@ -139,7 +139,7 @@ pub struct ConsumerProcessor {
     config: ConsumerConfig,
 }
 
-impl ConsumerProcessor::Processor {
+impl streamlib::Processor for ConsumerProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }
@@ -182,7 +182,7 @@ pub struct ManualProcessor {
     runtime_context: Option<Arc<RuntimeContext>>,
 }
 
-impl ManualProcessor::Processor {
+impl streamlib::Processor for ManualProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         // Store the runtime context for pause checking in our loop
         self.runtime_context = Some(Arc::new(ctx.clone()));
@@ -289,7 +289,7 @@ impl EventListener for PauseResumeEventListener {
 fn test_pause_stops_continuous_processor() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new().expect("Failed to create runtime");
 
     // Add producer (Continuous mode)
     let producer = runtime
@@ -362,7 +362,7 @@ fn test_pause_stops_continuous_processor() {
 fn test_pause_stops_reactive_processor() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new().expect("Failed to create runtime");
 
     // Add producer and consumer
     let producer = runtime
@@ -438,7 +438,7 @@ fn test_pause_stops_reactive_processor() {
 fn test_pubsub_notifications_on_pause_resume() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new().expect("Failed to create runtime");
 
     // Add producer
     let producer = runtime
@@ -500,7 +500,7 @@ fn test_pubsub_notifications_on_pause_resume() {
 fn test_runtime_pause_resume_all_processors() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new().expect("Failed to create runtime");
 
     // Add multiple producers
     let producer1 = runtime
@@ -579,7 +579,7 @@ fn test_runtime_pause_resume_all_processors() {
 fn test_pause_resume_idempotent() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new().expect("Failed to create runtime");
 
     let producer = runtime
         .add_processor(ProducerProcessor::Processor::node(ProducerConfig {
@@ -614,7 +614,7 @@ fn test_pause_resume_idempotent() {
 fn test_manual_processor_checks_is_paused() {
     reset_counters();
 
-    let mut runtime = StreamRuntime::new();
+    let mut runtime = StreamRuntime::new().expect("Failed to create runtime");
 
     // Add manual processor
     let manual = runtime

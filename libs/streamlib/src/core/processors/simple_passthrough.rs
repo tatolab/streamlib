@@ -31,7 +31,7 @@ pub struct SimplePassthroughProcessor {
     config: SimplePassthroughConfig,
 }
 
-impl SimplePassthroughProcessor::Processor {
+impl crate::core::Processor for SimplePassthroughProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
         Ok(())
     }

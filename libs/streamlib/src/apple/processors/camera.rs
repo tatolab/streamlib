@@ -199,164 +199,11 @@ pub struct AppleCameraProcessor {
     avfoundation_init_dispatched: bool,
 }
 
-impl AppleCameraProcessor::Processor {
+impl crate::core::Processor for AppleCameraProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         tracing::info!("Camera: setup() complete, will initialize AVFoundation in process()");
         Ok(())
-    }
-
-    /// Initialize AVFoundation capture session on main thread.
-    /// Called via dispatch to main queue - MUST NOT block or use tracing.
-    fn initialize_capture_session_on_main_thread(
-        mtm: MainThreadMarker,
-        config: &AppleCameraConfig,
-        latest_frame: Arc<Mutex<Option<FrameHolder>>>,
-        init_state: Arc<CaptureSessionInitState>,
-    ) {
-        // All errors are reported via init_state, not returned
-        let result = Self::do_initialize_capture_session(mtm, config, latest_frame);
-        match result {
-            Ok(camera_name) => {
-                eprintln!("[Camera] AVFoundation session started: {}", camera_name);
-                init_state.mark_ready(camera_name);
-            }
-            Err(e) => {
-                eprintln!("[Camera] AVFoundation init FAILED: {}", e);
-                init_state.mark_failed(e.to_string());
-            }
-        }
-    }
-
-    /// Internal init logic, returns Result for cleaner error handling.
-    fn do_initialize_capture_session(
-        mtm: MainThreadMarker,
-        config: &AppleCameraConfig,
-        latest_frame: Arc<Mutex<Option<FrameHolder>>>,
-    ) -> Result<String> {
-        let session = unsafe { AVCaptureSession::new() };
-
-        unsafe {
-            session.beginConfiguration();
-        }
-
-        let device = unsafe {
-            if let Some(ref id) = config.device_id {
-                let id_str = NSString::from_str(id);
-                let dev = AVCaptureDevice::deviceWithUniqueID(&id_str);
-                if dev.is_none() {
-                    return Err(StreamError::Configuration(format!(
-                        "Camera not found with ID: {}",
-                        id
-                    )));
-                }
-                dev.unwrap()
-            } else {
-                let media_type = AVMediaTypeVideo.ok_or_else(|| {
-                    StreamError::Configuration("AVMediaTypeVideo not available".into())
-                })?;
-
-                AVCaptureDevice::defaultDeviceWithMediaType(media_type)
-                    .ok_or_else(|| StreamError::Configuration("No camera found".into()))?
-            }
-        };
-
-        unsafe {
-            if let Err(e) = device.lockForConfiguration() {
-                return Err(StreamError::Configuration(format!(
-                    "Failed to lock camera device: {:?}",
-                    e
-                )));
-            }
-            device.unlockForConfiguration();
-        }
-
-        let input = unsafe {
-            AVCaptureDeviceInput::deviceInputWithDevice_error(&device).map_err(|e| {
-                StreamError::Configuration(format!("Failed to create camera input: {:?}", e))
-            })?
-        };
-
-        let can_add = unsafe { session.canAddInput(&input) };
-        if !can_add {
-            return Err(StreamError::Configuration(
-                "Session cannot add camera input. Camera may be in use.".into(),
-            ));
-        }
-
-        unsafe {
-            session.addInput(&input);
-        }
-
-        let _ = FRAME_STORAGE.set(latest_frame);
-
-        let message_writer_holder: Arc<
-            Mutex<
-                Option<crossbeam_channel::Sender<crate::core::links::LinkOutputToProcessorMessage>>,
-            >,
-        > = Arc::new(Mutex::new(None));
-        let _ = LINK_OUTPUT_TO_PROCESSOR_WRITER_AND_READER.set(message_writer_holder.clone());
-
-        let output = unsafe { AVCaptureVideoDataOutput::new() };
-
-        use objc2_foundation::NSNumber;
-
-        let pixel_format_key = unsafe { objc2_core_video::kCVPixelBufferPixelFormatTypeKey };
-        let pixel_format_value = NSNumber::new_u32(0x42475241); // BGRA
-
-        use objc2::runtime::AnyClass;
-        use objc2::ClassType;
-        let dict_cls: &AnyClass = objc2_foundation::NSDictionary::<
-            objc2::runtime::AnyObject,
-            objc2::runtime::AnyObject,
-        >::class();
-
-        let key_ptr = pixel_format_key as *const _ as *const objc2::runtime::AnyObject;
-        let value_ptr = &*pixel_format_value as *const _ as *const objc2::runtime::AnyObject;
-
-        let video_settings_ptr: *mut objc2::runtime::AnyObject =
-            unsafe { msg_send![dict_cls, dictionaryWithObject: value_ptr, forKey: key_ptr] };
-
-        unsafe {
-            let _: () = msg_send![&output, setVideoSettings: video_settings_ptr];
-        }
-
-        let delegate = CameraDelegate::new(mtm);
-
-        unsafe {
-            use dispatch2::{DispatchQueue, DispatchQueueAttr};
-            let queue = DispatchQueue::new("com.streamlib.camera.video", DispatchQueueAttr::SERIAL);
-
-            output.setSampleBufferDelegate_queue(
-                Some(ProtocolObject::from_ref(&*delegate)),
-                Some(&queue),
-            );
-        }
-
-        let can_add_output = unsafe { session.canAddOutput(&output) };
-        if !can_add_output {
-            return Err(StreamError::Configuration(
-                "Cannot add camera output".into(),
-            ));
-        }
-
-        unsafe {
-            session.addOutput(&output);
-            session.commitConfiguration();
-        }
-
-        let camera_name = unsafe { device.localizedName().to_string() };
-
-        unsafe {
-            session.startRunning();
-        }
-
-        // Leak ObjC objects to keep them alive
-        let _ = Retained::into_raw(session);
-        let _ = Retained::into_raw(device);
-        let _ = Retained::into_raw(delegate);
-
-        Ok(camera_name)
     }
 
     fn teardown(&mut self) -> Result<()> {
@@ -365,35 +212,6 @@ impl AppleCameraProcessor::Processor {
             self.camera_name,
             self.frame_count
         );
-        Ok(())
-    }
-
-    /// Initialize Metal resources (can run on any thread).
-    fn initialize_metal_resources(&mut self) -> Result<()> {
-        let metal_device = MetalDevice::new()?;
-
-        let metal_command_queue = {
-            use metal::foreign_types::ForeignTypeRef;
-            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-            let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-            metal_device_ref.new_command_queue()
-        };
-
-        let gpu_context = self
-            .gpu_context
-            .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
-
-        let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-            metal_device.clone_device(),
-            gpu_context.device().as_ref().clone(),
-            gpu_context.queue().as_ref().clone(),
-        ));
-
-        self.wgpu_bridge = Some(wgpu_bridge);
-        self.metal_command_queue = Some(metal_command_queue);
-        self.metal_device = Some(metal_device);
-
         Ok(())
     }
 
@@ -647,6 +465,190 @@ impl AppleCameraProcessor::Processor {
 
             Ok(LoopControl::Continue)
         })
+    }
+}
+
+impl AppleCameraProcessor::Processor {
+    /// Initialize AVFoundation capture session on main thread.
+    /// Called via dispatch to main queue - MUST NOT block or use tracing.
+    fn initialize_capture_session_on_main_thread(
+        mtm: MainThreadMarker,
+        config: &AppleCameraConfig,
+        latest_frame: Arc<Mutex<Option<FrameHolder>>>,
+        init_state: Arc<CaptureSessionInitState>,
+    ) {
+        // All errors are reported via init_state, not returned
+        let result = Self::do_initialize_capture_session(mtm, config, latest_frame);
+        match result {
+            Ok(camera_name) => {
+                eprintln!("[Camera] AVFoundation session started: {}", camera_name);
+                init_state.mark_ready(camera_name);
+            }
+            Err(e) => {
+                eprintln!("[Camera] AVFoundation init FAILED: {}", e);
+                init_state.mark_failed(e.to_string());
+            }
+        }
+    }
+
+    /// Internal init logic, returns Result for cleaner error handling.
+    fn do_initialize_capture_session(
+        mtm: MainThreadMarker,
+        config: &AppleCameraConfig,
+        latest_frame: Arc<Mutex<Option<FrameHolder>>>,
+    ) -> Result<String> {
+        let session = unsafe { AVCaptureSession::new() };
+
+        unsafe {
+            session.beginConfiguration();
+        }
+
+        let device = unsafe {
+            if let Some(ref id) = config.device_id {
+                let id_str = NSString::from_str(id);
+                let dev = AVCaptureDevice::deviceWithUniqueID(&id_str);
+                if dev.is_none() {
+                    return Err(StreamError::Configuration(format!(
+                        "Camera not found with ID: {}",
+                        id
+                    )));
+                }
+                dev.unwrap()
+            } else {
+                let media_type = AVMediaTypeVideo.ok_or_else(|| {
+                    StreamError::Configuration("AVMediaTypeVideo not available".into())
+                })?;
+
+                AVCaptureDevice::defaultDeviceWithMediaType(media_type)
+                    .ok_or_else(|| StreamError::Configuration("No camera found".into()))?
+            }
+        };
+
+        unsafe {
+            if let Err(e) = device.lockForConfiguration() {
+                return Err(StreamError::Configuration(format!(
+                    "Failed to lock camera device: {:?}",
+                    e
+                )));
+            }
+            device.unlockForConfiguration();
+        }
+
+        let input = unsafe {
+            AVCaptureDeviceInput::deviceInputWithDevice_error(&device).map_err(|e| {
+                StreamError::Configuration(format!("Failed to create camera input: {:?}", e))
+            })?
+        };
+
+        let can_add = unsafe { session.canAddInput(&input) };
+        if !can_add {
+            return Err(StreamError::Configuration(
+                "Session cannot add camera input. Camera may be in use.".into(),
+            ));
+        }
+
+        unsafe {
+            session.addInput(&input);
+        }
+
+        let _ = FRAME_STORAGE.set(latest_frame);
+
+        let message_writer_holder: Arc<
+            Mutex<
+                Option<crossbeam_channel::Sender<crate::core::links::LinkOutputToProcessorMessage>>,
+            >,
+        > = Arc::new(Mutex::new(None));
+        let _ = LINK_OUTPUT_TO_PROCESSOR_WRITER_AND_READER.set(message_writer_holder.clone());
+
+        let output = unsafe { AVCaptureVideoDataOutput::new() };
+
+        use objc2_foundation::NSNumber;
+
+        let pixel_format_key = unsafe { objc2_core_video::kCVPixelBufferPixelFormatTypeKey };
+        let pixel_format_value = NSNumber::new_u32(0x42475241); // BGRA
+
+        use objc2::runtime::AnyClass;
+        use objc2::ClassType;
+        let dict_cls: &AnyClass = objc2_foundation::NSDictionary::<
+            objc2::runtime::AnyObject,
+            objc2::runtime::AnyObject,
+        >::class();
+
+        let key_ptr = pixel_format_key as *const _ as *const objc2::runtime::AnyObject;
+        let value_ptr = &*pixel_format_value as *const _ as *const objc2::runtime::AnyObject;
+
+        let video_settings_ptr: *mut objc2::runtime::AnyObject =
+            unsafe { msg_send![dict_cls, dictionaryWithObject: value_ptr, forKey: key_ptr] };
+
+        unsafe {
+            let _: () = msg_send![&output, setVideoSettings: video_settings_ptr];
+        }
+
+        let delegate = CameraDelegate::new(mtm);
+
+        unsafe {
+            use dispatch2::{DispatchQueue, DispatchQueueAttr};
+            let queue = DispatchQueue::new("com.streamlib.camera.video", DispatchQueueAttr::SERIAL);
+
+            output.setSampleBufferDelegate_queue(
+                Some(ProtocolObject::from_ref(&*delegate)),
+                Some(&queue),
+            );
+        }
+
+        let can_add_output = unsafe { session.canAddOutput(&output) };
+        if !can_add_output {
+            return Err(StreamError::Configuration(
+                "Cannot add camera output".into(),
+            ));
+        }
+
+        unsafe {
+            session.addOutput(&output);
+            session.commitConfiguration();
+        }
+
+        let camera_name = unsafe { device.localizedName().to_string() };
+
+        unsafe {
+            session.startRunning();
+        }
+
+        // Leak ObjC objects to keep them alive
+        let _ = Retained::into_raw(session);
+        let _ = Retained::into_raw(device);
+        let _ = Retained::into_raw(delegate);
+
+        Ok(camera_name)
+    }
+
+    /// Initialize Metal resources (can run on any thread).
+    fn initialize_metal_resources(&mut self) -> Result<()> {
+        let metal_device = MetalDevice::new()?;
+
+        let metal_command_queue = {
+            use metal::foreign_types::ForeignTypeRef;
+            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+            let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
+            metal_device_ref.new_command_queue()
+        };
+
+        let gpu_context = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+
+        let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
+            metal_device.clone_device(),
+            gpu_context.device().as_ref().clone(),
+            gpu_context.queue().as_ref().clone(),
+        ));
+
+        self.wgpu_bridge = Some(wgpu_bridge);
+        self.metal_command_queue = Some(metal_command_queue);
+        self.metal_device = Some(metal_device);
+
+        Ok(())
     }
 
     // Helper methods

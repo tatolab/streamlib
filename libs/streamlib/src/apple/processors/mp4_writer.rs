@@ -121,7 +121,7 @@ pub struct AppleMp4WriterProcessor {
     pixel_transfer: Option<crate::apple::PixelTransferSession>,
 }
 
-impl AppleMp4WriterProcessor::Processor {
+impl crate::core::Processor for AppleMp4WriterProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         info!("Setting up MP4 writer processor");
 
@@ -373,7 +373,9 @@ impl AppleMp4WriterProcessor::Processor {
 
         Ok(())
     }
+}
 
+impl AppleMp4WriterProcessor::Processor {
     fn initialize_writer(&mut self) -> Result<()> {
         info!("Initializing MP4 writer for: {:?}", self.config.output_path);
 

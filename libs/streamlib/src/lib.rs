@@ -66,7 +66,6 @@ pub use core::{
     ClapScanner,
     DataFrame,
     DisplayConfig,
-    DynProcessor,
     EncodedAudioFrame,
     Field,
     FieldType,

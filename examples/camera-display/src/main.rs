@@ -17,7 +17,7 @@
 //! cargo run -p camera-display -- --string-mode
 //! ```
 
-use streamlib::core::{CameraConfig, DisplayConfig, InputLinkPortRef, OutputLinkPortRef};
+use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{
     input, output, CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
 };
@@ -51,13 +51,13 @@ fn run_typed_mode() -> Result<()> {
     // =========================================================================
 
     println!("📷 Adding camera processor...");
-    let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
+    let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
         device_id: None,
     }))?;
     println!("✓ Camera added: {}\n", camera);
 
     println!("🖥️  Adding display processor...");
-    let display = runtime.add_processor(DisplayProcessor::Processor::node(DisplayConfig {
+    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: 3840,
         height: 2160,
         title: Some("streamlib Camera Display".to_string()),

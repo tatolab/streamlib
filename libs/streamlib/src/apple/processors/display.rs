@@ -85,7 +85,7 @@ pub struct AppleDisplayProcessor {
     format_buffer_bgra: Option<metal::Buffer>,
 }
 
-impl AppleDisplayProcessor::Processor {
+impl crate::core::Processor for AppleDisplayProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         tracing::trace!("Display: setup() called");
         self.gpu_context = Some(ctx.gpu.clone());
@@ -318,7 +318,9 @@ impl AppleDisplayProcessor::Processor {
             Ok(LoopControl::Continue)
         })
     }
+}
 
+impl AppleDisplayProcessor::Processor {
     // Helper methods
     pub fn window_id(&self) -> AppleWindowId {
         self.window_id

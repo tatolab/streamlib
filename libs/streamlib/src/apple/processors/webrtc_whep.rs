@@ -148,7 +148,7 @@ pub struct WebRtcWhepProcessor {
     pending_ice_candidates: Arc<Mutex<Vec<String>>>,
 }
 
-impl WebRtcWhepProcessor::Processor {
+impl crate::core::Processor for WebRtcWhepProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         self.ctx = Some(ctx.clone());
@@ -184,6 +184,23 @@ impl WebRtcWhepProcessor::Processor {
         Ok(())
     }
 
+    fn teardown(&mut self) -> Result<()> {
+        if let Some(whep_client) = &self.whep_client {
+            if let Ok(client) = whep_client.lock() {
+                if let Err(e) = client.terminate() {
+                    tracing::error!(
+                        "[WebRtcWhepProcessor] Failed to terminate WHEP session: {}",
+                        e
+                    );
+                }
+            }
+        }
+        tracing::info!("[WebRtcWhepProcessor] Teardown complete");
+        Ok(())
+    }
+}
+
+impl WebRtcWhepProcessor::Processor {
     fn start_session(&mut self) -> Result<()> {
         let _ctx = self
             .ctx
@@ -901,21 +918,6 @@ impl WebRtcWhepProcessor::Processor {
             );
         }
 
-        Ok(())
-    }
-
-    fn teardown(&mut self) -> Result<()> {
-        if let Some(whep_client) = &self.whep_client {
-            if let Ok(client) = whep_client.lock() {
-                if let Err(e) = client.terminate() {
-                    tracing::error!(
-                        "[WebRtcWhepProcessor] Failed to terminate WHEP session: {}",
-                        e
-                    );
-                }
-            }
-        }
-        tracing::info!("[WebRtcWhepProcessor] Teardown complete");
         Ok(())
     }
 }
