@@ -3,7 +3,7 @@
 
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -33,15 +33,16 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 /// - Graph operations: `RwLock` (multiple readers OR one writer)
 /// - Pending operations: `Mutex` (batched for compilation)
 /// - Status: `Mutex` (lifecycle state)
-/// - Runtime context: `OnceLock` (set once at start, read thereafter)
+/// - Runtime context: `Mutex<Option<...>>` (created on start, cleared on stop)
 ///
 /// This means multiple threads can concurrently call `add_processor()`,
 /// `connect()`, etc. without blocking each other on an outer lock.
 pub struct StreamRuntime {
     /// Compiles graph changes into running processors. Owns the graph and transaction.
     pub(crate) compiler: Compiler,
-    /// Runtime context (GPU, audio config). Set once during start().
-    pub(crate) runtime_context: OnceLock<Arc<RuntimeContext>>,
+    /// Runtime context (GPU, audio config). Created on start(), cleared on stop().
+    /// Using Mutex<Option<...>> allows restart cycles with fresh context each time.
+    pub(crate) runtime_context: Mutex<Option<Arc<RuntimeContext>>>,
     /// Runtime lifecycle status. Protected by Mutex for interior mutability.
     pub(crate) status: Mutex<RuntimeStatus>,
 }
@@ -55,7 +56,7 @@ impl StreamRuntime {
 
         Ok(Self {
             compiler: Compiler::new(),
-            runtime_context: OnceLock::new(),
+            runtime_context: Mutex::new(None),
             status: Mutex::new(RuntimeStatus::Initial),
         })
     }
@@ -83,15 +84,9 @@ impl StreamRuntime {
         }
 
         // Runtime is started - delegate to compiler
-        let runtime_ctx = self
-            .runtime_context
-            .get()
-            .ok_or_else(|| {
-                crate::core::error::StreamError::Runtime(
-                    "Runtime context not initialized".to_string(),
-                )
-            })?
-            .clone();
+        let runtime_ctx = self.runtime_context.lock().clone().ok_or_else(|| {
+            crate::core::error::StreamError::Runtime("Runtime context not initialized".to_string())
+        })?;
 
         self.compiler.commit(&runtime_ctx)
     }
@@ -324,13 +319,11 @@ impl StreamRuntime {
         // Initialize GPU context FIRST, before any macOS app setup.
         // wgpu's Metal backend uses async operations that need to complete
         // before NSApplication configuration changes thread behavior.
-        if self.runtime_context.get().is_none() {
-            tracing::info!("[start] Initializing GPU context...");
-            let gpu = GpuContext::init_for_platform_sync()?;
-            tracing::info!("[start] GPU context initialized");
-            // OnceLock::set returns Err if already set, which is fine - we checked above
-            let _ = self.runtime_context.set(Arc::new(RuntimeContext::new(gpu)));
-        }
+        // Always create fresh context on start - enables tracking per session.
+        tracing::info!("[start] Initializing GPU context...");
+        let gpu = GpuContext::init_for_platform_sync()?;
+        tracing::info!("[start] GPU context initialized");
+        *self.runtime_context.lock() = Some(Arc::new(RuntimeContext::new(gpu)));
 
         // macOS standalone app setup: detect if we're running as a standalone app
         // (not embedded in another app with its own NSApplication event loop)
@@ -396,6 +389,11 @@ impl StreamRuntime {
         // Shutdown all processors
         self.compiler
             .scope(|graph, _tx| shutdown_all_processors(graph))?;
+
+        // Clear runtime context - allows fresh context on next start().
+        // This enables per-session tracking (e.g., AI agents analyzing runtime state).
+        *self.runtime_context.lock() = None;
+        tracing::info!("[stop] Runtime context cleared");
 
         *self.status.lock() = RuntimeStatus::Stopped;
         PUBSUB.publish(
