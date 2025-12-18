@@ -2,6 +2,111 @@
 
 ## Status: Draft (Lab Format)
 
+---
+
+<mentor-guidance>
+## For the Mentor Agent
+
+**When the developer references this document, acknowledge it explicitly:**
+
+> "I see you're working with the API Server lab. I've read through the complete implementation plan that the Lab Builder prepared. This is a well-structured 7-lab progression covering channels, RuntimeProxy, Tokio isolation, Axum, and WebSockets. I'm ready to guide you through it - you'll write the code, and I'll help you arrive at solutions that match the reference implementations. Where would you like to start?"
+
+### Your Role
+You are guiding an experienced developer (20+ years) who is learning Rust. The Lab Builder agent has prepared complete reference implementations in this document. Your job:
+- **Guide, don't solve** - ask leading questions
+- **Validate against the code blocks** - they are the answer key
+- **Let them write the code** - only show solutions if explicitly asked
+- **Celebrate their wins** - they're learning a new language
+
+### What This Lab Contains
+- **7 progressive labs** with complete, working implementations
+- Each lab explains **"why"** before showing **"how"**
+- Code blocks are your **answer key** - validate their work against these
+- The developer should arrive at solutions that match (or improve upon) these
+
+### Branch State (`api/server`)
+The Lab Builder has already completed foundational pre-work (4 commits):
+1. ✅ Interior mutability (`&self` not `&mut self`)
+2. ✅ Compiler simplified (no forced main thread dispatch)
+3. ✅ Runtime restart support (`Mutex<Option<...>>`)
+4. ✅ Dependencies in Cargo.toml (tokio, axum, tower-http)
+
+**The developer does NOT need to implement these** - they're documented in "Prerequisites Completed" for context.
+
+### Target Files (What They'll Create/Modify)
+| File | Action | Lab |
+|------|--------|-----|
+| `libs/streamlib/src/core/service/mod.rs` | Create | 3 |
+| `libs/streamlib/src/core/service/command.rs` | Create | 3 |
+| `libs/streamlib/src/core/service/runtime_proxy.rs` | Create | 3 |
+| `libs/streamlib/src/core/runtime/runtime.rs` | Modify | 4 |
+| `libs/streamlib/src/core/context/runtime_context.rs` | Modify | 4 |
+| `libs/streamlib/src/core/service/http/mod.rs` | Create | 5-6 |
+| `libs/streamlib/src/core/service/http/handlers.rs` | Create | 6 |
+| `libs/streamlib/src/core/service/http/websocket.rs` | Create | 7 |
+| `libs/streamlib/src/core/processors/api_server.rs` | Complete | 5 |
+
+### The Story Arc
+This lab tells a story of **bridging two worlds**:
+
+1. **The Problem** (Lab 1): StreamRuntime is sync, Axum is async. They can't talk directly.
+2. **The Bridge** (Labs 2-4): Channels create a message-passing bridge between worlds.
+3. **The Isolation** (Lab 5): Tokio gets its own thread, away from macOS main thread constraints.
+4. **The Interface** (Labs 6-7): HTTP and WebSocket expose the runtime to the outside world.
+
+The developer should understand this narrative - it's not just code, it's architecture.
+
+### Key Concepts to Reinforce
+| Concept | Why It Matters | When They'll Encounter It |
+|---------|----------------|---------------------------|
+| `try_recv()` takes `&mut self` | Requires `Mutex` wrapper | Lab 2, 4 |
+| Tokio on background thread | macOS main thread is for Apple frameworks | Lab 5 |
+| `oneshot` for request-response | Each command gets exactly one response | Lab 2, 3 |
+| `broadcast` for fan-out | Multiple WebSocket clients, all get events | Lab 2, 7 |
+| Proxy has ZERO logic | It's just a channel facade, not business logic | Lab 3 |
+| `clone()` for async moves | Values move into async blocks | Lab 5, 6 |
+
+### Common Stumbling Points
+When they hit these, guide with questions, not answers:
+
+1. **"Why do I need Mutex around the receiver?"**
+   - Ask: "What does `try_recv()`'s signature require?"
+   - Hint: Look at whether it takes `&self` or `&mut self`
+
+2. **"My Tokio code deadlocks on macOS"**
+   - Ask: "Which thread is Tokio running on? Which thread does macOS need free?"
+   - Hint: `std::thread::spawn` vs calling `block_on` directly
+
+3. **"How do I get the proxy into my handler?"**
+   - Ask: "How does Axum share state across handlers?"
+   - Hint: `.with_state()` and `State` extractor
+
+4. **"The oneshot channel closed unexpectedly"**
+   - Ask: "Who holds the sender? What happens when they drop it?"
+   - Hint: Trace the sender's lifetime
+
+### Verification Checkpoints
+Use these to confirm progress:
+
+| After Lab | Test | Expected |
+|-----------|------|----------|
+| 5 | `curl http://localhost:9000/health` | `ok` |
+| 6 | `curl http://localhost:9000/api/runtime/state` | `{"status":"running"}` |
+| 6 | `curl -X POST .../api/processors -d '{"processor_type":"..."}` | `{"processor_id":"..."}` |
+| 7 | `websocat ws://localhost:9000/api/events` | Events stream when processors added |
+
+### Code Review Focus
+When reviewing their implementations:
+
+- **Error handling**: Are they using `?` properly? Mapping errors to `AppError`?
+- **Ownership**: Did they `clone()` what needs to move into async blocks?
+- **Lifetimes**: The `CommandMessage` type alias avoids embedding lifetimes in the tuple
+- **Mutex scope**: Are they holding locks longer than necessary? (Lock, extract, drop)
+- **Match exhaustiveness**: Did they handle all `CommandResult` variants?
+</mentor-guidance>
+
+---
+
 ## Overview
 
 This lab teaches you how to build a thread-safe API server that controls StreamRuntime from HTTP/WebSocket clients. You'll learn:
@@ -12,6 +117,8 @@ This lab teaches you how to build a thread-safe API server that controls StreamR
 - **RuntimeProxy**: Async facade over sync runtime
 
 By the end, you'll understand how to expose StreamRuntime operations via REST API while ensuring the runtime never blocks.
+
+> **🎯 The Goal**: A web application can call `POST /api/processors` to create a camera, `POST /api/connections` to wire it to a display, and receive real-time events via WebSocket when things change. The runtime stays responsive, the API stays async, and they never block each other.
 
 ---
 
@@ -35,7 +142,7 @@ pub fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>
 
 **Internal locking strategy**:
 - `status: Mutex<RuntimeStatus>` - lifecycle state
-- `runtime_context: OnceLock<Arc<RuntimeContext>>` - set once at start()
+- `runtime_context: Mutex<Option<Arc<RuntimeContext>>>` - created on start(), cleared on stop()
 - Graph operations use `Arc<RwLock<Graph>>` via Compiler
 - Pending operations use `Arc<Mutex<Vec<PendingOperation>>>`
 
@@ -78,7 +185,7 @@ Self::compile(...)
 │  │  - Uses RuntimeProxy to send commands                     │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                              │                                  │
-│                              │ RuntimeCommand via flume channel │
+│                              │ RuntimeCommand via mpsc channel  │
 │                              │ CommandResult via oneshot        │
 │                              ▼                                  │
 │  ┌──────────────────────────────────────────────────────────┐  │
@@ -104,6 +211,8 @@ The proxy contains **zero business logic**.
 ---
 
 ## Lab 1: Understanding the Problem
+
+> **📖 The Story So Far**: You have a StreamRuntime that manages processors and connections. It works great from Rust code. But now you want a web UI to control it. The web server (Axum) speaks async. The runtime speaks sync. How do you bridge them?
 
 ### Why Can't We Just Use Arc<StreamRuntime>?
 
@@ -132,6 +241,8 @@ StreamRuntime is intentionally **synchronous**:
 
 ### The Solution: Channel-Based Proxy
 
+> **💡 Key Insight**: Instead of calling runtime methods directly from async code, we'll send *messages* through a channel. The async side sends a command and waits. The sync side polls for commands and sends back results. They never block each other.
+
 Decouple the async world (Tokio/Axum) from the sync world (StreamRuntime):
 
 ```
@@ -148,50 +259,69 @@ Async World                    Sync World
 
 ## Lab 2: Channel Fundamentals
 
+> **📖 Building the Bridge**: Channels are Rust's way of sending data between threads safely. You'll use three types, each with a specific purpose. Think of them as different kinds of pipes.
+
 ### Types of Channels
 
 | Channel Type | Use Case | Crate |
 |--------------|----------|-------|
-| **mpsc** | Multiple producers, single consumer | `flume`, `tokio::sync` |
+| **mpsc** | Multiple producers, single consumer | `tokio::sync::mpsc` |
 | **oneshot** | Single value, one-time response | `tokio::sync::oneshot` |
 | **broadcast** | Multiple consumers, all receive | `tokio::sync::broadcast` |
 
-### Why flume for Commands?
+### Why tokio::sync::mpsc for Commands?
 
 ```rust
-// flume works in both sync and async contexts
-let (tx, rx) = flume::unbounded::<RuntimeCommand>();
+use tokio::sync::mpsc;
+
+// Create bounded channel
+let (tx, rx) = mpsc::channel::<RuntimeCommand>(256);
 
 // Async send (from Tokio)
-tx.send_async(command).await?;
+tx.send(command).await?;
 
-// Sync receive (from main thread)
+// Sync receive (from main thread) - requires Mutex since try_recv takes &mut self
+let mut rx = rx.lock();
 while let Ok(command) = rx.try_recv() {
     // process command
 }
 ```
 
-`flume` is a multi-producer, multi-consumer channel that bridges sync/async seamlessly. Unlike `tokio::sync::mpsc`, it doesn't require a Tokio runtime to function.
+We use `tokio::sync::mpsc` because:
+- Already have Tokio as a dependency for the HTTP server
+- Simpler than adding another crate
+- `try_recv()` works without a Tokio runtime (just needs `&mut self`)
+- Wrap receiver in `Mutex` for interior mutability
+
+> **⚠️ Watch Out**: `try_recv()` takes `&mut self`, not `&self`. That's why we wrap the receiver in a `Mutex` - so we can get `&mut` access from `&self` methods. This is a common pattern when bridging sync and async code.
 
 ### Request-Response Pattern
+
+> **💡 Pattern**: For commands that need responses, we bundle a `oneshot::Sender` with each command. The receiver uses it to send back exactly one response. Think of it like a callback, but type-safe and channel-based.
 
 ```rust
 // Sender side (async)
 let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-command_tx.send_async((command, response_tx)).await?;
+command_tx.send((command, response_tx)).await?;
 let result = response_rx.await?;  // Wait for response
 
 // Receiver side (sync)
-let (command, response_tx) = command_rx.recv()?;
-let result = execute_command(command);
-response_tx.send(result).ok();  // Send response back
+let mut rx = command_rx.lock();
+while let Ok((command, response_tx)) = rx.try_recv() {
+    let result = execute_command(command);
+    response_tx.send(result).ok();  // Send response back
+}
 ```
 
 ---
 
 ## Lab 3: RuntimeProxy Design
 
+> **📖 The Facade**: RuntimeProxy is the async-friendly face of StreamRuntime. It looks like the runtime (same methods), but internally it just sends messages through channels. Zero business logic - it's purely a communication facade.
+
 ### Command and Result Types
+
+> **🎨 Design Choice**: We use enums for commands and results. Each variant maps to a runtime operation. This makes the protocol explicit and type-safe. The compiler ensures you handle every case.
 
 ```rust
 /// Commands sent from async world to sync runtime.
@@ -221,14 +351,22 @@ pub(crate) enum CommandResult {
 
 ### RuntimeProxy Implementation
 
+> **💡 Type Alias Trick**: `CommandMessage` is a type alias for the tuple. This avoids repeating the complex type everywhere and sidesteps lifetime issues that would arise if we tried to embed references.
+
 ```rust
+use tokio::sync::{mpsc, oneshot, broadcast};
+
+/// Message type for command channel.
+/// Using a type alias keeps things clean and avoids lifetime complexity.
+pub type CommandMessage = (RuntimeCommand, oneshot::Sender<CommandResult>);
+
 /// Async facade for StreamRuntime operations.
 ///
 /// Obtained from `RuntimeContext::runtime_proxy()` in processor setup.
 /// All methods are async and safe to call from Tokio.
 #[derive(Clone)]
 pub struct RuntimeProxy {
-    command_tx: flume::Sender<(RuntimeCommand, oneshot::Sender<CommandResult>)>,
+    command_tx: mpsc::Sender<CommandMessage>,
     event_tx: broadcast::Sender<RuntimeEvent>,
 }
 
@@ -238,7 +376,7 @@ impl RuntimeProxy {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.command_tx
-            .send_async((RuntimeCommand::AddProcessor { spec }, response_tx))
+            .send((RuntimeCommand::AddProcessor { spec }, response_tx))
             .await
             .map_err(|_| StreamError::Runtime("Command channel closed".into()))?;
 
@@ -275,16 +413,24 @@ impl crate::core::Processor for ApiServerProcessor::Processor {
 
 ## Lab 4: StreamRuntime Integration
 
+> **📖 Wiring It Up**: Now we add the channel infrastructure to StreamRuntime itself. The runtime owns the receiver, polls it for commands, and executes them. The proxy (which holds the sender) gets cloned to processors that need it.
+
 ### Adding Command Channel to Runtime
 
+> **🎨 Design Note**: The channel is created in `new()`, so it exists for the lifetime of the runtime. The proxy is created at the same time, holding the sender side. Processors get clones of the proxy through `RuntimeContext`.
+
 ```rust
+use tokio::sync::{mpsc, broadcast};
+use parking_lot::Mutex;
+
 pub struct StreamRuntime {
     pub(crate) compiler: Compiler,
-    pub(crate) runtime_context: OnceLock<Arc<RuntimeContext>>,
+    pub(crate) runtime_context: Mutex<Option<Arc<RuntimeContext>>>,
     pub(crate) status: Mutex<RuntimeStatus>,
 
     // NEW: Command channel for RuntimeProxy
-    command_rx: flume::Receiver<(RuntimeCommand, oneshot::Sender<CommandResult>)>,
+    // Mutex wraps receiver since try_recv() requires &mut self
+    command_rx: Mutex<mpsc::Receiver<CommandMessage>>,
     runtime_proxy: RuntimeProxy,  // Cloneable, given to processors
 }
 
@@ -292,17 +438,17 @@ impl StreamRuntime {
     pub fn new() -> Result<Self> {
         // ... existing initialization ...
 
-        // Create command channel
-        let (command_tx, command_rx) = flume::unbounded();
+        // Create command channel (bounded)
+        let (command_tx, command_rx) = mpsc::channel::<CommandMessage>(256);
         let (event_tx, _) = broadcast::channel(256);
 
         let runtime_proxy = RuntimeProxy { command_tx, event_tx };
 
         Ok(Self {
             compiler: Compiler::new(),
-            runtime_context: OnceLock::new(),
+            runtime_context: Mutex::new(None),
             status: Mutex::new(RuntimeStatus::Initial),
-            command_rx,
+            command_rx: Mutex::new(command_rx),
             runtime_proxy,
         })
     }
@@ -311,17 +457,25 @@ impl StreamRuntime {
 
 ### Polling Commands
 
+> **⚠️ Integration Point**: `poll_commands()` must be called regularly - either from your main loop, or integrated with the platform's event loop. On macOS, this happens in the NSApplication run loop callback.
+
 The runtime polls for commands in its event loop:
 
 ```rust
 impl StreamRuntime {
     /// Poll and execute pending commands.
     /// Call this from your main loop or integrate with platform event loop.
-    pub fn poll_commands(&self) {
-        while let Ok((command, response_tx)) = self.command_rx.try_recv() {
+    pub fn poll_commands(&self) -> usize {
+        let mut count = 0;
+        let mut rx = self.command_rx.lock();
+
+        while let Ok((command, response_tx)) = rx.try_recv() {
             let result = self.execute_command(command);
             let _ = response_tx.send(result);
+            count += 1;
         }
+
+        count
     }
 
     fn execute_command(&self, command: RuntimeCommand) -> CommandResult {
@@ -368,9 +522,13 @@ impl RuntimeContext {
 
 ## Lab 5: Tokio Runtime Isolation
 
+> **📖 The Threading Dance**: This is where macOS constraints meet async Rust. The main thread belongs to Apple frameworks (NSApplication, Metal, AVFoundation). Tokio needs its own thread pool. Solution: spawn Tokio on a background thread, let it do its async thing, and communicate with the main thread via channels.
+
 ### Why Isolate Tokio?
 
 StreamRuntime runs on the main thread (required for macOS). Tokio wants to run its own thread pool. Solution: spawn Tokio on a background thread.
+
+> **⚠️ macOS Gotcha**: If you try to run Tokio's `block_on` directly on the main thread, you'll deadlock when any processor tries to use Apple frameworks. The main thread will be blocked waiting for Tokio, and Tokio will be waiting for main thread access. Always spawn Tokio on a separate thread.
 
 ```rust
 impl crate::core::Processor for ApiServerProcessor::Processor {
@@ -417,11 +575,17 @@ impl crate::core::Processor for ApiServerProcessor::Processor {
 3. **`rt.block_on`** - Runs async code, blocking the thread until complete
 4. **Shutdown via oneshot** - Clean signal to stop the server
 
+> **✅ Checkpoint**: After completing this lab, you should be able to run the example and hit `curl http://localhost:9000/health`. If you get "ok", the Tokio isolation is working correctly.
+
 ---
 
 ## Lab 6: Axum HTTP Server
 
+> **📖 The Interface**: Now we build the actual HTTP API. Axum is a modern, ergonomic web framework built on Tokio. It uses extractors to pull data from requests and makes routing declarative.
+
 ### Router Setup
+
+> **💡 Axum Pattern**: Notice how we use `.with_state(proxy)` to share the RuntimeProxy across all handlers. Each handler receives it via `State(proxy): State<RuntimeProxy>`. This is dependency injection, Axum-style.
 
 ```rust
 use axum::{
@@ -469,6 +633,8 @@ async fn run_http_server(
 
 ### Handler Implementation
 
+> **🎨 Pattern**: Each handler is an async function that takes extractors as arguments. `State` gives you shared state, `Json` parses the request body, `Path` extracts URL parameters. The return type determines the response format.
+
 ```rust
 #[derive(Deserialize)]
 struct CreateProcessorRequest {
@@ -498,6 +664,8 @@ async fn create_processor(
 ```
 
 ### Error Handling
+
+> **💡 Newtype Pattern**: `AppError` wraps `StreamError` so we can implement Axum's `IntoResponse` trait. This lets us use `?` in handlers - errors automatically convert to proper HTTP responses with status codes.
 
 ```rust
 struct AppError(StreamError);
@@ -530,7 +698,11 @@ impl From<StreamError> for AppError {
 
 ## Lab 7: WebSocket Event Streaming
 
+> **📖 Real-Time Updates**: The final piece - pushing events to connected clients as things happen. When a processor is added, all WebSocket clients hear about it instantly. This uses the `broadcast` channel we set up earlier.
+
 ### Broadcast Pattern
+
+> **💡 tokio::select!**: This macro lets us wait on multiple async operations simultaneously. Whichever completes first wins. Here we're waiting for either: (1) a runtime event to forward, or (2) a WebSocket message from the client. This is the idiomatic way to handle bidirectional async communication.
 
 ```rust
 use axum::extract::ws::{WebSocket, WebSocketUpgrade, Message};
@@ -582,9 +754,15 @@ async fn handle_websocket(mut socket: WebSocket, proxy: RuntimeProxy) {
 }
 ```
 
+> **⚠️ Lagged Clients**: Notice the `RecvError::Lagged(_)` handling. If a WebSocket client is too slow to keep up with events, the broadcast channel drops old messages. We just continue rather than disconnecting - the client will catch up with newer events.
+
+> **✅ Checkpoint**: Test with `websocat ws://localhost:9000/api/events` in one terminal, then use curl to add a processor in another. You should see the event appear in the WebSocket terminal.
+
 ---
 
 ## API Reference
+
+> **📋 Complete API**: Here's everything the server exposes. Use this as a quick reference when building clients.
 
 ### Processors
 
@@ -689,15 +867,12 @@ Content-Type: application/json
 
 ```toml
 [dependencies]
-# Channel for sync/async bridging
-flume = "0.11"
+# Already in workspace - just need correct features
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync"] }
 
-# HTTP server (feature-gated)
-axum = { version = "0.8", optional = true }
-tokio = { version = "1", features = ["full"], optional = true }
-
-[features]
-api-server = ["axum", "tokio"]
+# HTTP server
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
 ```
 
 ---
@@ -709,3 +884,19 @@ api-server = ["axum", "tokio"]
 3. **Authentication**: Add auth middleware for production?
 4. **Rate limiting**: Protect against API abuse?
 5. **CORS**: Configure for browser clients?
+
+---
+
+## 🎉 Congratulations!
+
+If you've completed all 7 labs, you now have:
+
+- A **channel-based bridge** between async and sync worlds
+- A **RuntimeProxy** that makes the sync runtime feel async
+- **Tokio isolated** on its own thread, away from macOS constraints
+- A complete **REST API** for runtime control
+- **Real-time WebSocket** events for live updates
+
+The web UI you dreamed of can now talk to StreamRuntime. Add processors, wire them together, and watch events flow - all through HTTP and WebSocket.
+
+> **🔮 What's Next?**: Consider adding authentication (JWT or API keys), rate limiting, and CORS for production use. The Open Questions above are good starting points for discussion.
