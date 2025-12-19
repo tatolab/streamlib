@@ -8,6 +8,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use super::graph_change_listener::GraphChangeListener;
 use super::RuntimeStatus;
 use crate::core::compiler::{shutdown_all_processors, Compiler, PendingOperation};
 use crate::core::context::{GpuContext, RuntimeContext};
@@ -39,12 +40,15 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 /// `connect()`, etc. without blocking each other on an outer lock.
 pub struct StreamRuntime {
     /// Compiles graph changes into running processors. Owns the graph and transaction.
-    pub(crate) compiler: Compiler,
+    pub(crate) compiler: Arc<Compiler>,
     /// Runtime context (GPU, audio config). Created on start(), cleared on stop().
     /// Using Mutex<Option<...>> allows restart cycles with fresh context each time.
-    pub(crate) runtime_context: Mutex<Option<Arc<RuntimeContext>>>,
+    pub(crate) runtime_context: Arc<Mutex<Option<Arc<RuntimeContext>>>>,
     /// Runtime lifecycle status. Protected by Mutex for interior mutability.
-    pub(crate) status: Mutex<RuntimeStatus>,
+    pub(crate) status: Arc<Mutex<RuntimeStatus>>,
+    /// Listener for graph changes that triggers compilation.
+    /// Stored to keep subscription alive for runtime lifetime.
+    _graph_change_listener: Arc<Mutex<dyn EventListener>>,
 }
 
 impl StreamRuntime {
@@ -54,41 +58,28 @@ impl StreamRuntime {
         let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors()?;
         tracing::debug!("Registered {} processors from inventory", result.count);
 
+        // Create Arc-wrapped components
+        let compiler = Arc::new(Compiler::new());
+        let runtime_context = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(RuntimeStatus::Initial));
+
+        // Create listener with cloned Arc references
+        let listener = GraphChangeListener::new(
+            Arc::clone(&status),
+            Arc::clone(&runtime_context),
+            Arc::clone(&compiler),
+        );
+        let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
+
+        // Subscribe to graph changes
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+
         Ok(Self {
-            compiler: Compiler::new(),
-            runtime_context: Mutex::new(None),
-            status: Mutex::new(RuntimeStatus::Initial),
+            compiler,
+            runtime_context,
+            status,
+            _graph_change_listener: listener,
         })
-    }
-
-    // =========================================================================
-    // Commit Control
-    // =========================================================================
-
-    /// Apply all pending graph changes.
-    ///
-    /// When the runtime is not started, pending operations are kept in the queue
-    /// and will be executed when `start()` is called. When started, operations
-    /// are compiled and executed with proper processor lifecycle.
-    ///
-    /// All pending operations are batched into a single compilation pass.
-    /// This ensures processors are wired BEFORE their threads start,
-    /// avoiding deadlocks when wiring tries to lock a running processor.
-    pub fn commit(&self) -> Result<()> {
-        // Only compile when runtime is started
-        if *self.status.lock() != RuntimeStatus::Started {
-            tracing::info!("[commit] Runtime not started, operations queued, operations will be performed after starting runtime. If this is unexpected please call runtime.start(). On start a commit will automatically be submitted for you.");
-            return Ok(());
-        } else {
-            tracing::info!("[commit] Runtime started, commit operations to compiler");
-        }
-
-        // Runtime is started - delegate to compiler
-        let runtime_ctx = self.runtime_context.lock().clone().ok_or_else(|| {
-            crate::core::error::StreamError::Runtime("Runtime context not initialized".to_string())
-        })?;
-
-        self.compiler.commit(&runtime_ctx)
     }
 
     // =========================================================================
@@ -129,8 +120,11 @@ impl StreamRuntime {
                 .ok_or_else(|| StreamError::GraphError("Could not create node".into()))
         })?;
 
-        // Commit changes
-        self.commit()?;
+        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+        );
 
         Ok(processor_id)
     }
@@ -177,8 +171,11 @@ impl StreamRuntime {
             }),
         );
 
-        // Commit changes
-        self.commit()?;
+        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+        );
 
         Ok(link_id)
     }
@@ -229,8 +226,13 @@ impl StreamRuntime {
             }),
         );
 
-        // Commit changes
-        self.commit()
+        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+        );
+
+        Ok(())
     }
 
     pub fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
@@ -267,8 +269,13 @@ impl StreamRuntime {
             }),
         );
 
-        // Commit changes
-        self.commit()
+        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+        );
+
+        Ok(())
     }
 
     /// Update a processor's configuration at runtime.
@@ -299,8 +306,13 @@ impl StreamRuntime {
             }),
         );
 
-        // Commit changes
-        self.commit()
+        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+        );
+
+        Ok(())
     }
 
     // =========================================================================
@@ -316,58 +328,33 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
         );
 
-        // Initialize GPU context FIRST, before any macOS app setup.
+        // Initialize GPU context FIRST, before any platform app setup.
         // wgpu's Metal backend uses async operations that need to complete
         // before NSApplication configuration changes thread behavior.
         // Always create fresh context on start - enables tracking per session.
         tracing::info!("[start] Initializing GPU context...");
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
-        *self.runtime_context.lock() = Some(Arc::new(RuntimeContext::new(gpu)));
+        let runtime_ctx = Arc::new(RuntimeContext::new(gpu));
+        *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
-        // macOS standalone app setup: detect if we're running as a standalone app
-        // (not embedded in another app with its own NSApplication event loop)
-        #[cfg(target_os = "macos")]
-        {
-            use objc2::MainThreadMarker;
-            use objc2_app_kit::NSApplication;
-
-            let is_standalone = if let Some(mtm) = MainThreadMarker::new() {
-                let app = NSApplication::sharedApplication(mtm);
-                !app.isRunning()
-            } else {
-                // Not on main thread - can't check NSApplication state
-                false
-            };
-
-            if is_standalone {
-                tracing::info!("[start] Setting up macOS application");
-                crate::apple::runtime_ext::setup_macos_app();
-                crate::apple::runtime_ext::install_macos_shutdown_handler();
-
-                // CRITICAL: Verify the macOS platform is fully ready BEFORE starting
-                // any processors. This uses Apple's NSRunningApplication.isFinishedLaunching
-                // API to confirm the app has completed its launch sequence.
-                //
-                // Without this verification, processors may try to use AVFoundation,
-                // Metal, or other Apple frameworks before NSApplication is ready,
-                // causing hangs or undefined behavior.
-                tracing::info!("[start] Verifying macOS platform readiness...");
-                crate::apple::runtime_ext::ensure_macos_platform_ready()?;
-            }
-        }
+        // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
+        // RuntimeContext handles all platform-specific details internally.
+        runtime_ctx.ensure_platform_ready()?;
 
         // Set graph state to Running
         self.compiler.scope(|graph, _tx| {
             graph.set_state(GraphState::Running);
         });
 
-        // Mark runtime as started so commit() will actually compile
+        // Mark runtime as started so commit will actually compile
         *self.status.lock() = RuntimeStatus::Started;
 
-        // Compile any pending changes (includes Phase 4: START)
-        // This is now safe because we've verified the platform is ready above.
-        self.commit()?;
+        // Compile any pending changes directly (includes Phase 4: START)
+        // This ensures all queued operations are processed before start() returns.
+        // After this, GraphChangeListener handles commits asynchronously.
+        tracing::info!("[start] Committing pending graph operations");
+        self.compiler.commit(&runtime_ctx)?;
 
         tracing::info!("[start] Runtime started (platform verified)");
         PUBSUB.publish(

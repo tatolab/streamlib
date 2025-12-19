@@ -1,30 +1,34 @@
-# Main Thread Dispatch
+# Runtime Thread Dispatch
 
 ## Overview
 
-The `RuntimeContext` provides utilities for dispatching work to the main thread from processor worker threads. This is essential for platform APIs that require execution on the main thread with an active run loop (e.g., AVFoundation on macOS).
+The `RuntimeContext` provides utilities for dispatching work to the runtime thread from processor worker threads. This is essential for platform APIs that require execution on a specific thread with an active run loop (e.g., AVFoundation on macOS).
+
+> **Terminology Note**: The "runtime thread" is the thread where StreamRuntime orchestration happens.
+> On macOS, this is the main thread (NSApplication run loop) because Apple frameworks require it.
+> On other platforms, it may be a different thread depending on platform requirements.
 
 ## When to Use
 
-Use main thread dispatch when:
+Use runtime thread dispatch when:
 
-- **Platform APIs require it**: AVFoundation, UIKit/AppKit, and other macOS/iOS frameworks require certain operations to run on the main thread
+- **Platform APIs require it**: AVFoundation, UIKit/AppKit, and other macOS/iOS frameworks require certain operations to run on the runtime thread
 - **Thread-specific resources**: APIs that check for CFRunLoop, NSRunLoop, or thread-local storage
-- **UI updates**: Any UI-related code must run on the main thread
+- **UI updates**: Any UI-related code must run on the runtime thread
 
 **Do NOT use for:**
 - General computation (adds latency)
-- High-frequency operations (can bottleneck main thread)
+- High-frequency operations (can bottleneck runtime thread)
 - Operations that already work on worker threads
 
 ## API
 
-### `run_on_main_async`
+### `run_on_runtime_thread_async`
 
-Dispatches a closure to execute on the main thread asynchronously (non-blocking).
+Dispatches a closure to execute on the runtime thread asynchronously (non-blocking).
 
 ```rust
-pub fn run_on_main_async<F>(&self, f: F)
+pub fn run_on_runtime_thread_async<F>(&self, f: F)
 where
     F: FnOnce() + Send + 'static
 ```
@@ -32,7 +36,7 @@ where
 **Characteristics:**
 - Non-blocking - calling thread continues immediately
 - No return value
-- Queued for execution on main thread's event loop
+- Queued for execution on runtime thread's event loop
 - Executed in FIFO order (serial execution on main queue)
 
 **Example:**
@@ -47,10 +51,10 @@ impl Processor for MyProcessor {
     fn process(&mut self) -> Result<()> {
         let frame = self.pull_input()?;
 
-        // Dispatch to main thread
+        // Dispatch to runtime thread
         if let Some(ref ctx) = self.ctx {
-            ctx.run_on_main_async(move || {
-                // This runs on main thread
+            ctx.run_on_runtime_thread_async(move || {
+                // This runs on runtime thread
                 update_ui_with_frame(frame);
             });
         }
@@ -60,12 +64,12 @@ impl Processor for MyProcessor {
 }
 ```
 
-### `run_on_main_blocking`
+### `run_on_runtime_thread_blocking`
 
-Dispatches a closure to execute on the main thread and waits for the result (blocking).
+Dispatches a closure to execute on the runtime thread and waits for the result (blocking).
 
 ```rust
-pub fn run_on_main_blocking<F, R>(&self, f: F) -> R
+pub fn run_on_runtime_thread_blocking<F, R>(&self, f: F) -> R
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static
@@ -75,15 +79,15 @@ where
 - Blocking - calling thread waits for completion
 - Returns a value
 - Uses channel-based synchronization
-- **Will deadlock if called FROM main thread**
+- **Will deadlock if called FROM the runtime thread when it's blocked**
 
 **Example:**
 
 ```rust
 impl Processor for MyProcessor {
     fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        // Create AVFoundation writer on main thread
-        let writer = ctx.run_on_main_blocking(|| {
+        // Create AVFoundation writer on runtime thread
+        let writer = ctx.run_on_runtime_thread_blocking(|| {
             AVAssetWriter::assetWriterWithURL_fileType(url, file_type)
         });
 
@@ -115,8 +119,8 @@ impl Processor for MyProcessor {
 
     fn process(&mut self) -> Result<()> {
         if !self.initialized {
-            // Main event loop is running now
-            let writer = self.ctx.as_ref().unwrap().run_on_main_blocking(|| {
+            // Runtime event loop is running now
+            let writer = self.ctx.as_ref().unwrap().run_on_runtime_thread_blocking(|| {
                 AVAssetWriter::create(...)
             });
             self.writer = Some(writer);
@@ -131,7 +135,7 @@ impl Processor for MyProcessor {
 
 ### Pattern 2: Shared State with Arc<Mutex<>>
 
-Share mutable state between worker thread and main thread:
+Share mutable state between worker thread and runtime thread:
 
 ```rust
 struct MyProcessor {
@@ -144,7 +148,7 @@ impl Processor for MyProcessor {
         self.ctx = Some(ctx.clone());
 
         let writer = Arc::clone(&self.writer);
-        ctx.run_on_main_async(move || {
+        ctx.run_on_runtime_thread_async(move || {
             let w = AVAssetWriter::create(...);
             *writer.lock().unwrap() = Some(w);
         });
@@ -156,7 +160,7 @@ impl Processor for MyProcessor {
         let frame = self.pull_input()?;
         let writer = Arc::clone(&self.writer);
 
-        self.ctx.as_ref().unwrap().run_on_main_async(move || {
+        self.ctx.as_ref().unwrap().run_on_runtime_thread_async(move || {
             if let Some(w) = writer.lock().unwrap().as_mut() {
                 w.append_frame(frame);
             }
@@ -175,8 +179,8 @@ Ensure cleanup completes before returning:
 impl Processor for MyProcessor {
     fn teardown(&mut self) -> Result<()> {
         if let Some(ref ctx) = self.ctx {
-            ctx.run_on_main_blocking(|| {
-                // Finalize writer on main thread
+            ctx.run_on_runtime_thread_blocking(|| {
+                // Finalize writer on runtime thread
                 self.writer.finishWriting();
             });
         }
@@ -191,8 +195,8 @@ impl Processor for MyProcessor {
 
 - Uses GCD's `DispatchQueue::main()`
 - Integrates with NSApplication's event loop
-- Main thread must call `runtime.run()` to start event loop
-- Closures queued before `run()` execute once event loop starts
+- Runtime thread must call `runtime.wait_for_signal()` to start event loop
+- Closures queued before event loop starts execute once it begins
 
 ### Other Platforms
 
@@ -205,11 +209,11 @@ impl Processor for MyProcessor {
 
 - Async dispatch adds minimal latency (~microseconds to queue)
 - Blocking dispatch adds latency = (queue time + execution time)
-- Main thread serializes all dispatched work
+- Runtime thread serializes all dispatched work
 
 ### Best Practices
 
-1. **Keep closures fast**: Main thread processes UI events and other system work
+1. **Keep closures fast**: Runtime thread processes UI events and other system work
 2. **Batch when possible**: Combine multiple operations into one dispatch
 3. **Prefer async**: Use blocking only when you need the return value
 4. **Avoid hot paths**: Don't dispatch every single frame unless necessary
@@ -219,12 +223,12 @@ impl Processor for MyProcessor {
 ```rust
 // Bad: Dispatch for each sample
 for sample in samples {
-    ctx.run_on_main_async(move || process_sample(sample));
+    ctx.run_on_runtime_thread_async(move || process_sample(sample));
 }
 
 // Good: Dispatch once for all samples
 let samples = samples.clone();
-ctx.run_on_main_async(move || {
+ctx.run_on_runtime_thread_async(move || {
     for sample in samples {
         process_sample(sample);
     }
@@ -235,9 +239,9 @@ ctx.run_on_main_async(move || {
 
 ### Deadlock on Blocking Call
 
-**Symptom**: Application hangs when calling `run_on_main_blocking()`
+**Symptom**: Application hangs when calling `run_on_runtime_thread_blocking()`
 
-**Cause**: Called from main thread (would wait for itself)
+**Cause**: Called from runtime thread while it's blocked (would wait for itself)
 
 **Solution**: Only call from worker threads, or use async variant
 
@@ -245,9 +249,9 @@ ctx.run_on_main_async(move || {
 
 **Symptom**: Async closure never runs
 
-**Cause**: Main thread event loop not started
+**Cause**: Runtime thread event loop not started
 
-**Solution**: Ensure `runtime.run()` is called and running
+**Solution**: Ensure `runtime.wait_for_signal()` is called and running
 
 ### Compilation Error: Closure Lifetime
 
@@ -260,11 +264,11 @@ ctx.run_on_main_async(move || {
 ```rust
 // Bad
 let data = &self.some_data;
-ctx.run_on_main_async(|| use_data(data)); // Error
+ctx.run_on_runtime_thread_async(|| use_data(data)); // Error
 
 // Good
 let data = Arc::clone(&self.some_data);
-ctx.run_on_main_async(move || use_data(data)); // OK
+ctx.run_on_runtime_thread_async(move || use_data(data)); // OK
 ```
 
 ## See Also

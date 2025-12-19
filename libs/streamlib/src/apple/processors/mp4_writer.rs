@@ -161,7 +161,7 @@ impl crate::core::Processor for AppleMp4WriterProcessor::Processor {
 
         // AVAssetWriter initialization will happen in process() on first frame
         // This is because setup() runs before main thread event loop starts,
-        // so run_on_main_blocking() would deadlock
+        // so run_on_runtime_thread_blocking() would deadlock
         info!("MP4 writer setup complete, will initialize AVAssetWriter in process()");
         Ok(())
     }
@@ -400,7 +400,7 @@ impl AppleMp4WriterProcessor::Processor {
         // Dispatch to main thread (which has active run loop) to create AVAssetWriter
         // Returns raw pointer since Retained<AVAssetWriter> is not Send
         info!("Dispatching AVAssetWriter initialization to main thread...");
-        let writer_ptr = ctx.run_on_main_blocking(move || {
+        let writer_ptr = ctx.run_on_runtime_thread_blocking(move || {
             match Self::initialize_writer_on_main_thread(
                 &path_str,
                 &video_codec,
@@ -497,28 +497,29 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Dispatch to main thread to configure video input
         // Returns raw pointers since Retained types are not Send
-        let (video_input_ptr, pixel_buffer_adaptor_ptr) = ctx.run_on_main_blocking(move || {
-            // SAFETY: We just converted this from a Retained
-            let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
+        let (video_input_ptr, pixel_buffer_adaptor_ptr) =
+            ctx.run_on_runtime_thread_blocking(move || {
+                // SAFETY: We just converted this from a Retained
+                let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
 
-            match Self::configure_video_input_on_main_thread(
-                writer,
-                width,
-                height,
-                &video_codec,
-                video_bitrate,
-            ) {
-                Ok((writer, video_input, pixel_buffer_adaptor)) => {
-                    // Convert to raw pointers to send back across thread boundary
-                    let _ = Retained::into_raw(writer); // Already leaked, ignore
-                    Ok((
-                        Retained::into_raw(video_input) as usize,
-                        Retained::into_raw(pixel_buffer_adaptor) as usize,
-                    ))
+                match Self::configure_video_input_on_main_thread(
+                    writer,
+                    width,
+                    height,
+                    &video_codec,
+                    video_bitrate,
+                ) {
+                    Ok((writer, video_input, pixel_buffer_adaptor)) => {
+                        // Convert to raw pointers to send back across thread boundary
+                        let _ = Retained::into_raw(writer); // Already leaked, ignore
+                        Ok((
+                            Retained::into_raw(video_input) as usize,
+                            Retained::into_raw(pixel_buffer_adaptor) as usize,
+                        ))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
-            }
-        })?;
+            })?;
 
         // SAFETY: We just created these pointers on the main thread
         let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
@@ -648,7 +649,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Dispatch to main thread to configure audio input
         // Returns raw pointer since Retained types are not Send
-        let audio_input_ptr = ctx.run_on_main_blocking(move || {
+        let audio_input_ptr = ctx.run_on_runtime_thread_blocking(move || {
             // SAFETY: We just converted this from a Retained
             let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
 

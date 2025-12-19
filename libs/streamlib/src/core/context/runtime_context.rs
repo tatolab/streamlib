@@ -46,25 +46,29 @@ impl RuntimeContext {
         !self.is_paused()
     }
 
-    /// Dispatch a closure to execute on the main thread asynchronously.
+    /// Dispatch a closure to execute on the runtime thread asynchronously.
+    ///
+    /// The "runtime thread" is the thread where StreamRuntime orchestration happens.
+    /// On macOS, this is the main thread (NSApplication run loop) because Apple
+    /// frameworks like AVFoundation, Metal, and CoreMedia require it.
     #[cfg(target_os = "macos")]
-    pub fn run_on_main_async<F>(&self, f: F)
+    pub fn run_on_runtime_thread_async<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
         use objc2_foundation::NSThread;
 
-        let is_main = NSThread::currentThread().isMainThread();
+        let is_runtime_thread = NSThread::currentThread().isMainThread();
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current()
             .name()
             .unwrap_or("unnamed")
             .to_string();
 
-        // If already on main thread, execute directly
-        if is_main {
+        // If already on runtime thread, execute directly
+        if is_runtime_thread {
             tracing::debug!(
-                "[run_on_main_async] already on main thread ({:?} '{}'), executing directly",
+                "[run_on_runtime_thread_async] already on runtime thread ({:?} '{}'), executing directly",
                 thread_id,
                 thread_name
             );
@@ -73,16 +77,20 @@ impl RuntimeContext {
         }
 
         tracing::debug!(
-            "[run_on_main_async] on background thread ({:?} '{}'), dispatching to main",
+            "[run_on_runtime_thread_async] on background thread ({:?} '{}'), dispatching to runtime thread",
             thread_id,
             thread_name
         );
         dispatch2::DispatchQueue::main().exec_async(f);
     }
 
-    /// Dispatch a closure to execute on the main thread and wait for the result.
+    /// Dispatch a closure to execute on the runtime thread and wait for the result.
+    ///
+    /// The "runtime thread" is the thread where StreamRuntime orchestration happens.
+    /// On macOS, this is the main thread (NSApplication run loop) because Apple
+    /// frameworks like AVFoundation, Metal, and CoreMedia require it.
     #[cfg(target_os = "macos")]
-    pub fn run_on_main_blocking<F, R>(&self, f: F) -> R
+    pub fn run_on_runtime_thread_blocking<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -90,24 +98,24 @@ impl RuntimeContext {
         use objc2_foundation::NSThread;
         use std::sync::mpsc::channel;
 
-        let is_main = NSThread::currentThread().isMainThread();
+        let is_runtime_thread = NSThread::currentThread().isMainThread();
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current()
             .name()
             .unwrap_or("unnamed")
             .to_string();
 
-        // If already on main thread, execute directly to avoid deadlock
-        if is_main {
+        // If already on runtime thread, execute directly to avoid deadlock
+        if is_runtime_thread {
             tracing::debug!(
-                "[run_on_main_blocking] already on main thread ({:?} '{}'), executing directly",
+                "[run_on_runtime_thread_blocking] already on runtime thread ({:?} '{}'), executing directly",
                 thread_id,
                 thread_name
             );
             return f();
         }
 
-        tracing::debug!("[run_on_main_blocking] on background thread ({:?} '{}'), dispatching to main and waiting", thread_id, thread_name);
+        tracing::debug!("[run_on_runtime_thread_blocking] on background thread ({:?} '{}'), dispatching to runtime thread and waiting", thread_id, thread_name);
         let (tx, rx) = channel();
 
         dispatch2::DispatchQueue::main().exec_async(move || {
@@ -116,48 +124,48 @@ impl RuntimeContext {
         });
 
         rx.recv()
-            .expect("Failed to receive result from main thread")
+            .expect("Failed to receive result from runtime thread")
     }
 
     // =========================================================================
     // Windows Implementation
     // =========================================================================
 
-    /// Dispatch a closure to execute on the main thread asynchronously.
+    /// Dispatch a closure to execute on the runtime thread asynchronously.
     ///
     /// # Platform Implementation Status
     ///
     /// **Windows**: Not yet implemented. Will use `PostMessage` to dispatch
-    /// to the main thread's Win32 message loop. Required for:
+    /// to the runtime thread's Win32 message loop. Required for:
     /// - DirectX/Direct3D device creation and rendering
     /// - Win32 window creation (HWND)
     /// - COM objects with STA threading requirements
     ///
     /// Currently executes directly as a passthrough until implemented.
     #[cfg(target_os = "windows")]
-    pub fn run_on_main_async<F>(&self, f: F)
+    pub fn run_on_runtime_thread_async<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        // TODO: Implement Windows main thread dispatch via PostMessage/SendMessage
-        // to the main thread's message loop (GetMessage/DispatchMessage pump).
+        // TODO: Implement Windows runtime thread dispatch via PostMessage/SendMessage
+        // to the runtime thread's message loop (GetMessage/DispatchMessage pump).
         //
         // Implementation approach:
-        // 1. Store main thread ID at startup (GetCurrentThreadId)
+        // 1. Store runtime thread ID at startup (GetCurrentThreadId)
         // 2. Create a hidden HWND for receiving messages
         // 3. PostMessage with custom WM_USER message containing boxed closure
         // 4. Message loop handler unboxes and executes closure
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current().name().unwrap_or("unnamed");
         tracing::debug!(
-            "[run_on_main_async] Windows passthrough, executing directly on thread ({:?} '{}')",
+            "[run_on_runtime_thread_async] Windows passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
             thread_name
         );
         f();
     }
 
-    /// Dispatch a closure to execute on the main thread and wait for the result.
+    /// Dispatch a closure to execute on the runtime thread and wait for the result.
     ///
     /// # Platform Implementation Status
     ///
@@ -166,12 +174,12 @@ impl RuntimeContext {
     ///
     /// Currently executes directly as a passthrough until implemented.
     #[cfg(target_os = "windows")]
-    pub fn run_on_main_blocking<F, R>(&self, f: F) -> R
+    pub fn run_on_runtime_thread_blocking<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        // TODO: Implement Windows main thread dispatch with result synchronization.
+        // TODO: Implement Windows runtime thread dispatch with result synchronization.
         //
         // Implementation approach:
         // 1. Same as async, but use SendMessage (blocks until processed) OR
@@ -180,7 +188,7 @@ impl RuntimeContext {
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current().name().unwrap_or("unnamed");
         tracing::debug!(
-            "[run_on_main_blocking] Windows passthrough, executing directly on thread ({:?} '{}')",
+            "[run_on_runtime_thread_blocking] Windows passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
             thread_name
         );
@@ -191,45 +199,45 @@ impl RuntimeContext {
     // Linux Implementation
     // =========================================================================
 
-    /// Dispatch a closure to execute on the main thread asynchronously.
+    /// Dispatch a closure to execute on the runtime thread asynchronously.
     ///
     /// # Platform Implementation Status
     ///
     /// **Linux**: Not yet implemented. Implementation depends on windowing system:
     /// - **X11**: Use `XSendEvent` or integrate with GTK/Qt main loop
     /// - **Wayland**: Use `wl_display_dispatch` or GTK/Qt integration
-    /// - **Headless**: May not require main thread dispatch
+    /// - **Headless**: May not require runtime thread dispatch
     ///
     /// For GTK: `glib::MainContext::default().invoke()`
     /// For Qt: `QMetaObject::invokeMethod` with `Qt::QueuedConnection`
     ///
     /// Currently executes directly as a passthrough until implemented.
     #[cfg(target_os = "linux")]
-    pub fn run_on_main_async<F>(&self, f: F)
+    pub fn run_on_runtime_thread_async<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        // TODO: Implement Linux main thread dispatch.
+        // TODO: Implement Linux runtime thread dispatch.
         //
         // Implementation approach (GTK/glib):
         // 1. Use glib::MainContext::default().invoke(f)
-        // 2. Requires glib dependency and running GMainLoop on main thread
+        // 2. Requires glib dependency and running GMainLoop on runtime thread
         //
         // Alternative (custom):
         // 1. Create eventfd or pipe at startup
-        // 2. Main thread polls the fd in its event loop
-        // 3. Write closure pointer to fd, main thread reads and executes
+        // 2. Runtime thread polls the fd in its event loop
+        // 3. Write closure pointer to fd, runtime thread reads and executes
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current().name().unwrap_or("unnamed");
         tracing::debug!(
-            "[run_on_main_async] Linux passthrough, executing directly on thread ({:?} '{}')",
+            "[run_on_runtime_thread_async] Linux passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
             thread_name
         );
         f();
     }
 
-    /// Dispatch a closure to execute on the main thread and wait for the result.
+    /// Dispatch a closure to execute on the runtime thread and wait for the result.
     ///
     /// # Platform Implementation Status
     ///
@@ -238,21 +246,21 @@ impl RuntimeContext {
     ///
     /// Currently executes directly as a passthrough until implemented.
     #[cfg(target_os = "linux")]
-    pub fn run_on_main_blocking<F, R>(&self, f: F) -> R
+    pub fn run_on_runtime_thread_blocking<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        // TODO: Implement Linux main thread dispatch with result synchronization.
+        // TODO: Implement Linux runtime thread dispatch with result synchronization.
         //
         // Implementation approach:
         // 1. Same dispatch mechanism as async
         // 2. Include oneshot channel or CondVar for result
-        // 3. Block on channel/condvar until main thread signals completion
+        // 3. Block on channel/condvar until runtime thread signals completion
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current().name().unwrap_or("unnamed");
         tracing::debug!(
-            "[run_on_main_blocking] Linux passthrough, executing directly on thread ({:?} '{}')",
+            "[run_on_runtime_thread_blocking] Linux passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
             thread_name
         );
@@ -263,38 +271,38 @@ impl RuntimeContext {
     // Fallback Implementation (other platforms)
     // =========================================================================
 
-    /// Dispatch a closure to execute on the main thread asynchronously.
+    /// Dispatch a closure to execute on the runtime thread asynchronously.
     ///
     /// # Platform Implementation Status
     ///
-    /// **Other platforms**: No main thread dispatch implemented.
+    /// **Other platforms**: No runtime thread dispatch implemented.
     /// Executes directly on the calling thread.
     ///
-    /// If you need main thread dispatch on an unsupported platform,
+    /// If you need runtime thread dispatch on an unsupported platform,
     /// please file an issue with your platform requirements.
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    pub fn run_on_main_async<F>(&self, f: F)
+    pub fn run_on_runtime_thread_async<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current().name().unwrap_or("unnamed");
         tracing::debug!(
-            "[run_on_main_async] unsupported platform, executing directly on thread ({:?} '{}')",
+            "[run_on_runtime_thread_async] unsupported platform, executing directly on thread ({:?} '{}')",
             thread_id,
             thread_name
         );
         f();
     }
 
-    /// Dispatch a closure to execute on the main thread and wait for the result.
+    /// Dispatch a closure to execute on the runtime thread and wait for the result.
     ///
     /// # Platform Implementation Status
     ///
-    /// **Other platforms**: No main thread dispatch implemented.
+    /// **Other platforms**: No runtime thread dispatch implemented.
     /// Executes directly on the calling thread.
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    pub fn run_on_main_blocking<F, R>(&self, f: F) -> R
+    pub fn run_on_runtime_thread_blocking<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -302,11 +310,86 @@ impl RuntimeContext {
         let thread_id = std::thread::current().id();
         let thread_name = std::thread::current().name().unwrap_or("unnamed");
         tracing::debug!(
-            "[run_on_main_blocking] unsupported platform, executing directly on thread ({:?} '{}')",
+            "[run_on_runtime_thread_blocking] unsupported platform, executing directly on thread ({:?} '{}')",
             thread_id,
             thread_name
         );
         f()
+    }
+
+    // =========================================================================
+    // Platform Setup
+    // =========================================================================
+
+    /// Ensure the platform is ready for runtime operations.
+    ///
+    /// This method handles platform-specific initialization that must complete
+    /// before processors can safely use platform APIs. On macOS, this sets up
+    /// NSApplication and verifies the app has finished launching.
+    ///
+    /// Call this from `StreamRuntime::start()` after GPU context is initialized
+    /// but before starting any processors.
+    #[cfg(target_os = "macos")]
+    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
+
+        // Detect if we're running as a standalone app
+        // (not embedded in another app with its own NSApplication event loop)
+        let is_standalone = if let Some(mtm) = MainThreadMarker::new() {
+            let app = NSApplication::sharedApplication(mtm);
+            !app.isRunning()
+        } else {
+            // Not on runtime thread - can't check NSApplication state
+            false
+        };
+
+        if is_standalone {
+            tracing::info!("[ensure_platform_ready] Setting up macOS application");
+            crate::apple::runtime_ext::setup_macos_app();
+            crate::apple::runtime_ext::install_macos_shutdown_handler();
+
+            // CRITICAL: Verify the macOS platform is fully ready BEFORE starting
+            // any processors. This uses Apple's NSRunningApplication.isFinishedLaunching
+            // API to confirm the app has completed its launch sequence.
+            tracing::info!("[ensure_platform_ready] Verifying macOS platform readiness...");
+            crate::apple::runtime_ext::ensure_macos_platform_ready()?;
+        }
+
+        Ok(())
+    }
+
+    /// Ensure the platform is ready for runtime operations.
+    ///
+    /// On Windows, this is a no-op placeholder for future Win32 setup.
+    #[cfg(target_os = "windows")]
+    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
+        // TODO: Future Windows-specific initialization
+        // - DirectX device validation
+        // - Win32 message loop setup
+        tracing::debug!("[ensure_platform_ready] Windows - no setup required");
+        Ok(())
+    }
+
+    /// Ensure the platform is ready for runtime operations.
+    ///
+    /// On Linux, this is a no-op placeholder for future X11/Wayland setup.
+    #[cfg(target_os = "linux")]
+    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
+        // TODO: Future Linux-specific initialization
+        // - X11/Wayland connection setup
+        // - GPU driver validation
+        tracing::debug!("[ensure_platform_ready] Linux - no setup required");
+        Ok(())
+    }
+
+    /// Ensure the platform is ready for runtime operations.
+    ///
+    /// On unsupported platforms, this is a no-op.
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
+        tracing::debug!("[ensure_platform_ready] Unsupported platform - no setup required");
+        Ok(())
     }
 }
 

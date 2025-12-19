@@ -439,10 +439,10 @@ StreamLib uses a **graph-based processing pipeline** where processors are nodes 
 
 These patterns are fundamental to working with StreamLib. For detailed implementation guidance, see the respective crate documentation.
 "
-#### 1. Main Thread Dispatch (macOS/iOS)
-Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) **require** main thread execution.
+#### 1. Runtime Thread Dispatch (macOS/iOS)
+Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) **require** runtime thread execution.
 
-**Solution**: Use `RuntimeContext::run_on_main_blocking()` or `run_on_main_async()`
+**Solution**: Use `RuntimeContext::run_on_runtime_thread_blocking()` or `run_on_runtime_thread_async()`
 
 See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md) and [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
 
@@ -598,8 +598,8 @@ cargo build --lib
 cargo build -p example-name
 ```
 
-### Main Thread Deadlock
-**NEVER** call `run_on_main_blocking()` from the main thread - it will deadlock.
+### Runtime Thread Deadlock
+**NEVER** call `run_on_runtime_thread_blocking()` from the runtime thread when the runtime thread is blocked - it will deadlock.
 
 See [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
 

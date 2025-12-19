@@ -119,126 +119,127 @@ impl VideoToolboxEncoder {
 
         // CRITICAL: VideoToolbox APIs MUST run on main thread
         // Cast pointers to usize for Send compatibility across thread boundary
-        let (session_ptr, callback_context_ptr) = ctx.run_on_main_blocking(move || {
-            // Create callback context on main thread
-            // Use Arc::into_raw to increment ref count - keeps the Arc alive for the callback
-            let callback_context = Arc::into_raw(encoded_frames_ref) as *mut std::ffi::c_void;
-            let mut session: ffi::VTCompressionSessionRef = std::ptr::null_mut();
+        let (session_ptr, callback_context_ptr) =
+            ctx.run_on_runtime_thread_blocking(move || {
+                // Create callback context on main thread
+                // Use Arc::into_raw to increment ref count - keeps the Arc alive for the callback
+                let callback_context = Arc::into_raw(encoded_frames_ref) as *mut std::ffi::c_void;
+                let mut session: ffi::VTCompressionSessionRef = std::ptr::null_mut();
 
-            unsafe {
-                let status = ffi::VTCompressionSessionCreate(
-                    std::ptr::null(), // allocator
-                    width as i32,
-                    height as i32,
-                    codec_fourcc,
-                    std::ptr::null(), // encoder specification
-                    std::ptr::null(), // source image buffer attributes
-                    std::ptr::null(), // compressed data allocator
-                    compression_output_callback,
-                    callback_context,
-                    &mut session,
-                );
-
-                if status != ffi::NO_ERR {
-                    // Clean up callback context on error - reconstruct Arc to decrement ref count
-                    let _ = Arc::from_raw(
-                        callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>,
+                unsafe {
+                    let status = ffi::VTCompressionSessionCreate(
+                        std::ptr::null(), // allocator
+                        width as i32,
+                        height as i32,
+                        codec_fourcc,
+                        std::ptr::null(), // encoder specification
+                        std::ptr::null(), // source image buffer attributes
+                        std::ptr::null(), // compressed data allocator
+                        compression_output_callback,
+                        callback_context,
+                        &mut session,
                     );
-                    return Err(StreamError::Runtime(format!(
-                        "VTCompressionSessionCreate failed: {}",
-                        status
-                    )));
+
+                    if status != ffi::NO_ERR {
+                        // Clean up callback context on error - reconstruct Arc to decrement ref count
+                        let _ = Arc::from_raw(
+                            callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>,
+                        );
+                        return Err(StreamError::Runtime(format!(
+                            "VTCompressionSessionCreate failed: {}",
+                            status
+                        )));
+                    }
+
+                    // Configure encoder properties for real-time streaming
+                    // Set H.264 Baseline Profile Level 3.1 (matches 42e01f in SDP)
+                    // This ensures compatibility with WebRTC services
+                    let status = ffi::VTSessionSetProperty(
+                        session,
+                        ffi::kVTCompressionPropertyKey_ProfileLevel,
+                        ffi::kVTProfileLevel_H264_Baseline_3_1 as *const _,
+                    );
+                    if status != ffi::NO_ERR {
+                        tracing::warn!("Failed to set H.264 profile level: {}", status);
+                    }
+
+                    // Enable real-time encoding for low latency
+                    let status = ffi::VTSessionSetProperty(
+                        session,
+                        ffi::kVTCompressionPropertyKey_RealTime,
+                        ffi::kCFBooleanTrue as *const _,
+                    );
+                    if status != ffi::NO_ERR {
+                        tracing::warn!("Failed to enable real-time encoding: {}", status);
+                    }
+
+                    // Disable frame reordering (B-frames) for low latency
+                    // CRITICAL: Set to TRUE to allow encoder to generate keyframes properly
+                    // Baseline profile doesn't use B-frames anyway, but encoder needs this enabled
+                    let status = ffi::VTSessionSetProperty(
+                        session,
+                        ffi::kVTCompressionPropertyKey_AllowFrameReordering,
+                        ffi::kCFBooleanTrue as *const _,
+                    );
+                    if status != ffi::NO_ERR {
+                        tracing::warn!("Failed to set frame reordering: {}", status);
+                    }
+
+                    // Set keyframe interval
+                    let max_keyframe_interval = keyframe_interval as i32;
+                    let max_keyframe_interval_num = ffi::CFNumberCreate(
+                        std::ptr::null(),
+                        ffi::K_CFNUMBER_SINT32_TYPE,
+                        &max_keyframe_interval as *const _ as *const _,
+                    );
+                    let status = ffi::VTSessionSetProperty(
+                        session,
+                        ffi::kVTCompressionPropertyKey_MaxKeyFrameInterval,
+                        max_keyframe_interval_num as *const _,
+                    );
+                    ffi::CFRelease(max_keyframe_interval_num as *const _);
+                    if status != ffi::NO_ERR {
+                        tracing::warn!("Failed to set keyframe interval: {}", status);
+                    }
+
+                    // Set average bitrate
+                    let avg_bitrate = bitrate as i32;
+                    let avg_bitrate_num = ffi::CFNumberCreate(
+                        std::ptr::null(),
+                        ffi::K_CFNUMBER_SINT32_TYPE,
+                        &avg_bitrate as *const _ as *const _,
+                    );
+                    let status = ffi::VTSessionSetProperty(
+                        session,
+                        ffi::kVTCompressionPropertyKey_AverageBitRate,
+                        avg_bitrate_num as *const _,
+                    );
+                    ffi::CFRelease(avg_bitrate_num as *const _);
+                    if status != ffi::NO_ERR {
+                        tracing::warn!("Failed to set average bitrate: {}", status);
+                    }
+
+                    // Set expected frame rate
+                    let expected_fps = fps as i32;
+                    let expected_fps_num = ffi::CFNumberCreate(
+                        std::ptr::null(),
+                        ffi::K_CFNUMBER_SINT32_TYPE,
+                        &expected_fps as *const _ as *const _,
+                    );
+                    let status = ffi::VTSessionSetProperty(
+                        session,
+                        ffi::kVTCompressionPropertyKey_ExpectedFrameRate,
+                        expected_fps_num as *const _,
+                    );
+                    ffi::CFRelease(expected_fps_num as *const _);
+                    if status != ffi::NO_ERR {
+                        tracing::warn!("Failed to set expected frame rate: {}", status);
+                    }
                 }
 
-                // Configure encoder properties for real-time streaming
-                // Set H.264 Baseline Profile Level 3.1 (matches 42e01f in SDP)
-                // This ensures compatibility with WebRTC services
-                let status = ffi::VTSessionSetProperty(
-                    session,
-                    ffi::kVTCompressionPropertyKey_ProfileLevel,
-                    ffi::kVTProfileLevel_H264_Baseline_3_1 as *const _,
-                );
-                if status != ffi::NO_ERR {
-                    tracing::warn!("Failed to set H.264 profile level: {}", status);
-                }
-
-                // Enable real-time encoding for low latency
-                let status = ffi::VTSessionSetProperty(
-                    session,
-                    ffi::kVTCompressionPropertyKey_RealTime,
-                    ffi::kCFBooleanTrue as *const _,
-                );
-                if status != ffi::NO_ERR {
-                    tracing::warn!("Failed to enable real-time encoding: {}", status);
-                }
-
-                // Disable frame reordering (B-frames) for low latency
-                // CRITICAL: Set to TRUE to allow encoder to generate keyframes properly
-                // Baseline profile doesn't use B-frames anyway, but encoder needs this enabled
-                let status = ffi::VTSessionSetProperty(
-                    session,
-                    ffi::kVTCompressionPropertyKey_AllowFrameReordering,
-                    ffi::kCFBooleanTrue as *const _,
-                );
-                if status != ffi::NO_ERR {
-                    tracing::warn!("Failed to set frame reordering: {}", status);
-                }
-
-                // Set keyframe interval
-                let max_keyframe_interval = keyframe_interval as i32;
-                let max_keyframe_interval_num = ffi::CFNumberCreate(
-                    std::ptr::null(),
-                    ffi::K_CFNUMBER_SINT32_TYPE,
-                    &max_keyframe_interval as *const _ as *const _,
-                );
-                let status = ffi::VTSessionSetProperty(
-                    session,
-                    ffi::kVTCompressionPropertyKey_MaxKeyFrameInterval,
-                    max_keyframe_interval_num as *const _,
-                );
-                ffi::CFRelease(max_keyframe_interval_num as *const _);
-                if status != ffi::NO_ERR {
-                    tracing::warn!("Failed to set keyframe interval: {}", status);
-                }
-
-                // Set average bitrate
-                let avg_bitrate = bitrate as i32;
-                let avg_bitrate_num = ffi::CFNumberCreate(
-                    std::ptr::null(),
-                    ffi::K_CFNUMBER_SINT32_TYPE,
-                    &avg_bitrate as *const _ as *const _,
-                );
-                let status = ffi::VTSessionSetProperty(
-                    session,
-                    ffi::kVTCompressionPropertyKey_AverageBitRate,
-                    avg_bitrate_num as *const _,
-                );
-                ffi::CFRelease(avg_bitrate_num as *const _);
-                if status != ffi::NO_ERR {
-                    tracing::warn!("Failed to set average bitrate: {}", status);
-                }
-
-                // Set expected frame rate
-                let expected_fps = fps as i32;
-                let expected_fps_num = ffi::CFNumberCreate(
-                    std::ptr::null(),
-                    ffi::K_CFNUMBER_SINT32_TYPE,
-                    &expected_fps as *const _ as *const _,
-                );
-                let status = ffi::VTSessionSetProperty(
-                    session,
-                    ffi::kVTCompressionPropertyKey_ExpectedFrameRate,
-                    expected_fps_num as *const _,
-                );
-                ffi::CFRelease(expected_fps_num as *const _);
-                if status != ffi::NO_ERR {
-                    tracing::warn!("Failed to set expected frame rate: {}", status);
-                }
-            }
-
-            // Return pointers as usize for Send compatibility
-            Ok((session as usize, callback_context as usize))
-        })?;
+                // Return pointers as usize for Send compatibility
+                Ok((session as usize, callback_context as usize))
+            })?;
 
         // Cast back to proper pointer types
         let session = session_ptr as ffi::VTCompressionSessionRef;
@@ -450,7 +451,7 @@ impl VideoToolboxEncoder {
 }
 
 // SAFETY: VideoToolbox compression session will only be accessed from the main thread
-// via RuntimeContext::run_on_main_blocking, similar to Mp4WriterProcessor pattern
+// via RuntimeContext::run_on_runtime_thread_blocking, similar to Mp4WriterProcessor pattern
 unsafe impl Send for VideoToolboxEncoder {}
 
 impl Drop for VideoToolboxEncoder {

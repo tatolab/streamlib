@@ -25,13 +25,16 @@ You are guiding an experienced developer (20+ years) who is learning Rust. The L
 - The developer should arrive at solutions that match (or improve upon) these
 
 ### Branch State (`api/server`)
-The Lab Builder has already completed foundational pre-work (4 commits):
+The Lab Builder has already completed foundational pre-work (5 items):
 1. ✅ Interior mutability (`&self` not `&mut self`)
 2. ✅ Compiler simplified (no forced main thread dispatch)
 3. ✅ Runtime restart support (`Mutex<Option<...>>`)
-4. ✅ Dependencies in Cargo.toml (tokio, axum, tower-http)
+4. ✅ Event-driven commit system (`GraphChangeListener` + PUBSUB)
+5. ✅ Dependencies in Cargo.toml (tokio, axum, tower-http)
 
 **The developer does NOT need to implement these** - they're documented in "Prerequisites Completed" for context.
+
+**Key insight from Prerequisite 4**: Graph operations are now guaranteed fast and deadlock-free. The `RuntimeOperations` trait pattern (documented after Architecture Overview) enables a unified API across all contexts.
 
 ### Target Files (What They'll Create/Modify)
 | File | Action | Lab |
@@ -65,6 +68,8 @@ The developer should understand this narrative - it's not just code, it's archit
 | `broadcast` for fan-out | Multiple WebSocket clients, all get events | Lab 2, 7 |
 | Proxy has ZERO logic | It's just a channel facade, not business logic | Lab 3 |
 | `clone()` for async moves | Values move into async blocks | Lab 5, 6 |
+| `RuntimeOperations` trait | Unified API across all contexts | Architecture |
+| Event-driven commit | Graph ops return immediately, no deadlock | Prerequisite 4 |
 
 ### Common Stumbling Points
 When they hit these, guide with questions, not answers:
@@ -148,19 +153,19 @@ pub fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>
 
 ### 2. Compiler Main Thread Dispatch Removed ✅
 
-The compiler no longer forces all compilation to the main thread:
+The compiler no longer forces all compilation to the runtime thread:
 
 ```rust
-// OLD - forced everything to main thread
-runtime_ctx.run_on_main_blocking(move || {
+// OLD - forced everything to runtime thread
+runtime_ctx.run_on_runtime_thread_blocking(move || {
     Self::compile(...)
 })
 
-// NEW - processors handle their own main thread needs
+// NEW - processors handle their own runtime thread needs
 Self::compile(...)
 ```
 
-**Why this matters**: Only Apple framework processors (Camera, Display) need main thread. They call `ctx.run_on_main_blocking()` in their own `setup()`. This keeps the compiler simple and allows non-Apple processors to run without main thread constraints.
+**Why this matters**: Only Apple framework processors (Camera, Display) need runtime thread. They call `ctx.run_on_runtime_thread_blocking()` in their own `setup()`. This keeps the compiler simple and allows non-Apple processors to run without runtime thread constraints.
 
 ### 3. Cross-Platform Main Thread Documentation ✅
 
@@ -170,6 +175,37 @@ Self::compile(...)
 - **Windows**: TODO - `PostMessage` to Win32 message loop
 - **Linux**: TODO - `glib::MainContext` or eventfd
 - **Other**: Passthrough (executes directly)
+
+### 4. Event-Driven Commit System ✅
+
+Graph operations (`add_processor`, `connect`, `disconnect`, `remove_processor`) now return **immediately**. Compilation is decoupled via the PUBSUB event system:
+
+```rust
+// OLD - graph operation blocked on compilation
+pub fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+    // ... add to graph ...
+    self.commit()?;  // ← Blocked here during compilation!
+    Ok(processor_id)
+}
+
+// NEW - graph operation returns immediately, commit is async
+pub fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+    // ... add to graph ...
+    PUBSUB.publish(topics::RUNTIME_GLOBAL, &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange));
+    Ok(processor_id)  // ← Returns immediately!
+}
+```
+
+**How it works:**
+1. `GraphChangeListener` subscribes to `GraphDidChange` events in `StreamRuntime::new()`
+2. When event received, listener dispatches commit to runtime thread via `run_on_runtime_thread_async`
+3. Commit happens asynchronously, interleaved with the event loop
+4. Before runtime starts, commits are deferred to `start()`
+
+**Why this matters for the API server:**
+- `poll_commands()` stays fast - never blocks on compilation
+- `execute_command()` can call any graph operation without deadlock risk
+- Multiple rapid API calls queue up gracefully; compiler batches operations
 
 ---
 
@@ -210,6 +246,171 @@ The proxy contains **zero business logic**.
 
 ---
 
+## Unified API Pattern: RuntimeOperations Trait
+
+> **🎯 Design Goal**: Whether you're in `examples/camera-display` calling `runtime.add_processor()`, inside a processor calling `ctx.runtime().add_processor()`, or in an async Axum handler - the API should be **identical**. The caller doesn't know or care whether they're going through a proxy or calling directly.
+
+### The Problem with Multiple APIs
+
+Without unification, callers need to know their context:
+
+```rust
+// External code - direct call
+runtime.add_processor(spec)?;
+
+// Inside a processor - need proxy? direct? channel?
+ctx.???_add_processor(spec)?;
+
+// Async handler - definitely need proxy
+proxy.add_processor(spec).await?;
+```
+
+### The Solution: RuntimeOperations Trait
+
+Define a trait that both `StreamRuntime` and `RuntimeProxy` implement:
+
+```rust
+/// Unified interface for runtime graph operations.
+///
+/// Implemented by both StreamRuntime (sync, direct) and RuntimeProxy (via channels).
+/// Callers use this trait and don't need to know the underlying implementation.
+pub trait RuntimeOperations {
+    fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>;
+    fn remove_processor(&self, id: &ProcessorUniqueId) -> Result<()>;
+    fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId>;
+    fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
+    fn update_processor_config<C: Serialize>(&self, id: &ProcessorUniqueId, config: C) -> Result<()>;
+}
+```
+
+### Implementation: StreamRuntime (Direct)
+
+```rust
+impl RuntimeOperations for StreamRuntime {
+    fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+        // Direct implementation - already exists
+        self.add_processor_impl(spec)
+    }
+
+    fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
+        self.connect_impl(from, to)
+    }
+
+    // ... etc
+}
+```
+
+### Implementation: RuntimeProxy (Channel-Based)
+
+```rust
+impl RuntimeOperations for RuntimeProxy {
+    fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+        // Send command via channel, block for response
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.command_tx
+            .blocking_send((RuntimeCommand::AddProcessor { spec }, response_tx))
+            .map_err(|_| StreamError::Runtime("Channel closed".into()))?;
+
+        match response_rx.blocking_recv() {
+            Ok(CommandResult::ProcessorAdded(id)) => Ok(id),
+            Ok(CommandResult::Error(e)) => Err(e),
+            _ => Err(StreamError::Runtime("Unexpected response".into())),
+        }
+    }
+
+    // ... etc
+}
+```
+
+> **💡 Note**: `RuntimeProxy` implements the sync trait using `blocking_send`/`blocking_recv`. For async contexts, use `RuntimeProxyAsync` (which has async versions of the same methods). Both share the same channel infrastructure.
+
+### RuntimeContext Provides Unified Access
+
+```rust
+impl RuntimeContext {
+    /// Get a reference to runtime operations.
+    ///
+    /// Works identically whether called from:
+    /// - A processor's setup()/process() method
+    /// - External code with runtime access
+    /// - Code running via the proxy
+    ///
+    /// The caller doesn't need to know the underlying implementation.
+    pub fn runtime(&self) -> &dyn RuntimeOperations {
+        &self.runtime_ops
+    }
+}
+```
+
+### Usage Examples
+
+**In a processor:**
+```rust
+impl Processor for MyOrchestrator {
+    fn process(&mut self, ctx: &RuntimeContext) -> Result<()> {
+        // Identical API - don't know/care if direct or proxied
+        let camera_id = ctx.runtime().add_processor(camera_spec)?;
+        let display_id = ctx.runtime().add_processor(display_spec)?;
+        ctx.runtime().connect(
+            OutputLinkPortRef::new(&camera_id, "video"),
+            InputLinkPortRef::new(&display_id, "video"),
+        )?;
+        Ok(())
+    }
+}
+```
+
+**In external code:**
+```rust
+fn main() -> Result<()> {
+    let runtime = StreamRuntime::new()?;
+
+    // Same API as inside a processor
+    let camera_id = runtime.add_processor(camera_spec)?;
+    let display_id = runtime.add_processor(display_spec)?;
+    runtime.connect(
+        OutputLinkPortRef::new(&camera_id, "video"),
+        InputLinkPortRef::new(&display_id, "video"),
+    )?;
+
+    runtime.start()?;
+    runtime.wait_for_signal()
+}
+```
+
+**In an async handler (via RuntimeProxyAsync):**
+```rust
+async fn create_processor(
+    State(proxy): State<RuntimeProxyAsync>,
+    Json(request): Json<CreateProcessorRequest>,
+) -> Result<Json<CreateProcessorResponse>, AppError> {
+    // Async version of the same API
+    let processor_id = proxy.add_processor(spec).await?;
+    Ok(Json(CreateProcessorResponse { processor_id }))
+}
+```
+
+### Why This Pattern Matters
+
+1. **Transparency**: Callers don't need to know if they're direct or proxied
+2. **Testability**: Mock implementations can implement the same trait
+3. **Flexibility**: Can swap implementations without changing caller code
+4. **No special cases**: Same `add_processor()` works everywhere - no `_fire_and_forget` variants
+
+### Deadlock Safety (Enabled by Event-Driven Commit)
+
+This pattern is only safe because of the event-driven commit system (Prerequisite 4):
+
+- Graph operations return immediately (no inline compilation)
+- Commit happens asynchronously via `GraphChangeListener`
+- No lock is held across the commit boundary
+- Processors can safely call `ctx.runtime().add_processor()` during `process()`
+
+Without event-driven commit, calling graph operations from inside a processor would deadlock.
+
+---
+
 ## Lab 1: Understanding the Problem
 
 > **📖 The Story So Far**: You have a StreamRuntime that manages processors and connections. It works great from Rust code. But now you want a web UI to control it. The web server (Axum) speaks async. The runtime speaks sync. How do you bridge them?
@@ -230,7 +431,9 @@ tokio::spawn(async move {
 **Problem**: `add_processor()` is a **sync** function. Calling it from async context:
 - Blocks the Tokio worker thread
 - Prevents other async tasks from running
-- Can cause deadlocks if the operation takes time
+- Starves the Tokio runtime if done frequently
+
+> **📝 Note**: With the event-driven commit system (Prerequisite 4), graph operations themselves are now fast (no inline compilation). However, calling sync functions from async context is still an anti-pattern - it blocks Tokio worker threads and defeats the purpose of async. The channel-based proxy is the correct solution.
 
 ### Why Not Make add_processor() Async?
 
@@ -458,6 +661,8 @@ impl StreamRuntime {
 ### Polling Commands
 
 > **⚠️ Integration Point**: `poll_commands()` must be called regularly - either from your main loop, or integrated with the platform's event loop. On macOS, this happens in the NSApplication run loop callback.
+
+> **✅ Safe by Design**: Thanks to the event-driven commit system (Prerequisite 4), `execute_command()` is guaranteed fast. Graph operations like `add_processor()` return immediately - they just modify data structures and publish events. Compilation happens asynchronously on the runtime thread. This means `poll_commands()` never blocks on compilation, even when processing many commands rapidly.
 
 The runtime polls for commands in its event loop:
 
@@ -848,12 +1053,15 @@ Content-Type: application/json
 **Service Layer** (`libs/streamlib/src/core/service/`):
 - [ ] `mod.rs` - Module exports
 - [ ] `command.rs` - RuntimeCommand, CommandResult
-- [ ] `runtime_proxy.rs` - RuntimeProxy
+- [ ] `runtime_proxy.rs` - RuntimeProxy, RuntimeProxyAsync
+- [ ] `runtime_operations.rs` - RuntimeOperations trait
 
 **Runtime Integration**:
 - [ ] Update `StreamRuntime` with command channel
 - [ ] Add `poll_commands()` method
-- [ ] Update `RuntimeContext` with `runtime_proxy()`
+- [ ] Implement `RuntimeOperations` trait for `StreamRuntime`
+- [ ] Implement `RuntimeOperations` trait for `RuntimeProxy`
+- [ ] Update `RuntimeContext` with `runtime()` method returning `&dyn RuntimeOperations`
 
 **HTTP Server** (feature-gated: `api-server`):
 - [ ] `libs/streamlib/src/core/service/http/mod.rs` - Server setup
