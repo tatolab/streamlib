@@ -12,7 +12,10 @@ use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::PendingOperation;
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
+use crate::core::graph::{
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, ProcessorReadyBarrierHandle,
+    ProcessorUniqueId,
+};
 use crate::core::links::DefaultLinkFactory;
 use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
@@ -322,10 +325,12 @@ impl Compiler {
         }
 
         // =====================================================================
-        // 3. Phase 1: CREATE - Instantiate processor instances
+        // 3. Phase 1: PREPARE - Attach infrastructure components
         // =====================================================================
+        let mut barrier_handles: Vec<(ProcessorUniqueId, ProcessorReadyBarrierHandle)> = vec![];
+
         if !plan.processors_to_add.is_empty() {
-            tracing::debug!("[{}] Starting", CompilePhase::Create);
+            tracing::debug!("[{}] Starting", CompilePhase::Prepare);
             for proc_id in &plan.processors_to_add {
                 let mut graph = graph_arc.write();
                 let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
@@ -342,9 +347,10 @@ impl Compiler {
                     }),
                 );
 
-                tracing::info!("[{}] Creating {}", CompilePhase::Create, proc_id);
+                tracing::info!("[{}] Preparing {}", CompilePhase::Prepare, proc_id);
 
-                super::compiler_ops::create_processor(&PROCESSOR_REGISTRY, &mut graph, proc_id)?;
+                let barrier_handle = super::compiler_ops::prepare_processor(&mut graph, proc_id)?;
+                barrier_handles.push((proc_id.clone(), barrier_handle));
 
                 PUBSUB.publish(
                     topics::RUNTIME_GLOBAL,
@@ -356,11 +362,38 @@ impl Compiler {
 
                 result.processors_created += 1;
             }
-            tracing::debug!("[{}] Completed", CompilePhase::Create);
+            tracing::debug!("[{}] Completed", CompilePhase::Prepare);
         }
 
         // =====================================================================
-        // 4. Phase 2: WIRE - Create ring buffers and connect ports
+        // 4. Phase 2: SPAWN - Spawn processor threads
+        // =====================================================================
+        if !plan.processors_to_add.is_empty() {
+            tracing::debug!("[{}] Starting", CompilePhase::Spawn);
+            for proc_id in &plan.processors_to_add {
+                tracing::info!("[{}] Spawning {}", CompilePhase::Spawn, proc_id);
+                super::compiler_ops::spawn_processor(
+                    Arc::clone(&graph_arc),
+                    &PROCESSOR_REGISTRY,
+                    runtime_ctx,
+                    proc_id,
+                )?;
+            }
+            tracing::debug!("[{}] Completed", CompilePhase::Spawn);
+        }
+
+        // =====================================================================
+        // 5. Wait for all processors to signal READY (instances attached)
+        // =====================================================================
+        for (proc_id, handle) in &barrier_handles {
+            tracing::trace!("[{}] Waiting for READY signal", proc_id);
+            if handle.ready_receiver.recv().is_err() {
+                tracing::warn!("[{}] Processor failed during instance creation", proc_id);
+            }
+        }
+
+        // =====================================================================
+        // 6. Phase 3: WIRE - Create ring buffers and connect ports
         // =====================================================================
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
@@ -401,33 +434,17 @@ impl Compiler {
         }
 
         // =====================================================================
-        // 5. Phase 3: SETUP - Initialize processors (GPU, devices)
+        // 7. Signal all processors to CONTINUE (wiring complete, run setup)
         // =====================================================================
-        if !plan.processors_to_add.is_empty() {
-            tracing::debug!("[{}] Starting", CompilePhase::Setup);
-            for proc_id in &plan.processors_to_add {
-                tracing::info!("[{}] Setting up {}", CompilePhase::Setup, proc_id);
-                let mut graph = graph_arc.write();
-                super::compiler_ops::setup_processor(&mut graph, runtime_ctx, proc_id)?;
+        for (proc_id, handle) in barrier_handles {
+            tracing::trace!("[{}] Signaling CONTINUE", proc_id);
+            if handle.continue_sender.send(()).is_err() {
+                tracing::warn!("[{}] Failed to signal CONTINUE", proc_id);
             }
-            tracing::debug!("[{}] Completed", CompilePhase::Setup);
         }
 
         // =====================================================================
-        // 6. Phase 4: START - Spawn processor threads
-        // =====================================================================
-        if !plan.processors_to_add.is_empty() {
-            tracing::debug!("[{}] Starting", CompilePhase::Start);
-            for proc_id in &plan.processors_to_add {
-                tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
-                let mut graph = graph_arc.write();
-                super::compiler_ops::start_processor(&mut graph, proc_id)?;
-            }
-            tracing::debug!("[{}] Completed", CompilePhase::Start);
-        }
-
-        // =====================================================================
-        // 7. Config updates - for each config_update
+        // 8. Config updates - for each config_update
         // =====================================================================
         for proc_id in plan.config_updates {
             let graph = graph_arc.read();

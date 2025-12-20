@@ -15,7 +15,7 @@ use super::graph_change_listener::GraphChangeListener;
 use super::operations_runtime_proxy::RuntimeProxy;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
-use crate::core::compiler::{shutdown_all_processors, Compiler, PendingOperation};
+use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader, LinkUniqueId,
@@ -220,9 +220,19 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
         );
 
-        // Shutdown all processors
-        self.compiler
-            .scope(|graph, _tx| shutdown_all_processors(graph))?;
+        // Queue removal of all processors and commit
+        let runtime_ctx = self.runtime_context.lock().clone();
+        self.compiler.scope(|graph, tx| {
+            let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
+            for proc_id in processor_ids {
+                tx.log(PendingOperation::RemoveProcessor(proc_id));
+            }
+            graph.set_state(GraphState::Idle);
+        });
+
+        if let Some(ctx) = runtime_ctx {
+            self.compiler.commit(&ctx)?;
+        }
 
         // Clear runtime context - allows fresh context on next start().
         // This enables per-session tracking (e.g., AI agents analyzing runtime state).

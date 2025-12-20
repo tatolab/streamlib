@@ -4,11 +4,10 @@
 //! Graph compilation pipeline.
 //!
 //! Converts graph topology changes into running processor instances.
-//! The compilation process has 4 phases:
-//! 1. CREATE - Instantiate processor instances from factory
-//! 2. WIRE - Create ring buffers and connect ports
-//! 3. SETUP - Call __generated_setup on each processor
-//! 4. START - Spawn threads based on execution config
+//! The compilation process has 3 phases:
+//! 1. PREPARE - Attach infrastructure components to processor nodes
+//! 2. SPAWN - Spawn processor threads (threads create instances, setup runs on thread)
+//! 3. WIRE - Create ring buffers and connect ports
 
 mod compilation_plan;
 mod compile_phase;
@@ -27,7 +26,6 @@ pub mod wiring;
 pub use compile_phase::CompilePhase;
 pub use compile_result::CompileResult;
 pub use compiler::Compiler;
-pub use compiler_ops::{shutdown_all_processors, shutdown_processor};
 pub use compiler_ops::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper};
 pub use compiler_transaction::CompilerTransactionHandle;
 pub use link_config_change::LinkConfigChange;
