@@ -96,7 +96,9 @@ impl Compiler {
     ) -> Result<()> {
         use crate::core::graph::{
             LinkInstanceComponent, PendingDeletionComponent, ProcessorInstanceComponent,
+            ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
         };
+        use crate::core::processors::ProcessorState;
 
         let mut result = CompileResult::default();
 
@@ -256,10 +258,55 @@ impl Compiler {
 
                 tracing::info!("[REMOVE] {}", proc_id);
 
+                // Phase 1: Signal shutdown, extract thread handle (with lock)
+                // Lock is released before join() to avoid deadlock - processors may be
+                // waiting on runtime operations that need this lock to complete.
+                let thread_handle = {
+                    let mut graph = graph_arc.write();
+                    if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
+                        // Set state to stopping
+                        if let Some(state) = node.get::<StateComponent>() {
+                            *state.0.lock() = ProcessorState::Stopping;
+                        }
+                        // Send shutdown signal
+                        if let Some(channel) = node.get::<ShutdownChannelComponent>() {
+                            let _ = channel.sender.send(());
+                        }
+                        // Extract thread handle
+                        node.remove::<ThreadHandleComponent>()
+                    } else {
+                        None
+                    }
+                }; // Lock released here
+
+                // Phase 2: Wait for thread to exit (no lock held)
+                // Processor can now complete any pending runtime operations before exiting.
+                if let Some(handle) = thread_handle {
+                    match handle.0.join() {
+                        Ok(_) => {
+                            tracing::info!("[{}] Processor thread joined successfully", proc_id);
+                        }
+                        Err(panic_err) => {
+                            tracing::error!(
+                                "[{}] Processor thread panicked: {:?}",
+                                proc_id,
+                                panic_err
+                            );
+                        }
+                    }
+                }
+
+                // Phase 3: Cleanup (re-acquire lock)
                 {
                     let mut graph = graph_arc.write();
-                    if let Err(e) = super::compiler_ops::shutdown_processor(&mut graph, proc_id) {
-                        tracing::warn!("Failed to shutdown processor {}: {}", proc_id, e);
+                    if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
+                        if let Some(state) = node.get::<StateComponent>() {
+                            *state.0.lock() = ProcessorState::Stopped;
+                        }
+                    }
+                    // Remove from graph
+                    if graph.traversal_mut().v(proc_id).drop().exists() {
+                        return Err(StreamError::GraphError("value was not dropped".into()));
                     }
                 }
 
@@ -271,12 +318,6 @@ impl Compiler {
                 );
 
                 result.processors_removed += 1;
-
-                // Clean up graph after removal
-                let mut graph = graph_arc.write();
-                if graph.traversal_mut().v(proc_id).drop().exists() {
-                    return Err(StreamError::GraphError("value was not dropped".into()));
-                }
             }
         }
 

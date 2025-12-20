@@ -5,20 +5,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::GpuContext;
+use crate::core::runtime::RuntimeOperations;
 
 #[derive(Clone)]
 pub struct RuntimeContext {
     pub gpu: GpuContext,
     /// Pause gate for this processor (None for shared/global context).
     pause_gate: Option<Arc<AtomicBool>>,
+    /// Runtime operations interface. Typically an Arc<RuntimeProxy> that sends
+    /// commands through a channel to the StreamRuntime command processor thread.
+    runtime_ops: Arc<dyn RuntimeOperations>,
 }
 
 impl RuntimeContext {
-    pub fn new(gpu: GpuContext) -> Self {
+    pub fn new(gpu: GpuContext, runtime_ops: Arc<dyn RuntimeOperations>) -> Self {
         Self {
             gpu,
             pause_gate: None,
+            runtime_ops,
         }
+    }
+
+    /// Access runtime operations for graph mutations.
+    ///
+    /// Returns the runtime operations interface, allowing processors to add/remove
+    /// processors and connections dynamically.
+    pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
+        Arc::clone(&self.runtime_ops)
     }
 
     /// Create a processor-specific context with a pause gate.
@@ -26,6 +39,7 @@ impl RuntimeContext {
         Self {
             gpu: self.gpu.clone(),
             pause_gate: Some(pause_gate),
+            runtime_ops: Arc::clone(&self.runtime_ops),
         }
     }
 

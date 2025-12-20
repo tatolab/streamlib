@@ -145,7 +145,7 @@ fn run_string_mode() -> Result<()> {
     run_pipeline(runtime)
 }
 
-fn run_pipeline(runtime: StreamRuntime) -> Result<()> {
+fn run_pipeline(runtime: std::sync::Arc<StreamRuntime>) -> Result<()> {
     println!("▶️  Starting pipeline...");
     #[cfg(target_os = "macos")]
     println!("   Press Cmd+Q to stop\n");

@@ -5,20 +5,25 @@ use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use super::command_receiver::CommandReceiver;
+use super::commands::RuntimeCommand;
 use super::graph_change_listener::GraphChangeListener;
+use super::operations_runtime_proxy::RuntimeProxy;
+use super::RuntimeOperations;
 use super::RuntimeStatus;
 use crate::core::compiler::{shutdown_all_processors, Compiler, PendingOperation};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, GraphState,
-    LinkOutputToProcessorWriterAndReader, LinkUniqueId, PendingDeletionComponent,
+    GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader, LinkUniqueId,
     ProcessorPauseGateComponent, ProcessorUniqueId,
 };
 use crate::core::links::LinkOutputToProcessorMessage;
-use crate::core::processors::{ProcessorSpec, ProcessorState};
+use crate::core::processors::ProcessorSpec;
+use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 
@@ -49,10 +54,12 @@ pub struct StreamRuntime {
     /// Listener for graph changes that triggers compilation.
     /// Stored to keep subscription alive for runtime lifetime.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
+    /// Command channel sender. Cloned to create RuntimeProxy instances.
+    command_tx: Sender<RuntimeCommand>,
 }
 
 impl StreamRuntime {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Arc<Self>> {
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
         let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors()?;
@@ -74,208 +81,44 @@ impl StreamRuntime {
         // Subscribe to graph changes
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
-        Ok(Self {
+        // Create command channel for proxy communication
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+
+        let runtime = Arc::new(Self {
             compiler,
             runtime_context,
             status,
             _graph_change_listener: listener,
-        })
+            command_tx,
+        });
+
+        // Spawn command processing thread. Uses Weak<Self> to avoid preventing drop.
+        // When all senders are dropped (runtime + all proxies), channel closes and thread exits.
+        let runtime_weak = Arc::downgrade(&runtime);
+        std::thread::Builder::new()
+            .name("streamlib-command-processor".into())
+            .spawn(move || {
+                tracing::debug!("[command-processor] Thread started");
+                while let Ok(cmd) = command_rx.recv() {
+                    match runtime_weak.upgrade() {
+                        Some(runtime) => {
+                            runtime.process_command(cmd);
+                        }
+                        None => {
+                            tracing::debug!("[command-processor] Runtime dropped, exiting");
+                            break;
+                        }
+                    }
+                }
+                tracing::debug!("[command-processor] Thread exiting");
+            })
+            .expect("Failed to spawn command processor thread");
+
+        Ok(runtime)
     }
 
-    // =========================================================================
-    // Graph Mutations
-    // =========================================================================
-
-    /// Add a processor to the graph with its spec. Returns the processor ID.
-    pub fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-        // Declare side effects upfront
-        let emit_will_add = |id: &ProcessorUniqueId| {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillAddProcessor {
-                    processor_id: id.clone(),
-                }),
-            );
-        };
-
-        let emit_did_add = |id: &ProcessorUniqueId| {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidAddProcessor {
-                    processor_id: id.clone(),
-                }),
-            );
-        };
-
-        // Use compiler.scope() to access graph and transaction
-        let processor_id = self.compiler.scope(|graph, tx| {
-            graph
-                .traversal_mut()
-                .add_v(spec)
-                .inspect(|node| emit_will_add(&node.id))
-                .inspect(|node| tx.log(PendingOperation::AddProcessor(node.id.clone())))
-                .inspect(|node| emit_did_add(&node.id))
-                .first()
-                .map(|node| node.id.clone())
-                .ok_or_else(|| StreamError::GraphError("Could not create node".into()))
-        })?;
-
-        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-        );
-
-        Ok(processor_id)
-    }
-
-    /// Connect two ports - adds a link to the graph. Returns the link ID.
-    pub fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        // Capture for events before moving into add_e
-        let from_processor = from.processor_id.clone();
-        let from_port = from.port_name.clone();
-        let to_processor = to.processor_id.clone();
-        let to_port = to.port_name.clone();
-
-        // Emit WillConnect before the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-                from_processor,
-                from_port: from_port.clone(),
-                to_processor,
-                to_port: to_port.clone(),
-            }),
-        );
-
-        // Use compiler.scope() to access graph and transaction
-        let link_id = self.compiler.scope(|graph, tx| {
-            let id = graph
-                .traversal_mut()
-                .add_e(from, to)
-                .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
-                .first()
-                .map(|link| link.id.clone())
-                .ok_or_else(|| StreamError::GraphError("failed to create link".into()))?;
-
-            Ok::<_, StreamError>(id)
-        })?;
-
-        // Emit DidConnect after the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidConnect {
-                link_id: link_id.to_string(),
-                from_port,
-                to_port,
-            }),
-        );
-
-        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-        );
-
-        Ok(link_id)
-    }
-
-    pub fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
-        // Validate link exists and get info for events, then mark for deletion
-        let link_info = self.compiler.scope(|graph, tx| {
-            let (from_value, to_value) = graph
-                .traversal()
-                .e(link_id)
-                .first()
-                .map(|l| (l.from_port(), l.to_port()))
-                .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", link_id)))?;
-
-            let info = (
-                OutputLinkPortRef::new(from_value.processor_id.clone(), to_value.port_name.clone()),
-                InputLinkPortRef::new(to_value.processor_id.clone(), to_value.port_name.clone()),
-            );
-
-            // Mark for soft-delete by adding PendingDeletion component to link
-            if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-                link.insert(PendingDeletionComponent);
-            }
-
-            // Queue operation for commit
-            tx.log(PendingOperation::RemoveLink(link_id.clone()));
-
-            Ok::<_, StreamError>(info)
-        })?;
-
-        // Emit WillDisconnect before the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillDisconnect {
-                link_id: link_id.to_string(),
-                from_port: link_info.0.to_string(),
-                to_port: link_info.1.to_string(),
-            }),
-        );
-
-        // Emit DidDisconnect after queueing (actual removal happens at commit)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidDisconnect {
-                link_id: link_id.to_string(),
-                from_port: link_info.0.to_string(),
-                to_port: link_info.1.to_string(),
-            }),
-        );
-
-        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-        );
-
-        Ok(())
-    }
-
-    pub fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
-        // Validate processor exists and mark for deletion
-        self.compiler.scope(|graph, tx| {
-            if !graph.traversal().v(processor_id).exists() {
-                return Err(StreamError::ProcessorNotFound(processor_id.to_string()));
-            }
-
-            // Mark for soft-delete by adding PendingDeletion component
-            if let Some(node) = graph.traversal_mut().v(processor_id).first_mut() {
-                node.insert(PendingDeletionComponent);
-            }
-
-            // Queue operation for commit
-            tx.log(PendingOperation::RemoveProcessor(processor_id.clone()));
-
-            Ok(())
-        })?;
-
-        // Emit WillRemoveProcessor before the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillRemoveProcessor {
-                processor_id: processor_id.clone(),
-            }),
-        );
-
-        // Emit DidRemoveProcessor after queueing (actual removal happens at commit)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRemoveProcessor {
-                processor_id: processor_id.clone(),
-            }),
-        );
-
-        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-        );
-
-        Ok(())
+    pub fn create_proxy(&self) -> RuntimeProxy {
+        RuntimeProxy::new(self.command_tx.clone())
     }
 
     /// Update a processor's configuration at runtime.
@@ -335,7 +178,11 @@ impl StreamRuntime {
         tracing::info!("[start] Initializing GPU context...");
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
-        let runtime_ctx = Arc::new(RuntimeContext::new(gpu));
+
+        // Create a proxy for RuntimeContext. Processors use this to call runtime operations
+        // via the command channel, avoiding potential deadlocks from direct calls.
+        let proxy: Arc<dyn RuntimeOperations> = Arc::new(self.create_proxy());
+        let runtime_ctx = Arc::new(RuntimeContext::new(gpu, proxy));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
         // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
@@ -673,6 +520,34 @@ impl StreamRuntime {
 
     pub fn status(&self) -> RuntimeStatus {
         *self.status.lock()
+    }
+
+    // =========================================================================
+    // RuntimeOperations delegation (inherent methods for ergonomic API)
+    // =========================================================================
+
+    /// Add a processor to the graph.
+    pub fn add_processor(&self, spec: impl Into<ProcessorSpec>) -> Result<ProcessorUniqueId> {
+        <Self as RuntimeOperations>::add_processor(self, spec.into())
+    }
+
+    /// Remove a processor from the graph.
+    pub fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+        <Self as RuntimeOperations>::remove_processor(self, processor_id)
+    }
+
+    /// Connect two ports.
+    pub fn connect(
+        &self,
+        from: impl Into<OutputLinkPortRef>,
+        to: impl Into<InputLinkPortRef>,
+    ) -> Result<LinkUniqueId> {
+        <Self as RuntimeOperations>::connect(self, from.into(), to.into())
+    }
+
+    /// Disconnect a link.
+    pub fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
+        <Self as RuntimeOperations>::disconnect(self, link_id)
     }
 
     // =========================================================================
