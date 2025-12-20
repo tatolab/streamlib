@@ -5,14 +5,10 @@ use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::command_receiver::CommandReceiver;
-use super::commands::RuntimeCommand;
 use super::graph_change_listener::GraphChangeListener;
-use super::operations_runtime_proxy::RuntimeProxy;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
 use crate::core::compiler::{Compiler, PendingOperation};
@@ -54,8 +50,6 @@ pub struct StreamRuntime {
     /// Listener for graph changes that triggers compilation.
     /// Stored to keep subscription alive for runtime lifetime.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
-    /// Command channel sender. Cloned to create RuntimeProxy instances.
-    command_tx: Sender<RuntimeCommand>,
 }
 
 impl StreamRuntime {
@@ -81,44 +75,12 @@ impl StreamRuntime {
         // Subscribe to graph changes
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
-        // Create command channel for proxy communication
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
-
-        let runtime = Arc::new(Self {
+        Ok(Arc::new(Self {
             compiler,
             runtime_context,
             status,
             _graph_change_listener: listener,
-            command_tx,
-        });
-
-        // Spawn command processing thread. Uses Weak<Self> to avoid preventing drop.
-        // When all senders are dropped (runtime + all proxies), channel closes and thread exits.
-        let runtime_weak = Arc::downgrade(&runtime);
-        std::thread::Builder::new()
-            .name("streamlib-command-processor".into())
-            .spawn(move || {
-                tracing::debug!("[command-processor] Thread started");
-                while let Ok(cmd) = command_rx.recv() {
-                    match runtime_weak.upgrade() {
-                        Some(runtime) => {
-                            runtime.process_command(cmd);
-                        }
-                        None => {
-                            tracing::debug!("[command-processor] Runtime dropped, exiting");
-                            break;
-                        }
-                    }
-                }
-                tracing::debug!("[command-processor] Thread exiting");
-            })
-            .expect("Failed to spawn command processor thread");
-
-        Ok(runtime)
-    }
-
-    pub fn create_proxy(&self) -> RuntimeProxy {
-        RuntimeProxy::new(self.command_tx.clone())
+        }))
     }
 
     /// Update a processor's configuration at runtime.
@@ -163,7 +125,10 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Start the runtime.
-    pub fn start(&self) -> Result<()> {
+    ///
+    /// Takes `&Arc<Self>` to allow passing the runtime to processors via RuntimeContext.
+    /// Processors can then call runtime operations directly without indirection.
+    pub fn start(self: &Arc<Self>) -> Result<()> {
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
@@ -179,10 +144,12 @@ impl StreamRuntime {
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
 
-        // Create a proxy for RuntimeContext. Processors use this to call runtime operations
-        // via the command channel, avoiding potential deadlocks from direct calls.
-        let proxy: Arc<dyn RuntimeOperations> = Arc::new(self.create_proxy());
-        let runtime_ctx = Arc::new(RuntimeContext::new(gpu, proxy));
+        // Pass runtime directly to RuntimeContext. Processors call runtime operations
+        // directly - this is safe because processor lifecycle methods (setup, process)
+        // run on their own threads with no locks held.
+        let runtime_ops: Arc<dyn RuntimeOperations> =
+            Arc::clone(self) as Arc<dyn RuntimeOperations>;
+        let runtime_ctx = Arc::new(RuntimeContext::new(gpu, runtime_ops));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
         // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
