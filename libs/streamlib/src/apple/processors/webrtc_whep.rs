@@ -149,7 +149,10 @@ pub struct WebRtcWhepProcessor {
 }
 
 impl crate::core::Processor for WebRtcWhepProcessor::Processor {
-    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.gpu_context = Some(ctx.gpu.clone());
         self.ctx = Some(ctx.clone());
 
@@ -161,7 +164,7 @@ impl crate::core::Processor for WebRtcWhepProcessor::Processor {
         tracing::info!(
             "[WebRtcWhepProcessor] Initialized (will create decoders after SDP negotiation)"
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {
@@ -184,19 +187,46 @@ impl crate::core::Processor for WebRtcWhepProcessor::Processor {
         Ok(())
     }
 
-    fn teardown(&mut self) -> Result<()> {
-        if let Some(whep_client) = &self.whep_client {
-            if let Ok(client) = whep_client.lock() {
-                if let Err(e) = client.terminate() {
-                    tracing::error!(
-                        "[WebRtcWhepProcessor] Failed to terminate WHEP session: {}",
-                        e
-                    );
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        // Capture what we need for the async block
+        let webrtc_session = self.webrtc_session.take();
+        let whep_client = self.whep_client.take();
+
+        async move {
+            tracing::info!("[WebRtcWhepProcessor] Shutting down");
+
+            // Close WebRTC session
+            if let Some(session) = webrtc_session {
+                if let Err(e) = session.close().await {
+                    tracing::warn!("[WebRtcWhepProcessor] Error closing WebRTC session: {}", e);
                 }
             }
+
+            // Terminate WHEP session (DELETE request)
+            // Try to unwrap the Arc to get the inner client (avoids holding MutexGuard across await)
+            if let Some(client_arc) = whep_client {
+                match Arc::try_unwrap(client_arc) {
+                    Ok(mutex) => {
+                        let client = mutex.into_inner().unwrap();
+                        if let Err(e) = client.terminate().await {
+                            tracing::warn!(
+                                "[WebRtcWhepProcessor] Error terminating WHEP session: {}",
+                                e
+                            );
+                        }
+                    }
+                    Err(_arc) => {
+                        // Arc has other references, skip termination (will timeout server-side)
+                        tracing::warn!(
+                            "[WebRtcWhepProcessor] Could not terminate WHEP session: client still has references"
+                        );
+                    }
+                }
+            }
+
+            tracing::info!("[WebRtcWhepProcessor] Teardown complete");
+            Ok(())
         }
-        tracing::info!("[WebRtcWhepProcessor] Teardown complete");
-        Ok(())
     }
 }
 
@@ -216,7 +246,7 @@ impl WebRtcWhepProcessor::Processor {
         let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
 
         // 1. Create WHEP client
-        let mut whep_client = WhepClient::new(self.config.whep.clone(), tokio_handle.clone())?;
+        let mut whep_client = WhepClient::new(self.config.whep.clone())?;
 
         // 2. Set up callbacks for WebRTC session
         let pending_ice = Arc::clone(&self.pending_ice_candidates);
@@ -328,14 +358,15 @@ impl WebRtcWhepProcessor::Processor {
 
         // 3. Create WebRTC session in receive mode
         let mut webrtc_session =
-            WebRtcSession::new_receive(tokio_handle, on_ice_candidate, on_sample)?;
+            tokio_handle.block_on(WebRtcSession::new_receive(on_ice_candidate, on_sample))?;
 
         // 4. Create SDP offer
-        let sdp_offer = webrtc_session.create_offer()?;
+        let sdp_offer = tokio_handle.block_on(webrtc_session.create_offer())?;
         tracing::debug!("[WebRtcWhepProcessor] Generated SDP offer:\n{}", sdp_offer);
 
         // 5. POST offer to WHEP server, receive answer/counter-offer
-        let (sdp_answer, is_counter_offer) = whep_client.post_offer(&sdp_offer)?;
+        let (sdp_answer, is_counter_offer) =
+            tokio_handle.block_on(whep_client.post_offer(&sdp_offer))?;
 
         if is_counter_offer {
             tracing::warn!(
@@ -508,7 +539,7 @@ impl WebRtcWhepProcessor::Processor {
         }
 
         // 6. Set remote SDP answer
-        webrtc_session.set_remote_answer(&sdp_answer)?;
+        tokio_handle.block_on(webrtc_session.set_remote_answer(&sdp_answer))?;
 
         // 7. Wait a bit for ICE candidates to be gathered, then send them
         // In a real implementation, we'd send candidates as they're gathered (trickle ICE)
@@ -529,7 +560,7 @@ impl WebRtcWhepProcessor::Processor {
             whep_client.queue_ice_candidate(candidate);
         }
 
-        if let Err(e) = whep_client.send_ice_candidates() {
+        if let Err(e) = tokio_handle.block_on(whep_client.send_ice_candidates()) {
             tracing::warn!("[WebRtcWhepProcessor] Failed to send ICE candidates: {}", e);
         }
 

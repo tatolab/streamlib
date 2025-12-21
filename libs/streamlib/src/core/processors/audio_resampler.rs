@@ -43,7 +43,10 @@ pub struct AudioResamplerProcessor {
 }
 
 impl crate::core::Processor for AudioResamplerProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.output_sample_rate = self.config.target_sample_rate;
 
         tracing::info!(
@@ -52,15 +55,15 @@ impl crate::core::Processor for AudioResamplerProcessor::Processor {
             self.config.quality
         );
 
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "[AudioResampler] Stopped (processed {} output frames)",
             self.frame_counter
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

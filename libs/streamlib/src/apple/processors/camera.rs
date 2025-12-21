@@ -200,19 +200,22 @@ pub struct AppleCameraProcessor {
 }
 
 impl crate::core::Processor for AppleCameraProcessor::Processor {
-    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.gpu_context = Some(ctx.gpu.clone());
         tracing::info!("Camera: setup() complete, will initialize AVFoundation in process()");
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "Camera {}: Stopping (generated {} frames)",
             self.camera_name,
             self.frame_count
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     // Business logic - called by macro-generated process()

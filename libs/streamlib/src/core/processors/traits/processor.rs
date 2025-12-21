@@ -5,6 +5,7 @@
 
 use crate::core::error::Result;
 use crate::core::RuntimeContext;
+use std::future::Future;
 
 /// Defines the behavior for a processor.
 ///
@@ -45,15 +46,22 @@ pub trait Processor {
     /// Called once when the processor starts.
     ///
     /// Use this for one-time initialization that requires runtime context.
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
+    /// Returns a future that completes when setup is done.
+    ///
+    /// For sync processors, return `std::future::ready(Ok(()))`.
+    /// For async processors (e.g., WebRTC), use `async move { ... }`.
+    fn setup(&mut self, _ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 
     /// Called once when the processor stops.
     ///
-    /// Use this for cleanup.
-    fn teardown(&mut self) -> Result<()> {
-        Ok(())
+    /// Use this for cleanup. Returns a future that completes when teardown is done.
+    ///
+    /// For sync processors, return `std::future::ready(Ok(()))`.
+    /// For async processors (e.g., WebRTC), use `async move { ... }`.
+    fn teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 
     /// Your main processing logic.

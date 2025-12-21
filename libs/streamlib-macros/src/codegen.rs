@@ -307,11 +307,11 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #remove_link_input_data_reader
             #set_link_output_to_processor_message_writer
 
-            fn __generated_setup(&mut self, ctx: &::streamlib::core::RuntimeContext) -> ::streamlib::core::Result<()> {
+            fn __generated_setup(&mut self, ctx: ::streamlib::core::RuntimeContext) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as ::streamlib::core::Processor>::setup(self, ctx)
             }
 
-            fn __generated_teardown(&mut self) -> ::streamlib::core::Result<()> {
+            fn __generated_teardown(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as ::streamlib::core::Processor>::teardown(self)
             }
         }

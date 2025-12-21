@@ -46,13 +46,16 @@ pub struct AppleAudioCaptureProcessor {
 }
 
 impl crate::core::Processor for AppleAudioCaptureProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("[AudioCapture] setup() called - will set up stream in process()");
         self.stream_setup_done = false;
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         let device_name = self
             .device_info
             .as_ref()
@@ -70,7 +73,7 @@ impl crate::core::Processor for AppleAudioCaptureProcessor::Processor {
         // Drop the stream to stop the audio callback
         self._stream = None;
         self._device = None;
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

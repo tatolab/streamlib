@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext, VideoFrame};
+use crate::core::{LinkInput, LinkOutput, Result, VideoFrame};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -32,13 +32,7 @@ pub struct SimplePassthroughProcessor {
 }
 
 impl crate::core::Processor for SimplePassthroughProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn teardown(&mut self) -> Result<()> {
-        Ok(())
-    }
+    // Uses default setup() and teardown() implementations from Processor trait
 
     fn process(&mut self) -> Result<()> {
         if let Some(frame) = self.input.read() {

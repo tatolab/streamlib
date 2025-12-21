@@ -33,7 +33,7 @@ pub struct WhipConfig {
 /// - PATCH /session: Send ICE candidates (trickle ICE)
 /// - DELETE /session: Terminate session
 ///
-/// Uses pollster::block_on() for async HTTP calls (same pattern as WebRtcSession).
+/// All HTTP methods are async - call from async context or use block_on at call site.
 pub struct WhipClient {
     config: WhipConfig,
 
@@ -55,13 +55,10 @@ pub struct WhipClient {
 
     /// Pending ICE candidates (buffered for batch sending)
     pending_candidates: Arc<Mutex<Vec<String>>>,
-
-    /// Shared tokio runtime handle for async HTTP operations.
-    tokio_handle: tokio::runtime::Handle,
 }
 
 impl WhipClient {
-    pub fn new(config: WhipConfig, tokio_handle: tokio::runtime::Handle) -> Result<Self> {
+    pub fn new(config: WhipConfig) -> Result<Self> {
         tracing::info!(
             "[WhipClient] Creating WHIP client for endpoint: {}",
             config.endpoint_url
@@ -95,75 +92,55 @@ impl WhipClient {
             session_url: None,
             session_etag: None,
             pending_candidates: Arc::new(Mutex::new(Vec::new())),
-            tokio_handle,
         })
     }
 
     /// POST SDP offer to WHIP endpoint, receive SDP answer.
-    pub fn post_offer(&mut self, sdp_offer: &str) -> Result<String> {
-        use http_body_util::Full;
+    pub async fn post_offer(&mut self, sdp_offer: &str) -> Result<String> {
+        use http_body_util::{BodyExt, Full};
         use hyper::{header, Request, StatusCode};
 
-        // Clone what we need to avoid borrow issues
         let endpoint_url = self.config.endpoint_url.clone();
         let auth_token = self.config.auth_token.clone();
         let timeout_ms = self.config.timeout_ms;
 
-        // Extract http_client reference before async block
-        let http_client = &self.http_client;
+        // Build POST request per RFC 9725 Section 4.1
+        let body = Full::new(bytes::Bytes::from(sdp_offer.to_owned()));
+        let boxed_body = body.map_err(|never| match never {}).boxed();
 
-        // MUST use Tokio runtime (tokio::time::timeout requires it)
-        let result = self.tokio_handle.block_on(async {
-            // Build POST request per RFC 9725 Section 4.1
-            use http_body_util::BodyExt;
-            let body = Full::new(bytes::Bytes::from(sdp_offer.to_owned()));
-            let boxed_body = body.map_err(|never| match never {}).boxed();
+        let mut req_builder = Request::builder()
+            .method("POST")
+            .uri(&endpoint_url)
+            .header(header::CONTENT_TYPE, "application/sdp");
 
-            let mut req_builder = Request::builder()
-                .method("POST")
-                .uri(&endpoint_url)
-                .header(header::CONTENT_TYPE, "application/sdp");
+        // Add Authorization header only if token is provided
+        if let Some(token) = &auth_token {
+            req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+        }
 
-            // Add Authorization header only if token is provided
-            if let Some(token) = &auth_token {
-                req_builder =
-                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
-            }
-
-            let req = req_builder.body(boxed_body).map_err(|e| {
-                StreamError::Runtime(format!("Failed to build WHIP POST request: {}", e))
-            })?;
-
-            tracing::debug!("WHIP POST to {}", endpoint_url);
-
-            // Send request with timeout
-            let response = tokio::time::timeout(
-                std::time::Duration::from_millis(timeout_ms),
-                http_client.request(req),
-            )
-            .await
-            .map_err(|_| {
-                StreamError::Runtime(format!("WHIP POST timed out after {}ms", timeout_ms))
-            })?
-            .map_err(|e| StreamError::Runtime(format!("WHIP POST request failed: {}", e)))?;
-
-            let status = response.status();
-            let headers = response.headers().clone();
-
-            // Read response body
-            let body_bytes = http_body_util::BodyExt::collect(response.into_body())
-                .await
-                .map_err(|e| {
-                    StreamError::Runtime(format!("Failed to read WHIP response body: {}", e))
-                })?
-                .to_bytes();
-
-            // Return status, headers, and body for processing outside async block
-            Ok::<_, StreamError>((status, headers, body_bytes))
+        let req = req_builder.body(boxed_body).map_err(|e| {
+            StreamError::Runtime(format!("Failed to build WHIP POST request: {}", e))
         })?;
 
-        // Process response outside async block to avoid borrow conflicts
-        let (status, headers, body_bytes) = result;
+        tracing::debug!("WHIP POST to {}", endpoint_url);
+
+        // Send request with timeout
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            self.http_client.request(req),
+        )
+        .await
+        .map_err(|_| StreamError::Runtime(format!("WHIP POST timed out after {}ms", timeout_ms)))?
+        .map_err(|e| StreamError::Runtime(format!("WHIP POST request failed: {}", e)))?;
+
+        let status = response.status();
+        let headers = response.headers().clone();
+
+        // Read response body
+        let body_bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .map_err(|e| StreamError::Runtime(format!("Failed to read WHIP response body: {}", e)))?
+            .to_bytes();
 
         match status {
             StatusCode::CREATED => {
@@ -230,9 +207,9 @@ impl WhipClient {
 
                 tracing::info!("WHIP redirecting to: {}", location);
 
-                // Update endpoint and retry (recursive, but 307 should be rare)
+                // Update endpoint and retry (recursive via Box::pin for async recursion)
                 self.config.endpoint_url = location.to_owned();
-                self.post_offer(sdp_offer)
+                Box::pin(self.post_offer(sdp_offer)).await
             }
 
             StatusCode::SERVICE_UNAVAILABLE => {
@@ -267,12 +244,12 @@ impl WhipClient {
     }
 
     /// Send pending ICE candidates to WHIP server via PATCH.
-    pub fn send_ice_candidates(&self) -> Result<()> {
+    pub async fn send_ice_candidates(&self) -> Result<()> {
         use http_body_util::{BodyExt, Full};
         use hyper::{header, Request, StatusCode};
 
         let session_url = match &self.session_url {
-            Some(url) => url,
+            Some(url) => url.clone(),
             None => {
                 return Err(StreamError::Configuration(
                     "Cannot send ICE candidates: no WHIP session URL".into(),
@@ -293,134 +270,125 @@ impl WhipClient {
         // Format: Multiple "a=candidate:..." lines joined by CRLF
         let sdp_fragment = candidates.join("\r\n");
 
-        // MUST use Tokio runtime for HTTP operations
-        self.tokio_handle.block_on(async {
-            let body = Full::new(bytes::Bytes::from(sdp_fragment));
-            let boxed_body = body.map_err(|never| match never {}).boxed();
+        let body = Full::new(bytes::Bytes::from(sdp_fragment));
+        let boxed_body = body.map_err(|never| match never {}).boxed();
 
-            let mut req_builder = Request::builder()
-                .method("PATCH")
-                .uri(session_url)
-                .header(header::CONTENT_TYPE, "application/trickle-ice-sdpfrag");
+        let mut req_builder = Request::builder()
+            .method("PATCH")
+            .uri(&session_url)
+            .header(header::CONTENT_TYPE, "application/trickle-ice-sdpfrag");
 
-            // Add Authorization header only if token is provided
-            if let Some(token) = &self.config.auth_token {
-                req_builder =
-                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+        // Add Authorization header only if token is provided
+        if let Some(token) = &self.config.auth_token {
+            req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+        }
+
+        let req = req_builder.body(boxed_body).map_err(|e| {
+            StreamError::Runtime(format!("Failed to build WHIP PATCH request: {}", e))
+        })?;
+
+        tracing::debug!(
+            "WHIP PATCH to {} ({} candidates)",
+            session_url,
+            candidates.len()
+        );
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(self.config.timeout_ms),
+            self.http_client.request(req),
+        )
+        .await
+        .map_err(|_| {
+            StreamError::Runtime(format!(
+                "WHIP PATCH timed out after {}ms",
+                self.config.timeout_ms
+            ))
+        })?
+        .map_err(|e| StreamError::Runtime(format!("WHIP PATCH request failed: {}", e)))?;
+
+        let status = response.status();
+
+        match status {
+            StatusCode::NO_CONTENT => {
+                tracing::debug!("Sent {} ICE candidates to WHIP server", candidates.len());
+                Ok(())
             }
-
-            let req = req_builder.body(boxed_body).map_err(|e| {
-                StreamError::Runtime(format!("Failed to build WHIP PATCH request: {}", e))
-            })?;
-
-            tracing::debug!(
-                "WHIP PATCH to {} ({} candidates)",
-                session_url,
-                candidates.len()
-            );
-
-            let response = tokio::time::timeout(
-                std::time::Duration::from_millis(self.config.timeout_ms),
-                self.http_client.request(req),
-            )
-            .await
-            .map_err(|_| {
-                StreamError::Runtime(format!(
-                    "WHIP PATCH timed out after {}ms",
-                    self.config.timeout_ms
-                ))
-            })?
-            .map_err(|e| StreamError::Runtime(format!("WHIP PATCH request failed: {}", e)))?;
-
-            let status = response.status();
-
-            match status {
-                StatusCode::NO_CONTENT => {
-                    tracing::debug!("Sent {} ICE candidates to WHIP server", candidates.len());
-                    Ok(())
-                }
-                StatusCode::OK => {
-                    // 200 OK with body indicates ICE restart (server sends new candidates)
-                    tracing::debug!("ICE restart response (200 OK)");
-                    Ok(())
-                }
-                _ => {
-                    // Read error body for debugging
-                    let body_bytes = BodyExt::collect(response.into_body())
-                        .await
-                        .ok()
-                        .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
-                        .unwrap_or_else(|| format!("HTTP {}", status));
-
-                    Err(StreamError::Runtime(format!(
-                        "WHIP PATCH failed: {}",
-                        body_bytes
-                    )))
-                }
+            StatusCode::OK => {
+                // 200 OK with body indicates ICE restart (server sends new candidates)
+                tracing::debug!("ICE restart response (200 OK)");
+                Ok(())
             }
-        })
+            _ => {
+                // Read error body for debugging
+                let body_bytes = BodyExt::collect(response.into_body())
+                    .await
+                    .ok()
+                    .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
+                    .unwrap_or_else(|| format!("HTTP {}", status));
+
+                Err(StreamError::Runtime(format!(
+                    "WHIP PATCH failed: {}",
+                    body_bytes
+                )))
+            }
+        }
     }
 
     /// DELETE session to WHIP server (graceful shutdown)
     ///
     /// RFC 9725 Section 4.4: Client terminates session by DELETEing session URL.
     /// Server responds with 200 OK.
-    pub fn terminate(&self) -> Result<()> {
-        use http_body_util::Empty;
+    pub async fn terminate(&self) -> Result<()> {
+        use http_body_util::{BodyExt, Empty};
         use hyper::{header, Request};
 
         let session_url = match &self.session_url {
-            Some(url) => url,
+            Some(url) => url.clone(),
             None => {
                 tracing::debug!("No WHIP session to terminate");
                 return Ok(()); // No session was created
             }
         };
 
-        // MUST use Tokio runtime for HTTP operations
-        self.tokio_handle.block_on(async {
-            use http_body_util::BodyExt;
-            let body = Empty::<bytes::Bytes>::new();
-            let boxed_body = body.map_err(|never| match never {}).boxed();
+        let body = Empty::<bytes::Bytes>::new();
+        let boxed_body = body.map_err(|never| match never {}).boxed();
 
-            let mut req_builder = Request::builder().method("DELETE").uri(session_url);
+        let mut req_builder = Request::builder().method("DELETE").uri(&session_url);
 
-            // Add Authorization header only if token is provided
-            if let Some(token) = &self.config.auth_token {
-                req_builder =
-                    req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
-            }
+        // Add Authorization header only if token is provided
+        if let Some(token) = &self.config.auth_token {
+            req_builder = req_builder.header(header::AUTHORIZATION, format!("Bearer {}", token));
+        }
 
-            let req = req_builder.body(boxed_body).map_err(|e| {
-                StreamError::Runtime(format!("Failed to build WHIP DELETE request: {}", e))
-            })?;
+        let req = req_builder.body(boxed_body).map_err(|e| {
+            StreamError::Runtime(format!("Failed to build WHIP DELETE request: {}", e))
+        })?;
 
-            tracing::debug!("WHIP DELETE to {}", session_url);
+        tracing::debug!("WHIP DELETE to {}", session_url);
 
-            let response = tokio::time::timeout(
-                std::time::Duration::from_millis(self.config.timeout_ms),
-                self.http_client.request(req),
-            )
-            .await
-            .map_err(|_| {
-                StreamError::Runtime(format!(
-                    "WHIP DELETE timed out after {}ms",
-                    self.config.timeout_ms
-                ))
-            })?
-            .map_err(|e| StreamError::Runtime(format!("WHIP DELETE request failed: {}", e)))?;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(self.config.timeout_ms),
+            self.http_client.request(req),
+        )
+        .await
+        .map_err(|_| {
+            StreamError::Runtime(format!(
+                "WHIP DELETE timed out after {}ms",
+                self.config.timeout_ms
+            ))
+        })?
+        .map_err(|e| StreamError::Runtime(format!("WHIP DELETE request failed: {}", e)))?;
 
-            if response.status().is_success() {
-                tracing::info!("WHIP session terminated: {}", session_url);
-                Ok(())
-            } else {
-                // Non-fatal - session will timeout server-side
-                tracing::warn!(
-                    "WHIP DELETE failed (status {}), session may still exist server-side",
-                    response.status()
-                );
-                Ok(())
-            }
-        })
+        if response.status().is_success() {
+            tracing::info!("WHIP session terminated: {}", session_url);
+            Ok(())
+        } else {
+            // Non-fatal - session will timeout server-side
+            tracing::warn!(
+                "WHIP DELETE failed (status {}), session may still exist server-side",
+                response.status()
+            );
+            Ok(())
+        }
     }
 }

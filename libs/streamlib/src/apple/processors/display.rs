@@ -86,158 +86,164 @@ pub struct AppleDisplayProcessor {
 }
 
 impl crate::core::Processor for AppleDisplayProcessor::Processor {
-    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        tracing::trace!("Display: setup() called");
-        self.gpu_context = Some(ctx.gpu.clone());
-        self.window_id = AppleWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
-        self.width = self.config.width;
-        self.height = self.config.height;
-        self.window_title = self
-            .config
-            .title
-            .clone()
-            .unwrap_or_else(|| "streamlib Display".to_string());
+    fn setup(
+        &mut self,
+        ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        let result = (|| {
+            tracing::trace!("Display: setup() called");
+            self.gpu_context = Some(ctx.gpu.clone());
+            self.window_id = AppleWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
+            self.width = self.config.width;
+            self.height = self.config.height;
+            self.window_title = self
+                .config
+                .title
+                .clone()
+                .unwrap_or_else(|| "streamlib Display".to_string());
 
-        tracing::trace!("Display {}: Creating MetalDevice...", self.window_id.0);
-        let metal_device = MetalDevice::new()?;
-        tracing::trace!("Display {}: MetalDevice created", self.window_id.0);
+            tracing::trace!("Display {}: Creating MetalDevice...", self.window_id.0);
+            let metal_device = MetalDevice::new()?;
+            tracing::trace!("Display {}: MetalDevice created", self.window_id.0);
 
-        // Create metal crate command queue from objc2 Metal device
-        tracing::trace!(
-            "Display {}: Creating Metal command queue...",
-            self.window_id.0
-        );
-        let metal_command_queue = {
+            // Create metal crate command queue from objc2 Metal device
+            tracing::trace!(
+                "Display {}: Creating Metal command queue...",
+                self.window_id.0
+            );
+            let metal_command_queue = {
+                use metal::foreign_types::ForeignTypeRef;
+                let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+                let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
+                metal_device_ref.new_command_queue()
+            };
+            tracing::trace!("Display {}: Metal command queue created", self.window_id.0);
+
+            // Create wgpu bridge from shared device
+            tracing::trace!("Display {}: Creating WgpuBridge...", self.window_id.0);
+            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
+                metal_device.clone_device(),
+                ctx.gpu.device().as_ref().clone(),
+                ctx.gpu.queue().as_ref().clone(),
+            ));
+            tracing::trace!("Display {}: WgpuBridge created", self.window_id.0);
+
+            self.wgpu_bridge = Some(wgpu_bridge);
+            self.metal_command_queue = Some(metal_command_queue);
+
+            // Initialize CVDisplayLink for vsync
+            tracing::trace!("Display {}: Creating CVDisplayLink...", self.window_id.0);
+            let display_link = DisplayLink::new()?;
+            tracing::trace!("Display {}: Starting CVDisplayLink...", self.window_id.0);
+            display_link.start()?;
+            tracing::trace!("Display {}: CVDisplayLink started", self.window_id.0);
+
+            if let Ok(period) = display_link.get_nominal_output_video_refresh_period() {
+                tracing::info!(
+                    "Display {}: Vsync enabled (refresh period: {:?})",
+                    self.window_title,
+                    period
+                );
+            } else {
+                tracing::info!("Display {}: Vsync enabled", self.window_title);
+            }
+
+            self.display_link = Some(display_link);
+
+            // Create Metal render pipeline for scaling
             use metal::foreign_types::ForeignTypeRef;
             let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
             let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-            metal_device_ref.new_command_queue()
-        };
-        tracing::trace!("Display {}: Metal command queue created", self.window_id.0);
 
-        // Create wgpu bridge from shared device
-        tracing::trace!("Display {}: Creating WgpuBridge...", self.window_id.0);
-        let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-            metal_device.clone_device(),
-            ctx.gpu.device().as_ref().clone(),
-            ctx.gpu.queue().as_ref().clone(),
-        ));
-        tracing::trace!("Display {}: WgpuBridge created", self.window_id.0);
+            // Compile Metal shader
+            let shader_source = include_str!("shaders/fullscreen.metal");
+            let library = metal_device_ref
+                .new_library_with_source(shader_source, &metal::CompileOptions::new())
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Failed to compile Metal shader: {}", e))
+                })?;
 
-        self.wgpu_bridge = Some(wgpu_bridge);
-        self.metal_command_queue = Some(metal_command_queue);
+            let vertex_function = library.get_function("vertex_main", None).map_err(|e| {
+                StreamError::Configuration(format!("vertex_main function not found: {}", e))
+            })?;
+            let fragment_function = library.get_function("fragment_main", None).map_err(|e| {
+                StreamError::Configuration(format!("fragment_main function not found: {}", e))
+            })?;
 
-        // Initialize CVDisplayLink for vsync
-        tracing::trace!("Display {}: Creating CVDisplayLink...", self.window_id.0);
-        let display_link = DisplayLink::new()?;
-        tracing::trace!("Display {}: Starting CVDisplayLink...", self.window_id.0);
-        display_link.start()?;
-        tracing::trace!("Display {}: CVDisplayLink started", self.window_id.0);
+            // Create render pipeline descriptor
+            let pipeline_descriptor = metal::RenderPipelineDescriptor::new();
+            pipeline_descriptor.set_vertex_function(Some(&vertex_function));
+            pipeline_descriptor.set_fragment_function(Some(&fragment_function));
 
-        if let Ok(period) = display_link.get_nominal_output_video_refresh_period() {
-            tracing::info!(
-                "Display {}: Vsync enabled (refresh period: {:?})",
-                self.window_title,
-                period
+            let color_attachment = pipeline_descriptor
+                .color_attachments()
+                .object_at(0)
+                .unwrap();
+            color_attachment.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+
+            // Create pipeline state
+            let pipeline_state = metal_device_ref
+                .new_render_pipeline_state(&pipeline_descriptor)
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Failed to create render pipeline: {}", e))
+                })?;
+
+            // Create sampler for texture sampling with linear filtering
+            let sampler_descriptor = metal::SamplerDescriptor::new();
+            sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
+            sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
+            sampler_descriptor.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
+            sampler_descriptor.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
+
+            let sampler_state = metal_device_ref.new_sampler(&sampler_descriptor);
+
+            // Create format flag buffers (0 = BGRA, 1 = RGBA)
+            let format_buffer_rgba = metal_device_ref.new_buffer(
+                std::mem::size_of::<i32>() as u64,
+                metal::MTLResourceOptions::CPUCacheModeDefaultCache,
             );
-        } else {
-            tracing::info!("Display {}: Vsync enabled", self.window_title);
-        }
+            unsafe {
+                let ptr = format_buffer_rgba.contents() as *mut i32;
+                *ptr = 1; // RGBA flag
+            }
 
-        self.display_link = Some(display_link);
+            let format_buffer_bgra = metal_device_ref.new_buffer(
+                std::mem::size_of::<i32>() as u64,
+                metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+            );
+            unsafe {
+                let ptr = format_buffer_bgra.contents() as *mut i32;
+                *ptr = 0; // BGRA flag
+            }
 
-        // Create Metal render pipeline for scaling
-        use metal::foreign_types::ForeignTypeRef;
-        let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-        let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
+            self.metal_render_pipeline = Some(pipeline_state);
+            self.metal_sampler = Some(sampler_state);
+            self.format_buffer_rgba = Some(format_buffer_rgba);
+            self.format_buffer_bgra = Some(format_buffer_bgra);
+            self.metal_device = Some(metal_device);
 
-        // Compile Metal shader
-        let shader_source = include_str!("shaders/fullscreen.metal");
-        let library = metal_device_ref
-            .new_library_with_source(shader_source, &metal::CompileOptions::new())
-            .map_err(|e| {
-                StreamError::Configuration(format!("Failed to compile Metal shader: {}", e))
-            })?;
+            tracing::info!(
+                "Display {}: Initialized ({}x{}) with Metal render pipeline",
+                self.window_title,
+                self.width,
+                self.height
+            );
 
-        let vertex_function = library.get_function("vertex_main", None).map_err(|e| {
-            StreamError::Configuration(format!("vertex_main function not found: {}", e))
-        })?;
-        let fragment_function = library.get_function("fragment_main", None).map_err(|e| {
-            StreamError::Configuration(format!("fragment_main function not found: {}", e))
-        })?;
+            // EAGER WINDOW CREATION: Create window immediately instead of waiting for first frame
+            self.initialize_window()?;
 
-        // Create render pipeline descriptor
-        let pipeline_descriptor = metal::RenderPipelineDescriptor::new();
-        pipeline_descriptor.set_vertex_function(Some(&vertex_function));
-        pipeline_descriptor.set_fragment_function(Some(&fragment_function));
-
-        let color_attachment = pipeline_descriptor
-            .color_attachments()
-            .object_at(0)
-            .unwrap();
-        color_attachment.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
-
-        // Create pipeline state
-        let pipeline_state = metal_device_ref
-            .new_render_pipeline_state(&pipeline_descriptor)
-            .map_err(|e| {
-                StreamError::Configuration(format!("Failed to create render pipeline: {}", e))
-            })?;
-
-        // Create sampler for texture sampling with linear filtering
-        let sampler_descriptor = metal::SamplerDescriptor::new();
-        sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
-        sampler_descriptor.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
-        sampler_descriptor.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
-        sampler_descriptor.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
-
-        let sampler_state = metal_device_ref.new_sampler(&sampler_descriptor);
-
-        // Create format flag buffers (0 = BGRA, 1 = RGBA)
-        let format_buffer_rgba = metal_device_ref.new_buffer(
-            std::mem::size_of::<i32>() as u64,
-            metal::MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-        unsafe {
-            let ptr = format_buffer_rgba.contents() as *mut i32;
-            *ptr = 1; // RGBA flag
-        }
-
-        let format_buffer_bgra = metal_device_ref.new_buffer(
-            std::mem::size_of::<i32>() as u64,
-            metal::MTLResourceOptions::CPUCacheModeDefaultCache,
-        );
-        unsafe {
-            let ptr = format_buffer_bgra.contents() as *mut i32;
-            *ptr = 0; // BGRA flag
-        }
-
-        self.metal_render_pipeline = Some(pipeline_state);
-        self.metal_sampler = Some(sampler_state);
-        self.format_buffer_rgba = Some(format_buffer_rgba);
-        self.format_buffer_bgra = Some(format_buffer_bgra);
-        self.metal_device = Some(metal_device);
-
-        tracing::info!(
-            "Display {}: Initialized ({}x{}) with Metal render pipeline",
-            self.window_title,
-            self.width,
-            self.height
-        );
-
-        // EAGER WINDOW CREATION: Create window immediately instead of waiting for first frame
-        self.initialize_window()?;
-
-        Ok(())
+            Ok(())
+        })();
+        std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "Display {}: Stopping (rendered {} frames)",
             self.window_title,
             self.frames_rendered
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     // Business logic - called once by macro-generated process() in Pull mode

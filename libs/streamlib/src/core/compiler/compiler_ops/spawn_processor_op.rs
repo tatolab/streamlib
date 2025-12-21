@@ -250,8 +250,9 @@ fn spawn_dedicated_thread(
             }; // Lock released here
 
             // === PHASE 4: Setup (NO LOCK HELD - safe to call runtime ops) ===
+            let processor_context = runtime_ctx_clone.with_pause_gate(pause_gate_inner.clone());
             {
-                let processor_context = runtime_ctx_clone.with_pause_gate(pause_gate_inner.clone());
+                let tokio_handle = runtime_ctx_clone.tokio_handle();
 
                 tracing::info!(
                     "[{}] Calling setup on thread '{}' (id={:?}) - no locks held",
@@ -260,7 +261,9 @@ fn spawn_dedicated_thread(
                     thread_id
                 );
                 let mut guard = processor_arc_clone.lock();
-                if let Err(e) = guard.__generated_setup(&processor_context) {
+                if let Err(e) =
+                    tokio_handle.block_on(guard.__generated_setup(processor_context.clone()))
+                {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
                     *state_arc.lock() = ProcessorState::Error;
                     return;
@@ -286,6 +289,7 @@ fn spawn_dedicated_thread(
                 state_arc,
                 pause_gate_inner,
                 exec_config,
+                processor_context,
             );
         })
         .map_err(|e| StreamError::Runtime(format!("Failed to spawn thread: {}", e)))?;

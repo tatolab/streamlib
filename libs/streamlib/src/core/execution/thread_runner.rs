@@ -14,6 +14,7 @@ use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
+use crate::core::RuntimeContext;
 
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
@@ -27,6 +28,7 @@ pub fn run_processor_loop(
     state: Arc<Mutex<ProcessorState>>,
     pause_gate: Arc<AtomicBool>,
     exec_config: ExecutionConfig,
+    runtime_ctx: RuntimeContext,
 ) {
     tracing::info!(
         "[{}] Thread started with {}",
@@ -63,7 +65,10 @@ pub fn run_processor_loop(
     {
         let mut guard = processor.lock();
         tracing::trace!("[{}] Calling __generated_teardown...", id);
-        if let Err(e) = guard.__generated_teardown() {
+        if let Err(e) = runtime_ctx
+            .tokio_handle()
+            .block_on(guard.__generated_teardown())
+        {
             tracing::warn!("[{}] Teardown error: {}", id, e);
         }
         tracing::trace!("[{}] __generated_teardown completed", id);
