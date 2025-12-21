@@ -40,6 +40,8 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 /// This means multiple threads can concurrently call `add_processor()`,
 /// `connect()`, etc. without blocking each other on an outer lock.
 pub struct StreamRuntime {
+    /// Shared tokio runtime for async operations.
+    pub(crate) tokio_runtime: tokio::runtime::Runtime,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
     pub(crate) compiler: Arc<Compiler>,
     /// Runtime context (GPU, audio config). Created on start(), cleared on stop().
@@ -54,6 +56,12 @@ pub struct StreamRuntime {
 
 impl StreamRuntime {
     pub fn new() -> Result<Arc<Self>> {
+        // Create tokio runtime with default thread count (one per CPU core)
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| StreamError::Runtime(format!("Failed to create tokio runtime: {}", e)))?;
+
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
         let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors()?;
@@ -76,6 +84,7 @@ impl StreamRuntime {
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
         Ok(Arc::new(Self {
+            tokio_runtime,
             compiler,
             runtime_context,
             status,
@@ -149,7 +158,11 @@ impl StreamRuntime {
         // run on their own threads with no locks held.
         let runtime_ops: Arc<dyn RuntimeOperations> =
             Arc::clone(self) as Arc<dyn RuntimeOperations>;
-        let runtime_ctx = Arc::new(RuntimeContext::new(gpu, runtime_ops));
+        let runtime_ctx = Arc::new(RuntimeContext::new(
+            gpu,
+            runtime_ops,
+            self.tokio_runtime.handle().clone(),
+        ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
         // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)

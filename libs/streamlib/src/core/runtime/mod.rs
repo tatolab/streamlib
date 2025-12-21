@@ -8,6 +8,6 @@ mod operations_runtime;
 mod runtime;
 mod status;
 
-pub use operations::RuntimeOperations;
+pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::StreamRuntime;
 pub use status::RuntimeStatus;

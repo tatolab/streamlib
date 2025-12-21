@@ -46,31 +46,20 @@ pub struct WebRtcSession {
     #[allow(dead_code)] // Read by ICE callback handler
     ice_connected: Arc<std::sync::atomic::AtomicBool>,
 
-    /// Tokio runtime for WebRTC background tasks
-    /// CRITICAL: Must stay alive for session lifetime (ICE gathering, DTLS, stats)
-    _runtime: tokio::runtime::Runtime,
+    /// Shared tokio runtime handle for WebRTC async operations.
+    tokio_handle: tokio::runtime::Handle,
 }
 
 impl WebRtcSession {
     /// Creates a new WebRTC session in SEND mode (WHIP).
-    pub fn new<F>(on_ice_candidate: F) -> Result<Self>
+    pub fn new<F>(tokio_handle: tokio::runtime::Handle, on_ice_candidate: F) -> Result<Self>
     where
         F: Fn(String) + Send + Sync + 'static,
     {
-        // Create Tokio runtime for WebRTC background tasks
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2) // Minimal threads: 1 for blocking ops, 1 for background tasks
-            .thread_name("webrtc-tokio")
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                StreamError::Runtime(format!("Failed to create Tokio runtime for WebRTC: {}", e))
-            })?;
-
-        tracing::info!("[WebRTC] Created Tokio runtime with 2 worker threads");
+        tracing::info!("[WebRTC] Creating session using shared tokio runtime");
 
         // Block on async initialization within Tokio context
-        let init_result = runtime.block_on(async {
+        let init_result = tokio_handle.block_on(async {
             tracing::debug!("[WebRTC] Creating MediaEngine and registering codecs...");
 
             // Create MediaEngine and register only the codecs we use
@@ -356,32 +345,26 @@ impl WebRtcSession {
             video_track: Some(video_track),
             audio_track: Some(audio_track),
             ice_connected,
-            _runtime: runtime,
+            tokio_handle,
         })
     }
 
     /// Creates a new WebRTC session in RECEIVE mode (WHEP).
-    pub fn new_receive<F, S>(on_ice_candidate: F, on_sample: S) -> Result<Self>
+    pub fn new_receive<F, S>(
+        tokio_handle: tokio::runtime::Handle,
+        on_ice_candidate: F,
+        on_sample: S,
+    ) -> Result<Self>
     where
         F: Fn(String) + Send + Sync + 'static,
         S: Fn(String, bytes::Bytes, u32) + Send + Sync + 'static,
     {
-        // Create Tokio runtime for WebRTC background tasks
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("webrtc-tokio-recv")
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                StreamError::Runtime(format!("Failed to create Tokio runtime for WebRTC: {}", e))
-            })?;
-
-        tracing::info!("[WebRTC WHEP] Created Tokio runtime with 2 worker threads");
+        tracing::info!("[WebRTC] Creating receive session using shared tokio runtime");
 
         let on_sample = Arc::new(on_sample);
 
-        // Block on async initialization
-        let init_result = runtime.block_on(async {
+        // Block on async initialization within Tokio context
+        let init_result = tokio_handle.block_on(async {
             tracing::debug!("[WebRTC WHEP] Creating MediaEngine and registering codecs...");
 
             // Create MediaEngine and register only the codecs we use
@@ -590,7 +573,7 @@ impl WebRtcSession {
             video_track: None, // No local tracks in receive mode
             audio_track: None,
             ice_connected,
-            _runtime: runtime,
+            tokio_handle,
         })
     }
 
@@ -648,7 +631,7 @@ impl WebRtcSession {
 
     /// Creates SDP offer for WHIP signaling.
     pub fn create_offer(&self) -> Result<String> {
-        self._runtime.block_on(async {
+        self.tokio_handle.block_on(async {
             tracing::debug!("[WebRTC] Creating SDP offer...");
 
             let offer = self
@@ -693,7 +676,7 @@ impl WebRtcSession {
 
     /// Sets remote SDP answer from WHIP/WHEP server.
     pub fn set_remote_answer(&mut self, sdp: &str) -> Result<()> {
-        self._runtime.block_on(async {
+        self.tokio_handle.block_on(async {
             let mode_str = match self.mode {
                 WebRtcSessionMode::SendOnly => "WHIP",
                 WebRtcSessionMode::ReceiveOnly => "WHEP",
@@ -962,7 +945,7 @@ impl WebRtcSession {
                     payload: sample.data.clone(),
                 };
 
-                self._runtime.block_on(async {
+                self.tokio_handle.block_on(async {
                     track.write_rtp(&rtp_packet).await.map_err(|e| {
                         StreamError::Runtime(format!("Failed to write video RTP: {}", e))
                     })
@@ -1028,7 +1011,7 @@ impl WebRtcSession {
                         payload: fu_payload.into(),
                     };
 
-                    self._runtime.block_on(async {
+                    self.tokio_handle.block_on(async {
                         track.write_rtp(&rtp_packet).await.map_err(|e| {
                             StreamError::Runtime(format!("Failed to write video RTP: {}", e))
                         })
@@ -1111,7 +1094,7 @@ impl WebRtcSession {
             payload: sample.data,
         };
 
-        let result = self._runtime.block_on(async {
+        let result = self.tokio_handle.block_on(async {
             track
                 .write_rtp(&rtp_packet)
                 .await
@@ -1135,13 +1118,13 @@ impl WebRtcSession {
 
     /// Gets RTCP statistics from the peer connection.
     pub fn get_stats(&self) -> Result<webrtc::stats::StatsReport> {
-        self._runtime
+        self.tokio_handle
             .block_on(async { Ok(self.peer_connection.get_stats().await) })
     }
 
     /// Closes the WebRTC session.
     pub fn close(&self) -> Result<()> {
-        self._runtime.block_on(async {
+        self.tokio_handle.block_on(async {
             self.peer_connection.close().await.map_err(|e| {
                 StreamError::Runtime(format!("Failed to close peer connection: {}", e))
             })

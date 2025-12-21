@@ -268,13 +268,19 @@ impl WebRtcWhipProcessor::Processor {
                 })?;
         }
 
+        // Get tokio handle from context
+        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
+
         // Create WHIP client
-        let whip_client = Arc::new(Mutex::new(WhipClient::new(self.config.whip.clone())?));
+        let whip_client = Arc::new(Mutex::new(WhipClient::new(
+            self.config.whip.clone(),
+            tokio_handle.clone(),
+        )?));
         self.whip_client = Some(whip_client.clone());
 
         // Create WebRTC session with ICE callback
         let whip_clone = whip_client.clone();
-        let mut webrtc_session = WebRtcSession::new(move |candidate_sdp| {
+        let mut webrtc_session = WebRtcSession::new(tokio_handle, move |candidate_sdp| {
             if let Ok(whip) = whip_clone.lock() {
                 whip.queue_ice_candidate(candidate_sdp);
             }

@@ -12,17 +12,23 @@ pub struct RuntimeContext {
     pub gpu: GpuContext,
     /// Pause gate for this processor (None for shared/global context).
     pause_gate: Option<Arc<AtomicBool>>,
-    /// Runtime operations interface. Typically an Arc<RuntimeProxy> that sends
-    /// commands through a channel to the StreamRuntime command processor thread.
+    /// Runtime operations interface for graph mutations.
     runtime_ops: Arc<dyn RuntimeOperations>,
+    /// Shared tokio runtime handle for async operations.
+    tokio_handle: tokio::runtime::Handle,
 }
 
 impl RuntimeContext {
-    pub fn new(gpu: GpuContext, runtime_ops: Arc<dyn RuntimeOperations>) -> Self {
+    pub fn new(
+        gpu: GpuContext,
+        runtime_ops: Arc<dyn RuntimeOperations>,
+        tokio_handle: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             gpu,
             pause_gate: None,
             runtime_ops,
+            tokio_handle,
         }
     }
 
@@ -34,12 +40,21 @@ impl RuntimeContext {
         Arc::clone(&self.runtime_ops)
     }
 
+    /// Get the shared tokio runtime handle.
+    ///
+    /// Use this to spawn async tasks without creating your own runtime.
+    /// The handle is shared across all processors.
+    pub fn tokio_handle(&self) -> &tokio::runtime::Handle {
+        &self.tokio_handle
+    }
+
     /// Create a processor-specific context with a pause gate.
     pub fn with_pause_gate(&self, pause_gate: Arc<AtomicBool>) -> Self {
         Self {
             gpu: self.gpu.clone(),
             pause_gate: Some(pause_gate),
             runtime_ops: Arc::clone(&self.runtime_ops),
+            tokio_handle: self.tokio_handle.clone(),
         }
     }
 

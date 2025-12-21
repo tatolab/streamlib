@@ -56,12 +56,12 @@ pub struct WhipClient {
     /// Pending ICE candidates (buffered for batch sending)
     pending_candidates: Arc<Mutex<Vec<String>>>,
 
-    /// Tokio runtime for HTTP operations (required for tokio::time::timeout)
-    _runtime: tokio::runtime::Runtime,
+    /// Shared tokio runtime handle for async HTTP operations.
+    tokio_handle: tokio::runtime::Handle,
 }
 
 impl WhipClient {
-    pub fn new(config: WhipConfig) -> Result<Self> {
+    pub fn new(config: WhipConfig, tokio_handle: tokio::runtime::Handle) -> Result<Self> {
         tracing::info!(
             "[WhipClient] Creating WHIP client for endpoint: {}",
             config.endpoint_url
@@ -89,26 +89,13 @@ impl WhipClient {
                 .build(https);
         tracing::info!("[WhipClient] HTTP client created successfully");
 
-        // Create Tokio runtime for HTTP operations (tokio::time::timeout needs it)
-        tracing::debug!("[WhipClient] Creating Tokio runtime for HTTP operations...");
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                StreamError::Runtime(format!(
-                    "Failed to create Tokio runtime for WHIP client: {}",
-                    e
-                ))
-            })?;
-        tracing::debug!("[WhipClient] Tokio runtime created successfully");
-
         Ok(Self {
             config,
             http_client,
             session_url: None,
             session_etag: None,
             pending_candidates: Arc::new(Mutex::new(Vec::new())),
-            _runtime: runtime,
+            tokio_handle,
         })
     }
 
@@ -126,7 +113,7 @@ impl WhipClient {
         let http_client = &self.http_client;
 
         // MUST use Tokio runtime (tokio::time::timeout requires it)
-        let result = self._runtime.block_on(async {
+        let result = self.tokio_handle.block_on(async {
             // Build POST request per RFC 9725 Section 4.1
             use http_body_util::BodyExt;
             let body = Full::new(bytes::Bytes::from(sdp_offer.to_owned()));
@@ -307,7 +294,7 @@ impl WhipClient {
         let sdp_fragment = candidates.join("\r\n");
 
         // MUST use Tokio runtime for HTTP operations
-        self._runtime.block_on(async {
+        self.tokio_handle.block_on(async {
             let body = Full::new(bytes::Bytes::from(sdp_fragment));
             let boxed_body = body.map_err(|never| match never {}).boxed();
 
@@ -391,7 +378,7 @@ impl WhipClient {
         };
 
         // MUST use Tokio runtime for HTTP operations
-        self._runtime.block_on(async {
+        self.tokio_handle.block_on(async {
             use http_body_util::BodyExt;
             let body = Empty::<bytes::Bytes>::new();
             let boxed_body = body.map_err(|never| match never {}).boxed();

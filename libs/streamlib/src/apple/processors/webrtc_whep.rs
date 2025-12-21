@@ -212,8 +212,11 @@ impl WebRtcWhepProcessor::Processor {
             self.config.whep.endpoint_url
         );
 
+        // Get tokio handle from context
+        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
+
         // 1. Create WHEP client
-        let mut whep_client = WhepClient::new(self.config.whep.clone())?;
+        let mut whep_client = WhepClient::new(self.config.whep.clone(), tokio_handle.clone())?;
 
         // 2. Set up callbacks for WebRTC session
         let pending_ice = Arc::clone(&self.pending_ice_candidates);
@@ -324,7 +327,8 @@ impl WebRtcWhepProcessor::Processor {
         };
 
         // 3. Create WebRTC session in receive mode
-        let mut webrtc_session = WebRtcSession::new_receive(on_ice_candidate, on_sample)?;
+        let mut webrtc_session =
+            WebRtcSession::new_receive(tokio_handle, on_ice_candidate, on_sample)?;
 
         // 4. Create SDP offer
         let sdp_offer = webrtc_session.create_offer()?;

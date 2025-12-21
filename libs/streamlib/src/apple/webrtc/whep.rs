@@ -60,12 +60,12 @@ pub struct WhepClient {
     /// Pending ICE candidates (buffered for batch sending)
     pending_candidates: Arc<Mutex<Vec<String>>>,
 
-    /// Tokio runtime for HTTP operations
-    _runtime: tokio::runtime::Runtime,
+    /// Shared tokio runtime handle for async HTTP operations.
+    tokio_handle: tokio::runtime::Handle,
 }
 
 impl WhepClient {
-    pub fn new(config: WhepConfig) -> Result<Self> {
+    pub fn new(config: WhepConfig, tokio_handle: tokio::runtime::Handle) -> Result<Self> {
         // Install rustls crypto provider (ring) globally - only done once per process
         static CRYPTO_PROVIDER_INIT: std::sync::Once = std::sync::Once::new();
         CRYPTO_PROVIDER_INIT.call_once(|| {
@@ -100,26 +100,13 @@ impl WhepClient {
                 .build(https);
         tracing::info!("[WhepClient] HTTP client created successfully");
 
-        // Create Tokio runtime for HTTP operations
-        tracing::debug!("[WhepClient] Creating Tokio runtime for HTTP operations...");
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                StreamError::Runtime(format!(
-                    "Failed to create Tokio runtime for WHEP client: {}",
-                    e
-                ))
-            })?;
-        tracing::debug!("[WhepClient] Tokio runtime created successfully");
-
         Ok(Self {
             config,
             http_client,
             session_url: None,
             session_etag: None,
             pending_candidates: Arc::new(Mutex::new(Vec::new())),
-            _runtime: runtime,
+            tokio_handle,
         })
     }
 
@@ -134,7 +121,7 @@ impl WhepClient {
         let http_client = &self.http_client;
 
         // Execute HTTP request in Tokio runtime
-        let result = self._runtime.block_on(async {
+        let result = self.tokio_handle.block_on(async {
             use http_body_util::BodyExt;
             let body = Full::new(bytes::Bytes::from(sdp_offer.to_owned()));
             let boxed_body = body.map_err(|never| match never {}).boxed();
@@ -310,7 +297,7 @@ impl WhepClient {
             sdp_fragment.len()
         );
 
-        self._runtime.block_on(async {
+        self.tokio_handle.block_on(async {
             let body = Full::new(bytes::Bytes::from(sdp_fragment));
             let boxed_body = body.map_err(|never| match never {}).boxed();
 
@@ -388,7 +375,7 @@ impl WhepClient {
             }
         };
 
-        self._runtime.block_on(async {
+        self.tokio_handle.block_on(async {
             use http_body_util::BodyExt;
             let body = Empty::<bytes::Bytes>::new();
             let boxed_body = body.map_err(|never| match never {}).boxed();
