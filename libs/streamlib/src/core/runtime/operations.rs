@@ -37,15 +37,18 @@ pub trait RuntimeOperations: Send + Sync {
     // =========================================================================
 
     /// Add a processor to the graph asynchronously. Returns the processor ID.
-    #[must_use]
+    ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
     fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>>;
 
     /// Remove a processor from the graph asynchronously.
-    #[must_use]
+    ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>>;
 
     /// Connect two ports asynchronously. Returns the link ID.
-    #[must_use]
+    ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
     fn connect_async(
         &self,
         from: OutputLinkPortRef,
@@ -53,7 +56,8 @@ pub trait RuntimeOperations: Send + Sync {
     ) -> BoxFuture<'_, Result<LinkUniqueId>>;
 
     /// Disconnect a link asynchronously.
-    #[must_use]
+    ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>>;
 
     // =========================================================================
@@ -62,11 +66,15 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Add a processor to the graph. Returns the processor ID.
     ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
+    ///
     /// This is a blocking wrapper around [`add_processor_async`]. Do not call
     /// from within a tokio task - use the async variant instead.
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>;
 
     /// Remove a processor from the graph.
+    ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
     ///
     /// This is a blocking wrapper around [`remove_processor_async`]. Do not call
     /// from within a tokio task - use the async variant instead.
@@ -74,11 +82,15 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Connect two ports. Returns the link ID.
     ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
+    ///
     /// This is a blocking wrapper around [`connect_async`]. Do not call
     /// from within a tokio task - use the async variant instead.
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId>;
 
     /// Disconnect a link.
+    ///
+    /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
     ///
     /// This is a blocking wrapper around [`disconnect_async`]. Do not call
     /// from within a tokio task - use the async variant instead.
