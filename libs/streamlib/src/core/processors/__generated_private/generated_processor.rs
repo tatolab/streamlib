@@ -4,6 +4,7 @@
 //! Internal generated processor trait - DO NOT USE DIRECTLY.
 
 use serde_json::Value as JsonValue;
+use std::future::Future;
 
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
@@ -125,12 +126,20 @@ pub trait GeneratedProcessor: Send + 'static {
     }
 
     /// Generated setup hook called by runtime.
-    fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
+    ///
+    /// Returns a future that completes when setup is done.
+    /// Takes ownership of the RuntimeContext to avoid lifetime issues with async.
+    fn __generated_setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 
     /// Generated teardown hook called by runtime.
-    fn __generated_teardown(&mut self) -> Result<()> {
-        Ok(())
+    ///
+    /// Returns a future that completes when teardown is done.
+    fn __generated_teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 }

@@ -5,268 +5,96 @@ use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::Serialize;
 
+use super::graph_change_listener::GraphChangeListener;
+use super::RuntimeOperations;
 use super::RuntimeStatus;
-use crate::core::compiler::{shutdown_all_processors, Compiler, PendingOperation};
+use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, GraphState,
-    LinkOutputToProcessorWriterAndReader, LinkUniqueId, PendingDeletionComponent,
+    GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader, LinkUniqueId,
     ProcessorPauseGateComponent, ProcessorUniqueId,
 };
 use crate::core::links::LinkOutputToProcessorMessage;
-use crate::core::processors::{ProcessorSpec, ProcessorState};
+use crate::core::processors::ProcessorSpec;
+use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 
 /// The main stream processing runtime.
+///
+/// # Thread Safety
+///
+/// `StreamRuntime` is designed for concurrent access from multiple threads.
+/// All public methods take `&self` (not `&mut self`), allowing the runtime
+/// to be shared via `Arc<StreamRuntime>` without external synchronization.
+///
+/// Internal state uses fine-grained locking:
+/// - Graph operations: `RwLock` (multiple readers OR one writer)
+/// - Pending operations: `Mutex` (batched for compilation)
+/// - Status: `Mutex` (lifecycle state)
+/// - Runtime context: `Mutex<Option<...>>` (created on start, cleared on stop)
+///
+/// This means multiple threads can concurrently call `add_processor()`,
+/// `connect()`, etc. without blocking each other on an outer lock.
 pub struct StreamRuntime {
+    /// Shared tokio runtime for async operations.
+    pub(crate) tokio_runtime: tokio::runtime::Runtime,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
-    pub(crate) compiler: Compiler,
-    /// Runtime context (GPU, audio config).
-    pub(crate) runtime_context: Option<Arc<RuntimeContext>>,
-    /// Runtime lifecycle status.
-    pub(crate) status: RuntimeStatus,
+    pub(crate) compiler: Arc<Compiler>,
+    /// Runtime context (GPU, audio config). Created on start(), cleared on stop().
+    /// Using Mutex<Option<...>> allows restart cycles with fresh context each time.
+    pub(crate) runtime_context: Arc<Mutex<Option<Arc<RuntimeContext>>>>,
+    /// Runtime lifecycle status. Protected by Mutex for interior mutability.
+    pub(crate) status: Arc<Mutex<RuntimeStatus>>,
+    /// Listener for graph changes that triggers compilation.
+    /// Stored to keep subscription alive for runtime lifetime.
+    _graph_change_listener: Arc<Mutex<dyn EventListener>>,
 }
 
 impl StreamRuntime {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Arc<Self>> {
+        // Create tokio runtime with default thread count (one per CPU core)
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| StreamError::Runtime(format!("Failed to create tokio runtime: {}", e)))?;
+
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
         let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors()?;
         tracing::debug!("Registered {} processors from inventory", result.count);
 
-        Ok(Self {
-            compiler: Compiler::new(),
-            runtime_context: None,
-            status: RuntimeStatus::Initial,
-        })
-    }
+        // Create Arc-wrapped components
+        let compiler = Arc::new(Compiler::new());
+        let runtime_context = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(RuntimeStatus::Initial));
 
-    // =========================================================================
-    // Commit Control
-    // =========================================================================
-
-    /// Apply all pending graph changes.
-    ///
-    /// When the runtime is not started, pending operations are kept in the queue
-    /// and will be executed when `start()` is called. When started, operations
-    /// are compiled and executed with proper processor lifecycle.
-    ///
-    /// All pending operations are batched into a single compilation pass.
-    /// This ensures processors are wired BEFORE their threads start,
-    /// avoiding deadlocks when wiring tries to lock a running processor.
-    pub fn commit(&mut self) -> Result<()> {
-        // Only compile when runtime is started
-        if self.status != RuntimeStatus::Started {
-            tracing::info!("[commit] Runtime not started, operations queued, operations will be performed after starting runtime. If this is unexpected please call runtime.start(). On start a commit will automatically be submitted for you.");
-            return Ok(());
-        } else {
-            tracing::info!("[commit] Runtime started, commit operations to compiler");
-        }
-
-        // Runtime is started - delegate to compiler
-        let runtime_ctx = self
-            .runtime_context
-            .as_ref()
-            .ok_or_else(|| {
-                crate::core::error::StreamError::Runtime(
-                    "Runtime context not initialized".to_string(),
-                )
-            })?
-            .clone();
-
-        self.compiler.commit(&runtime_ctx)
-    }
-
-    // =========================================================================
-    // Graph Mutations
-    // =========================================================================
-
-    /// Add a processor to the graph with its spec. Returns the processor ID.
-    pub fn add_processor(&mut self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-        // Declare side effects upfront
-        let emit_will_add = |id: &ProcessorUniqueId| {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillAddProcessor {
-                    processor_id: id.clone(),
-                }),
-            );
-        };
-
-        let emit_did_add = |id: &ProcessorUniqueId| {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidAddProcessor {
-                    processor_id: id.clone(),
-                }),
-            );
-        };
-
-        // Use compiler.scope() to access graph and transaction
-        let processor_id = self.compiler.scope(|graph, tx| {
-            graph
-                .traversal_mut()
-                .add_v(spec)
-                .inspect(|node| emit_will_add(&node.id))
-                .inspect(|node| tx.log(PendingOperation::AddProcessor(node.id.clone())))
-                .inspect(|node| emit_did_add(&node.id))
-                .first()
-                .map(|node| node.id.clone())
-                .ok_or_else(|| StreamError::GraphError("Could not create node".into()))
-        })?;
-
-        // Commit changes
-        self.commit()?;
-
-        Ok(processor_id)
-    }
-
-    /// Connect two ports - adds a link to the graph. Returns the link ID.
-    pub fn connect(
-        &mut self,
-        from: OutputLinkPortRef,
-        to: InputLinkPortRef,
-    ) -> Result<LinkUniqueId> {
-        // Capture for events before moving into add_e
-        let from_processor = from.processor_id.clone();
-        let from_port = from.port_name.clone();
-        let to_processor = to.processor_id.clone();
-        let to_port = to.port_name.clone();
-
-        // Emit WillConnect before the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-                from_processor,
-                from_port: from_port.clone(),
-                to_processor,
-                to_port: to_port.clone(),
-            }),
+        // Create listener with cloned Arc references
+        let listener = GraphChangeListener::new(
+            Arc::clone(&status),
+            Arc::clone(&runtime_context),
+            Arc::clone(&compiler),
         );
+        let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
 
-        // Use compiler.scope() to access graph and transaction
-        let link_id = self.compiler.scope(|graph, tx| {
-            let id = graph
-                .traversal_mut()
-                .add_e(from, to)
-                .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
-                .first()
-                .map(|link| link.id.clone())
-                .ok_or_else(|| StreamError::GraphError("failed to create link".into()))?;
+        // Subscribe to graph changes
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
-            Ok::<_, StreamError>(id)
-        })?;
-
-        // Emit DidConnect after the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidConnect {
-                link_id: link_id.to_string(),
-                from_port,
-                to_port,
-            }),
-        );
-
-        // Commit changes
-        self.commit()?;
-
-        Ok(link_id)
-    }
-
-    pub fn disconnect(&mut self, link_id: &LinkUniqueId) -> Result<()> {
-        // Validate link exists and get info for events, then mark for deletion
-        let link_info = self.compiler.scope(|graph, tx| {
-            let (from_value, to_value) = graph
-                .traversal()
-                .e(link_id)
-                .first()
-                .map(|l| (l.from_port(), l.to_port()))
-                .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", link_id)))?;
-
-            let info = (
-                OutputLinkPortRef::new(from_value.processor_id.clone(), to_value.port_name.clone()),
-                InputLinkPortRef::new(to_value.processor_id.clone(), to_value.port_name.clone()),
-            );
-
-            // Mark for soft-delete by adding PendingDeletion component to link
-            if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-                link.insert(PendingDeletionComponent);
-            }
-
-            // Queue operation for commit
-            tx.log(PendingOperation::RemoveLink(link_id.clone()));
-
-            Ok::<_, StreamError>(info)
-        })?;
-
-        // Emit WillDisconnect before the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillDisconnect {
-                link_id: link_id.to_string(),
-                from_port: link_info.0.to_string(),
-                to_port: link_info.1.to_string(),
-            }),
-        );
-
-        // Emit DidDisconnect after queueing (actual removal happens at commit)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidDisconnect {
-                link_id: link_id.to_string(),
-                from_port: link_info.0.to_string(),
-                to_port: link_info.1.to_string(),
-            }),
-        );
-
-        // Commit changes
-        self.commit()
-    }
-
-    pub fn remove_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
-        // Validate processor exists and mark for deletion
-        self.compiler.scope(|graph, tx| {
-            if !graph.traversal().v(processor_id).exists() {
-                return Err(StreamError::ProcessorNotFound(processor_id.to_string()));
-            }
-
-            // Mark for soft-delete by adding PendingDeletion component
-            if let Some(node) = graph.traversal_mut().v(processor_id).first_mut() {
-                node.insert(PendingDeletionComponent);
-            }
-
-            // Queue operation for commit
-            tx.log(PendingOperation::RemoveProcessor(processor_id.clone()));
-
-            Ok(())
-        })?;
-
-        // Emit WillRemoveProcessor before the action
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillRemoveProcessor {
-                processor_id: processor_id.clone(),
-            }),
-        );
-
-        // Emit DidRemoveProcessor after queueing (actual removal happens at commit)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRemoveProcessor {
-                processor_id: processor_id.clone(),
-            }),
-        );
-
-        // Commit changes
-        self.commit()
+        Ok(Arc::new(Self {
+            tokio_runtime,
+            compiler,
+            runtime_context,
+            status,
+            _graph_change_listener: listener,
+        }))
     }
 
     /// Update a processor's configuration at runtime.
     pub fn update_processor_config<C: Serialize>(
-        &mut self,
+        &self,
         processor_id: &ProcessorUniqueId,
         config: C,
     ) -> Result<()> {
@@ -292,8 +120,13 @@ impl StreamRuntime {
             }),
         );
 
-        // Commit changes
-        self.commit()
+        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+        );
+
+        Ok(())
     }
 
     // =========================================================================
@@ -301,67 +134,54 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Start the runtime.
-    pub fn start(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Starting;
+    ///
+    /// Takes `&Arc<Self>` to allow passing the runtime to processors via RuntimeContext.
+    /// Processors can then call runtime operations directly without indirection.
+    pub fn start(self: &Arc<Self>) -> Result<()> {
+        *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
         );
 
-        // Initialize GPU context FIRST, before any macOS app setup.
+        // Initialize GPU context FIRST, before any platform app setup.
         // wgpu's Metal backend uses async operations that need to complete
         // before NSApplication configuration changes thread behavior.
-        if self.runtime_context.is_none() {
-            tracing::info!("[start] Initializing GPU context...");
-            let gpu = GpuContext::init_for_platform_sync()?;
-            tracing::info!("[start] GPU context initialized");
-            self.runtime_context = Some(Arc::new(RuntimeContext::new(gpu)));
-        }
+        // Always create fresh context on start - enables tracking per session.
+        tracing::info!("[start] Initializing GPU context...");
+        let gpu = GpuContext::init_for_platform_sync()?;
+        tracing::info!("[start] GPU context initialized");
 
-        // macOS standalone app setup: detect if we're running as a standalone app
-        // (not embedded in another app with its own NSApplication event loop)
-        #[cfg(target_os = "macos")]
-        {
-            use objc2::MainThreadMarker;
-            use objc2_app_kit::NSApplication;
+        // Pass runtime directly to RuntimeContext. Processors call runtime operations
+        // directly - this is safe because processor lifecycle methods (setup, process)
+        // run on their own threads with no locks held.
+        let runtime_ops: Arc<dyn RuntimeOperations> =
+            Arc::clone(self) as Arc<dyn RuntimeOperations>;
+        let runtime_ctx = Arc::new(RuntimeContext::new(
+            gpu,
+            runtime_ops,
+            self.tokio_runtime.handle().clone(),
+        ));
+        *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
-            let is_standalone = if let Some(mtm) = MainThreadMarker::new() {
-                let app = NSApplication::sharedApplication(mtm);
-                !app.isRunning()
-            } else {
-                // Not on main thread - can't check NSApplication state
-                false
-            };
-
-            if is_standalone {
-                tracing::info!("[start] Setting up macOS application");
-                crate::apple::runtime_ext::setup_macos_app();
-                crate::apple::runtime_ext::install_macos_shutdown_handler();
-
-                // CRITICAL: Verify the macOS platform is fully ready BEFORE starting
-                // any processors. This uses Apple's NSRunningApplication.isFinishedLaunching
-                // API to confirm the app has completed its launch sequence.
-                //
-                // Without this verification, processors may try to use AVFoundation,
-                // Metal, or other Apple frameworks before NSApplication is ready,
-                // causing hangs or undefined behavior.
-                tracing::info!("[start] Verifying macOS platform readiness...");
-                crate::apple::runtime_ext::ensure_macos_platform_ready()?;
-            }
-        }
+        // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
+        // RuntimeContext handles all platform-specific details internally.
+        runtime_ctx.ensure_platform_ready()?;
 
         // Set graph state to Running
         self.compiler.scope(|graph, _tx| {
             graph.set_state(GraphState::Running);
         });
 
-        // Mark runtime as started so commit() will actually compile
-        self.status = RuntimeStatus::Started;
+        // Mark runtime as started so commit will actually compile
+        *self.status.lock() = RuntimeStatus::Started;
 
-        // Compile any pending changes (includes Phase 4: START)
-        // This is now safe because we've verified the platform is ready above.
-        self.commit()?;
+        // Compile any pending changes directly (includes Phase 4: START)
+        // This ensures all queued operations are processed before start() returns.
+        // After this, GraphChangeListener handles commits asynchronously.
+        tracing::info!("[start] Committing pending graph operations");
+        self.compiler.commit(&runtime_ctx)?;
 
         tracing::info!("[start] Runtime started (platform verified)");
         PUBSUB.publish(
@@ -373,23 +193,45 @@ impl StreamRuntime {
     }
 
     /// Stop the runtime.
-    pub fn stop(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Stopping;
+    pub fn stop(&self) -> Result<()> {
+        tracing::info!("[stop] Beginning graceful shutdown");
+        *self.status.lock() = RuntimeStatus::Stopping;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
         );
 
-        // Shutdown all processors
-        self.compiler
-            .scope(|graph, _tx| shutdown_all_processors(graph))?;
+        // Queue removal of all processors and commit
+        let runtime_ctx = self.runtime_context.lock().clone();
+        let processor_count = self.compiler.scope(|graph, tx| {
+            let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
+            let count = processor_ids.len();
+            for proc_id in processor_ids {
+                tx.log(PendingOperation::RemoveProcessor(proc_id));
+            }
+            graph.set_state(GraphState::Idle);
+            count
+        });
+        tracing::info!("[stop] Queued removal of {} processor(s)", processor_count);
 
-        self.status = RuntimeStatus::Stopped;
+        if let Some(ctx) = runtime_ctx {
+            tracing::debug!("[stop] Committing processor teardown");
+            self.compiler.commit(&ctx)?;
+            tracing::debug!("[stop] Processor teardown complete");
+        }
+
+        // Clear runtime context - allows fresh context on next start().
+        // This enables per-session tracking (e.g., AI agents analyzing runtime state).
+        *self.runtime_context.lock() = None;
+        tracing::debug!("[stop] Runtime context cleared");
+
+        *self.status.lock() = RuntimeStatus::Stopped;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
         );
 
+        tracing::info!("[stop] Graceful shutdown complete");
         Ok(())
     }
 
@@ -398,7 +240,7 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Pause a specific processor.
-    pub fn pause_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    pub fn pause_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         self.compiler.scope(|graph, _tx| {
             // Validate processor exists
             let node = graph
@@ -439,7 +281,7 @@ impl StreamRuntime {
     }
 
     /// Resume a specific processor.
-    pub fn resume_processor(&mut self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    pub fn resume_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         self.compiler.scope(|graph, _tx| {
             // Validate processor exists
             let node = graph
@@ -511,8 +353,8 @@ impl StreamRuntime {
     // =========================================================================
 
     /// Pause the runtime (all processors).
-    pub fn pause(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Pausing;
+    pub fn pause(&self) -> Result<()> {
+        *self.status.lock() = RuntimeStatus::Pausing;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
@@ -537,7 +379,7 @@ impl StreamRuntime {
             graph.set_state(GraphState::Paused);
         });
 
-        self.status = RuntimeStatus::Paused;
+        *self.status.lock() = RuntimeStatus::Paused;
         if failures.is_empty() {
             PUBSUB.publish(
                 topics::RUNTIME_GLOBAL,
@@ -556,8 +398,8 @@ impl StreamRuntime {
     }
 
     /// Resume the runtime (all processors).
-    pub fn resume(&mut self) -> Result<()> {
-        self.status = RuntimeStatus::Starting;
+    pub fn resume(&self) -> Result<()> {
+        *self.status.lock() = RuntimeStatus::Starting;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
@@ -582,7 +424,7 @@ impl StreamRuntime {
             graph.set_state(GraphState::Running);
         });
 
-        self.status = RuntimeStatus::Started;
+        *self.status.lock() = RuntimeStatus::Started;
         if failures.is_empty() {
             PUBSUB.publish(
                 topics::RUNTIME_GLOBAL,
@@ -601,15 +443,15 @@ impl StreamRuntime {
     }
 
     /// Block until shutdown signal (Ctrl+C, SIGTERM, Cmd+Q).
-    pub fn wait_for_signal(&mut self) -> Result<()> {
+    pub fn wait_for_signal(&self) -> Result<()> {
         self.wait_for_signal_with(|_| ControlFlow::Continue(()))
     }
 
     /// Block until shutdown signal, with periodic callback for dynamic control.
     #[allow(unused_variables, unused_mut)]
-    pub fn wait_for_signal_with<F>(&mut self, mut callback: F) -> Result<()>
+    pub fn wait_for_signal_with<F>(&self, mut callback: F) -> Result<()>
     where
-        F: FnMut(&mut Self) -> ControlFlow<()>,
+        F: FnMut(&Self) -> ControlFlow<()>,
     {
         // Install signal handlers
         crate::core::signals::install_signal_handlers().map_err(|e| {
@@ -674,7 +516,35 @@ impl StreamRuntime {
     }
 
     pub fn status(&self) -> RuntimeStatus {
-        self.status
+        *self.status.lock()
+    }
+
+    // =========================================================================
+    // RuntimeOperations delegation (inherent methods for ergonomic API)
+    // =========================================================================
+
+    /// Add a processor to the graph.
+    pub fn add_processor(&self, spec: impl Into<ProcessorSpec>) -> Result<ProcessorUniqueId> {
+        <Self as RuntimeOperations>::add_processor(self, spec.into())
+    }
+
+    /// Remove a processor from the graph.
+    pub fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+        <Self as RuntimeOperations>::remove_processor(self, processor_id)
+    }
+
+    /// Connect two ports.
+    pub fn connect(
+        &self,
+        from: impl Into<OutputLinkPortRef>,
+        to: impl Into<InputLinkPortRef>,
+    ) -> Result<LinkUniqueId> {
+        <Self as RuntimeOperations>::connect(self, from.into(), to.into())
+    }
+
+    /// Disconnect a link.
+    pub fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
+        <Self as RuntimeOperations>::disconnect(self, link_id)
     }
 
     // =========================================================================

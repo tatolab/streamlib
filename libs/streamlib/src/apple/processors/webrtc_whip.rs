@@ -152,40 +152,62 @@ pub struct WebRtcWhipProcessor {
 }
 
 impl crate::core::Processor for WebRtcWhipProcessor::Processor {
-    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        self.gpu_context = Some(ctx.gpu.clone());
-        self.ctx = Some(ctx.clone());
+    fn setup(
+        &mut self,
+        ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        let result = (|| {
+            self.gpu_context = Some(ctx.gpu.clone());
+            self.ctx = Some(ctx.clone());
 
-        // Initialize audio encoder (doesn't require main thread)
-        self.audio_encoder = Some(OpusEncoder::new(self.config.audio.clone())?);
+            // Initialize audio encoder (doesn't require main thread)
+            self.audio_encoder = Some(OpusEncoder::new(self.config.audio.clone())?);
 
-        tracing::info!(
-            "WebRtcWhipProcessor initialized (will create video encoder on first frames)"
-        );
-        Ok(())
+            tracing::info!(
+                "WebRtcWhipProcessor initialized (will create video encoder on first frames)"
+            );
+            Ok(())
+        })();
+        std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> Result<()> {
-        tracing::info!("WebRtcWhipProcessor shutting down");
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        // Capture what we need for the async block
+        let webrtc_session = self.webrtc_session.take();
+        let whip_client = self.whip_client.take();
 
-        // Close WebRTC session
-        if let Some(webrtc_session) = &self.webrtc_session {
-            if let Err(e) = webrtc_session.close() {
-                tracing::warn!("Error closing WebRTC session: {}", e);
-            }
-        }
+        async move {
+            tracing::info!("WebRtcWhipProcessor shutting down");
 
-        // Terminate WHIP session (DELETE request)
-        if let Some(whip_client) = &self.whip_client {
-            if let Ok(client) = whip_client.lock() {
-                if let Err(e) = client.terminate() {
-                    tracing::warn!("Error terminating WHIP session: {}", e);
+            // Close WebRTC session
+            if let Some(session) = webrtc_session {
+                if let Err(e) = session.close().await {
+                    tracing::warn!("Error closing WebRTC session: {}", e);
                 }
             }
-        }
 
-        tracing::info!("WebRtcWhipProcessor shutdown complete");
-        Ok(())
+            // Terminate WHIP session (DELETE request)
+            // Try to unwrap the Arc to get the inner client (avoids holding MutexGuard across await)
+            if let Some(client_arc) = whip_client {
+                match Arc::try_unwrap(client_arc) {
+                    Ok(mutex) => {
+                        let client = mutex.into_inner().unwrap();
+                        if let Err(e) = client.terminate().await {
+                            tracing::warn!("Error terminating WHIP session: {}", e);
+                        }
+                    }
+                    Err(_arc) => {
+                        // Arc has other references, skip termination (will timeout server-side)
+                        tracing::warn!(
+                            "Could not terminate WHIP session: client still has references"
+                        );
+                    }
+                }
+            }
+
+            tracing::info!("WebRtcWhipProcessor shutdown complete");
+            Ok(())
+        }
     }
 
     fn process(&mut self) -> Result<()> {
@@ -268,20 +290,24 @@ impl WebRtcWhipProcessor::Processor {
                 })?;
         }
 
+        // Get tokio handle from context
+        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
+
         // Create WHIP client
         let whip_client = Arc::new(Mutex::new(WhipClient::new(self.config.whip.clone())?));
         self.whip_client = Some(whip_client.clone());
 
         // Create WebRTC session with ICE callback
         let whip_clone = whip_client.clone();
-        let mut webrtc_session = WebRtcSession::new(move |candidate_sdp| {
-            if let Ok(whip) = whip_clone.lock() {
-                whip.queue_ice_candidate(candidate_sdp);
-            }
-        })?;
+        let mut webrtc_session =
+            tokio_handle.block_on(WebRtcSession::new(move |candidate_sdp| {
+                if let Ok(whip) = whip_clone.lock() {
+                    whip.queue_ice_candidate(candidate_sdp);
+                }
+            }))?;
 
         // Create SDP offer and add bandwidth attributes
-        let offer = webrtc_session.create_offer()?;
+        let offer = tokio_handle.block_on(webrtc_session.create_offer())?;
         let offer_with_bandwidth = WebRtcSession::add_bandwidth_to_sdp(
             &offer,
             self.config.video.bitrate_bps,
@@ -295,10 +321,12 @@ impl WebRtcWhipProcessor::Processor {
         tracing::info!("[WebRTC] ================================");
 
         // POST offer to WHIP endpoint
-        let answer = whip_client
-            .lock()
-            .unwrap()
-            .post_offer(&offer_with_bandwidth)?;
+        let answer = tokio_handle.block_on(
+            whip_client
+                .lock()
+                .unwrap()
+                .post_offer(&offer_with_bandwidth),
+        )?;
         tracing::info!("[WebRTC] ========== SDP ANSWER ==========");
         for (i, line) in answer.lines().enumerate() {
             tracing::info!("[WebRTC] SDP ANSWER [{}]: {}", i, line);
@@ -306,10 +334,10 @@ impl WebRtcWhipProcessor::Processor {
         tracing::info!("[WebRTC] =================================");
 
         // Set remote answer
-        webrtc_session.set_remote_answer(&answer)?;
+        tokio_handle.block_on(webrtc_session.set_remote_answer(&answer))?;
 
         // Send any buffered ICE candidates (optional - trickle ICE may not be supported)
-        match whip_client.lock().unwrap().send_ice_candidates() {
+        match tokio_handle.block_on(whip_client.lock().unwrap().send_ice_candidates()) {
             Ok(_) => {
                 tracing::info!("[WebRTC] ICE candidates sent successfully (trickle ICE supported)");
             }
@@ -336,10 +364,11 @@ impl WebRtcWhipProcessor::Processor {
             .ok_or_else(|| StreamError::Configuration("Video encoder not initialized".into()))?;
         let encoded = encoder.encode(frame)?;
         let samples = convert_video_to_samples(&encoded, self.config.video.fps)?;
+        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle();
         self.webrtc_session
             .as_mut()
             .unwrap()
-            .write_video_samples(samples)?;
+            .write_video_samples(samples, tokio_handle)?;
 
         Ok(())
     }
@@ -355,10 +384,11 @@ impl WebRtcWhipProcessor::Processor {
             .ok_or_else(|| StreamError::Configuration("Audio encoder not initialized".into()))?;
         let encoded = encoder.encode(frame)?;
         let sample = convert_audio_to_sample(&encoded, self.config.audio.sample_rate)?;
+        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle();
         self.webrtc_session
             .as_mut()
             .unwrap()
-            .write_audio_sample(sample)?;
+            .write_audio_sample(sample, tokio_handle)?;
 
         Ok(())
     }
@@ -372,7 +402,8 @@ impl WebRtcWhipProcessor::Processor {
             .ok_or_else(|| StreamError::Runtime("WebRTC session not initialized".into()))?;
 
         // Get stats from peer connection (async operation, run in Tokio runtime)
-        let stats = webrtc_session.get_stats()?;
+        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle();
+        let stats = tokio_handle.block_on(webrtc_session.get_stats());
 
         let mut video_bytes_sent = 0u64;
         let mut audio_bytes_sent = 0u64;
@@ -470,9 +501,11 @@ impl WebRtcWhipProcessor::Processor {
 
 impl Drop for WebRtcWhipProcessor::Processor {
     fn drop(&mut self) {
-        if let Some(whip_client) = &self.whip_client {
+        // Terminate WHIP session if we have both the client and tokio handle
+        if let (Some(whip_client), Some(ctx)) = (&self.whip_client, &self.ctx) {
             if let Ok(client) = whip_client.lock() {
-                let _ = client.terminate();
+                let tokio_handle = ctx.tokio_handle();
+                let _ = tokio_handle.block_on(client.terminate());
             }
         }
     }

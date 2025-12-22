@@ -47,20 +47,23 @@ pub struct AudioChannelConverterProcessor {
 }
 
 impl crate::core::Processor for AudioChannelConverterProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "[AudioChannelConverter] setup() - mode: {:?}",
             self.config.mode
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "[AudioChannelConverter] Stopped (processed {} frames)",
             self.frame_counter
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

@@ -38,17 +38,20 @@ pub struct BufferRechunkerProcessor {
 }
 
 impl crate::core::Processor for BufferRechunkerProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "[BufferRechunker] Initialized with target buffer size: {} samples per channel",
             self.config.target_buffer_size
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("[BufferRechunker] Stopped");
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

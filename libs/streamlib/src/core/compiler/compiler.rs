@@ -12,7 +12,10 @@ use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::PendingOperation;
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
-use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
+use crate::core::graph::{
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, ProcessorReadyBarrierHandle,
+    ProcessorUniqueId,
+};
 use crate::core::links::DefaultLinkFactory;
 use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
@@ -70,16 +73,16 @@ impl Compiler {
             operations.len()
         );
 
-        // Clone Arcs for the closure (required for 'static lifetime)
-        let graph = Arc::clone(&self.graph);
-        let link_factory = Arc::clone(&self.link_factory);
-        let runtime_ctx_clone = Arc::clone(runtime_ctx);
-
-        // Dispatch compile to main thread (required for thread spawning, Apple frameworks)
-        runtime_ctx.run_on_main_blocking(move || {
-            tracing::debug!("[commit] Running compile on main thread");
-            Self::compile(graph, link_factory, operations, &runtime_ctx_clone)
-        })
+        // Compile directly - processors handle their own runtime thread needs
+        // via RuntimeContext::run_on_runtime_thread_blocking() in their setup() if required.
+        // This avoids forcing all compilation to runtime thread when most processors
+        // don't need it (only Apple framework processors like Camera, Display).
+        Self::compile(
+            Arc::clone(&self.graph),
+            Arc::clone(&self.link_factory),
+            operations,
+            runtime_ctx,
+        )
     }
 
     // =========================================================================
@@ -96,7 +99,9 @@ impl Compiler {
     ) -> Result<()> {
         use crate::core::graph::{
             LinkInstanceComponent, PendingDeletionComponent, ProcessorInstanceComponent,
+            ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
         };
+        use crate::core::processors::ProcessorState;
 
         let mut result = CompileResult::default();
 
@@ -256,10 +261,55 @@ impl Compiler {
 
                 tracing::info!("[REMOVE] {}", proc_id);
 
+                // Phase 1: Signal shutdown, extract thread handle (with lock)
+                // Lock is released before join() to avoid deadlock - processors may be
+                // waiting on runtime operations that need this lock to complete.
+                let thread_handle = {
+                    let mut graph = graph_arc.write();
+                    if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
+                        // Set state to stopping
+                        if let Some(state) = node.get::<StateComponent>() {
+                            *state.0.lock() = ProcessorState::Stopping;
+                        }
+                        // Send shutdown signal
+                        if let Some(channel) = node.get::<ShutdownChannelComponent>() {
+                            let _ = channel.sender.send(());
+                        }
+                        // Extract thread handle
+                        node.remove::<ThreadHandleComponent>()
+                    } else {
+                        None
+                    }
+                }; // Lock released here
+
+                // Phase 2: Wait for thread to exit (no lock held)
+                // Processor can now complete any pending runtime operations before exiting.
+                if let Some(handle) = thread_handle {
+                    match handle.0.join() {
+                        Ok(_) => {
+                            tracing::info!("[{}] Processor thread joined successfully", proc_id);
+                        }
+                        Err(panic_err) => {
+                            tracing::error!(
+                                "[{}] Processor thread panicked: {:?}",
+                                proc_id,
+                                panic_err
+                            );
+                        }
+                    }
+                }
+
+                // Phase 3: Cleanup (re-acquire lock)
                 {
                     let mut graph = graph_arc.write();
-                    if let Err(e) = super::compiler_ops::shutdown_processor(&mut graph, proc_id) {
-                        tracing::warn!("Failed to shutdown processor {}: {}", proc_id, e);
+                    if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
+                        if let Some(state) = node.get::<StateComponent>() {
+                            *state.0.lock() = ProcessorState::Stopped;
+                        }
+                    }
+                    // Remove from graph
+                    if graph.traversal_mut().v(proc_id).drop().exists() {
+                        return Err(StreamError::GraphError("value was not dropped".into()));
                     }
                 }
 
@@ -271,20 +321,16 @@ impl Compiler {
                 );
 
                 result.processors_removed += 1;
-
-                // Clean up graph after removal
-                let mut graph = graph_arc.write();
-                if graph.traversal_mut().v(proc_id).drop().exists() {
-                    return Err(StreamError::GraphError("value was not dropped".into()));
-                }
             }
         }
 
         // =====================================================================
-        // 3. Phase 1: CREATE - Instantiate processor instances
+        // 3. Phase 1: PREPARE - Attach infrastructure components
         // =====================================================================
+        let mut barrier_handles: Vec<(ProcessorUniqueId, ProcessorReadyBarrierHandle)> = vec![];
+
         if !plan.processors_to_add.is_empty() {
-            tracing::debug!("[{}] Starting", CompilePhase::Create);
+            tracing::debug!("[{}] Starting", CompilePhase::Prepare);
             for proc_id in &plan.processors_to_add {
                 let mut graph = graph_arc.write();
                 let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
@@ -301,9 +347,10 @@ impl Compiler {
                     }),
                 );
 
-                tracing::info!("[{}] Creating {}", CompilePhase::Create, proc_id);
+                tracing::info!("[{}] Preparing {}", CompilePhase::Prepare, proc_id);
 
-                super::compiler_ops::create_processor(&PROCESSOR_REGISTRY, &mut graph, proc_id)?;
+                let barrier_handle = super::compiler_ops::prepare_processor(&mut graph, proc_id)?;
+                barrier_handles.push((proc_id.clone(), barrier_handle));
 
                 PUBSUB.publish(
                     topics::RUNTIME_GLOBAL,
@@ -315,11 +362,38 @@ impl Compiler {
 
                 result.processors_created += 1;
             }
-            tracing::debug!("[{}] Completed", CompilePhase::Create);
+            tracing::debug!("[{}] Completed", CompilePhase::Prepare);
         }
 
         // =====================================================================
-        // 4. Phase 2: WIRE - Create ring buffers and connect ports
+        // 4. Phase 2: SPAWN - Spawn processor threads
+        // =====================================================================
+        if !plan.processors_to_add.is_empty() {
+            tracing::debug!("[{}] Starting", CompilePhase::Spawn);
+            for proc_id in &plan.processors_to_add {
+                tracing::info!("[{}] Spawning {}", CompilePhase::Spawn, proc_id);
+                super::compiler_ops::spawn_processor(
+                    Arc::clone(&graph_arc),
+                    &PROCESSOR_REGISTRY,
+                    runtime_ctx,
+                    proc_id,
+                )?;
+            }
+            tracing::debug!("[{}] Completed", CompilePhase::Spawn);
+        }
+
+        // =====================================================================
+        // 5. Wait for all processors to signal READY (instances attached)
+        // =====================================================================
+        for (proc_id, handle) in &barrier_handles {
+            tracing::trace!("[{}] Waiting for READY signal", proc_id);
+            if handle.ready_receiver.recv().is_err() {
+                tracing::warn!("[{}] Processor failed during instance creation", proc_id);
+            }
+        }
+
+        // =====================================================================
+        // 6. Phase 3: WIRE - Create ring buffers and connect ports
         // =====================================================================
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
@@ -360,33 +434,17 @@ impl Compiler {
         }
 
         // =====================================================================
-        // 5. Phase 3: SETUP - Initialize processors (GPU, devices)
+        // 7. Signal all processors to CONTINUE (wiring complete, run setup)
         // =====================================================================
-        if !plan.processors_to_add.is_empty() {
-            tracing::debug!("[{}] Starting", CompilePhase::Setup);
-            for proc_id in &plan.processors_to_add {
-                tracing::info!("[{}] Setting up {}", CompilePhase::Setup, proc_id);
-                let mut graph = graph_arc.write();
-                super::compiler_ops::setup_processor(&mut graph, runtime_ctx, proc_id)?;
+        for (proc_id, handle) in barrier_handles {
+            tracing::trace!("[{}] Signaling CONTINUE", proc_id);
+            if handle.continue_sender.send(()).is_err() {
+                tracing::warn!("[{}] Failed to signal CONTINUE", proc_id);
             }
-            tracing::debug!("[{}] Completed", CompilePhase::Setup);
         }
 
         // =====================================================================
-        // 6. Phase 4: START - Spawn processor threads
-        // =====================================================================
-        if !plan.processors_to_add.is_empty() {
-            tracing::debug!("[{}] Starting", CompilePhase::Start);
-            for proc_id in &plan.processors_to_add {
-                tracing::info!("[{}] Starting {}", CompilePhase::Start, proc_id);
-                let mut graph = graph_arc.write();
-                super::compiler_ops::start_processor(&mut graph, proc_id)?;
-            }
-            tracing::debug!("[{}] Completed", CompilePhase::Start);
-        }
-
-        // =====================================================================
-        // 7. Config updates - for each config_update
+        // 8. Config updates - for each config_update
         // =====================================================================
         for proc_id in plan.config_updates {
             let graph = graph_arc.read();

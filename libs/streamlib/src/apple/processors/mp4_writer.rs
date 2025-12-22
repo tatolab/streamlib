@@ -122,48 +122,54 @@ pub struct AppleMp4WriterProcessor {
 }
 
 impl crate::core::Processor for AppleMp4WriterProcessor::Processor {
-    fn setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        info!("Setting up MP4 writer processor");
+    fn setup(
+        &mut self,
+        ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        let result = (|| {
+            info!("Setting up MP4 writer processor");
 
-        // Store RuntimeContext for main thread dispatch
-        self.ctx = Some(ctx.clone());
+            // Store RuntimeContext for main thread dispatch
+            self.ctx = Some(ctx.clone());
 
-        self.sync_tolerance_ms = self
-            .config
-            .sync_tolerance_ms
-            .unwrap_or(DEFAULT_SYNC_TOLERANCE_MS);
-        self.gpu_context = Some(ctx.gpu.clone());
+            self.sync_tolerance_ms = self
+                .config
+                .sync_tolerance_ms
+                .unwrap_or(DEFAULT_SYNC_TOLERANCE_MS);
+            self.gpu_context = Some(ctx.gpu.clone());
 
-        // Initialize Metal device and wgpu bridge for texture conversion
-        let metal_device = MetalDevice::new()?;
+            // Initialize Metal device and wgpu bridge for texture conversion
+            let metal_device = MetalDevice::new()?;
 
-        // Create metal crate command queue from objc2 Metal device
-        let metal_command_queue = {
-            use metal::foreign_types::ForeignTypeRef;
-            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-            let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-            metal_device_ref.new_command_queue()
-        };
+            // Create metal crate command queue from objc2 Metal device
+            let metal_command_queue = {
+                use metal::foreign_types::ForeignTypeRef;
+                let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
+                let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
+                metal_device_ref.new_command_queue()
+            };
 
-        let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-            metal_device.clone_device(),
-            ctx.gpu.device().as_ref().clone(),
-            ctx.gpu.queue().as_ref().clone(),
-        ));
+            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
+                metal_device.clone_device(),
+                ctx.gpu.device().as_ref().clone(),
+                ctx.gpu.queue().as_ref().clone(),
+            ));
 
-        // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
-        let pixel_transfer = crate::apple::PixelTransferSession::new(wgpu_bridge.clone())?;
+            // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
+            let pixel_transfer = crate::apple::PixelTransferSession::new(wgpu_bridge.clone())?;
 
-        self.metal_device = Some(metal_device);
-        self.metal_command_queue = Some(metal_command_queue);
-        self.wgpu_bridge = Some(wgpu_bridge);
-        self.pixel_transfer = Some(pixel_transfer);
+            self.metal_device = Some(metal_device);
+            self.metal_command_queue = Some(metal_command_queue);
+            self.wgpu_bridge = Some(wgpu_bridge);
+            self.pixel_transfer = Some(pixel_transfer);
 
-        // AVAssetWriter initialization will happen in process() on first frame
-        // This is because setup() runs before main thread event loop starts,
-        // so run_on_main_blocking() would deadlock
-        info!("MP4 writer setup complete, will initialize AVAssetWriter in process()");
-        Ok(())
+            // AVAssetWriter initialization will happen in process() on first frame
+            // This is because setup() runs before main thread event loop starts,
+            // so run_on_runtime_thread_blocking() would deadlock
+            info!("MP4 writer setup complete, will initialize AVAssetWriter in process()");
+            Ok(())
+        })();
+        std::future::ready(result)
     }
 
     fn process(&mut self) -> Result<()> {
@@ -362,16 +368,19 @@ impl crate::core::Processor for AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn teardown(&mut self) -> Result<()> {
-        info!("Tearing down MP4 writer processor");
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        let result = (|| {
+            info!("Tearing down MP4 writer processor");
 
-        // No buffering, so nothing to flush - just finalize
-        self.finalize_writer()?;
+            // No buffering, so nothing to flush - just finalize
+            self.finalize_writer()?;
 
-        // Cleanup: AVFoundation objects will be dropped on main thread
-        // when self.asset_writer is dropped (happens automatically)
+            // Cleanup: AVFoundation objects will be dropped on main thread
+            // when self.asset_writer is dropped (happens automatically)
 
-        Ok(())
+            Ok(())
+        })();
+        std::future::ready(result)
     }
 }
 
@@ -400,7 +409,7 @@ impl AppleMp4WriterProcessor::Processor {
         // Dispatch to main thread (which has active run loop) to create AVAssetWriter
         // Returns raw pointer since Retained<AVAssetWriter> is not Send
         info!("Dispatching AVAssetWriter initialization to main thread...");
-        let writer_ptr = ctx.run_on_main_blocking(move || {
+        let writer_ptr = ctx.run_on_runtime_thread_blocking(move || {
             match Self::initialize_writer_on_main_thread(
                 &path_str,
                 &video_codec,
@@ -497,28 +506,29 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Dispatch to main thread to configure video input
         // Returns raw pointers since Retained types are not Send
-        let (video_input_ptr, pixel_buffer_adaptor_ptr) = ctx.run_on_main_blocking(move || {
-            // SAFETY: We just converted this from a Retained
-            let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
+        let (video_input_ptr, pixel_buffer_adaptor_ptr) =
+            ctx.run_on_runtime_thread_blocking(move || {
+                // SAFETY: We just converted this from a Retained
+                let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
 
-            match Self::configure_video_input_on_main_thread(
-                writer,
-                width,
-                height,
-                &video_codec,
-                video_bitrate,
-            ) {
-                Ok((writer, video_input, pixel_buffer_adaptor)) => {
-                    // Convert to raw pointers to send back across thread boundary
-                    let _ = Retained::into_raw(writer); // Already leaked, ignore
-                    Ok((
-                        Retained::into_raw(video_input) as usize,
-                        Retained::into_raw(pixel_buffer_adaptor) as usize,
-                    ))
+                match Self::configure_video_input_on_main_thread(
+                    writer,
+                    width,
+                    height,
+                    &video_codec,
+                    video_bitrate,
+                ) {
+                    Ok((writer, video_input, pixel_buffer_adaptor)) => {
+                        // Convert to raw pointers to send back across thread boundary
+                        let _ = Retained::into_raw(writer); // Already leaked, ignore
+                        Ok((
+                            Retained::into_raw(video_input) as usize,
+                            Retained::into_raw(pixel_buffer_adaptor) as usize,
+                        ))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
-            }
-        })?;
+            })?;
 
         // SAFETY: We just created these pointers on the main thread
         let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
@@ -648,7 +658,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Dispatch to main thread to configure audio input
         // Returns raw pointer since Retained types are not Send
-        let audio_input_ptr = ctx.run_on_main_blocking(move || {
+        let audio_input_ptr = ctx.run_on_runtime_thread_blocking(move || {
             // SAFETY: We just converted this from a Retained
             let writer = unsafe { Retained::retain(writer_ptr as *mut AVAssetWriter).unwrap() };
 

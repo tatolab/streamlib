@@ -40,6 +40,8 @@ __internal__/
 
 # Internal documentation (secret sauce)
 docs/internal/
+docs/research/ai_embodiment_vision.md
+docs/research/SESSION_RESTORE.md
 
 # Rust
 target/
@@ -54,4 +56,5 @@ node_modules/
 dist/
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*examples/camera-display/no_window_camera.log
+yarn-error.log*
+examples/camera-display/no_window_camera.log

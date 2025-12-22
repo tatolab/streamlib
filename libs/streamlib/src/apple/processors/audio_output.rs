@@ -82,7 +82,10 @@ pub struct AppleAudioOutputProcessor {
 }
 
 impl crate::core::Processor for AppleAudioOutputProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.device_id = self
             .config
             .device_id
@@ -91,13 +94,13 @@ impl crate::core::Processor for AppleAudioOutputProcessor::Processor {
         tracing::info!(
             "AudioOutput: start() called (Pull mode - will query device for native config)"
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         self.stream = None;
         tracing::info!("AudioOutput {}: Stopped", self.device_name);
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

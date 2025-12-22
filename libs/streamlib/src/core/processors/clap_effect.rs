@@ -129,59 +129,68 @@ impl ClapEffectProcessor::Processor {
 }
 
 impl crate::core::Processor for ClapEffectProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        self.sample_rate = self.config.sample_rate;
-        self.buffer_size = self.config.buffer_size;
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        let result = (|| {
+            self.sample_rate = self.config.sample_rate;
+            self.buffer_size = self.config.buffer_size;
 
-        let mut host = if let Some(name) = self.config.plugin_name.as_deref() {
-            ClapPluginHost::load_by_name(
-                &self.config.plugin_path,
-                name,
+            let mut host = if let Some(name) = self.config.plugin_name.as_deref() {
+                ClapPluginHost::load_by_name(
+                    &self.config.plugin_path,
+                    name,
+                    self.config.sample_rate,
+                    self.config.buffer_size,
+                )?
+            } else if let Some(index) = self.config.plugin_index {
+                ClapPluginHost::load_by_index(
+                    &self.config.plugin_path,
+                    index,
+                    self.config.sample_rate,
+                    self.config.buffer_size,
+                )?
+            } else {
+                ClapPluginHost::load(
+                    &self.config.plugin_path,
+                    self.config.sample_rate,
+                    self.config.buffer_size,
+                )?
+            };
+
+            host.activate(self.config.sample_rate, self.config.buffer_size)?;
+
+            tracing::info!(
+                "[ClapEffect] Loaded and activated plugin '{}' at {} Hz with {} buffer size",
+                host.plugin_info().name,
                 self.config.sample_rate,
-                self.config.buffer_size,
-            )?
-        } else if let Some(index) = self.config.plugin_index {
-            ClapPluginHost::load_by_index(
-                &self.config.plugin_path,
-                index,
-                self.config.sample_rate,
-                self.config.buffer_size,
-            )?
-        } else {
-            ClapPluginHost::load(
-                &self.config.plugin_path,
-                self.config.sample_rate,
-                self.config.buffer_size,
-            )?
-        };
+                self.config.buffer_size
+            );
 
-        host.activate(self.config.sample_rate, self.config.buffer_size)?;
-
-        tracing::info!(
-            "[ClapEffect] Loaded and activated plugin '{}' at {} Hz with {} buffer size",
-            host.plugin_info().name,
-            self.config.sample_rate,
-            self.config.buffer_size
-        );
-
-        self.host = Some(host);
-        Ok(())
+            self.host = Some(host);
+            Ok(())
+        })();
+        std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         use crate::core::StreamError;
 
-        let host = self
-            .host
-            .as_mut()
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
+        let result = (|| {
+            let host = self
+                .host
+                .as_mut()
+                .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?;
 
-        host.deactivate()?;
-        tracing::info!(
-            "[ClapEffect] Deactivated plugin '{}'",
-            host.plugin_info().name
-        );
-        Ok(())
+            host.deactivate()?;
+            tracing::info!(
+                "[ClapEffect] Deactivated plugin '{}'",
+                host.plugin_info().name
+            );
+            Ok(())
+        })();
+        std::future::ready(result)
     }
 
     fn process(&mut self) -> Result<()> {

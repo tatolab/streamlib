@@ -91,7 +91,10 @@ impl ChordGeneratorProcessor::Processor {
 }
 
 impl crate::core::Processor for ChordGeneratorProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.buffer_size = self.config.buffer_size;
         self.sample_rate = self.config.sample_rate;
         *self.frame_counter.lock().unwrap() = 0;
@@ -118,16 +121,16 @@ impl crate::core::Processor for ChordGeneratorProcessor::Processor {
             self.sample_rate,
             self.buffer_size
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.loop_handle.take() {
             let _ = handle.join();
         }
         tracing::info!("ChordGenerator: Stopped");
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

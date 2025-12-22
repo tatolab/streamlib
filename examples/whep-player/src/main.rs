@@ -50,7 +50,7 @@ fn run_whep_player() -> Result<()> {
     tracing::info!("   {}\n", whep_url);
 
     // Create StreamRuntime
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // Configure WHEP processor
     let whep_config = WebRtcWhepConfig {

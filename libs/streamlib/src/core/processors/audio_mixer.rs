@@ -50,7 +50,10 @@ pub struct AudioMixerProcessor {
 }
 
 impl crate::core::Processor for AudioMixerProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.sample_rate = 0;
         self.buffer_size = 0;
         self.frame_counter = 0;
@@ -59,12 +62,12 @@ impl crate::core::Processor for AudioMixerProcessor::Processor {
             "AudioMixer: Starting (sample_rate and buffer_size will be inferred from first input, strategy: {:?})",
             self.config.strategy
         );
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("AudioMixer: Stopped");
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

@@ -102,6 +102,29 @@ impl Event {
             data,
         }
     }
+
+    /// Returns a readable log name like "RuntimeGlobal.GraphDidChange"
+    pub fn log_name(&self) -> String {
+        match self {
+            Event::RuntimeGlobal(inner) => {
+                let variant = format!("{:?}", inner);
+                // Extract just the variant name (before any { or ()
+                let variant_name = variant.split(['{', '(']).next().unwrap_or(&variant).trim();
+                format!("RuntimeGlobal.{}", variant_name)
+            }
+            Event::ProcessorEvent {
+                processor_id,
+                event,
+            } => {
+                let variant = format!("{:?}", event);
+                let variant_name = variant.split(['{', '(']).next().unwrap_or(&variant).trim();
+                format!("ProcessorEvent.{} ({})", variant_name, processor_id)
+            }
+            Event::Custom { topic, .. } => {
+                format!("Custom.{}", topic)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,9 +304,11 @@ pub enum RuntimeEvent {
     },
 
     // ===== Graph Events =====
-    // Emitted by Graph when topology changes
-    /// Emitted when graph topology changed (nodes or edges added/removed)
-    GraphTopologyDidChange,
+    // Emitted when graph structure changes (nodes or edges added/removed)
+    /// Emitted before graph changes
+    GraphWillChange,
+    /// Emitted after graph changed
+    GraphDidChange,
 
     // ===== Factory/Registration Events =====
     /// Emitted when a new processor type is registered with the factory

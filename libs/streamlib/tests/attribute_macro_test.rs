@@ -20,12 +20,15 @@ pub struct TestProcessor {
 
 // User implements the Processor trait on the generated Processor struct
 impl streamlib::Processor for TestProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
-        Ok(())
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {
@@ -100,12 +103,15 @@ pub struct ConfiguredProcessor {
 }
 
 impl streamlib::Processor for ConfiguredProcessor::Processor {
-    fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
+    fn setup(
+        &mut self,
+        _ctx: RuntimeContext,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> Result<()> {
-        Ok(())
+    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 
     fn process(&mut self) -> Result<()> {

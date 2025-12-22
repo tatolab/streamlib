@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     println!("  • Handle-based type-safe connections\n");
 
     // Create runtime (no FPS parameter - event-driven!)
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // Audio configuration
     let sample_rate = 48000;

@@ -8,7 +8,7 @@ use streamlib::{
 };
 
 fn main() -> Result<()> {
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // Add a camera processor
     let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {

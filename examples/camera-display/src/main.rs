@@ -23,9 +23,16 @@ use streamlib::{
 };
 
 fn main() -> Result<()> {
-    // Initialize tracing
+    // Initialize tracing with sensible defaults (silence noisy GPU crates)
+    // Override with RUST_LOG env var if needed, e.g., RUST_LOG=trace
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "debug,naga=warn,wgpu_core=warn,wgpu_hal=warn"
+                    .parse()
+                    .unwrap()
+            }),
+        )
         .init();
 
     // Check for --string-mode argument
@@ -44,7 +51,7 @@ fn main() -> Result<()> {
 
 /// Typed mode - uses compile-time type safety with ::node() methods
 fn run_typed_mode() -> Result<()> {
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // =========================================================================
     // Add processors using typed API
@@ -85,7 +92,7 @@ fn run_typed_mode() -> Result<()> {
 
 /// String mode - simulates REST API with string-based processor names and JSON configs
 fn run_string_mode() -> Result<()> {
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // =========================================================================
     // Add processors using string-based API (REST API style)
@@ -138,7 +145,7 @@ fn run_string_mode() -> Result<()> {
     run_pipeline(runtime)
 }
 
-fn run_pipeline(mut runtime: StreamRuntime) -> Result<()> {
+fn run_pipeline(runtime: std::sync::Arc<StreamRuntime>) -> Result<()> {
     println!("▶️  Starting pipeline...");
     #[cfg(target_os = "macos")]
     println!("   Press Cmd+Q to stop\n");

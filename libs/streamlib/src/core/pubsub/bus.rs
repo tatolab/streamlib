@@ -44,15 +44,16 @@ impl PubSub {
             .entry(topic.to_string())
             .or_default()
             .push(weak_listener);
+        tracing::debug!("Listener subscribed to topic '{}'", topic);
     }
 
     /// Publish event to topic (non-blocking, parallel dispatch).
     pub fn publish(&self, topic: &str, event: &Event) {
         if let Some(subscribers) = self.topics.get(topic) {
-            tracing::info!(
-                "PUBSUB: Publishing to topic '{}', {} subscribers registered",
-                topic,
-                subscribers.len()
+            tracing::trace!(
+                "PUBSUB: {} subscribers registered for topic '{}'",
+                subscribers.len(),
+                topic
             );
 
             // Share event via Arc to avoid cloning for each listener
@@ -64,13 +65,16 @@ impl PubSub {
                 if let Some(listener) = weak_listener.upgrade() {
                     live_listeners.push(listener);
                 } else {
-                    tracing::info!("[PUBSUB]   - Weak ref upgrade failed (listener dropped)");
+                    tracing::trace!("PUBSUB: Weak ref upgrade failed (listener dropped)");
                 }
             }
 
-            tracing::info!(
-                "PUBSUB: {} live listeners (weak refs upgraded successfully)",
-                live_listeners.len()
+            let listener_count = live_listeners.len();
+            tracing::debug!(
+                "Publishing [{}] to topic [{}] with [{}] active listeners",
+                event.log_name(),
+                topic,
+                listener_count
             );
 
             // Dispatch in parallel to all listeners (fire-and-forget, non-blocking)
@@ -81,15 +85,15 @@ impl PubSub {
                     // Try lock without blocking
                     // If listener is busy, skip (fire-and-forget)
                     if let Some(mut guard) = listener.try_lock() {
-                        tracing::info!("PUBSUB: Calling on_event for listener");
+                        tracing::trace!("PUBSUB: Calling on_event for listener");
                         let _ = guard.on_event(&event);
                     } else {
-                        tracing::warn!("PUBSUB: Listener mutex locked, skipping (fire-and-forget)");
+                        tracing::trace!("PUBSUB: Listener busy, skipping (fire-and-forget)");
                     }
                 });
             }
         } else {
-            tracing::debug!(
+            tracing::trace!(
                 "PUBSUB: No subscribers for topic '{}', event: {:?}",
                 topic,
                 event

@@ -7,20 +7,26 @@ use super::GeneratedProcessor;
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::LinkUniqueId;
 use crate::core::links::{LinkOutputToProcessorMessage, LinkPortType};
+use crate::core::runtime::BoxFuture;
 use crate::core::schema::ProcessorDescriptor;
 use crate::core::{Result, RuntimeContext};
 
 /// Object-safe version of [`GeneratedProcessor`] for dynamic dispatch.
 ///
 /// **DO NOT USE DIRECTLY** - This is an internal implementation detail.
+///
+/// Uses [`BoxFuture`] for async lifecycle methods to maintain object safety.
 pub trait DynGeneratedProcessor: Send + 'static {
-    fn __generated_setup(&mut self, _ctx: &RuntimeContext) -> Result<()> {
-        Ok(())
-    }
+    /// Generated setup hook called by runtime.
+    ///
+    /// Returns a boxed future for object safety. The future must not borrow
+    /// from `ctx` - clone it if needed in async code.
+    fn __generated_setup(&mut self, ctx: RuntimeContext) -> BoxFuture<'_, Result<()>>;
 
-    fn __generated_teardown(&mut self) -> Result<()> {
-        Ok(())
-    }
+    /// Generated teardown hook called by runtime.
+    ///
+    /// Returns a boxed future for object safety.
+    fn __generated_teardown(&mut self) -> BoxFuture<'_, Result<()>>;
 
     fn process(&mut self) -> Result<()>;
 
@@ -81,12 +87,12 @@ impl<T> DynGeneratedProcessor for T
 where
     T: GeneratedProcessor,
 {
-    fn __generated_setup(&mut self, ctx: &RuntimeContext) -> Result<()> {
-        <Self as GeneratedProcessor>::__generated_setup(self, ctx)
+    fn __generated_setup(&mut self, ctx: RuntimeContext) -> BoxFuture<'_, Result<()>> {
+        Box::pin(<Self as GeneratedProcessor>::__generated_setup(self, ctx))
     }
 
-    fn __generated_teardown(&mut self) -> Result<()> {
-        <Self as GeneratedProcessor>::__generated_teardown(self)
+    fn __generated_teardown(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(<Self as GeneratedProcessor>::__generated_teardown(self))
     }
 
     fn process(&mut self) -> Result<()> {

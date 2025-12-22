@@ -135,8 +135,8 @@ impl VideoToolboxDecoder {
         let pps = pps.to_vec();
 
         // CRITICAL: Create format description and decompression session on main thread
-        let (format_desc_ptr, session_ptr, callback_context_ptr) =
-            ctx.run_on_main_blocking(move || {
+        let (format_desc_ptr, session_ptr, callback_context_ptr) = ctx
+            .run_on_runtime_thread_blocking(move || {
                 unsafe {
                     // Create CMVideoFormatDescription from SPS/PPS
                     let param_set_pointers = [sps.as_ptr(), pps.as_ptr()];
@@ -271,72 +271,76 @@ impl VideoToolboxDecoder {
         let avcc_ptr_usize = avcc_ptr as usize; // Convert to usize for Send
         let format_desc_usize = format_desc as usize; // Convert format_desc for Send
 
-        let (_block_buffer_ptr, sample_buffer_ptr) = ctx.run_on_main_blocking(move || {
-            unsafe {
-                let avcc_ptr = avcc_ptr_usize as *mut std::ffi::c_void; // Convert back
-                let format_desc = format_desc_usize as ffi::CMFormatDescriptionRef; // Convert back
-                let mut block_buffer: ffi::CMBlockBufferRef = std::ptr::null_mut();
+        let (_block_buffer_ptr, sample_buffer_ptr) =
+            ctx.run_on_runtime_thread_blocking(move || {
+                unsafe {
+                    let avcc_ptr = avcc_ptr_usize as *mut std::ffi::c_void; // Convert back
+                    let format_desc = format_desc_usize as ffi::CMFormatDescriptionRef; // Convert back
+                    let mut block_buffer: ffi::CMBlockBufferRef = std::ptr::null_mut();
 
-                let status = ffi::CMBlockBufferCreateWithMemoryBlock(
-                    std::ptr::null(), // allocator
-                    avcc_ptr,
-                    avcc_len,
-                    std::ptr::null(), // block allocator (null = use malloc/free)
-                    std::ptr::null(), // custom block source
-                    0,                // offset to data
-                    avcc_len,
-                    0, // flags
-                    &mut block_buffer,
-                );
-
-                if status != ffi::NO_ERR {
-                    // Cleanup leaked data
-                    let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                        avcc_ptr as *mut u8,
+                    let status = ffi::CMBlockBufferCreateWithMemoryBlock(
+                        std::ptr::null(), // allocator
+                        avcc_ptr,
                         avcc_len,
-                    ));
-                    return Err(StreamError::Runtime(format!(
-                        "CMBlockBufferCreateWithMemoryBlock failed: {}",
-                        status
-                    )));
-                }
+                        std::ptr::null(), // block allocator (null = use malloc/free)
+                        std::ptr::null(), // custom block source
+                        0,                // offset to data
+                        avcc_len,
+                        0, // flags
+                        &mut block_buffer,
+                    );
 
-                // Step 3: Create CMSampleBuffer from CMBlockBuffer
-                let mut sample_buffer: ffi::CMSampleBufferRef = std::ptr::null_mut();
-                let presentation_time = ffi::CMTime::new(timestamp_ns, 1_000_000_000);
+                    if status != ffi::NO_ERR {
+                        // Cleanup leaked data
+                        let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                            avcc_ptr as *mut u8,
+                            avcc_len,
+                        ));
+                        return Err(StreamError::Runtime(format!(
+                            "CMBlockBufferCreateWithMemoryBlock failed: {}",
+                            status
+                        )));
+                    }
 
-                let status = ffi::CMSampleBufferCreate(
-                    std::ptr::null(), // allocator
-                    block_buffer,
-                    true,                 // data ready
-                    None,                 // make data ready callback
-                    std::ptr::null_mut(), // make data ready refcon
-                    format_desc,
-                    1,                // num samples
-                    0,                // num sample timing entries
-                    std::ptr::null(), // sample timing array
-                    1,                // num sample size entries
-                    &avcc_len,
-                    &mut sample_buffer,
-                );
+                    // Step 3: Create CMSampleBuffer from CMBlockBuffer
+                    let mut sample_buffer: ffi::CMSampleBufferRef = std::ptr::null_mut();
+                    let presentation_time = ffi::CMTime::new(timestamp_ns, 1_000_000_000);
 
-                if status != ffi::NO_ERR {
+                    let status = ffi::CMSampleBufferCreate(
+                        std::ptr::null(), // allocator
+                        block_buffer,
+                        true,                 // data ready
+                        None,                 // make data ready callback
+                        std::ptr::null_mut(), // make data ready refcon
+                        format_desc,
+                        1,                // num samples
+                        0,                // num sample timing entries
+                        std::ptr::null(), // sample timing array
+                        1,                // num sample size entries
+                        &avcc_len,
+                        &mut sample_buffer,
+                    );
+
+                    if status != ffi::NO_ERR {
+                        ffi::CFRelease(block_buffer as *const _);
+                        return Err(StreamError::Runtime(format!(
+                            "CMSampleBufferCreate failed: {}",
+                            status
+                        )));
+                    }
+
+                    // Set presentation timestamp on sample buffer
+                    ffi::CMSampleBufferSetOutputPresentationTimeStamp(
+                        sample_buffer,
+                        presentation_time,
+                    );
+
+                    // Release block buffer (sample buffer retains it)
                     ffi::CFRelease(block_buffer as *const _);
-                    return Err(StreamError::Runtime(format!(
-                        "CMSampleBufferCreate failed: {}",
-                        status
-                    )));
+
+                    Ok((block_buffer as usize, sample_buffer as usize))
                 }
-
-                // Set presentation timestamp on sample buffer
-                ffi::CMSampleBufferSetOutputPresentationTimeStamp(sample_buffer, presentation_time);
-
-                // Release block buffer (sample buffer retains it)
-                ffi::CFRelease(block_buffer as *const _);
-
-                Ok((block_buffer as usize, sample_buffer as usize))
-            }
-        })?;
+            })?;
 
         let sample_buffer = sample_buffer_ptr as ffi::CMSampleBufferRef;
 

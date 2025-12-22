@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     println!("=== WebRTC WHIP Streaming to Cloudflare Stream ===\n");
 
     // Create runtime first
-    let mut runtime = StreamRuntime::new()?;
+    let runtime = StreamRuntime::new()?;
 
     // Request camera and microphone permissions (must be on main thread)
     println!("🔒 Requesting camera permission...");
