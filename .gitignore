@@ -41,6 +41,7 @@ __internal__/
 # Internal documentation (secret sauce)
 docs/internal/
 docs/research/ai_embodiment_vision.md
+docs/research/SESSION_RESTORE.md
 
 # Rust
 target/

@@ -194,6 +194,7 @@ impl StreamRuntime {
 
     /// Stop the runtime.
     pub fn stop(&self) -> Result<()> {
+        tracing::info!("[stop] Beginning graceful shutdown");
         *self.status.lock() = RuntimeStatus::Stopping;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
@@ -202,22 +203,27 @@ impl StreamRuntime {
 
         // Queue removal of all processors and commit
         let runtime_ctx = self.runtime_context.lock().clone();
-        self.compiler.scope(|graph, tx| {
+        let processor_count = self.compiler.scope(|graph, tx| {
             let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
+            let count = processor_ids.len();
             for proc_id in processor_ids {
                 tx.log(PendingOperation::RemoveProcessor(proc_id));
             }
             graph.set_state(GraphState::Idle);
+            count
         });
+        tracing::info!("[stop] Queued removal of {} processor(s)", processor_count);
 
         if let Some(ctx) = runtime_ctx {
+            tracing::debug!("[stop] Committing processor teardown");
             self.compiler.commit(&ctx)?;
+            tracing::debug!("[stop] Processor teardown complete");
         }
 
         // Clear runtime context - allows fresh context on next start().
         // This enables per-session tracking (e.g., AI agents analyzing runtime state).
         *self.runtime_context.lock() = None;
-        tracing::info!("[stop] Runtime context cleared");
+        tracing::debug!("[stop] Runtime context cleared");
 
         *self.status.lock() = RuntimeStatus::Stopped;
         PUBSUB.publish(
@@ -225,6 +231,7 @@ impl StreamRuntime {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
         );
 
+        tracing::info!("[stop] Graceful shutdown complete");
         Ok(())
     }
 

@@ -37,12 +37,15 @@ pub trait RuntimeOperations: Send + Sync {
     // =========================================================================
 
     /// Add a processor to the graph asynchronously. Returns the processor ID.
+    #[must_use]
     fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>>;
 
     /// Remove a processor from the graph asynchronously.
+    #[must_use]
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>>;
 
     /// Connect two ports asynchronously. Returns the link ID.
+    #[must_use]
     fn connect_async(
         &self,
         from: OutputLinkPortRef,
@@ -50,6 +53,7 @@ pub trait RuntimeOperations: Send + Sync {
     ) -> BoxFuture<'_, Result<LinkUniqueId>>;
 
     /// Disconnect a link asynchronously.
+    #[must_use]
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>>;
 
     // =========================================================================

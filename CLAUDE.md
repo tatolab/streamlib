@@ -444,7 +444,7 @@ Apple frameworks (AVFoundation, VideoToolbox, CoreMedia) **require** runtime thr
 
 **Solution**: Use `RuntimeContext::run_on_runtime_thread_blocking()` or `run_on_runtime_thread_async()`
 
-See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md) and [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
+See [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md) for details.
 
 #### 2. Processor Macro System
 Use `#[streamlib::processor()]` attribute macro to automatically generate boilerplate:
@@ -567,11 +567,6 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ## Documentation
 
-### Project Documentation
-- **Main thread dispatch**: [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) - Apple framework threading patterns
-- **Graceful shutdown**: [`docs/graceful_shutdown.md`](docs/graceful_shutdown.md) - macOS signal handling
-- **WebRTC considerations**: [`docs/webrtc_considerations.md`](docs/webrtc_considerations.md) - RTP/RTCP concepts
-
 ### Crate-Specific Documentation
 - **Core library**: [`libs/streamlib/CLAUDE.md`](libs/streamlib/CLAUDE.md)
   - Detailed architecture, lifecycle, threading, GPU context
@@ -600,8 +595,6 @@ cargo build -p example-name
 
 ### Runtime Thread Deadlock
 **NEVER** call `run_on_runtime_thread_blocking()` from the runtime thread when the runtime thread is blocked - it will deadlock.
-
-See [`docs/main_thread_dispatch.md`](docs/main_thread_dispatch.md) for details.
 
 ### Platform-Specific Builds
 Some processors only compile on specific platforms:
