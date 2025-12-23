@@ -33,10 +33,15 @@ type CVDisplayLinkOutputCallback = extern "C-unwind" fn(
     display_link_context: *mut std::ffi::c_void,
 ) -> i32;
 
+/// Render callback type for callback-driven rendering
+pub type DisplayLinkRenderCallback = Box<dyn Fn() + Send + Sync>;
+
 /// Display link callback context
 struct DisplayLinkContext {
-    /// Flag indicating a frame is ready
+    /// Flag indicating a frame is ready (used when no render callback)
     frame_ready: Arc<AtomicBool>,
+    /// Optional render callback invoked on each vsync
+    render_callback: Option<DisplayLinkRenderCallback>,
 }
 
 /// CVDisplayLink wrapper for vsync-synchronized loop mode
@@ -44,10 +49,14 @@ struct DisplayLinkContext {
 /// This provides hardware-synchronized frame pacing for video processing.
 /// Instead of sleeping for arbitrary durations, we wait for the display's
 /// vertical blanking interval, ensuring smooth frame delivery.
+///
+/// Supports two modes:
+/// - **Polling mode**: Call `wait_for_frame()` in a loop (legacy)
+/// - **Callback mode**: Set a render callback via `set_render_callback()` before `start()`
 pub struct DisplayLink {
     display_link: CVDisplayLinkRef,
     frame_ready: Arc<AtomicBool>,
-    context_ptr: *mut std::ffi::c_void, // Track context for cleanup
+    context_ptr: *mut DisplayLinkContext, // Track context for cleanup and callback setting
 }
 
 unsafe impl Send for DisplayLink {}
@@ -74,18 +83,22 @@ impl DisplayLink {
             let frame_ready = Arc::new(AtomicBool::new(false));
             let context = Box::new(DisplayLinkContext {
                 frame_ready: frame_ready.clone(),
+                render_callback: None,
             });
 
-            let context_ptr = Box::into_raw(context) as *mut std::ffi::c_void;
+            let context_ptr = Box::into_raw(context);
 
             // Set callback
-            let result =
-                CVDisplayLinkSetOutputCallback(display_link, display_link_callback, context_ptr);
+            let result = CVDisplayLinkSetOutputCallback(
+                display_link,
+                display_link_callback,
+                context_ptr as *mut std::ffi::c_void,
+            );
 
             if result != kCVReturnSuccess {
                 // Clean up
                 CVDisplayLinkRelease(display_link);
-                let _ = Box::from_raw(context_ptr as *mut DisplayLinkContext);
+                let _ = Box::from_raw(context_ptr);
                 return Err(StreamError::Runtime(format!(
                     "Failed to set CVDisplayLink callback: error code {}",
                     result
@@ -126,6 +139,22 @@ impl DisplayLink {
             }
         }
         Ok(())
+    }
+
+    /// Set render callback for callback-driven rendering.
+    ///
+    /// Must be called BEFORE `start()`. The callback is invoked on every vsync
+    /// from the CVDisplayLink's dedicated thread.
+    ///
+    /// When a render callback is set, `wait_for_frame()` should not be used.
+    pub fn set_render_callback(&mut self, callback: Option<DisplayLinkRenderCallback>) {
+        // SAFETY: context_ptr points to valid DisplayLinkContext allocated in new()
+        // This must be called before start() to avoid races with the callback thread
+        unsafe {
+            if !self.context_ptr.is_null() {
+                (*self.context_ptr).render_callback = callback;
+            }
+        }
     }
 
     /// Wait for the next frame (vsync)
@@ -171,7 +200,7 @@ impl Drop for DisplayLink {
 
             // Free context
             if !self.context_ptr.is_null() {
-                let _ = Box::from_raw(self.context_ptr as *mut DisplayLinkContext);
+                let _ = Box::from_raw(self.context_ptr);
             }
 
             // Release display link
@@ -191,8 +220,14 @@ extern "C-unwind" fn display_link_callback(
 ) -> i32 {
     unsafe {
         let context = &*(display_link_context as *const DisplayLinkContext);
-        // Signal that a frame is ready
-        context.frame_ready.store(true, Ordering::Release);
+
+        // If render callback is set, invoke it directly
+        if let Some(ref render_callback) = context.render_callback {
+            render_callback();
+        } else {
+            // Fallback: signal frame ready for polling mode
+            context.frame_ready.store(true, Ordering::Release);
+        }
     }
     kCVReturnSuccess
 }

@@ -141,14 +141,29 @@ fn spawn_dedicated_thread(
             );
 
             // Apply thread priority (platform-specific)
+            // Skip for Manual mode - real work runs on OS-managed callback threads
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            if let Err(e) = crate::apple::thread_priority::apply_thread_priority(priority) {
-                tracing::warn!(
-                    "[{}] Failed to apply {:?} thread priority: {}",
-                    proc_id_clone,
-                    priority,
-                    e
-                );
+            {
+                let is_manual = processor_arc_clone
+                    .lock()
+                    .execution_config()
+                    .execution
+                    .is_manual();
+                if is_manual {
+                    tracing::info!(
+                        "[{}] Manual mode: skipping thread priority (callbacks use OS threads)",
+                        proc_id_clone
+                    );
+                } else if let Err(e) =
+                    crate::apple::thread_priority::apply_thread_priority(priority)
+                {
+                    tracing::warn!(
+                        "[{}] Failed to apply {:?} thread priority: {}",
+                        proc_id_clone,
+                        priority,
+                        e
+                    );
+                }
             }
 
             // === PHASE 1: Attach instance to graph ===

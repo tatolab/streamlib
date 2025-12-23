@@ -215,46 +215,38 @@ fn run_manual_mode(
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
 ) {
-    // Invoke start() to let processor initialize
+    // Call start() - for callback-driven processors this returns immediately
+    // after registering callbacks with OS (AVFoundation, CoreAudio, CVDisplayLink)
     tracing::info!("[{}] Invoking start()...", id);
     {
         let mut guard = processor.lock();
         match guard.start() {
             Ok(()) => tracing::info!("[{}] start() completed successfully", id),
-            Err(e) => tracing::warn!("[{}] start() failed: {}", id, e),
+            Err(e) => {
+                tracing::warn!("[{}] start() failed: {}", id, e);
+                return;
+            }
         }
     }
 
+    // Wait for shutdown signal - this thread is just a lifecycle manager
+    // Real work happens on OS-managed callback threads
     let mut was_paused = false;
 
-    // Wait for shutdown signal
     loop {
         crossbeam_channel::select! {
             recv(shutdown_rx) -> _ => {
                 tracing::info!("[{}] Received shutdown signal", id);
-                tracing::info!("[{}] Invoking stop()...", id);
-                let mut guard = processor.lock();
-                match guard.stop() {
-                    Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
-                    Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
-                }
                 break;
             },
             recv(message_reader) -> msg => {
-                if let Ok(message) = msg {
-                    if message == LinkOutputToProcessorMessage::StopProcessingNow {
-                        tracing::info!("[{}] Received StopProcessingNow message", id);
-                        tracing::info!("[{}] Invoking stop()...", id);
-                        let mut guard = processor.lock();
-                        match guard.stop() {
-                            Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
-                            Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
-                        }
-                        break;
-                    }
+                if let Ok(LinkOutputToProcessorMessage::StopProcessingNow) = msg {
+                    tracing::info!("[{}] Received StopProcessingNow", id);
+                    break;
                 }
             }
             default(std::time::Duration::from_millis(100)) => {
+                // Periodic check for pause/resume state changes
                 let is_paused = pause_gate.load(Ordering::Acquire);
 
                 if is_paused && !was_paused {
@@ -275,6 +267,16 @@ fn run_manual_mode(
                     was_paused = false;
                 }
             }
+        }
+    }
+
+    // Call stop() - stops callbacks and waits for in-flight work
+    tracing::info!("[{}] Invoking stop()...", id);
+    {
+        let mut guard = processor.lock();
+        match guard.stop() {
+            Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
+            Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
         }
     }
 }
