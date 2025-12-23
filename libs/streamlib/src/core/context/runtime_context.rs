@@ -376,7 +376,6 @@ impl RuntimeContext {
         if is_standalone {
             tracing::info!("[ensure_platform_ready] Setting up macOS application");
             crate::apple::runtime_ext::setup_macos_app();
-            crate::apple::runtime_ext::install_macos_shutdown_handler();
 
             // CRITICAL: Verify the macOS platform is fully ready BEFORE starting
             // any processors. This uses Apple's NSRunningApplication.isFinishedLaunching

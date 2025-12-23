@@ -10,7 +10,6 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
 use crate::core::Result;
 
 /// Global shutdown callback that applicationWillTerminate can invoke
@@ -49,27 +48,15 @@ define_class!(
     unsafe impl NSApplicationDelegate for StreamlibAppDelegate {}
 );
 
-/// Install the macOS shutdown handler
+/// Set the shutdown callback that applicationWillTerminate will invoke.
 ///
-/// This sets up the shutdown callback that applicationWillTerminate will invoke.
-/// When called, it publishes a RuntimeShutdown event to the global PUBSUB,
-/// which the executor listens to for graceful shutdown coordination.
-pub fn install_macos_shutdown_handler() {
-    let shutdown_callback = Arc::new(|| {
-        // Publish shutdown event to PUBSUB
-        // The executor subscribes to this and handles stopping all processors
-        let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
-        PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
-        tracing::info!("macOS shutdown: Published RuntimeShutdown event to PUBSUB");
-
-        // Give the executor time to handle shutdown
-        // TODO: Better approach would be to wait for executor to signal completion
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
-        tracing::info!("macOS shutdown: Completed");
-    });
-
-    *SHUTDOWN_CALLBACK.lock() = Some(shutdown_callback);
+/// The callback should be `runtime.stop()` - the runtime handles all shutdown
+/// orchestration (signaling processors, waiting for them to stop, etc.).
+fn set_shutdown_callback<F>(callback: F)
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    *SHUTDOWN_CALLBACK.lock() = Some(Arc::new(callback));
 }
 
 /// Set up NSApplication for standalone macOS apps.
@@ -227,9 +214,19 @@ pub fn is_macos_platform_ready() -> bool {
 ///
 /// Call `setup_macos_app()` and `ensure_macos_platform_ready()` first.
 /// This blocks until the app terminates.
-pub fn run_macos_event_loop() {
+///
+/// The `stop_callback` is invoked by `applicationWillTerminate` when the user
+/// presses Cmd+Q or the system requests termination. This should be `runtime.stop()`
+/// which handles graceful shutdown of all processors.
+pub fn run_macos_event_loop<F>(stop_callback: F)
+where
+    F: Fn() + Send + Sync + 'static,
+{
     use objc2_app_kit::NSEventMask;
     use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
+
+    // Register the stop callback for applicationWillTerminate
+    set_shutdown_callback(stop_callback);
 
     let mtm = MainThreadMarker::new().expect("Must be on main thread");
     let app = NSApplication::sharedApplication(mtm);
