@@ -133,7 +133,7 @@ impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         if self.running.load(Ordering::Relaxed) {
             return Ok(());
         }

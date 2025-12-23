@@ -34,5 +34,5 @@ pub trait ManualProcessor {
     }
 
     /// Called according to the execution mode.
-    fn process(&mut self) -> Result<()>;
+    fn start(&mut self) -> Result<()>;
 }

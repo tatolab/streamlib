@@ -156,4 +156,13 @@ pub trait GeneratedProcessor: Send + 'static {
     fn __generated_on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
+
+    /// Called once to start a Manual mode processor.
+    ///
+    /// Only valid for Manual execution mode. Returns an error for other modes.
+    fn start(&mut self) -> Result<()> {
+        Err(crate::core::StreamError::Runtime(
+            "start() is only valid for Manual execution mode".into(),
+        ))
+    }
 }

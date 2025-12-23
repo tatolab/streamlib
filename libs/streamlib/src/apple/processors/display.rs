@@ -248,7 +248,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
 
     // Business logic - called once by macro-generated process() in Pull mode
     // Sets up vsync-driven rendering loop
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         tracing::trace!(
             "Display {}: process() called - entering processor main function",
             self.window_id.0

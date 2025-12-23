@@ -103,7 +103,7 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         if self.stream_setup_done {
             return Ok(());
         }

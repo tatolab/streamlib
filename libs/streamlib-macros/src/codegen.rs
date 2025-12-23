@@ -252,6 +252,42 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
         }
     };
 
+    // Generate mode-specific implementations for process() and start()
+    // Manual mode: start() works, process() returns error
+    // Continuous/Reactive: process() works, start() returns error
+    let (process_impl, start_impl) = match &analysis.processor_attrs.execution_mode {
+        Some(ProcessExecution::Manual) => (
+            quote! {
+                Err(::streamlib::core::StreamError::Runtime(
+                    "process() is not valid for Manual execution mode. Use start() instead.".into()
+                ))
+            },
+            quote! {
+                <Self as ::streamlib::core::ManualProcessor>::start(self)
+            },
+        ),
+        Some(ProcessExecution::Continuous { .. }) => (
+            quote! {
+                <Self as ::streamlib::core::ContinuousProcessor>::process(self)
+            },
+            quote! {
+                Err(::streamlib::core::StreamError::Runtime(
+                    "start() is only valid for Manual execution mode.".into()
+                ))
+            },
+        ),
+        Some(ProcessExecution::Reactive) | None => (
+            quote! {
+                <Self as ::streamlib::core::ReactiveProcessor>::process(self)
+            },
+            quote! {
+                Err(::streamlib::core::StreamError::Runtime(
+                    "start() is only valid for Manual execution mode.".into()
+                ))
+            },
+        ),
+    };
+
     quote! {
         impl Processor {
             /// Processor name for registration and lookup.
@@ -291,7 +327,11 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #from_config_body
 
             fn process(&mut self) -> ::streamlib::core::Result<()> {
-                <Self as #processor_trait>::process(self)
+                #process_impl
+            }
+
+            fn start(&mut self) -> ::streamlib::core::Result<()> {
+                #start_impl
             }
 
             #update_config

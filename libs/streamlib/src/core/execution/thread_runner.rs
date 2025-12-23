@@ -238,29 +238,26 @@ fn run_manual_mode(
     runtime_ctx: &RuntimeContext,
 ) {
     tracing::info!(
-        "[{}] Manual mode: calling process() once, then YOU control timing",
+        "[{}] Manual mode: calling start() once, then YOU control timing",
         id
     );
 
-    // Initial process call to let processor set up callbacks/threads
+    // Initial start call to let processor set up callbacks/threads
     tracing::trace!(
-        "[{}] Manual mode: acquiring lock for initial process()...",
+        "[{}] Manual mode: acquiring lock for initial start()...",
         id
     );
     {
         let mut guard = processor.lock();
-        tracing::trace!("[{}] Manual mode: lock acquired, calling process()...", id);
-        if let Err(e) = guard.process() {
-            tracing::warn!("[{}] Initial process error: {}", id, e);
+        tracing::trace!("[{}] Manual mode: lock acquired, calling start()...", id);
+        if let Err(e) = guard.start() {
+            tracing::warn!("[{}] Start error: {}", id, e);
         }
-        tracing::trace!("[{}] Manual mode: process() returned", id);
+        tracing::trace!("[{}] Manual mode: start() returned", id);
     }
-    tracing::trace!("[{}] Manual mode: lock released after process()", id);
+    tracing::trace!("[{}] Manual mode: lock released after start()", id);
 
-    tracing::debug!(
-        "[{}] Manual mode: runtime will NOT call process() again",
-        id
-    );
+    tracing::debug!("[{}] Manual mode: runtime will NOT call start() again", id);
 
     tracing::trace!("[{}] Manual mode: entering wait loop for shutdown", id);
 

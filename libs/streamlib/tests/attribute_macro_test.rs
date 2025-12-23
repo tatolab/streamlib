@@ -31,7 +31,7 @@ impl streamlib::ManualProcessor for TestProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         // Simple passthrough - read from input and push to output
         while let Some(frame) = self.video_in.read() {
             self.video_out.push(frame);

@@ -54,7 +54,7 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn process(&mut self) -> crate::core::error::Result<()> {
+    fn start(&mut self) -> crate::core::error::Result<()> {
         Ok(())
     }
 }
@@ -84,7 +84,7 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn process(&mut self) -> crate::core::error::Result<()> {
+    fn start(&mut self) -> crate::core::error::Result<()> {
         Ok(())
     }
 }
@@ -114,7 +114,7 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn process(&mut self) -> crate::core::error::Result<()> {
+    fn start(&mut self) -> crate::core::error::Result<()> {
         Ok(())
     }
 }

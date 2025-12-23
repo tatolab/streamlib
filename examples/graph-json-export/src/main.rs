@@ -50,7 +50,7 @@ struct SourceProcessor {
 }
 
 impl streamlib::ManualProcessor for SourceProcessor::Processor {
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -69,7 +69,7 @@ struct TransformProcessor {
 }
 
 impl streamlib::ManualProcessor for TransformProcessor::Processor {
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -88,7 +88,7 @@ struct SinkProcessor {
 }
 
 impl streamlib::ManualProcessor for SinkProcessor::Processor {
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }

@@ -220,7 +220,7 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
 
     // Business logic - called by macro-generated process()
     // Manual mode: called once, sets up camera and enters frame processing loop
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         // Step 1: Dispatch AVFoundation init to main queue (non-blocking)
         if !self.avfoundation_init_dispatched {
             tracing::info!("Camera: Dispatching AVFoundation init to main thread (non-blocking)");
