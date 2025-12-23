@@ -319,6 +319,14 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             fn __generated_teardown(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as #processor_trait>::teardown(self)
             }
+
+            fn __generated_on_pause(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
+                <Self as #processor_trait>::on_pause(self)
+            }
+
+            fn __generated_on_resume(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
+                <Self as #processor_trait>::on_resume(self)
+            }
         }
     }
 }

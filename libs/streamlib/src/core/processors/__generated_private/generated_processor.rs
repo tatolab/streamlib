@@ -142,4 +142,18 @@ pub trait GeneratedProcessor: Send + 'static {
     fn __generated_teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
+
+    /// Generated on_pause hook called by runtime when processor is paused.
+    ///
+    /// Returns a future that completes when pause handling is done.
+    fn __generated_on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    /// Generated on_resume hook called by runtime when processor is resumed.
+    ///
+    /// Returns a future that completes when resume handling is done.
+    fn __generated_on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
 }

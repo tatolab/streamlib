@@ -45,17 +45,38 @@ pub fn run_processor_loop(
                 id,
                 interval_ms
             );
-            run_continuous_mode(&id, &processor, &shutdown_rx, &pause_gate, interval_ms);
+            run_continuous_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &pause_gate,
+                interval_ms,
+                &runtime_ctx,
+            );
         }
         ProcessExecution::Reactive => {
             tracing::trace!("[{}] Entering reactive mode", id);
-            run_reactive_mode(&id, &processor, &shutdown_rx, &message_reader, &pause_gate);
+            run_reactive_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &message_reader,
+                &pause_gate,
+                &runtime_ctx,
+            );
         }
         ProcessExecution::Manual => {
             tracing::trace!("[{}] Entering manual mode", id);
             // Manual mode doesn't use the pause gate in the thread runner -
             // the processor is responsible for checking RuntimeContext::is_paused()
-            run_manual_mode(&id, &processor, &shutdown_rx, &message_reader);
+            run_manual_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &message_reader,
+                &pause_gate,
+                &runtime_ctx,
+            );
         }
     }
 
@@ -84,6 +105,7 @@ fn run_continuous_mode(
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     pause_gate: &Arc<AtomicBool>,
     interval_ms: u32,
+    runtime_ctx: &RuntimeContext,
 ) {
     let sleep_duration = if interval_ms > 0 {
         std::time::Duration::from_millis(interval_ms as u64)
@@ -97,13 +119,42 @@ fn run_continuous_mode(
         sleep_duration
     );
 
+    let mut was_paused = false;
+
     loop {
         if shutdown_rx.try_recv().is_ok() {
             break;
         }
 
+        let is_paused = pause_gate.load(Ordering::Acquire);
+
+        // Handle pause state transitions
+        if is_paused && !was_paused {
+            // Transitioning to paused
+            tracing::debug!("[{}] Pausing processor", id);
+            let mut guard = processor.lock();
+            if let Err(e) = runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_pause())
+            {
+                tracing::warn!("[{}] on_pause error: {}", id, e);
+            }
+            was_paused = true;
+        } else if !is_paused && was_paused {
+            // Transitioning from paused to running
+            tracing::debug!("[{}] Resuming processor", id);
+            let mut guard = processor.lock();
+            if let Err(e) = runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_resume())
+            {
+                tracing::warn!("[{}] on_resume error: {}", id, e);
+            }
+            was_paused = false;
+        }
+
         // Check pause gate before processing
-        if pause_gate.load(Ordering::Acquire) {
+        if is_paused {
             tracing::trace!("[{}] Paused, skipping process()", id);
             std::thread::sleep(PAUSE_CHECK_INTERVAL);
             continue;
@@ -126,8 +177,11 @@ fn run_reactive_mode(
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
     pause_gate: &Arc<AtomicBool>,
+    runtime_ctx: &RuntimeContext,
 ) {
     tracing::debug!("[{}] Reactive mode: waiting for input data...", id);
+
+    let mut was_paused = false;
 
     loop {
         crossbeam_channel::select! {
@@ -138,8 +192,29 @@ fn run_reactive_mode(
                         break;
                     }
 
+                    let is_paused = pause_gate.load(Ordering::Acquire);
+
+                    // Handle pause state transitions
+                    if is_paused && !was_paused {
+                        // Transitioning to paused
+                        tracing::debug!("[{}] Pausing processor", id);
+                        let mut guard = processor.lock();
+                        if let Err(e) = runtime_ctx.tokio_handle().block_on(guard.__generated_on_pause()) {
+                            tracing::warn!("[{}] on_pause error: {}", id, e);
+                        }
+                        was_paused = true;
+                    } else if !is_paused && was_paused {
+                        // Transitioning from paused to running
+                        tracing::debug!("[{}] Resuming processor", id);
+                        let mut guard = processor.lock();
+                        if let Err(e) = runtime_ctx.tokio_handle().block_on(guard.__generated_on_resume()) {
+                            tracing::warn!("[{}] on_resume error: {}", id, e);
+                        }
+                        was_paused = false;
+                    }
+
                     // Check pause gate before processing
-                    if pause_gate.load(Ordering::Acquire) {
+                    if is_paused {
                         tracing::trace!("[{}] Paused, discarding incoming data", id);
                         continue;
                     }
@@ -159,6 +234,8 @@ fn run_manual_mode(
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
+    pause_gate: &Arc<AtomicBool>,
+    runtime_ctx: &RuntimeContext,
 ) {
     tracing::info!(
         "[{}] Manual mode: calling process() once, then YOU control timing",
@@ -187,6 +264,8 @@ fn run_manual_mode(
 
     tracing::trace!("[{}] Manual mode: entering wait loop for shutdown", id);
 
+    let mut was_paused = false;
+
     // Wait for shutdown - processor manages its own timing
     loop {
         crossbeam_channel::select! {
@@ -202,7 +281,28 @@ fn run_manual_mode(
                     }
                 }
             }
-            default(std::time::Duration::from_millis(100)) => {}
+            default(std::time::Duration::from_millis(100)) => {
+                // Check for pause state transitions during idle wait
+                let is_paused = pause_gate.load(Ordering::Acquire);
+
+                if is_paused && !was_paused {
+                    // Transitioning to paused
+                    tracing::debug!("[{}] Pausing processor", id);
+                    let mut guard = processor.lock();
+                    if let Err(e) = runtime_ctx.tokio_handle().block_on(guard.__generated_on_pause()) {
+                        tracing::warn!("[{}] on_pause error: {}", id, e);
+                    }
+                    was_paused = true;
+                } else if !is_paused && was_paused {
+                    // Transitioning from paused to running
+                    tracing::debug!("[{}] Resuming processor", id);
+                    let mut guard = processor.lock();
+                    if let Err(e) = runtime_ctx.tokio_handle().block_on(guard.__generated_on_resume()) {
+                        tracing::warn!("[{}] on_resume error: {}", id, e);
+                    }
+                    was_paused = false;
+                }
+            }
         }
     }
     tracing::trace!("[{}] Manual mode: exiting wait loop", id);

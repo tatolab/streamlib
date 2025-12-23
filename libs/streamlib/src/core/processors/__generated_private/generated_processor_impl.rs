@@ -28,6 +28,16 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// Returns a boxed future for object safety.
     fn __generated_teardown(&mut self) -> BoxFuture<'_, Result<()>>;
 
+    /// Generated on_pause hook called by runtime when processor is paused.
+    ///
+    /// Returns a boxed future for object safety.
+    fn __generated_on_pause(&mut self) -> BoxFuture<'_, Result<()>>;
+
+    /// Generated on_resume hook called by runtime when processor is resumed.
+    ///
+    /// Returns a boxed future for object safety.
+    fn __generated_on_resume(&mut self) -> BoxFuture<'_, Result<()>>;
+
     fn process(&mut self) -> Result<()>;
 
     fn name(&self) -> &str;
@@ -93,6 +103,14 @@ where
 
     fn __generated_teardown(&mut self) -> BoxFuture<'_, Result<()>> {
         Box::pin(<Self as GeneratedProcessor>::__generated_teardown(self))
+    }
+
+    fn __generated_on_pause(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(<Self as GeneratedProcessor>::__generated_on_pause(self))
+    }
+
+    fn __generated_on_resume(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(<Self as GeneratedProcessor>::__generated_on_resume(self))
     }
 
     fn process(&mut self) -> Result<()> {

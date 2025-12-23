@@ -22,6 +22,16 @@ pub trait ContinuousProcessor {
         std::future::ready(Ok(()))
     }
 
+    /// Called when the processor is paused.
+    fn on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    /// Called when the processor is resumed after being paused.
+    fn on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+
     /// Called repeatedly by the runtime in a loop.
     fn process(&mut self) -> Result<()>;
 }
