@@ -42,7 +42,7 @@ struct MockProcessor {
     config: MockConfig,
 }
 
-impl crate::core::Processor for MockProcessor::Processor {
+impl crate::core::ManualProcessor for MockProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: crate::core::context::RuntimeContext,
@@ -54,7 +54,7 @@ impl crate::core::Processor for MockProcessor::Processor {
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn process(&mut self) -> crate::core::error::Result<()> {
+    fn start(&mut self) -> crate::core::error::Result<()> {
         Ok(())
     }
 }
@@ -72,7 +72,7 @@ struct MockOutputOnlyProcessor {
     config: MockConfig,
 }
 
-impl crate::core::Processor for MockOutputOnlyProcessor::Processor {
+impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: crate::core::context::RuntimeContext,
@@ -84,7 +84,7 @@ impl crate::core::Processor for MockOutputOnlyProcessor::Processor {
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn process(&mut self) -> crate::core::error::Result<()> {
+    fn start(&mut self) -> crate::core::error::Result<()> {
         Ok(())
     }
 }
@@ -102,7 +102,7 @@ struct MockInputOnlyProcessor {
     config: MockConfig,
 }
 
-impl crate::core::Processor for MockInputOnlyProcessor::Processor {
+impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: crate::core::context::RuntimeContext,
@@ -114,7 +114,7 @@ impl crate::core::Processor for MockInputOnlyProcessor::Processor {
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn process(&mut self) -> crate::core::error::Result<()> {
+    fn start(&mut self) -> crate::core::error::Result<()> {
         Ok(())
     }
 }

@@ -31,6 +31,9 @@ debug-overlay = ["dep:vello", "dep:skrifa", "dep:wgpu-profiler"]
 # python-embed = [...]
 
 [dependencies]
+# Execution types (shared with macros for code generation)
+streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
+
 # Procedural macros
 streamlib-macros = { path = "../streamlib-macros" }
 

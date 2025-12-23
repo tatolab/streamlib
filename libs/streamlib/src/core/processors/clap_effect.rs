@@ -128,7 +128,7 @@ impl ClapEffectProcessor::Processor {
     }
 }
 
-impl crate::core::Processor for ClapEffectProcessor::Processor {
+impl crate::core::ReactiveProcessor for ClapEffectProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,

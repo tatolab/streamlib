@@ -31,51 +31,59 @@ pub fn run_processor_loop(
     runtime_ctx: RuntimeContext,
 ) {
     tracing::info!(
-        "[{}] Thread started with {}",
+        "[{}] Thread started ({})",
         id,
         exec_config.execution.description()
     );
 
-    tracing::trace!("[{}] About to enter execution mode loop", id);
-
     match exec_config.execution {
         ProcessExecution::Continuous { interval_ms } => {
-            tracing::trace!(
-                "[{}] Entering continuous mode (interval={}ms)",
-                id,
-                interval_ms
+            run_continuous_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &pause_gate,
+                interval_ms,
+                &runtime_ctx,
             );
-            run_continuous_mode(&id, &processor, &shutdown_rx, &pause_gate, interval_ms);
         }
         ProcessExecution::Reactive => {
-            tracing::trace!("[{}] Entering reactive mode", id);
-            run_reactive_mode(&id, &processor, &shutdown_rx, &message_reader, &pause_gate);
+            run_reactive_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &message_reader,
+                &pause_gate,
+                &runtime_ctx,
+            );
         }
         ProcessExecution::Manual => {
-            tracing::trace!("[{}] Entering manual mode", id);
-            // Manual mode doesn't use the pause gate in the thread runner -
-            // the processor is responsible for checking RuntimeContext::is_paused()
-            run_manual_mode(&id, &processor, &shutdown_rx, &message_reader);
+            run_manual_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &message_reader,
+                &pause_gate,
+                &runtime_ctx,
+            );
         }
     }
 
-    tracing::trace!("[{}] Exited execution mode loop, calling teardown", id);
-
     // Teardown
+    tracing::info!("[{}] Invoking teardown()...", id);
     {
         let mut guard = processor.lock();
-        tracing::trace!("[{}] Calling __generated_teardown...", id);
-        if let Err(e) = runtime_ctx
+        match runtime_ctx
             .tokio_handle()
             .block_on(guard.__generated_teardown())
         {
-            tracing::warn!("[{}] Teardown error: {}", id, e);
+            Ok(()) => tracing::info!("[{}] teardown() completed successfully", id),
+            Err(e) => tracing::warn!("[{}] teardown() failed: {}", id, e),
         }
-        tracing::trace!("[{}] __generated_teardown completed", id);
     }
 
     *state.lock() = ProcessorState::Stopped;
-    tracing::debug!("[{}] Thread stopped", id);
+    tracing::info!("[{}] Thread stopped", id);
 }
 
 fn run_continuous_mode(
@@ -84,6 +92,7 @@ fn run_continuous_mode(
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     pause_gate: &Arc<AtomicBool>,
     interval_ms: u32,
+    runtime_ctx: &RuntimeContext,
 ) {
     let sleep_duration = if interval_ms > 0 {
         std::time::Duration::from_millis(interval_ms as u64)
@@ -91,20 +100,41 @@ fn run_continuous_mode(
         std::time::Duration::from_micros(100)
     };
 
-    tracing::debug!(
-        "[{}] Continuous mode: process() called every {:?}",
-        id,
-        sleep_duration
-    );
+    let mut was_paused = false;
 
     loop {
         if shutdown_rx.try_recv().is_ok() {
+            tracing::info!("[{}] Received shutdown signal", id);
             break;
         }
 
-        // Check pause gate before processing
-        if pause_gate.load(Ordering::Acquire) {
-            tracing::trace!("[{}] Paused, skipping process()", id);
+        let is_paused = pause_gate.load(Ordering::Acquire);
+
+        if is_paused && !was_paused {
+            tracing::info!("[{}] Invoking on_pause()...", id);
+            let mut guard = processor.lock();
+            match runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_pause())
+            {
+                Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
+            }
+            was_paused = true;
+        } else if !is_paused && was_paused {
+            tracing::info!("[{}] Invoking on_resume()...", id);
+            let mut guard = processor.lock();
+            match runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_resume())
+            {
+                Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
+            }
+            was_paused = false;
+        }
+
+        if is_paused {
             std::thread::sleep(PAUSE_CHECK_INTERVAL);
             continue;
         }
@@ -112,7 +142,7 @@ fn run_continuous_mode(
         {
             let mut guard = processor.lock();
             if let Err(e) = guard.process() {
-                tracing::warn!("[{}] Process error: {}", id, e);
+                tracing::warn!("[{}] process() failed: {}", id, e);
             }
         }
 
@@ -126,27 +156,50 @@ fn run_reactive_mode(
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
     pause_gate: &Arc<AtomicBool>,
+    runtime_ctx: &RuntimeContext,
 ) {
-    tracing::debug!("[{}] Reactive mode: waiting for input data...", id);
+    let mut was_paused = false;
 
     loop {
         crossbeam_channel::select! {
-            recv(shutdown_rx) -> _ => break,
+            recv(shutdown_rx) -> _ => {
+                tracing::info!("[{}] Received shutdown signal", id);
+                break;
+            },
             recv(message_reader) -> msg => {
                 if let Ok(message) = msg {
                     if message == LinkOutputToProcessorMessage::StopProcessingNow {
+                        tracing::info!("[{}] Received StopProcessingNow message", id);
                         break;
                     }
 
-                    // Check pause gate before processing
-                    if pause_gate.load(Ordering::Acquire) {
-                        tracing::trace!("[{}] Paused, discarding incoming data", id);
+                    let is_paused = pause_gate.load(Ordering::Acquire);
+
+                    if is_paused && !was_paused {
+                        tracing::info!("[{}] Invoking on_pause()...", id);
+                        let mut guard = processor.lock();
+                        match runtime_ctx.tokio_handle().block_on(guard.__generated_on_pause()) {
+                            Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
+                            Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
+                        }
+                        was_paused = true;
+                    } else if !is_paused && was_paused {
+                        tracing::info!("[{}] Invoking on_resume()...", id);
+                        let mut guard = processor.lock();
+                        match runtime_ctx.tokio_handle().block_on(guard.__generated_on_resume()) {
+                            Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
+                            Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
+                        }
+                        was_paused = false;
+                    }
+
+                    if is_paused {
                         continue;
                     }
 
                     let mut guard = processor.lock();
                     if let Err(e) = guard.process() {
-                        tracing::warn!("[{}] Process error: {}", id, e);
+                        tracing::warn!("[{}] process() failed: {}", id, e);
                     }
                 }
             }
@@ -159,51 +212,71 @@ fn run_manual_mode(
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
+    pause_gate: &Arc<AtomicBool>,
+    runtime_ctx: &RuntimeContext,
 ) {
-    tracing::info!(
-        "[{}] Manual mode: calling process() once, then YOU control timing",
-        id
-    );
-
-    // Initial process call to let processor set up callbacks/threads
-    tracing::trace!(
-        "[{}] Manual mode: acquiring lock for initial process()...",
-        id
-    );
+    // Call start() - for callback-driven processors this returns immediately
+    // after registering callbacks with OS (AVFoundation, CoreAudio, CVDisplayLink)
+    tracing::info!("[{}] Invoking start()...", id);
     {
         let mut guard = processor.lock();
-        tracing::trace!("[{}] Manual mode: lock acquired, calling process()...", id);
-        if let Err(e) = guard.process() {
-            tracing::warn!("[{}] Initial process error: {}", id, e);
+        match guard.start() {
+            Ok(()) => tracing::info!("[{}] start() completed successfully", id),
+            Err(e) => {
+                tracing::warn!("[{}] start() failed: {}", id, e);
+                return;
+            }
         }
-        tracing::trace!("[{}] Manual mode: process() returned", id);
     }
-    tracing::trace!("[{}] Manual mode: lock released after process()", id);
 
-    tracing::debug!(
-        "[{}] Manual mode: runtime will NOT call process() again",
-        id
-    );
+    // Wait for shutdown signal - this thread is just a lifecycle manager
+    // Real work happens on OS-managed callback threads
+    let mut was_paused = false;
 
-    tracing::trace!("[{}] Manual mode: entering wait loop for shutdown", id);
-
-    // Wait for shutdown - processor manages its own timing
     loop {
         crossbeam_channel::select! {
             recv(shutdown_rx) -> _ => {
-                tracing::trace!("[{}] Manual mode: received shutdown signal", id);
+                tracing::info!("[{}] Received shutdown signal", id);
                 break;
             },
             recv(message_reader) -> msg => {
-                if let Ok(message) = msg {
-                    tracing::trace!("[{}] Manual mode: received message {:?}", id, message);
-                    if message == LinkOutputToProcessorMessage::StopProcessingNow {
-                        break;
-                    }
+                if let Ok(LinkOutputToProcessorMessage::StopProcessingNow) = msg {
+                    tracing::info!("[{}] Received StopProcessingNow", id);
+                    break;
                 }
             }
-            default(std::time::Duration::from_millis(100)) => {}
+            default(std::time::Duration::from_millis(100)) => {
+                // Periodic check for pause/resume state changes
+                let is_paused = pause_gate.load(Ordering::Acquire);
+
+                if is_paused && !was_paused {
+                    tracing::info!("[{}] Invoking on_pause()...", id);
+                    let mut guard = processor.lock();
+                    match runtime_ctx.tokio_handle().block_on(guard.__generated_on_pause()) {
+                        Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
+                        Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
+                    }
+                    was_paused = true;
+                } else if !is_paused && was_paused {
+                    tracing::info!("[{}] Invoking on_resume()...", id);
+                    let mut guard = processor.lock();
+                    match runtime_ctx.tokio_handle().block_on(guard.__generated_on_resume()) {
+                        Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
+                        Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
+                    }
+                    was_paused = false;
+                }
+            }
         }
     }
-    tracing::trace!("[{}] Manual mode: exiting wait loop", id);
+
+    // Call stop() - stops callbacks and waits for in-flight work
+    tracing::info!("[{}] Invoking stop()...", id);
+    {
+        let mut guard = processor.lock();
+        match guard.stop() {
+            Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
+            Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
+        }
+    }
 }

@@ -19,7 +19,7 @@ pub struct TestProcessor {
 }
 
 // User implements the Processor trait on the generated Processor struct
-impl streamlib::Processor for TestProcessor::Processor {
+impl streamlib::ManualProcessor for TestProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,
@@ -31,7 +31,7 @@ impl streamlib::Processor for TestProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         // Simple passthrough - read from input and push to output
         while let Some(frame) = self.video_in.read() {
             self.video_out.push(frame);
@@ -44,7 +44,7 @@ impl streamlib::Processor for TestProcessor::Processor {
 fn test_module_structure_generated() {
     // Verify the module structure was generated correctly
     // TestProcessor::Processor should exist
-    fn assert_processor_type<T: streamlib::core::Processor>() {}
+    fn assert_processor_type<T: streamlib::core::ManualProcessor>() {}
     assert_processor_type::<TestProcessor::Processor>();
 }
 
@@ -102,7 +102,7 @@ pub struct ConfiguredProcessor {
     config: MyConfig,
 }
 
-impl streamlib::Processor for ConfiguredProcessor::Processor {
+impl streamlib::ContinuousProcessor for ConfiguredProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,

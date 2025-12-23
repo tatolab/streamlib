@@ -37,7 +37,7 @@ pub struct BufferRechunkerProcessor {
     rechunker: Option<AudioRechunker>,
 }
 
-impl crate::core::Processor for BufferRechunkerProcessor::Processor {
+impl crate::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,

@@ -49,7 +49,7 @@ pub struct AudioMixerProcessor {
     frame_counter: u64,
 }
 
-impl crate::core::Processor for AudioMixerProcessor::Processor {
+impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,

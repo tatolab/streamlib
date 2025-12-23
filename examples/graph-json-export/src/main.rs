@@ -49,8 +49,8 @@ struct SourceProcessor {
     config: MockConfig,
 }
 
-impl streamlib::Processor for SourceProcessor::Processor {
-    fn process(&mut self) -> Result<()> {
+impl streamlib::ManualProcessor for SourceProcessor::Processor {
+    fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -68,8 +68,8 @@ struct TransformProcessor {
     config: MockConfig,
 }
 
-impl streamlib::Processor for TransformProcessor::Processor {
-    fn process(&mut self) -> Result<()> {
+impl streamlib::ManualProcessor for TransformProcessor::Processor {
+    fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }
@@ -87,8 +87,8 @@ struct SinkProcessor {
     config: MockConfig,
 }
 
-impl streamlib::Processor for SinkProcessor::Processor {
-    fn process(&mut self) -> Result<()> {
+impl streamlib::ManualProcessor for SinkProcessor::Processor {
+    fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }

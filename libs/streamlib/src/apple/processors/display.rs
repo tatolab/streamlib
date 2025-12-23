@@ -77,6 +77,7 @@ pub struct AppleDisplayProcessor {
     width: u32,
     height: u32,
     frames_rendered: u64,
+    frames_rendered_shared: Arc<AtomicU64>,
     window_creation_dispatched: bool,
     display_link: Option<DisplayLink>,
     metal_render_pipeline: Option<metal::RenderPipelineState>,
@@ -85,7 +86,7 @@ pub struct AppleDisplayProcessor {
     format_buffer_bgra: Option<metal::Buffer>,
 }
 
-impl crate::core::Processor for AppleDisplayProcessor::Processor {
+impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
     fn setup(
         &mut self,
         ctx: RuntimeContext,
@@ -131,21 +132,23 @@ impl crate::core::Processor for AppleDisplayProcessor::Processor {
             self.wgpu_bridge = Some(wgpu_bridge);
             self.metal_command_queue = Some(metal_command_queue);
 
-            // Initialize CVDisplayLink for vsync
+            // Initialize shared frame counter for callback-driven rendering
+            self.frames_rendered_shared = Arc::new(AtomicU64::new(0));
+
+            // Initialize CVDisplayLink for vsync (started later in start())
             tracing::trace!("Display {}: Creating CVDisplayLink...", self.window_id.0);
             let display_link = DisplayLink::new()?;
-            tracing::trace!("Display {}: Starting CVDisplayLink...", self.window_id.0);
-            display_link.start()?;
-            tracing::trace!("Display {}: CVDisplayLink started", self.window_id.0);
+            tracing::trace!(
+                "Display {}: CVDisplayLink created (will start in start())",
+                self.window_id.0
+            );
 
             if let Ok(period) = display_link.get_nominal_output_video_refresh_period() {
                 tracing::info!(
-                    "Display {}: Vsync enabled (refresh period: {:?})",
+                    "Display {}: Vsync available (refresh period: {:?})",
                     self.window_title,
                     period
                 );
-            } else {
-                tracing::info!("Display {}: Vsync enabled", self.window_title);
             }
 
             self.display_link = Some(display_link);
@@ -246,157 +249,90 @@ impl crate::core::Processor for AppleDisplayProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    // Business logic - called once by macro-generated process() in Pull mode
-    // Sets up vsync-driven rendering loop
-    fn process(&mut self) -> Result<()> {
+    // Callback-driven start - registers render callback with CVDisplayLink and returns immediately
+    fn start(&mut self) -> Result<()> {
         tracing::trace!(
-            "Display {}: process() called - entering processor main function",
+            "Display {}: start() called - setting up callback-driven rendering",
             self.window_id.0
         );
 
-        // Pull mode: process() is called once to set up the loop
-        // Loop continuously, waiting for vsync to drive frame presentation - with shutdown awareness
-        use crate::core::{shutdown_aware_loop, LoopControl};
+        // Clone state needed for render callback
+        let video_input = self.video.clone();
+        let layer_addr = Arc::clone(&self.layer_addr);
+        let frames_rendered = Arc::clone(&self.frames_rendered_shared);
+        let window_id = self.window_id.0;
 
-        tracing::trace!(
-            "Display {}: Entering shutdown_aware_loop for vsync rendering",
-            self.window_id.0
-        );
-        let mut loop_iteration = 0u64;
-        let mut frames_received = 0u64;
-
-        shutdown_aware_loop(|| {
-            loop_iteration += 1;
-            if loop_iteration == 1 {
-                tracing::trace!(
-                    "Display {}: First iteration of vsync loop",
-                    self.window_id.0
-                );
-            } else if loop_iteration.is_multiple_of(1000) {
-                tracing::trace!(
-                    "Display {}: Vsync loop iteration #{}, frames_received={}",
-                    self.window_id.0,
-                    loop_iteration,
-                    frames_received
-                );
-            }
-
-            // Wait for vsync signal from CVDisplayLink
-            if let Some(ref display_link) = self.display_link {
-                if loop_iteration == 1 {
-                    tracing::trace!(
-                        "Display {}: Waiting for first vsync signal...",
-                        self.window_id.0
-                    );
-                }
-                display_link.wait_for_frame();
-                if loop_iteration == 1 {
-                    tracing::trace!("Display {}: First vsync signal received!", self.window_id.0);
-                }
-            } else {
-                tracing::warn!("Display {}: No display_link available!", self.window_id.0);
-            }
-
-            // Render the latest available frame (if any)
-            if let Some(frame) = self.video.read() {
-                frames_received += 1;
-                if frames_received == 1 {
-                    tracing::trace!(
-                        "Display {}: Received FIRST frame from input link!",
-                        self.window_id.0
-                    );
-                } else if frames_received.is_multiple_of(60) {
-                    tracing::trace!(
-                        "Display {}: Received frame #{} from input",
-                        self.window_id.0,
-                        frames_received
-                    );
-                }
-                self.render_frame(frame)?;
-            } else if loop_iteration.is_multiple_of(1000) {
-                tracing::trace!(
-                    "Display {}: No frame available at iteration #{}",
-                    self.window_id.0,
-                    loop_iteration
-                );
-            }
-
-            Ok(LoopControl::Continue)
-        })
-    }
-}
-
-impl AppleDisplayProcessor::Processor {
-    // Helper methods
-    pub fn window_id(&self) -> AppleWindowId {
-        self.window_id
-    }
-
-    pub fn set_window_title(&mut self, title: &str) {
-        self.window_title = title.to_string();
-        if let Some(window) = &self.window {
-            let title_string = NSString::from_str(title);
-            window.setTitle(&title_string);
-        }
-    }
-
-    fn render_frame(&mut self, frame: VideoFrame) -> Result<()> {
-        if self.frames_rendered == 0 {
-            tracing::trace!(
-                "Display {}: render_frame() called for FIRST frame",
-                self.window_id.0
-            );
-        }
-
-        let layer_addr = self.layer_addr.load(Ordering::Acquire);
-        if layer_addr == 0 {
-            if self.frames_rendered == 0 {
-                tracing::trace!(
-                    "Display {}: layer_addr is 0, window not ready yet",
-                    self.window_id.0
-                );
-            }
-            return Ok(());
-        }
-
-        if self.frames_rendered == 0 {
-            tracing::trace!(
-                "Display {}: layer_addr={:#x}, proceeding to render",
-                self.window_id.0,
-                layer_addr
-            );
-        }
-
-        // SAFETY: Layer was created on main thread and address stored atomically
-        let metal_layer = unsafe {
-            let ptr = layer_addr as *const CAMetalLayer;
-            &*ptr
-        };
-
-        let metal_command_queue = self.metal_command_queue.as_ref().ok_or_else(|| {
-            StreamError::Configuration("Metal command queue not initialized".into())
-        })?;
+        let metal_command_queue = self
+            .metal_command_queue
+            .as_ref()
+            .ok_or_else(|| {
+                StreamError::Configuration("Metal command queue not initialized".into())
+            })?
+            .clone();
 
         let wgpu_bridge = self
             .wgpu_bridge
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?;
+            .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?
+            .clone();
 
-        let render_pipeline = self.metal_render_pipeline.as_ref().ok_or_else(|| {
-            StreamError::Configuration("Metal render pipeline not initialized".into())
-        })?;
+        let render_pipeline = self
+            .metal_render_pipeline
+            .as_ref()
+            .ok_or_else(|| {
+                StreamError::Configuration("Metal render pipeline not initialized".into())
+            })?
+            .clone();
 
         let sampler = self
             .metal_sampler
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Metal sampler not initialized".into()))?;
+            .ok_or_else(|| StreamError::Configuration("Metal sampler not initialized".into()))?
+            .clone();
 
-        unsafe {
-            if let Some(drawable) = metal_layer.nextDrawable() {
+        let format_buffer_rgba = self
+            .format_buffer_rgba
+            .as_ref()
+            .ok_or_else(|| StreamError::Configuration("Format buffer RGBA not initialized".into()))?
+            .clone();
+
+        let format_buffer_bgra = self
+            .format_buffer_bgra
+            .as_ref()
+            .ok_or_else(|| StreamError::Configuration("Format buffer BGRA not initialized".into()))?
+            .clone();
+
+        // Create render callback - runs on CVDisplayLink thread on each vsync
+        let render_callback = Box::new(move || {
+            // Read latest frame from input
+            let Some(frame) = video_input.read() else {
+                return;
+            };
+
+            // Get layer address (window may not be ready yet)
+            let addr = layer_addr.load(Ordering::Acquire);
+            if addr == 0 {
+                return;
+            }
+
+            // SAFETY: Layer was created on main thread and address stored atomically
+            let metal_layer = unsafe {
+                let ptr = addr as *const CAMetalLayer;
+                &*ptr
+            };
+
+            // Render frame
+            unsafe {
+                let Some(drawable) = metal_layer.nextDrawable() else {
+                    return;
+                };
+
                 let drawable_texture = drawable.texture();
 
                 // Get Metal texture from wgpu VideoFrame
-                let source_metal = wgpu_bridge.unwrap_to_metal_texture(&frame.texture)?;
+                let Ok(source_metal) = wgpu_bridge.unwrap_to_metal_texture(&frame.texture) else {
+                    return;
+                };
 
                 // Create command buffer and render pass
                 let command_buffer = metal_command_queue.new_command_buffer();
@@ -422,15 +358,15 @@ impl AppleDisplayProcessor::Processor {
                     command_buffer.new_render_command_encoder(render_pass_descriptor);
 
                 // Set pipeline and resources
-                render_encoder.set_render_pipeline_state(render_pipeline);
+                render_encoder.set_render_pipeline_state(&render_pipeline);
                 render_encoder.set_fragment_texture(0, Some(&source_metal));
-                render_encoder.set_fragment_sampler_state(0, Some(sampler));
+                render_encoder.set_fragment_sampler_state(0, Some(&sampler));
 
                 // Set format buffer based on VideoFrame format
                 let format_buffer = if frame.format == wgpu::TextureFormat::Rgba8Unorm {
-                    self.format_buffer_rgba.as_ref().unwrap()
+                    &format_buffer_rgba
                 } else {
-                    self.format_buffer_bgra.as_ref().unwrap()
+                    &format_buffer_bgra
                 };
                 render_encoder.set_fragment_buffer(0, Some(format_buffer), 0);
 
@@ -446,23 +382,67 @@ impl AppleDisplayProcessor::Processor {
                 command_buffer.present_drawable(drawable_ref);
                 command_buffer.commit();
 
-                self.frames_rendered += 1;
-
-                if self.frames_rendered.is_multiple_of(60) {
-                    tracing::info!(
-                        "Display {}: Rendered frame {} ({}x{} → {}x{}) via Metal scaled render",
-                        self.window_id.0,
-                        frame.frame_number,
-                        frame.width,
-                        frame.height,
-                        self.width,
-                        self.height,
+                let count = frames_rendered.fetch_add(1, Ordering::Relaxed) + 1;
+                if count == 1 || count.is_multiple_of(60) {
+                    tracing::trace!(
+                        "Display {}: Rendered frame {} in callback",
+                        window_id,
+                        count
                     );
                 }
             }
-        }
+        });
+
+        // Set callback and start DisplayLink
+        let display_link = self
+            .display_link
+            .as_mut()
+            .ok_or_else(|| StreamError::Configuration("DisplayLink not initialized".into()))?;
+
+        display_link.set_render_callback(Some(render_callback));
+        display_link.start()?;
+
+        tracing::info!(
+            "Display {}: Callback-driven rendering started",
+            self.window_id.0
+        );
 
         Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        tracing::trace!("Display {}: stop() called", self.window_id.0);
+
+        if let Some(ref display_link) = self.display_link {
+            display_link.stop()?;
+        }
+
+        // Brief wait for in-flight callback to complete
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let count = self.frames_rendered_shared.load(Ordering::Relaxed);
+        tracing::info!(
+            "Display {}: Stopped (rendered {} frames)",
+            self.window_id.0,
+            count
+        );
+
+        Ok(())
+    }
+}
+
+impl AppleDisplayProcessor::Processor {
+    // Helper methods
+    pub fn window_id(&self) -> AppleWindowId {
+        self.window_id
+    }
+
+    pub fn set_window_title(&mut self, title: &str) {
+        self.window_title = title.to_string();
+        if let Some(window) = &self.window {
+            let title_string = NSString::from_str(title);
+            window.setTitle(&title_string);
+        }
     }
 
     /// Compute destination rectangle for scaled blit based on scaling mode

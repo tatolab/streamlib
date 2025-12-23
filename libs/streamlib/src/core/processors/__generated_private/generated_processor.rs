@@ -142,4 +142,36 @@ pub trait GeneratedProcessor: Send + 'static {
     fn __generated_teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
+
+    /// Generated on_pause hook called by runtime when processor is paused.
+    ///
+    /// Returns a future that completes when pause handling is done.
+    fn __generated_on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    /// Generated on_resume hook called by runtime when processor is resumed.
+    ///
+    /// Returns a future that completes when resume handling is done.
+    fn __generated_on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    /// Called once to start a Manual mode processor.
+    ///
+    /// Only valid for Manual execution mode. Returns an error for other modes.
+    fn start(&mut self) -> Result<()> {
+        Err(crate::core::StreamError::Runtime(
+            "start() is only valid for Manual execution mode".into(),
+        ))
+    }
+
+    /// Called to stop a Manual mode processor.
+    ///
+    /// Only valid for Manual execution mode. Returns an error for other modes.
+    fn stop(&mut self) -> Result<()> {
+        Err(crate::core::StreamError::Runtime(
+            "stop() is only valid for Manual execution mode".into(),
+        ))
+    }
 }

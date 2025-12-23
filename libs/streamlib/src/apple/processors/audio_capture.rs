@@ -45,7 +45,7 @@ pub struct AppleAudioCaptureProcessor {
     stream_setup_done: bool,
 }
 
-impl crate::core::Processor for AppleAudioCaptureProcessor::Processor {
+impl crate::core::ManualProcessor for AppleAudioCaptureProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,
@@ -76,7 +76,7 @@ impl crate::core::Processor for AppleAudioCaptureProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         // Pull mode: process() is called once to set up the stream, then cpal callback drives everything
         if !self.stream_setup_done {
             tracing::info!("[AudioCapture] process() called - setting up cpal stream");

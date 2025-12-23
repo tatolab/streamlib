@@ -90,7 +90,7 @@ impl ChordGeneratorProcessor::Processor {
     const FREQ_G4: f64 = 392.00;
 }
 
-impl crate::core::Processor for ChordGeneratorProcessor::Processor {
+impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,
@@ -133,7 +133,7 @@ impl crate::core::Processor for ChordGeneratorProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn start(&mut self) -> Result<()> {
         if self.running.load(Ordering::Relaxed) {
             return Ok(());
         }
