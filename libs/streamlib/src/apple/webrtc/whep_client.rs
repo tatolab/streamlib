@@ -151,6 +151,15 @@ impl WhepClient {
     pub async fn connect(&mut self) -> Result<()> {
         tracing::info!("[WhepClient] Connecting...");
 
+        // Clean up any existing peer connection from a previous failed attempt
+        if let Some(pc) = self.peer_connection.take() {
+            tracing::debug!("[WhepClient] Closing previous peer connection before retry");
+            let _ = pc.close().await;
+        }
+        self.ice_candidate_rx = None;
+        self.video_sample_rx = None;
+        self.audio_sample_rx = None;
+
         // Create peer connection and tracks
         let (peer_connection, ice_rx, video_rx, audio_rx) = self.create_peer_connection().await?;
 
@@ -160,12 +169,24 @@ impl WhepClient {
         self.audio_sample_rx = Some(audio_rx);
 
         // Create SDP offer
-        let offer = self.create_offer(&peer_connection).await?;
+        let offer = match self.create_offer(&peer_connection).await {
+            Ok(o) => o,
+            Err(e) => {
+                self.cleanup_peer_connection().await;
+                return Err(e);
+            }
+        };
 
         tracing::debug!("[WhepClient] SDP offer:\n{}", offer);
 
         // POST offer to WHEP endpoint
-        let answer = self.post_offer(&offer).await?;
+        let answer = match self.post_offer(&offer).await {
+            Ok(a) => a,
+            Err(e) => {
+                self.cleanup_peer_connection().await;
+                return Err(e);
+            }
+        };
 
         tracing::debug!("[WhepClient] SDP answer:\n{}", answer);
 
@@ -173,7 +194,10 @@ impl WhepClient {
         self.parse_audio_config(&answer);
 
         // Set remote answer
-        self.set_remote_answer(&peer_connection, &answer).await?;
+        if let Err(e) = self.set_remote_answer(&peer_connection, &answer).await {
+            self.cleanup_peer_connection().await;
+            return Err(e);
+        }
 
         // Wait briefly for ICE candidates to gather, then send them
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -185,6 +209,16 @@ impl WhepClient {
 
         tracing::info!("[WhepClient] Connected successfully");
         Ok(())
+    }
+
+    /// Cleans up peer connection and related resources on connection failure.
+    async fn cleanup_peer_connection(&mut self) {
+        if let Some(pc) = self.peer_connection.take() {
+            let _ = pc.close().await;
+        }
+        self.ice_candidate_rx = None;
+        self.video_sample_rx = None;
+        self.audio_sample_rx = None;
     }
 
     /// Creates the WebRTC peer connection with receive-only transceivers.
