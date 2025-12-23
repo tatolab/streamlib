@@ -43,6 +43,9 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// Called once to start a Manual mode processor.
     fn start(&mut self) -> Result<()>;
 
+    /// Called to stop a Manual mode processor.
+    fn stop(&mut self) -> Result<()>;
+
     fn name(&self) -> &str;
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
     fn descriptor_instance(&self) -> Option<ProcessorDescriptor>;
@@ -122,6 +125,10 @@ where
 
     fn start(&mut self) -> Result<()> {
         <Self as GeneratedProcessor>::start(self)
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        <Self as GeneratedProcessor>::stop(self)
     }
 
     fn name(&self) -> &str {

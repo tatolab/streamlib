@@ -33,6 +33,14 @@ pub trait ManualProcessor {
         std::future::ready(Ok(()))
     }
 
-    /// Called according to the execution mode.
+    /// Called once to start the processor.
     fn start(&mut self) -> Result<()>;
+
+    /// Called when the processor should stop.
+    ///
+    /// This is called before teardown when the runtime shuts down or the processor is removed.
+    /// Use this to stop internal threads, callbacks, or processing loops started by `start()`.
+    fn stop(&mut self) -> Result<()> {
+        Ok(())
+    }
 }

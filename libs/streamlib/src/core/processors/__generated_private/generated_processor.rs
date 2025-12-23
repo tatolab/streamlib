@@ -165,4 +165,13 @@ pub trait GeneratedProcessor: Send + 'static {
             "start() is only valid for Manual execution mode".into(),
         ))
     }
+
+    /// Called to stop a Manual mode processor.
+    ///
+    /// Only valid for Manual execution mode. Returns an error for other modes.
+    fn stop(&mut self) -> Result<()> {
+        Err(crate::core::StreamError::Runtime(
+            "stop() is only valid for Manual execution mode".into(),
+        ))
+    }
 }

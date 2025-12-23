@@ -252,10 +252,10 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
         }
     };
 
-    // Generate mode-specific implementations for process() and start()
-    // Manual mode: start() works, process() returns error
-    // Continuous/Reactive: process() works, start() returns error
-    let (process_impl, start_impl) = match &analysis.processor_attrs.execution_mode {
+    // Generate mode-specific implementations for process(), start(), and stop()
+    // Manual mode: start()/stop() work, process() returns error
+    // Continuous/Reactive: process() works, start()/stop() return error
+    let (process_impl, start_impl, stop_impl) = match &analysis.processor_attrs.execution_mode {
         Some(ProcessExecution::Manual) => (
             quote! {
                 Err(::streamlib::core::StreamError::Runtime(
@@ -264,6 +264,9 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             },
             quote! {
                 <Self as ::streamlib::core::ManualProcessor>::start(self)
+            },
+            quote! {
+                <Self as ::streamlib::core::ManualProcessor>::stop(self)
             },
         ),
         Some(ProcessExecution::Continuous { .. }) => (
@@ -275,6 +278,11 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
                     "start() is only valid for Manual execution mode.".into()
                 ))
             },
+            quote! {
+                Err(::streamlib::core::StreamError::Runtime(
+                    "stop() is only valid for Manual execution mode.".into()
+                ))
+            },
         ),
         Some(ProcessExecution::Reactive) | None => (
             quote! {
@@ -283,6 +291,11 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             quote! {
                 Err(::streamlib::core::StreamError::Runtime(
                     "start() is only valid for Manual execution mode.".into()
+                ))
+            },
+            quote! {
+                Err(::streamlib::core::StreamError::Runtime(
+                    "stop() is only valid for Manual execution mode.".into()
                 ))
             },
         ),
@@ -332,6 +345,10 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
 
             fn start(&mut self) -> ::streamlib::core::Result<()> {
                 #start_impl
+            }
+
+            fn stop(&mut self) -> ::streamlib::core::Result<()> {
+                #stop_impl
             }
 
             #update_config

@@ -78,9 +78,7 @@ impl ProcessExecution {
             ProcessExecution::Reactive => {
                 "Reactive (runtime calls process() when input data arrives)".to_string()
             }
-            ProcessExecution::Manual => {
-                "Manual (runtime calls process() once, then you control timing)".to_string()
-            }
+            ProcessExecution::Manual => self.to_string(),
         }
     }
 }
