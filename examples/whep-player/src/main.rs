@@ -103,6 +103,8 @@ fn run_whep_player() -> Result<()> {
     // start() blocks on macOS standalone (runs NSApplication event loop)
     runtime.start()?;
 
+    runtime.wait_for_signal()?;
+
     tracing::info!("✅ WHEP player stopped");
 
     Ok(())
