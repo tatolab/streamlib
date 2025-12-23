@@ -69,8 +69,8 @@ fn main() -> Result<()> {
     println!("   • Hardware sources drive the clock");
     println!("   • Type-safe connections verified at compile time\n");
 
-    // start() blocks on macOS standalone (runs NSApplication event loop)
     runtime.start()?;
+    runtime.wait_for_signal()?;
 
     println!("\n\n⏹️  Stopping...");
     println!("✅ Stopped\n");

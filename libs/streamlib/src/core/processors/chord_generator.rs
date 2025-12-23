@@ -125,12 +125,18 @@ impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
     }
 
     fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+        tracing::info!("ChordGenerator: teardown complete");
+        std::future::ready(Ok(()))
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        tracing::info!("ChordGenerator: stop() called");
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.loop_handle.take() {
             let _ = handle.join();
         }
-        tracing::info!("ChordGenerator: Stopped");
-        std::future::ready(Ok(()))
+        tracing::info!("ChordGenerator: generation thread stopped");
+        Ok(())
     }
 
     fn start(&mut self) -> Result<()> {

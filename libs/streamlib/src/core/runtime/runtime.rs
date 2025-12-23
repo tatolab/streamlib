@@ -443,13 +443,13 @@ impl StreamRuntime {
     }
 
     /// Block until shutdown signal (Ctrl+C, SIGTERM, Cmd+Q).
-    pub fn wait_for_signal(&self) -> Result<()> {
+    pub fn wait_for_signal(self: &Arc<Self>) -> Result<()> {
         self.wait_for_signal_with(|_| ControlFlow::Continue(()))
     }
 
     /// Block until shutdown signal, with periodic callback for dynamic control.
     #[allow(unused_variables, unused_mut)]
-    pub fn wait_for_signal_with<F>(&self, mut callback: F) -> Result<()>
+    pub fn wait_for_signal_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
@@ -489,9 +489,14 @@ impl StreamRuntime {
         // On macOS, run the NSApplication event loop (required for GUI)
         #[cfg(target_os = "macos")]
         {
-            crate::apple::runtime_ext::run_macos_event_loop();
-            // Event loop exited (Cmd+Q or terminate)
-            self.stop()?;
+            let runtime = Arc::clone(self);
+            crate::apple::runtime_ext::run_macos_event_loop(move || {
+                // Called by applicationWillTerminate before app exits
+                if let Err(e) = runtime.stop() {
+                    tracing::error!("Failed to stop runtime during shutdown: {}", e);
+                }
+            });
+            // Note: run_macos_event_loop never returns - app terminates after stop callback
             Ok(())
         }
 
