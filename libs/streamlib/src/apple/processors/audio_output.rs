@@ -81,7 +81,7 @@ pub struct AppleAudioOutputProcessor {
     resampler_state: Arc<Mutex<Option<ResamplerState>>>,
 }
 
-impl crate::core::Processor for AppleAudioOutputProcessor::Processor {
+impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,

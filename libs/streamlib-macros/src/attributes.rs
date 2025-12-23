@@ -6,31 +6,16 @@
 //! Parses `#[processor(...)]` and `#[input(...)]`/`#[output(...)]` attributes.
 
 use proc_macro2::TokenStream;
+use streamlib_codegen_shared::ProcessExecution;
 use syn::{Attribute, Error, Lit, Result};
-
-/// Process execution mode - determines how and when `process()` is called.
-///
-/// This is the parsed representation that will be converted to `ProcessExecution` in codegen.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum ExecutionMode {
-    /// Runtime loops, calling process() repeatedly.
-    /// Optional interval_ms for minimum time between calls.
-    Continuous { interval_ms: Option<u32> },
-    /// Called when upstream writes to any input port.
-    #[default]
-    Reactive,
-    /// Called once, then you control timing.
-    Manual,
-}
 
 /// Parsed attributes from `#[processor(...)]`
 #[derive(Debug, Default)]
 pub struct ProcessorAttributes {
     /// Execution mode: determines how and when `process()` is called.
     ///
-    /// New syntax: `execution = Continuous` or `execution = Reactive` or `execution = Manual`
-    /// Legacy syntax (deprecated): `mode = Loop` or `mode = Push` or `mode = Pull`
-    pub execution_mode: Option<ExecutionMode>,
+    /// Uses [`ProcessExecution`] from streamlib-codegen-shared (single source of truth).
+    pub execution_mode: Option<ProcessExecution>,
 
     /// Description: `description = "..."`
     pub description: Option<String>,
@@ -93,7 +78,7 @@ impl ProcessorAttributes {
                 return Ok(());
             }
 
-            // NEW: execution = Continuous | Reactive | Manual
+            // execution = Continuous | Reactive | Manual
             if meta.path.is_ident("execution") {
                 let path: syn::Path = meta.value()?.parse()?;
                 let mode_str = path
@@ -103,9 +88,9 @@ impl ProcessorAttributes {
                     .ok_or_else(|| Error::new_spanned(&path, "Invalid execution path"))?;
 
                 let execution_mode = match mode_str.as_str() {
-                    "Continuous" => ExecutionMode::Continuous { interval_ms: None },
-                    "Reactive" => ExecutionMode::Reactive,
-                    "Manual" => ExecutionMode::Manual,
+                    "Continuous" => ProcessExecution::Continuous { interval_ms: 0 },
+                    "Reactive" => ProcessExecution::Reactive,
+                    "Manual" => ProcessExecution::Manual,
                     _ => {
                         return Err(Error::new_spanned(
                             path,
@@ -126,22 +111,20 @@ impl ProcessorAttributes {
                 return Ok(());
             }
 
-            // NEW: execution_interval_ms = N (for Continuous mode)
+            // execution_interval_ms = N (for Continuous mode)
             if meta.path.is_ident("execution_interval_ms") {
                 let value: syn::LitInt = meta.value()?.parse()?;
                 let interval_ms: u32 = value.base10_parse()?;
 
                 // Update or create Continuous mode with interval
                 match &mut result.execution_mode {
-                    Some(ExecutionMode::Continuous {
+                    Some(ProcessExecution::Continuous {
                         interval_ms: ref mut i,
                     }) => {
-                        *i = Some(interval_ms);
+                        *i = interval_ms;
                     }
                     None => {
-                        result.execution_mode = Some(ExecutionMode::Continuous {
-                            interval_ms: Some(interval_ms),
-                        });
+                        result.execution_mode = Some(ProcessExecution::Continuous { interval_ms });
                     }
                     Some(_) => {
                         return Err(Error::new_spanned(
@@ -163,9 +146,9 @@ impl ProcessorAttributes {
                     .ok_or_else(|| Error::new_spanned(&path, "Invalid mode path"))?;
 
                 let execution_mode = match mode.as_str() {
-                    "Loop" => ExecutionMode::Continuous { interval_ms: None },
-                    "Push" => ExecutionMode::Reactive,
-                    "Pull" => ExecutionMode::Manual,
+                    "Loop" => ProcessExecution::Continuous { interval_ms: 0 },
+                    "Push" => ProcessExecution::Reactive,
+                    "Pull" => ProcessExecution::Manual,
                     _ => {
                         return Err(Error::new_spanned(
                             path,
@@ -294,14 +277,14 @@ mod tests {
         assert_eq!(result.description, Some("Test processor".to_string()));
     }
 
-    // New execution syntax tests
+    // Execution syntax tests
     #[test]
     fn test_parse_execution_continuous() {
         let args: TokenStream = quote::quote! { execution = Continuous };
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
         assert_eq!(
             result.execution_mode,
-            Some(ExecutionMode::Continuous { interval_ms: None })
+            Some(ProcessExecution::Continuous { interval_ms: 0 })
         );
     }
 
@@ -309,14 +292,14 @@ mod tests {
     fn test_parse_execution_reactive() {
         let args: TokenStream = quote::quote! { execution = Reactive };
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
-        assert_eq!(result.execution_mode, Some(ExecutionMode::Reactive));
+        assert_eq!(result.execution_mode, Some(ProcessExecution::Reactive));
     }
 
     #[test]
     fn test_parse_execution_manual() {
         let args: TokenStream = quote::quote! { execution = Manual };
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
-        assert_eq!(result.execution_mode, Some(ExecutionMode::Manual));
+        assert_eq!(result.execution_mode, Some(ProcessExecution::Manual));
     }
 
     #[test]
@@ -326,9 +309,7 @@ mod tests {
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
         assert_eq!(
             result.execution_mode,
-            Some(ExecutionMode::Continuous {
-                interval_ms: Some(100)
-            })
+            Some(ProcessExecution::Continuous { interval_ms: 100 })
         );
     }
 
@@ -338,9 +319,7 @@ mod tests {
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
         assert_eq!(
             result.execution_mode,
-            Some(ExecutionMode::Continuous {
-                interval_ms: Some(50)
-            })
+            Some(ProcessExecution::Continuous { interval_ms: 50 })
         );
     }
 
@@ -351,7 +330,7 @@ mod tests {
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
         assert_eq!(
             result.execution_mode,
-            Some(ExecutionMode::Continuous { interval_ms: None })
+            Some(ProcessExecution::Continuous { interval_ms: 0 })
         );
     }
 
@@ -359,14 +338,14 @@ mod tests {
     fn test_parse_legacy_mode_push() {
         let args: TokenStream = quote::quote! { mode = Push };
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
-        assert_eq!(result.execution_mode, Some(ExecutionMode::Reactive));
+        assert_eq!(result.execution_mode, Some(ProcessExecution::Reactive));
     }
 
     #[test]
     fn test_parse_legacy_mode_pull() {
         let args: TokenStream = quote::quote! { mode = Pull };
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
-        assert_eq!(result.execution_mode, Some(ExecutionMode::Manual));
+        assert_eq!(result.execution_mode, Some(ProcessExecution::Manual));
     }
 
     #[test]
@@ -384,7 +363,7 @@ mod tests {
             unsafe_send
         };
         let result = ProcessorAttributes::parse_from_args(args).unwrap();
-        assert_eq!(result.execution_mode, Some(ExecutionMode::Manual));
+        assert_eq!(result.execution_mode, Some(ProcessExecution::Manual));
         assert_eq!(result.description, Some("Test processor".to_string()));
         assert!(result.unsafe_send);
     }

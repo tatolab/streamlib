@@ -15,8 +15,10 @@ mod processor_spec;
 // Re-export graph types
 pub use graph::{ProcessorState, ProcessorStateComponent};
 
-// Re-export user-facing trait
-pub use traits::{Config, ConfigValidationError, Processor};
+// Re-export processor traits
+pub use traits::{Config, ConfigValidationError};
+// Mode-specific processor traits
+pub use traits::{ContinuousProcessor, ManualProcessor, ReactiveProcessor};
 
 // Re-export internal traits (doc-hidden but needed by macro and runtime)
 #[doc(hidden)]

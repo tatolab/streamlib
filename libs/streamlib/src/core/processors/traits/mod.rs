@@ -3,8 +3,12 @@
 
 //! Core processor traits.
 
-pub mod config;
-pub mod processor;
+mod config;
+mod continuous;
+mod manual;
+mod reactive;
 
 pub use config::{Config, ConfigValidationError};
-pub use processor::Processor;
+pub use continuous::ContinuousProcessor;
+pub use manual::ManualProcessor;
+pub use reactive::ReactiveProcessor;

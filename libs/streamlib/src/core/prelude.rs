@@ -13,8 +13,8 @@ pub use crate::core::{
     // Graph
     graph::{LinkUniqueId, ProcessorUniqueId},
 
-    // Processors
-    processors::Processor,
+    // Processor traits (mode-specific)
+    processors::{ContinuousProcessor, ManualProcessor, ReactiveProcessor},
 
     // Runtime
     runtime::StreamRuntime,

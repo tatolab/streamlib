@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "libs/streamlib",           # All-in-one: core, apple, mcp, python (feature-gated)
+    "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "examples/simple-pipeline", # Example: Basic processing pipeline
     "examples/camera-display",  # Example: Camera capture and display

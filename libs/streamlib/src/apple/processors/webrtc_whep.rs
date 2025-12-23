@@ -148,7 +148,7 @@ pub struct WebRtcWhepProcessor {
     pending_ice_candidates: Arc<Mutex<Vec<String>>>,
 }
 
-impl crate::core::Processor for WebRtcWhepProcessor::Processor {
+impl crate::core::ContinuousProcessor for WebRtcWhepProcessor::Processor {
     fn setup(
         &mut self,
         ctx: RuntimeContext,

@@ -199,7 +199,7 @@ pub struct AppleCameraProcessor {
     avfoundation_init_dispatched: bool,
 }
 
-impl crate::core::Processor for AppleCameraProcessor::Processor {
+impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
     fn setup(
         &mut self,
         ctx: RuntimeContext,

@@ -46,7 +46,7 @@ pub struct AudioChannelConverterProcessor {
     frame_counter: u64,
 }
 
-impl crate::core::Processor for AudioChannelConverterProcessor::Processor {
+impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,

@@ -31,7 +31,7 @@ pub struct SimplePassthroughProcessor {
     config: SimplePassthroughConfig,
 }
 
-impl crate::core::Processor for SimplePassthroughProcessor::Processor {
+impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
     // Uses default setup() and teardown() implementations from Processor trait
 
     fn process(&mut self) -> Result<()> {

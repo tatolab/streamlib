@@ -10,9 +10,9 @@
 //! - Processor trait implementation
 
 use crate::analysis::{AnalysisResult, PortDirection};
-use crate::attributes::ExecutionMode;
 use proc_macro2::TokenStream;
 use quote::quote;
+use streamlib_codegen_shared::ProcessExecution;
 
 /// Generate a module wrapping the processor and port markers.
 pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
@@ -199,14 +199,13 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
 
     // Generate execution config based on parsed execution_mode
     let execution_variant = match &analysis.processor_attrs.execution_mode {
-        Some(ExecutionMode::Continuous { interval_ms }) => {
-            let interval = interval_ms.unwrap_or(0);
-            quote! { ::streamlib::core::ProcessExecution::Continuous { interval_ms: #interval } }
+        Some(ProcessExecution::Continuous { interval_ms }) => {
+            quote! { ::streamlib::core::ProcessExecution::Continuous { interval_ms: #interval_ms } }
         }
-        Some(ExecutionMode::Reactive) => {
+        Some(ProcessExecution::Reactive) => {
             quote! { ::streamlib::core::ProcessExecution::Reactive }
         }
-        Some(ExecutionMode::Manual) => {
+        Some(ProcessExecution::Manual) => {
             quote! { ::streamlib::core::ProcessExecution::Manual }
         }
         // Default: Reactive (process() called when input data arrives)
@@ -232,19 +231,25 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
         }
     });
 
-    // Generate execution mode description for debugging
-    let execution_description = match &analysis.processor_attrs.execution_mode {
-        Some(ExecutionMode::Continuous { interval_ms }) => {
-            let interval = interval_ms.unwrap_or(0);
-            if interval > 0 {
-                format!("Continuous ({}ms interval)", interval)
-            } else {
-                "Continuous (no interval)".to_string()
-            }
+    // Generate execution mode description for debugging (uses Display impl)
+    let execution_description = analysis
+        .processor_attrs
+        .execution_mode
+        .as_ref()
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| "Reactive (default)".to_string());
+
+    // Determine which mode-specific trait to use based on execution mode
+    let processor_trait = match &analysis.processor_attrs.execution_mode {
+        Some(ProcessExecution::Continuous { .. }) => {
+            quote! { ::streamlib::core::ContinuousProcessor }
         }
-        Some(ExecutionMode::Reactive) => "Reactive".to_string(),
-        Some(ExecutionMode::Manual) => "Manual".to_string(),
-        None => "Reactive (default)".to_string(),
+        Some(ProcessExecution::Manual) => {
+            quote! { ::streamlib::core::ManualProcessor }
+        }
+        Some(ProcessExecution::Reactive) | None => {
+            quote! { ::streamlib::core::ReactiveProcessor }
+        }
     };
 
     quote! {
@@ -286,7 +291,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #from_config_body
 
             fn process(&mut self) -> ::streamlib::core::Result<()> {
-                <Self as ::streamlib::core::Processor>::process(self)
+                <Self as #processor_trait>::process(self)
             }
 
             #update_config
@@ -308,11 +313,11 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             #set_link_output_to_processor_message_writer
 
             fn __generated_setup(&mut self, ctx: ::streamlib::core::RuntimeContext) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
-                <Self as ::streamlib::core::Processor>::setup(self, ctx)
+                <Self as #processor_trait>::setup(self, ctx)
             }
 
             fn __generated_teardown(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
-                <Self as ::streamlib::core::Processor>::teardown(self)
+                <Self as #processor_trait>::teardown(self)
             }
         }
     }

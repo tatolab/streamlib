@@ -121,7 +121,7 @@ pub struct AppleMp4WriterProcessor {
     pixel_transfer: Option<crate::apple::PixelTransferSession>,
 }
 
-impl crate::core::Processor for AppleMp4WriterProcessor::Processor {
+impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
     fn setup(
         &mut self,
         ctx: RuntimeContext,

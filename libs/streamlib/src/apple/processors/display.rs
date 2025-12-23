@@ -85,7 +85,7 @@ pub struct AppleDisplayProcessor {
     format_buffer_bgra: Option<metal::Buffer>,
 }
 
-impl crate::core::Processor for AppleDisplayProcessor::Processor {
+impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
     fn setup(
         &mut self,
         ctx: RuntimeContext,

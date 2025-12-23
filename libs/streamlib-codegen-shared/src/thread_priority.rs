@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Thread scheduling priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThreadPriority {
     RealTime,
@@ -24,7 +25,7 @@ impl ThreadPriority {
         match self {
             ThreadPriority::RealTime => Some(10.0),
             ThreadPriority::High => Some(33.0),
-            ThreadPriority::Normal => None, // No strict budget
+            ThreadPriority::Normal => None,
         }
     }
 

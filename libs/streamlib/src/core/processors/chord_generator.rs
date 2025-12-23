@@ -90,7 +90,7 @@ impl ChordGeneratorProcessor::Processor {
     const FREQ_G4: f64 = 392.00;
 }
 
-impl crate::core::Processor for ChordGeneratorProcessor::Processor {
+impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,

@@ -151,7 +151,7 @@ pub struct WebRtcWhipProcessor {
     last_audio_packets_sent: u64,
 }
 
-impl crate::core::Processor for WebRtcWhipProcessor::Processor {
+impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
     fn setup(
         &mut self,
         ctx: RuntimeContext,

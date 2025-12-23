@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use super::link_buffer_read_mode::LinkBufferReadMode;
-use super::link_port_type::LinkPortType;
+use super::LinkPortType;
 use crate::core::Schema;
 
 /// Trait for types that can be sent through link ports.
