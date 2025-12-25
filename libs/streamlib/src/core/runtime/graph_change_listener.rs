@@ -53,10 +53,11 @@ impl EventListener for GraphChangeListener {
                 }
             };
 
-            // Dispatch commit to runtime thread (non-blocking)
+            // Dispatch commit to tokio (non-blocking)
+            // Note: compiler.commit() has no main thread requirements - uses only thread-safe primitives
             let compiler = Arc::clone(&self.compiler);
             let ctx_for_closure = Arc::clone(&ctx);
-            ctx.run_on_runtime_thread_async(move || {
+            ctx.tokio_handle().spawn(async move {
                 if let Err(e) = compiler.commit(&ctx_for_closure) {
                     tracing::error!("[GraphChangeListener] Commit failed: {}", e);
                 }
