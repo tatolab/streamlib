@@ -13,6 +13,7 @@ members = [
     "examples/whep-player",     # Example: WHEP (WebRTC egress) player
     "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization
     "examples/graph-json-export",         # Example: Graph data structure JSON export (no runtime)
+    "examples/api-server-demo",           # Example: API server processor demo
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 
@@ -62,8 +63,8 @@ pyo3 = { version = "0.27.0", features = ["extension-module"] }
 str0m = "0.11.1"
 
 # HTTP/Web
-axum = "0.8.6"
-tower-http = "0.6.6"
+axum = "0.8.8"
+tower-http = "0.6.8"
 hyper = "1.7.0"
 
 # WebGPU (cross-platform GPU abstraction)

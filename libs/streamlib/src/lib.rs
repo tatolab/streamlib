@@ -39,6 +39,8 @@ pub use core::{
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
+    ApiServerConfig,
+    ApiServerProcessor,
     AudioCaptureConfig,
     AudioChannelConverterConfig,
     AudioChannelConverterProcessor,

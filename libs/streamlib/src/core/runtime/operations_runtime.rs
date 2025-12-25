@@ -162,6 +162,10 @@ impl RuntimeOperations for StreamRuntime {
         })
     }
 
+    fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+        Box::pin(async move { StreamRuntime::to_json(self) })
+    }
+
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             // Validate link exists and get info for events, then mark for deletion
@@ -247,5 +251,14 @@ impl RuntimeOperations for StreamRuntime {
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
         self.tokio_runtime
             .block_on(self.disconnect_async(link_id.clone()))
+    }
+
+    // =========================================================================
+    // Introspection
+    // =========================================================================
+
+    fn to_json(&self) -> Result<serde_json::Value> {
+        // Delegate to the existing StreamRuntime::to_json() implementation
+        StreamRuntime::to_json(self)
     }
 }

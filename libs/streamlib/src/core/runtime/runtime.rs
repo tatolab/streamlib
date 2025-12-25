@@ -56,6 +56,17 @@ pub struct StreamRuntime {
 
 impl StreamRuntime {
     pub fn new() -> Result<Arc<Self>> {
+        // Detect if called from within an existing tokio runtime.
+        // StreamRuntime's sync methods require Runtime::block_on() which needs ownership.
+        // See https://github.com/tatolab/streamlib/issues/92 for external handle support.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(StreamError::Runtime(
+                "StreamRuntime::new() cannot be called from within a tokio runtime context. \
+                 Create StreamRuntime from a synchronous context (fn main, not #[tokio::main])."
+                    .into(),
+            ));
+        }
+
         // Create tokio runtime with default thread count (one per CPU core)
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -448,7 +459,6 @@ impl StreamRuntime {
     }
 
     /// Block until shutdown signal, with periodic callback for dynamic control.
-    #[allow(unused_variables, unused_mut)]
     pub fn wait_for_signal_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
     where
         F: FnMut(&Self) -> ControlFlow<()>,
@@ -490,12 +500,16 @@ impl StreamRuntime {
         #[cfg(target_os = "macos")]
         {
             let runtime = Arc::clone(self);
-            crate::apple::runtime_ext::run_macos_event_loop(move || {
-                // Called by applicationWillTerminate before app exits
-                if let Err(e) = runtime.stop() {
-                    tracing::error!("Failed to stop runtime during shutdown: {}", e);
-                }
-            });
+            let runtime_for_callback = Arc::clone(self);
+            crate::apple::runtime_ext::run_macos_event_loop(
+                move || {
+                    // Called by applicationWillTerminate before app exits
+                    if let Err(e) = runtime.stop() {
+                        tracing::error!("Failed to stop runtime during shutdown: {}", e);
+                    }
+                },
+                move || callback(&runtime_for_callback),
+            );
             // Note: run_macos_event_loop never returns - app terminates after stop callback
             Ok(())
         }

@@ -218,9 +218,13 @@ pub fn is_macos_platform_ready() -> bool {
 /// The `stop_callback` is invoked by `applicationWillTerminate` when the user
 /// presses Cmd+Q or the system requests termination. This should be `runtime.stop()`
 /// which handles graceful shutdown of all processors.
-pub fn run_macos_event_loop<F>(stop_callback: F)
+///
+/// The `periodic_callback` is called approximately every 100ms (matching non-macOS polling).
+/// Return `ControlFlow::Break(())` to trigger graceful shutdown.
+pub fn run_macos_event_loop<F, C>(stop_callback: F, mut periodic_callback: C)
 where
     F: Fn() + Send + Sync + 'static,
+    C: FnMut() -> std::ops::ControlFlow<()>,
 {
     use objc2_app_kit::NSEventMask;
     use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
@@ -237,6 +241,14 @@ where
     tracing::info!("macOS: Event loop starting");
 
     loop {
+        // Call periodic callback (matches non-macOS 100ms timing)
+        if let std::ops::ControlFlow::Break(()) = periodic_callback() {
+            // User signaled break - trigger graceful shutdown
+            tracing::info!("macOS: Periodic callback signaled shutdown");
+            app.terminate(None);
+            break;
+        }
+
         let date = NSDate::dateWithTimeIntervalSinceNow(0.1);
 
         let event = unsafe {

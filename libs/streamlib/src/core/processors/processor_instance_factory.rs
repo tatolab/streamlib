@@ -10,6 +10,7 @@ use crate::core::error::{Result, StreamError};
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
+use crate::core::schema::ProcessorDescriptor;
 
 /// A created processor instance for runtime use.
 pub type ProcessorInstance = Box<dyn DynGeneratedProcessor + Send>;
@@ -44,6 +45,7 @@ pub struct RegisterResult {
 pub struct ProcessorInstanceFactory {
     constructors: RwLock<HashMap<String, private::ConstructorFn>>,
     port_info: RwLock<HashMap<String, (Vec<PortInfo>, Vec<PortInfo>)>>,
+    descriptors: RwLock<HashMap<String, ProcessorDescriptor>>,
 }
 
 /// Global processor registry for runtime lookups.
@@ -68,6 +70,7 @@ impl ProcessorInstanceFactory {
         Self {
             constructors: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
+            descriptors: RwLock::new(HashMap::new()),
         }
     }
 
@@ -130,6 +133,10 @@ impl ProcessorInstanceFactory {
             .write()
             .insert(type_name.clone(), (inputs, outputs));
 
+        self.descriptors
+            .write()
+            .insert(type_name.clone(), descriptor);
+
         let constructor: private::ConstructorFn = Box::new(move |node: &ProcessorNode| {
             let config: P::Config = match &node.config {
                 Some(json) => serde_json::from_value(json.clone()).map_err(|e| {
@@ -189,5 +196,10 @@ impl ProcessorInstanceFactory {
 
     pub fn is_registered(&self, processor_type: &str) -> bool {
         self.constructors.read().contains_key(processor_type)
+    }
+
+    /// List all registered processor types with their full descriptors.
+    pub fn list_registered(&self) -> Vec<ProcessorDescriptor> {
+        self.descriptors.read().values().cloned().collect()
     }
 }
