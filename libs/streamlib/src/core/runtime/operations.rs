@@ -60,6 +60,9 @@ pub trait RuntimeOperations: Send + Sync {
     /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>>;
 
+    /// Export graph state as JSON asynchronously.
+    fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
+
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)
     // =========================================================================
@@ -95,4 +98,11 @@ pub trait RuntimeOperations: Send + Sync {
     /// This is a blocking wrapper around [`disconnect_async`]. Do not call
     /// from within a tokio task - use the async variant instead.
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
+
+    // =========================================================================
+    // Introspection
+    // =========================================================================
+
+    /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
+    fn to_json(&self) -> Result<serde_json::Value>;
 }

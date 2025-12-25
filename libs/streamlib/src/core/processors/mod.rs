@@ -9,9 +9,9 @@ pub mod traits;
 #[doc(hidden)]
 pub mod __generated_private;
 
+mod api_server;
 mod processor_instance_factory;
 mod processor_spec;
-
 // Re-export graph types
 pub use graph::{ProcessorState, ProcessorStateComponent};
 
@@ -59,6 +59,7 @@ pub use audio_output::{AudioDevice, AudioOutputConfig, AudioOutputProcessor};
 pub use display::{DisplayConfig, DisplayProcessor, WindowId};
 pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
 
+pub use api_server::*;
 pub use audio_channel_converter::{
     AudioChannelConverterConfig, AudioChannelConverterProcessor, ChannelConversionMode,
 };

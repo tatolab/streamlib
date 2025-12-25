@@ -7,6 +7,7 @@
 
 use crate::attributes::{PortAttributes, ProcessorAttributes, StateAttributes};
 use proc_macro2::{Ident, TokenStream};
+use streamlib_codegen_shared::ProcessExecution;
 use syn::{Error, Fields, GenericArgument, ItemStruct, PathArguments, Result, Type};
 
 /// Direction of a port
@@ -137,10 +138,18 @@ impl AnalysisResult {
             });
         }
 
-        if port_fields.is_empty() {
+        // Manual processors (like API servers) may have no ports - they control
+        // the runtime rather than processing data flow
+        if port_fields.is_empty()
+            && !matches!(
+                processor_attrs.execution_mode,
+                Some(ProcessExecution::Manual)
+            )
+        {
             return Err(Error::new_spanned(
                 item,
-                "Processor must have at least one #[input] or #[output] port",
+                "Processor must have at least one #[input] or #[output] port \
+                 (Manual execution mode processors are exempt)",
             ));
         }
 
