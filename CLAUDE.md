@@ -606,26 +606,20 @@ Use `#[cfg(target_os = "macos")]` in examples that depend on platform-specific p
 
 ## Tool Preferences
 
-### Rust Analyzer MCP - USE THIS
+### Rust Analyzer Plugin - USE THIS
 
-When working with Rust code, **prefer rust-analyzer MCP tools** over grep/search for understanding code:
+This project uses the **rust-analyzer-lsp** Claude Code plugin (`rust-analyzer-lsp@claude-plugins-official`) for semantic code understanding.
 
-```
-mcp__rust-analyzer__rust_analyzer_hover      - Get type info at position
-mcp__rust-analyzer__rust_analyzer_definition - Jump to definition
-mcp__rust-analyzer__rust_analyzer_references - Find all usages
-mcp__rust-analyzer__rust_analyzer_symbols    - List symbols in file
-mcp__rust-analyzer__rust_analyzer_diagnostics - Get compiler errors
-```
-
-**Why**: Rust-analyzer understands the code semantically. It knows types, traits, and relationships. Grep just matches text.
+**Why use rust-analyzer over grep**:
+- **Semantic understanding**: Knows types, traits, and relationships
+- **Accurate navigation**: Handles macros, generics, and complex imports
+- **Cross-file context**: Understands the entire crate graph
 
 **When to use rust-analyzer**:
-- Understanding what a type is: `rust_analyzer_hover`
-- Finding where something is defined: `rust_analyzer_definition`
-- Finding all usages before renaming: `rust_analyzer_references`
-- Getting an overview of a file: `rust_analyzer_symbols`
-- Checking if code compiles: `rust_analyzer_diagnostics`
+- Understanding type definitions and signatures
+- Finding where symbols are defined
+- Finding all usages before refactoring
+- Exploring symbol visibility and scoping
 
 **When grep is still fine**:
 - Searching for string literals

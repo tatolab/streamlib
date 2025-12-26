@@ -23,6 +23,27 @@ use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 
+/// Storage variant for tokio runtime in StreamRuntime.
+///
+/// Enables StreamRuntime to work both standalone (owning its runtime) and
+/// integrated into existing tokio applications (using the current handle).
+pub(crate) enum TokioRuntimeVariant {
+    /// StreamRuntime owns the tokio Runtime (created when NOT in tokio context).
+    OwnedTokioRuntime(tokio::runtime::Runtime),
+    /// StreamRuntime uses an external tokio Handle (auto-detected when called from tokio context).
+    ExternalTokioHandle(tokio::runtime::Handle),
+}
+
+impl TokioRuntimeVariant {
+    /// Get a tokio Handle from either variant.
+    pub(crate) fn handle(&self) -> tokio::runtime::Handle {
+        match self {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.handle().clone(),
+            TokioRuntimeVariant::ExternalTokioHandle(h) => h.clone(),
+        }
+    }
+}
+
 /// The main stream processing runtime.
 ///
 /// # Thread Safety
@@ -40,8 +61,8 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 /// This means multiple threads can concurrently call `add_processor()`,
 /// `connect()`, etc. without blocking each other on an outer lock.
 pub struct StreamRuntime {
-    /// Shared tokio runtime for async operations.
-    pub(crate) tokio_runtime: tokio::runtime::Runtime,
+    /// Tokio runtime storage - either owned or external handle.
+    pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
     pub(crate) compiler: Arc<Compiler>,
     /// Runtime context (GPU, audio config). Created on start(), cleared on stop().
@@ -56,22 +77,25 @@ pub struct StreamRuntime {
 
 impl StreamRuntime {
     pub fn new() -> Result<Arc<Self>> {
-        // Detect if called from within an existing tokio runtime.
-        // StreamRuntime's sync methods require Runtime::block_on() which needs ownership.
-        // See https://github.com/tatolab/streamlib/issues/92 for external handle support.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            return Err(StreamError::Runtime(
-                "StreamRuntime::new() cannot be called from within a tokio runtime context. \
-                 Create StreamRuntime from a synchronous context (fn main, not #[tokio::main])."
-                    .into(),
-            ));
-        }
-
-        // Create tokio runtime with default thread count (one per CPU core)
-        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create tokio runtime: {}", e)))?;
+        // Auto-detect tokio context (issue #92)
+        // If inside tokio runtime: use current handle (external handle mode)
+        // If outside tokio runtime: create owned runtime
+        let tokio_runtime_variant = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                tracing::debug!("Detected existing tokio runtime, using external handle mode");
+                TokioRuntimeVariant::ExternalTokioHandle(handle)
+            }
+            Err(_) => {
+                // Create tokio runtime with default thread count (one per CPU core)
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| {
+                        StreamError::Runtime(format!("Failed to create tokio runtime: {}", e))
+                    })?;
+                TokioRuntimeVariant::OwnedTokioRuntime(rt)
+            }
+        };
 
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
@@ -95,7 +119,7 @@ impl StreamRuntime {
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
         Ok(Arc::new(Self {
-            tokio_runtime,
+            tokio_runtime_variant,
             compiler,
             runtime_context,
             status,
@@ -172,7 +196,7 @@ impl StreamRuntime {
         let runtime_ctx = Arc::new(RuntimeContext::new(
             gpu,
             runtime_ops,
-            self.tokio_runtime.handle().clone(),
+            self.tokio_runtime_variant.handle(),
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
@@ -587,5 +611,46 @@ mod tests {
     fn test_runtime_creation() {
         let _runtime = StreamRuntime::new();
         // Runtime creates successfully
+    }
+
+    #[test]
+    fn test_new_outside_tokio_creates_owned_runtime() {
+        // Outside tokio context - creates owned runtime
+        let runtime = StreamRuntime::new().unwrap();
+        assert!(matches!(
+            runtime.tokio_runtime_variant,
+            TokioRuntimeVariant::OwnedTokioRuntime(_)
+        ));
+    }
+
+    #[test]
+    fn test_new_inside_tokio_uses_external_handle() {
+        // Inside tokio context - auto-detects and uses external handle
+        let temp_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = temp_rt.block_on(async { StreamRuntime::new() });
+        assert!(result.is_ok());
+        let runtime = result.unwrap();
+        assert!(matches!(
+            runtime.tokio_runtime_variant,
+            TokioRuntimeVariant::ExternalTokioHandle(_)
+        ));
+    }
+
+    #[test]
+    fn test_sync_methods_work_inside_tokio() {
+        // Verify sync methods work when called from tokio context
+        let temp_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        temp_rt.block_on(async {
+            let runtime = StreamRuntime::new().unwrap();
+            // Sync methods should work (use spawn + channel internally)
+            let json = runtime.to_json().unwrap();
+            assert!(json["nodes"].is_array());
+        });
     }
 }
