@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::sync::{Arc, LazyLock, Weak};
 
-use super::events::{Event, EventListener};
+use super::events::{topics, Event, EventListener};
 
 const MAX_EVENT_SIZE: usize = 64 * 1024;
 
@@ -48,16 +48,33 @@ impl PubSub {
     }
 
     /// Publish event to topic (non-blocking, parallel dispatch).
+    ///
+    /// Events are dispatched to:
+    /// 1. All subscribers of the specific topic
+    /// 2. All subscribers of `topics::ALL` (wildcard)
     pub fn publish(&self, topic: &str, event: &Event) {
+        // Share event via Arc to avoid cloning for each dispatch
+        let event = Arc::new(event.clone());
+
+        // Dispatch to specific topic subscribers
+        self.dispatch_to_topic(topic, &event);
+
+        // Also dispatch to wildcard subscribers (if not already wildcard topic)
+        if topic != topics::ALL {
+            self.dispatch_to_topic(topics::ALL, &event);
+        }
+
+        // Cleanup dead listeners periodically
+        self.cleanup_dead_listeners(topic);
+    }
+
+    fn dispatch_to_topic(&self, topic: &str, event: &Arc<Event>) {
         if let Some(subscribers) = self.topics.get(topic) {
             tracing::trace!(
                 "PUBSUB: {} subscribers registered for topic '{}'",
                 subscribers.len(),
                 topic
             );
-
-            // Share event via Arc to avoid cloning for each listener
-            let event = Arc::new(event.clone());
 
             // Collect live listeners (upgrade weak refs)
             let mut live_listeners = Vec::with_capacity(subscribers.len());
@@ -80,7 +97,7 @@ impl PubSub {
             // Dispatch in parallel to all listeners (fire-and-forget, non-blocking)
             // Each listener gets its own rayon task
             for listener in live_listeners {
-                let event = Arc::clone(&event);
+                let event = Arc::clone(event);
                 rayon::spawn(move || {
                     // Try lock without blocking
                     // If listener is busy, skip (fire-and-forget)
@@ -99,10 +116,6 @@ impl PubSub {
                 event
             );
         }
-        // If no subscribers, event is dropped (true fire-and-forget)
-
-        // Cleanup dead listeners periodically
-        self.cleanup_dead_listeners(topic);
     }
 
     fn cleanup_dead_listeners(&self, topic: &str) {
@@ -316,5 +329,73 @@ mod tests {
         );
 
         // If we get here without panicking, test passes
+    }
+
+    #[test]
+    fn test_wildcard_subscription_receives_all_events() {
+        let pubsub = PubSub::new();
+
+        let wildcard_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let specific_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
+
+        let wildcard_listener: Arc<Mutex<dyn EventListener>> = wildcard_listener_concrete.clone();
+        let specific_listener: Arc<Mutex<dyn EventListener>> = specific_listener_concrete.clone();
+
+        // Subscribe to wildcard (all events) and a specific topic
+        pubsub.subscribe(super::super::events::topics::ALL, wildcard_listener);
+        pubsub.subscribe("topic-a", specific_listener);
+
+        // Publish to various topics
+        pubsub.publish(
+            "topic-a",
+            &Event::Custom {
+                topic: "topic-a".to_string(),
+                data: serde_json::json!({"msg": "first"}),
+            },
+        );
+        pubsub.publish(
+            "topic-b",
+            &Event::Custom {
+                topic: "topic-b".to_string(),
+                data: serde_json::json!({"msg": "second"}),
+            },
+        );
+        pubsub.publish(
+            "runtime:global",
+            &Event::RuntimeGlobal(super::super::events::RuntimeEvent::RuntimeStarted),
+        );
+
+        wait_for_rayon();
+
+        // Wildcard listener should receive ALL 3 events
+        assert_eq!(wildcard_listener_concrete.lock().count(), 3);
+
+        // Specific listener should receive only 1 event (topic-a)
+        assert_eq!(specific_listener_concrete.lock().count(), 1);
+    }
+
+    #[test]
+    fn test_wildcard_does_not_double_dispatch_to_self() {
+        let pubsub = PubSub::new();
+
+        let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
+        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
+
+        // Subscribe to wildcard
+        pubsub.subscribe(super::super::events::topics::ALL, listener);
+
+        // Publish directly to wildcard topic
+        pubsub.publish(
+            super::super::events::topics::ALL,
+            &Event::Custom {
+                topic: "*".to_string(),
+                data: serde_json::json!({"direct": true}),
+            },
+        );
+
+        wait_for_rayon();
+
+        // Should receive exactly 1 event (no double dispatch)
+        assert_eq!(listener_concrete.lock().count(), 1);
     }
 }
