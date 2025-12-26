@@ -7,26 +7,41 @@ Licensor:             Jonathan Fontanez
 Licensed Work:        StreamLib
                       The Licensed Work is (c) 2025 Jonathan Fontanez.
 Additional Use Grant: You may make production use of the Licensed Work, provided
-                      that you do not use the Licensed Work for a Streaming Service.
+                      that you do not engage in any Restricted Use.
 
-                      A "Streaming Service" is a commercial offering that allows
-                      third parties to access the functionality of the Licensed
-                      Work by performing any of the following:
+                      RESTRICTED USES (require commercial license):
 
-                      (a) Offering a managed or hosted media streaming platform
-                          that uses StreamLib to process, encode, decode, or
-                          transmit audio/video content as a service to third
-                          parties;
+                      (a) Selling, licensing, sublicensing, or distributing the
+                          Runtime (or any derivative work based on the Runtime)
+                          as a standalone product, SDK, framework, engine, or
+                          library;
 
-                      (b) Providing a commercial API or SaaS product where the
-                          core value proposition is powered by StreamLib's
-                          streaming capabilities;
+                      (b) Offering the Runtime as a managed service, hosted
+                          platform, cloud offering, or "as-a-service" product
+                          where third parties interact with the Runtime's
+                          functionality;
 
-                      (c) Redistributing StreamLib as part of a commercial SDK,
-                          framework, or library that competes with StreamLib.
+                      (c) White-labeling, rebranding, or OEM licensing of the
+                          Runtime for redistribution to third parties;
 
-                      The following uses are explicitly permitted without a
-                      commercial license:
+                      (d) Creating a product that competes with StreamLib by
+                          providing substantially similar media processing
+                          runtime capabilities derived from the Licensed Work;
+
+                      (e) Embedding the Runtime in a product where the Runtime
+                          itself (or access to it) is sold, licensed, or
+                          sublicensed separately to end users.
+
+                      "Runtime" means the StreamLib runtime engine, including
+                      the graph data structures, graph compiler, scheduler,
+                      processor execution system, link/port infrastructure,
+                      GPU context management, and associated infrastructure
+                      code found in this repository.
+
+                      The Runtime does NOT include Processors you create using
+                      StreamLib's Processor API (see Permitted Uses below).
+
+                      PERMITTED USES (no commercial license required):
 
                       (a) Personal, educational, and research use;
 
@@ -56,10 +71,11 @@ Additional Use Grant: You may make production use of the Licensed Work, provided
                           community and commercial Processors, similar to how game
                           engines enable developers to build and sell games.
 
-                      For any use not covered above, you must obtain a commercial
-                      license. Two options are available:
+                      For any Restricted Use, you must obtain a commercial license.
+                      Two options are available:
 
-                      - Commercial License: For production use in your products.
+                      - Commercial License: For production use that falls under
+                        Restricted Uses.
                       - Partner License: For consulting companies, integrators,
                         and strategic partners with additional benefits including
                         early access, roadmap input, and co-marketing rights.

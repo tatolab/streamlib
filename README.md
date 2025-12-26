@@ -119,11 +119,11 @@ StreamLib uses an **open-core model** inspired by game engines like Unity and Un
 │                                 ▼                                           │
 │   ┌─────────────────────────────────────────────────────────────────┐      │
 │   │                                                                  │      │
-│   │                    StreamLib Runtime Engine                      │      │
+│   │                    StreamLib Runtime (Protected)                 │      │
 │   │                                                                  │      │
-│   │    Graph Compiler • Scheduler • GPU Context • Thread Pool       │  ←── │
+│   │    Graph Compiler • Scheduler • GPU Context • Link/Port Infra   │      │
 │   │                                                                  │      │
-│   │              BUSL-1.1 Licensed (see details below)              │      │
+│   │         BUSL-1.1: Restricted Uses require commercial license    │  ◄── │
 │   │                                                                  │      │
 │   └─────────────────────────────────────────────────────────────────┘      │
 │                                                                             │
@@ -143,13 +143,18 @@ StreamLib uses an **open-core model** inspired by game engines like Unity and Un
 | Open source projects | ✅ | OSI-approved licenses |
 | Commercial apps (StreamLib as component) | ✅ | Video conferencing, security cameras, robotics, etc. |
 
-### What Requires a Commercial License
+### What Requires a Commercial License (Restricted Uses)
 
 | Activity | License Required |
 |----------|:----------------:|
-| Building a competing streaming SDK/framework | ✅ Commercial |
-| Offering StreamLib as a managed/hosted SaaS | ✅ Commercial |
-| Reselling StreamLib's core functionality as a service | ✅ Commercial |
+| Selling/licensing the Runtime as a product | ✅ Commercial |
+| Offering the Runtime as a managed service or SaaS | ✅ Commercial |
+| White-labeling or rebranding the Runtime for resale | ✅ Commercial |
+| Creating a competing runtime derived from StreamLib | ✅ Commercial |
+| Embedding the Runtime and sublicensing it to end users | ✅ Commercial |
+
+**"Runtime"** = graph compiler, scheduler, processor execution, GPU context, link/port infrastructure.
+**Not the Runtime** = Processors you build using the Processor API.
 
 ### Why This Model?
 
