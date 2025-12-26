@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Verify AudioRequirements serialize to JSON correctly for MCP
+//! Verify AudioRequirements serialize to JSON correctly
 //!
 //! Run with: cargo test --test verify_audio_requirements_json
 
@@ -20,7 +20,7 @@ mod tests {
                 required_channels: Some(2),
             });
 
-        // Serialize to JSON (this is what MCP does)
+        // Serialize to JSON
         let json = descriptor.to_json().expect("Should serialize");
         println!("Serialized JSON:\n{}", json);
 

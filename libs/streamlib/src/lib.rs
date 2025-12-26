@@ -189,12 +189,6 @@ pub use permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,
 };
 
-// MCP server removed - needs complete redesign for Phase 1 architecture
-// TODO: Reimplement MCP server with new graph-based API
-
-// Python bindings removed - needs complete redesign for Phase 1 architecture
-// TODO: Reimplement Python bindings with new graph-based API
-
 pub use core::StreamRuntime;
 
 pub mod platform {

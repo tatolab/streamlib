@@ -6,8 +6,6 @@
     "objc",
     "Bgra",
     "Unorm",
-    "rmcp",
-    "mcp",
     "tokio"
   ],
   "rust-analyzer.cargo.features": "all",
