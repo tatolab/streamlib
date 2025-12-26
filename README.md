@@ -1,16 +1,18 @@
 # StreamLib
 
-A foundational streaming library built from the ground up for low-latency livestreaming and agentic video development.
+A real-time processing framework for building applications where audio, video, and data flow together continuously.
 
-**Zero external dependencies on GStreamer, FFmpeg, or similar frameworks.** StreamLib is an entirely new approach to real-time video streaming, designed to be cross-platform from day one.
+**What does "streaming" mean here?** Not broadcasting to Twitch. Not just playing video files. StreamLib treats streaming as *continuous real-time data flow*—like electricity through a circuit. Audio, video, sensor data, AI model outputs, or any combination flowing through your application simultaneously.
+
+**Zero external dependencies on GStreamer, FFmpeg, or similar frameworks.** Unlike traditional media libraries that focus on encoding and decoding files, StreamLib is a processing framework. Connect inputs to processors to outputs. Data flows through in real-time. Build anything from video conferencing to robot vision to multi-modal AI agents.
 
 ## Vision
 
-StreamLib is building a truly headless streaming library that requires no display server or window system. Run the same code on headless servers, embedded devices, edge compute, or full GUI applications.
+StreamLib is building a truly headless processing framework that requires no display server or window system. Run the same code on headless servers, embedded devices, edge compute, or full GUI applications.
 
 This is an alternative to solutions like NVIDIA DeepStream that require CUDA and lock you into specific hardware. StreamLib uses platform-native APIs (Metal, Vulkan, DirectX) to deliver GPU acceleration without vendor lock-in.
 
-**Inspired by game engine architecture.** Like Unreal Engine enables cross-platform game development, StreamLib applies the same principles to video streaming. A unified development and rendering library that abstracts platform differences, letting you write once and deploy anywhere.
+**Inspired by game engine architecture.** Like Unreal Engine enables cross-platform game development, StreamLib applies the same principles to real-time processing. A unified framework that abstracts platform differences, letting you write once and deploy anywhere.
 
 **Target environments:**
 - Headless cloud servers (no X11/Wayland required)
@@ -27,11 +29,12 @@ All platforms supported out of the box—Linux, macOS, Windows—without convolu
 
 ## Features
 
+- **Multi-modal by design** - Audio, video, and arbitrary data flow through the same graph. Build applications that see, hear, and process data simultaneously
+- **Graph-based processing** - Connect processors into pipelines. Data flows from inputs through processors to outputs, like nodes in a visual programming environment
 - **Zero legacy dependencies** - No GStreamer, FFmpeg, or libav. Pure Rust with platform-native APIs
-- **Graph-based processing pipeline** - Build complex media workflows by connecting processors
-- **GPU-accelerated video** - Hardware-accelerated encoding/decoding via Metal and wgpu
+- **GPU-accelerated** - Hardware-accelerated video encoding/decoding via Metal and wgpu
 - **Real-time audio** - Low-latency audio processing with CLAP plugin support
-- **Built for agentic workflows** - Designed for AI-driven video processing and automation
+- **Built for AI agents** - Designed for applications where AI models need to perceive and act on live data
 - **Cross-platform** - See platform support table below
 
 ## Platform Support
@@ -74,60 +77,48 @@ StreamLib uses an **open-core model** inspired by game engines like Unity and Un
 
 ### The Simple Version
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                                                             │
-│   ✅  BUILD PROCESSORS  →  FREE                                            │
-│   ✅  SELL PROCESSORS   →  FREE (you keep 100%)                            │
-│   ✅  PRIVATE SOURCE    →  FREE (no obligation to share)                   │
-│                                                                             │
-│   💼  RUN THE RUNTIME IN PRODUCTION  →  Commercial license required*       │
-│                                                                             │
-│   * Unless you fall under permitted uses (see below)                       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| What you want to do | Cost |
+|---------------------|------|
+| Build Processors | **Free** |
+| Sell Processors | **Free** (you keep 100%) |
+| Keep source private | **Free** (no obligation to share) |
+| Run the Runtime in production | Commercial license required* |
+
+*Unless you fall under permitted uses (see below)
 
 ### Build Anything, Own Everything
 
 **We don't own your Processors.** Just like Epic doesn't own games built with Unreal Engine, we don't own what you build with StreamLib.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          YOUR APPLICATION                                   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   ┌───────────────┐   ┌───────────────┐   ┌───────────────┐                │
-│   │  Your Custom  │   │   Community   │   │  Commercial   │                │
-│   │   Processor   │   │  Processors   │   │  Processors   │   YOURS        │
-│   │               │   │               │   │               │   100%         │
-│   │  (private or  │   │ (open source) │   │  (for sale)   │                │
-│   │   commercial) │   │               │   │               │                │
-│   └───────┬───────┘   └───────┬───────┘   └───────┬───────┘                │
-│           │                   │                   │                         │
-│           ▼                   ▼                   ▼                         │
-│   ┌─────────────────────────────────────────────────────────────────┐      │
-│   │                    Processor API                                 │      │
-│   │         ReactiveProcessor • ContinuousProcessor • etc.          │      │
-│   │                                                                  │      │
-│   │    LinkInput<T> ──────────────────────────────► LinkOutput<T>   │      │
-│   │                                                                  │      │
-│   │              VideoFrame • AudioFrame • DataFrame                 │      │
-│   └─────────────────────────────┬───────────────────────────────────┘      │
-│                                 │                                           │
-├─────────────────────────────────┼───────────────────────────────────────────┤
-│                                 ▼                                           │
-│   ┌─────────────────────────────────────────────────────────────────┐      │
-│   │                                                                  │      │
-│   │                    StreamLib Runtime (Protected)                 │      │
-│   │                                                                  │      │
-│   │    Graph Compiler • Scheduler • GPU Context • Link/Port Infra   │      │
-│   │                                                                  │      │
-│   │         BUSL-1.1: Restricted Uses require commercial license    │  ◄── │
-│   │                                                                  │      │
-│   └─────────────────────────────────────────────────────────────────┘      │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph APP["YOUR APPLICATION"]
+        subgraph YOURS["Yours 100%"]
+            P1["Your Custom Processor<br/><i>(private or commercial)</i>"]
+            P2["Community Processors<br/><i>(open source)</i>"]
+            P3["Commercial Processors<br/><i>(for sale)</i>"]
+        end
+
+        subgraph API["Processor API"]
+            TRAITS["ReactiveProcessor • ContinuousProcessor"]
+            PORTS["LinkInput‹T› ──► LinkOutput‹T›"]
+            FRAMES["VideoFrame • AudioFrame • DataFrame"]
+        end
+
+        P1 --> API
+        P2 --> API
+        P3 --> API
+    end
+
+    subgraph RUNTIME["StreamLib Runtime (Protected)"]
+        CORE["Graph Compiler • Scheduler • GPU Context • Link/Port Infra"]
+        LICENSE["BUSL-1.1: Restricted Uses require commercial license"]
+    end
+
+    API --> RUNTIME
+
+    style YOURS fill:#d4edda,stroke:#28a745
+    style RUNTIME fill:#fff3cd,stroke:#ffc107
 ```
 
 ### What You Can Do (No License Required)
