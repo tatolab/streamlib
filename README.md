@@ -20,7 +20,7 @@ This is an alternative to solutions like NVIDIA DeepStream that require CUDA and
 
 **Language support (roadmap):**
 - Rust (native, available now)
-- Python (via PyO3, in development)
+- Python (planned, separate repository)
 - TypeScript (planned)
 
 All platforms supported out of the box—Linux, macOS, Windows—without convoluted setup. Every processor is designed to be cross-platform from the start.
@@ -68,48 +68,120 @@ Run an example:
 cargo run -p camera-display
 ```
 
-## License
+## License & Business Model
 
-StreamLib is licensed under the [Business Source License 1.1](LICENSE).
+StreamLib uses an **open-core model** inspired by game engines like Unity and Unreal.
 
-### What This Means
+### The Simple Version
 
-**Covered by BUSL (no additional license required):**
-- Personal projects
-- Educational / Research
-- Internal evaluation
-- Open source projects
-- Commercial apps where StreamLib is a component
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│   ✅  BUILD PROCESSORS  →  FREE                                            │
+│   ✅  SELL PROCESSORS   →  FREE (you keep 100%)                            │
+│   ✅  PRIVATE SOURCE    →  FREE (no obligation to share)                   │
+│                                                                             │
+│   💼  RUN THE RUNTIME IN PRODUCTION  →  Commercial license required*       │
+│                                                                             │
+│   * Unless you fall under permitted uses (see below)                       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-**Requires a commercial license:**
+### Build Anything, Own Everything
 
-| Use Case | Commercial | Partner |
-|----------|:----------:|:-------:|
-| Commercial streaming platform / SaaS | ✅ | ✅ |
-| Competing SDK / framework | ✅ | ✅ |
-| Consultants / Integrators (multi-client) | | ✅ |
-| Agencies building client projects | | ✅ |
+**We don't own your Processors.** Just like Epic doesn't own games built with Unreal Engine, we don't own what you build with StreamLib.
 
-**Partner-exclusive benefits:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          YOUR APPLICATION                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌───────────────┐   ┌───────────────┐   ┌───────────────┐                │
+│   │  Your Custom  │   │   Community   │   │  Commercial   │                │
+│   │   Processor   │   │  Processors   │   │  Processors   │   YOURS        │
+│   │               │   │               │   │               │   100%         │
+│   │  (private or  │   │ (open source) │   │  (for sale)   │                │
+│   │   commercial) │   │               │   │               │                │
+│   └───────┬───────┘   └───────┬───────┘   └───────┬───────┘                │
+│           │                   │                   │                         │
+│           ▼                   ▼                   ▼                         │
+│   ┌─────────────────────────────────────────────────────────────────┐      │
+│   │                    Processor API                                 │      │
+│   │         ReactiveProcessor • ContinuousProcessor • etc.          │      │
+│   │                                                                  │      │
+│   │    LinkInput<T> ──────────────────────────────► LinkOutput<T>   │      │
+│   │                                                                  │      │
+│   │              VideoFrame • AudioFrame • DataFrame                 │      │
+│   └─────────────────────────────┬───────────────────────────────────┘      │
+│                                 │                                           │
+├─────────────────────────────────┼───────────────────────────────────────────┤
+│                                 ▼                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐      │
+│   │                                                                  │      │
+│   │                    StreamLib Runtime Engine                      │      │
+│   │                                                                  │      │
+│   │    Graph Compiler • Scheduler • GPU Context • Thread Pool       │  ←── │
+│   │                                                                  │      │
+│   │              BUSL-1.1 Licensed (see details below)              │      │
+│   │                                                                  │      │
+│   └─────────────────────────────────────────────────────────────────┘      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-| Benefit | Commercial | Partner |
-|---------|:----------:|:-------:|
-| Co-marketing opportunities | | ✅ |
-| Roadmap input & early access | | ✅ |
+### What You Can Do (No License Required)
+
+| Activity | Allowed? | Notes |
+|----------|:--------:|-------|
+| Build custom Processors | ✅ | For yourself, clients, or to sell |
+| Sell Processors commercially | ✅ | Keep 100% of revenue |
+| Keep Processor source private | ✅ | No obligation to open source |
+| Build Processors for clients | ✅ | Contractors/consultants welcome |
+| Personal/hobby projects | ✅ | No restrictions |
+| Educational/research use | ✅ | Universities, students, researchers |
+| Open source projects | ✅ | OSI-approved licenses |
+| Commercial apps (StreamLib as component) | ✅ | Video conferencing, security cameras, robotics, etc. |
+
+### What Requires a Commercial License
+
+| Activity | License Required |
+|----------|:----------------:|
+| Building a competing streaming SDK/framework | ✅ Commercial |
+| Offering StreamLib as a managed/hosted SaaS | ✅ Commercial |
+| Reselling StreamLib's core functionality as a service | ✅ Commercial |
+
+### Why This Model?
+
+**For the community:** We want a thriving ecosystem of Processors. Whether you're building an AI video analyzer, a custom encoder, or a specialized filter—build it, sell it, keep it private. Your choice.
+
+**For sustainability:** The runtime engine requires significant investment to build and maintain. Commercial licenses from companies building competing platforms fund continued development.
+
+**For trust:** On **January 1, 2029**, StreamLib automatically converts to [Apache License 2.0](LICENSES/Apache-2.0.txt). The code will be fully open source with no restrictions, guaranteed.
+
+### The Game Engine Analogy
+
+| Game Engine | StreamLib |
+|-------------|-----------|
+| Engine (Unity/Unreal) | Runtime Engine |
+| Games you build | Processors you build |
+| Asset Store | Processor marketplace (coming soon) |
+| You own your games | You own your Processors |
+| Engine is licensed | Runtime is BUSL-1.1 |
 
 ### Commercial Licensing
 
-**[Commercial License](docs/license/COMMERCIAL-LICENSING.md)** — For companies building products or services that require production use rights.
+Need a commercial license? Two options:
 
-**[Partner License](docs/license/PARTNER-LICENSING.md)** — For consultants, integrators, and agencies. Includes co-marketing, roadmap input, and early access.
+**[Commercial License](docs/license/COMMERCIAL-LICENSING.md)** — For companies building streaming platforms or competing products.
 
-See [docs/license/](docs/license/) for full licensing documentation.
+**[Partner License](docs/license/PARTNER-LICENSING.md)** — For consultants, agencies, and integrators. Includes co-marketing, roadmap input, and early access.
 
-**Contact:** fontanezj1@gmail.com (response within one week)
+**Contact:** fontanezj1@gmail.com
 
-### Change Date
+### Full License
 
-On **January 1, 2029**, StreamLib automatically converts to [Apache License 2.0](LICENSES/Apache-2.0.txt) and becomes fully open source with no restrictions.
+StreamLib is licensed under the [Business Source License 1.1](LICENSE). See the LICENSE file for complete terms including the Additional Use Grant that explicitly permits Processor development.
 
 ## Contributing
 

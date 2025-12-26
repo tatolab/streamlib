@@ -37,7 +37,24 @@ Additional Use Grant: You may make production use of the Licensed Work, provided
 
                       (d) Use in commercial products where StreamLib is not the
                           primary value proposition (e.g., a video conferencing
-                          app, a security camera system, a robotics application).
+                          app, a security camera system, a robotics application);
+
+                      (e) Building, distributing, and selling custom Processors.
+                          "Processors" are components that implement StreamLib's
+                          processor traits (ReactiveProcessor, ContinuousProcessor,
+                          ManualProcessor) to add functionality to the pipeline.
+
+                          YOU OWN YOUR PROCESSORS. StreamLib claims no rights to
+                          Processor code you create. You may:
+                          - License your Processors under any terms (including
+                            proprietary/commercial)
+                          - Sell your Processors for any price
+                          - Keep your Processor source code private
+                          - Build Processors for clients as a contractor/consultant
+
+                          This grant exists to encourage a thriving ecosystem of
+                          community and commercial Processors, similar to how game
+                          engines enable developers to build and sell games.
 
                       For any use not covered above, you must obtain a commercial
                       license. Two options are available:
