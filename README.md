@@ -92,30 +92,11 @@ StreamLib uses an **open-core model** inspired by game engines like Unity and Un
 
 ```mermaid
 flowchart TB
-    subgraph APP["YOUR APPLICATION"]
-        subgraph YOURS["Yours 100%"]
-            P1["Your Custom Processor<br/><i>(private or commercial)</i>"]
-            P2["Community Processors<br/><i>(open source)</i>"]
-            P3["Commercial Processors<br/><i>(for sale)</i>"]
-        end
+    YOURS["<b>Your Processors</b><br/>Custom • Community • Commercial<br/><i>Yours 100% — sell, keep private, open source</i>"]
+    API["<b>Processor API</b><br/>ReactiveProcessor • LinkInput/Output • VideoFrame • AudioFrame"]
+    RUNTIME["<b>StreamLib Runtime</b><br/>Graph Compiler • Scheduler • GPU Context<br/><i>BUSL-1.1 — Restricted uses require license</i>"]
 
-        subgraph API["Processor API"]
-            TRAITS["ReactiveProcessor • ContinuousProcessor"]
-            PORTS["LinkInput‹T› ──► LinkOutput‹T›"]
-            FRAMES["VideoFrame • AudioFrame • DataFrame"]
-        end
-
-        P1 --> API
-        P2 --> API
-        P3 --> API
-    end
-
-    subgraph RUNTIME["StreamLib Runtime (Protected)"]
-        CORE["Graph Compiler • Scheduler • GPU Context • Link/Port Infra"]
-        LICENSE["BUSL-1.1: Restricted Uses require commercial license"]
-    end
-
-    API --> RUNTIME
+    YOURS --> API --> RUNTIME
 
     style YOURS fill:#d4edda,stroke:#28a745
     style RUNTIME fill:#fff3cd,stroke:#ffc107
