@@ -38,66 +38,16 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --workspace --features mcp,debug-overlay --bins --lib -- -D warnings
+        run: cargo clippy --workspace --features debug-overlay --bins --lib -- -D warnings
 
       - name: Build workspace
-        run: cargo build --workspace --features mcp,debug-overlay
+        run: cargo build --workspace --features debug-overlay
 
       - name: Run tests
-        run: cargo test --workspace --features mcp,debug-overlay --lib
+        run: cargo test --workspace --features debug-overlay --lib
 
       - name: Build examples
         run: |
           cargo build -p camera-display
           cargo build -p whep-player
           cargo build -p microphone-reverb-speaker
-
-  python-tests:
-    name: Python Tests
-    runs-on: macos-14
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11', '3.12']
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: brew install opus pkg-config
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-py${{ matrix.python-version }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install maturin
-        run: pip install maturin pytest
-
-      - name: Build Python package
-        working-directory: libs/streamlib
-        run: |
-          maturin build --features python --out ../../dist
-          pip install --force-reinstall ../../dist/*.whl
-
-      - name: Test Python import
-        run: python -c "import streamlib; print('StreamLib version:', streamlib.__version__)"
-
-      - name: Run Python tests (if they exist)
-        run: |
-          if [ -d "tests/python" ]; then
-            pytest tests/python -v
-          else
-            echo "No Python tests found, skipping"
-          fi

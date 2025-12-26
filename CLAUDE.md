@@ -268,16 +268,15 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 
 ## Project Overview
 
-StreamLib is a real-time audio/video processing framework for Rust and Python, featuring:
+StreamLib is a real-time audio/video processing framework for Rust, featuring:
 - GPU-accelerated video processing (wgpu/Metal)
 - Real-time audio processing with CLAP plugin support
 - Graph-based processor pipeline architecture
 - Platform-specific optimizations (macOS/iOS via Apple frameworks)
-- Python bindings via PyO3
 
 ## Repository Structure
 
-This is an **Nx monorepo** using Cargo workspaces to manage multiple related projects:
+This is a **Cargo workspace** managing multiple related projects:
 
 ```
 streamlib/
@@ -291,11 +290,9 @@ streamlib/
 │   ├── camera-display/      # Rust: Camera → Display pipeline
 │   ├── microphone-reverb-speaker/  # Rust: Audio with CLAP plugins
 │   ├── camera-audio-recorder/      # Rust: Record MP4 files
-│   ├── news-cast/                  # Rust: Multi-source composition
-│   └── python/                     # Python bindings examples
+│   └── news-cast/                  # Rust: Multi-source composition
 ├── docs/                     # Project documentation
-├── Cargo.toml               # Workspace configuration
-└── nx.json                  # Nx build system configuration
+└── Cargo.toml               # Workspace configuration
 ```
 
 ### Core Projects
@@ -375,8 +372,7 @@ cargo build --lib -p streamlib
 cargo build -p camera-display
 
 # Build with features
-cargo build -p streamlib --features python
-cargo build -p streamlib --features mcp
+cargo build -p streamlib --features debug-overlay
 ```
 
 ### Testing
@@ -632,6 +628,5 @@ This project uses the **rust-analyzer-lsp** Claude Code plugin (`rust-analyzer-l
 
 ## Additional Resources
 
-- **Nx workspace**: Uses Nx for caching and task orchestration
 - **Cargo workspace**: Manages dependencies and builds across crates
 - **Platform support**: macOS (primary), iOS (partial), Linux/Windows (core only)
