@@ -1,2 +1,6 @@
+packages:
+  - "apps/*"
+  - "libs/*"
+  - "examples/*"
 onlyBuiltDependencies:
   - nx

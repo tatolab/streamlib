@@ -22,6 +22,8 @@
   "homepage": "https://github.com/tato123/streamlib#readme",
   "devDependencies": {
     "@monodon/rust": "^2.3.0",
-    "@nx/workspace": "^21.6.5"
+    "@nx/next": "^21.6.8",
+    "@nx/workspace": "^21.6.5",
+    "nx": "^21.6.8"
   }
 }
