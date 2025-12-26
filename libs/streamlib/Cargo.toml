@@ -92,6 +92,7 @@ vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b20
 skrifa = { version = "0.22", optional = true }
 wgpu-profiler = { version = "0.23.0", optional = true }
 axum.workspace = true
+futures-util = "0.3"  # For StreamExt/SinkExt on WebSocket
 
 # MCP and Python dependencies removed - needs redesign for Phase 1
 # See feature comments above for TODO notes

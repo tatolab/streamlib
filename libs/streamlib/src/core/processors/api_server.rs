@@ -1,15 +1,25 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::core::pubsub::{topics, Event, EventListener, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
 use crate::{
     core::{Result, RuntimeContext},
     ProcessorSpec,
 };
-use axum::{extract::Path, extract::State, Json};
+use axum::{
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::Path,
+    extract::State,
+    response::IntoResponse,
+    Json,
+};
+use futures_util::{SinkExt, StreamExt};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiServerConfig {
@@ -101,6 +111,7 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
             .route("/api/connections", post(create_connection))
             .route("/api/connections/{id}", delete(delete_connection))
             .route("/api/registry", get(get_registry))
+            .route("/ws/events", get(websocket_handler))
             .with_state(state);
 
         let config = self.config.clone();
@@ -212,4 +223,74 @@ async fn delete_connection(
 async fn get_registry() -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
     let processors = PROCESSOR_REGISTRY.list_registered();
     Ok(Json(serde_json::json!({ "processors": processors })))
+}
+
+// ============================================================================
+// WebSocket Event Streaming
+// ============================================================================
+
+async fn websocket_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(handle_websocket)
+}
+
+async fn handle_websocket(socket: WebSocket) {
+    let (mut sender, mut receiver) = socket.split();
+
+    // Channel to bridge sync EventListener -> async WebSocket
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+
+    // Listener that forwards events to channel
+    let listener = Arc::new(Mutex::new(WebSocketEventForwarder { tx }));
+
+    // Subscribe to ALL topics via wildcard
+    PUBSUB.subscribe(topics::ALL, listener.clone());
+
+    tracing::info!("WebSocket client connected, subscribed to all events");
+
+    // Task: forward channel events to WebSocket
+    let send_task = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match serde_json::to_string(&event) {
+                Ok(json) => {
+                    if sender.send(Message::Text(json.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to serialize event: {}", e);
+                }
+            }
+        }
+    });
+
+    // Receive loop (keep-alive, handle close)
+    while let Some(msg) = receiver.next().await {
+        match msg {
+            Ok(Message::Close(_)) => {
+                tracing::info!("WebSocket client closed connection");
+                break;
+            }
+            Err(e) => {
+                tracing::warn!("WebSocket error: {}", e);
+                break;
+            }
+            _ => {} // axum handles ping/pong automatically
+        }
+    }
+
+    // Cleanup
+    drop(listener); // Weak ref cleanup on next publish
+    send_task.abort();
+    tracing::info!("WebSocket client disconnected");
+}
+
+struct WebSocketEventForwarder {
+    tx: tokio::sync::mpsc::UnboundedSender<Event>,
+}
+
+impl EventListener for WebSocketEventForwarder {
+    fn on_event(&mut self, event: &Event) -> Result<()> {
+        let _ = self.tx.send(event.clone());
+        Ok(())
+    }
 }

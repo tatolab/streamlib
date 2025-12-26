@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 /// Common topic constants for system events
 pub mod topics {
+    /// Wildcard topic - receives ALL events from any topic
+    pub const ALL: &str = "*";
+
     /// Runtime global events (lifecycle, errors)
     pub const RUNTIME_GLOBAL: &str = "runtime:global";
 
