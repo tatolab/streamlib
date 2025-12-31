@@ -51,14 +51,14 @@ pub struct AudioFrameSignal {
 pub struct AudioFrame {
     #[crate::field(
         internal,
-        type = "Arc<Vec<f32>>",
+        field_type = "Arc<Vec<f32>>",
         description = "Interleaved audio samples (f32, -1.0 to 1.0)"
     )]
     pub samples: Arc<Vec<f32>>,
 
     #[crate::field(
         internal,
-        type = "AudioChannelCount",
+        field_type = "AudioChannelCount",
         description = "Number of audio channels (1-8)"
     )]
     pub channels: AudioChannelCount,

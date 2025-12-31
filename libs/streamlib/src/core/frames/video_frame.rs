@@ -8,14 +8,14 @@ use std::sync::Arc;
 pub struct VideoFrame {
     #[crate::field(
         internal,
-        type = "Arc<wgpu::Texture>",
+        field_type = "Arc<wgpu::Texture>",
         description = "GPU texture containing the frame pixel data"
     )]
     pub texture: Arc<wgpu::Texture>,
 
     #[crate::field(
         internal,
-        type = "wgpu::TextureFormat",
+        field_type = "wgpu::TextureFormat",
         description = "Pixel format of the texture (e.g., Rgba8Unorm)"
     )]
     pub format: wgpu::TextureFormat,

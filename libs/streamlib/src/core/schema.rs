@@ -395,6 +395,35 @@ pub trait DataFrameSchema: Send + Sync {
     fn field_layout(&self, name: &str) -> Option<(usize, usize)>;
 }
 
+/// Errors that can occur when creating a DynamicDataFrameSchema.
+#[derive(Debug)]
+pub enum DynamicDataFrameSchemaError {
+    /// JSON parsing error.
+    Json(serde_json::Error),
+    /// Too many fields in the schema.
+    TooManyFields { count: usize, max: usize },
+}
+
+impl std::fmt::Display for DynamicDataFrameSchemaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DynamicDataFrameSchemaError::Json(e) => write!(f, "JSON parse error: {}", e),
+            DynamicDataFrameSchemaError::TooManyFields { count, max } => {
+                write!(f, "Too many fields: {} exceeds maximum of {}", count, max)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DynamicDataFrameSchemaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            DynamicDataFrameSchemaError::Json(e) => Some(e),
+            DynamicDataFrameSchemaError::TooManyFields { .. } => None,
+        }
+    }
+}
+
 /// Runtime implementation of DataFrameSchema from JSON.
 #[derive(Debug, Clone)]
 pub struct DynamicDataFrameSchema {
@@ -423,13 +452,23 @@ impl DynamicDataFrameSchema {
         }
     }
 
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+    /// Maximum number of fields allowed in a schema to prevent DoS.
+    pub const MAX_FIELDS: usize = 256;
+
+    pub fn from_json(json: &str) -> Result<Self, DynamicDataFrameSchemaError> {
         #[derive(Deserialize)]
         struct JsonSchema {
             name: String,
             fields: Vec<DataFrameSchemaField>,
         }
-        let parsed: JsonSchema = serde_json::from_str(json)?;
+        let parsed: JsonSchema =
+            serde_json::from_str(json).map_err(DynamicDataFrameSchemaError::Json)?;
+        if parsed.fields.len() > Self::MAX_FIELDS {
+            return Err(DynamicDataFrameSchemaError::TooManyFields {
+                count: parsed.fields.len(),
+                max: Self::MAX_FIELDS,
+            });
+        }
         Ok(Self::new(parsed.name, parsed.fields))
     }
 }

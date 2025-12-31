@@ -32,19 +32,23 @@ impl DataFrame {
     }
 
     /// Create a new DataFrame with provided data buffer.
-    pub fn from_data(schema: Arc<dyn DataFrameSchema>, data: Vec<u8>, timestamp_ns: i64) -> Self {
-        debug_assert_eq!(
-            data.len(),
-            schema.byte_size(),
-            "Data buffer size mismatch: expected {}, got {}",
-            schema.byte_size(),
-            data.len()
-        );
-        Self {
+    pub fn from_data(
+        schema: Arc<dyn DataFrameSchema>,
+        data: Vec<u8>,
+        timestamp_ns: i64,
+    ) -> Result<Self, DataFrameError> {
+        let expected = schema.byte_size();
+        if data.len() != expected {
+            return Err(DataFrameError::SizeMismatch {
+                expected,
+                actual: data.len(),
+            });
+        }
+        Ok(Self {
             schema,
             data,
             timestamp_ns,
-        }
+        })
     }
 
     /// Get a slice of f32 values for a field.
@@ -249,6 +253,8 @@ pub enum DataFrameError {
     FieldNotFound(String),
     /// Type mismatch when accessing field.
     TypeMismatch(String),
+    /// Data buffer size does not match schema byte size.
+    SizeMismatch { expected: usize, actual: usize },
 }
 
 impl std::fmt::Display for DataFrameError {
@@ -256,6 +262,13 @@ impl std::fmt::Display for DataFrameError {
         match self {
             DataFrameError::FieldNotFound(name) => write!(f, "Field not found: {}", name),
             DataFrameError::TypeMismatch(name) => write!(f, "Type mismatch for field: {}", name),
+            DataFrameError::SizeMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "Data buffer size mismatch: expected {} bytes, got {}",
+                    expected, actual
+                )
+            }
         }
     }
 }

@@ -143,9 +143,9 @@ impl FieldAttributes {
             self.skip = true;
         }
 
-        // Parse `type = "..."` - type is a keyword so we need manual parsing
-        if let Some(type_start) = tokens_str.find("type") {
-            let after_type = &tokens_str[type_start + 4..];
+        // Parse `field_type = "..."` - used instead of `type` since type is a Rust keyword
+        if let Some(type_start) = tokens_str.find("field_type") {
+            let after_type = &tokens_str[type_start + 10..];
             if let Some(eq_pos) = after_type.find('=') {
                 let after_eq = after_type[eq_pos + 1..].trim_start();
                 if let Some(stripped) = after_eq.strip_prefix('"') {
