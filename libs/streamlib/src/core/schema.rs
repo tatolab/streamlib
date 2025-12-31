@@ -13,7 +13,7 @@ pub struct SemanticVersion {
 }
 
 impl SemanticVersion {
-    pub fn new(major: u32, minor: u32, patch: u32) -> Self {
+    pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
         Self {
             major,
             minor,
@@ -73,11 +73,12 @@ pub enum FieldType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Field {
     pub name: String,
-    pub field_type: FieldType,
-    pub required: bool,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    pub field_type: FieldType,
+    pub required: bool,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
@@ -87,9 +88,9 @@ impl Field {
     pub fn new(name: impl Into<String>, field_type: FieldType) -> Self {
         Self {
             name: name.into(),
+            description: None,
             field_type,
             required: true,
-            description: None,
             metadata: None,
         }
     }
@@ -253,47 +254,455 @@ impl Schema {
     }
 }
 
+// =============================================================================
+// DataFrame Schema System
+// =============================================================================
+
+/// Content hint for schema buffer configuration.
+///
+/// Sets defaults for both buffer_size (rtrb ring buffer capacity) and read_behavior.
+/// Explicit `buffer_size` or `read_behavior` attributes override these defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentHint {
+    /// Audio content: buffer_size=32, read_behavior=ReadNextInOrder
+    Audio,
+    /// Video content: buffer_size=4, read_behavior=SkipToLatest
+    Video,
+    /// Control/command messages: buffer_size=2, read_behavior=ReadNextInOrder
+    Control,
+    /// Sensor/telemetry data: buffer_size=64, read_behavior=SkipToLatest
+    Sensor,
+    /// Default: buffer_size=16, read_behavior=SkipToLatest
+    #[default]
+    Default,
+}
+
+impl ContentHint {
+    /// Returns the default buffer size for this content hint.
+    pub const fn default_buffer_size(&self) -> usize {
+        match self {
+            ContentHint::Audio => 32,
+            ContentHint::Video => 4,
+            ContentHint::Control => 2,
+            ContentHint::Sensor => 64,
+            ContentHint::Default => 16,
+        }
+    }
+
+    /// Returns the default read behavior for this content hint.
+    pub const fn default_read_behavior(&self) -> crate::core::links::LinkBufferReadMode {
+        use crate::core::links::LinkBufferReadMode;
+        match self {
+            ContentHint::Audio | ContentHint::Control => LinkBufferReadMode::ReadNextInOrder,
+            ContentHint::Video | ContentHint::Sensor | ContentHint::Default => {
+                LinkBufferReadMode::SkipToLatest
+            }
+        }
+    }
+}
+
+/// Supported primitive types for DataFrameSchema fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrimitiveType {
+    Bool,
+    I32,
+    I64,
+    U32,
+    U64,
+    F32,
+    F64,
+}
+
+impl PrimitiveType {
+    /// Returns the size in bytes for this primitive type.
+    pub fn byte_size(&self) -> usize {
+        match self {
+            PrimitiveType::Bool => 1,
+            PrimitiveType::I32 | PrimitiveType::U32 | PrimitiveType::F32 => 4,
+            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::F64 => 8,
+        }
+    }
+
+    /// Converts to the corresponding FieldType for Schema compatibility.
+    pub fn to_field_type(&self) -> FieldType {
+        match self {
+            PrimitiveType::Bool => FieldType::Bool,
+            PrimitiveType::I32 => FieldType::Int32,
+            PrimitiveType::I64 => FieldType::Int64,
+            PrimitiveType::U32 => FieldType::UInt32,
+            PrimitiveType::U64 => FieldType::UInt64,
+            PrimitiveType::F32 => FieldType::Float32,
+            PrimitiveType::F64 => FieldType::Float64,
+        }
+    }
+}
+
+/// Helper for serde skip_serializing_if.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// A single field in a DataFrameSchema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataFrameSchemaField {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(rename = "type")]
+    pub type_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape: Vec<usize>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub internal: bool,
+    /// Primitive type for byte size calculations. None for internal fields.
+    #[serde(skip)]
+    pub primitive: Option<PrimitiveType>,
+}
+
+impl DataFrameSchemaField {
+    /// Computes total element count (product of shape dimensions, minimum 1).
+    pub fn element_count(&self) -> usize {
+        if self.shape.is_empty() {
+            1
+        } else {
+            self.shape.iter().product()
+        }
+    }
+
+    /// Computes total byte size for this field. Returns 0 for internal fields.
+    pub fn byte_size(&self) -> usize {
+        match &self.primitive {
+            Some(p) => self.element_count() * p.byte_size(),
+            None => 0, // Internal fields have no byte size
+        }
+    }
+}
+
+/// Trait for DataFrame schema implementations.
+pub trait DataFrameSchema: Send + Sync {
+    /// Schema name (e.g., "clip_embedding", "control_command").
+    fn name(&self) -> &str;
+
+    /// Ordered list of fields.
+    fn fields(&self) -> &[DataFrameSchemaField];
+
+    /// Total byte size of the schema.
+    fn byte_size(&self) -> usize;
+
+    /// Returns (byte_offset, byte_size) for a field, or None if not found.
+    fn field_layout(&self, name: &str) -> Option<(usize, usize)>;
+}
+
+/// Errors that can occur when creating a DynamicDataFrameSchema.
+#[derive(Debug)]
+pub enum DynamicDataFrameSchemaError {
+    /// JSON parsing error.
+    Json(serde_json::Error),
+    /// Too many fields in the schema.
+    TooManyFields { count: usize, max: usize },
+}
+
+impl std::fmt::Display for DynamicDataFrameSchemaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DynamicDataFrameSchemaError::Json(e) => write!(f, "JSON parse error: {}", e),
+            DynamicDataFrameSchemaError::TooManyFields { count, max } => {
+                write!(f, "Too many fields: {} exceeds maximum of {}", count, max)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DynamicDataFrameSchemaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            DynamicDataFrameSchemaError::Json(e) => Some(e),
+            DynamicDataFrameSchemaError::TooManyFields { .. } => None,
+        }
+    }
+}
+
+/// Runtime implementation of DataFrameSchema from JSON.
+#[derive(Debug, Clone)]
+pub struct DynamicDataFrameSchema {
+    name: String,
+    fields: Vec<DataFrameSchemaField>,
+    byte_size: usize,
+    field_offsets: HashMap<String, (usize, usize)>,
+}
+
+impl DynamicDataFrameSchema {
+    pub fn new(name: String, fields: Vec<DataFrameSchemaField>) -> Self {
+        let mut byte_size = 0;
+        let mut field_offsets = HashMap::new();
+
+        for field in &fields {
+            let field_size = field.byte_size();
+            field_offsets.insert(field.name.clone(), (byte_size, field_size));
+            byte_size += field_size;
+        }
+
+        Self {
+            name,
+            fields,
+            byte_size,
+            field_offsets,
+        }
+    }
+
+    /// Maximum number of fields allowed in a schema to prevent DoS.
+    pub const MAX_FIELDS: usize = 256;
+
+    pub fn from_json(json: &str) -> Result<Self, DynamicDataFrameSchemaError> {
+        #[derive(Deserialize)]
+        struct JsonSchema {
+            name: String,
+            fields: Vec<DataFrameSchemaField>,
+        }
+        let parsed: JsonSchema =
+            serde_json::from_str(json).map_err(DynamicDataFrameSchemaError::Json)?;
+        if parsed.fields.len() > Self::MAX_FIELDS {
+            return Err(DynamicDataFrameSchemaError::TooManyFields {
+                count: parsed.fields.len(),
+                max: Self::MAX_FIELDS,
+            });
+        }
+        Ok(Self::new(parsed.name, parsed.fields))
+    }
+}
+
+impl DataFrameSchema for DynamicDataFrameSchema {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn fields(&self) -> &[DataFrameSchemaField] {
+        &self.fields
+    }
+
+    fn byte_size(&self) -> usize {
+        self.byte_size
+    }
+
+    fn field_layout(&self, name: &str) -> Option<(usize, usize)> {
+        self.field_offsets.get(name).copied()
+    }
+}
+
+impl Default for DynamicDataFrameSchema {
+    fn default() -> Self {
+        Self::new("empty".to_string(), vec![])
+    }
+}
+
+/// Serializable representation of a DataFrameSchema for JSON/API transport.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataFrameSchemaDescriptor {
+    pub name: String,
+    pub fields: Vec<DataFrameSchemaField>,
+}
+
+impl DataFrameSchemaDescriptor {
+    pub fn from_schema(schema: &dyn DataFrameSchema) -> Self {
+        Self {
+            name: schema.name().to_string(),
+            fields: schema.fields().to_vec(),
+        }
+    }
+
+    pub fn to_dynamic(&self) -> DynamicDataFrameSchema {
+        DynamicDataFrameSchema::new(self.name.clone(), self.fields.clone())
+    }
+
+    /// Converts to a Schema for port descriptor compatibility.
+    /// Only includes non-internal fields with primitive types.
+    pub fn to_schema(&self) -> Arc<Schema> {
+        let fields = self
+            .fields
+            .iter()
+            .filter(|f| !f.internal && f.primitive.is_some())
+            .map(|f| {
+                let base_type = f.primitive.as_ref().unwrap().to_field_type();
+                // Wrap in Array for each dimension in shape
+                let field_type = if f.shape.is_empty() {
+                    base_type
+                } else {
+                    f.shape
+                        .iter()
+                        .fold(base_type, |acc, _| FieldType::Array(Box::new(acc)))
+                };
+                Field::new(&f.name, field_type)
+            })
+            .collect();
+
+        Arc::new(Schema::new(
+            &self.name,
+            SemanticVersion::new(1, 0, 0),
+            fields,
+            SerializationFormat::Bincode,
+        ))
+    }
+}
+
+// =============================================================================
+// Primitive DataFrame Schemas
+// =============================================================================
+
+/// Helper to create a primitive field.
+fn primitive_field(name: &str, type_name: &str, primitive: PrimitiveType) -> DataFrameSchemaField {
+    DataFrameSchemaField {
+        name: name.to_string(),
+        description: String::new(),
+        type_name: type_name.to_string(),
+        shape: vec![],
+        internal: false,
+        primitive: Some(primitive),
+    }
+}
+
+/// Primitive DataFrame schema for a single bool value.
+pub static PRIMITIVE_BOOL: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_bool".to_string(),
+        vec![primitive_field("value", "bool", PrimitiveType::Bool)],
+    ))
+});
+
+/// Primitive DataFrame schema for a single i32 value.
+pub static PRIMITIVE_I32: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_i32".to_string(),
+        vec![primitive_field("value", "i32", PrimitiveType::I32)],
+    ))
+});
+
+/// Primitive DataFrame schema for a single i64 value.
+pub static PRIMITIVE_I64: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_i64".to_string(),
+        vec![primitive_field("value", "i64", PrimitiveType::I64)],
+    ))
+});
+
+/// Primitive DataFrame schema for a single u32 value.
+pub static PRIMITIVE_U32: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_u32".to_string(),
+        vec![primitive_field("value", "u32", PrimitiveType::U32)],
+    ))
+});
+
+/// Primitive DataFrame schema for a single u64 value.
+pub static PRIMITIVE_U64: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_u64".to_string(),
+        vec![primitive_field("value", "u64", PrimitiveType::U64)],
+    ))
+});
+
+/// Primitive DataFrame schema for a single f32 value.
+pub static PRIMITIVE_F32: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_f32".to_string(),
+        vec![primitive_field("value", "f32", PrimitiveType::F32)],
+    ))
+});
+
+/// Primitive DataFrame schema for a single f64 value.
+pub static PRIMITIVE_F64: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_f64".to_string(),
+        vec![primitive_field("value", "f64", PrimitiveType::F64)],
+    ))
+});
+
+/// Creates a primitive DataFrame schema for an array of the given type and shape.
+pub fn primitive_array(primitive: PrimitiveType, shape: Vec<usize>) -> Arc<DynamicDataFrameSchema> {
+    let shape_str = shape
+        .iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join("x");
+    let name = format!("primitive_{:?}_{}", primitive, shape_str).to_lowercase();
+    let type_name = format!("{:?}", primitive).to_lowercase();
+
+    Arc::new(DynamicDataFrameSchema::new(
+        name,
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            description: String::new(),
+            type_name,
+            shape,
+            internal: false,
+            primitive: Some(primitive),
+        }],
+    ))
+}
+
+impl PrimitiveType {
+    /// Returns the static primitive DataFrame schema for this type (scalar only).
+    pub fn schema(&self) -> Arc<DynamicDataFrameSchema> {
+        match self {
+            PrimitiveType::Bool => PRIMITIVE_BOOL.clone(),
+            PrimitiveType::I32 => PRIMITIVE_I32.clone(),
+            PrimitiveType::I64 => PRIMITIVE_I64.clone(),
+            PrimitiveType::U32 => PRIMITIVE_U32.clone(),
+            PrimitiveType::U64 => PRIMITIVE_U64.clone(),
+            PrimitiveType::F32 => PRIMITIVE_F32.clone(),
+            PrimitiveType::F64 => PRIMITIVE_F64.clone(),
+        }
+    }
+
+    /// Creates a primitive DataFrame schema for an array of this type.
+    pub fn array_schema(&self, shape: Vec<usize>) -> Arc<DynamicDataFrameSchema> {
+        primitive_array(*self, shape)
+    }
+}
+
+impl DataFrameSchemaField {
+    /// Returns a primitive DataFrame schema matching this field's type and shape.
+    /// Returns None for internal fields without a primitive type.
+    pub fn to_primitive_schema(&self) -> Option<Arc<DynamicDataFrameSchema>> {
+        self.primitive.map(|p| {
+            if self.shape.is_empty() {
+                p.schema()
+            } else {
+                p.array_schema(self.shape.clone())
+            }
+        })
+    }
+}
+
+// =============================================================================
+// Port and Processor Descriptors
+// =============================================================================
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortDescriptor {
     pub name: String,
 
-    #[serde(
-        serialize_with = "serialize_arc_schema",
-        deserialize_with = "deserialize_arc_schema"
-    )]
-    pub schema: Arc<Schema>,
+    pub description: String,
+
+    /// Reference to a schema by name (looked up in SCHEMA_REGISTRY).
+    pub schema: String,
 
     pub required: bool,
-
-    pub description: String,
-}
-
-fn serialize_arc_schema<S>(schema: &Arc<Schema>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    schema.as_ref().serialize(serializer)
-}
-
-fn deserialize_arc_schema<'de, D>(deserializer: D) -> Result<Arc<Schema>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Schema::deserialize(deserializer).map(Arc::new)
 }
 
 impl PortDescriptor {
     pub fn new(
         name: impl Into<String>,
-        schema: Arc<Schema>,
-        required: bool,
         description: impl Into<String>,
+        schema: impl Into<String>,
+        required: bool,
     ) -> Self {
         Self {
             name: name.into(),
-            schema,
-            required,
             description: description.into(),
+            schema: schema.into(),
+            required,
         }
     }
 }
@@ -759,5 +1168,199 @@ mod tests {
 
         let yaml = schema.to_yaml().expect("Failed to serialize to YAML");
         assert!(yaml.contains("TestSchema"));
+    }
+
+    #[test]
+    fn test_derive_dataframe_schema() {
+        #[derive(crate::DataFrameSchema)]
+        #[schema(name = "test_embedding")]
+        struct TestEmbeddingSchema {
+            embedding: [f32; 4],
+            timestamp: i64,
+            active: bool,
+        }
+
+        let schema = TestEmbeddingSchema {
+            embedding: [0.0; 4],
+            timestamp: 0,
+            active: false,
+        };
+
+        // Test name
+        assert_eq!(schema.name(), "test_embedding");
+
+        // Test fields
+        let fields = schema.fields();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].name, "embedding");
+        assert_eq!(fields[0].primitive, Some(PrimitiveType::F32));
+        assert_eq!(fields[0].shape, vec![4]);
+        assert_eq!(fields[1].name, "timestamp");
+        assert_eq!(fields[1].primitive, Some(PrimitiveType::I64));
+        assert_eq!(fields[2].name, "active");
+        assert_eq!(fields[2].primitive, Some(PrimitiveType::Bool));
+
+        // Test byte_size: 4*4 (f32) + 8 (i64) + 1 (bool) = 25
+        assert_eq!(schema.byte_size(), 25);
+
+        // Test field_layout
+        assert_eq!(schema.field_layout("embedding"), Some((0, 16)));
+        assert_eq!(schema.field_layout("timestamp"), Some((16, 8)));
+        assert_eq!(schema.field_layout("active"), Some((24, 1)));
+        assert_eq!(schema.field_layout("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_derive_dataframe_schema_multi_dim_array() {
+        #[derive(crate::DataFrameSchema)]
+        #[schema(name = "image_patch")]
+        struct ImagePatchSchema {
+            patch: [[f32; 4]; 4],
+        }
+
+        let schema = ImagePatchSchema {
+            patch: [[0.0; 4]; 4],
+        };
+
+        assert_eq!(schema.name(), "image_patch");
+
+        let fields = schema.fields();
+        assert_eq!(fields[0].shape, vec![4, 4]);
+        assert_eq!(schema.byte_size(), 64); // 4 * 4 * 4 bytes
+    }
+
+    #[test]
+    fn test_derive_dataframe_schema_default_name() {
+        #[derive(crate::DataFrameSchema)]
+        struct MyCustomSchema {
+            value: f64,
+        }
+
+        let schema = MyCustomSchema { value: 0.0 };
+
+        // Default name is struct name
+        assert_eq!(schema.name(), "MyCustomSchema");
+    }
+
+    // Schema type for test_processor_with_schema_attribute test
+    // Defined at module level due to macro hygiene requirements
+    #[derive(Default, crate::DataFrameSchema)]
+    #[schema(name = "test_embedding")]
+    struct TestProcessorSchema {
+        values: [f32; 8],
+        timestamp: i64,
+    }
+
+    #[crate::processor(execution = Manual, description = "Test processor with schema")]
+    struct SchemaTestProcessor {
+        #[crate::input(description = "Input with schema", schema = TestProcessorSchema)]
+        input: crate::core::links::LinkInput<crate::core::frames::DataFrame>,
+
+        #[crate::output(description = "Output with schema", schema = TestProcessorSchema)]
+        output: crate::core::links::LinkOutput<crate::core::frames::DataFrame>,
+
+        #[crate::config]
+        config: (),
+    }
+
+    impl crate::core::ManualProcessor for SchemaTestProcessor::Processor {
+        fn setup(
+            &mut self,
+            _ctx: crate::core::context::RuntimeContext,
+        ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
+            std::future::ready(Ok(()))
+        }
+        fn teardown(
+            &mut self,
+        ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
+            std::future::ready(Ok(()))
+        }
+        fn start(&mut self) -> crate::core::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_processor_with_schema_attribute() {
+        use crate::core::GeneratedProcessor;
+
+        // Get the descriptor and check schema references
+        let descriptor = SchemaTestProcessor::Processor::descriptor().unwrap();
+
+        // Check input port references the schema by name
+        let input_port = &descriptor.inputs[0];
+        assert_eq!(input_port.schema, "test_embedding");
+
+        // Check output port references the schema by name
+        let output_port = &descriptor.outputs[0];
+        assert_eq!(output_port.schema, "test_embedding");
+
+        // Verify the schema struct implements DataFrameSchema correctly
+        let schema = TestProcessorSchema::default();
+        assert_eq!(
+            crate::core::schema::DataFrameSchema::name(&schema),
+            "test_embedding"
+        );
+        assert_eq!(
+            crate::core::schema::DataFrameSchema::fields(&schema).len(),
+            2
+        );
+        assert_eq!(
+            crate::core::schema::DataFrameSchema::fields(&schema)[0].name,
+            "values"
+        );
+    }
+
+    #[test]
+    fn test_primitive_schemas() {
+        use super::*;
+
+        // Test scalar primitives
+        assert_eq!(PRIMITIVE_F32.name(), "primitive_f32");
+        assert_eq!(PRIMITIVE_F32.fields().len(), 1);
+        assert_eq!(PRIMITIVE_F32.fields()[0].name, "value");
+        assert_eq!(
+            PRIMITIVE_F32.fields()[0].primitive,
+            Some(PrimitiveType::F32)
+        );
+        assert_eq!(PRIMITIVE_F32.fields()[0].shape, Vec::<usize>::new());
+        assert_eq!(PRIMITIVE_F32.byte_size(), 4);
+
+        assert_eq!(PRIMITIVE_I64.name(), "primitive_i64");
+        assert_eq!(PRIMITIVE_I64.byte_size(), 8);
+
+        assert_eq!(PRIMITIVE_BOOL.name(), "primitive_bool");
+        assert_eq!(PRIMITIVE_BOOL.byte_size(), 1);
+
+        // Test PrimitiveType::schema() helper
+        let f32_schema = PrimitiveType::F32.schema();
+        assert_eq!(f32_schema.name(), "primitive_f32");
+
+        // Test array schema creation
+        let array_schema = PrimitiveType::F32.array_schema(vec![512]);
+        assert_eq!(array_schema.name(), "primitive_f32_512");
+        assert_eq!(array_schema.fields()[0].shape, vec![512]);
+        assert_eq!(array_schema.byte_size(), 512 * 4);
+
+        // Test multi-dimensional array
+        let matrix_schema = primitive_array(PrimitiveType::F32, vec![4, 4]);
+        assert_eq!(matrix_schema.name(), "primitive_f32_4x4");
+        assert_eq!(matrix_schema.byte_size(), 16 * 4);
+
+        // Test DataFrameSchemaField::to_primitive_schema
+        let field = primitive_field("confidence", "f32", PrimitiveType::F32);
+        let primitive_schema = field.to_primitive_schema().unwrap();
+        assert_eq!(primitive_schema.name(), "primitive_f32");
+
+        let array_field = DataFrameSchemaField {
+            name: "embedding".to_string(),
+            description: String::new(),
+            type_name: "f32".to_string(),
+            primitive: Some(PrimitiveType::F32),
+            shape: vec![512],
+            internal: false,
+        };
+        let array_primitive_schema = array_field.to_primitive_schema().unwrap();
+        assert_eq!(array_primitive_schema.name(), "primitive_f32_512");
     }
 }

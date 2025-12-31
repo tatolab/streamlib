@@ -26,6 +26,10 @@ pub struct ProcessorAttributes {
     /// Custom processor name: `name = "..."`
     /// If not specified, defaults to the struct name.
     pub name: Option<String>,
+
+    /// Custom descriptor function: `descriptor_fn = "method_name"`
+    /// If specified, the generated code will call this method for `descriptor_instance()`.
+    pub descriptor_fn: Option<String>,
 }
 
 /// Parsed attributes from `#[input(...)]` or `#[output(...)]`
@@ -36,6 +40,9 @@ pub struct PortAttributes {
 
     /// Port description: `description = "..."`
     pub description: Option<String>,
+
+    /// DataFrame schema type: `schema = MySchemaType`
+    pub schema: Option<syn::Path>,
 }
 
 /// Parsed attributes from `#[state]`
@@ -175,6 +182,13 @@ impl ProcessorAttributes {
                 return Ok(());
             }
 
+            // descriptor_fn = "method_name" (custom descriptor function)
+            if meta.path.is_ident("descriptor_fn") {
+                let value = parse_string_value(&meta)?;
+                result.descriptor_fn = Some(value);
+                return Ok(());
+            }
+
             Err(meta.error("unsupported processor attribute"))
         })
     }
@@ -214,6 +228,13 @@ impl PortAttributes {
                 if meta.path.is_ident("description") {
                     let value = parse_string_value(&meta)?;
                     result.description = Some(value);
+                    return Ok(());
+                }
+
+                // schema = MySchemaType
+                if meta.path.is_ident("schema") {
+                    let path: syn::Path = meta.value()?.parse()?;
+                    result.schema = Some(path);
                     return Ok(());
                 }
 
@@ -392,5 +413,14 @@ mod tests {
         let result = PortAttributes::parse(&attrs, "input").unwrap();
         assert_eq!(result.custom_name, None);
         assert_eq!(result.description, None);
+    }
+
+    #[test]
+    fn test_parse_descriptor_fn() {
+        let args: TokenStream =
+            quote::quote! { execution = Reactive, descriptor_fn = "build_descriptor" };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.descriptor_fn, Some("build_descriptor".to_string()));
+        assert_eq!(result.execution_mode, Some(ProcessExecution::Reactive));
     }
 }

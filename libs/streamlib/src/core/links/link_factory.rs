@@ -6,10 +6,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::runtime::{BoxedLinkInstance, LinkInstance};
-use super::traits::LinkPortType;
-use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
-use crate::core::graph::{LinkCapacity, LinkTypeInfoComponent};
+use super::runtime::BoxedLinkInstance;
+use crate::core::graph::{LinkCapacity, LinkTypeInfoComponent, LinkUniqueId};
+use crate::core::schema_registry::SCHEMA_REGISTRY;
 use crate::core::Result;
 
 /// Result of creating a link instance.
@@ -26,20 +25,21 @@ pub struct LinkInstanceCreationResult {
 
 /// Factory for creating link instances.
 ///
-/// Mirrors `FactoryDelegate` for processors. Creates `LinkInstance` objects
-/// based on the port type (Audio, Video, Data).
+/// Creates `LinkInstance` objects based on schema name.
 pub trait LinkFactoryDelegate: Send + Sync {
-    /// Create a link instance for the given port type.
-    fn create(
+    /// Create a link instance for the given schema name and link ID.
+    /// Returns pre-wrapped data writers/readers that include the link ID.
+    fn create_by_schema(
         &self,
-        port_type: LinkPortType,
+        schema_name: &str,
         capacity: LinkCapacity,
+        link_id: &LinkUniqueId,
     ) -> Result<LinkInstanceCreationResult>;
 }
 
 /// Default link factory implementation.
 ///
-/// Creates ring-buffer-based `LinkInstance` objects for each port type.
+/// Creates ring-buffer-based `LinkInstance` objects using the schema registry.
 pub struct DefaultLinkFactory;
 
 impl DefaultLinkFactory {
@@ -55,44 +55,25 @@ impl Default for DefaultLinkFactory {
 }
 
 impl LinkFactoryDelegate for DefaultLinkFactory {
-    fn create(
+    fn create_by_schema(
         &self,
-        port_type: LinkPortType,
+        schema_name: &str,
         capacity: LinkCapacity,
+        link_id: &LinkUniqueId,
     ) -> Result<LinkInstanceCreationResult> {
-        match port_type {
-            LinkPortType::Audio => create_typed_instance::<AudioFrame>(capacity),
-            LinkPortType::Video => create_typed_instance::<VideoFrame>(capacity),
-            LinkPortType::Data => create_typed_instance::<DataFrame>(capacity),
-        }
+        SCHEMA_REGISTRY.create_link_instance(schema_name, capacity, link_id)
     }
-}
-
-/// Create a typed link instance and return boxed components.
-fn create_typed_instance<T>(capacity: LinkCapacity) -> Result<LinkInstanceCreationResult>
-where
-    T: crate::core::LinkPortMessage + 'static,
-{
-    let instance = LinkInstance::<T>::new(capacity);
-    let data_writer = instance.create_link_output_data_writer();
-    let data_reader = instance.create_link_input_data_reader();
-
-    Ok(LinkInstanceCreationResult {
-        instance: Box::new(instance),
-        type_info: LinkTypeInfoComponent::new::<T>(capacity),
-        data_writer: Box::new(data_writer),
-        data_reader: Box::new(data_reader),
-    })
 }
 
 // Blanket impl for Arc
 impl<T: LinkFactoryDelegate + ?Sized> LinkFactoryDelegate for Arc<T> {
-    fn create(
+    fn create_by_schema(
         &self,
-        port_type: LinkPortType,
+        schema_name: &str,
         capacity: LinkCapacity,
+        link_id: &LinkUniqueId,
     ) -> Result<LinkInstanceCreationResult> {
-        (**self).create(port_type, capacity)
+        (**self).create_by_schema(schema_name, capacity, link_id)
     }
 }
 
@@ -103,9 +84,10 @@ mod tests {
     #[test]
     fn test_default_factory_audio() {
         let factory = DefaultLinkFactory::new();
+        let link_id = LinkUniqueId::from("test-audio-link");
 
         let result = factory
-            .create(LinkPortType::Audio, 4.into())
+            .create_by_schema("AudioFrame", 4.into(), &link_id)
             .expect("should create audio link");
 
         assert_eq!(result.type_info.capacity, 4.into());
@@ -115,9 +97,10 @@ mod tests {
     #[test]
     fn test_default_factory_video() {
         let factory = DefaultLinkFactory::new();
+        let link_id = LinkUniqueId::from("test-video-link");
 
         let result = factory
-            .create(LinkPortType::Video, LinkCapacity::from(8))
+            .create_by_schema("VideoFrame", LinkCapacity::from(8), &link_id)
             .expect("should create video link");
 
         assert_eq!(result.type_info.capacity, 8.into());
@@ -125,14 +108,12 @@ mod tests {
     }
 
     #[test]
-    fn test_default_factory_data() {
+    fn test_default_factory_unknown_schema() {
         let factory = DefaultLinkFactory::new();
+        let link_id = LinkUniqueId::from("test-unknown-link");
 
-        let result = factory
-            .create(LinkPortType::Data, LinkCapacity::from(16))
-            .expect("should create data link");
-
-        assert_eq!(result.type_info.capacity, 16.into());
-        assert!(result.type_info.type_name.contains("DataFrame"));
+        // Unregistered schema should fail
+        let result = factory.create_by_schema("UnknownSchema", LinkCapacity::from(16), &link_id);
+        assert!(result.is_err());
     }
 }

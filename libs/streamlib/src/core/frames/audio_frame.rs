@@ -1,17 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::metadata::MetadataValue;
-use crate::core::links::{LinkPortMessage, LinkPortType};
 use dasp::slice::{FromSampleSlice, ToSampleSlice};
 use dasp::Frame;
 use dasp::Signal;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-
-// Implement sealed trait for AudioFrame
-impl crate::core::links::LinkPortMessageImplementor for AudioFrame {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -52,14 +46,31 @@ pub struct AudioFrameSignal {
     position: usize,
 }
 
+#[crate::schema(content_hint = Audio)]
 #[derive(Clone)]
 pub struct AudioFrame {
+    #[crate::field(
+        internal,
+        field_type = "Arc<Vec<f32>>",
+        description = "Interleaved audio samples (f32, -1.0 to 1.0)"
+    )]
     pub samples: Arc<Vec<f32>>,
+
+    #[crate::field(
+        internal,
+        field_type = "AudioChannelCount",
+        description = "Number of audio channels (1-8)"
+    )]
     pub channels: AudioChannelCount,
+
+    #[crate::field(description = "Monotonic timestamp in nanoseconds")]
     pub timestamp_ns: i64,
+
+    #[crate::field(description = "Sequential frame number")]
     pub frame_number: u64,
+
+    #[crate::field(description = "Sample rate in Hz (e.g., 44100, 48000)")]
     pub sample_rate: u32,
-    pub metadata: Option<HashMap<String, MetadataValue>>,
 }
 
 impl AudioFrame {
@@ -85,7 +96,6 @@ impl AudioFrame {
             timestamp_ns,
             frame_number,
             sample_rate,
-            metadata: None,
         }
     }
 
@@ -160,34 +170,6 @@ impl AudioFrame {
         let sample_slice: &[f32] = frames.to_sample_slice();
         let samples = sample_slice.to_vec();
         Self::new(samples, channels, timestamp_ns, frame_number, sample_rate)
-    }
-}
-
-impl LinkPortMessage for AudioFrame {
-    fn port_type() -> LinkPortType {
-        LinkPortType::Audio
-    }
-
-    fn schema() -> std::sync::Arc<crate::core::Schema> {
-        std::sync::Arc::clone(&crate::core::SCHEMA_AUDIO_FRAME)
-    }
-
-    fn examples() -> Vec<(&'static str, serde_json::Value)> {
-        vec![(
-            "AudioFrame",
-            serde_json::json!({
-                "sample_count": 2048,
-                "channels": 2,
-                "timestamp_ns": 0,
-                "frame_number": 1,
-                "metadata": {}
-            }),
-        )]
-    }
-
-    fn link_read_behavior() -> crate::core::links::LinkBufferReadMode {
-        // Audio frames must be read in order to avoid audio dropouts/glitches
-        crate::core::links::LinkBufferReadMode::ReadNextInOrder
     }
 }
 

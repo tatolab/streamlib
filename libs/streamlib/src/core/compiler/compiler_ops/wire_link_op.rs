@@ -11,14 +11,14 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::error::{Result, StreamError};
-use crate::core::frames::{AudioFrame, DataFrame, VideoFrame};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef,
     LinkInstanceComponent, LinkOutputToProcessorWriterAndReader, LinkState, LinkStateComponent,
     LinkTypeInfoComponent, LinkUniqueId, OutputLinkPortRef, ProcessorInstanceComponent,
 };
-use crate::core::links::{LinkFactoryDelegate, LinkPortType};
+use crate::core::links::LinkFactoryDelegate;
 use crate::core::processors::ProcessorInstance;
+use crate::core::schema_registry::SCHEMA_REGISTRY;
 use crate::core::ProcessorUniqueId;
 use crate::LinkCapacity;
 
@@ -137,7 +137,7 @@ fn wire_link_ports(
 
     validate_audio_compatibility(&source_processor, &dest_processor, from_port, to_port)?;
 
-    let (source_port_type, _dest_port_type) = validate_port_types(
+    let source_schema_name = validate_schema_compatibility(
         &source_processor,
         &dest_processor,
         &source_port,
@@ -146,10 +146,15 @@ fn wire_link_ports(
         to_port,
     )?;
 
-    let capacity = source_port_type.default_capacity();
+    let capacity = get_default_capacity_for_schema(&source_schema_name);
 
-    // Create link instance via factory
-    let creation_result = link_factory.create(source_port_type, LinkCapacity::from(capacity))?;
+    // Create link instance via factory using schema name
+    // Factory returns pre-wrapped data writers/readers that include the link_id
+    let creation_result = link_factory.create_by_schema(
+        &source_schema_name,
+        LinkCapacity::from(capacity),
+        link_id,
+    )?;
 
     // Store instance and type info as components on the link
     let link = graph
@@ -160,23 +165,11 @@ fn wire_link_ports(
     link.insert(LinkInstanceComponent(creation_result.instance));
     link.insert(creation_result.type_info);
 
-    // Wire data writer to source processor
-    wire_data_writer_to_processor(
-        &source_processor,
-        &source_port,
-        link_id,
-        source_port_type,
-        creation_result.data_writer,
-    )?;
+    // Wire pre-wrapped data writer to source processor
+    wire_data_writer_to_processor(&source_processor, &source_port, creation_result.data_writer)?;
 
-    // Wire data reader to destination processor
-    wire_data_reader_to_processor(
-        &dest_processor,
-        &dest_port,
-        link_id,
-        source_port_type,
-        creation_result.data_reader,
-    )?;
+    // Wire pre-wrapped data reader to destination processor
+    wire_data_reader_to_processor(&dest_processor, &dest_port, creation_result.data_reader)?;
 
     setup_link_output_to_processor_message_writer(
         graph,
@@ -262,19 +255,19 @@ fn validate_audio_compatibility(
     Ok(())
 }
 
-fn validate_port_types(
+fn validate_schema_compatibility(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     source_port: &str,
     dest_port: &str,
     from_port: &OutputLinkPortRef,
     to_port: &InputLinkPortRef,
-) -> Result<(LinkPortType, LinkPortType)> {
+) -> Result<String> {
     let source_guard = source_processor.lock();
     let dest_guard = dest_processor.lock();
 
-    let src_type = source_guard
-        .get_output_port_type(source_port)
+    let source_schema = source_guard
+        .get_output_schema_name(source_port)
         .ok_or_else(|| {
             StreamError::Configuration(format!(
                 "Source processor does not have output port '{}'",
@@ -282,134 +275,47 @@ fn validate_port_types(
             ))
         })?;
 
-    let dst_type = dest_guard.get_input_port_type(dest_port).ok_or_else(|| {
+    let dest_schema = dest_guard.get_input_schema_name(dest_port).ok_or_else(|| {
         StreamError::Configuration(format!(
             "Destination processor does not have input port '{}'",
             dest_port
         ))
     })?;
 
-    if !src_type.compatible_with(&dst_type) {
+    // Check schema compatibility via registry
+    if !SCHEMA_REGISTRY.compatible(source_schema, dest_schema) {
         return Err(StreamError::Configuration(format!(
-            "Port type mismatch: {} ({:?}) → {} ({:?})",
-            from_port, src_type, to_port, dst_type
+            "Schema mismatch: {} ({}) → {} ({})",
+            from_port, source_schema, to_port, dest_schema
         )));
     }
 
-    Ok((src_type, dst_type))
+    Ok(source_schema.to_string())
 }
 
-/// Wrapper for passing LinkOutputDataWriter with its LinkUniqueId through Box<dyn Any>.
-pub struct LinkOutputDataWriterWrapper<T: crate::core::LinkPortMessage> {
-    pub link_id: LinkUniqueId,
-    pub data_writer: crate::core::LinkOutputDataWriter<T>,
-}
-
-/// Wrapper for passing LinkInputDataReader with its LinkUniqueId through Box<dyn Any>.
-pub struct LinkInputDataReaderWrapper<T: crate::core::LinkPortMessage> {
-    pub link_id: LinkUniqueId,
-    pub data_reader: crate::core::LinkInputDataReader<T>,
+fn get_default_capacity_for_schema(schema_name: &str) -> usize {
+    SCHEMA_REGISTRY.get_default_capacity(schema_name)
 }
 
 fn wire_data_writer_to_processor(
     processor: &Arc<Mutex<ProcessorInstance>>,
     port_name: &str,
-    link_id: &LinkUniqueId,
-    port_type: LinkPortType,
     data_writer: Box<dyn std::any::Any + Send>,
 ) -> Result<()> {
+    // Data writer is pre-wrapped with link_id by the schema factory
     let mut guard = processor.lock();
-
-    match port_type {
-        LinkPortType::Audio => {
-            let writer = data_writer
-                .downcast::<crate::core::LinkOutputDataWriter<AudioFrame>>()
-                .map_err(|_| StreamError::Link("Failed to downcast audio data writer".into()))?;
-            guard.add_link_output_data_writer(
-                port_name,
-                Box::new(LinkOutputDataWriterWrapper {
-                    link_id: link_id.clone(),
-                    data_writer: *writer,
-                }),
-            )?;
-        }
-        LinkPortType::Video => {
-            let writer = data_writer
-                .downcast::<crate::core::LinkOutputDataWriter<VideoFrame>>()
-                .map_err(|_| StreamError::Link("Failed to downcast video data writer".into()))?;
-            guard.add_link_output_data_writer(
-                port_name,
-                Box::new(LinkOutputDataWriterWrapper {
-                    link_id: link_id.clone(),
-                    data_writer: *writer,
-                }),
-            )?;
-        }
-        LinkPortType::Data => {
-            let writer = data_writer
-                .downcast::<crate::core::LinkOutputDataWriter<DataFrame>>()
-                .map_err(|_| StreamError::Link("Failed to downcast data writer".into()))?;
-            guard.add_link_output_data_writer(
-                port_name,
-                Box::new(LinkOutputDataWriterWrapper {
-                    link_id: link_id.clone(),
-                    data_writer: *writer,
-                }),
-            )?;
-        }
-    }
-
+    guard.add_link_output_data_writer(port_name, data_writer)?;
     Ok(())
 }
 
 fn wire_data_reader_to_processor(
     processor: &Arc<Mutex<ProcessorInstance>>,
     port_name: &str,
-    link_id: &LinkUniqueId,
-    port_type: LinkPortType,
     data_reader: Box<dyn std::any::Any + Send>,
 ) -> Result<()> {
+    // Data reader is pre-wrapped with link_id by the schema factory
     let mut guard = processor.lock();
-
-    match port_type {
-        LinkPortType::Audio => {
-            let reader = data_reader
-                .downcast::<crate::core::LinkInputDataReader<AudioFrame>>()
-                .map_err(|_| StreamError::Link("Failed to downcast audio data reader".into()))?;
-            guard.add_link_input_data_reader(
-                port_name,
-                Box::new(LinkInputDataReaderWrapper {
-                    link_id: link_id.clone(),
-                    data_reader: *reader,
-                }),
-            )?;
-        }
-        LinkPortType::Video => {
-            let reader = data_reader
-                .downcast::<crate::core::LinkInputDataReader<VideoFrame>>()
-                .map_err(|_| StreamError::Link("Failed to downcast video data reader".into()))?;
-            guard.add_link_input_data_reader(
-                port_name,
-                Box::new(LinkInputDataReaderWrapper {
-                    link_id: link_id.clone(),
-                    data_reader: *reader,
-                }),
-            )?;
-        }
-        LinkPortType::Data => {
-            let reader = data_reader
-                .downcast::<crate::core::LinkInputDataReader<DataFrame>>()
-                .map_err(|_| StreamError::Link("Failed to downcast data reader".into()))?;
-            guard.add_link_input_data_reader(
-                port_name,
-                Box::new(LinkInputDataReaderWrapper {
-                    link_id: link_id.clone(),
-                    data_reader: *reader,
-                }),
-            )?;
-        }
-    }
-
+    guard.add_link_input_data_reader(port_name, data_reader)?;
     Ok(())
 }
 

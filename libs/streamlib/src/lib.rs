@@ -26,7 +26,9 @@ pub mod core;
 // - #[streamlib::input] - Input port marker
 // - #[streamlib::output] - Output port marker
 // - #[streamlib::config] - Config field marker
-pub use streamlib_macros::{config, input, output, processor};
+// - #[streamlib::schema] - Schema definition for port message types
+// - #[streamlib::field] - Field customization within schema
+pub use streamlib_macros::{config, field, input, output, processor, schema, DataFrameSchema};
 
 pub use core::{
     are_synchronized,
@@ -35,6 +37,7 @@ pub use core::{
     input,
     media_clock::MediaClock,
     output,
+    primitive_array,
     timestamp_delta_ms,
     video_audio_delta_ms,
     video_audio_synchronized,
@@ -85,7 +88,6 @@ pub use core::{
     LinkPortMessage,
     LinkPortType,
     ManualProcessor,
-    MetadataValue,
     MixingStrategy,
     Mp4WriterConfig,
     // Streaming utilities:
@@ -116,6 +118,13 @@ pub use core::{
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
+    PRIMITIVE_BOOL,
+    PRIMITIVE_F32,
+    PRIMITIVE_F64,
+    PRIMITIVE_I32,
+    PRIMITIVE_I64,
+    PRIMITIVE_U32,
+    PRIMITIVE_U64,
     PROCESSOR_REGISTRY,
     SCHEMA_AUDIO_FRAME,
     SCHEMA_BOUNDING_BOX,

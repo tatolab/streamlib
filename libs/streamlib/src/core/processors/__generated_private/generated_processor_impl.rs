@@ -54,6 +54,8 @@ pub trait DynGeneratedProcessor: Send + 'static {
     fn execution_config(&self) -> ExecutionConfig;
     fn get_output_port_type(&self, port_name: &str) -> Option<LinkPortType>;
     fn get_input_port_type(&self, port_name: &str) -> Option<LinkPortType>;
+    fn get_output_schema_name(&self, port_name: &str) -> Option<&'static str>;
+    fn get_input_schema_name(&self, port_name: &str) -> Option<&'static str>;
 
     fn add_link_output_data_writer(
         &mut self,
@@ -140,7 +142,7 @@ where
     }
 
     fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
-        <T as GeneratedProcessor>::descriptor()
+        <Self as GeneratedProcessor>::descriptor_instance(self)
     }
 
     fn execution_config(&self) -> ExecutionConfig {
@@ -153,6 +155,14 @@ where
 
     fn get_input_port_type(&self, port_name: &str) -> Option<LinkPortType> {
         <Self as GeneratedProcessor>::get_input_port_type(self, port_name)
+    }
+
+    fn get_output_schema_name(&self, port_name: &str) -> Option<&'static str> {
+        <Self as GeneratedProcessor>::get_output_schema_name(self, port_name)
+    }
+
+    fn get_input_schema_name(&self, port_name: &str) -> Option<&'static str> {
+        <Self as GeneratedProcessor>::get_input_schema_name(self, port_name)
     }
 
     fn add_link_output_data_writer(

@@ -16,7 +16,18 @@ pub trait LinkPortMessage:
     crate::core::links::LinkPortMessageImplementor + Clone + Send + 'static
 {
     /// The type of port this message is sent through.
-    fn port_type() -> LinkPortType;
+    /// Deprecated: Use schema_name() for compatibility checking.
+    #[deprecated(note = "Use schema_name() for compatibility checking instead")]
+    fn port_type() -> LinkPortType {
+        LinkPortType::Data
+    }
+
+    /// Schema name for registry lookup and compatibility checking.
+    fn schema_name() -> &'static str {
+        // Default: extract from schema
+        // Override in #[streamlib::schema] macro for efficiency
+        "Unknown"
+    }
 
     /// Schema describing this message type.
     fn schema() -> Arc<Schema>;
