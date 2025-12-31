@@ -140,7 +140,7 @@ where
     }
 
     fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
-        <T as GeneratedProcessor>::descriptor()
+        <Self as GeneratedProcessor>::descriptor_instance(self)
     }
 
     fn execution_config(&self) -> ExecutionConfig {

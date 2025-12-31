@@ -279,10 +279,23 @@ impl PrimitiveType {
             PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::F64 => 8,
         }
     }
+
+    /// Converts to the corresponding FieldType for Schema compatibility.
+    pub fn to_field_type(&self) -> FieldType {
+        match self {
+            PrimitiveType::Bool => FieldType::Bool,
+            PrimitiveType::I32 => FieldType::Int32,
+            PrimitiveType::I64 => FieldType::Int64,
+            PrimitiveType::U32 => FieldType::UInt32,
+            PrimitiveType::U64 => FieldType::UInt64,
+            PrimitiveType::F32 => FieldType::Float32,
+            PrimitiveType::F64 => FieldType::Float64,
+        }
+    }
 }
 
 /// A single field in a DataFrameSchema.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DataFrameSchemaField {
     pub name: String,
     #[serde(rename = "type")]
@@ -379,6 +392,12 @@ impl DataFrameSchema for DynamicDataFrameSchema {
     }
 }
 
+impl Default for DynamicDataFrameSchema {
+    fn default() -> Self {
+        Self::new("empty".to_string(), vec![])
+    }
+}
+
 /// Serializable representation of a DataFrameSchema for JSON/API transport.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataFrameSchemaDescriptor {
@@ -396,6 +415,171 @@ impl DataFrameSchemaDescriptor {
 
     pub fn to_dynamic(&self) -> DynamicDataFrameSchema {
         DynamicDataFrameSchema::new(self.name.clone(), self.fields.clone())
+    }
+
+    /// Converts to a Schema for port descriptor compatibility.
+    pub fn to_schema(&self) -> Arc<Schema> {
+        let fields = self
+            .fields
+            .iter()
+            .map(|f| {
+                let base_type = f.primitive.to_field_type();
+                // Wrap in Array for each dimension in shape
+                let field_type = if f.shape.is_empty() {
+                    base_type
+                } else {
+                    f.shape
+                        .iter()
+                        .fold(base_type, |acc, _| FieldType::Array(Box::new(acc)))
+                };
+                Field::new(&f.name, field_type)
+            })
+            .collect();
+
+        Arc::new(Schema::new(
+            &self.name,
+            SemanticVersion::new(1, 0, 0),
+            fields,
+            SerializationFormat::Bincode,
+        ))
+    }
+}
+
+// =============================================================================
+// Primitive DataFrame Schemas
+// =============================================================================
+
+/// Primitive DataFrame schema for a single bool value.
+pub static PRIMITIVE_BOOL: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_bool".to_string(),
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive: PrimitiveType::Bool,
+            shape: vec![],
+        }],
+    ))
+});
+
+/// Primitive DataFrame schema for a single i32 value.
+pub static PRIMITIVE_I32: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_i32".to_string(),
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive: PrimitiveType::I32,
+            shape: vec![],
+        }],
+    ))
+});
+
+/// Primitive DataFrame schema for a single i64 value.
+pub static PRIMITIVE_I64: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_i64".to_string(),
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive: PrimitiveType::I64,
+            shape: vec![],
+        }],
+    ))
+});
+
+/// Primitive DataFrame schema for a single u32 value.
+pub static PRIMITIVE_U32: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_u32".to_string(),
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive: PrimitiveType::U32,
+            shape: vec![],
+        }],
+    ))
+});
+
+/// Primitive DataFrame schema for a single u64 value.
+pub static PRIMITIVE_U64: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_u64".to_string(),
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive: PrimitiveType::U64,
+            shape: vec![],
+        }],
+    ))
+});
+
+/// Primitive DataFrame schema for a single f32 value.
+pub static PRIMITIVE_F32: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_f32".to_string(),
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive: PrimitiveType::F32,
+            shape: vec![],
+        }],
+    ))
+});
+
+/// Primitive DataFrame schema for a single f64 value.
+pub static PRIMITIVE_F64: LazyLock<Arc<DynamicDataFrameSchema>> = LazyLock::new(|| {
+    Arc::new(DynamicDataFrameSchema::new(
+        "primitive_f64".to_string(),
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive: PrimitiveType::F64,
+            shape: vec![],
+        }],
+    ))
+});
+
+/// Creates a primitive DataFrame schema for an array of the given type and shape.
+pub fn primitive_array(primitive: PrimitiveType, shape: Vec<usize>) -> Arc<DynamicDataFrameSchema> {
+    let shape_str = shape
+        .iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join("x");
+    let name = format!("primitive_{:?}_{}", primitive, shape_str).to_lowercase();
+
+    Arc::new(DynamicDataFrameSchema::new(
+        name,
+        vec![DataFrameSchemaField {
+            name: "value".to_string(),
+            primitive,
+            shape,
+        }],
+    ))
+}
+
+impl PrimitiveType {
+    /// Returns the static primitive DataFrame schema for this type (scalar only).
+    pub fn schema(&self) -> Arc<DynamicDataFrameSchema> {
+        match self {
+            PrimitiveType::Bool => PRIMITIVE_BOOL.clone(),
+            PrimitiveType::I32 => PRIMITIVE_I32.clone(),
+            PrimitiveType::I64 => PRIMITIVE_I64.clone(),
+            PrimitiveType::U32 => PRIMITIVE_U32.clone(),
+            PrimitiveType::U64 => PRIMITIVE_U64.clone(),
+            PrimitiveType::F32 => PRIMITIVE_F32.clone(),
+            PrimitiveType::F64 => PRIMITIVE_F64.clone(),
+        }
+    }
+
+    /// Creates a primitive DataFrame schema for an array of this type.
+    pub fn array_schema(&self, shape: Vec<usize>) -> Arc<DynamicDataFrameSchema> {
+        primitive_array(*self, shape)
+    }
+}
+
+impl DataFrameSchemaField {
+    /// Returns a primitive DataFrame schema matching this field's type and shape.
+    pub fn to_primitive_schema(&self) -> Arc<DynamicDataFrameSchema> {
+        if self.shape.is_empty() {
+            self.primitive.schema()
+        } else {
+            self.primitive.array_schema(self.shape.clone())
+        }
     }
 }
 
@@ -1052,5 +1236,56 @@ mod tests {
         assert!(output_port.dataframe_schema.is_some());
         let output_schema = output_port.dataframe_schema.as_ref().unwrap();
         assert_eq!(output_schema.name, "test_embedding");
+    }
+
+    #[test]
+    fn test_primitive_schemas() {
+        use super::*;
+
+        // Test scalar primitives
+        assert_eq!(PRIMITIVE_F32.name(), "primitive_f32");
+        assert_eq!(PRIMITIVE_F32.fields().len(), 1);
+        assert_eq!(PRIMITIVE_F32.fields()[0].name, "value");
+        assert_eq!(PRIMITIVE_F32.fields()[0].primitive, PrimitiveType::F32);
+        assert_eq!(PRIMITIVE_F32.fields()[0].shape, Vec::<usize>::new());
+        assert_eq!(PRIMITIVE_F32.byte_size(), 4);
+
+        assert_eq!(PRIMITIVE_I64.name(), "primitive_i64");
+        assert_eq!(PRIMITIVE_I64.byte_size(), 8);
+
+        assert_eq!(PRIMITIVE_BOOL.name(), "primitive_bool");
+        assert_eq!(PRIMITIVE_BOOL.byte_size(), 1);
+
+        // Test PrimitiveType::schema() helper
+        let f32_schema = PrimitiveType::F32.schema();
+        assert_eq!(f32_schema.name(), "primitive_f32");
+
+        // Test array schema creation
+        let array_schema = PrimitiveType::F32.array_schema(vec![512]);
+        assert_eq!(array_schema.name(), "primitive_f32_512");
+        assert_eq!(array_schema.fields()[0].shape, vec![512]);
+        assert_eq!(array_schema.byte_size(), 512 * 4);
+
+        // Test multi-dimensional array
+        let matrix_schema = primitive_array(PrimitiveType::F32, vec![4, 4]);
+        assert_eq!(matrix_schema.name(), "primitive_f32_4x4");
+        assert_eq!(matrix_schema.byte_size(), 16 * 4);
+
+        // Test DataFrameSchemaField::to_primitive_schema
+        let field = DataFrameSchemaField {
+            name: "confidence".to_string(),
+            primitive: PrimitiveType::F32,
+            shape: vec![],
+        };
+        let primitive_schema = field.to_primitive_schema();
+        assert_eq!(primitive_schema.name(), "primitive_f32");
+
+        let array_field = DataFrameSchemaField {
+            name: "embedding".to_string(),
+            primitive: PrimitiveType::F32,
+            shape: vec![512],
+        };
+        let array_primitive_schema = array_field.to_primitive_schema();
+        assert_eq!(array_primitive_schema.name(), "primitive_f32_512");
     }
 }

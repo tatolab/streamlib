@@ -54,6 +54,17 @@ pub trait GeneratedProcessor: Send + 'static {
     where
         Self: Sized;
 
+    /// Returns the descriptor for this specific instance.
+    ///
+    /// Default implementation calls static `descriptor()`. Override via `descriptor_fn`
+    /// attribute for processors with config-dependent ports.
+    fn descriptor_instance(&self) -> Option<ProcessorDescriptor>
+    where
+        Self: Sized,
+    {
+        Self::descriptor()
+    }
+
     fn get_output_port_type(&self, _port_name: &str) -> Option<LinkPortType> {
         None
     }

@@ -213,6 +213,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     };
 
     let descriptor_impl = generate_descriptor(analysis);
+    let descriptor_instance_impl = generate_descriptor_instance(analysis);
     let get_output_port_type = generate_get_output_port_type(analysis);
     let get_input_port_type = generate_get_input_port_type(analysis);
     let add_link_output_data_writer = generate_add_link_output_data_writer(analysis);
@@ -361,6 +362,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             }
 
             #descriptor_impl
+            #descriptor_instance_impl
             #get_output_port_type
             #get_input_port_type
             #add_link_output_data_writer
@@ -472,18 +474,28 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
             let port_name = &p.port_name;
             let msg_type = &p.message_type;
             let port_desc = p.attributes.description.as_deref().unwrap_or("");
-            let dataframe_schema = match &p.attributes.schema {
-                Some(schema_type) => quote! {
-                    Some(::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
-                        &<#schema_type as ::core::default::Default>::default()
-                    ))
-                },
-                None => quote! { None },
+            let (schema_expr, dataframe_schema) = match &p.attributes.schema {
+                Some(schema_type) => (
+                    quote! {
+                        ::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
+                            &<#schema_type as ::core::default::Default>::default()
+                        ).to_schema()
+                    },
+                    quote! {
+                        Some(::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
+                            &<#schema_type as ::core::default::Default>::default()
+                        ))
+                    },
+                ),
+                None => (
+                    quote! { <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema() },
+                    quote! { None },
+                ),
             };
             quote! {
                 .with_input(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema(),
+                    schema: #schema_expr,
                     required: true,
                     description: #port_desc.to_string(),
                     dataframe_schema: #dataframe_schema,
@@ -498,18 +510,28 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
             let port_name = &p.port_name;
             let msg_type = &p.message_type;
             let port_desc = p.attributes.description.as_deref().unwrap_or("");
-            let dataframe_schema = match &p.attributes.schema {
-                Some(schema_type) => quote! {
-                    Some(::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
-                        &<#schema_type as ::core::default::Default>::default()
-                    ))
-                },
-                None => quote! { None },
+            let (schema_expr, dataframe_schema) = match &p.attributes.schema {
+                Some(schema_type) => (
+                    quote! {
+                        ::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
+                            &<#schema_type as ::core::default::Default>::default()
+                        ).to_schema()
+                    },
+                    quote! {
+                        Some(::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
+                            &<#schema_type as ::core::default::Default>::default()
+                        ))
+                    },
+                ),
+                None => (
+                    quote! { <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema() },
+                    quote! { None },
+                ),
             };
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema(),
+                    schema: #schema_expr,
                     required: true,
                     description: #port_desc.to_string(),
                     dataframe_schema: #dataframe_schema,
@@ -525,6 +547,22 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
                     #(#input_ports)*
                     #(#output_ports)*
             )
+        }
+    }
+}
+
+/// Generate descriptor_instance method (only when descriptor_fn is specified)
+fn generate_descriptor_instance(analysis: &AnalysisResult) -> TokenStream {
+    let Some(method_name) = &analysis.processor_attrs.descriptor_fn else {
+        // Use default implementation from trait (calls Self::descriptor())
+        return quote! {};
+    };
+
+    let method_ident = syn::Ident::new(method_name, proc_macro2::Span::call_site());
+
+    quote! {
+        fn descriptor_instance(&self) -> Option<::streamlib::core::ProcessorDescriptor> {
+            self.#method_ident()
         }
     }
 }

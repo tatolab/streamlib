@@ -13,6 +13,7 @@ members = [
     "examples/whep-player",     # Example: WHEP (WebRTC egress) player
     "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization
     "examples/graph-json-export",         # Example: Graph data structure JSON export (no runtime)
+    "examples/api-server",                # Example: Minimal API server (runtime + wait_for_signal)
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
