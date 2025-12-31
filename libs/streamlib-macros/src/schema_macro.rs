@@ -133,46 +133,87 @@ impl FieldAttributes {
         // Manual parsing because `type` is a Rust keyword and can't be parsed as Meta
         let tokens_str = tokens.to_string();
 
-        // Check for `internal` (standalone keyword)
-        if tokens_str.contains("internal") {
+        // Check for `internal` (standalone keyword) - must be at word boundary
+        if is_keyword_present(&tokens_str, "internal") {
             self.internal = true;
         }
 
-        // Check for `skip` (standalone keyword)
-        if tokens_str.contains("skip") {
+        // Check for `skip` (standalone keyword) - must be at word boundary
+        if is_keyword_present(&tokens_str, "skip") {
             self.skip = true;
         }
 
-        // Parse `field_type = "..."` - used instead of `type` since type is a Rust keyword
-        if let Some(type_start) = tokens_str.find("field_type") {
-            let after_type = &tokens_str[type_start + 10..];
-            if let Some(eq_pos) = after_type.find('=') {
-                let after_eq = after_type[eq_pos + 1..].trim_start();
-                if let Some(stripped) = after_eq.strip_prefix('"') {
-                    // Find the closing quote
-                    if let Some(end_quote) = stripped.find('"') {
-                        let type_value = &stripped[..end_quote];
-                        self.type_override = Some(type_value.to_string());
+        // Parse `field_type = "..."` - look for the key=value pattern
+        if let Some(value) = extract_string_value(&tokens_str, "field_type") {
+            self.type_override = Some(value);
+        }
+
+        // Parse `description = "..."`
+        if let Some(value) = extract_string_value(&tokens_str, "description") {
+            self.description = Some(value);
+        }
+    }
+}
+
+/// Check if a keyword is present as a standalone token (not inside a string).
+fn is_keyword_present(s: &str, keyword: &str) -> bool {
+    let mut search_start = 0;
+    while let Some(pos) = s[search_start..].find(keyword) {
+        let abs_pos = search_start + pos;
+
+        // Check character before: must be start, comma, or whitespace
+        let before_ok = abs_pos == 0 || {
+            let c = s[..abs_pos].chars().last().unwrap();
+            c == ',' || c.is_whitespace()
+        };
+
+        // Check character after: must be end, comma, or whitespace
+        let after_pos = abs_pos + keyword.len();
+        let after_ok = after_pos >= s.len() || {
+            let c = s[after_pos..].chars().next().unwrap();
+            c == ',' || c.is_whitespace()
+        };
+
+        if before_ok && after_ok {
+            return true;
+        }
+
+        search_start = abs_pos + 1;
+    }
+    false
+}
+
+/// Extract a string value for a key like `key = "value"`.
+/// Returns None if the key is not found as a standalone token.
+fn extract_string_value(s: &str, key: &str) -> Option<String> {
+    let mut search_start = 0;
+    while let Some(pos) = s[search_start..].find(key) {
+        let abs_pos = search_start + pos;
+
+        // Check character before: must be start, comma, or whitespace
+        let before_ok = abs_pos == 0 || {
+            let c = s[..abs_pos].chars().last().unwrap();
+            c == ',' || c.is_whitespace()
+        };
+
+        if before_ok {
+            // Look for = after the key
+            let after_key = &s[abs_pos + key.len()..];
+            let trimmed = after_key.trim_start();
+            if let Some(rest) = trimmed.strip_prefix('=') {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('"') {
+                    // Find closing quote
+                    if let Some(end_quote) = rest.find('"') {
+                        return Some(rest[..end_quote].to_string());
                     }
                 }
             }
         }
 
-        // Parse `description = "..."` - this could also use manual parsing for consistency
-        if let Some(desc_start) = tokens_str.find("description") {
-            let after_desc = &tokens_str[desc_start + 11..];
-            if let Some(eq_pos) = after_desc.find('=') {
-                let after_eq = after_desc[eq_pos + 1..].trim_start();
-                if let Some(stripped) = after_eq.strip_prefix('"') {
-                    // Find the closing quote (handle escaped quotes if needed)
-                    if let Some(end_quote) = stripped.find('"') {
-                        let desc_value = &stripped[..end_quote];
-                        self.description = Some(desc_value.to_string());
-                    }
-                }
-            }
-        }
+        search_start = abs_pos + 1;
     }
+    None
 }
 
 /// Information about a schema field.
@@ -642,5 +683,53 @@ mod tests {
         let args = quote! { content_hint = "Video" };
         let attrs = SchemaAttributes::parse_from_args(args).unwrap();
         assert_eq!(attrs.content_hint, Some("Video".to_string()));
+    }
+
+    #[test]
+    fn test_is_keyword_present() {
+        // Simple cases
+        assert!(super::is_keyword_present("internal", "internal"));
+        assert!(super::is_keyword_present("skip, internal", "internal"));
+        assert!(super::is_keyword_present("internal, skip", "internal"));
+        assert!(super::is_keyword_present("  internal  ", "internal"));
+
+        // Should NOT match inside strings or other words
+        assert!(!super::is_keyword_present("internally", "internal"));
+        assert!(!super::is_keyword_present("notinternal", "internal"));
+        assert!(!super::is_keyword_present(
+            r#"description = "internal stuff""#,
+            "internal"
+        ));
+    }
+
+    #[test]
+    fn test_extract_string_value() {
+        // Simple cases
+        assert_eq!(
+            super::extract_string_value(r#"field_type = "Arc<Vec<f32>>""#, "field_type"),
+            Some("Arc<Vec<f32>>".to_string())
+        );
+        assert_eq!(
+            super::extract_string_value(r#"description = "A description""#, "description"),
+            Some("A description".to_string())
+        );
+
+        // With other attributes
+        assert_eq!(
+            super::extract_string_value(
+                r#"internal, field_type = "wgpu::Texture", description = "GPU texture""#,
+                "field_type"
+            ),
+            Some("wgpu::Texture".to_string())
+        );
+
+        // Should NOT match inside string values
+        assert_eq!(
+            super::extract_string_value(
+                r#"description = "The field_type is important""#,
+                "field_type"
+            ),
+            None
+        );
     }
 }
