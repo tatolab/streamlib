@@ -46,13 +46,14 @@ impl Parse for SchemaAttr {
 /// Information about a field in the schema struct.
 struct FieldInfo {
     name: String,
+    type_name: String,
     primitive: TokenStream,
     shape: Vec<usize>,
     byte_size: usize,
 }
 
-/// Parse a Rust type into PrimitiveType and shape.
-fn parse_type(ty: &Type) -> Result<(TokenStream, Vec<usize>, usize)> {
+/// Parse a Rust type into PrimitiveType, type_name, shape, and byte size.
+fn parse_type(ty: &Type) -> Result<(TokenStream, String, Vec<usize>, usize)> {
     match ty {
         Type::Path(type_path) => {
             let segment = type_path
@@ -67,36 +68,43 @@ fn parse_type(ty: &Type) -> Result<(TokenStream, Vec<usize>, usize)> {
             match ident_str.as_str() {
                 "bool" => Ok((
                     quote!(::streamlib::core::schema::PrimitiveType::Bool),
+                    "bool".to_string(),
                     vec![],
                     1,
                 )),
                 "i32" => Ok((
                     quote!(::streamlib::core::schema::PrimitiveType::I32),
+                    "i32".to_string(),
                     vec![],
                     4,
                 )),
                 "i64" => Ok((
                     quote!(::streamlib::core::schema::PrimitiveType::I64),
+                    "i64".to_string(),
                     vec![],
                     8,
                 )),
                 "u32" => Ok((
                     quote!(::streamlib::core::schema::PrimitiveType::U32),
+                    "u32".to_string(),
                     vec![],
                     4,
                 )),
                 "u64" => Ok((
                     quote!(::streamlib::core::schema::PrimitiveType::U64),
+                    "u64".to_string(),
                     vec![],
                     8,
                 )),
                 "f32" => Ok((
                     quote!(::streamlib::core::schema::PrimitiveType::F32),
+                    "f32".to_string(),
                     vec![],
                     4,
                 )),
                 "f64" => Ok((
                     quote!(::streamlib::core::schema::PrimitiveType::F64),
+                    "f64".to_string(),
                     vec![],
                     8,
                 )),
@@ -108,7 +116,7 @@ fn parse_type(ty: &Type) -> Result<(TokenStream, Vec<usize>, usize)> {
         }
         Type::Array(type_array) => {
             // Parse the element type recursively
-            let (primitive, mut shape, elem_size) = parse_type(&type_array.elem)?;
+            let (primitive, type_name, mut shape, elem_size) = parse_type(&type_array.elem)?;
 
             // Extract array length
             let len = match &type_array.len {
@@ -128,7 +136,7 @@ fn parse_type(ty: &Type) -> Result<(TokenStream, Vec<usize>, usize)> {
             shape.insert(0, len);
             let total_size = elem_size * len;
 
-            Ok((primitive, shape, total_size))
+            Ok((primitive, type_name, shape, total_size))
         }
         _ => Err(Error::new(
             ty.span(),
@@ -180,10 +188,11 @@ pub fn derive_dataframe_schema(input: DeriveInput) -> Result<TokenStream> {
             .ok_or_else(|| Error::new(field.span(), "Field must have a name"))?
             .to_string();
 
-        let (primitive, shape, byte_size) = parse_type(&field.ty)?;
+        let (primitive, type_name, shape, byte_size) = parse_type(&field.ty)?;
 
         field_infos.push(FieldInfo {
             name: field_name,
+            type_name,
             primitive,
             shape,
             byte_size,
@@ -204,14 +213,18 @@ pub fn derive_dataframe_schema(input: DeriveInput) -> Result<TokenStream> {
         .iter()
         .map(|info| {
             let name = &info.name;
+            let type_name = &info.type_name;
             let primitive = &info.primitive;
             let shape = &info.shape;
 
             quote! {
                 ::streamlib::core::schema::DataFrameSchemaField {
                     name: #name.to_string(),
-                    primitive: #primitive,
+                    description: ::std::string::String::new(),
+                    type_name: #type_name.to_string(),
                     shape: vec![#(#shape),*],
+                    internal: false,
+                    primitive: ::core::option::Option::Some(#primitive),
                 }
             }
         })

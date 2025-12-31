@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::pubsub::{topics, Event, EventListener, PUBSUB};
+use crate::core::schema_registry::SCHEMA_REGISTRY;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
 use crate::{
@@ -222,7 +223,11 @@ async fn delete_connection(
 
 async fn get_registry() -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
     let processors = PROCESSOR_REGISTRY.list_registered();
-    Ok(Json(serde_json::json!({ "processors": processors })))
+    let schemas = SCHEMA_REGISTRY.list_descriptors();
+    Ok(Json(serde_json::json!({
+        "processors": processors,
+        "schemas": schemas
+    })))
 }
 
 // ============================================================================

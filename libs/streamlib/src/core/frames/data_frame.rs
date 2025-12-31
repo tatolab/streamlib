@@ -273,18 +273,27 @@ mod tests {
             vec![
                 DataFrameSchemaField {
                     name: "embedding".to_string(),
-                    primitive: PrimitiveType::F32,
+                    description: String::new(),
+                    type_name: "f32".to_string(),
+                    primitive: Some(PrimitiveType::F32),
                     shape: vec![4],
+                    internal: false,
                 },
                 DataFrameSchemaField {
                     name: "timestamp".to_string(),
-                    primitive: PrimitiveType::I64,
+                    description: String::new(),
+                    type_name: "i64".to_string(),
+                    primitive: Some(PrimitiveType::I64),
                     shape: vec![],
+                    internal: false,
                 },
                 DataFrameSchemaField {
                     name: "active".to_string(),
-                    primitive: PrimitiveType::Bool,
+                    description: String::new(),
+                    type_name: "bool".to_string(),
+                    primitive: Some(PrimitiveType::Bool),
                     shape: vec![],
+                    internal: false,
                 },
             ],
         ))

@@ -8,9 +8,12 @@ use std::sync::{Arc, LazyLock};
 
 use parking_lot::RwLock;
 
-use crate::core::graph::LinkCapacity;
+use serde::{Deserialize, Serialize};
+
+use crate::core::graph::{LinkCapacity, LinkUniqueId};
 use crate::core::links::{
-    LinkBufferReadMode, LinkInstance, LinkInstanceCreationResult, LinkPortMessage,
+    LinkBufferReadMode, LinkInputDataReaderWrapper, LinkInstance, LinkInstanceCreationResult,
+    LinkOutputDataWriterWrapper, LinkPortMessage,
 };
 use crate::core::schema::{DataFrameSchemaField, SemanticVersion};
 use crate::core::StreamError;
@@ -21,9 +24,12 @@ pub static SCHEMA_REGISTRY: LazyLock<SchemaRegistry> = LazyLock::new(SchemaRegis
 /// Static schema field for compile-time registration.
 pub struct StaticSchemaField {
     pub name: &'static str,
-    pub primitive: crate::core::schema::PrimitiveType,
+    pub description: &'static str,
+    pub type_name: &'static str,
     pub shape: &'static [usize],
-    pub serializable: bool,
+    pub internal: bool,
+    /// Primitive type for byte calculations. None for internal fields.
+    pub primitive: Option<crate::core::schema::PrimitiveType>,
 }
 
 impl StaticSchemaField {
@@ -31,18 +37,23 @@ impl StaticSchemaField {
     pub fn to_field(&self) -> DataFrameSchemaField {
         DataFrameSchemaField {
             name: self.name.to_string(),
-            primitive: self.primitive,
+            description: self.description.to_string(),
+            type_name: self.type_name.to_string(),
             shape: self.shape.to_vec(),
+            internal: self.internal,
+            primitive: self.primitive,
         }
     }
 }
 
 /// Factory trait for creating typed link instances from schema.
 pub trait SchemaLinkFactory: Send + Sync {
-    /// Create a link instance with the given capacity.
+    /// Create a link instance with the given capacity and link ID.
+    /// Returns pre-wrapped data writers/readers that include the link ID.
     fn create_link_instance(
         &self,
         capacity: LinkCapacity,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<LinkInstanceCreationResult>;
 }
 
@@ -52,6 +63,7 @@ pub struct SchemaRegistration {
     pub version: SemanticVersion,
     pub fields: &'static [StaticSchemaField],
     pub read_behavior: LinkBufferReadMode,
+    pub default_capacity: usize,
     pub factory: &'static dyn SchemaLinkFactory,
 }
 
@@ -67,6 +79,7 @@ pub struct SchemaEntry {
     pub version: SemanticVersion,
     pub fields: Vec<DataFrameSchemaField>,
     pub read_behavior: LinkBufferReadMode,
+    pub default_capacity: usize,
     /// Factory for creating LinkInstance. None for runtime-only schemas.
     pub link_factory: Option<Arc<dyn SchemaLinkFactory>>,
 }
@@ -81,6 +94,27 @@ impl SchemaEntry {
         // Major version must match for compatibility
         self.version.major == other.version.major
     }
+
+    /// Convert to a serializable descriptor for API output.
+    pub fn to_descriptor(&self) -> SchemaDescriptor {
+        SchemaDescriptor {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            fields: self.fields.clone(),
+            read_behavior: self.read_behavior,
+            default_capacity: self.default_capacity,
+        }
+    }
+}
+
+/// Serializable schema descriptor for API output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaDescriptor {
+    pub name: String,
+    pub version: SemanticVersion,
+    pub fields: Vec<DataFrameSchemaField>,
+    pub read_behavior: LinkBufferReadMode,
+    pub default_capacity: usize,
 }
 
 /// Global registry for schemas.
@@ -113,6 +147,7 @@ impl SchemaRegistry {
                 version: registration.version.clone(),
                 fields: registration.fields.iter().map(|f| f.to_field()).collect(),
                 read_behavior: registration.read_behavior,
+                default_capacity: registration.default_capacity,
                 link_factory: Some(Arc::new(StaticLinkFactory {
                     factory: registration.factory,
                 })),
@@ -162,12 +197,14 @@ impl SchemaRegistry {
         version: SemanticVersion,
         fields: Vec<DataFrameSchemaField>,
         read_behavior: LinkBufferReadMode,
+        default_capacity: usize,
     ) -> crate::core::Result<()> {
         let entry = SchemaEntry {
             name,
             version,
             fields,
             read_behavior,
+            default_capacity,
             link_factory: Some(Arc::new(DataFrameLinkFactory)),
         };
         self.register_runtime(entry)
@@ -177,6 +214,12 @@ impl SchemaRegistry {
     pub fn get(&self, name: &str) -> Option<Arc<SchemaEntry>> {
         self.ensure_initialized();
         self.schemas.read().get(name).cloned()
+    }
+
+    /// Get the default capacity for a schema by name.
+    /// Returns 16 if schema not found (fallback for unknown schemas).
+    pub fn get_default_capacity(&self, name: &str) -> usize {
+        self.get(name).map(|e| e.default_capacity).unwrap_or(16)
     }
 
     /// Check if two schemas are compatible by name.
@@ -194,6 +237,16 @@ impl SchemaRegistry {
     pub fn list(&self) -> Vec<Arc<SchemaEntry>> {
         self.ensure_initialized();
         self.schemas.read().values().cloned().collect()
+    }
+
+    /// List all registered schemas as serializable descriptors for API output.
+    pub fn list_descriptors(&self) -> Vec<SchemaDescriptor> {
+        self.ensure_initialized();
+        self.schemas
+            .read()
+            .values()
+            .map(|entry| entry.to_descriptor())
+            .collect()
     }
 
     /// Check if a schema is registered.
@@ -218,6 +271,7 @@ impl SchemaRegistry {
         &self,
         schema_name: &str,
         capacity: LinkCapacity,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<LinkInstanceCreationResult> {
         let entry = self.get(schema_name).ok_or_else(|| {
             StreamError::Configuration(format!("Schema '{}' not found in registry", schema_name))
@@ -230,7 +284,7 @@ impl SchemaRegistry {
             ))
         })?;
 
-        factory.create_link_instance(capacity)
+        factory.create_link_instance(capacity, link_id)
     }
 }
 
@@ -249,8 +303,9 @@ impl SchemaLinkFactory for StaticLinkFactory {
     fn create_link_instance(
         &self,
         capacity: LinkCapacity,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<LinkInstanceCreationResult> {
-        self.factory.create_link_instance(capacity)
+        self.factory.create_link_instance(capacity, link_id)
     }
 }
 
@@ -262,14 +317,17 @@ impl SchemaLinkFactory for DataFrameLinkFactory {
     fn create_link_instance(
         &self,
         capacity: LinkCapacity,
+        link_id: &LinkUniqueId,
     ) -> crate::core::Result<LinkInstanceCreationResult> {
-        create_typed_link_instance::<crate::core::frames::DataFrame>(capacity)
+        create_typed_link_instance::<crate::core::frames::DataFrame>(capacity, link_id)
     }
 }
 
 /// Helper to create a typed link instance. Used by generated schema code.
+/// Returns pre-wrapped data writers/readers that include the link ID.
 pub fn create_typed_link_instance<T>(
     capacity: LinkCapacity,
+    link_id: &LinkUniqueId,
 ) -> crate::core::Result<LinkInstanceCreationResult>
 where
     T: LinkPortMessage + 'static,
@@ -280,11 +338,21 @@ where
     let data_writer = instance.create_link_output_data_writer();
     let data_reader = instance.create_link_input_data_reader();
 
+    // Pre-wrap with link_id - factory knows T so it can create the typed wrapper
+    let wrapped_writer = LinkOutputDataWriterWrapper {
+        link_id: link_id.clone(),
+        data_writer,
+    };
+    let wrapped_reader = LinkInputDataReaderWrapper {
+        link_id: link_id.clone(),
+        data_reader,
+    };
+
     Ok(LinkInstanceCreationResult {
         instance: Box::new(instance),
         type_info: LinkTypeInfoComponent::new::<T>(capacity),
-        data_writer: Box::new(data_writer),
-        data_reader: Box::new(data_reader),
+        data_writer: Box::new(wrapped_writer),
+        data_reader: Box::new(wrapped_reader),
     })
 }
 
@@ -306,6 +374,7 @@ mod tests {
             version: SemanticVersion::new(1, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
+            default_capacity: 16,
             link_factory: None,
         };
 
@@ -314,6 +383,7 @@ mod tests {
             version: SemanticVersion::new(1, 1, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
+            default_capacity: 16,
             link_factory: None,
         };
 
@@ -322,6 +392,7 @@ mod tests {
             version: SemanticVersion::new(2, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
+            default_capacity: 16,
             link_factory: None,
         };
 
@@ -348,21 +419,35 @@ mod tests {
             names
         );
 
-        // Verify VideoFrame fields
+        // Verify VideoFrame fields, read behavior, and default capacity
         let video = SCHEMA_REGISTRY.get("VideoFrame").unwrap();
         assert_eq!(video.version, SemanticVersion::new(1, 0, 0));
+        assert_eq!(video.read_behavior, LinkBufferReadMode::SkipToLatest);
+        assert_eq!(
+            video.default_capacity, 4,
+            "VideoFrame should have buffer size 4 (from content_hint = Video)"
+        );
         let field_names: Vec<_> = video.fields.iter().map(|f| f.name.as_str()).collect();
         assert!(field_names.contains(&"timestamp_ns"));
         assert!(field_names.contains(&"frame_number"));
         assert!(field_names.contains(&"width"));
         assert!(field_names.contains(&"height"));
 
-        // Verify AudioFrame fields and read behavior
+        // Verify AudioFrame fields, read behavior, and default capacity
         let audio = SCHEMA_REGISTRY.get("AudioFrame").unwrap();
         assert_eq!(audio.read_behavior, LinkBufferReadMode::ReadNextInOrder);
+        assert_eq!(
+            audio.default_capacity, 32,
+            "AudioFrame should have buffer size 32 (from content_hint = Audio)"
+        );
         let audio_field_names: Vec<_> = audio.fields.iter().map(|f| f.name.as_str()).collect();
         assert!(audio_field_names.contains(&"timestamp_ns"));
         assert!(audio_field_names.contains(&"sample_rate"));
+
+        // Verify get_default_capacity helper
+        assert_eq!(SCHEMA_REGISTRY.get_default_capacity("VideoFrame"), 4);
+        assert_eq!(SCHEMA_REGISTRY.get_default_capacity("AudioFrame"), 32);
+        assert_eq!(SCHEMA_REGISTRY.get_default_capacity("UnknownSchema"), 16); // fallback
     }
 
     #[test]
@@ -374,6 +459,7 @@ mod tests {
             version: SemanticVersion::new(1, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
+            default_capacity: 16,
             link_factory: None,
         };
 
@@ -386,6 +472,7 @@ mod tests {
             version: SemanticVersion::new(1, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
+            default_capacity: 16,
             link_factory: None,
         };
 

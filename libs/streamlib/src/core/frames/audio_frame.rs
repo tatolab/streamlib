@@ -46,17 +46,30 @@ pub struct AudioFrameSignal {
     position: usize,
 }
 
-#[streamlib::schema(port_type = "Audio", read_behavior = "read_next_in_order")]
+#[crate::schema(content_hint = Audio)]
 #[derive(Clone)]
 pub struct AudioFrame {
-    #[streamlib::field(not_serializable)]
+    #[crate::field(
+        internal,
+        type = "Arc<Vec<f32>>",
+        description = "Interleaved audio samples (f32, -1.0 to 1.0)"
+    )]
     pub samples: Arc<Vec<f32>>,
 
-    #[streamlib::field(skip)]
+    #[crate::field(
+        internal,
+        type = "AudioChannelCount",
+        description = "Number of audio channels (1-8)"
+    )]
     pub channels: AudioChannelCount,
 
+    #[crate::field(description = "Monotonic timestamp in nanoseconds")]
     pub timestamp_ns: i64,
+
+    #[crate::field(description = "Sequential frame number")]
     pub frame_number: u64,
+
+    #[crate::field(description = "Sample rate in Hz (e.g., 44100, 48000)")]
     pub sample_rate: u32,
 }
 

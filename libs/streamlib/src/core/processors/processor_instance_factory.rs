@@ -114,7 +114,7 @@ impl ProcessorInstanceFactory {
             .iter()
             .map(|p| PortInfo {
                 name: p.name.clone(),
-                data_type: p.schema.name.clone(),
+                data_type: p.schema.clone(),
                 port_kind: Default::default(),
             })
             .collect();
@@ -124,7 +124,7 @@ impl ProcessorInstanceFactory {
             .iter()
             .map(|p| PortInfo {
                 name: p.name.clone(),
-                data_type: p.schema.name.clone(),
+                data_type: p.schema.clone(),
                 port_kind: Default::default(),
             })
             .collect();

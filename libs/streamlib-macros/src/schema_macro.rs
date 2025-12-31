@@ -15,6 +15,10 @@ pub struct SchemaAttributes {
     pub version: Option<String>,
     pub read_behavior: Option<String>,
     pub name: Option<String>,
+    /// Content hint sets defaults for buffer_size and read_behavior.
+    pub content_hint: Option<String>,
+    /// Explicit buffer size override (takes precedence over content_hint).
+    pub buffer_size: Option<usize>,
     /// Temporary: port_type for backwards compatibility (Video, Audio, Data)
     pub port_type: Option<String>,
 }
@@ -51,6 +55,28 @@ impl SchemaAttributes {
                             }
                         }
                     }
+                    Some("content_hint") => {
+                        if let Expr::Path(path) = &nv.value {
+                            // Handle content_hint = Audio (identifier)
+                            if let Some(ident) = path.path.get_ident() {
+                                result.content_hint = Some(ident.to_string());
+                            }
+                        } else if let Expr::Lit(lit) = &nv.value {
+                            // Handle content_hint = "Audio" (string)
+                            if let Lit::Str(s) = &lit.lit {
+                                result.content_hint = Some(s.value());
+                            }
+                        }
+                    }
+                    Some("buffer_size") => {
+                        if let Expr::Lit(lit) = &nv.value {
+                            if let Lit::Int(i) = &lit.lit {
+                                if let Ok(size) = i.base10_parse::<usize>() {
+                                    result.buffer_size = Some(size);
+                                }
+                            }
+                        }
+                    }
                     Some("port_type") => {
                         if let Expr::Lit(lit) = &nv.value {
                             if let Lit::Str(s) = &lit.lit {
@@ -67,12 +93,17 @@ impl SchemaAttributes {
     }
 }
 
-/// Parsed field attributes from `#[streamlib::field(...)]`
+/// Parsed field attributes from `#[crate::field(...)]` or `#[streamlib::field(...)]`
 #[derive(Default)]
 pub struct FieldAttributes {
-    pub not_serializable: bool,
-    pub display: Option<String>,
+    /// Skip this field entirely from the schema.
     pub skip: bool,
+    /// Mark this field as internal (visible in API but not usable).
+    pub internal: bool,
+    /// Custom type string for internal fields (e.g., "wgpu::Texture").
+    pub type_override: Option<String>,
+    /// Description of this field.
+    pub description: Option<String>,
 }
 
 impl FieldAttributes {
@@ -80,20 +111,16 @@ impl FieldAttributes {
         let mut result = FieldAttributes::default();
 
         for attr in attrs {
-            if attr.path().is_ident("streamlib") || attr.path().is_ident("crate") {
-                // Check for nested path like #[streamlib::field(...)]
-                if let Meta::List(list) = &attr.meta {
-                    let tokens = list.tokens.clone();
-                    if let Ok(inner) = syn::parse2::<Meta>(tokens) {
-                        if let Meta::List(inner_list) = inner {
-                            if inner_list.path.is_ident("field") {
-                                result.parse_field_args(&inner_list.tokens);
-                            }
-                        } else if let Meta::Path(path) = inner {
-                            if path.is_ident("field") {
-                                // Just #[streamlib::field] with no args
-                            }
-                        }
+            // Check for #[streamlib::field(...)] or #[crate::field(...)]
+            let segments: Vec<_> = attr.path().segments.iter().collect();
+
+            if segments.len() == 2 {
+                let first = segments[0].ident.to_string();
+                let second = segments[1].ident.to_string();
+                if (first == "streamlib" || first == "crate") && second == "field" {
+                    // Parse #[crate::field(...)] or #[streamlib::field(...)]
+                    if let Meta::List(list) = &attr.meta {
+                        result.parse_field_args(&list.tokens);
                     }
                 }
             }
@@ -103,27 +130,45 @@ impl FieldAttributes {
     }
 
     fn parse_field_args(&mut self, tokens: &TokenStream) {
-        let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
-        if let Ok(metas) = parser.parse2(tokens.clone()) {
-            for meta in metas {
-                match &meta {
-                    Meta::Path(path) => {
-                        if path.is_ident("not_serializable") {
-                            self.not_serializable = true;
-                        } else if path.is_ident("skip") {
-                            self.skip = true;
-                        }
+        // Manual parsing because `type` is a Rust keyword and can't be parsed as Meta
+        let tokens_str = tokens.to_string();
+
+        // Check for `internal` (standalone keyword)
+        if tokens_str.contains("internal") {
+            self.internal = true;
+        }
+
+        // Check for `skip` (standalone keyword)
+        if tokens_str.contains("skip") {
+            self.skip = true;
+        }
+
+        // Parse `type = "..."` - type is a keyword so we need manual parsing
+        if let Some(type_start) = tokens_str.find("type") {
+            let after_type = &tokens_str[type_start + 4..];
+            if let Some(eq_pos) = after_type.find('=') {
+                let after_eq = after_type[eq_pos + 1..].trim_start();
+                if let Some(stripped) = after_eq.strip_prefix('"') {
+                    // Find the closing quote
+                    if let Some(end_quote) = stripped.find('"') {
+                        let type_value = &stripped[..end_quote];
+                        self.type_override = Some(type_value.to_string());
                     }
-                    Meta::NameValue(nv) => {
-                        if nv.path.is_ident("display") {
-                            if let Expr::Lit(lit) = &nv.value {
-                                if let Lit::Str(s) = &lit.lit {
-                                    self.display = Some(s.value());
-                                }
-                            }
-                        }
+                }
+            }
+        }
+
+        // Parse `description = "..."` - this could also use manual parsing for consistency
+        if let Some(desc_start) = tokens_str.find("description") {
+            let after_desc = &tokens_str[desc_start + 11..];
+            if let Some(eq_pos) = after_desc.find('=') {
+                let after_eq = after_desc[eq_pos + 1..].trim_start();
+                if let Some(stripped) = after_eq.strip_prefix('"') {
+                    // Find the closing quote (handle escaped quotes if needed)
+                    if let Some(end_quote) = stripped.find('"') {
+                        let desc_value = &stripped[..end_quote];
+                        self.description = Some(desc_value.to_string());
                     }
-                    _ => {}
                 }
             }
         }
@@ -133,10 +178,15 @@ impl FieldAttributes {
 /// Information about a schema field.
 pub struct SchemaFieldInfo {
     pub name: String,
-    pub primitive_type_name: String,
-    pub field_type_name: String,
+    pub description: String,
+    /// Type name for API output (e.g., "i64", "wgpu::Texture").
+    pub type_name: String,
+    /// Primitive type enum name (e.g., "I64"). None for internal fields.
+    pub primitive_type_name: Option<String>,
+    /// Field type enum name for Schema (e.g., "Int64"). None for internal fields.
+    pub field_type_name: Option<String>,
     pub shape: Vec<usize>,
-    pub serializable: bool,
+    pub internal: bool,
 }
 
 /// Primitive type info with both PrimitiveType and FieldType names.
@@ -226,6 +276,20 @@ fn extract_primitive_info(ty: &Type) -> Option<(PrimitiveInfo, Vec<usize>)> {
     }
 }
 
+/// Get the lowercase type name for a primitive type.
+fn primitive_to_type_name(primitive_type_name: &str) -> String {
+    match primitive_type_name {
+        "Bool" => "bool".to_string(),
+        "I32" => "i32".to_string(),
+        "I64" => "i64".to_string(),
+        "U32" => "u32".to_string(),
+        "U64" => "u64".to_string(),
+        "F32" => "f32".to_string(),
+        "F64" => "f64".to_string(),
+        _ => primitive_type_name.to_lowercase(),
+    }
+}
+
 /// Analyze struct fields and extract schema field info.
 fn analyze_fields(item: &ItemStruct) -> Vec<SchemaFieldInfo> {
     let mut fields = Vec::new();
@@ -234,7 +298,7 @@ fn analyze_fields(item: &ItemStruct) -> Vec<SchemaFieldInfo> {
         for field in &named.named {
             let field_attrs = FieldAttributes::parse_from_attrs(&field.attrs);
 
-            // Skip fields marked with #[streamlib::field(skip)]
+            // Skip fields marked with #[crate::field(skip)]
             if field_attrs.skip {
                 continue;
             }
@@ -245,17 +309,36 @@ fn analyze_fields(item: &ItemStruct) -> Vec<SchemaFieldInfo> {
                 .map(|i| i.to_string())
                 .unwrap_or_default();
 
+            let description = field_attrs.description.unwrap_or_default();
+
             // Try to extract primitive info
             if let Some((primitive_info, shape)) = extract_primitive_info(&field.ty) {
+                // Primitive field (regular or internal with description)
                 fields.push(SchemaFieldInfo {
                     name: field_name,
-                    primitive_type_name: primitive_info.primitive_type_name,
-                    field_type_name: primitive_info.field_type_name,
+                    description,
+                    type_name: primitive_to_type_name(&primitive_info.primitive_type_name),
+                    primitive_type_name: Some(primitive_info.primitive_type_name),
+                    field_type_name: Some(primitive_info.field_type_name),
                     shape,
-                    serializable: !field_attrs.not_serializable,
+                    internal: field_attrs.internal,
+                });
+            } else if field_attrs.internal {
+                // Internal field with custom type (non-primitive)
+                let type_name = field_attrs
+                    .type_override
+                    .unwrap_or_else(|| "unknown".to_string());
+                fields.push(SchemaFieldInfo {
+                    name: field_name,
+                    description,
+                    type_name,
+                    primitive_type_name: None,
+                    field_type_name: None,
+                    shape: vec![],
+                    internal: true,
                 });
             }
-            // Non-primitive fields are skipped (they can still exist on the struct)
+            // Non-primitive fields without internal attribute are silently skipped
         }
     }
 
@@ -278,9 +361,23 @@ pub fn generate_schema(attrs: SchemaAttributes, item: ItemStruct) -> TokenStream
     let minor = version_parts.get(1).copied().unwrap_or(0);
     let patch = version_parts.get(2).copied().unwrap_or(0);
 
-    // Parse read behavior
-    let read_behavior = match attrs.read_behavior.as_deref() {
-        Some("read_next_in_order") => {
+    // Determine defaults from content_hint
+    let (hint_buffer_size, hint_read_behavior): (usize, &str) = match attrs.content_hint.as_deref()
+    {
+        Some("Audio") | Some("audio") => (32, "read_next_in_order"),
+        Some("Video") | Some("video") => (4, "skip_to_latest"),
+        Some("Control") | Some("control") => (2, "read_next_in_order"),
+        Some("Sensor") | Some("sensor") => (64, "skip_to_latest"),
+        _ => (16, "skip_to_latest"), // Default
+    };
+
+    // Apply explicit overrides
+    let final_buffer_size = attrs.buffer_size.unwrap_or(hint_buffer_size);
+    let final_read_behavior = attrs.read_behavior.as_deref().unwrap_or(hint_read_behavior);
+
+    // Parse read behavior to token stream
+    let read_behavior = match final_read_behavior {
+        "read_next_in_order" => {
             quote! { ::streamlib::core::links::LinkBufferReadMode::ReadNextInOrder }
         }
         _ => quote! { ::streamlib::core::links::LinkBufferReadMode::SkipToLatest },
@@ -313,32 +410,46 @@ pub fn generate_schema(attrs: SchemaAttributes, item: ItemStruct) -> TokenStream
     // Analyze fields
     let schema_fields = analyze_fields(&item);
 
-    // Generate static field definitions (uses PrimitiveType)
+    // Generate static field definitions
     let static_fields: Vec<TokenStream> = schema_fields
         .iter()
         .map(|f| {
             let name = &f.name;
-            let primitive = format_ident!("{}", f.primitive_type_name);
+            let description = &f.description;
+            let type_name = &f.type_name;
             let shape: Vec<TokenStream> = f.shape.iter().map(|s| quote! { #s }).collect();
-            let serializable = f.serializable;
+            let internal = f.internal;
+
+            // Generate primitive as Option<PrimitiveType>
+            let primitive_tokens = match &f.primitive_type_name {
+                Some(prim) => {
+                    let primitive = format_ident!("{}", prim);
+                    quote! { Some(::streamlib::core::schema::PrimitiveType::#primitive) }
+                }
+                None => quote! { None },
+            };
 
             quote! {
                 ::streamlib::core::StaticSchemaField {
                     name: #name,
-                    primitive: ::streamlib::core::schema::PrimitiveType::#primitive,
+                    description: #description,
+                    type_name: #type_name,
                     shape: &[#(#shape),*],
-                    serializable: #serializable,
+                    internal: #internal,
+                    primitive: #primitive_tokens,
                 }
             }
         })
         .collect();
 
     // Generate Schema fields for LinkPortMessage::schema() (uses FieldType)
+    // Only include non-internal fields with primitive types
     let schema_field_defs: Vec<TokenStream> = schema_fields
         .iter()
+        .filter(|f| !f.internal && f.field_type_name.is_some())
         .map(|f| {
             let name = &f.name;
-            let field_type_ident = format_ident!("{}", f.field_type_name);
+            let field_type_ident = format_ident!("{}", f.field_type_name.as_ref().unwrap());
 
             // Build the field type, wrapping in Array for each dimension
             let base_type = quote! { ::streamlib::core::FieldType::#field_type_ident };
@@ -431,8 +542,9 @@ pub fn generate_schema(attrs: SchemaAttributes, item: ItemStruct) -> TokenStream
             fn create_link_instance(
                 &self,
                 capacity: ::streamlib::core::graph::LinkCapacity,
+                link_id: &::streamlib::core::graph::LinkUniqueId,
             ) -> ::streamlib::core::Result<::streamlib::core::links::LinkInstanceCreationResult> {
-                ::streamlib::core::create_typed_link_instance::<#struct_name>(capacity)
+                ::streamlib::core::create_typed_link_instance::<#struct_name>(capacity, link_id)
             }
         }
 
@@ -445,6 +557,7 @@ pub fn generate_schema(attrs: SchemaAttributes, item: ItemStruct) -> TokenStream
                     #(#static_fields),*
                 ],
                 read_behavior: #read_behavior,
+                default_capacity: #final_buffer_size,
                 factory: &#factory_name,
             }
         }
@@ -497,5 +610,37 @@ mod tests {
         assert_eq!(prim.primitive_type_name, "F32");
         assert_eq!(prim.field_type_name, "Float32");
         assert_eq!(shape, vec![4, 4]);
+    }
+
+    #[test]
+    fn test_parse_content_hint_audio() {
+        let args = quote! { content_hint = Audio };
+        let attrs = SchemaAttributes::parse_from_args(args).unwrap();
+        assert_eq!(attrs.content_hint, Some("Audio".to_string()));
+        assert_eq!(attrs.buffer_size, None);
+        assert_eq!(attrs.read_behavior, None);
+    }
+
+    #[test]
+    fn test_parse_content_hint_with_buffer_size_override() {
+        let args = quote! { content_hint = Audio, buffer_size = 64 };
+        let attrs = SchemaAttributes::parse_from_args(args).unwrap();
+        assert_eq!(attrs.content_hint, Some("Audio".to_string()));
+        assert_eq!(attrs.buffer_size, Some(64));
+    }
+
+    #[test]
+    fn test_parse_buffer_size_only() {
+        let args = quote! { buffer_size = 128 };
+        let attrs = SchemaAttributes::parse_from_args(args).unwrap();
+        assert_eq!(attrs.buffer_size, Some(128));
+        assert_eq!(attrs.content_hint, None);
+    }
+
+    #[test]
+    fn test_parse_content_hint_as_string() {
+        let args = quote! { content_hint = "Video" };
+        let attrs = SchemaAttributes::parse_from_args(args).unwrap();
+        assert_eq!(attrs.content_hint, Some("Video".to_string()));
     }
 }

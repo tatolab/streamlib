@@ -3,21 +3,33 @@
 
 use std::sync::Arc;
 
-#[streamlib::schema(port_type = "Video")]
+#[crate::schema(content_hint = Video)]
 #[derive(Clone)]
 pub struct VideoFrame {
-    #[streamlib::field(not_serializable)]
+    #[crate::field(
+        internal,
+        type = "Arc<wgpu::Texture>",
+        description = "GPU texture containing the frame pixel data"
+    )]
     pub texture: Arc<wgpu::Texture>,
 
-    #[streamlib::field(skip)]
+    #[crate::field(
+        internal,
+        type = "wgpu::TextureFormat",
+        description = "Pixel format of the texture (e.g., Rgba8Unorm)"
+    )]
     pub format: wgpu::TextureFormat,
 
+    #[crate::field(description = "Monotonic timestamp in nanoseconds")]
     pub timestamp_ns: i64,
 
+    #[crate::field(description = "Sequential frame number")]
     pub frame_number: u64,
 
+    #[crate::field(description = "Frame width in pixels")]
     pub width: u32,
 
+    #[crate::field(description = "Frame height in pixels")]
     pub height: u32,
 }
 

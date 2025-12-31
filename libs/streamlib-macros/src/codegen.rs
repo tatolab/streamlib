@@ -474,31 +474,24 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
             let port_name = &p.port_name;
             let msg_type = &p.message_type;
             let port_desc = p.attributes.description.as_deref().unwrap_or("");
-            let (schema_expr, dataframe_schema) = match &p.attributes.schema {
-                Some(schema_type) => (
-                    quote! {
-                        ::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
-                            &<#schema_type as ::core::default::Default>::default()
-                        ).to_schema()
-                    },
-                    quote! {
-                        Some(::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
-                            &<#schema_type as ::core::default::Default>::default()
-                        ))
-                    },
-                ),
-                None => (
-                    quote! { <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema() },
-                    quote! { None },
-                ),
+            // Use explicit schema type if provided (via DataFrameSchema trait),
+            // otherwise use message type (via LinkPortMessage trait)
+            let schema_name_expr = match &p.attributes.schema {
+                Some(schema_type) => quote! {
+                    ::streamlib::core::schema::DataFrameSchema::name(
+                        &<#schema_type as ::core::default::Default>::default()
+                    ).to_string()
+                },
+                None => quote! {
+                    <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name().to_string()
+                },
             };
             quote! {
                 .with_input(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: #schema_expr,
-                    required: true,
                     description: #port_desc.to_string(),
-                    dataframe_schema: #dataframe_schema,
+                    schema: #schema_name_expr,
+                    required: true,
                 })
             }
         })
@@ -510,31 +503,24 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
             let port_name = &p.port_name;
             let msg_type = &p.message_type;
             let port_desc = p.attributes.description.as_deref().unwrap_or("");
-            let (schema_expr, dataframe_schema) = match &p.attributes.schema {
-                Some(schema_type) => (
-                    quote! {
-                        ::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
-                            &<#schema_type as ::core::default::Default>::default()
-                        ).to_schema()
-                    },
-                    quote! {
-                        Some(::streamlib::core::schema::DataFrameSchemaDescriptor::from_schema(
-                            &<#schema_type as ::core::default::Default>::default()
-                        ))
-                    },
-                ),
-                None => (
-                    quote! { <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema() },
-                    quote! { None },
-                ),
+            // Use explicit schema type if provided (via DataFrameSchema trait),
+            // otherwise use message type (via LinkPortMessage trait)
+            let schema_name_expr = match &p.attributes.schema {
+                Some(schema_type) => quote! {
+                    ::streamlib::core::schema::DataFrameSchema::name(
+                        &<#schema_type as ::core::default::Default>::default()
+                    ).to_string()
+                },
+                None => quote! {
+                    <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name().to_string()
+                },
             };
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    schema: #schema_expr,
-                    required: true,
                     description: #port_desc.to_string(),
-                    dataframe_schema: #dataframe_schema,
+                    schema: #schema_name_expr,
+                    required: true,
                 })
             }
         })
