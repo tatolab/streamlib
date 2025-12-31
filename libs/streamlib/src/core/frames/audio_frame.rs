@@ -1,17 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::metadata::MetadataValue;
-use crate::core::links::{LinkPortMessage, LinkPortType};
 use dasp::slice::{FromSampleSlice, ToSampleSlice};
 use dasp::Frame;
 use dasp::Signal;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-
-// Implement sealed trait for AudioFrame
-impl crate::core::links::LinkPortMessageImplementor for AudioFrame {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -52,14 +46,18 @@ pub struct AudioFrameSignal {
     position: usize,
 }
 
+#[streamlib::schema(port_type = "Audio", read_behavior = "read_next_in_order")]
 #[derive(Clone)]
 pub struct AudioFrame {
+    #[streamlib::field(not_serializable)]
     pub samples: Arc<Vec<f32>>,
+
+    #[streamlib::field(skip)]
     pub channels: AudioChannelCount,
+
     pub timestamp_ns: i64,
     pub frame_number: u64,
     pub sample_rate: u32,
-    pub metadata: Option<HashMap<String, MetadataValue>>,
 }
 
 impl AudioFrame {
@@ -85,7 +83,6 @@ impl AudioFrame {
             timestamp_ns,
             frame_number,
             sample_rate,
-            metadata: None,
         }
     }
 
@@ -160,34 +157,6 @@ impl AudioFrame {
         let sample_slice: &[f32] = frames.to_sample_slice();
         let samples = sample_slice.to_vec();
         Self::new(samples, channels, timestamp_ns, frame_number, sample_rate)
-    }
-}
-
-impl LinkPortMessage for AudioFrame {
-    fn port_type() -> LinkPortType {
-        LinkPortType::Audio
-    }
-
-    fn schema() -> std::sync::Arc<crate::core::Schema> {
-        std::sync::Arc::clone(&crate::core::SCHEMA_AUDIO_FRAME)
-    }
-
-    fn examples() -> Vec<(&'static str, serde_json::Value)> {
-        vec![(
-            "AudioFrame",
-            serde_json::json!({
-                "sample_count": 2048,
-                "channels": 2,
-                "timestamp_ns": 0,
-                "frame_number": 1,
-                "metadata": {}
-            }),
-        )]
-    }
-
-    fn link_read_behavior() -> crate::core::links::LinkBufferReadMode {
-        // Audio frames must be read in order to avoid audio dropouts/glitches
-        crate::core::links::LinkBufferReadMode::ReadNextInOrder
     }
 }
 

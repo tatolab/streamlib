@@ -26,7 +26,9 @@ pub mod core;
 // - #[streamlib::input] - Input port marker
 // - #[streamlib::output] - Output port marker
 // - #[streamlib::config] - Config field marker
-pub use streamlib_macros::{config, input, output, processor, DataFrameSchema};
+// - #[streamlib::schema] - Schema definition for port message types
+// - #[streamlib::field] - Field customization within schema
+pub use streamlib_macros::{config, field, input, output, processor, schema, DataFrameSchema};
 
 pub use core::{
     are_synchronized,
@@ -73,8 +75,6 @@ pub use core::{
     DisplayConfig,
     EncodedAudioFrame,
     Field,
-    FieldGetterConfig,
-    FieldGetterProcessor,
     FieldType,
     GpuContext,
     InputPortMarker,
@@ -88,7 +88,6 @@ pub use core::{
     LinkPortMessage,
     LinkPortType,
     ManualProcessor,
-    MetadataValue,
     MixingStrategy,
     Mp4WriterConfig,
     // Streaming utilities:

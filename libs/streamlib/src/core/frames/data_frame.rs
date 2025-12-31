@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::links::{LinkPortMessage, LinkPortType};
+use crate::core::links::LinkPortMessage;
 use crate::core::schema::DataFrameSchema;
 use std::sync::Arc;
 
@@ -233,8 +233,8 @@ impl DataFrame {
 }
 
 impl LinkPortMessage for DataFrame {
-    fn port_type() -> LinkPortType {
-        LinkPortType::Data
+    fn schema_name() -> &'static str {
+        "DataFrame"
     }
 
     fn schema() -> std::sync::Arc<crate::core::Schema> {

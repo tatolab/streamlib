@@ -567,9 +567,9 @@ fn generate_descriptor_instance(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate get_output_port_type method
+/// Generate get_output_port_type method (deprecated, use get_output_schema_name)
 fn generate_get_output_port_type(analysis: &AnalysisResult) -> TokenStream {
-    let arms: Vec<TokenStream> = analysis
+    let port_type_arms: Vec<TokenStream> = analysis
         .output_ports()
         .map(|p| {
             let port_name = &p.port_name;
@@ -580,23 +580,42 @@ fn generate_get_output_port_type(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
-    if arms.is_empty() {
+    let schema_name_arms: Vec<TokenStream> = analysis
+        .output_ports()
+        .map(|p| {
+            let port_name = &p.port_name;
+            let msg_type = &p.message_type;
+            quote! {
+                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name())
+            }
+        })
+        .collect();
+
+    if port_type_arms.is_empty() {
         return quote! {};
     }
 
     quote! {
+        #[allow(deprecated)]
         fn get_output_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
             match port_name {
-                #(#arms,)*
+                #(#port_type_arms,)*
+                _ => None
+            }
+        }
+
+        fn get_output_schema_name(&self, port_name: &str) -> Option<&'static str> {
+            match port_name {
+                #(#schema_name_arms,)*
                 _ => None
             }
         }
     }
 }
 
-/// Generate get_input_port_type method
+/// Generate get_input_port_type method (deprecated, use get_input_schema_name)
 fn generate_get_input_port_type(analysis: &AnalysisResult) -> TokenStream {
-    let arms: Vec<TokenStream> = analysis
+    let port_type_arms: Vec<TokenStream> = analysis
         .input_ports()
         .map(|p| {
             let port_name = &p.port_name;
@@ -607,14 +626,33 @@ fn generate_get_input_port_type(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
-    if arms.is_empty() {
+    let schema_name_arms: Vec<TokenStream> = analysis
+        .input_ports()
+        .map(|p| {
+            let port_name = &p.port_name;
+            let msg_type = &p.message_type;
+            quote! {
+                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name())
+            }
+        })
+        .collect();
+
+    if port_type_arms.is_empty() {
         return quote! {};
     }
 
     quote! {
+        #[allow(deprecated)]
         fn get_input_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
             match port_name {
-                #(#arms,)*
+                #(#port_type_arms,)*
+                _ => None
+            }
+        }
+
+        fn get_input_schema_name(&self, port_name: &str) -> Option<&'static str> {
+            match port_name {
+                #(#schema_name_arms,)*
                 _ => None
             }
         }

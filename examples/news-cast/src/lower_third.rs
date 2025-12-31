@@ -451,7 +451,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             height: input.height,
             frame_number: input.frame_number,
             timestamp_ns: input.timestamp_ns,
-            metadata: input.metadata.clone(),
         })
     }
 }

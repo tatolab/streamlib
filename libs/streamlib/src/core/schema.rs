@@ -13,7 +13,7 @@ pub struct SemanticVersion {
 }
 
 impl SemanticVersion {
-    pub fn new(major: u32, minor: u32, patch: u32) -> Self {
+    pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
         Self {
             major,
             minor,

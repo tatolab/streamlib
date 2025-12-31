@@ -73,6 +73,14 @@ pub trait GeneratedProcessor: Send + 'static {
         None
     }
 
+    fn get_output_schema_name(&self, _port_name: &str) -> Option<&'static str> {
+        None
+    }
+
+    fn get_input_schema_name(&self, _port_name: &str) -> Option<&'static str> {
+        None
+    }
+
     /// Add a data writer to an output port.
     fn add_link_output_data_writer(
         &mut self,

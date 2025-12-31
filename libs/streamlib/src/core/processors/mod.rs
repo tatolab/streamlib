@@ -49,7 +49,6 @@ pub mod audio_mixer;
 pub mod audio_resampler;
 pub mod buffer_rechunker;
 pub mod clap_effect;
-pub mod field_getter;
 pub mod simple_passthrough;
 
 pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
@@ -68,5 +67,4 @@ pub use audio_mixer::{AudioMixerConfig, AudioMixerProcessor, MixingStrategy};
 pub use audio_resampler::{AudioResamplerConfig, AudioResamplerProcessor};
 pub use buffer_rechunker::{BufferRechunkerConfig, BufferRechunkerProcessor};
 pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
-pub use field_getter::{FieldGetterConfig, FieldGetterProcessor};
 pub use simple_passthrough::{SimplePassthroughConfig, SimplePassthroughProcessor};
