@@ -26,7 +26,7 @@ pub mod core;
 // - #[streamlib::input] - Input port marker
 // - #[streamlib::output] - Output port marker
 // - #[streamlib::config] - Config field marker
-pub use streamlib_macros::{config, input, output, processor};
+pub use streamlib_macros::{config, input, output, processor, DataFrameSchema};
 
 pub use core::{
     are_synchronized,

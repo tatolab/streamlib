@@ -36,6 +36,9 @@ pub struct PortAttributes {
 
     /// Port description: `description = "..."`
     pub description: Option<String>,
+
+    /// DataFrame schema type: `schema = MySchemaType`
+    pub schema: Option<syn::Path>,
 }
 
 /// Parsed attributes from `#[state]`
@@ -214,6 +217,13 @@ impl PortAttributes {
                 if meta.path.is_ident("description") {
                     let value = parse_string_value(&meta)?;
                     result.description = Some(value);
+                    return Ok(());
+                }
+
+                // schema = MySchemaType
+                if meta.path.is_ident("schema") {
+                    let path: syn::Path = meta.value()?.parse()?;
+                    result.schema = Some(path);
                     return Ok(());
                 }
 

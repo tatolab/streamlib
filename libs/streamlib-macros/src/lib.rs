@@ -47,9 +47,10 @@
 mod analysis;
 mod attributes;
 mod codegen;
+mod dataframe_schema;
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, ItemStruct};
+use syn::{parse_macro_input, DeriveInput, ItemStruct};
 
 /// Main processor attribute macro.
 ///
@@ -138,4 +139,40 @@ pub fn output(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn config(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
+}
+
+/// Derive macro for DataFrameSchema trait.
+///
+/// Generates a `DataFrameSchema` implementation for structs with primitive fields.
+///
+/// # Supported Types
+///
+/// - Scalars: `bool`, `i32`, `i64`, `u32`, `u64`, `f32`, `f64`
+/// - Fixed-size arrays: `[f32; 512]`, `[[f32; 4]; 4]`, etc.
+///
+/// # Attributes
+///
+/// - `#[schema(name = "...")]` - Custom schema name (defaults to struct name)
+///
+/// # Example
+///
+/// ```ignore
+/// use streamlib::DataFrameSchema;
+///
+/// #[derive(DataFrameSchema)]
+/// #[schema(name = "clip_embedding")]
+/// pub struct ClipEmbeddingSchema {
+///     pub embedding: [f32; 512],
+///     pub timestamp: i64,
+///     pub normalized: bool,
+/// }
+/// ```
+#[proc_macro_derive(DataFrameSchema, attributes(schema))]
+pub fn derive_dataframe_schema(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    match dataframe_schema::derive_dataframe_schema(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
 }
