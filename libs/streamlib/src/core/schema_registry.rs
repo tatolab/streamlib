@@ -332,6 +332,40 @@ mod tests {
     }
 
     #[test]
+    fn test_video_audio_schemas_registered() {
+        // Verify VideoFrame and AudioFrame are registered via inventory
+        let schemas = SCHEMA_REGISTRY.list();
+        let names: Vec<_> = schemas.iter().map(|s| s.name.as_str()).collect();
+
+        assert!(
+            SCHEMA_REGISTRY.contains("VideoFrame"),
+            "VideoFrame should be registered. Found: {:?}",
+            names
+        );
+        assert!(
+            SCHEMA_REGISTRY.contains("AudioFrame"),
+            "AudioFrame should be registered. Found: {:?}",
+            names
+        );
+
+        // Verify VideoFrame fields
+        let video = SCHEMA_REGISTRY.get("VideoFrame").unwrap();
+        assert_eq!(video.version, SemanticVersion::new(1, 0, 0));
+        let field_names: Vec<_> = video.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(field_names.contains(&"timestamp_ns"));
+        assert!(field_names.contains(&"frame_number"));
+        assert!(field_names.contains(&"width"));
+        assert!(field_names.contains(&"height"));
+
+        // Verify AudioFrame fields and read behavior
+        let audio = SCHEMA_REGISTRY.get("AudioFrame").unwrap();
+        assert_eq!(audio.read_behavior, LinkBufferReadMode::ReadNextInOrder);
+        let audio_field_names: Vec<_> = audio.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(audio_field_names.contains(&"timestamp_ns"));
+        assert!(audio_field_names.contains(&"sample_rate"));
+    }
+
+    #[test]
     fn test_runtime_registration() {
         let registry = SchemaRegistry::new();
 
