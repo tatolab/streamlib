@@ -530,12 +530,20 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
     let version = "0.1.0";
     let repository = "https://github.com/tatolab/streamlib";
 
+    // Generate config fields call if config type is available
+    let config_fields = analysis.config_field_type.as_ref().map(|config_type| {
+        quote! {
+            .with_config(<#config_type as ::streamlib::core::schema::ConfigDescriptor>::config_fields())
+        }
+    });
+
     quote! {
         fn descriptor() -> Option<::streamlib::core::ProcessorDescriptor> {
             Some(
                 ::streamlib::core::ProcessorDescriptor::new(#name, #desc)
                     .with_version(#version)
                     .with_repository(#repository)
+                    #config_fields
                     #(#input_ports)*
                     #(#output_ports)*
             )

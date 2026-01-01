@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 // CONFIGURATION
 // ============================================================================
 
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct WebRtcWhepConfig {
     pub whep: WhepConfig,
 }

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct ApiServerConfig {
     pub host: String,
     pub port: u16,

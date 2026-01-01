@@ -47,6 +47,7 @@
 mod analysis;
 mod attributes;
 mod codegen;
+mod config_descriptor;
 mod dataframe_schema;
 mod schema_macro;
 
@@ -173,6 +174,42 @@ pub fn derive_dataframe_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match dataframe_schema::derive_dataframe_schema(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Derive macro for ConfigDescriptor trait.
+///
+/// Generates a `ConfigDescriptor` implementation for config structs,
+/// enabling automatic config field metadata extraction for processor descriptors.
+///
+/// # Field Handling
+///
+/// - `Option<T>` fields are marked as `required: false`
+/// - All other fields are marked as `required: true`
+/// - Doc comments on fields become the `description`
+///
+/// # Example
+///
+/// ```ignore
+/// use streamlib::ConfigDescriptor;
+///
+/// #[derive(ConfigDescriptor)]
+/// pub struct CameraConfig {
+///     /// Camera device identifier
+///     pub device_id: Option<String>,
+///     /// Target width in pixels
+///     pub width: u32,
+///     /// Target height in pixels
+///     pub height: u32,
+/// }
+/// ```
+#[proc_macro_derive(ConfigDescriptor)]
+pub fn derive_config_descriptor(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    match config_descriptor::derive_config_descriptor(input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

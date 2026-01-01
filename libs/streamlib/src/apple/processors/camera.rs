@@ -19,7 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 // Apple-specific configuration and device types
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default, crate::ConfigDescriptor,
+)]
 pub struct AppleCameraConfig {
     pub device_id: Option<String>,
 }

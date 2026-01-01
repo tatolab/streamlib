@@ -6,7 +6,7 @@ use crate::core::utils::audio_utils::AudioRechunker;
 use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct BufferRechunkerConfig {
     /// Target buffer size in samples per channel
     pub target_buffer_size: usize,

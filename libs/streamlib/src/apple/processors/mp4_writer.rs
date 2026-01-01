@@ -29,7 +29,9 @@ extern "C" {
 }
 
 /// Configuration for MP4 writer processor.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ConfigDescriptor,
+)]
 pub struct AppleMp4WriterConfig {
     pub output_path: PathBuf,
     pub sync_tolerance_ms: Option<f64>,

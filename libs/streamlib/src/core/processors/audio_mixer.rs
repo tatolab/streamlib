@@ -6,7 +6,7 @@ use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
 use dasp::Signal;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct AudioMixerConfig {
     pub strategy: MixingStrategy,
 }

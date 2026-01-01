@@ -27,7 +27,7 @@ use streamlib::Result;
 // Mock Processor Configuration
 // =============================================================================
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, streamlib::ConfigDescriptor)]
 pub struct MockConfig {
     pub label: String,
 }

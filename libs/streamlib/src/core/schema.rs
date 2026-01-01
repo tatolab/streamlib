@@ -708,21 +708,11 @@ impl PortDescriptor {
 }
 
 /// Code examples for a processor in different languages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CodeExamples {
     pub rust: String,
     pub python: String,
     pub typescript: String,
-}
-
-impl Default for CodeExamples {
-    fn default() -> Self {
-        Self {
-            rust: String::new(),
-            python: String::new(),
-            typescript: String::new(),
-        }
-    }
 }
 
 /// A configuration field for a processor.
@@ -748,6 +738,19 @@ impl ConfigField {
             required,
             description: description.into(),
         }
+    }
+}
+
+/// Trait for config structs to provide field metadata for descriptors.
+pub trait ConfigDescriptor {
+    /// Returns the list of config fields with their types and descriptions.
+    fn config_fields() -> Vec<ConfigField>;
+}
+
+/// Default implementation for unit type (no config).
+impl ConfigDescriptor for () {
+    fn config_fields() -> Vec<ConfigField> {
+        Vec::new()
     }
 }
 
@@ -784,6 +787,11 @@ impl ProcessorDescriptor {
 
     pub fn with_repository(mut self, repository: impl Into<String>) -> Self {
         self.repository = repository.into();
+        self
+    }
+
+    pub fn with_config(mut self, fields: Vec<ConfigField>) -> Self {
+        self.config = fields;
         self
     }
 
@@ -1293,5 +1301,30 @@ mod tests {
         };
         let array_primitive_schema = array_field.to_primitive_schema().unwrap();
         assert_eq!(array_primitive_schema.name(), "primitive_f32_512");
+    }
+
+    #[test]
+    fn test_config_descriptor_derive_provides_fields() {
+        use crate::core::processors::simple_passthrough::SimplePassthroughConfig;
+
+        let fields = SimplePassthroughConfig::config_fields();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "scale");
+        assert_eq!(fields[0].field_type, "f32");
+        assert!(fields[0].required);
+    }
+
+    #[test]
+    fn test_processor_descriptor_includes_config_fields() {
+        use crate::core::processors::simple_passthrough::SimplePassthroughProcessor;
+        use crate::core::GeneratedProcessor;
+
+        let descriptor = SimplePassthroughProcessor::Processor::descriptor().unwrap();
+        assert!(
+            !descriptor.config.is_empty(),
+            "Config fields should be populated"
+        );
+        assert_eq!(descriptor.config[0].name, "scale");
+        assert_eq!(descriptor.config[0].field_type, "f32");
     }
 }
