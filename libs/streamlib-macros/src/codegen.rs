@@ -526,10 +526,16 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
+    // Default version and repository for built-in processors
+    let version = "0.1.0";
+    let repository = "https://github.com/tatolab/streamlib";
+
     quote! {
         fn descriptor() -> Option<::streamlib::core::ProcessorDescriptor> {
             Some(
                 ::streamlib::core::ProcessorDescriptor::new(#name, #desc)
+                    .with_version(#version)
+                    .with_repository(#repository)
                     #(#input_ports)*
                     #(#output_ports)*
             )
