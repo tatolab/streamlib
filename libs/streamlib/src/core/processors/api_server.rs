@@ -21,6 +21,8 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;
+use utoipa::OpenApi;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct ApiServerConfig {
@@ -40,23 +42,79 @@ impl Default for ApiServerConfig {
 #[derive(Clone)]
 struct AppState {
     runtime_ctx: RuntimeContext,
+    openapi: utoipa::openapi::OpenApi,
 }
 
-#[derive(Deserialize)]
+// ============================================================================
+// Request/Response Types with OpenAPI Schema
+// ============================================================================
+
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CreateProcessorRequest {
+    /// The processor type name (e.g., "CameraProcessor", "DisplayProcessor")
     processor_type: String,
+    /// Processor-specific configuration as JSON
     config: serde_json::Value,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CreateConnectionRequest {
+    /// Source processor ID
     from_processor: String,
+    /// Source output port name
     from_port: String,
+    /// Destination processor ID
     to_processor: String,
+    /// Destination input port name
     to_port: String,
 }
 
-// ------------
+#[derive(Serialize, utoipa::ToSchema)]
+struct IdResponse {
+    /// The created resource ID
+    id: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct RegistryResponse {
+    /// Available processor types with their descriptors
+    processors: Vec<serde_json::Value>,
+    /// Available data frame schemas
+    schemas: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct ErrorResponse {
+    /// Error message
+    error: String,
+}
+
+// ============================================================================
+// OpenAPI Documentation
+// ============================================================================
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "StreamLib Runtime API",
+        version = "0.1.0",
+        description = "Real-time streaming infrastructure API for managing processors, connections, and events",
+        license(name = "BUSL-1.1")
+    ),
+    tags(
+        (name = "graph", description = "Graph inspection and management"),
+        (name = "processors", description = "Processor lifecycle management"),
+        (name = "connections", description = "Connection management between processors"),
+        (name = "registry", description = "Processor and schema registry"),
+        (name = "events", description = "Real-time event streaming via WebSocket")
+    )
+)]
+struct ApiDoc;
+
+// ============================================================================
+// Processor Definition
+// ============================================================================
+
 #[crate::processor(
     execution = Manual,
     description = "Runtime api server for streamlib"
@@ -74,24 +132,20 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    /// Called once when the processor stops.
     fn teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    /// Called when the processor is paused.
     fn on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    /// Called when the processor is resumed after being paused.
     fn on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    /// Called once to start the processor.
     fn start(&mut self) -> Result<()> {
-        use axum::{routing::delete, routing::get, routing::post, Router};
+        use axum::routing::get;
 
         let ctx = self
             .runtime_ctx
@@ -100,19 +154,26 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
+        // Build OpenAPI router with documented routes
+        let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+            .routes(routes!(health))
+            .routes(routes!(get_graph))
+            .routes(routes!(create_processor))
+            .routes(routes!(delete_processor))
+            .routes(routes!(create_connection))
+            .routes(routes!(delete_connection))
+            .routes(routes!(get_registry))
+            .split_for_parts();
+
         let state = AppState {
             runtime_ctx: ctx.clone(),
+            openapi,
         };
 
-        let app = Router::new()
-            .route("/health", get(health))
-            .route("/api/graph", get(get_graph))
-            .route("/api/processor", post(create_processor))
-            .route("/api/processors/{id}", delete(delete_processor))
-            .route("/api/connections", post(create_connection))
-            .route("/api/connections/{id}", delete(delete_connection))
-            .route("/api/registry", get(get_registry))
+        // Add WebSocket route and OpenAPI spec endpoint (not documented in OpenAPI)
+        let app = router
             .route("/ws/events", get(websocket_handler))
+            .route("/api/openapi.json", get(get_openapi_spec))
             .with_state(state);
 
         let config = self.config.clone();
@@ -121,6 +182,7 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         ctx.tokio_handle().spawn(async move {
             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
             tracing::info!("Api server listening on {}", addr);
+            tracing::info!("OpenAPI spec available at http://{}/api/openapi.json", addr);
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
@@ -132,10 +194,6 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         Ok(())
     }
 
-    /// Called when the processor should stop.
-    ///
-    /// This is called before teardown when the runtime shuts down or the processor is removed.
-    /// Use this to stop internal threads, callbacks, or processing loops started by `start()`.
     fn stop(&mut self) -> Result<()> {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
@@ -144,11 +202,32 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
     }
 }
 
+// ============================================================================
+// API Handlers
+// ============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "graph",
+    responses(
+        (status = 200, description = "Server is healthy", body = String)
+    )
+)]
 async fn health() -> &'static str {
     tracing::info!("Health function called");
     "ok"
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/graph",
+    tag = "graph",
+    responses(
+        (status = 200, description = "Current graph state as JSON"),
+        (status = 500, description = "Internal server error")
+    )
+)]
 async fn get_graph(
     State(state): State<AppState>,
 ) -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
@@ -161,10 +240,20 @@ async fn get_graph(
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/processor",
+    tag = "processors",
+    request_body = CreateProcessorRequest,
+    responses(
+        (status = 200, description = "Processor created successfully", body = IdResponse),
+        (status = 400, description = "Invalid processor type or configuration", body = ErrorResponse)
+    )
+)]
 async fn create_processor(
     State(state): State<AppState>,
     Json(body): Json<CreateProcessorRequest>,
-) -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> std::result::Result<Json<IdResponse>, axum::http::StatusCode> {
     let spec = ProcessorSpec::new(&body.processor_type, body.config);
 
     state
@@ -172,10 +261,22 @@ async fn create_processor(
         .runtime()
         .add_processor_async(spec)
         .await
-        .map(|id| Json(serde_json::json!({"id": id.to_string()})))
+        .map(|id| Json(IdResponse { id: id.to_string() }))
         .map_err(|_| axum::http::StatusCode::BAD_REQUEST)
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/processors/{id}",
+    tag = "processors",
+    params(
+        ("id" = String, Path, description = "Processor ID to delete")
+    ),
+    responses(
+        (status = 204, description = "Processor deleted successfully"),
+        (status = 404, description = "Processor not found")
+    )
+)]
 async fn delete_processor(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -190,10 +291,20 @@ async fn delete_processor(
         .map_err(|_| axum::http::StatusCode::NOT_FOUND)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/connections",
+    tag = "connections",
+    request_body = CreateConnectionRequest,
+    responses(
+        (status = 200, description = "Connection created successfully", body = IdResponse),
+        (status = 400, description = "Invalid connection (ports don't exist or types don't match)", body = ErrorResponse)
+    )
+)]
 async fn create_connection(
     State(state): State<AppState>,
     Json(body): Json<CreateConnectionRequest>,
-) -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> std::result::Result<Json<IdResponse>, axum::http::StatusCode> {
     let from = OutputLinkPortRef::new(body.from_processor, body.from_port);
     let to = InputLinkPortRef::new(body.to_processor, body.to_port);
 
@@ -202,10 +313,22 @@ async fn create_connection(
         .runtime()
         .connect_async(from, to)
         .await
-        .map(|id| Json(serde_json::json!({"id": id.to_string()})))
+        .map(|id| Json(IdResponse { id: id.to_string() }))
         .map_err(|_| axum::http::StatusCode::BAD_REQUEST)
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/connections/{id}",
+    tag = "connections",
+    params(
+        ("id" = String, Path, description = "Connection ID to delete")
+    ),
+    responses(
+        (status = 204, description = "Connection deleted successfully"),
+        (status = 404, description = "Connection not found")
+    )
+)]
 async fn delete_connection(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -221,13 +344,33 @@ async fn delete_connection(
         .map_err(|_| axum::http::StatusCode::NOT_FOUND)
 }
 
-async fn get_registry() -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let processors = PROCESSOR_REGISTRY.list_registered();
-    let schemas = SCHEMA_REGISTRY.list_descriptors();
-    Ok(Json(serde_json::json!({
-        "processors": processors,
-        "schemas": schemas
-    })))
+#[utoipa::path(
+    get,
+    path = "/api/registry",
+    tag = "registry",
+    responses(
+        (status = 200, description = "Available processors and schemas", body = RegistryResponse)
+    )
+)]
+async fn get_registry() -> Json<RegistryResponse> {
+    let processors = PROCESSOR_REGISTRY
+        .list_registered()
+        .into_iter()
+        .map(|d| serde_json::to_value(d).unwrap_or_default())
+        .collect();
+    let schemas = SCHEMA_REGISTRY
+        .list_descriptors()
+        .into_iter()
+        .map(|d| serde_json::to_value(d).unwrap_or_default())
+        .collect();
+    Json(RegistryResponse {
+        processors,
+        schemas,
+    })
+}
+
+async fn get_openapi_spec(State(state): State<AppState>) -> Json<utoipa::openapi::OpenApi> {
+    Json(state.openapi)
 }
 
 // ============================================================================
