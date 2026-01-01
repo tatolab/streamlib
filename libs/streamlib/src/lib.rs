@@ -28,7 +28,9 @@ pub mod core;
 // - #[streamlib::config] - Config field marker
 // - #[streamlib::schema] - Schema definition for port message types
 // - #[streamlib::field] - Field customization within schema
-pub use streamlib_macros::{config, field, input, output, processor, schema, DataFrameSchema};
+pub use streamlib_macros::{
+    config, field, input, output, processor, schema, ConfigDescriptor, DataFrameSchema,
+};
 
 pub use core::{
     are_synchronized,
@@ -55,7 +57,6 @@ pub use core::{
     AudioMixerConfig,
     AudioMixerProcessor,
     AudioOutputConfig,
-    AudioRequirements,
     AudioResamplerConfig,
     AudioResamplerProcessor,
     BufferRechunkerConfig,
@@ -69,6 +70,9 @@ pub use core::{
     ClapEffectProcessor,
     ClapPluginInfo,
     ClapScanner,
+    CodeExamples,
+    ConfigDescriptor,
+    ConfigField,
     // Processor traits (mode-specific)
     ContinuousProcessor,
     DataFrame,
@@ -99,7 +103,6 @@ pub use core::{
     PluginInfo,
     PortDescriptor,
     ProcessorDescriptor,
-    ProcessorExample,
     ProcessorSpec,
     ReactiveProcessor,
     ResamplingQuality,

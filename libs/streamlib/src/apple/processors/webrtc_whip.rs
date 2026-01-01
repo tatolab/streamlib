@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 // CONFIGURATION
 // ============================================================================
 
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct WebRtcWhipConfig {
     pub whip: WhipConfig,
     pub video: VideoEncoderConfig,

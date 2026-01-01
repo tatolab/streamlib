@@ -27,7 +27,9 @@ pub enum ScalingMode {
 }
 
 // Apple-specific configuration and types
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ConfigDescriptor,
+)]
 pub struct AppleDisplayConfig {
     pub width: u32,
     pub height: u32,

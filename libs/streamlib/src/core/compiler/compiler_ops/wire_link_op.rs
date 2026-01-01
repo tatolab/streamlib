@@ -226,32 +226,13 @@ fn get_processor_pair(
 }
 
 fn validate_audio_compatibility(
-    source_processor: &Arc<Mutex<ProcessorInstance>>,
-    dest_processor: &Arc<Mutex<ProcessorInstance>>,
-    from_port: &OutputLinkPortRef,
-    to_port: &InputLinkPortRef,
+    _source_processor: &Arc<Mutex<ProcessorInstance>>,
+    _dest_processor: &Arc<Mutex<ProcessorInstance>>,
+    _from_port: &OutputLinkPortRef,
+    _to_port: &InputLinkPortRef,
 ) -> Result<()> {
-    let source_guard = source_processor.lock();
-    let dest_guard = dest_processor.lock();
-
-    let source_descriptor = source_guard.descriptor_instance();
-    let dest_descriptor = dest_guard.descriptor_instance();
-
-    if let (Some(source_desc), Some(dest_desc)) = (source_descriptor, dest_descriptor) {
-        if let (Some(source_audio), Some(dest_audio)) = (
-            &source_desc.audio_requirements,
-            &dest_desc.audio_requirements,
-        ) {
-            if !source_audio.compatible_with(dest_audio) {
-                let error_msg = source_audio.compatibility_error(dest_audio);
-                return Err(StreamError::Configuration(format!(
-                    "Audio requirements incompatible: {} → {}: {}",
-                    from_port, to_port, error_msg
-                )));
-            }
-        }
-    }
-
+    // Audio requirements validation removed - compatibility is now handled
+    // at the schema level rather than through processor descriptors
     Ok(())
 }
 

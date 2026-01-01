@@ -9,7 +9,9 @@ use cpal::Stream;
 use std::sync::{Arc, Mutex};
 
 // Apple-specific configuration and device types
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default, crate::ConfigDescriptor,
+)]
 pub struct AppleAudioOutputConfig {
     pub device_id: Option<String>,
 }

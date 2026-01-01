@@ -24,7 +24,7 @@ use crate::core::JsonSerializableComponent;
 // =============================================================================
 
 /// Mock config for testing.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct MockConfig {
     pub label: String,
 }

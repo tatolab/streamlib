@@ -707,168 +707,63 @@ impl PortDescriptor {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessorExample {
-    pub description: String,
-
-    pub input_example: serde_json::Value,
-
-    pub output_example: serde_json::Value,
+/// Code examples for a processor in different languages.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CodeExamples {
+    pub rust: String,
+    pub python: String,
+    pub typescript: String,
 }
 
-impl ProcessorExample {
+/// A configuration field for a processor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub required: bool,
+    pub description: String,
+}
+
+impl ConfigField {
     pub fn new(
+        name: impl Into<String>,
+        field_type: impl Into<String>,
+        required: bool,
         description: impl Into<String>,
-        input_example: serde_json::Value,
-        output_example: serde_json::Value,
     ) -> Self {
         Self {
+            name: name.into(),
+            field_type: field_type.into(),
+            required,
             description: description.into(),
-            input_example,
-            output_example,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AudioRequirements {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preferred_buffer_size: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub required_buffer_size: Option<usize>,
-
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub supported_sample_rates: Vec<u32>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub required_channels: Option<u32>,
+/// Trait for config structs to provide field metadata for descriptors.
+pub trait ConfigDescriptor {
+    /// Returns the list of config fields with their types and descriptions.
+    fn config_fields() -> Vec<ConfigField>;
 }
 
-impl AudioRequirements {
-    pub fn flexible() -> Self {
-        Self {
-            preferred_buffer_size: None,
-            required_buffer_size: None,
-            supported_sample_rates: Vec::new(),
-            required_channels: None,
-        }
-    }
-
-    pub fn with_preferred(buffer_size: usize, sample_rate: u32, channels: u32) -> Self {
-        Self {
-            preferred_buffer_size: Some(buffer_size),
-            required_buffer_size: None,
-            supported_sample_rates: vec![sample_rate],
-            required_channels: Some(channels),
-        }
-    }
-
-    pub fn required(buffer_size: usize, sample_rate: u32, channels: u32) -> Self {
-        Self {
-            preferred_buffer_size: None,
-            required_buffer_size: Some(buffer_size),
-            supported_sample_rates: vec![sample_rate],
-            required_channels: Some(channels),
-        }
-    }
-
-    pub fn compatible_with(&self, downstream: &AudioRequirements) -> bool {
-        if let (Some(our_size), Some(their_size)) =
-            (self.required_buffer_size, downstream.required_buffer_size)
-        {
-            if our_size != their_size {
-                return false;
-            }
-        }
-
-        if !downstream.supported_sample_rates.is_empty() && !self.supported_sample_rates.is_empty()
-        {
-            let has_common_rate = downstream
-                .supported_sample_rates
-                .iter()
-                .any(|rate| self.supported_sample_rates.contains(rate));
-            if !has_common_rate {
-                return false;
-            }
-        }
-
-        if let (Some(our_channels), Some(their_channels)) =
-            (self.required_channels, downstream.required_channels)
-        {
-            if our_channels != their_channels {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    pub fn compatibility_error(&self, downstream: &AudioRequirements) -> String {
-        if let (Some(our_size), Some(their_size)) =
-            (self.required_buffer_size, downstream.required_buffer_size)
-        {
-            if our_size != their_size {
-                return format!(
-                    "Buffer size mismatch: upstream outputs {} samples, downstream requires {}",
-                    our_size, their_size
-                );
-            }
-        }
-
-        if !downstream.supported_sample_rates.is_empty() && !self.supported_sample_rates.is_empty()
-        {
-            let has_common_rate = downstream
-                .supported_sample_rates
-                .iter()
-                .any(|rate| self.supported_sample_rates.contains(rate));
-            if !has_common_rate {
-                return format!(
-                    "Sample rate mismatch: upstream supports {:?}, downstream requires {:?}",
-                    self.supported_sample_rates, downstream.supported_sample_rates
-                );
-            }
-        }
-
-        if let (Some(our_channels), Some(their_channels)) =
-            (self.required_channels, downstream.required_channels)
-        {
-            if our_channels != their_channels {
-                return format!(
-                    "Channel count mismatch: upstream outputs {} channels, downstream requires {}",
-                    our_channels, their_channels
-                );
-            }
-        }
-
-        "Audio requirements are compatible".to_string()
+/// Default implementation for unit type (no config).
+impl ConfigDescriptor for () {
+    fn config_fields() -> Vec<ConfigField> {
+        Vec::new()
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
     pub name: String,
-
     pub description: String,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage_context: Option<String>,
-
+    pub version: String,
+    pub repository: String,
+    pub config: Vec<ConfigField>,
     pub inputs: Vec<PortDescriptor>,
-
     pub outputs: Vec<PortDescriptor>,
-
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub examples: Vec<ProcessorExample>,
-
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_requirements: Option<AudioRequirements>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub examples: CodeExamples,
 }
 
 impl ProcessorDescriptor {
@@ -876,18 +771,32 @@ impl ProcessorDescriptor {
         Self {
             name: name.into(),
             description: description.into(),
-            usage_context: None,
+            version: String::new(),
+            repository: String::new(),
+            config: Vec::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
-            examples: Vec::new(),
-            tags: Vec::new(),
-            audio_requirements: None,
-            metadata: None,
+            examples: CodeExamples::default(),
         }
     }
 
-    pub fn with_usage_context(mut self, context: impl Into<String>) -> Self {
-        self.usage_context = Some(context.into());
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = version.into();
+        self
+    }
+
+    pub fn with_repository(mut self, repository: impl Into<String>) -> Self {
+        self.repository = repository.into();
+        self
+    }
+
+    pub fn with_config(mut self, fields: Vec<ConfigField>) -> Self {
+        self.config = fields;
+        self
+    }
+
+    pub fn with_config_field(mut self, field: ConfigField) -> Self {
+        self.config.push(field);
         self
     }
 
@@ -901,23 +810,18 @@ impl ProcessorDescriptor {
         self
     }
 
-    pub fn with_example(mut self, example: ProcessorExample) -> Self {
-        self.examples.push(example);
+    pub fn with_rust_example(mut self, example: impl Into<String>) -> Self {
+        self.examples.rust = example.into();
         self
     }
 
-    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
-        self.tags.push(tag.into());
+    pub fn with_python_example(mut self, example: impl Into<String>) -> Self {
+        self.examples.python = example.into();
         self
     }
 
-    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.tags.extend(tags.into_iter().map(|t| t.into()));
-        self
-    }
-
-    pub fn with_audio_requirements(mut self, requirements: AudioRequirements) -> Self {
-        self.audio_requirements = Some(requirements);
+    pub fn with_typescript_example(mut self, example: impl Into<String>) -> Self {
+        self.examples.typescript = example.into();
         self
     }
 
@@ -1139,14 +1043,49 @@ mod tests {
     #[test]
     fn test_processor_descriptor_builder() {
         let descriptor = ProcessorDescriptor::new("TestProcessor", "A test processor")
-            .with_usage_context("Use for testing")
-            .with_tag("test")
-            .with_tag("example");
+            .with_version("1.0.0")
+            .with_repository("https://github.com/tatolab/streamlib")
+            .with_rust_example("let processor = graph.add_processor::<TestProcessor>()?;");
 
         assert_eq!(descriptor.name, "TestProcessor");
         assert_eq!(descriptor.description, "A test processor");
-        assert_eq!(descriptor.usage_context, Some("Use for testing".into()));
-        assert_eq!(descriptor.tags, vec!["test", "example"]);
+        assert_eq!(descriptor.version, "1.0.0");
+        assert_eq!(
+            descriptor.repository,
+            "https://github.com/tatolab/streamlib"
+        );
+        assert_eq!(
+            descriptor.examples.rust,
+            "let processor = graph.add_processor::<TestProcessor>()?;"
+        );
+        assert!(descriptor.examples.python.is_empty());
+        assert!(descriptor.examples.typescript.is_empty());
+        assert!(descriptor.config.is_empty());
+        assert!(descriptor.inputs.is_empty());
+        assert!(descriptor.outputs.is_empty());
+    }
+
+    #[test]
+    fn test_processor_descriptor_all_fields_serialize() {
+        let descriptor = ProcessorDescriptor::new("TestProcessor", "A test processor");
+        let json = descriptor.to_json().expect("Should serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("Should parse");
+
+        // All fields should always be present
+        assert!(parsed.get("name").is_some());
+        assert!(parsed.get("description").is_some());
+        assert!(parsed.get("version").is_some());
+        assert!(parsed.get("repository").is_some());
+        assert!(parsed.get("config").is_some());
+        assert!(parsed.get("inputs").is_some());
+        assert!(parsed.get("outputs").is_some());
+        assert!(parsed.get("examples").is_some());
+
+        // Examples should have all language keys
+        let examples = parsed.get("examples").unwrap();
+        assert!(examples.get("rust").is_some());
+        assert!(examples.get("python").is_some());
+        assert!(examples.get("typescript").is_some());
     }
 
     #[test]
@@ -1362,5 +1301,30 @@ mod tests {
         };
         let array_primitive_schema = array_field.to_primitive_schema().unwrap();
         assert_eq!(array_primitive_schema.name(), "primitive_f32_512");
+    }
+
+    #[test]
+    fn test_config_descriptor_derive_provides_fields() {
+        use crate::core::processors::simple_passthrough::SimplePassthroughConfig;
+
+        let fields = SimplePassthroughConfig::config_fields();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "scale");
+        assert_eq!(fields[0].field_type, "f32");
+        assert!(fields[0].required);
+    }
+
+    #[test]
+    fn test_processor_descriptor_includes_config_fields() {
+        use crate::core::processors::simple_passthrough::SimplePassthroughProcessor;
+        use crate::core::GeneratedProcessor;
+
+        let descriptor = SimplePassthroughProcessor::Processor::descriptor().unwrap();
+        assert!(
+            !descriptor.config.is_empty(),
+            "Config fields should be populated"
+        );
+        assert_eq!(descriptor.config[0].name, "scale");
+        assert_eq!(descriptor.config[0].field_type, "f32");
     }
 }

@@ -88,7 +88,15 @@ fn test_processor_instantiation() {
 }
 
 // Test with config field
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    streamlib::ConfigDescriptor,
+)]
 pub struct MyConfig {
     pub threshold: f32,
 }

@@ -5,7 +5,7 @@ use crate::core::{LinkInput, LinkOutput, Result, VideoFrame};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 #[serde(default)]
 pub struct SimplePassthroughConfig {
     pub scale: f32,

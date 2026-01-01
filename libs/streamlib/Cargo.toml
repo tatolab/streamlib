@@ -83,6 +83,10 @@ wgpu-profiler = { version = "0.23.0", optional = true }
 axum.workspace = true
 futures-util = "0.3"  # For StreamExt/SinkExt on WebSocket
 
+# OpenAPI documentation generation
+utoipa = { version = "5.3", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+
 # Platform-specific: macOS/iOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2.workspace = true
