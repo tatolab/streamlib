@@ -19,8 +19,8 @@ use streamlib::{
     core::links::LinkBufferReadMode,
     core::schema::{DataFrameSchemaField, PrimitiveType, SemanticVersion},
     core::schema_registry::SCHEMA_REGISTRY,
-    GpuContext, LinkInput, LinkOutput, PortDescriptor, ProcessorDescriptor, ReactiveProcessor,
-    Result, RuntimeContext, StreamError, VideoFrame,
+    GpuContext, LinkInput, LinkOutput, PortDescriptor, ReactiveProcessor, Result, RuntimeContext,
+    StreamError, VideoFrame,
 };
 
 use crate::frame_binding::PyFrame;
@@ -55,7 +55,7 @@ impl Default for PythonHostProcessorConfig {
 #[derive(Debug, Clone)]
 struct PythonProcessorMetadata {
     name: String,
-    description: String,
+    _description: String,
     _inputs: Vec<PortDescriptor>,
     _outputs: Vec<PortDescriptor>,
 }
@@ -435,7 +435,7 @@ impl PythonHostProcessor::Processor {
 
         Ok(PythonProcessorMetadata {
             name,
-            description,
+            _description: description,
             _inputs: inputs,
             _outputs: outputs,
         })
@@ -801,14 +801,5 @@ impl ReactiveProcessor for PythonHostProcessor::Processor {
         })?;
 
         Ok(())
-    }
-}
-
-impl PythonHostProcessor::Processor {
-    /// Get the ProcessorDescriptor using the Python class name.
-    pub fn descriptor_from_metadata(&self) -> Option<ProcessorDescriptor> {
-        self.metadata
-            .as_ref()
-            .map(|m| ProcessorDescriptor::new(&m.name, &m.description).with_version("1.0.0"))
     }
 }

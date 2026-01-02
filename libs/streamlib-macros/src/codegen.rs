@@ -552,6 +552,16 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
 }
 
 /// Generate descriptor_instance method (only when descriptor_fn is specified)
+///
+/// When `descriptor_fn = "method_name"` is specified, the generated code passes
+/// the base descriptor (from `Self::descriptor()`) to the custom method, allowing
+/// it to modify specific fields (like name, description) while keeping others
+/// (inputs, outputs, config) intact.
+///
+/// The custom method signature should be:
+/// ```ignore
+/// fn method_name(&self, base: ProcessorDescriptor) -> ProcessorDescriptor
+/// ```
 fn generate_descriptor_instance(analysis: &AnalysisResult) -> TokenStream {
     let Some(method_name) = &analysis.processor_attrs.descriptor_fn else {
         // Use default implementation from trait (calls Self::descriptor())
@@ -562,7 +572,7 @@ fn generate_descriptor_instance(analysis: &AnalysisResult) -> TokenStream {
 
     quote! {
         fn descriptor_instance(&self) -> Option<::streamlib::core::ProcessorDescriptor> {
-            self.#method_ident()
+            Self::descriptor().map(|base| self.#method_ident(base))
         }
     }
 }
