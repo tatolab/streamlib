@@ -301,19 +301,41 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
         ),
     };
 
-    quote! {
-        impl Processor {
-            /// Processor name for registration and lookup.
-            pub const NAME: &'static str = #processor_name;
-
+    // Generate node() function - optionally extracts display_name from config field
+    let node_fn = if let Some(field_name) = &analysis.processor_attrs.display_name_from_config {
+        let field_ident = syn::Ident::new(field_name, proc_macro2::Span::call_site());
+        quote! {
+            /// Create a ProcessorSpec for adding this processor to a runtime.
+            pub fn node(config: #config_type) -> ::streamlib::core::ProcessorSpec {
+                let display_name = config.#field_ident.clone();
+                ::streamlib::core::ProcessorSpec {
+                    name: Self::NAME.to_string(),
+                    config: ::streamlib::serde_json::to_value(&config)
+                        .expect("Config serialization failed"),
+                    display_name: Some(display_name),
+                }
+            }
+        }
+    } else {
+        quote! {
             /// Create a ProcessorSpec for adding this processor to a runtime.
             pub fn node(config: #config_type) -> ::streamlib::core::ProcessorSpec {
                 ::streamlib::core::ProcessorSpec {
                     name: Self::NAME.to_string(),
                     config: ::streamlib::serde_json::to_value(&config)
                         .expect("Config serialization failed"),
+                    display_name: None,
                 }
             }
+        }
+    };
+
+    quote! {
+        impl Processor {
+            /// Processor name for registration and lookup.
+            pub const NAME: &'static str = #processor_name;
+
+            #node_fn
 
             /// Returns the execution mode for this processor.
             ///

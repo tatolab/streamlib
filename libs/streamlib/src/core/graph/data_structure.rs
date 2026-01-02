@@ -133,9 +133,10 @@ impl Serialize for SerializableNode<'_> {
         let node = self.0;
         let components = node.serialize_components();
 
-        let mut state = serializer.serialize_struct("ProcessorNode", 6)?;
+        let mut state = serializer.serialize_struct("ProcessorNode", 7)?;
         state.serialize_field("id", &node.id)?;
         state.serialize_field("type", &node.processor_type)?;
+        state.serialize_field("display_name", &node.display_name)?;
         state.serialize_field("config", &node.config)?;
         state.serialize_field("config_checksum", &node.config_checksum)?;
         state.serialize_field("ports", &node.ports)?;

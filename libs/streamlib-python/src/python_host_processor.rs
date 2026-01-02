@@ -92,7 +92,8 @@ fn rand_simple() -> u32 {
 /// created and managed automatically using `uv`.
 #[streamlib::processor(
     execution = Reactive,
-    description = "Host processor for Python-defined processors"
+    description = "Host processor for Python-defined processors",
+    display_name_from_config = "class_name"
 )]
 pub struct PythonHostProcessor {
     #[streamlib::config]

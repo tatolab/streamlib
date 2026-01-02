@@ -26,6 +26,10 @@ pub struct ProcessorAttributes {
     /// Custom processor name: `name = "..."`
     /// If not specified, defaults to the struct name.
     pub name: Option<String>,
+
+    /// Extract display_name from a config field: `display_name_from_config = "field_name"`
+    /// The generated `node()` will call `.with_display_name(config.field_name.clone())`.
+    pub display_name_from_config: Option<String>,
 }
 
 /// Parsed attributes from `#[input(...)]` or `#[output(...)]`
@@ -175,6 +179,13 @@ impl ProcessorAttributes {
             // unsafe_send (flag attribute, no value)
             if meta.path.is_ident("unsafe_send") {
                 result.unsafe_send = true;
+                return Ok(());
+            }
+
+            // display_name_from_config = "field_name"
+            if meta.path.is_ident("display_name_from_config") {
+                let value = parse_string_value(&meta)?;
+                result.display_name_from_config = Some(value);
                 return Ok(());
             }
 

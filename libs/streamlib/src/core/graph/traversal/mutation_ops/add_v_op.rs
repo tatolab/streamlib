@@ -18,8 +18,11 @@ impl<'a> TraversalSourceMut<'a> {
             };
         };
 
+        // Resolve display_name: use override if provided, otherwise default to type name
+        let display_name = spec.display_name.unwrap_or_else(|| spec.name.clone());
+
         // Build ProcessorNode with resolved port info
-        let node = ProcessorNode::new(spec.name, Some(spec.config), inputs, outputs);
+        let node = ProcessorNode::new(spec.name, display_name, Some(spec.config), inputs, outputs);
 
         // Add to graph
         let node_idx = self.graph.add_node(node);

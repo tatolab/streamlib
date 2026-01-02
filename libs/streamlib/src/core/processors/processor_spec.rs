@@ -13,6 +13,9 @@ pub struct ProcessorSpec {
     pub name: String,
     /// Configuration as JSON value.
     pub config: serde_json::Value,
+    /// Display name override. If None, defaults to `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 impl ProcessorSpec {
@@ -20,6 +23,13 @@ impl ProcessorSpec {
         Self {
             name: name.into(),
             config,
+            display_name: None,
         }
+    }
+
+    /// Set a custom display name for this processor.
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = Some(display_name.into());
+        self
     }
 }
