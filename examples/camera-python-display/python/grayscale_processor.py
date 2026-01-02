@@ -7,7 +7,7 @@ This processor converts RGB video frames to grayscale using a WGSL
 compute shader executed on the GPU.
 """
 
-from streamlib import processor, input_port, output_port
+from streamlib import processor, input, output
 
 # WGSL compute shader for grayscale conversion
 GRAYSCALE_SHADER = """
@@ -39,11 +39,11 @@ class GrayscaleProcessor:
     All processing happens on the GPU via a WGSL compute shader.
     """
 
-    @input_port(frame_type="VideoFrame", description="RGB video input")
+    @input(schema="VideoFrame")
     def video_in(self):
         pass
 
-    @output_port(frame_type="VideoFrame", description="Grayscale video output")
+    @output(schema="VideoFrame")
     def video_out(self):
         pass
 
@@ -54,20 +54,31 @@ class GrayscaleProcessor:
 
     def process(self, ctx):
         """Process each frame through the grayscale shader."""
-        frame = ctx.inputs.video_in.read()
+        frame = ctx.input("video_in").get()
         if frame is None:
             return
+
+        # Get specific fields
+        texture = ctx.input("video_in").get("texture")
+        width = frame["width"]
+        height = frame["height"]
 
         # Dispatch shader to convert frame to grayscale
         output_texture = ctx.gpu.dispatch(
             self.shader,
-            {"input_texture": frame.texture},
-            frame.width,
-            frame.height,
+            {"input_texture": texture},
+            width,
+            height,
         )
 
-        # Write output frame with new texture, preserving metadata
-        ctx.outputs.video_out.write(frame.with_texture(output_texture))
+        # Write output frame with new texture
+        ctx.output("video_out").set({
+            "texture": output_texture,
+            "width": width,
+            "height": height,
+            "timestamp_ns": frame["timestamp_ns"],
+            "frame_number": frame["frame_number"],
+        })
 
     def teardown(self, ctx):
         """Cleanup on shutdown."""

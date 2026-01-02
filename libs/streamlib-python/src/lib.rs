@@ -8,9 +8,11 @@
 
 use pyo3::prelude::*;
 
+mod frame_binding;
 mod gpu_context_binding;
 mod processor_context_proxy;
 mod python_host_processor;
+mod schema_field_mappers;
 mod shader_handle;
 mod venv_manager;
 mod video_frame_binding;
@@ -29,10 +31,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<shader_handle::PyGpuTexture>()?;
     m.add_class::<shader_handle::PyCompiledShader>()?;
     m.add_class::<processor_context_proxy::PyProcessorContext>()?;
-    m.add_class::<processor_context_proxy::PyInputPortsProxy>()?;
-    m.add_class::<processor_context_proxy::PyOutputPortsProxy>()?;
-    m.add_class::<processor_context_proxy::PyInputPort>()?;
-    m.add_class::<processor_context_proxy::PyOutputPort>()?;
+    m.add_class::<processor_context_proxy::PyInputPortProxy>()?;
+    m.add_class::<processor_context_proxy::PyOutputPortProxy>()?;
+    m.add_class::<frame_binding::PyFrame>()?;
 
     Ok(())
 }

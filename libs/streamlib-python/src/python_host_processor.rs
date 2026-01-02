@@ -20,10 +20,9 @@ use streamlib::{
     Result, RuntimeContext, StreamError, VideoFrame,
 };
 
-use crate::gpu_context_binding::PyGpuContext;
-use crate::processor_context_proxy::{PyInputPortsProxy, PyOutputPortsProxy, PyProcessorContext};
+use crate::frame_binding::PyFrame;
+use crate::processor_context_proxy::{PortMetadata, PyProcessorContext};
 use crate::venv_manager::VenvManager;
-use crate::video_frame_binding::PyVideoFrame;
 
 /// Configuration for PythonHostProcessor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, streamlib::ConfigDescriptor)]
@@ -108,9 +107,7 @@ pub struct PythonHostProcessor {
     // Python runtime state
     py_instance: Option<Py<PyAny>>,
     py_context: Option<Py<PyProcessorContext>>,
-    inputs_proxy: Option<PyInputPortsProxy>,
-    outputs_proxy: Option<PyOutputPortsProxy>,
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<Arc<GpuContext>>,
     metadata: Option<PythonProcessorMetadata>,
 }
 
@@ -340,11 +337,21 @@ impl PythonHostProcessor::Processor {
                 .map(|v| v.extract().unwrap_or_default())
                 .unwrap_or_default();
 
-            let frame_type: String = port_dict
-                .get_item("frame_type")
-                .map_err(|e| py_err_to_stream_error(e, "Failed to get frame_type"))?
-                .map(|v| v.extract().unwrap_or_else(|_| "VideoFrame".to_string()))
-                .unwrap_or_else(|| "VideoFrame".to_string());
+            // Try 'schema' first (new API), fall back to 'frame_type' (deprecated)
+            let schema: Option<String> = port_dict
+                .get_item("schema")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok());
+
+            let frame_type: String = schema.unwrap_or_else(|| {
+                port_dict
+                    .get_item("frame_type")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or_else(|| "VideoFrame".to_string())
+            });
 
             inputs.push(PortDescriptor::new(
                 &port_name,
@@ -384,11 +391,21 @@ impl PythonHostProcessor::Processor {
                 .map(|v| v.extract().unwrap_or_default())
                 .unwrap_or_default();
 
-            let frame_type: String = port_dict
-                .get_item("frame_type")
-                .map_err(|e| py_err_to_stream_error(e, "Failed to get frame_type"))?
-                .map(|v| v.extract().unwrap_or_else(|_| "VideoFrame".to_string()))
-                .unwrap_or_else(|| "VideoFrame".to_string());
+            // Try 'schema' first (new API), fall back to 'frame_type' (deprecated)
+            let schema: Option<String> = port_dict
+                .get_item("schema")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok());
+
+            let frame_type: String = schema.unwrap_or_else(|| {
+                port_dict
+                    .get_item("frame_type")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or_else(|| "VideoFrame".to_string())
+            });
 
             outputs.push(PortDescriptor::new(
                 &port_name,
@@ -417,7 +434,7 @@ impl PythonHostProcessor::Processor {
 impl ReactiveProcessor for PythonHostProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         // Store GPU context
-        self.gpu_context = Some(ctx.gpu.clone());
+        self.gpu_context = Some(Arc::new(ctx.gpu.clone()));
 
         // Generate unique instance ID and create venv manager
         let instance_id = generate_instance_id();
@@ -447,24 +464,33 @@ impl ReactiveProcessor for PythonHostProcessor::Processor {
             self.config.project_path.display()
         );
 
-        // Create context proxies
-        self.inputs_proxy = Some(PyInputPortsProxy::new());
-        self.outputs_proxy = Some(PyOutputPortsProxy::new());
-
         // Call Python setup() if it exists
+        let gpu_context = self.gpu_context.clone().unwrap();
         Python::attach(|py| {
             if let Some(ref instance) = self.py_instance {
                 let instance = instance.bind(py);
 
                 // Create ProcessorContext for Python
-                let py_gpu = PyGpuContext::new(self.gpu_context.clone().unwrap());
-                let py_ctx = PyProcessorContext::new(
-                    py,
-                    self.inputs_proxy.clone().unwrap(),
-                    self.outputs_proxy.clone().unwrap(),
-                    py_gpu,
-                )
-                .map_err(|e| py_err_to_stream_error(e, "Failed to create ProcessorContext"))?;
+                let py_ctx = PyProcessorContext::new(py, gpu_context.clone())
+                    .map_err(|e| py_err_to_stream_error(e, "Failed to create ProcessorContext"))?;
+
+                // Register input ports with schema metadata
+                for input in &metadata._inputs {
+                    py_ctx.register_input_port(PortMetadata {
+                        name: input.name.clone(),
+                        schema: Some(input.schema.clone()),
+                        description: input.description.clone(),
+                    });
+                }
+
+                // Register output ports with schema metadata
+                for output in &metadata._outputs {
+                    py_ctx.register_output_port(PortMetadata {
+                        name: output.name.clone(),
+                        schema: Some(output.schema.clone()),
+                        description: output.description.clone(),
+                    });
+                }
 
                 self.py_context = Some(
                     Py::new(py, py_ctx)
@@ -554,10 +580,12 @@ impl ReactiveProcessor for PythonHostProcessor::Processor {
                 .as_ref()
                 .ok_or_else(|| StreamError::Runtime("Python context not initialized".into()))?;
 
-            // Set input frame on context
-            if let Some(ref inputs_proxy) = self.inputs_proxy {
-                inputs_proxy.set_frame("video_in", Some(PyVideoFrame::new(input_frame.clone())));
-            }
+            // Set input frame on context using new API
+            let ctx_borrowed = ctx.borrow(py);
+            ctx_borrowed.set_input_frame(
+                "video_in",
+                Some(PyFrame::from_video_frame(input_frame.clone())),
+            );
 
             // Call Python process()
             let ctx_ref = ctx.bind(py);
@@ -572,10 +600,10 @@ impl ReactiveProcessor for PythonHostProcessor::Processor {
                     StreamError::Runtime(format!("Python process() failed: {}\n{}", e, traceback))
                 })?;
 
-            // Extract output frame
-            if let Some(ref outputs_proxy) = self.outputs_proxy {
-                if let Some(py_frame) = outputs_proxy.take_frame("video_out") {
-                    self.video_out.write(py_frame.into_inner());
+            // Extract output frame using new API
+            if let Some(py_frame) = ctx_borrowed.take_output_frame("video_out") {
+                if let Some(video_frame) = py_frame.as_video_frame() {
+                    self.video_out.write(video_frame.clone());
                 }
             }
 

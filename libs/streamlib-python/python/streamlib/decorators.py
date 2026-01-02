@@ -18,8 +18,8 @@ def processor(
 ):
     """Mark a class as a StreamLib processor.
 
-    The decorated class should define input/output ports using @input_port
-    and @output_port decorators on methods, and implement process() and
+    The decorated class should define input/output ports using @input
+    and @output decorators on methods, and implement process() and
     optionally setup() and teardown().
 
     Args:
@@ -30,21 +30,22 @@ def processor(
     Example:
         @processor(name="GrayscaleProcessor", description="Convert to grayscale")
         class GrayscaleProcessor:
-            @input_port(frame_type="VideoFrame")
+            @input(schema="VideoFrame")
             def video_in(self): pass
 
-            @output_port(frame_type="VideoFrame")
+            @output(schema="VideoFrame")
             def video_out(self): pass
 
             def setup(self, ctx):
                 self.shader = ctx.gpu.compile_shader("grayscale", WGSL_CODE)
 
             def process(self, ctx):
-                frame = ctx.inputs.video_in.read()
+                frame = ctx.input("video_in").get()
                 if frame:
-                    output = ctx.gpu.dispatch(self.shader, {"input_texture": frame.texture},
-                                              frame.width, frame.height)
-                    ctx.outputs.video_out.write(frame.with_texture(output))
+                    texture = ctx.input("video_in").get("texture")
+                    output = ctx.gpu.dispatch(self.shader, {"input_texture": texture},
+                                              frame["width"], frame["height"])
+                    ctx.output("video_out").set({"texture": output, **frame})
     """
 
     def decorator(cls):
@@ -74,20 +75,20 @@ def processor(
     return decorator
 
 
-def input_port(
+def input(
     name: Optional[str] = None,
-    frame_type: str = "VideoFrame",
+    schema: Optional[str] = None,
     description: str = "",
 ):
     """Mark a method as defining an input port.
 
     Args:
         name: Port name. Defaults to method name.
-        frame_type: Frame type - "VideoFrame", "AudioFrame", or "DataFrame".
-        description: Human-readable description.
+        schema: Schema name from SCHEMA_REGISTRY (required). Examples: "VideoFrame", "AudioFrame", "DataFrame".
+        description: Human-readable description for introspection.
 
     Example:
-        @input_port(frame_type="VideoFrame", description="Video input")
+        @input(schema="VideoFrame", description="RGB video input")
         def video_in(self): pass
     """
 
@@ -95,7 +96,7 @@ def input_port(
         port_name = name or method.__name__
         method._streamlib_input_port = {
             "name": port_name,
-            "frame_type": frame_type,
+            "schema": schema,  # Required - error logged if None when get() called
             "description": description,
         }
         return method
@@ -103,20 +104,20 @@ def input_port(
     return decorator
 
 
-def output_port(
+def output(
     name: Optional[str] = None,
-    frame_type: str = "VideoFrame",
+    schema: Optional[str] = None,
     description: str = "",
 ):
     """Mark a method as defining an output port.
 
     Args:
         name: Port name. Defaults to method name.
-        frame_type: Frame type - "VideoFrame", "AudioFrame", or "DataFrame".
-        description: Human-readable description.
+        schema: Schema name from SCHEMA_REGISTRY (required). Examples: "VideoFrame", "AudioFrame", "DataFrame".
+        description: Human-readable description for introspection.
 
     Example:
-        @output_port(frame_type="VideoFrame", description="Video output")
+        @output(schema="VideoFrame", description="Processed video output")
         def video_out(self): pass
     """
 
@@ -124,9 +125,28 @@ def output_port(
         port_name = name or method.__name__
         method._streamlib_output_port = {
             "name": port_name,
-            "frame_type": frame_type,
+            "schema": schema,  # Required - error logged if None when set() called
             "description": description,
         }
         return method
 
     return decorator
+
+
+# Backward compatibility aliases
+def input_port(
+    name: Optional[str] = None,
+    frame_type: str = "VideoFrame",
+    description: str = "",
+):
+    """Deprecated: Use @input(schema=...) instead."""
+    return input(name=name, schema=frame_type, description=description)
+
+
+def output_port(
+    name: Optional[str] = None,
+    frame_type: str = "VideoFrame",
+    description: str = "",
+):
+    """Deprecated: Use @output(schema=...) instead."""
+    return output(name=name, schema=frame_type, description=description)

@@ -8,33 +8,34 @@ processors to run within the Rust runtime. Python acts as a scripting
 layer that orchestrates GPU shaders - heavy processing stays on GPU.
 
 Example:
-    from streamlib import processor, input_port, output_port
+    from streamlib import processor, input, output
 
     @processor(name="GrayscaleProcessor")
     class GrayscaleProcessor:
-        @input_port(frame_type="VideoFrame")
+        @input(schema="VideoFrame")
         def video_in(self): pass
 
-        @output_port(frame_type="VideoFrame")
+        @output(schema="VideoFrame")
         def video_out(self): pass
 
         def setup(self, ctx):
             self.shader = ctx.gpu.compile_shader("grayscale", WGSL_CODE)
 
         def process(self, ctx):
-            frame = ctx.inputs.video_in.read()
+            frame = ctx.input("video_in").get()
             if frame:
-                output = ctx.gpu.dispatch(
+                texture = ctx.input("video_in").get("texture")
+                output_tex = ctx.gpu.dispatch(
                     self.shader,
-                    {"input_texture": frame.texture},
-                    frame.width,
-                    frame.height
+                    {"input_texture": texture},
+                    frame["width"],
+                    frame["height"]
                 )
-                ctx.outputs.video_out.write(frame.with_texture(output))
+                ctx.output("video_out").set({"texture": output_tex, **frame})
 """
 
 # Re-export decorators
-from .decorators import processor, input_port, output_port
+from .decorators import processor, input, output, input_port, output_port
 
 # Try to import native bindings (available when built with maturin)
 try:
@@ -52,6 +53,9 @@ except ImportError:
 __all__ = [
     # Decorators (always available)
     "processor",
+    "input",
+    "output",
+    # Deprecated aliases
     "input_port",
     "output_port",
     # Native types (available when built)
