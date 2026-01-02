@@ -1,0 +1,10 @@
+# Cargo configuration for streamlib workspace
+# This ensures PyO3 always uses the correct Python version
+
+[env]
+# Tell PyO3 to use uv-managed Python 3.12 for builds and tests
+# This prevents PyO3 from finding incorrect Python installations
+PYO3_PYTHON = "/Users/fonta/.local/share/uv/python/cpython-3.12.10-macos-aarch64-none/bin/python3.12"
+
+# Set PYTHONHOME so embedded Python can find its standard library
+PYTHONHOME = "/Users/fonta/.local/share/uv/python/cpython-3.12.10-macos-aarch64-none"
