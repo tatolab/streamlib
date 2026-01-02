@@ -1,34 +1,31 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Reactive host processor for Python-defined processors.
+//! Continuous host processor for Python-defined processors.
 //!
-//! Use this for Python processors that react to input data.
+//! Use this for Python processors that run in a continuous loop.
 //! The Python class must implement `process(self, ctx)`.
 
 use std::sync::Arc;
 
-use streamlib::{LinkInput, LinkOutput, ReactiveProcessor, Result, RuntimeContext, VideoFrame};
+use streamlib::{ContinuousProcessor, LinkInput, LinkOutput, Result, RuntimeContext, VideoFrame};
 
 use crate::python_processor_core::{PythonProcessorConfig, PythonProcessorCore};
 
-// Re-export config for backward compatibility
-pub use crate::python_processor_core::PythonProcessorConfig as PythonHostProcessorConfig;
-
-/// Reactive host processor for Python-defined processors.
+/// Continuous host processor for Python-defined processors.
 ///
 /// This processor loads a Python project and executes it via PyO3.
-/// The Python class must be decorated with `@processor(execution="Reactive")`
+/// The Python class must be decorated with `@processor(execution="Continuous")`
 /// and implement `process(self, ctx)`.
 ///
-/// Use this when Python processor reacts to input data - `process()` is called
-/// each time data arrives on an input port.
+/// Use this for generators, sources, polling, or batch processing where
+/// `process()` is called repeatedly in a loop.
 #[streamlib::processor(
-    execution = Reactive,
-    description = "Reactive host processor for Python-defined processors",
+    execution = Continuous,
+    description = "Continuous host processor for Python-defined processors",
     display_name_from_config = "class_name"
 )]
-pub struct PythonReactiveHostProcessor {
+pub struct PythonContinuousHostProcessor {
     #[streamlib::config]
     config: PythonProcessorConfig,
 
@@ -43,7 +40,7 @@ pub struct PythonReactiveHostProcessor {
     core: PythonProcessorCore,
 }
 
-impl PythonReactiveHostProcessor::Processor {
+impl PythonContinuousHostProcessor::Processor {
     fn core(&self) -> &PythonProcessorCore {
         &self.core
     }
@@ -53,16 +50,16 @@ impl PythonReactiveHostProcessor::Processor {
     }
 }
 
-impl ReactiveProcessor for PythonReactiveHostProcessor::Processor {
+impl ContinuousProcessor for PythonContinuousHostProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         self.core_mut().setup_common(&ctx.gpu)?;
         self.core_mut().init_python_context()?;
 
         // Validate execution mode
         if let Some(ref metadata) = self.core().metadata {
-            if metadata.execution != "Reactive" {
+            if metadata.execution != "Continuous" {
                 tracing::warn!(
-                    "PythonReactiveHostProcessor: Python processor '{}' declares execution='{}' but is being run as Reactive",
+                    "PythonContinuousHostProcessor: Python processor '{}' declares execution='{}' but is being run as Continuous",
                     metadata.name,
                     metadata.execution
                 );
@@ -85,23 +82,15 @@ impl ReactiveProcessor for PythonReactiveHostProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // Read input frame
-        let input_frame = match self.video_in.read() {
-            Some(frame) => frame,
-            None => return Ok(()),
-        };
+        // For continuous mode, we may or may not have input
+        // Try to read input if available
+        let input_frame = self.video_in.read();
 
         // Call Python process()
-        if let Some(output_frame) = self.core().call_python_process(Some(input_frame.clone()))? {
+        if let Some(output_frame) = self.core().call_python_process(input_frame.clone())? {
             self.video_out.write(output_frame);
         }
 
         Ok(())
     }
-}
-
-/// Backward compatibility: Re-export PythonReactiveHostProcessor as PythonHostProcessor.
-#[allow(non_snake_case)]
-pub mod PythonHostProcessor {
-    pub use super::PythonReactiveHostProcessor::*;
 }

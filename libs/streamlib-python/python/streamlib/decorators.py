@@ -190,16 +190,36 @@ def processor(
     """Mark a class as a StreamLib processor.
 
     The decorated class should define input/output ports using @input
-    and @output decorators on methods, and implement process() and
-    optionally setup() and teardown().
+    and @output decorators on methods, and implement the appropriate
+    methods for the execution mode.
 
     Args:
         name: Processor name for registry. Defaults to class name.
         description: Human-readable description.
-        execution: Execution mode - "Reactive" or "Continuous".
+        execution: Execution mode - one of:
+            - "Reactive": process() called when input data arrives.
+              Use for transforms, filters, effects, encoders, decoders.
+            - "Continuous": process() called repeatedly in a loop.
+              Use for generators, sources, polling, batch processing.
+            - "Manual": start() called once, then you control timing.
+              Use for hardware callbacks, display vsync, cameras.
 
-    Example:
-        @processor(name="GrayscaleProcessor", description="Convert to grayscale")
+    Required methods by execution mode:
+        Reactive/Continuous:
+            - process(self, ctx): Called to process data.
+
+        Manual:
+            - start(self, ctx): Called once to start the processor.
+            - stop(self, ctx): Optional, called when stopping.
+
+    Optional lifecycle methods (all modes):
+        - setup(self, ctx): Called once at startup.
+        - teardown(self, ctx): Called once at shutdown.
+        - on_pause(self, ctx): Called when processor is paused.
+        - on_resume(self, ctx): Called when processor is resumed.
+
+    Example (Reactive):
+        @processor(name="GrayscaleProcessor", execution="Reactive")
         class GrayscaleProcessor:
             @input(schema="VideoFrame")
             def video_in(self): pass
@@ -207,16 +227,26 @@ def processor(
             @output(schema="VideoFrame")
             def video_out(self): pass
 
-            def setup(self, ctx):
-                self.shader = ctx.gpu.compile_shader("grayscale", WGSL_CODE)
-
             def process(self, ctx):
                 frame = ctx.input("video_in").get()
                 if frame:
-                    texture = ctx.input("video_in").get("texture")
-                    output = ctx.gpu.dispatch(self.shader, {"input_texture": texture},
-                                              frame["width"], frame["height"])
-                    ctx.output("video_out").set({"texture": output, **frame})
+                    # Process frame...
+                    ctx.output("video_out").set(result)
+
+    Example (Manual):
+        @processor(name="CameraSource", execution="Manual")
+        class CameraSource:
+            @output(schema="VideoFrame")
+            def video_out(self): pass
+
+            def start(self, ctx):
+                # Start camera capture, register callbacks
+                self.camera = Camera()
+                self.camera.on_frame(lambda f: ctx.output("video_out").set(f))
+                self.camera.start()
+
+            def stop(self, ctx):
+                self.camera.stop()
     """
 
     def decorator(cls):

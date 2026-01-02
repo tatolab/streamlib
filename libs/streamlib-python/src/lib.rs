@@ -11,14 +11,23 @@ use pyo3::prelude::*;
 mod frame_binding;
 mod gpu_context_binding;
 mod processor_context_proxy;
+mod python_continuous_host_processor;
 mod python_host_processor;
+mod python_manual_host_processor;
+mod python_processor_core;
 pub mod schema_binding;
 mod schema_field_mappers;
 mod shader_handle;
 mod venv_manager;
 mod video_frame_binding;
 
-pub use python_host_processor::{PythonHostProcessor, PythonHostProcessorConfig};
+// Re-export all Python host processor variants
+pub use python_continuous_host_processor::PythonContinuousHostProcessor;
+pub use python_host_processor::{
+    PythonHostProcessor, PythonHostProcessorConfig, PythonReactiveHostProcessor,
+};
+pub use python_manual_host_processor::PythonManualHostProcessor;
+pub use python_processor_core::PythonProcessorConfig;
 
 /// StreamLib Python native bindings module.
 #[pymodule]
