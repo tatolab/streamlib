@@ -17,7 +17,6 @@ members = [
     "examples/api-server",                # Example: Minimal API server (runtime + wait_for_signal)
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
-    "examples/python-grayscale",          # Example: Python processor with GPU shader
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
