@@ -5,9 +5,34 @@
 
 This processor converts RGB video frames to grayscale using a WGSL
 compute shader executed on the GPU.
+
+Also demonstrates custom schema definition that gets registered in
+the Rust SCHEMA_REGISTRY.
 """
 
-from streamlib import processor, input, output
+from streamlib import processor, input, output, schema, f32, i64, bool_field
+
+
+# =============================================================================
+# Example: Custom schema definition (registered in Rust SCHEMA_REGISTRY)
+# =============================================================================
+
+@schema(name="TestEmbedding")
+class TestEmbeddingSchema:
+    """Example custom schema for ML embedding output.
+
+    This schema is registered in Rust's SCHEMA_REGISTRY when this module
+    is imported, making it available for inspection via the API server.
+    """
+    embedding = f32(shape=[512], description="Feature embedding vector")
+    timestamp = i64(description="Timestamp in nanoseconds")
+    confidence = f32(description="Confidence score 0.0-1.0")
+    active = bool_field(description="Whether detection is active")
+
+
+# =============================================================================
+# Grayscale Processor
+# =============================================================================
 
 # WGSL compute shader for grayscale conversion
 GRAYSCALE_SHADER = """

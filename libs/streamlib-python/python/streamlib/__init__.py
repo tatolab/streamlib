@@ -8,34 +8,54 @@ processors to run within the Rust runtime. Python acts as a scripting
 layer that orchestrates GPU shaders - heavy processing stays on GPU.
 
 Example:
-    from streamlib import processor, input, output
+    from streamlib import processor, input, output, schema, f32, i64, bool_field
 
-    @processor(name="GrayscaleProcessor")
-    class GrayscaleProcessor:
+    # Define a custom schema
+    @schema(name="clip_embedding")
+    class ClipEmbeddingSchema:
+        embedding = f32(shape=[512], description="CLIP embedding vector")
+        timestamp = i64(description="Timestamp in nanoseconds")
+        normalized = bool_field()
+
+    @processor(name="EmbeddingProcessor")
+    class EmbeddingProcessor:
         @input(schema="VideoFrame")
         def video_in(self): pass
 
-        @output(schema="VideoFrame")
-        def video_out(self): pass
-
-        def setup(self, ctx):
-            self.shader = ctx.gpu.compile_shader("grayscale", WGSL_CODE)
+        @output(schema=ClipEmbeddingSchema)
+        def embedding_out(self): pass
 
         def process(self, ctx):
             frame = ctx.input("video_in").get()
             if frame:
-                texture = ctx.input("video_in").get("texture")
-                output_tex = ctx.gpu.dispatch(
-                    self.shader,
-                    {"input_texture": texture},
-                    frame["width"],
-                    frame["height"]
-                )
-                ctx.output("video_out").set({"texture": output_tex, **frame})
+                ctx.output("embedding_out").set({
+                    "embedding": self.model.encode(frame),
+                    "timestamp": frame["timestamp_ns"],
+                    "normalized": True,
+                })
 """
 
-# Re-export decorators
-from .decorators import processor, input, output, input_port, output_port
+# Re-export decorators and schema API
+from .decorators import (
+    # Processor decorators
+    processor,
+    input,
+    output,
+    # Schema decorator
+    schema,
+    # Field descriptors
+    SchemaField,
+    f32,
+    f64,
+    i32,
+    i64,
+    u32,
+    u64,
+    bool_field,
+    # Deprecated aliases
+    input_port,
+    output_port,
+)
 
 # Try to import native bindings (available when built with maturin)
 try:
@@ -51,10 +71,20 @@ except ImportError:
     pass
 
 __all__ = [
-    # Decorators (always available)
+    # Processor decorators (always available)
     "processor",
     "input",
     "output",
+    # Schema API (always available)
+    "schema",
+    "SchemaField",
+    "f32",
+    "f64",
+    "i32",
+    "i64",
+    "u32",
+    "u64",
+    "bool_field",
     # Deprecated aliases
     "input_port",
     "output_port",

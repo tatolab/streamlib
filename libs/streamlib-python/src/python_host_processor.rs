@@ -16,6 +16,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use streamlib::{
+    core::links::LinkBufferReadMode,
+    core::schema::{DataFrameSchemaField, PrimitiveType, SemanticVersion},
+    core::schema_registry::SCHEMA_REGISTRY,
     GpuContext, LinkInput, LinkOutput, PortDescriptor, ProcessorDescriptor, ReactiveProcessor,
     Result, RuntimeContext, StreamError, VideoFrame,
 };
@@ -253,6 +256,14 @@ impl PythonHostProcessor::Processor {
                         StreamError::Configuration(format!("Failed to load Python module: {}", e))
                     })?;
 
+            // Register any @schema-decorated classes in SCHEMA_REGISTRY
+            if let Err(e) = self.register_python_schemas(py, &module) {
+                tracing::warn!(
+                    "PythonHostProcessor: Failed to register Python schemas: {}",
+                    e
+                );
+            }
+
             // Get the processor class
             let py_class = module
                 .getattr(self.config.class_name.as_str())
@@ -428,6 +439,185 @@ impl PythonHostProcessor::Processor {
             _inputs: inputs,
             _outputs: outputs,
         })
+    }
+
+    /// Scan Python module for @schema-decorated classes and register them in SCHEMA_REGISTRY.
+    fn register_python_schemas(&self, py: Python<'_>, module: &Bound<'_, PyModule>) -> Result<()> {
+        // Use dir() to get all module attribute names
+        let builtins = py
+            .import("builtins")
+            .map_err(|e| py_err_to_stream_error(e, "Failed to import builtins"))?;
+        let dir_fn = builtins
+            .getattr("dir")
+            .map_err(|e| py_err_to_stream_error(e, "Failed to get dir function"))?;
+        let names = dir_fn
+            .call1((module,))
+            .map_err(|e| py_err_to_stream_error(e, "Failed to call dir()"))?;
+
+        for name in names
+            .try_iter()
+            .map_err(|e| py_err_to_stream_error(e, "Failed to iterate names"))?
+        {
+            let name = name.map_err(|e| py_err_to_stream_error(e, "Failed to get name"))?;
+            let name_str: String = name
+                .extract()
+                .map_err(|e| py_err_to_stream_error(e, "Failed to extract name"))?;
+
+            // Skip private attributes
+            if name_str.starts_with('_') {
+                continue;
+            }
+
+            // Get the attribute
+            let attr = match module.getattr(name_str.as_str()) {
+                Ok(attr) => attr,
+                Err(_) => continue,
+            };
+
+            // Check if it has __streamlib_schema__ attribute
+            let schema_attr = match attr.getattr("__streamlib_schema__") {
+                Ok(schema) => schema,
+                Err(_) => continue,
+            };
+
+            // Extract schema metadata
+            if let Err(e) = self.register_schema_from_python(py, &name_str, &schema_attr) {
+                tracing::warn!(
+                    "PythonHostProcessor: Failed to register schema '{}': {}",
+                    name_str,
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Register a single schema from Python metadata in SCHEMA_REGISTRY.
+    fn register_schema_from_python(
+        &self,
+        _py: Python<'_>,
+        class_name: &str,
+        schema_attr: &Bound<'_, PyAny>,
+    ) -> Result<()> {
+        let schema_dict: &Bound<'_, PyDict> = schema_attr.cast().map_err(|_| {
+            StreamError::Configuration(format!(
+                "Invalid __streamlib_schema__ format on class '{}'",
+                class_name
+            ))
+        })?;
+
+        // Extract schema name
+        let schema_name: String = schema_dict
+            .get_item("name")
+            .map_err(|e| py_err_to_stream_error(e, "Failed to get schema name"))?
+            .ok_or_else(|| StreamError::Configuration("Missing 'name' in schema metadata".into()))?
+            .extract()
+            .map_err(|e| py_err_to_stream_error(e, "Failed to extract schema name"))?;
+
+        // Extract fields
+        let fields_list = schema_dict
+            .get_item("fields")
+            .map_err(|e| py_err_to_stream_error(e, "Failed to get schema fields"))?
+            .ok_or_else(|| {
+                StreamError::Configuration("Missing 'fields' in schema metadata".into())
+            })?;
+
+        let mut schema_fields = Vec::new();
+
+        for field in fields_list
+            .try_iter()
+            .map_err(|e| py_err_to_stream_error(e, "Failed to iterate fields"))?
+        {
+            let field = field.map_err(|e| py_err_to_stream_error(e, "Failed to get field"))?;
+            let field_dict: &Bound<'_, PyDict> = field
+                .cast()
+                .map_err(|_| StreamError::Configuration("Field is not a dict".into()))?;
+
+            let field_name: String = field_dict
+                .get_item("name")
+                .map_err(|e| py_err_to_stream_error(e, "Failed to get field name"))?
+                .ok_or_else(|| StreamError::Configuration("Missing field name".into()))?
+                .extract()
+                .map_err(|e| py_err_to_stream_error(e, "Failed to extract field name"))?;
+
+            let primitive_type_str: String = field_dict
+                .get_item("primitive_type")
+                .map_err(|e| py_err_to_stream_error(e, "Failed to get primitive_type"))?
+                .ok_or_else(|| StreamError::Configuration("Missing primitive_type".into()))?
+                .extract()
+                .map_err(|e| py_err_to_stream_error(e, "Failed to extract primitive_type"))?;
+
+            let shape: Vec<usize> = field_dict
+                .get_item("shape")
+                .map_err(|e| py_err_to_stream_error(e, "Failed to get shape"))?
+                .map(|v| v.extract().unwrap_or_default())
+                .unwrap_or_default();
+
+            let description: String = field_dict
+                .get_item("description")
+                .map_err(|e| py_err_to_stream_error(e, "Failed to get description"))?
+                .map(|v| v.extract().unwrap_or_default())
+                .unwrap_or_default();
+
+            // Parse primitive type
+            let primitive = match primitive_type_str.as_str() {
+                "bool" => PrimitiveType::Bool,
+                "i32" => PrimitiveType::I32,
+                "i64" => PrimitiveType::I64,
+                "u32" => PrimitiveType::U32,
+                "u64" => PrimitiveType::U64,
+                "f32" => PrimitiveType::F32,
+                "f64" => PrimitiveType::F64,
+                other => {
+                    return Err(StreamError::Configuration(format!(
+                        "Unknown primitive type '{}' in schema field '{}'",
+                        other, field_name
+                    )));
+                }
+            };
+
+            schema_fields.push(DataFrameSchemaField {
+                name: field_name,
+                description,
+                type_name: primitive_type_str,
+                shape,
+                internal: false,
+                primitive: Some(primitive),
+            });
+        }
+
+        // Register in SCHEMA_REGISTRY
+        if SCHEMA_REGISTRY.contains(&schema_name) {
+            tracing::debug!(
+                "PythonHostProcessor: Schema '{}' already registered, skipping",
+                schema_name
+            );
+            return Ok(());
+        }
+
+        SCHEMA_REGISTRY
+            .register_dataframe_schema(
+                schema_name.clone(),
+                SemanticVersion::new(1, 0, 0),
+                schema_fields.clone(),
+                LinkBufferReadMode::SkipToLatest,
+                16,
+            )
+            .map_err(|e| {
+                StreamError::Configuration(format!(
+                    "Failed to register schema '{}': {}",
+                    schema_name, e
+                ))
+            })?;
+
+        tracing::info!(
+            "PythonHostProcessor: Registered schema '{}' with {} fields",
+            schema_name,
+            schema_fields.len()
+        );
+
+        Ok(())
     }
 }
 

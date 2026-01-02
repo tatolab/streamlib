@@ -28,7 +28,9 @@
 
 use std::path::PathBuf;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::{CameraProcessor, DisplayProcessor, Result, StreamRuntime};
+use streamlib::{
+    ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor, Result, StreamRuntime,
+};
 use streamlib_python::{PythonHostProcessor, PythonHostProcessorConfig};
 
 fn main() -> Result<()> {
@@ -86,6 +88,18 @@ fn main() -> Result<()> {
         scaling_mode: Default::default(),
     }))?;
     println!("✓ Display added: {}\n", display);
+
+    // =========================================================================
+    // Add API Server processor (free-floating, for registry inspection)
+    // =========================================================================
+
+    println!("🌐 Adding API server processor...");
+    let _api_server = runtime.add_processor(ApiServerProcessor::node(ApiServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 9000,
+    }))?;
+    println!("✓ API server running at http://127.0.0.1:9000");
+    println!("   Registry: http://127.0.0.1:9000/registry\n");
 
     // =========================================================================
     // Connect the pipeline: Camera → Grayscale → Display

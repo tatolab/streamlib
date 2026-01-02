@@ -12,6 +12,7 @@ mod frame_binding;
 mod gpu_context_binding;
 mod processor_context_proxy;
 mod python_host_processor;
+pub mod schema_binding;
 mod schema_field_mappers;
 mod shader_handle;
 mod venv_manager;
@@ -34,6 +35,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<processor_context_proxy::PyInputPortProxy>()?;
     m.add_class::<processor_context_proxy::PyOutputPortProxy>()?;
     m.add_class::<frame_binding::PyFrame>()?;
+
+    // Schema API
+    m.add_class::<schema_binding::PySchema>()?;
+    m.add_function(wrap_pyfunction!(schema_binding::create_schema, m)?)?;
+    m.add_function(wrap_pyfunction!(schema_binding::schema_exists, m)?)?;
+    m.add_function(wrap_pyfunction!(schema_binding::list_schemas, m)?)?;
 
     Ok(())
 }
