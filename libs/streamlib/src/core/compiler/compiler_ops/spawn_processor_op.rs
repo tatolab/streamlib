@@ -265,7 +265,10 @@ fn spawn_dedicated_thread(
             }; // Lock released here
 
             // === PHASE 4: Setup (NO LOCK HELD - safe to call runtime ops) ===
-            let processor_context = runtime_ctx_clone.with_pause_gate(pause_gate_inner.clone());
+            // Create processor-specific context with both processor ID and pause gate
+            let processor_context = runtime_ctx_clone
+                .with_processor_id(proc_id_clone.clone())
+                .with_pause_gate(pause_gate_inner.clone());
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
 

@@ -1,0 +1,57 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+# Note: Using license identifier instead of license-file due to maturin path restrictions
+license = "BUSL-1.1"
+repository.workspace = true
+description = "Python bindings for StreamLib via PyO3"
+keywords = ["video", "streaming", "gpu", "python", "pyo3"]
+categories = ["multimedia::video", "api-bindings"]
+
+[lib]
+name = "streamlib_python"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Core StreamLib
+streamlib = { path = "../streamlib" }
+streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
+
+# PyO3 for Python bindings
+pyo3 = { version = "0.27", features = ["abi3-py310", "auto-initialize"] }
+pyo3-log = "0.13"
+
+# Serialization for config parsing
+serde.workspace = true
+serde_json.workspace = true
+
+# GPU
+wgpu.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Async runtime
+tokio = { workspace = true }
+
+# Synchronization
+parking_lot = "0.12"
+
+# Filesystem utilities
+dirs = "5.0"
+
+# Hook registration (matches streamlib's version)
+inventory = "0.3"
+
+[features]
+# Enable this feature when building as a Python extension (via maturin).
+# Do NOT enable when linking into a Rust binary.
+extension-module = ["pyo3/extension-module"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

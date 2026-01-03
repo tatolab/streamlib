@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_scheduling_camera() {
-        let node = ProcessorNode::new("CameraProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new("CameraProcessor", "CameraProcessor", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
                 assert_eq!(priority, ThreadPriority::High);
@@ -106,7 +106,13 @@ mod tests {
 
     #[test]
     fn test_scheduling_audio() {
-        let node = ProcessorNode::new("AudioCaptureProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            "AudioCaptureProcessor",
+            "AudioCaptureProcessor",
+            None,
+            vec![],
+            vec![],
+        );
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
@@ -116,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_scheduling_encoder() {
-        let node = ProcessorNode::new("H264Encoder", None, vec![], vec![]);
+        let node = ProcessorNode::new("H264Encoder", "H264Encoder", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
                 assert_eq!(priority, ThreadPriority::High);
@@ -126,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_scheduling_generic() {
-        let node = ProcessorNode::new("SomeProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new("SomeProcessor", "SomeProcessor", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
                 assert_eq!(priority, ThreadPriority::Normal);

@@ -99,6 +99,30 @@ impl CaptureSessionInitState {
     }
 }
 
+/// Thread-safe wrapper for Metal textures.
+///
+/// SAFETY: Metal textures (MTLTexture) are designed to be thread-safe.
+/// They can be safely shared across threads via shared references.
+struct SendSyncMtlTexture(Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>);
+
+// SAFETY: Metal textures are thread-safe and can be sent between threads.
+unsafe impl Send for SendSyncMtlTexture {}
+// SAFETY: Metal textures are thread-safe and can be shared across threads.
+unsafe impl Sync for SendSyncMtlTexture {}
+
+impl SendSyncMtlTexture {
+    fn inner(&self) -> &Retained<ProtocolObject<dyn objc2_metal::MTLTexture>> {
+        &self.0
+    }
+}
+
+/// Cached RGBA texture for reuse when dimensions match.
+struct CachedRgbaTexture {
+    texture: SendSyncMtlTexture,
+    width: usize,
+    height: usize,
+}
+
 /// Callback context for processing frames directly in AVFoundation callback
 struct CameraCallbackContext {
     metal_device: MetalDevice,
@@ -106,6 +130,8 @@ struct CameraCallbackContext {
     wgpu_bridge: Arc<WgpuBridge>,
     video_output: LinkOutput<VideoFrame>,
     frame_count: std::sync::atomic::AtomicU64,
+    /// Cached RGBA output texture to avoid per-frame allocation.
+    cached_rgba_texture: Mutex<Option<CachedRgbaTexture>>,
 }
 
 /// Global callback context - set by start(), used by AVFoundation callback
@@ -162,21 +188,42 @@ define_class!(
                 Err(_) => return,
             };
 
-            // Create RGBA output texture
+            // Get or create RGBA output texture (cached for reuse)
             let metal_rgba_texture = {
-                use objc2_metal::{
-                    MTLDevice, MTLPixelFormat, MTLTextureDescriptor, MTLTextureUsage,
-                };
+                let mut cache = ctx.cached_rgba_texture.lock();
 
-                let desc = MTLTextureDescriptor::new();
-                desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-                desc.setWidth(width);
-                desc.setHeight(height);
-                desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+                // Check if cached texture matches current dimensions
+                let can_reuse = cache
+                    .as_ref()
+                    .map(|c| c.width == width && c.height == height)
+                    .unwrap_or(false);
 
-                match ctx.metal_device.device().newTextureWithDescriptor(&desc) {
-                    Some(tex) => tex,
-                    None => return,
+                if can_reuse {
+                    cache.as_ref().unwrap().texture.inner().clone()
+                } else {
+                    // Create new texture and cache it
+                    use objc2_metal::{
+                        MTLDevice, MTLPixelFormat, MTLTextureDescriptor, MTLTextureUsage,
+                    };
+
+                    let desc = MTLTextureDescriptor::new();
+                    desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+                    desc.setWidth(width);
+                    desc.setHeight(height);
+                    desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+
+                    let texture = match ctx.metal_device.device().newTextureWithDescriptor(&desc) {
+                        Some(tex) => tex,
+                        None => return,
+                    };
+
+                    *cache = Some(CachedRgbaTexture {
+                        texture: SendSyncMtlTexture(texture.clone()),
+                        width,
+                        height,
+                    });
+
+                    texture
                 }
             };
 
@@ -333,6 +380,7 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
             wgpu_bridge,
             video_output: self.video.clone(),
             frame_count: std::sync::atomic::AtomicU64::new(0),
+            cached_rgba_texture: Mutex::new(None),
         });
 
         // Store in global - callback will read from here

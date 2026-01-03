@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[project]
+name = "grayscale-processor"
+version = "0.1.0"
+description = "Grayscale video processor using GPU shader"
+requires-python = ">=3.10"
+# Note: streamlib-python is automatically injected by the Rust host
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

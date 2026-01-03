@@ -4,6 +4,7 @@ members = [
     "libs/streamlib",           # All-in-one: core, apple (feature-gated)
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
+    "libs/streamlib-python",    # Python bindings via PyO3
     "examples/simple-pipeline", # Example: Basic processing pipeline
     "examples/camera-display",  # Example: Camera capture and display
     "examples/camera-audio-recorder", # Example: Record camera + audio to MP4
@@ -16,6 +17,7 @@ members = [
     "examples/api-server",                # Example: Minimal API server (runtime + wait_for_signal)
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
+    "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
     # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 

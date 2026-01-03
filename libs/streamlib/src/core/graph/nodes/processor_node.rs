@@ -16,6 +16,8 @@ pub struct ProcessorNode {
     pub id: ProcessorUniqueId,
     #[serde(rename = "type")]
     pub processor_type: String,
+    /// Display name for UI. Defaults to processor_type if not overridden.
+    pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     /// Checksum of config for change detection.
@@ -35,6 +37,7 @@ impl PartialEq for ProcessorNode {
         // Compare only static fields, not runtime components
         self.id == other.id
             && self.processor_type == other.processor_type
+            && self.display_name == other.display_name
             && self.config == other.config
             && self.config_checksum == other.config_checksum
             && self.ports == other.ports
@@ -48,6 +51,7 @@ impl std::fmt::Debug for ProcessorNode {
         f.debug_struct("ProcessorNode")
             .field("id", &self.id)
             .field("processor_type", &self.processor_type)
+            .field("display_name", &self.display_name)
             .field("config", &self.config)
             .field("config_checksum", &self.config_checksum)
             .field("ports", &self.ports)
@@ -60,6 +64,7 @@ impl ProcessorNode {
     /// Create a new processor node. The ID is generated automatically using cuid2.
     pub fn new(
         processor_type: impl Into<String>,
+        display_name: impl Into<String>,
         config: Option<serde_json::Value>,
         inputs: Vec<PortInfo>,
         outputs: Vec<PortInfo>,
@@ -70,6 +75,7 @@ impl ProcessorNode {
         Self {
             id: ProcessorUniqueId::new(),
             processor_type,
+            display_name: display_name.into(),
             config,
             config_checksum,
             ports: ProcessorNodePorts { inputs, outputs },

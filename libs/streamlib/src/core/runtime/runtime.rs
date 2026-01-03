@@ -11,6 +11,7 @@ use serde::Serialize;
 use super::graph_change_listener::GraphChangeListener;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
+use super::RuntimeUniqueId;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{GpuContext, RuntimeContext};
 use crate::core::graph::{
@@ -61,6 +62,8 @@ impl TokioRuntimeVariant {
 /// This means multiple threads can concurrently call `add_processor()`,
 /// `connect()`, etc. without blocking each other on an outer lock.
 pub struct StreamRuntime {
+    /// Unique identifier for this runtime instance.
+    pub(crate) runtime_id: Arc<RuntimeUniqueId>,
     /// Tokio runtime storage - either owned or external handle.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
@@ -77,6 +80,15 @@ pub struct StreamRuntime {
 
 impl StreamRuntime {
     pub fn new() -> Result<Arc<Self>> {
+        // Generate or retrieve runtime ID (checks STREAMLIB_RUNTIME_ID env var)
+        let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
+        tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
+
+        // Get STREAMLIB_HOME and run init hooks (once per process)
+        let streamlib_home = crate::core::get_streamlib_home();
+        tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
+        crate::core::run_init_hooks(&streamlib_home)?;
+
         // Auto-detect tokio context (issue #92)
         // If inside tokio runtime: use current handle (external handle mode)
         // If outside tokio runtime: create owned runtime
@@ -119,6 +131,7 @@ impl StreamRuntime {
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
         Ok(Arc::new(Self {
+            runtime_id,
             tokio_runtime_variant,
             compiler,
             runtime_context,
@@ -195,6 +208,7 @@ impl StreamRuntime {
             Arc::clone(self) as Arc<dyn RuntimeOperations>;
         let runtime_ctx = Arc::new(RuntimeContext::new(
             gpu,
+            Arc::clone(&self.runtime_id),
             runtime_ops,
             self.tokio_runtime_variant.handle(),
         ));

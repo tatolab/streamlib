@@ -47,8 +47,9 @@ pre-push:
       run: cargo clippy --workspace --all-features --bins --lib -- -D warnings
 
     # 3. Tests - ensure functionality works
+    # Note: streamlib-python excluded because PyO3 tests require Python linking
     test-lib:
-      run: cargo test --workspace --all-features --lib
+      run: cargo test --workspace --all-features --lib --exclude streamlib-python
 
     # 4. Example builds - ensure examples still compile
     test-examples:

@@ -5,11 +5,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::GpuContext;
-use crate::core::runtime::RuntimeOperations;
+use crate::core::graph::ProcessorUniqueId;
+use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
 
 #[derive(Clone)]
 pub struct RuntimeContext {
     pub gpu: GpuContext,
+    /// Unique identifier for this runtime instance.
+    runtime_id: Arc<RuntimeUniqueId>,
+    /// Unique identifier for this processor (None for shared/global context).
+    processor_id: Option<ProcessorUniqueId>,
     /// Pause gate for this processor (None for shared/global context).
     pause_gate: Option<Arc<AtomicBool>>,
     /// Runtime operations interface for graph mutations.
@@ -21,15 +26,28 @@ pub struct RuntimeContext {
 impl RuntimeContext {
     pub fn new(
         gpu: GpuContext,
+        runtime_id: Arc<RuntimeUniqueId>,
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
             gpu,
+            runtime_id,
+            processor_id: None,
             pause_gate: None,
             runtime_ops,
             tokio_handle,
         }
+    }
+
+    /// Get the runtime's unique identifier.
+    pub fn runtime_id(&self) -> &RuntimeUniqueId {
+        &self.runtime_id
+    }
+
+    /// Get the processor's unique identifier (None for shared/global context).
+    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
+        self.processor_id.as_ref()
     }
 
     /// Access runtime operations for graph mutations.
@@ -48,10 +66,24 @@ impl RuntimeContext {
         &self.tokio_handle
     }
 
+    /// Create a processor-specific context with a processor ID.
+    pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
+        Self {
+            gpu: self.gpu.clone(),
+            runtime_id: Arc::clone(&self.runtime_id),
+            processor_id: Some(processor_id),
+            pause_gate: self.pause_gate.clone(),
+            runtime_ops: Arc::clone(&self.runtime_ops),
+            tokio_handle: self.tokio_handle.clone(),
+        }
+    }
+
     /// Create a processor-specific context with a pause gate.
     pub fn with_pause_gate(&self, pause_gate: Arc<AtomicBool>) -> Self {
         Self {
             gpu: self.gpu.clone(),
+            runtime_id: Arc::clone(&self.runtime_id),
+            processor_id: self.processor_id.clone(),
             pause_gate: Some(pause_gate),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),

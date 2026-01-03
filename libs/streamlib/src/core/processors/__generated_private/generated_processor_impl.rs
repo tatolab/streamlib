@@ -48,7 +48,6 @@ pub trait DynGeneratedProcessor: Send + 'static {
 
     fn name(&self) -> &str;
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
-    fn descriptor_instance(&self) -> Option<ProcessorDescriptor>;
 
     /// Returns the execution configuration for this processor.
     fn execution_config(&self) -> ExecutionConfig;
@@ -139,10 +138,6 @@ where
 
     fn descriptor(&self) -> Option<ProcessorDescriptor> {
         <T as GeneratedProcessor>::descriptor()
-    }
-
-    fn descriptor_instance(&self) -> Option<ProcessorDescriptor> {
-        <Self as GeneratedProcessor>::descriptor_instance(self)
     }
 
     fn execution_config(&self) -> ExecutionConfig {

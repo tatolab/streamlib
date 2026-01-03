@@ -44,6 +44,7 @@ petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
 ahash = "0.8"  # Fast hashing for graph checksum computation
 anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
 cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
+dirs = "6.0"   # Cross-platform home directory resolution
 
 # Serialization
 serde.workspace = true
