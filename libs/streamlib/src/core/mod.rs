@@ -10,6 +10,7 @@ pub mod execution;
 
 pub mod frames;
 pub mod graph;
+pub mod json_schema;
 pub mod links;
 pub mod media_clock;
 pub mod observability;

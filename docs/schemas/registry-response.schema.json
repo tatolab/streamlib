@@ -1,0 +1,294 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RegistryResponse",
+  "description": "Response from the `/api/registry` endpoint.",
+  "type": "object",
+  "required": [
+    "processors",
+    "schemas"
+  ],
+  "properties": {
+    "processors": {
+      "description": "Available processor types with their descriptors.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ProcessorDescriptorOutput"
+      }
+    },
+    "schemas": {
+      "description": "Available data frame schemas.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SchemaDescriptorOutput"
+      }
+    }
+  },
+  "definitions": {
+    "CodeExamplesOutput": {
+      "description": "Code examples for a processor in different languages.",
+      "type": "object",
+      "required": [
+        "python",
+        "rust",
+        "typescript"
+      ],
+      "properties": {
+        "python": {
+          "description": "Python code example.",
+          "type": "string"
+        },
+        "rust": {
+          "description": "Rust code example.",
+          "type": "string"
+        },
+        "typescript": {
+          "description": "TypeScript code example.",
+          "type": "string"
+        }
+      }
+    },
+    "ConfigFieldOutput": {
+      "description": "A configuration field for a processor.",
+      "type": "object",
+      "required": [
+        "description",
+        "name",
+        "required",
+        "type"
+      ],
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Field name.",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether the field is required.",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "Field type as string (e.g., \"String\", \"u32\", \"Option<PathBuf>\").",
+          "type": "string"
+        }
+      }
+    },
+    "LinkBufferReadModeOutput": {
+      "description": "How data is read from the link buffer.",
+      "oneOf": [
+        {
+          "description": "Drain buffer and return only the newest frame (optimal for video).",
+          "type": "string",
+          "enum": [
+            "skip_to_latest"
+          ]
+        },
+        {
+          "description": "Read next frame in FIFO order (required for audio).",
+          "type": "string",
+          "enum": [
+            "read_next_in_order"
+          ]
+        }
+      ]
+    },
+    "PortDescriptorOutput": {
+      "description": "Descriptor for a processor port.",
+      "type": "object",
+      "required": [
+        "description",
+        "name",
+        "required",
+        "schema"
+      ],
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Port name.",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether the port is required.",
+          "type": "boolean"
+        },
+        "schema": {
+          "description": "Schema name for data flowing through this port.",
+          "type": "string"
+        }
+      }
+    },
+    "ProcessorDescriptorOutput": {
+      "description": "Descriptor for a processor type.",
+      "type": "object",
+      "required": [
+        "config",
+        "description",
+        "examples",
+        "inputs",
+        "name",
+        "outputs",
+        "repository",
+        "version"
+      ],
+      "properties": {
+        "config": {
+          "description": "Configuration fields.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConfigFieldOutput"
+          }
+        },
+        "description": {
+          "description": "Human-readable description.",
+          "type": "string"
+        },
+        "examples": {
+          "description": "Code examples in different languages.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CodeExamplesOutput"
+            }
+          ]
+        },
+        "inputs": {
+          "description": "Input port descriptors.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortDescriptorOutput"
+          }
+        },
+        "name": {
+          "description": "Processor type name.",
+          "type": "string"
+        },
+        "outputs": {
+          "description": "Output port descriptors.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortDescriptorOutput"
+          }
+        },
+        "repository": {
+          "description": "Repository URL.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Semantic version string.",
+          "type": "string"
+        }
+      }
+    },
+    "SchemaDescriptorOutput": {
+      "description": "Descriptor for a data schema.",
+      "type": "object",
+      "required": [
+        "default_capacity",
+        "fields",
+        "name",
+        "read_behavior",
+        "version"
+      ],
+      "properties": {
+        "default_capacity": {
+          "description": "Default ring buffer capacity.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "fields": {
+          "description": "Fields in this schema.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SchemaFieldOutput"
+          }
+        },
+        "name": {
+          "description": "Schema name (e.g., \"VideoFrame\", \"AudioFrame\").",
+          "type": "string"
+        },
+        "read_behavior": {
+          "description": "How data is read from the link buffer.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LinkBufferReadModeOutput"
+            }
+          ]
+        },
+        "version": {
+          "description": "Semantic version.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SemanticVersionOutput"
+            }
+          ]
+        }
+      }
+    },
+    "SchemaFieldOutput": {
+      "description": "A field in a data schema.",
+      "type": "object",
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": "string"
+        },
+        "internal": {
+          "description": "Whether this is an internal field (not serializable).",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Field name.",
+          "type": "string"
+        },
+        "shape": {
+          "description": "Shape for multi-dimensional fields (e.g., [512] for embeddings).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0.0
+          }
+        },
+        "type": {
+          "description": "Type name (e.g., \"u32\", \"Arc<wgpu::Texture>\").",
+          "type": "string"
+        }
+      }
+    },
+    "SemanticVersionOutput": {
+      "description": "Semantic version (major.minor.patch).",
+      "type": "object",
+      "required": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "patch": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
+}

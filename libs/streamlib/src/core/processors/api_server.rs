@@ -75,13 +75,11 @@ struct IdResponse {
     id: String,
 }
 
-#[derive(Serialize, utoipa::ToSchema)]
-struct RegistryResponse {
-    /// Available processor types with their descriptors
-    processors: Vec<serde_json::Value>,
-    /// Available data frame schemas
-    schemas: Vec<serde_json::Value>,
-}
+// Note: RegistryResponse is now defined in crate::core::json_schema
+// and imported below for the get_registry handler.
+use crate::core::json_schema::{
+    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput,
+};
 
 #[derive(Serialize, utoipa::ToSchema)]
 struct ErrorResponse {
@@ -353,15 +351,15 @@ async fn delete_connection(
     )
 )]
 async fn get_registry() -> Json<RegistryResponse> {
-    let processors = PROCESSOR_REGISTRY
+    let processors: Vec<ProcessorDescriptorOutput> = PROCESSOR_REGISTRY
         .list_registered()
         .into_iter()
-        .map(|d| serde_json::to_value(d).unwrap_or_default())
+        .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
-    let schemas = SCHEMA_REGISTRY
+    let schemas: Vec<SchemaDescriptorOutput> = SCHEMA_REGISTRY
         .list_descriptors()
         .into_iter()
-        .map(|d| serde_json::to_value(d).unwrap_or_default())
+        .map(|d| SchemaDescriptorOutput::from(&d))
         .collect();
     Json(RegistryResponse {
         processors,

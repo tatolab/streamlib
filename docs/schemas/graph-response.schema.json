@@ -1,0 +1,247 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GraphResponse",
+  "description": "Response from the `/api/graph` endpoint.",
+  "type": "object",
+  "required": [
+    "links",
+    "nodes"
+  ],
+  "properties": {
+    "links": {
+      "description": "All links (connections) between processors.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/LinkOutput"
+      }
+    },
+    "nodes": {
+      "description": "All processor nodes in the graph.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ProcessorNodeOutput"
+      }
+    }
+  },
+  "definitions": {
+    "LinkOutput": {
+      "description": "A link (connection) between two processor ports.",
+      "type": "object",
+      "required": [
+        "components",
+        "id",
+        "source",
+        "target"
+      ],
+      "properties": {
+        "capacity": {
+          "description": "Ring buffer capacity for the channel.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "components": {
+          "description": "Runtime components (dynamic, varies based on link state).",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "id": {
+          "description": "Unique identifier for this link.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Source endpoint (output port).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LinkPortRefOutput"
+            }
+          ]
+        },
+        "state": {
+          "description": "Current state of the link.",
+          "default": "pending",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LinkStateOutput"
+            }
+          ]
+        },
+        "target": {
+          "description": "Target endpoint (input port).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LinkPortRefOutput"
+            }
+          ]
+        }
+      }
+    },
+    "LinkPortRefOutput": {
+      "description": "Reference to a port on a processor.",
+      "type": "object",
+      "required": [
+        "port_name",
+        "processor_id"
+      ],
+      "properties": {
+        "port_name": {
+          "description": "Port name on that processor.",
+          "type": "string"
+        },
+        "processor_id": {
+          "description": "Processor instance ID.",
+          "type": "string"
+        }
+      }
+    },
+    "LinkStateOutput": {
+      "description": "State of a link in the graph.",
+      "oneOf": [
+        {
+          "description": "Link exists in graph but not yet wired.",
+          "type": "string",
+          "enum": [
+            "pending"
+          ]
+        },
+        {
+          "description": "Link is actively wired with a ring buffer channel.",
+          "type": "string",
+          "enum": [
+            "wired"
+          ]
+        },
+        {
+          "description": "Link is being disconnected.",
+          "type": "string",
+          "enum": [
+            "disconnecting"
+          ]
+        },
+        {
+          "description": "Link was disconnected.",
+          "type": "string",
+          "enum": [
+            "disconnected"
+          ]
+        },
+        {
+          "description": "Link is in error state.",
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        }
+      ]
+    },
+    "PortInfoOutput": {
+      "description": "Metadata about a port.",
+      "type": "object",
+      "required": [
+        "data_type",
+        "name"
+      ],
+      "properties": {
+        "data_type": {
+          "description": "Data type flowing through this port.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Port name (e.g., \"video_in\", \"audio_out\").",
+          "type": "string"
+        },
+        "port_kind": {
+          "description": "Kind of port: data, event, or control.",
+          "default": "data",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortKindOutput"
+            }
+          ]
+        }
+      }
+    },
+    "PortKindOutput": {
+      "description": "The kind of port - determines how data flows.",
+      "type": "string",
+      "enum": [
+        "data",
+        "event",
+        "control"
+      ]
+    },
+    "ProcessorNodeOutput": {
+      "description": "A processor node in the graph.",
+      "type": "object",
+      "required": [
+        "components",
+        "display_name",
+        "id",
+        "ports",
+        "type"
+      ],
+      "properties": {
+        "components": {
+          "description": "Runtime components (dynamic, varies based on processor state).",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "config": {
+          "description": "Processor configuration as JSON."
+        },
+        "config_checksum": {
+          "description": "Checksum of config for change detection.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "display_name": {
+          "description": "Display name for UI. May differ from type for hosted processors.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Unique identifier for this processor instance.",
+          "type": "string"
+        },
+        "ports": {
+          "description": "Input and output ports.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessorNodePortsOutput"
+            }
+          ]
+        },
+        "type": {
+          "description": "The processor type name (e.g., \"CameraProcessor\", \"DisplayProcessor\").",
+          "type": "string"
+        }
+      }
+    },
+    "ProcessorNodePortsOutput": {
+      "description": "Container for processor input and output ports.",
+      "type": "object",
+      "required": [
+        "inputs",
+        "outputs"
+      ],
+      "properties": {
+        "inputs": {
+          "description": "Input ports that receive data.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortInfoOutput"
+          }
+        },
+        "outputs": {
+          "description": "Output ports that send data.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortInfoOutput"
+          }
+        }
+      }
+    }
+  }
+}
