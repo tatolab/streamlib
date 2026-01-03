@@ -53,7 +53,7 @@ impl PythonContinuousHostProcessor::Processor {
 impl ContinuousProcessor for PythonContinuousHostProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         let config = self.config.clone();
-        self.core_mut().setup_common(config, &ctx.gpu)?;
+        self.core_mut().setup_common(config, &ctx)?;
         self.core_mut().init_python_context()?;
 
         // Validate execution mode

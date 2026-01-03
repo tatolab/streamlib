@@ -45,6 +45,9 @@ parking_lot = "0.12"
 # Filesystem utilities
 dirs = "5.0"
 
+# Hook registration (matches streamlib's version)
+inventory = "0.3"
+
 [features]
 # Enable this feature when building as a Python extension (via maturin).
 # Do NOT enable when linking into a Rust binary.

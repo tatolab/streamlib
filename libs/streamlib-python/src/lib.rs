@@ -15,11 +15,13 @@ mod python_continuous_host_processor;
 mod python_host_processor;
 mod python_manual_host_processor;
 mod python_processor_core;
+mod runtime_init;
 pub mod schema_binding;
 mod schema_field_mappers;
 mod shader_handle;
 mod venv_manager;
 mod video_frame_binding;
+mod wheel_cache;
 
 // Re-export all Python host processor variants
 pub use python_continuous_host_processor::PythonContinuousHostProcessor;

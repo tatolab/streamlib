@@ -8,101 +8,102 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use streamlib::core::{ProcessorUniqueId, RuntimeUniqueId};
 use streamlib::{Result, StreamError};
 
 /// Manages isolated Python virtual environments for processor instances.
 pub struct VenvManager {
-    /// Base cache directory for venvs (e.g., ~/.cache/streamlib/python-venvs/)
-    cache_dir: PathBuf,
-    /// Unique identifier for this processor instance
-    instance_id: String,
-    /// Path to the created venv (set after ensure_venv)
-    venv_path: Option<PathBuf>,
+    /// Path to this processor's venv
+    venv_path: PathBuf,
+    /// Shared UV cache directory
+    uv_cache_dir: PathBuf,
+    /// Directory containing pre-built streamlib-python wheel
+    wheels_dir: PathBuf,
+    /// Whether the venv has been created
+    initialized: bool,
 }
 
 impl VenvManager {
     /// Create a new VenvManager for a processor instance.
-    pub fn new(instance_id: &str) -> Result<Self> {
-        let cache_dir = Self::get_cache_dir()?;
+    ///
+    /// Uses STREAMLIB_HOME-based paths:
+    /// - Venv: ~/.streamlib/runtimes/{runtime_id}/processors/{processor_id}/venv
+    /// - UV cache: ~/.streamlib/cache/uv (shared across all processors)
+    /// - Wheel: ~/.streamlib/cache/wheels/streamlib-*.whl (pre-built by init hook)
+    pub fn new(runtime_id: &RuntimeUniqueId, processor_id: &ProcessorUniqueId) -> Result<Self> {
+        let streamlib_home = streamlib::core::get_streamlib_home();
+
+        let venv_path = streamlib_home
+            .join("runtimes")
+            .join(runtime_id.as_str())
+            .join("processors")
+            .join(processor_id.as_str())
+            .join("venv");
+
+        let uv_cache_dir = streamlib_home.join("cache").join("uv");
+        let wheels_dir = streamlib_home.join("cache").join("wheels");
 
         Ok(Self {
-            cache_dir,
-            instance_id: instance_id.to_string(),
-            venv_path: None,
+            venv_path,
+            uv_cache_dir,
+            wheels_dir,
+            initialized: false,
         })
     }
 
-    /// Get the cache directory for venvs.
-    fn get_cache_dir() -> Result<PathBuf> {
-        let cache_base = dirs::cache_dir().ok_or_else(|| {
-            StreamError::Configuration("Could not determine cache directory".into())
-        })?;
-        Ok(cache_base.join("streamlib").join("python-venvs"))
+    /// Find the streamlib wheel in the cache directory.
+    fn find_wheel(&self) -> Option<PathBuf> {
+        let entries = std::fs::read_dir(&self.wheels_dir).ok()?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("streamlib-") && name.ends_with(".whl") {
+                return Some(entry.path());
+            }
+        }
+        None
     }
 
-    /// Check if `uv` is available on the system.
-    pub fn check_uv_available() -> Result<()> {
-        let output = Command::new("uv")
-            .arg("--version")
+    /// Run a uv command with shared UV_CACHE_DIR.
+    fn run_uv(&self, args: &[&str]) -> Result<std::process::Output> {
+        Command::new("uv")
+            .args(args)
+            .env("UV_CACHE_DIR", &self.uv_cache_dir)
             .output()
-            .map_err(|e| {
-                StreamError::Configuration(format!(
-                    "uv is not installed or not in PATH. Please install uv: https://docs.astral.sh/uv/\nError: {}",
-                    e
-                ))
-            })?;
-
-        if !output.status.success() {
-            return Err(StreamError::Configuration(
-                "uv is installed but returned an error. Please check your uv installation.".into(),
-            ));
-        }
-
-        let version = String::from_utf8_lossy(&output.stdout);
-        tracing::debug!("VenvManager: Found {}", version.trim());
-
-        Ok(())
+            .map_err(|e| StreamError::Runtime(format!("Failed to run uv: {}", e)))
     }
 
     /// Ensure a venv exists for this processor instance.
     /// Creates the venv and installs dependencies if needed.
     pub fn ensure_venv(&mut self, project_path: &Path) -> Result<PathBuf> {
-        // Check uv is available
-        Self::check_uv_available()?;
-
-        // Create venv path based on instance ID
-        let venv_path = self.cache_dir.join(&self.instance_id);
-
         // Create parent directories
-        std::fs::create_dir_all(&self.cache_dir).map_err(|e| {
-            StreamError::Configuration(format!(
-                "Failed to create venv cache directory '{}': {}",
-                self.cache_dir.display(),
-                e
-            ))
-        })?;
+        if let Some(parent) = self.venv_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                StreamError::Configuration(format!(
+                    "Failed to create venv directory '{}': {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
 
         // Create the venv
-        self.create_venv(&venv_path)?;
+        self.create_venv(&self.venv_path.clone())?;
 
         // Install project dependencies
-        self.install_project_deps(&venv_path, project_path)?;
+        self.install_project_deps(&self.venv_path.clone(), project_path)?;
 
-        // Inject streamlib-python
-        self.inject_streamlib(&venv_path)?;
+        // Inject streamlib-python from pre-built wheel
+        self.inject_streamlib(&self.venv_path.clone())?;
 
-        self.venv_path = Some(venv_path.clone());
-        Ok(venv_path)
+        self.initialized = true;
+        Ok(self.venv_path.clone())
     }
 
     /// Create a new virtual environment.
     fn create_venv(&self, venv_path: &Path) -> Result<()> {
         tracing::info!("VenvManager: Creating venv at '{}'", venv_path.display());
 
-        let output = Command::new("uv")
-            .args(["venv", venv_path.to_str().unwrap(), "--python", "3.12"])
-            .output()
-            .map_err(|e| StreamError::Runtime(format!("Failed to run 'uv venv': {}", e)))?;
+        let output = self.run_uv(&["venv", venv_path.to_str().unwrap(), "--python", "3.12"])?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -136,18 +137,10 @@ impl VenvManager {
 
         // Use uv pip install with the venv's Python
         let python_path = self.get_python_path(venv_path);
+        let python_str = python_path.to_str().unwrap();
+        let project_str = project_path.to_str().unwrap();
 
-        let output = Command::new("uv")
-            .args([
-                "pip",
-                "install",
-                "-e",
-                project_path.to_str().unwrap(),
-                "--python",
-                python_path.to_str().unwrap(),
-            ])
-            .output()
-            .map_err(|e| StreamError::Runtime(format!("Failed to run 'uv pip install': {}", e)))?;
+        let output = self.run_uv(&["pip", "install", "-e", project_str, "--python", python_str])?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -161,100 +154,38 @@ impl VenvManager {
         Ok(())
     }
 
-    /// Inject streamlib-python into the venv.
+    /// Inject streamlib-python into the venv from pre-built wheel.
     fn inject_streamlib(&self, venv_path: &Path) -> Result<()> {
-        tracing::info!("VenvManager: Installing streamlib-python");
+        // Find wheel (should have been built by PythonRuntimeInitHook)
+        let wheel_path = self.find_wheel().ok_or_else(|| {
+            StreamError::Configuration(format!(
+                "streamlib-python wheel not found in '{}'. \
+                 The wheel should be pre-built by the Python init hook.",
+                self.wheels_dir.display()
+            ))
+        })?;
+
+        tracing::info!(
+            "VenvManager: Installing streamlib-python from wheel '{}'",
+            wheel_path.display()
+        );
 
         let python_path = self.get_python_path(venv_path);
+        let python_str = python_path.to_str().unwrap();
+        let wheel_str = wheel_path.to_str().unwrap();
 
-        // Try to find streamlib-python in the workspace (development mode)
-        let streamlib_python_path = self.find_streamlib_python_path();
-
-        let output = if let Some(lib_path) = streamlib_python_path {
-            // Development mode: editable install from source
-            tracing::debug!(
-                "VenvManager: Using editable install from '{}'",
-                lib_path.display()
-            );
-
-            Command::new("uv")
-                .args([
-                    "pip",
-                    "install",
-                    "-e",
-                    lib_path.to_str().unwrap(),
-                    "--python",
-                    python_path.to_str().unwrap(),
-                ])
-                .output()
-                .map_err(|e| {
-                    StreamError::Runtime(format!("Failed to run 'uv pip install': {}", e))
-                })?
-        } else {
-            // Production mode: install from PyPI (future)
-            tracing::debug!("VenvManager: Installing streamlib from PyPI");
-
-            Command::new("uv")
-                .args([
-                    "pip",
-                    "install",
-                    "streamlib",
-                    "--python",
-                    python_path.to_str().unwrap(),
-                ])
-                .output()
-                .map_err(|e| {
-                    StreamError::Runtime(format!("Failed to run 'uv pip install': {}", e))
-                })?
-        };
+        let output = self.run_uv(&["pip", "install", wheel_str, "--python", python_str])?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(StreamError::Runtime(format!(
-                "Failed to install streamlib-python: {}",
+                "Failed to install streamlib-python from wheel: {}",
                 stderr
             )));
         }
 
-        tracing::debug!("VenvManager: streamlib-python installed");
+        tracing::debug!("VenvManager: streamlib-python installed from wheel");
         Ok(())
-    }
-
-    /// Find the path to streamlib-python source (for development mode).
-    fn find_streamlib_python_path(&self) -> Option<PathBuf> {
-        // Try relative to CARGO_MANIFEST_DIR if available
-        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            // From examples: ../../libs/streamlib-python
-            let path = PathBuf::from(&manifest_dir).join("../../libs/streamlib-python");
-            if path.join("pyproject.toml").exists() {
-                return Some(path.canonicalize().unwrap_or(path));
-            }
-
-            // From within libs: ../streamlib-python
-            let path = PathBuf::from(&manifest_dir).join("../streamlib-python");
-            if path.join("pyproject.toml").exists() {
-                return Some(path.canonicalize().unwrap_or(path));
-            }
-        }
-
-        // Try relative to current exe
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                // Walk up looking for libs/streamlib-python
-                let mut current = exe_dir.to_path_buf();
-                for _ in 0..10 {
-                    let candidate = current.join("libs/streamlib-python");
-                    if candidate.join("pyproject.toml").exists() {
-                        return Some(candidate);
-                    }
-                    if !current.pop() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        None
     }
 
     /// Get the path to Python executable in the venv.
@@ -305,29 +236,34 @@ impl VenvManager {
 
     /// Clean up the venv (call on teardown).
     pub fn cleanup(&mut self) -> Result<()> {
-        if let Some(ref venv_path) = self.venv_path {
-            if venv_path.exists() {
-                tracing::info!("VenvManager: Cleaning up venv at '{}'", venv_path.display());
-
-                std::fs::remove_dir_all(venv_path).map_err(|e| {
-                    StreamError::Runtime(format!(
-                        "Failed to remove venv '{}': {}",
-                        venv_path.display(),
-                        e
-                    ))
-                })?;
-
-                tracing::debug!("VenvManager: Venv removed");
-            }
+        if !self.initialized {
+            return Ok(());
         }
 
-        self.venv_path = None;
+        if self.venv_path.exists() {
+            tracing::info!(
+                "VenvManager: Cleaning up venv at '{}'",
+                self.venv_path.display()
+            );
+
+            std::fs::remove_dir_all(&self.venv_path).map_err(|e| {
+                StreamError::Runtime(format!(
+                    "Failed to remove venv '{}': {}",
+                    self.venv_path.display(),
+                    e
+                ))
+            })?;
+
+            tracing::debug!("VenvManager: Venv removed");
+        }
+
+        self.initialized = false;
         Ok(())
     }
 
-    /// Get the venv path if created.
-    pub fn venv_path(&self) -> Option<&Path> {
-        self.venv_path.as_deref()
+    /// Get the venv path.
+    pub fn venv_path(&self) -> &Path {
+        &self.venv_path
     }
 }
 

@@ -12,12 +12,12 @@ use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use streamlib::{
     core::links::LinkBufferReadMode,
     core::schema::{DataFrameSchemaField, PrimitiveType, SemanticVersion},
     core::schema_registry::SCHEMA_REGISTRY,
+    core::RuntimeContext,
     GpuContext, PortDescriptor, Result, StreamError, VideoFrame,
 };
 
@@ -62,23 +62,6 @@ pub struct PythonProcessorMetadata {
 /// Convert PyErr to StreamError.
 pub fn py_err_to_stream_error(e: PyErr, context: &str) -> StreamError {
     StreamError::Runtime(format!("{}: {}", context, e))
-}
-
-/// Generate a unique instance ID for venv isolation.
-pub fn generate_instance_id() -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let random: u32 = rand_simple();
-    format!("py_{:x}_{:08x}", timestamp, random)
-}
-
-/// Simple random number generator (no external dependency).
-fn rand_simple() -> u32 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    RandomState::new().build_hasher().finish() as u32
 }
 
 /// Shared core for Python host processors.
@@ -617,17 +600,31 @@ impl PythonProcessorCore {
     }
 
     /// Common setup logic for all Python host processors.
-    pub fn setup_common(&mut self, config: PythonProcessorConfig, gpu: &GpuContext) -> Result<()> {
+    pub fn setup_common(
+        &mut self,
+        config: PythonProcessorConfig,
+        ctx: &RuntimeContext,
+    ) -> Result<()> {
         self.config = config;
-        self.gpu_context = Some(Arc::new(gpu.clone()));
+        self.gpu_context = Some(Arc::new(ctx.gpu.clone()));
 
-        let instance_id = generate_instance_id();
+        // Get IDs from RuntimeContext
+        let runtime_id = ctx.runtime_id();
+        let processor_id = ctx.processor_id().ok_or_else(|| {
+            StreamError::Runtime(
+                "processor_id not set on RuntimeContext. \
+                 Did spawn_processor_op call with_processor_id()?"
+                    .into(),
+            )
+        })?;
+
         tracing::info!(
-            "PythonProcessorCore: Setting up with instance ID '{}'",
-            instance_id
+            "PythonProcessorCore: Setting up processor {} in runtime {}",
+            processor_id.as_str(),
+            runtime_id.as_str()
         );
 
-        let mut venv_manager = VenvManager::new(&instance_id)?;
+        let mut venv_manager = VenvManager::new(runtime_id, processor_id)?;
         let venv_path = venv_manager.ensure_venv(&self.config.project_path)?;
         let site_packages = venv_manager.get_site_packages(&venv_path)?;
 
