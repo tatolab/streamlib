@@ -55,7 +55,8 @@ impl PythonReactiveHostProcessor::Processor {
 
 impl ReactiveProcessor for PythonReactiveHostProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        self.core_mut().setup_common(&ctx.gpu)?;
+        let config = self.config.clone();
+        self.core_mut().setup_common(config, &ctx.gpu)?;
         self.core_mut().init_python_context()?;
 
         // Validate execution mode

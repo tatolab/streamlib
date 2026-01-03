@@ -617,7 +617,8 @@ impl PythonProcessorCore {
     }
 
     /// Common setup logic for all Python host processors.
-    pub fn setup_common(&mut self, gpu: &GpuContext) -> Result<()> {
+    pub fn setup_common(&mut self, config: PythonProcessorConfig, gpu: &GpuContext) -> Result<()> {
+        self.config = config;
         self.gpu_context = Some(Arc::new(gpu.clone()));
 
         let instance_id = generate_instance_id();
