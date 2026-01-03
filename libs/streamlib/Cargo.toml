@@ -50,6 +50,7 @@ dirs = "6.0"   # Cross-platform home directory resolution
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+schemars = "0.8"  # JSON Schema generation from Rust types
 
 # WebGPU for cross-platform GPU abstraction
 wgpu.workspace = true

@@ -5,10 +5,8 @@ use std::time::Instant;
 
 use super::edges::Link;
 use super::nodes::ProcessorNode;
-use super::{GraphEdgeWithComponents, GraphNodeWithComponents};
 use petgraph::graph::DiGraph;
 
-use serde::ser::SerializeStruct;
 use serde::Serialize;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
@@ -122,70 +120,26 @@ impl std::fmt::Display for Graph {
     }
 }
 
-/// Helper for serializing a ProcessorNode with its components.
-struct SerializableNode<'a>(&'a ProcessorNode);
-
-impl Serialize for SerializableNode<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let node = self.0;
-        let components = node.serialize_components();
-
-        let mut state = serializer.serialize_struct("ProcessorNode", 7)?;
-        state.serialize_field("id", &node.id)?;
-        state.serialize_field("type", &node.processor_type)?;
-        state.serialize_field("display_name", &node.display_name)?;
-        state.serialize_field("config", &node.config)?;
-        state.serialize_field("config_checksum", &node.config_checksum)?;
-        state.serialize_field("ports", &node.ports)?;
-        state.serialize_field("components", &components)?;
-        state.end()
-    }
-}
-
-/// Helper for serializing a Link with its components.
-struct SerializableLink<'a>(&'a Link);
-
-impl Serialize for SerializableLink<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let link = self.0;
-        let components = link.serialize_components();
-
-        let mut state = serializer.serialize_struct("Link", 6)?;
-        state.serialize_field("id", &link.id)?;
-        state.serialize_field("source", &link.source)?;
-        state.serialize_field("target", &link.target)?;
-        state.serialize_field("capacity", &link.capacity)?;
-        state.serialize_field("state", &link.state)?;
-        state.serialize_field("components", &components)?;
-        state.end()
-    }
-}
-
 impl Serialize for Graph {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let nodes: Vec<_> = self
-            .digraph
-            .node_indices()
-            .map(|idx| SerializableNode(&self.digraph[idx]))
-            .collect();
-        let links: Vec<_> = self
-            .digraph
-            .edge_indices()
-            .map(|idx| SerializableLink(&self.digraph[idx]))
-            .collect();
+        use crate::core::json_schema::{GraphResponse, LinkOutput, ProcessorNodeOutput};
 
-        let mut state = serializer.serialize_struct("Graph", 2)?;
-        state.serialize_field("nodes", &nodes)?;
-        state.serialize_field("links", &links)?;
-        state.end()
+        let response = GraphResponse {
+            nodes: self
+                .digraph
+                .node_indices()
+                .map(|idx| ProcessorNodeOutput::from(&self.digraph[idx]))
+                .collect(),
+            links: self
+                .digraph
+                .edge_indices()
+                .map(|idx| LinkOutput::from(&self.digraph[idx]))
+                .collect(),
+        };
+
+        response.serialize(serializer)
     }
 }
