@@ -6,9 +6,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
-use streamlib::GpuContext;
+use streamlib::{GpuContext, TexturePoolDescriptor};
 
-use crate::shader_handle::{PyCompiledShader, PyGpuTexture};
+use crate::shader_handle::{PyCompiledShader, PyGpuTexture, PyPooledTextureHandle};
 
 /// Python-accessible GpuContext for shader compilation and dispatch.
 ///
@@ -129,6 +129,63 @@ impl PyGpuContext {
         output_height: u32,
     ) -> PyResult<PyGpuTexture> {
         shader.dispatch(inputs, output_width, output_height)
+    }
+
+    /// Acquire an IOSurface-backed texture from the pool.
+    ///
+    /// The texture is automatically returned to the pool when the handle is dropped.
+    /// On macOS, use `handle.iosurface_id` to share with other frameworks like pygfx.
+    ///
+    /// Args:
+    ///     width: Texture width in pixels
+    ///     height: Texture height in pixels
+    ///     format: Texture format (optional, defaults to "rgba8")
+    ///             Supported: "rgba8", "bgra8", "rgba8_srgb", "bgra8_srgb"
+    ///
+    /// Returns:
+    ///     PooledTexture handle
+    ///
+    /// Example:
+    ///     output = ctx.gpu.acquire_surface(1920, 1080)
+    ///     # Use output.texture with shaders
+    ///     # output.iosurface_id for cross-process sharing (macOS)
+    #[pyo3(signature = (width, height, format=None))]
+    fn acquire_surface(
+        &self,
+        width: u32,
+        height: u32,
+        format: Option<&str>,
+    ) -> PyResult<PyPooledTextureHandle> {
+        let texture_format = match format.unwrap_or("rgba8") {
+            "rgba8" => wgpu::TextureFormat::Rgba8Unorm,
+            "bgra8" => wgpu::TextureFormat::Bgra8Unorm,
+            "rgba8_srgb" => wgpu::TextureFormat::Rgba8UnormSrgb,
+            "bgra8_srgb" => wgpu::TextureFormat::Bgra8UnormSrgb,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unsupported format '{}'. Use: rgba8, bgra8, rgba8_srgb, bgra8_srgb",
+                    other
+                )))
+            }
+        };
+
+        let desc = TexturePoolDescriptor {
+            width,
+            height,
+            format: texture_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            label: Some("python_pooled_texture"),
+        };
+
+        let handle = self
+            .inner
+            .acquire_texture(&desc)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+        Ok(PyPooledTextureHandle::new(handle))
     }
 
     fn __repr__(&self) -> String {

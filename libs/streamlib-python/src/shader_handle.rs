@@ -6,7 +6,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::{Arc, Mutex};
-use streamlib::GpuContext;
+use streamlib::{GpuContext, PooledTextureHandle};
 
 /// Opaque GPU texture handle.
 ///
@@ -42,6 +42,99 @@ impl PyGpuTexture {
             size.height,
             self.texture.format()
         )
+    }
+}
+
+/// Pooled texture handle for IOSurface-backed GPU textures.
+///
+/// Acquired via `ctx.gpu.acquire_surface()`. When this handle is dropped,
+/// the texture is automatically returned to the pool for reuse.
+///
+/// On macOS, these textures are backed by IOSurface for cross-process
+/// and cross-library GPU memory sharing (e.g., with pygfx/wgpu-py).
+#[pyclass(name = "PooledTexture")]
+pub struct PyPooledTextureHandle {
+    handle: Option<PooledTextureHandle>,
+}
+
+impl PyPooledTextureHandle {
+    pub fn new(handle: PooledTextureHandle) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    /// Take ownership of the inner handle (consumes it).
+    pub fn take_handle(&mut self) -> Option<PooledTextureHandle> {
+        self.handle.take()
+    }
+
+    /// Get a reference to the inner handle.
+    pub fn handle_ref(&self) -> Option<&PooledTextureHandle> {
+        self.handle.as_ref()
+    }
+}
+
+#[pymethods]
+impl PyPooledTextureHandle {
+    /// Texture width in pixels.
+    #[getter]
+    fn width(&self) -> PyResult<u32> {
+        self.handle
+            .as_ref()
+            .map(|h| h.width())
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Handle already consumed"))
+    }
+
+    /// Texture height in pixels.
+    #[getter]
+    fn height(&self) -> PyResult<u32> {
+        self.handle
+            .as_ref()
+            .map(|h| h.height())
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Handle already consumed"))
+    }
+
+    /// Get the texture as a GpuTexture for shader binding.
+    #[getter]
+    fn texture(&self) -> PyResult<PyGpuTexture> {
+        self.handle
+            .as_ref()
+            .map(|h| PyGpuTexture::new(h.texture_arc()))
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Handle already consumed"))
+    }
+
+    /// IOSurface ID for cross-process sharing (macOS only).
+    ///
+    /// Use this ID to import the texture into other frameworks like pygfx/wgpu-py.
+    #[cfg(target_os = "macos")]
+    #[getter]
+    fn iosurface_id(&self) -> PyResult<u32> {
+        self.handle
+            .as_ref()
+            .map(|h| h.iosurface_id())
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Handle already consumed"))
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.handle {
+            Some(h) => {
+                #[cfg(target_os = "macos")]
+                {
+                    format!(
+                        "PooledTexture({}x{}, iosurface_id={})",
+                        h.width(),
+                        h.height(),
+                        h.iosurface_id()
+                    )
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    format!("PooledTexture({}x{})", h.width(), h.height())
+                }
+            }
+            None => "PooledTexture(consumed)".to_string(),
+        }
     }
 }
 

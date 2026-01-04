@@ -5,18 +5,45 @@ use crate::core::{Result, StreamError};
 use std::sync::Arc;
 use wgpu;
 
+use super::texture_pool::{
+    PooledTextureHandle, TexturePool, TexturePoolConfig, TexturePoolDescriptor,
+};
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<wgpu::Device>,
 
     queue: Arc<wgpu::Queue>,
+
+    texture_pool: TexturePool,
 }
 
 impl GpuContext {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+        let texture_pool = TexturePool::new(Arc::clone(&device), Arc::clone(&queue));
         Self {
-            device: Arc::new(device),
-            queue: Arc::new(queue),
+            device,
+            queue,
+            texture_pool,
+        }
+    }
+
+    /// Create with custom texture pool configuration.
+    pub fn with_texture_pool_config(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        pool_config: TexturePoolConfig,
+    ) -> Self {
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+        let texture_pool =
+            TexturePool::with_config(Arc::clone(&device), Arc::clone(&queue), pool_config);
+        Self {
+            device,
+            queue,
+            texture_pool,
         }
     }
 
@@ -30,6 +57,16 @@ impl GpuContext {
 
     pub fn device_and_queue(&self) -> (&Arc<wgpu::Device>, &Arc<wgpu::Queue>) {
         (&self.device, &self.queue)
+    }
+
+    /// Get the texture pool for acquiring pooled textures.
+    pub fn texture_pool(&self) -> &TexturePool {
+        &self.texture_pool
+    }
+
+    /// Acquire a texture from the pool.
+    pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
+        self.texture_pool.acquire(desc)
     }
 
     pub async fn init_for_platform() -> Result<Self> {

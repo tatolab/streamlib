@@ -8,6 +8,7 @@ pub mod media_clock;
 pub mod metal;
 pub mod pixel_transfer;
 pub mod texture;
+pub mod texture_pool_macos;
 pub mod videotoolbox;
 pub mod webrtc;
 pub mod wgpu_bridge;

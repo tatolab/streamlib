@@ -3,6 +3,8 @@
 
 mod gpu_context;
 mod runtime_context;
+pub mod texture_pool;
 
 pub use gpu_context::GpuContext;
 pub use runtime_context::RuntimeContext;
+pub use texture_pool::*;

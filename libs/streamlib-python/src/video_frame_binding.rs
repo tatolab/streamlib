@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use std::sync::Arc;
 use streamlib::VideoFrame;
 
-use crate::shader_handle::PyGpuTexture;
+use crate::shader_handle::{PyGpuTexture, PyPooledTextureHandle};
 
 /// Python-accessible VideoFrame wrapper.
 ///
@@ -70,15 +70,30 @@ impl PyVideoFrame {
     /// Use this after GPU shader processing to create the output frame.
     fn with_texture(&self, texture: &PyGpuTexture) -> PyVideoFrame {
         PyVideoFrame {
-            inner: VideoFrame {
-                texture: texture.inner(),
-                format: self.inner.format,
-                width: self.inner.width,
-                height: self.inner.height,
-                frame_number: self.inner.frame_number,
-                timestamp_ns: self.inner.timestamp_ns,
-            },
+            inner: self
+                .inner
+                .with_texture(texture.inner(), texture.texture_ref().format()),
         }
+    }
+
+    /// Create a new frame with a pooled texture, preserving metadata.
+    ///
+    /// Use this after GPU shader processing when using pooled textures.
+    /// The pooled texture will be returned to the pool when the frame is dropped.
+    ///
+    /// Args:
+    ///     pooled: PooledTexture handle from ctx.gpu.acquire_surface()
+    ///
+    /// Returns:
+    ///     New VideoFrame with the pooled texture
+    fn with_pooled_texture(&self, pooled: &mut PyPooledTextureHandle) -> PyResult<PyVideoFrame> {
+        let handle = pooled.take_handle().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("PooledTexture handle already consumed")
+        })?;
+
+        Ok(PyVideoFrame {
+            inner: self.inner.with_pooled_texture(handle),
+        })
     }
 
     /// Copy frame data to numpy array (GPU -> CPU transfer).

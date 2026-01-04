@@ -1,8 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::{iosurface, MetalDevice, WgpuBridge};
-use crate::core::{LinkOutput, Result, RuntimeContext, StreamError, VideoFrame};
+use crate::apple::{iosurface, MetalDevice};
+use crate::core::{
+    LinkOutput, Result, RuntimeContext, StreamError, TexturePool, TexturePoolDescriptor, VideoFrame,
+};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -99,39 +101,14 @@ impl CaptureSessionInitState {
     }
 }
 
-/// Thread-safe wrapper for Metal textures.
-///
-/// SAFETY: Metal textures (MTLTexture) are designed to be thread-safe.
-/// They can be safely shared across threads via shared references.
-struct SendSyncMtlTexture(Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>);
-
-// SAFETY: Metal textures are thread-safe and can be sent between threads.
-unsafe impl Send for SendSyncMtlTexture {}
-// SAFETY: Metal textures are thread-safe and can be shared across threads.
-unsafe impl Sync for SendSyncMtlTexture {}
-
-impl SendSyncMtlTexture {
-    fn inner(&self) -> &Retained<ProtocolObject<dyn objc2_metal::MTLTexture>> {
-        &self.0
-    }
-}
-
-/// Cached RGBA texture for reuse when dimensions match.
-struct CachedRgbaTexture {
-    texture: SendSyncMtlTexture,
-    width: usize,
-    height: usize,
-}
-
 /// Callback context for processing frames directly in AVFoundation callback
 struct CameraCallbackContext {
     metal_device: MetalDevice,
     metal_command_queue: metal::CommandQueue,
-    wgpu_bridge: Arc<WgpuBridge>,
     video_output: LinkOutput<VideoFrame>,
     frame_count: std::sync::atomic::AtomicU64,
-    /// Cached RGBA output texture to avoid per-frame allocation.
-    cached_rgba_texture: Mutex<Option<CachedRgbaTexture>>,
+    /// Texture pool for acquiring IOSurface-backed output textures.
+    texture_pool: TexturePool,
 }
 
 /// Global callback context - set by start(), used by AVFoundation callback
@@ -188,52 +165,28 @@ define_class!(
                 Err(_) => return,
             };
 
-            // Get or create RGBA output texture (cached for reuse)
-            let metal_rgba_texture = {
-                let mut cache = ctx.cached_rgba_texture.lock();
-
-                // Check if cached texture matches current dimensions
-                let can_reuse = cache
-                    .as_ref()
-                    .map(|c| c.width == width && c.height == height)
-                    .unwrap_or(false);
-
-                if can_reuse {
-                    cache.as_ref().unwrap().texture.inner().clone()
-                } else {
-                    // Create new texture and cache it
-                    use objc2_metal::{
-                        MTLDevice, MTLPixelFormat, MTLTextureDescriptor, MTLTextureUsage,
-                    };
-
-                    let desc = MTLTextureDescriptor::new();
-                    desc.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
-                    desc.setWidth(width);
-                    desc.setHeight(height);
-                    desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
-
-                    let texture = match ctx.metal_device.device().newTextureWithDescriptor(&desc) {
-                        Some(tex) => tex,
-                        None => return,
-                    };
-
-                    *cache = Some(CachedRgbaTexture {
-                        texture: SendSyncMtlTexture(texture.clone()),
-                        width,
-                        height,
-                    });
-
-                    texture
-                }
+            // Acquire RGBA output texture from pool (IOSurface-backed)
+            let pooled_handle = match ctx.texture_pool.acquire(&TexturePoolDescriptor {
+                width: width as u32,
+                height: height as u32,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                label: Some("camera_output"),
+            }) {
+                Ok(handle) => handle,
+                Err(_) => return,
             };
 
-            // Blit BGRA → RGBA
+            // Blit BGRA → RGBA (to pool's Metal texture)
             use metal::foreign_types::ForeignTypeRef;
 
             let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
             let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
 
-            let dest_texture_ptr = &*metal_rgba_texture as *const _ as *mut std::ffi::c_void;
+            let pool_metal_texture = pooled_handle.metal_texture();
+            let dest_texture_ptr = pool_metal_texture as *const _ as *mut std::ffi::c_void;
             let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
 
             let command_buffer = ctx.metal_command_queue.new_command_buffer();
@@ -265,27 +218,10 @@ define_class!(
             command_buffer.commit();
             command_buffer.wait_until_completed();
 
-            // Wrap in wgpu texture
-            let output_texture = match ctx.wgpu_bridge.wrap_metal_texture(
-                &metal_rgba_texture,
-                wgpu::TextureFormat::Rgba8Unorm,
-                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            ) {
-                Ok(tex) => tex,
-                Err(_) => return,
-            };
-
             let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
             let frame_num = ctx.frame_count.fetch_add(1, Ordering::Relaxed);
 
-            let frame = VideoFrame::new(
-                Arc::new(output_texture),
-                wgpu::TextureFormat::Rgba8Unorm,
-                timestamp_ns,
-                frame_num,
-                width as u32,
-                height as u32,
-            );
+            let frame = VideoFrame::from_pooled(pooled_handle, timestamp_ns, frame_num);
 
             // Write frame to output
             ctx.video_output.write(frame);
@@ -367,20 +303,13 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
-        let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-            metal_device.clone_device(),
-            gpu_context.device().as_ref().clone(),
-            gpu_context.queue().as_ref().clone(),
-        ));
-
         // Step 2: Create and set callback context
         let callback_context = Arc::new(CameraCallbackContext {
             metal_device,
             metal_command_queue,
-            wgpu_bridge,
             video_output: self.video.clone(),
             frame_count: std::sync::atomic::AtomicU64::new(0),
-            cached_rgba_texture: Mutex::new(None),
+            texture_pool: gpu_context.texture_pool().clone(),
         });
 
         // Store in global - callback will read from here

@@ -444,13 +444,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        Ok(VideoFrame {
-            texture: Arc::new(output_texture),
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            width: input.width,
-            height: input.height,
-            frame_number: input.frame_number,
-            timestamp_ns: input.timestamp_ns,
-        })
+        Ok(VideoFrame::new(
+            Arc::new(output_texture),
+            wgpu::TextureFormat::Rgba8Unorm,
+            input.timestamp_ns,
+            input.frame_number,
+            input.width,
+            input.height,
+        ))
     }
 }
