@@ -6,6 +6,7 @@
 use pyo3::prelude::*;
 use streamlib::VideoFrame;
 
+use crate::gl_context_binding::PyGlContext;
 use crate::shader_handle::{PyGpuTexture, PyPooledTextureHandle};
 
 /// Python-accessible VideoFrame wrapper.
@@ -106,6 +107,50 @@ impl PyVideoFrame {
         Err(pyo3::exceptions::PyNotImplementedError::new_err(
             "to_numpy() not yet implemented - use GPU shaders for processing",
         ))
+    }
+
+    /// IOSurface ID for cross-framework sharing.
+    ///
+    /// Use this ID to import the texture into other frameworks like SceneKit or Metal.
+    /// Call `IOSurfaceLookup(id)` from PyObjC to get the IOSurface handle.
+    ///
+    /// Returns Some(id) on macOS if available, None on other platforms.
+    #[getter]
+    fn iosurface_id(&self) -> Option<u32> {
+        self.inner.iosurface_id()
+    }
+
+    /// Bind this frame's texture to an OpenGL texture and return the GL texture ID (experimental).
+    ///
+    /// This enables interop with OpenGL-based libraries like skia-python.
+    /// The GL context must be current before calling this method.
+    ///
+    /// Args:
+    ///     gl_ctx: The GlContext from ctx.gpu._experimental_gl_context()
+    ///
+    /// Returns:
+    ///     The OpenGL texture ID (GLuint)
+    ///
+    /// Example:
+    ///     gl_ctx = ctx.gpu._experimental_gl_context()
+    ///     gl_ctx.make_current()
+    ///     frame = ctx.input("video_in").get()
+    ///     gl_tex_id = frame._experimental_gl_texture_id(gl_ctx)
+    fn _experimental_gl_texture_id(&self, gl_ctx: &PyGlContext) -> PyResult<u32> {
+        let binding = self
+            .inner
+            .gl_texture_binding(&mut gl_ctx.lock())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+        Ok(binding.texture_id)
+    }
+
+    /// Get the OpenGL texture target for this frame's texture (experimental).
+    ///
+    /// Returns GL_TEXTURE_RECTANGLE (0x84F5) for IOSurface-backed textures on macOS.
+    /// Use this when constructing skia.GrGLTextureInfo.
+    fn _experimental_gl_texture_target(&self) -> u32 {
+        streamlib::gl_constants::GL_TEXTURE_RECTANGLE
     }
 
     fn __repr__(&self) -> String {

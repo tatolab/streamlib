@@ -13,7 +13,7 @@ use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
 use crate::core::compiler::{Compiler, PendingOperation};
-use crate::core::context::{GpuContext, RuntimeContext};
+use crate::core::context::{GpuContext, RuntimeContext, TimeContext};
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader, LinkUniqueId,
     ProcessorPauseGateComponent, ProcessorUniqueId,
@@ -201,6 +201,9 @@ impl StreamRuntime {
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
 
+        // Create shared timing context - clock starts now
+        let time = Arc::new(TimeContext::new());
+
         // Pass runtime directly to RuntimeContext. Processors call runtime operations
         // directly - this is safe because processor lifecycle methods (setup, process)
         // run on their own threads with no locks held.
@@ -208,6 +211,7 @@ impl StreamRuntime {
             Arc::clone(self) as Arc<dyn RuntimeOperations>;
         let runtime_ctx = Arc::new(RuntimeContext::new(
             gpu,
+            time,
             Arc::clone(&self.runtime_id),
             runtime_ops,
             self.tokio_runtime_variant.handle(),

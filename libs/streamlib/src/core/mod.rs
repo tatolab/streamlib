@@ -33,7 +33,7 @@ pub use clap::*;
 pub use compiler::*;
 pub use context::*;
 pub use error::*;
-pub use rhi::NativeTextureHandle;
+pub use rhi::{gl_constants, GlContext, GlTextureBinding, NativeTextureHandle};
 
 pub use frames::*;
 pub use graph::*;

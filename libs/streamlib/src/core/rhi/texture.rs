@@ -212,6 +212,32 @@ impl StreamTexture {
         }
     }
 
+    /// Bind this texture to an OpenGL texture and return the binding info.
+    ///
+    /// This enables interop with OpenGL-based libraries like Skia. The texture
+    /// is bound via platform-specific mechanisms (IOSurface on macOS, DMA-BUF
+    /// on Linux, DXGI on Windows).
+    ///
+    /// # Arguments
+    /// * `gl_ctx` - The GL context to bind the texture in
+    ///
+    /// # Returns
+    /// The GL texture ID and target on success.
+    ///
+    /// # Errors
+    /// Returns an error if the texture has no native sharing handle or if
+    /// the binding fails.
+    pub fn gl_texture_binding(
+        &self,
+        gl_ctx: &mut super::GlContext,
+    ) -> crate::core::Result<super::GlTextureBinding> {
+        let native_handle = self.native_handle().ok_or_else(|| {
+            crate::core::StreamError::GpuError("Texture has no native handle for GL binding".into())
+        })?;
+
+        gl_ctx.bind_texture(&native_handle, self.width(), self.height())
+    }
+
     /// Get the underlying Metal texture (macOS only).
     #[cfg(target_os = "macos")]
     pub fn as_metal_texture(&self) -> &metal::TextureRef {

@@ -5,22 +5,27 @@
 
 use pyo3::prelude::*;
 use streamlib::core::rhi::{TextureFormat, TextureUsages};
-use streamlib::{GpuContext, TexturePoolDescriptor};
+use streamlib::{GlContext, GpuContext, TexturePoolDescriptor};
 
+use crate::gl_context_binding::PyGlContext;
 use crate::shader_handle::PyPooledTextureHandle;
 
 /// Python-accessible GpuContext for texture pool operations.
 ///
 /// Access via `ctx.gpu` in processor methods.
 #[pyclass(name = "GpuContext")]
-#[derive(Clone)]
 pub struct PyGpuContext {
     inner: GpuContext,
+    /// Lazily-created GL context for interop
+    gl_context: Option<PyGlContext>,
 }
 
 impl PyGpuContext {
     pub fn new(ctx: GpuContext) -> Self {
-        Self { inner: ctx }
+        Self {
+            inner: ctx,
+            gl_context: None,
+        }
     }
 
     pub fn inner(&self) -> &GpuContext {
@@ -84,6 +89,33 @@ impl PyGpuContext {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
 
         Ok(PyPooledTextureHandle::new(handle))
+    }
+
+    /// Get the OpenGL context for GPU interop (experimental).
+    ///
+    /// This provides access to StreamLib's OpenGL context for use with
+    /// libraries like skia-python that require OpenGL.
+    ///
+    /// The context is created lazily on first access and cached for reuse.
+    ///
+    /// Example:
+    ///     gl_ctx = ctx.gpu._experimental_gl_context()
+    ///     gl_ctx.make_current()
+    ///     skia_ctx = skia.GrDirectContext.MakeGL()
+    ///
+    /// Note: This is an experimental API and may change in future versions.
+    fn _experimental_gl_context(&mut self) -> PyResult<PyGlContext> {
+        if let Some(ref gl_ctx) = self.gl_context {
+            return Ok(gl_ctx.clone());
+        }
+
+        // Create new GL context
+        let gl_ctx = GlContext::new()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+        let py_gl_ctx = PyGlContext::new(gl_ctx);
+        self.gl_context = Some(py_gl_ctx.clone());
+        Ok(py_gl_ctx)
     }
 
     fn __repr__(&self) -> String {

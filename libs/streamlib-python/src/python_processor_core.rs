@@ -18,7 +18,7 @@ use streamlib::{
     core::schema::{DataFrameSchemaField, PrimitiveType, SemanticVersion},
     core::schema_registry::SCHEMA_REGISTRY,
     core::RuntimeContext,
-    GpuContext, PortDescriptor, Result, StreamError, VideoFrame,
+    GpuContext, PortDescriptor, Result, StreamError, TimeContext, VideoFrame,
 };
 
 use crate::frame_binding::PyFrame;
@@ -75,6 +75,7 @@ pub struct PythonProcessorCore {
     pub py_instance: Option<Py<PyAny>>,
     pub py_context: Option<Py<PyProcessorContext>>,
     pub gpu_context: Option<Arc<GpuContext>>,
+    pub time_context: Option<Arc<TimeContext>>,
     pub metadata: Option<PythonProcessorMetadata>,
 }
 
@@ -87,6 +88,7 @@ impl PythonProcessorCore {
             py_instance: None,
             py_context: None,
             gpu_context: None,
+            time_context: None,
             metadata: None,
         }
     }
@@ -607,6 +609,7 @@ impl PythonProcessorCore {
     ) -> Result<()> {
         self.config = config;
         self.gpu_context = Some(Arc::new(ctx.gpu.clone()));
+        self.time_context = Some(Arc::clone(&ctx.time));
 
         // Get IDs from RuntimeContext
         let runtime_id = ctx.runtime_id();
@@ -647,6 +650,10 @@ impl PythonProcessorCore {
             .gpu_context
             .clone()
             .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
+        let time_context = self
+            .time_context
+            .clone()
+            .ok_or_else(|| StreamError::Runtime("Time context not initialized".into()))?;
         let metadata = self
             .metadata
             .as_ref()
@@ -656,7 +663,7 @@ impl PythonProcessorCore {
             if let Some(ref instance) = self.py_instance {
                 let instance = instance.bind(py);
 
-                let py_ctx = PyProcessorContext::new(py, gpu_context.clone())
+                let py_ctx = PyProcessorContext::new(py, gpu_context.clone(), time_context.clone())
                     .map_err(|e| py_err_to_stream_error(e, "Failed to create ProcessorContext"))?;
 
                 // Register input ports with schema metadata

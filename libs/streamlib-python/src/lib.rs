@@ -9,6 +9,7 @@
 use pyo3::prelude::*;
 
 mod frame_binding;
+mod gl_context_binding;
 mod gpu_context_binding;
 mod processor_context_proxy;
 mod python_continuous_host_processor;
@@ -19,6 +20,7 @@ mod runtime_init;
 pub mod schema_binding;
 mod schema_field_mappers;
 mod shader_handle;
+mod time_context_binding;
 mod venv_manager;
 mod video_frame_binding;
 mod wheel_cache;
@@ -40,8 +42,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register types
     m.add_class::<video_frame_binding::PyVideoFrame>()?;
     m.add_class::<gpu_context_binding::PyGpuContext>()?;
+    m.add_class::<gl_context_binding::PyGlContext>()?;
     m.add_class::<shader_handle::PyGpuTexture>()?;
     m.add_class::<shader_handle::PyPooledTextureHandle>()?;
+    m.add_class::<time_context_binding::PyTimeContext>()?;
     m.add_class::<processor_context_proxy::PyProcessorContext>()?;
     m.add_class::<processor_context_proxy::PyInputPortProxy>()?;
     m.add_class::<processor_context_proxy::PyOutputPortProxy>()?;

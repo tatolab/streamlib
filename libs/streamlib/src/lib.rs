@@ -35,6 +35,7 @@ pub use streamlib_macros::{
 pub use core::{
     are_synchronized,
     convert_audio_to_sample,
+    gl_constants,
     // Port marker traits and helpers for compile-time safe connections
     input,
     media_clock::MediaClock,
@@ -80,6 +81,8 @@ pub use core::{
     EncodedAudioFrame,
     Field,
     FieldType,
+    GlContext,
+    GlTextureBinding,
     GpuContext,
     InputPortMarker,
     LfoWaveform,
@@ -121,6 +124,7 @@ pub use core::{
     TexturePool,
     TexturePoolDescriptor,
     TextureUsages,
+    TimeContext,
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,

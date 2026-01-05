@@ -4,13 +4,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::GpuContext;
+use super::{GpuContext, TimeContext};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
 
 #[derive(Clone)]
 pub struct RuntimeContext {
     pub gpu: GpuContext,
+    /// Shared timing context - monotonic clock starting at runtime creation.
+    pub time: Arc<TimeContext>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
     /// Unique identifier for this processor (None for shared/global context).
@@ -26,12 +28,14 @@ pub struct RuntimeContext {
 impl RuntimeContext {
     pub fn new(
         gpu: GpuContext,
+        time: Arc<TimeContext>,
         runtime_id: Arc<RuntimeUniqueId>,
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
             gpu,
+            time,
             runtime_id,
             processor_id: None,
             pause_gate: None,
@@ -102,6 +106,7 @@ impl RuntimeContext {
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
             gpu: self.gpu.clone(),
+            time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: Some(processor_id),
             pause_gate: self.pause_gate.clone(),
@@ -114,6 +119,7 @@ impl RuntimeContext {
     pub fn with_pause_gate(&self, pause_gate: Arc<AtomicBool>) -> Self {
         Self {
             gpu: self.gpu.clone(),
+            time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: self.processor_id.clone(),
             pause_gate: Some(pause_gate),

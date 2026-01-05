@@ -1,13 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → Python Passthrough → Display Pipeline Example
+//! Camera → Python Cyberpunk → Display Pipeline Example
 //!
 //! Demonstrates a full video processing pipeline with a Python-defined
-//! processor in the middle. The Python processor demonstrates IOSurface
-//! sharing for cross-framework GPU access (SceneKit, Core Image, etc.).
+//! processor using Skia for GPU-accelerated 2D drawing. Features:
+//! - Cyberpunk color grading (teal shadows, magenta highlights)
+//! - Spray paint style watermark with drips and neon glow
+//! - Zero-copy GPU texture sharing via IOSurface ↔ OpenGL
 //!
-//! Pipeline: Camera → GrayscaleProcessor (Python passthrough) → Display
+//! Pipeline: Camera → CyberpunkProcessor (Python/Skia) → Display
 //!
 //! ## Prerequisites
 //!
@@ -50,7 +52,7 @@ fn main() -> Result<()> {
     // THEN initialize LogTracer to forward Python logging (via pyo3-log) to tracing
     tracing_log::LogTracer::init().expect("Failed to initialize LogTracer");
 
-    println!("=== Camera → Python Grayscale → Display Pipeline ===\n");
+    println!("=== Camera → Python Cyberpunk → Display Pipeline ===\n");
 
     let runtime = StreamRuntime::new()?;
 
@@ -65,21 +67,21 @@ fn main() -> Result<()> {
     println!("✓ Camera added: {}\n", camera);
 
     // =========================================================================
-    // Add Python Grayscale processor
+    // Add Python Cyberpunk processor
     // =========================================================================
 
-    println!("🐍 Adding Python grayscale processor...");
+    println!("🐍 Adding Python cyberpunk processor (Skia GPU rendering)...");
 
-    // Path to the Python project (contains pyproject.toml and grayscale_processor.py)
+    // Path to the Python project (contains pyproject.toml and cyberpunk_processor.py)
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
-    let grayscale =
+    let cyberpunk =
         runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
             project_path,
-            class_name: "GrayscaleProcessor".to_string(),
-            entry_point: Some("grayscale_processor.py".to_string()),
+            class_name: "CyberpunkProcessor".to_string(),
+            entry_point: Some("cyberpunk_processor.py".to_string()),
         }))?;
-    println!("✓ Python grayscale processor added: {}\n", grayscale);
+    println!("✓ Python cyberpunk processor added: {}\n", cyberpunk);
 
     // =========================================================================
     // Add Display processor
@@ -89,7 +91,7 @@ fn main() -> Result<()> {
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: 1920,
         height: 1080,
-        title: Some("Camera → Python Grayscale → Display".to_string()),
+        title: Some("Camera → Python Cyberpunk → Display".to_string()),
         scaling_mode: Default::default(),
     }))?;
     println!("✓ Display added: {}\n", display);
@@ -107,24 +109,24 @@ fn main() -> Result<()> {
     println!("   Registry: http://127.0.0.1:9000/registry\n");
 
     // =========================================================================
-    // Connect the pipeline: Camera → Grayscale → Display
+    // Connect the pipeline: Camera → Cyberpunk → Display
     // =========================================================================
 
     println!("🔗 Connecting pipeline...");
 
-    // Camera video → Grayscale video_in
+    // Camera video → Cyberpunk video_in
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
-        InputLinkPortRef::new(&grayscale, "video_in"),
+        InputLinkPortRef::new(&cyberpunk, "video_in"),
     )?;
-    println!("   ✓ Camera → Grayscale");
+    println!("   ✓ Camera → Cyberpunk");
 
-    // Grayscale video_out → Display video
+    // Cyberpunk video_out → Display video
     runtime.connect(
-        OutputLinkPortRef::new(&grayscale, "video_out"),
+        OutputLinkPortRef::new(&cyberpunk, "video_out"),
         InputLinkPortRef::new(&display, "video"),
     )?;
-    println!("   ✓ Grayscale → Display");
+    println!("   ✓ Cyberpunk → Display");
     println!();
 
     // =========================================================================
