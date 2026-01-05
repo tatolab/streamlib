@@ -9,6 +9,9 @@ use std::sync::Arc;
 
 use parking_lot::{Condvar, Mutex};
 
+use crate::core::rhi::{
+    GpuDevice, NativeTextureHandle, StreamTexture, TextureFormat, TextureUsages,
+};
 use crate::core::{Result, StreamError};
 
 /// Request descriptor for acquiring a pooled texture.
@@ -16,9 +19,34 @@ use crate::core::{Result, StreamError};
 pub struct TexturePoolDescriptor {
     pub width: u32,
     pub height: u32,
-    pub format: wgpu::TextureFormat,
-    pub usage: wgpu::TextureUsages,
+    pub format: TextureFormat,
+    pub usage: TextureUsages,
     pub label: Option<&'static str>,
+}
+
+impl TexturePoolDescriptor {
+    /// Create a new pool descriptor.
+    pub fn new(width: u32, height: u32, format: TextureFormat) -> Self {
+        Self {
+            width,
+            height,
+            format,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+            label: None,
+        }
+    }
+
+    /// Set usage flags.
+    pub fn with_usage(mut self, usage: TextureUsages) -> Self {
+        self.usage = usage;
+        self
+    }
+
+    /// Set label.
+    pub fn with_label(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
+    }
 }
 
 /// Unique identifier for a pool slot.
@@ -30,8 +58,8 @@ pub struct PoolSlotId(u64);
 pub struct TexturePoolKey {
     pub width: u32,
     pub height: u32,
-    pub format: wgpu::TextureFormat,
-    pub usage: wgpu::TextureUsages,
+    pub format: TextureFormat,
+    pub usage: TextureUsages,
 }
 
 impl TexturePoolKey {
@@ -92,59 +120,12 @@ pub struct TexturePoolStats {
     pub bucket_count: usize,
 }
 
-/// Thread-safe wrapper for Metal textures (macOS only).
-///
-/// SAFETY: Metal textures (MTLTexture) are designed to be thread-safe.
-/// They can be safely shared across threads via shared references.
-#[cfg(target_os = "macos")]
-pub struct SendSyncMtlTexture(
-    pub(crate) objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>>,
-);
-
-#[cfg(target_os = "macos")]
-impl SendSyncMtlTexture {
-    /// Get a reference to the inner Metal texture.
-    pub fn inner(
-        &self,
-    ) -> &objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>> {
-        &self.0
-    }
-
-    /// Get a reference to the Metal texture protocol object.
-    pub fn as_ref(&self) -> &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture> {
-        &self.0
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Clone for SendSyncMtlTexture {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-// SAFETY: Metal textures are thread-safe and can be sent between threads.
-#[cfg(target_os = "macos")]
-unsafe impl Send for SendSyncMtlTexture {}
-// SAFETY: Metal textures are thread-safe and can be shared across threads.
-#[cfg(target_os = "macos")]
-unsafe impl Sync for SendSyncMtlTexture {}
-
 /// A slot in the texture pool.
-#[allow(dead_code)]
 pub(crate) struct PoolSlot {
     pub(crate) id: PoolSlotId,
-    pub(crate) texture: Arc<wgpu::Texture>,
+    pub(crate) texture: StreamTexture,
     pub(crate) key: TexturePoolKey,
     pub(crate) in_use: AtomicBool,
-    /// IOSurface backing the texture (macOS only). Kept alive to ensure GPU memory persists.
-    #[cfg(target_os = "macos")]
-    pub(crate) iosurface: objc2::rc::Retained<objc2_io_surface::IOSurface>,
-    #[cfg(target_os = "macos")]
-    pub(crate) iosurface_id: u32,
-    /// Metal texture for direct blit operations (macOS only).
-    #[cfg(target_os = "macos")]
-    pub(crate) metal_texture: SendSyncMtlTexture,
 }
 
 impl PoolSlot {
@@ -167,14 +148,10 @@ impl PoolSlot {
 pub(crate) struct TexturePoolInner {
     pub(crate) buckets: Mutex<HashMap<TexturePoolKey, Vec<Arc<PoolSlot>>>>,
     pub(crate) config: TexturePoolConfig,
-    pub(crate) device: Arc<wgpu::Device>,
-    pub(crate) queue: Arc<wgpu::Queue>,
+    pub(crate) device: Arc<GpuDevice>,
     pub(crate) next_slot_id: AtomicU64,
     pub(crate) available_condvar: Condvar,
     pub(crate) buckets_mutex_for_condvar: Mutex<()>,
-    #[cfg(target_os = "macos")]
-    pub(crate) metal_device:
-        Option<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>>,
 }
 
 impl TexturePoolInner {
@@ -218,20 +195,6 @@ impl TexturePoolInner {
         buckets.entry(slot.key.clone()).or_default().push(slot);
     }
 
-    #[cfg(target_os = "macos")]
-    #[allow(dead_code)]
-    pub(crate) fn get_iosurface_id(&self, slot_id: PoolSlotId) -> Option<u32> {
-        let buckets = self.buckets.lock();
-        for slots in buckets.values() {
-            for slot in slots {
-                if slot.id == slot_id {
-                    return Some(slot.iosurface_id);
-                }
-            }
-        }
-        None
-    }
-
     pub(crate) fn stats(&self) -> TexturePoolStats {
         let buckets = self.buckets.lock();
         let mut total = 0;
@@ -255,29 +218,26 @@ impl TexturePoolInner {
 
 /// Handle to a pooled texture. Returns texture to pool on Drop.
 pub struct PooledTextureHandle {
-    texture: Arc<wgpu::Texture>,
+    texture: StreamTexture,
     pool_inner: Arc<TexturePoolInner>,
     slot_id: PoolSlotId,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
-    #[cfg(target_os = "macos")]
-    iosurface_id: u32,
-    /// Metal texture for direct blit operations (macOS only).
-    #[cfg(target_os = "macos")]
-    metal_texture: SendSyncMtlTexture,
+    format: TextureFormat,
 }
 
 impl PooledTextureHandle {
+    /// Constructor for non-macOS platforms (Linux/Windows).
+    /// On macOS, handles are created via `texture_pool_macos::allocate_iosurface_slot`.
     #[allow(dead_code)]
     #[cfg(not(target_os = "macos"))]
     pub(crate) fn new(
-        texture: Arc<wgpu::Texture>,
+        texture: StreamTexture,
         pool_inner: Arc<TexturePoolInner>,
         slot_id: PoolSlotId,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
+        format: TextureFormat,
     ) -> Self {
         Self {
             texture,
@@ -289,44 +249,14 @@ impl PooledTextureHandle {
         }
     }
 
-    #[allow(dead_code)]
-    #[cfg(target_os = "macos")]
-    pub(crate) fn new(
-        texture: Arc<wgpu::Texture>,
-        pool_inner: Arc<TexturePoolInner>,
-        slot_id: PoolSlotId,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-        iosurface_id: u32,
-        metal_texture: SendSyncMtlTexture,
-    ) -> Self {
-        Self {
-            texture,
-            pool_inner,
-            slot_id,
-            width,
-            height,
-            format,
-            iosurface_id,
-            metal_texture,
-        }
-    }
-
-    /// Get a reference to the underlying wgpu texture.
-    pub fn texture(&self) -> &wgpu::Texture {
+    /// Get a reference to the underlying texture.
+    pub fn texture(&self) -> &StreamTexture {
         &self.texture
     }
 
-    /// Get a cloneable Arc reference to the underlying wgpu texture.
-    pub fn texture_arc(&self) -> Arc<wgpu::Texture> {
-        Arc::clone(&self.texture)
-    }
-
-    /// Get a reference to the Metal texture for direct blit operations (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn metal_texture(&self) -> &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture> {
-        self.metal_texture.as_ref()
+    /// Get a cloneable reference to the underlying texture.
+    pub fn texture_clone(&self) -> StreamTexture {
+        self.texture.clone()
     }
 
     /// Get the texture width.
@@ -340,7 +270,7 @@ impl PooledTextureHandle {
     }
 
     /// Get the texture format.
-    pub fn format(&self) -> wgpu::TextureFormat {
+    pub fn format(&self) -> TextureFormat {
         self.format
     }
 
@@ -349,10 +279,30 @@ impl PooledTextureHandle {
         self.slot_id
     }
 
-    /// Get the IOSurface ID for cross-process sharing (macOS only).
+    /// Get the IOSurface ID for cross-framework sharing.
+    ///
+    /// Returns `Some(id)` on macOS/iOS if the texture is backed by an IOSurface.
+    /// Returns `None` on other platforms or if no IOSurface is available.
+    pub fn iosurface_id(&self) -> Option<u32> {
+        self.texture.iosurface_id()
+    }
+
+    /// Get the platform-native sharing handle for this texture.
+    ///
+    /// Returns the appropriate handle type for the current platform:
+    /// - macOS/iOS: `IOSurface { id }`
+    /// - Linux: `DmaBuf { fd }` (when implemented)
+    /// - Windows: `DxgiSharedHandle { handle }` (when implemented)
+    ///
+    /// Returns `None` if no sharing handle is available.
+    pub fn native_handle(&self) -> Option<NativeTextureHandle> {
+        self.texture.native_handle()
+    }
+
+    /// Get the underlying Metal texture (macOS only).
     #[cfg(target_os = "macos")]
-    pub fn iosurface_id(&self) -> u32 {
-        self.iosurface_id
+    pub fn metal_texture(&self) -> &metal::TextureRef {
+        self.texture.as_metal_texture()
     }
 }
 
@@ -377,51 +327,20 @@ impl Clone for TexturePool {
 
 impl TexturePool {
     /// Create a new texture pool with default configuration.
-    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
-        Self::with_config(device, queue, TexturePoolConfig::default())
+    pub fn new(device: Arc<GpuDevice>) -> Self {
+        Self::with_config(device, TexturePoolConfig::default())
     }
 
     /// Create a new texture pool with custom configuration.
-    pub fn with_config(
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        config: TexturePoolConfig,
-    ) -> Self {
+    pub fn with_config(device: Arc<GpuDevice>, config: TexturePoolConfig) -> Self {
         Self {
             inner: Arc::new(TexturePoolInner {
                 buckets: Mutex::new(HashMap::new()),
                 config,
                 device,
-                queue,
                 next_slot_id: AtomicU64::new(0),
                 available_condvar: Condvar::new(),
                 buckets_mutex_for_condvar: Mutex::new(()),
-                #[cfg(target_os = "macos")]
-                metal_device: None,
-            }),
-        }
-    }
-
-    /// Create a new texture pool with a Metal device for IOSurface support (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn with_metal_device(
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        config: TexturePoolConfig,
-        metal_device: objc2::rc::Retained<
-            objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
-        >,
-    ) -> Self {
-        Self {
-            inner: Arc::new(TexturePoolInner {
-                buckets: Mutex::new(HashMap::new()),
-                config,
-                device,
-                queue,
-                next_slot_id: AtomicU64::new(0),
-                available_condvar: Condvar::new(),
-                buckets_mutex_for_condvar: Mutex::new(()),
-                metal_device: Some(metal_device),
             }),
         }
     }
@@ -511,53 +430,28 @@ impl TexturePool {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn create_handle_from_slot(&self, slot: &Arc<PoolSlot>) -> PooledTextureHandle {
         PooledTextureHandle {
-            texture: Arc::clone(&slot.texture),
+            texture: slot.texture.clone(),
             pool_inner: Arc::clone(&self.inner),
             slot_id: slot.id,
             width: slot.key.width,
             height: slot.key.height,
             format: slot.key.format,
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn create_handle_from_slot(&self, slot: &Arc<PoolSlot>) -> PooledTextureHandle {
-        PooledTextureHandle {
-            texture: Arc::clone(&slot.texture),
-            pool_inner: Arc::clone(&self.inner),
-            slot_id: slot.id,
-            width: slot.key.width,
-            height: slot.key.height,
-            format: slot.key.format,
-            iosurface_id: slot.iosurface_id,
-            metal_texture: slot.metal_texture.clone(),
         }
     }
 
     /// Allocate a new texture slot.
     #[cfg(not(target_os = "macos"))]
     fn allocate_slot(&self, desc: &TexturePoolDescriptor) -> Result<Arc<PoolSlot>> {
-        let texture = self.inner.device.create_texture(&wgpu::TextureDescriptor {
-            label: desc.label,
-            size: wgpu::Extent3d {
-                width: desc.width,
-                height: desc.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: desc.format,
-            usage: desc.usage,
-            view_formats: &[],
-        });
+        let texture_desc =
+            TextureDescriptor::new(desc.width, desc.height, desc.format).with_usage(desc.usage);
+
+        let texture = self.inner.device.create_texture(&texture_desc)?;
 
         Ok(Arc::new(PoolSlot {
             id: self.inner.next_slot_id(),
-            texture: Arc::new(texture),
+            texture,
             key: TexturePoolKey::from_descriptor(desc),
             in_use: AtomicBool::new(false),
         }))

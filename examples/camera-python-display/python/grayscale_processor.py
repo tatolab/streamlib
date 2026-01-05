@@ -1,16 +1,21 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Grayscale video processor using GPU shader.
+"""Passthrough video processor with IOSurface access.
 
-This processor converts RGB video frames to grayscale using a WGSL
-compute shader executed on the GPU.
+This processor demonstrates video frame passthrough with access to IOSurface
+IDs for cross-framework GPU sharing (e.g., SceneKit, Core Image, Metal).
 
 Also demonstrates custom schema definition that gets registered in
 the Rust SCHEMA_REGISTRY.
 """
 
+import logging
+
 from streamlib import processor, input, output, schema, f32, i64, bool_field
+
+# Get a logger for this module - logs will be forwarded to Rust tracing
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -31,37 +36,40 @@ class TestEmbeddingSchema:
 
 
 # =============================================================================
-# Grayscale Processor
+# Passthrough Processor (IOSurface demo)
 # =============================================================================
 
-# WGSL compute shader for grayscale conversion
-GRAYSCALE_SHADER = """
-@group(0) @binding(0) var input_texture: texture_2d<f32>;
-@group(0) @binding(1) var output_texture: texture_storage_2d<rgba8unorm, write>;
-
-@compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let dims = textureDimensions(input_texture);
-    if global_id.x >= dims.x || global_id.y >= dims.y {
-        return;
-    }
-
-    let color = textureLoad(input_texture, vec2<i32>(global_id.xy), 0);
-
-    // ITU-R BT.709 luma coefficients
-    let gray = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-
-    textureStore(output_texture, vec2<i32>(global_id.xy), vec4<f32>(gray, gray, gray, color.a));
-}
-"""
-
-
-@processor(name="GrayscaleProcessor", description="Convert video to grayscale using GPU shader")
+@processor(name="GrayscaleProcessor", description="Passthrough processor with IOSurface access")
 class GrayscaleProcessor:
-    """Converts RGB video frames to grayscale.
+    """Passes video frames through with IOSurface ID logging.
 
-    Uses ITU-R BT.709 luma coefficients for accurate grayscale conversion.
-    All processing happens on the GPU via a WGSL compute shader.
+    This demonstrates the IOSurface sharing pattern for cross-framework
+    GPU access. The IOSurface ID can be used with:
+
+    - SceneKit: Create Metal texture from IOSurface for 3D scene rendering
+    - Core Image: Apply CIFilter effects via GPU
+    - Metal: Direct Metal compute/render operations
+    - AVFoundation: Video composition and effects
+
+    Example SceneKit usage (requires pyobjc-framework-SceneKit):
+
+        from IOSurface import IOSurfaceLookup
+        from Metal import MTLCreateSystemDefaultDevice
+
+        # Get shared IOSurface from frame
+        iosurface_id = frame.iosurface_id  # Available on pooled textures
+        surface = IOSurfaceLookup(iosurface_id)
+
+        # Create Metal texture from IOSurface
+        device = MTLCreateSystemDefaultDevice()
+        descriptor = metal.MTLTextureDescriptor.texture2DDescriptor(...)
+        texture = device.newTextureWithDescriptor_iosurface_plane_(
+            descriptor, surface, 0
+        )
+
+        # Use texture in SceneKit scene
+        material = SceneKit.SCNMaterial.alloc().init()
+        material.diffuse().setContents_(texture)
     """
 
     @input(schema="VideoFrame")
@@ -73,38 +81,32 @@ class GrayscaleProcessor:
         pass
 
     def setup(self, ctx):
-        """Compile the grayscale shader on startup."""
-        self.shader = ctx.gpu.compile_shader("grayscale", GRAYSCALE_SHADER)
-        print(f"GrayscaleProcessor: Shader compiled successfully")
+        """Initialize processor."""
+        self.frame_count = 0
+        logger.info("Setup complete (passthrough mode)")
+        logger.debug("GPU shader processing removed - use native Rust processors or SceneKit via PyObjC")
 
     def process(self, ctx):
-        """Process each frame through the grayscale shader."""
+        """Pass each frame through, logging IOSurface ID."""
         frame = ctx.input("video_in").get()
         if frame is None:
             return
 
-        # Get specific fields
-        texture = ctx.input("video_in").get("texture")
-        width = frame["width"]
-        height = frame["height"]
+        # Log frame info periodically
+        self.frame_count += 1
+        if self.frame_count % 60 == 0:  # Log every 60 frames
+            width = frame["width"]
+            height = frame["height"]
+            logger.debug(f"Frame {self.frame_count} - {width}x{height}")
 
-        # Dispatch shader to convert frame to grayscale
-        output_texture = ctx.gpu.dispatch(
-            self.shader,
-            {"input_texture": texture},
-            width,
-            height,
-        )
-
-        # Write output frame with new texture
-        ctx.output("video_out").set({
-            "texture": output_texture,
-            "width": width,
-            "height": height,
-            "timestamp_ns": frame["timestamp_ns"],
-            "frame_number": frame["frame_number"],
-        })
+        # Pass frame through unmodified
+        # To modify frames, use:
+        # 1. Native Rust processors (recommended for performance)
+        # 2. SceneKit/Core Image via PyObjC (for Python-native effects)
+        # 3. acquire_surface() to get IOSurface-backed output textures
+        ctx.output("video_out").set(frame)
 
     def teardown(self, ctx):
         """Cleanup on shutdown."""
-        print(f"GrayscaleProcessor: Teardown complete")
+        logger.info(f"Processed {self.frame_count} frames")
+        logger.info("Teardown complete")

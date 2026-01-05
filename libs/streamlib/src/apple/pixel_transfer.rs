@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::apple::iosurface;
-use crate::apple::WgpuBridge;
+use crate::core::rhi::{GpuDevice, StreamTexture};
 use crate::core::{Result, StreamError};
 use metal;
 use metal::foreign_types::ForeignTypeRef;
@@ -52,13 +52,13 @@ mod ffi {
 /// GPU-accelerated pixel format converter using VTPixelTransferSession.
 pub struct PixelTransferSession {
     session: ffi::VTPixelTransferSessionRef,
-    wgpu_bridge: Arc<WgpuBridge>,
+    device: Arc<GpuDevice>,
     command_queue: metal::CommandQueue,
 }
 
 impl PixelTransferSession {
     /// Creates a new pixel transfer session.
-    pub fn new(wgpu_bridge: Arc<WgpuBridge>) -> Result<Self> {
+    pub fn new(device: Arc<GpuDevice>) -> Result<Self> {
         // Create VTPixelTransferSession
         let mut session: ffi::VTPixelTransferSessionRef = std::ptr::null_mut();
 
@@ -83,30 +83,26 @@ impl PixelTransferSession {
         // - kVTPixelTransferPropertyKey_DestinationYCbCrMatrix (BT.709)
         // For now, defaults should work for our use case
 
-        // Get metal device reference and convert to metal crate type
-        let metal_device_ref = wgpu_bridge.metal_device();
-        let metal_device_ptr = metal_device_ref as *const _ as *mut std::ffi::c_void;
-        let metal_crate_device =
-            unsafe { metal::DeviceRef::from_ptr(metal_device_ptr as *mut _) }.to_owned();
-
-        let command_queue = metal_crate_device.new_command_queue();
+        // Get metal device reference from RHI and create command queue
+        let metal_device_ref = device.metal_device_ref();
+        let command_queue = metal_device_ref.new_command_queue();
 
         Ok(Self {
             session,
-            wgpu_bridge,
+            device,
             command_queue,
         })
     }
 
-    /// Converts an RGBA wgpu texture to NV12 CVPixelBuffer.
+    /// Converts an RGBA texture to NV12 CVPixelBuffer.
     pub fn convert_to_nv12(
         &self,
-        wgpu_texture: &wgpu::Texture,
+        texture: &StreamTexture,
         width: u32,
         height: u32,
     ) -> Result<*mut CVPixelBuffer> {
-        // Step 1: Metal Blit - wgpu texture → RGBA CVPixelBuffer
-        let source_rgba_buffer = self.blit_to_rgba_pixel_buffer(wgpu_texture, width, height)?;
+        // Step 1: Metal Blit - texture → RGBA CVPixelBuffer
+        let source_rgba_buffer = self.blit_to_rgba_pixel_buffer(texture, width, height)?;
 
         // Step 2: VTPixelTransferSession - RGBA → NV12
         let dest_nv12_buffer = self.transfer_rgba_to_nv12(source_rgba_buffer, width, height)?;
@@ -119,15 +115,15 @@ impl PixelTransferSession {
         Ok(dest_nv12_buffer)
     }
 
-    /// Step 1: Uses Metal blit to copy wgpu texture data into RGBA CVPixelBuffer
+    /// Step 1: Uses Metal blit to copy texture data into RGBA CVPixelBuffer
     fn blit_to_rgba_pixel_buffer(
         &self,
-        wgpu_texture: &wgpu::Texture,
+        texture: &StreamTexture,
         width: u32,
         height: u32,
     ) -> Result<*mut CVPixelBuffer> {
-        // Get Metal texture from wgpu texture
-        let source_metal = unsafe { self.wgpu_bridge.unwrap_to_metal_texture(wgpu_texture)? };
+        // Get Metal texture directly from StreamTexture
+        let source_metal = texture.as_metal_texture();
 
         // Create destination CVPixelBuffer in BGRA format (32BGRA is standard for Metal/CoreVideo interop)
         let mut pixel_buffer: *mut CVPixelBuffer = std::ptr::null_mut();
@@ -190,7 +186,7 @@ impl PixelTransferSession {
 
         // Create Metal texture from IOSurface (destination for blit)
         let dest_metal = iosurface::create_metal_texture_from_iosurface(
-            self.wgpu_bridge.metal_device(),
+            self.device.as_metal_device().device(),
             iosurface,
             0, // plane 0
         )?;
@@ -211,7 +207,7 @@ impl PixelTransferSession {
         let dest_metal_ref = unsafe { metal::TextureRef::from_ptr(dest_metal_ptr as *mut _) };
 
         blit_encoder.copy_from_texture(
-            &source_metal,
+            source_metal,
             0, // source slice
             0, // source level
             origin,

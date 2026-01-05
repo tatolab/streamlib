@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → Python Grayscale → Display Pipeline Example
+//! Camera → Python Passthrough → Display Pipeline Example
 //!
 //! Demonstrates a full video processing pipeline with a Python-defined
-//! grayscale processor in the middle. The Python processor uses a GPU
-//! shader for efficient grayscale conversion.
+//! processor in the middle. The Python processor demonstrates IOSurface
+//! sharing for cross-framework GPU access (SceneKit, Core Image, etc.).
 //!
-//! Pipeline: Camera → GrayscaleProcessor (Python) → Display
+//! Pipeline: Camera → GrayscaleProcessor (Python passthrough) → Display
 //!
 //! ## Prerequisites
 //!
@@ -34,8 +34,8 @@ use streamlib::{
 use streamlib_python::{PythonHostProcessor, PythonHostProcessorConfig};
 
 fn main() -> Result<()> {
-    // Initialize tracing with sensible defaults
-    tracing_subscriber::fmt()
+    // Initialize tracing subscriber FIRST
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 "info,naga=warn,wgpu_core=warn,wgpu_hal=warn"
@@ -43,7 +43,12 @@ fn main() -> Result<()> {
                     .unwrap()
             }),
         )
-        .init();
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
+
+    // THEN initialize LogTracer to forward Python logging (via pyo3-log) to tracing
+    tracing_log::LogTracer::init().expect("Failed to initialize LogTracer");
 
     println!("=== Camera → Python Grayscale → Display Pipeline ===\n");
 

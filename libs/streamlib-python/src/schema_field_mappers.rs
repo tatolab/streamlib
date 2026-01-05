@@ -10,6 +10,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
+use streamlib::core::rhi::{StreamTexture, TextureFormat};
 use streamlib::core::AudioChannelCount;
 use streamlib::{AudioFrame, DataFrame, VideoFrame};
 
@@ -17,8 +18,8 @@ use crate::shader_handle::PyGpuTexture;
 
 /// Field mapper for VideoFrame - compile-time safe field access.
 pub trait VideoFrameFieldMapper {
-    fn get_texture(&self) -> Arc<wgpu::Texture>;
-    fn get_format(&self) -> wgpu::TextureFormat;
+    fn get_texture(&self) -> StreamTexture;
+    fn get_format(&self) -> TextureFormat;
     fn get_timestamp_ns(&self) -> i64;
     fn get_frame_number(&self) -> u64;
     fn get_width(&self) -> u32;
@@ -26,11 +27,11 @@ pub trait VideoFrameFieldMapper {
 }
 
 impl VideoFrameFieldMapper for VideoFrame {
-    fn get_texture(&self) -> Arc<wgpu::Texture> {
-        Arc::clone(&self.texture)
+    fn get_texture(&self) -> StreamTexture {
+        self.texture.clone()
     }
 
-    fn get_format(&self) -> wgpu::TextureFormat {
+    fn get_format(&self) -> TextureFormat {
         self.format
     }
 

@@ -7,11 +7,11 @@ pub mod iosurface;
 pub mod media_clock;
 pub mod metal;
 pub mod pixel_transfer;
+pub mod rhi;
 pub mod texture;
 pub mod texture_pool_macos;
 pub mod videotoolbox;
 pub mod webrtc;
-pub mod wgpu_bridge;
 
 pub mod processors;
 
@@ -29,7 +29,6 @@ pub mod display_link;
 
 pub use metal::MetalDevice;
 pub use pixel_transfer::PixelTransferSession;
-pub use wgpu_bridge::WgpuBridge;
 
 pub use processors::{
     AppleAudioCaptureProcessor,

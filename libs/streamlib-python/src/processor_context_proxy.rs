@@ -295,6 +295,30 @@ impl PyProcessorContext {
 
 #[pymethods]
 impl PyProcessorContext {
+    /// Current platform name.
+    ///
+    /// Returns "macos", "linux", or "windows".
+    /// Use this to branch on platform-specific behavior.
+    #[getter]
+    fn platform(&self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        {
+            "macos"
+        }
+        #[cfg(target_os = "linux")]
+        {
+            "linux"
+        }
+        #[cfg(target_os = "windows")]
+        {
+            "windows"
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            "unknown"
+        }
+    }
+
     /// Get an input port proxy by name.
     ///
     /// Usage:

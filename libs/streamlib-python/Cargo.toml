@@ -30,9 +30,6 @@ pyo3-log = "0.13"
 serde.workspace = true
 serde_json.workspace = true
 
-# GPU
-wgpu.workspace = true
-
 # Logging
 tracing.workspace = true
 

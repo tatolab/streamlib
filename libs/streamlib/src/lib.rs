@@ -94,6 +94,7 @@ pub use core::{
     ManualProcessor,
     MixingStrategy,
     Mp4WriterConfig,
+    NativeTextureHandle,
     // Streaming utilities:
     OpusEncoder,
     OutputPortMarker,
@@ -114,13 +115,12 @@ pub use core::{
     SemanticVersion,
     SerializationFormat,
     StreamError,
-    Texture,
+    StreamTexture,
     TextureDescriptor,
     TextureFormat,
     TexturePool,
     TexturePoolDescriptor,
     TextureUsages,
-    TextureView,
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
@@ -165,8 +165,6 @@ pub use apple::{
     WebRtcWhipConfig,
     // WebRTC WHIP processor and config types:
     WebRtcWhipProcessor,
-    // Metal/wgpu utilities:
-    WgpuBridge,
     WhepClient,
     WhepConfig,
     WhipClient,

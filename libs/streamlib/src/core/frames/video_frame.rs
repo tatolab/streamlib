@@ -4,26 +4,27 @@
 use std::sync::Arc;
 
 use crate::core::context::PooledTextureHandle;
+use crate::core::rhi::{NativeTextureHandle, StreamTexture, TextureFormat};
 
 #[crate::schema(content_hint = Video)]
 #[derive(Clone)]
 pub struct VideoFrame {
     #[crate::field(
         internal,
-        field_type = "Arc<wgpu::Texture>",
+        field_type = "StreamTexture",
         description = "GPU texture containing the frame pixel data"
     )]
-    pub texture: Arc<wgpu::Texture>,
+    pub texture: StreamTexture,
 
     /// Pooled texture handle (keeps texture alive in pool until frame is dropped).
     pooled_handle: Option<Arc<PooledTextureHandle>>,
 
     #[crate::field(
         internal,
-        field_type = "wgpu::TextureFormat",
+        field_type = "TextureFormat",
         description = "Pixel format of the texture (e.g., Rgba8Unorm)"
     )]
-    pub format: wgpu::TextureFormat,
+    pub format: TextureFormat,
 
     #[crate::field(description = "Monotonic timestamp in nanoseconds")]
     pub timestamp_ns: i64,
@@ -41,8 +42,8 @@ pub struct VideoFrame {
 impl VideoFrame {
     /// Create a VideoFrame from a non-pooled texture.
     pub fn new(
-        texture: Arc<wgpu::Texture>,
-        format: wgpu::TextureFormat,
+        texture: StreamTexture,
+        format: TextureFormat,
         timestamp_ns: i64,
         frame_number: u64,
         width: u32,
@@ -67,7 +68,7 @@ impl VideoFrame {
         let width = handle.width();
         let height = handle.height();
         let format = handle.format();
-        let texture = handle.texture_arc();
+        let texture = handle.texture_clone();
         let handle = Arc::new(handle);
 
         Self {
@@ -86,26 +87,47 @@ impl VideoFrame {
         self.pooled_handle.is_some()
     }
 
-    /// Get the IOSurface ID if this frame uses an IOSurface-backed texture (macOS only).
-    #[cfg(target_os = "macos")]
+    /// Get the IOSurface ID for cross-framework sharing.
+    ///
+    /// Returns `Some(id)` on macOS/iOS if the texture is backed by an IOSurface.
+    /// Returns `None` on other platforms or if no IOSurface is available.
     pub fn iosurface_id(&self) -> Option<u32> {
-        self.pooled_handle.as_ref().map(|h| h.iosurface_id())
+        self.texture.iosurface_id()
+    }
+
+    /// Get the platform-native sharing handle for this texture.
+    ///
+    /// Returns the appropriate handle type for the current platform:
+    /// - macOS/iOS: `IOSurface { id }`
+    /// - Linux: `DmaBuf { fd }` (when implemented)
+    /// - Windows: `DxgiSharedHandle { handle }` (when implemented)
+    ///
+    /// Returns `None` if no sharing handle is available.
+    pub fn native_handle(&self) -> Option<NativeTextureHandle> {
+        self.texture.native_handle()
+    }
+
+    /// Get the underlying Metal texture (macOS only).
+    #[cfg(target_os = "macos")]
+    pub fn metal_texture(&self) -> &metal::TextureRef {
+        self.texture.as_metal_texture()
     }
 
     /// Create a new frame with a different non-pooled texture, preserving metadata.
     ///
     /// Use this for shader output where you render to a new texture but want to
     /// preserve timestamp and frame number from the input frame.
-    pub fn with_texture(&self, texture: Arc<wgpu::Texture>, format: wgpu::TextureFormat) -> Self {
-        let size = texture.size();
+    pub fn with_texture(&self, texture: StreamTexture, format: TextureFormat) -> Self {
+        let width = texture.width();
+        let height = texture.height();
         Self {
             texture,
             pooled_handle: None,
             format,
             timestamp_ns: self.timestamp_ns,
             frame_number: self.frame_number,
-            width: size.width,
-            height: size.height,
+            width,
+            height,
         }
     }
 
@@ -117,7 +139,7 @@ impl VideoFrame {
         let width = handle.width();
         let height = handle.height();
         let format = handle.format();
-        let texture = handle.texture_arc();
+        let texture = handle.texture_clone();
         let handle = Arc::new(handle);
 
         Self {

@@ -218,7 +218,7 @@ pub fn video_frame_from_dict(
         .transpose()?
         .unwrap_or(0);
 
-    // Get format from texture
+    // Get format from StreamTexture
     let format = texture.texture_ref().format();
 
     Ok(VideoFrame::new(

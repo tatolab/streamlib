@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::{display_link::DisplayLink, metal::MetalDevice, WgpuBridge};
+use crate::apple::{display_link::DisplayLink, metal::MetalDevice};
+use crate::core::rhi::TextureFormat;
 use crate::core::{LinkInput, Result, RuntimeContext, StreamError, VideoFrame};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
@@ -73,7 +74,6 @@ pub struct AppleDisplayProcessor {
     metal_device: Option<MetalDevice>,
     metal_command_queue: Option<metal::CommandQueue>,
     gpu_context: Option<crate::core::GpuContext>,
-    wgpu_bridge: Option<Arc<WgpuBridge>>,
     window_id: AppleWindowId,
     window_title: String,
     width: u32,
@@ -122,16 +122,6 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             };
             tracing::trace!("Display {}: Metal command queue created", self.window_id.0);
 
-            // Create wgpu bridge from shared device
-            tracing::trace!("Display {}: Creating WgpuBridge...", self.window_id.0);
-            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-                metal_device.clone_device(),
-                ctx.gpu.device().as_ref().clone(),
-                ctx.gpu.queue().as_ref().clone(),
-            ));
-            tracing::trace!("Display {}: WgpuBridge created", self.window_id.0);
-
-            self.wgpu_bridge = Some(wgpu_bridge);
             self.metal_command_queue = Some(metal_command_queue);
 
             // Initialize shared frame counter for callback-driven rendering
@@ -272,12 +262,6 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             })?
             .clone();
 
-        let wgpu_bridge = self
-            .wgpu_bridge
-            .as_ref()
-            .ok_or_else(|| StreamError::Configuration("WgpuBridge not initialized".into()))?
-            .clone();
-
         let render_pipeline = self
             .metal_render_pipeline
             .as_ref()
@@ -331,10 +315,8 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
 
                 let drawable_texture = drawable.texture();
 
-                // Get Metal texture from wgpu VideoFrame
-                let Ok(source_metal) = wgpu_bridge.unwrap_to_metal_texture(&frame.texture) else {
-                    return;
-                };
+                // Get Metal texture directly from VideoFrame (native RHI)
+                let source_metal = frame.metal_texture();
 
                 // Create command buffer and render pass
                 let command_buffer = metal_command_queue.new_command_buffer();
@@ -361,11 +343,11 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
 
                 // Set pipeline and resources
                 render_encoder.set_render_pipeline_state(&render_pipeline);
-                render_encoder.set_fragment_texture(0, Some(&source_metal));
+                render_encoder.set_fragment_texture(0, Some(source_metal));
                 render_encoder.set_fragment_sampler_state(0, Some(&sampler));
 
                 // Set format buffer based on VideoFrame format
-                let format_buffer = if frame.format == wgpu::TextureFormat::Rgba8Unorm {
+                let format_buffer = if frame.format == TextureFormat::Rgba8Unorm {
                     &format_buffer_rgba
                 } else {
                     &format_buffer_bgra

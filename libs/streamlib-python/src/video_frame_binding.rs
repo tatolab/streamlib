@@ -4,7 +4,6 @@
 //! Python bindings for VideoFrame.
 
 use pyo3::prelude::*;
-use std::sync::Arc;
 use streamlib::VideoFrame;
 
 use crate::shader_handle::{PyGpuTexture, PyPooledTextureHandle};
@@ -35,10 +34,10 @@ impl PyVideoFrame {
 
 #[pymethods]
 impl PyVideoFrame {
-    /// GPU texture handle (opaque, pass to shader dispatch).
+    /// GPU texture handle (opaque, use with VideoFrame APIs).
     #[getter]
     fn texture(&self) -> PyGpuTexture {
-        PyGpuTexture::new(Arc::clone(&self.inner.texture))
+        PyGpuTexture::new(self.inner.texture.clone())
     }
 
     /// Frame width in pixels.

@@ -40,6 +40,38 @@ impl RuntimeContext {
         }
     }
 
+    /// Current platform name.
+    ///
+    /// Returns "macos", "linux", or "windows".
+    /// Use this to branch on platform-specific behavior in processors.
+    pub fn platform(&self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        {
+            "macos"
+        }
+        #[cfg(target_os = "ios")]
+        {
+            "ios"
+        }
+        #[cfg(target_os = "linux")]
+        {
+            "linux"
+        }
+        #[cfg(target_os = "windows")]
+        {
+            "windows"
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "windows"
+        )))]
+        {
+            "unknown"
+        }
+    }
+
     /// Get the runtime's unique identifier.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         &self.runtime_id

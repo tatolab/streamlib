@@ -7,6 +7,7 @@ pub mod compiler;
 pub mod context;
 pub mod error;
 pub mod execution;
+pub mod rhi;
 
 pub mod frames;
 pub mod graph;
@@ -32,6 +33,7 @@ pub use clap::*;
 pub use compiler::*;
 pub use context::*;
 pub use error::*;
+pub use rhi::NativeTextureHandle;
 
 pub use frames::*;
 pub use graph::*;

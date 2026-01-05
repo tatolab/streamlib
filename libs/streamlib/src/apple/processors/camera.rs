@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::apple::{iosurface, MetalDevice};
+use crate::core::rhi::{TextureFormat, TextureUsages};
 use crate::core::{
     LinkOutput, Result, RuntimeContext, StreamError, TexturePool, TexturePoolDescriptor, VideoFrame,
 };
@@ -169,10 +170,10 @@ define_class!(
             let pooled_handle = match ctx.texture_pool.acquire(&TexturePoolDescriptor {
                 width: width as u32,
                 height: height as u32,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: TextureFormat::Rgba8Unorm,
+                usage: TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_SRC
+                    | TextureUsages::RENDER_ATTACHMENT,
                 label: Some("camera_output"),
             }) {
                 Ok(handle) => handle,
@@ -185,9 +186,8 @@ define_class!(
             let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
             let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
 
-            let pool_metal_texture = pooled_handle.metal_texture();
-            let dest_texture_ptr = pool_metal_texture as *const _ as *mut std::ffi::c_void;
-            let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
+            // pooled_handle.metal_texture() now returns &TextureRef directly
+            let dest_texture_ref = pooled_handle.metal_texture();
 
             let command_buffer = ctx.metal_command_queue.new_command_buffer();
             let blit_encoder = command_buffer.new_blit_command_encoder();

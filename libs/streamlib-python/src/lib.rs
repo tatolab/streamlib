@@ -41,7 +41,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<video_frame_binding::PyVideoFrame>()?;
     m.add_class::<gpu_context_binding::PyGpuContext>()?;
     m.add_class::<shader_handle::PyGpuTexture>()?;
-    m.add_class::<shader_handle::PyCompiledShader>()?;
     m.add_class::<shader_handle::PyPooledTextureHandle>()?;
     m.add_class::<processor_context_proxy::PyProcessorContext>()?;
     m.add_class::<processor_context_proxy::PyInputPortProxy>()?;
