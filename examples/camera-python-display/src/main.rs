@@ -1,17 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → Python Cyberpunk → Display Pipeline Example
+//! Camera → Cyberpunk Compositor → Display Pipeline Example
 //!
-//! Demonstrates a full video processing pipeline with Python-defined
-//! processors using Skia for GPU-accelerated 2D drawing. Features:
-//! - Cyberpunk color grading (teal shadows, magenta highlights)
-//! - Spray paint style watermark with drips and neon glow
-//! - Cyberpunk 2077 style lower third overlay with slide-in animation
-//! - Full-screen glitch effect (RGB separation, scanlines, slice displacement)
-//! - Zero-copy GPU texture sharing via IOSurface ↔ OpenGL
+//! Demonstrates a full video processing pipeline with:
+//! - Rust Vision-based person segmentation with cyberpunk background compositing
+//! - Python lower third overlay with slide-in animation
+//! - Python glitch effect (RGB separation, scanlines, slice displacement)
+//! - Zero-copy GPU texture sharing via IOSurface
 //!
-//! Pipeline: Camera → CyberpunkProcessor → CyberpunkLowerThird → CyberpunkGlitch → Display
+//! Pipeline: Camera → CyberpunkCompositor (Rust) → CyberpunkLowerThird → CyberpunkGlitch → Display
 //!
 //! ## Prerequisites
 //!
@@ -22,13 +20,8 @@
 //! ```bash
 //! cargo run -p camera-python-display
 //! ```
-//!
-//! The Rust host will automatically:
-//! 1. Create an isolated Python virtual environment
-//! 2. Install dependencies from the Python project
-//! 3. Inject streamlib-python for the processor decorators
-//! 4. Run the Python processor
-//! 5. Clean up the venv on shutdown
+
+mod cyberpunk_compositor;
 
 use std::path::PathBuf;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
@@ -36,6 +29,8 @@ use streamlib::{
     ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor, Result, StreamRuntime,
 };
 use streamlib_python::{PythonHostProcessor, PythonHostProcessorConfig};
+
+use cyberpunk_compositor::{CyberpunkCompositorConfig, CyberpunkCompositorProcessor};
 
 fn main() -> Result<()> {
     // Initialize tracing subscriber FIRST
@@ -69,20 +64,28 @@ fn main() -> Result<()> {
     println!("✓ Camera added: {}\n", camera);
 
     // =========================================================================
-    // Add Python Cyberpunk processor (color grading + watermark)
+    // Add Rust Cyberpunk Compositor (Vision segmentation + background)
     // =========================================================================
 
-    println!("🐍 Adding Python cyberpunk processor (color grading + watermark)...");
+    println!(
+        "🦀 Adding Rust cyberpunk compositor (Vision segmentation + background replacement)..."
+    );
 
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
+    let background_image = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/background.png");
 
-    let cyberpunk =
-        runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
-            project_path: project_path.clone(),
-            class_name: "CyberpunkProcessor".to_string(),
-            entry_point: Some("cyberpunk_processor.py".to_string()),
-        }))?;
-    println!("✓ Python cyberpunk processor added: {}\n", cyberpunk);
+    let cyberpunk = runtime.add_processor(CyberpunkCompositorProcessor::node(
+        CyberpunkCompositorConfig {
+            background_image_path: if background_image.exists() {
+                Some(background_image)
+            } else {
+                tracing::warn!("Background image not found at assets/background.png, using procedural background");
+                None
+            },
+            ..Default::default()
+        },
+    ))?;
+    println!("✓ Rust cyberpunk compositor added: {}\n", cyberpunk);
 
     // =========================================================================
     // Add Python Cyberpunk Lower Third processor
@@ -102,17 +105,35 @@ fn main() -> Result<()> {
     );
 
     // =========================================================================
-    // Add Python Cyberpunk Glitch processor (post-processing)
+    // Add Python Cyberpunk Watermark processor
     // =========================================================================
 
-    println!("🐍 Adding Python cyberpunk glitch processor (RGB separation, scanlines)...");
+    println!("🐍 Adding Python cyberpunk watermark processor...");
 
-    let glitch = runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
-        project_path,
-        class_name: "CyberpunkGlitch".to_string(),
-        entry_point: Some("cyberpunk_glitch.py".to_string()),
-    }))?;
-    println!("✓ Python cyberpunk glitch processor added: {}\n", glitch);
+    let watermark =
+        runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
+            project_path: project_path.clone(),
+            class_name: "CyberpunkWatermark".to_string(),
+            entry_point: Some("cyberpunk_watermark.py".to_string()),
+        }))?;
+    println!(
+        "✓ Python cyberpunk watermark processor added: {}\n",
+        watermark
+    );
+
+    // =========================================================================
+    // Add Python Cyberpunk Glitch processor (post-processing) - TEMPORARILY DISABLED
+    // =========================================================================
+
+    // println!("🐍 Adding Python cyberpunk glitch processor (RGB separation, scanlines)...");
+    //
+    // let glitch = runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
+    //     project_path,
+    //     class_name: "CyberpunkGlitch".to_string(),
+    //     entry_point: Some("cyberpunk_glitch.py".to_string()),
+    // }))?;
+    // println!("✓ Python cyberpunk glitch processor added: {}\n", glitch);
+    let _ = project_path; // suppress unused warning
 
     // =========================================================================
     // Add Display processor
@@ -122,7 +143,7 @@ fn main() -> Result<()> {
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: 1920,
         height: 1080,
-        title: Some("Camera → Cyberpunk → Lower Third → Glitch → Display".to_string()),
+        title: Some("Camera → Compositor → Lower Third → Watermark → Display".to_string()),
         scaling_mode: Default::default(),
     }))?;
     println!("✓ Display added: {}\n", display);
@@ -140,38 +161,39 @@ fn main() -> Result<()> {
     println!("   Registry: http://127.0.0.1:9000/registry\n");
 
     // =========================================================================
-    // Connect the pipeline: Camera → Cyberpunk → Lower Third → Glitch → Display
+    // Connect the pipeline: Camera → Compositor → Lower Third → Watermark → Display
+    // (Glitch processor temporarily disabled)
     // =========================================================================
 
     println!("🔗 Connecting pipeline...");
 
-    // Camera video → Cyberpunk video_in
+    // Camera video → Compositor video_in
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
         InputLinkPortRef::new(&cyberpunk, "video_in"),
     )?;
-    println!("   ✓ Camera → Cyberpunk");
+    println!("   ✓ Camera → Compositor");
 
-    // Cyberpunk video_out → Lower Third video_in
+    // Compositor video_out → Lower Third video_in
     runtime.connect(
         OutputLinkPortRef::new(&cyberpunk, "video_out"),
         InputLinkPortRef::new(&lower_third, "video_in"),
     )?;
-    println!("   ✓ Cyberpunk → Lower Third");
+    println!("   ✓ Compositor → Lower Third");
 
-    // Lower Third video_out → Glitch video_in
+    // Lower Third video_out → Watermark video_in
     runtime.connect(
         OutputLinkPortRef::new(&lower_third, "video_out"),
-        InputLinkPortRef::new(&glitch, "video_in"),
+        InputLinkPortRef::new(&watermark, "video_in"),
     )?;
-    println!("   ✓ Lower Third → Glitch");
+    println!("   ✓ Lower Third → Watermark");
 
-    // Glitch video_out → Display video
+    // Watermark video_out → Display video
     runtime.connect(
-        OutputLinkPortRef::new(&glitch, "video_out"),
+        OutputLinkPortRef::new(&watermark, "video_out"),
         InputLinkPortRef::new(&display, "video"),
     )?;
-    println!("   ✓ Glitch → Display");
+    println!("   ✓ Watermark → Display");
     println!();
 
     // =========================================================================

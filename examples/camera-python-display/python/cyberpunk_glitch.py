@@ -123,7 +123,7 @@ void main() {
 }
 """
 
-# Simple passthrough with subtle scanlines
+# True passthrough - no effects when not glitching
 PASSTHROUGH_FRAGMENT_SHADER = """
 #version 150 core
 
@@ -133,11 +133,7 @@ out vec4 fragColor;
 uniform sampler2DRect inputTexture;
 
 void main() {
-    vec4 color = texture(inputTexture, texCoord);
-    // Subtle scanlines
-    float scanline = sin(texCoord.y * 3.14159) * 0.5 + 0.5;
-    color.rgb *= 0.95 + 0.05 * scanline;
-    fragColor = color;
+    fragColor = texture(inputTexture, texCoord);
 }
 """
 
@@ -327,6 +323,10 @@ class CyberpunkGlitch:
         input_texture = frame["texture"]
         elapsed = ctx.time.elapsed_secs
 
+        # Log IOSurface IDs for texture flow debugging
+        input_iosurface_id = getattr(input_texture, 'iosurface_id', None)
+        logger.info(f"CyberpunkGlitch: INPUT IOSurface ID={input_iosurface_id}")
+
         # Update glitch state
         glitch_active = self.glitch_state.update(elapsed)
 
@@ -384,6 +384,10 @@ class CyberpunkGlitch:
 
         # Flush GL commands
         self.gl_ctx.flush()
+
+        # Log output IOSurface ID for texture flow debugging
+        output_iosurface_id = output_tex.iosurface_id
+        logger.info(f"CyberpunkGlitch: OUTPUT IOSurface ID={output_iosurface_id} (input was {input_iosurface_id})")
 
         # Output
         ctx.output("video_out").set({

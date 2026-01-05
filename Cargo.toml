@@ -53,6 +53,7 @@ objc2-app-kit = "0.3.2"
 objc2-quartz-core = "0.3.2"
 objc2-core-text = "0.3.2"
 objc2-core-graphics = "0.3.2"
+objc2-vision = "0.3.2"
 libc = "0.2.177"
 
 # Shader compilation

@@ -244,6 +244,12 @@ impl StreamTexture {
         self.inner.as_metal_texture()
     }
 
+    /// Get the underlying IOSurface if this texture is IOSurface-backed (macOS only).
+    #[cfg(target_os = "macos")]
+    pub fn as_iosurface(&self) -> Option<&objc2_io_surface::IOSurface> {
+        self.inner.iosurface()
+    }
+
     /// Create from a Metal texture (macOS only).
     #[cfg(target_os = "macos")]
     pub fn from_metal(texture: crate::apple::rhi::MetalTexture) -> Self {

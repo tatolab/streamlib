@@ -15,4 +15,15 @@ streamlib-python = { path = "../../libs/streamlib-python" }
 tracing = { workspace = true }
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Vision framework for person segmentation (macOS only)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-vision = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-video = { workspace = true }
+objc2-io-surface = { workspace = true }
+objc2-metal = { workspace = true }
+metal = "0.31"

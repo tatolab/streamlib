@@ -300,6 +300,10 @@ class CyberpunkLowerThird:
         height = frame["height"]
         input_texture = frame["texture"]
 
+        # Log input IOSurface ID for texture flow debugging
+        input_iosurface_id = getattr(input_texture, 'iosurface_id', None)
+        logger.info(f"CyberpunkLowerThird: INPUT IOSurface ID={input_iosurface_id}")
+
         # Acquire output surface
         output_tex = ctx.gpu.acquire_surface(width, height)
 
@@ -347,6 +351,10 @@ class CyberpunkLowerThird:
         # Flush
         output_surface.flushAndSubmit()
         self.gl_ctx.flush()
+
+        # Log output IOSurface ID for texture flow debugging
+        output_iosurface_id = output_tex.iosurface_id
+        logger.info(f"CyberpunkLowerThird: OUTPUT IOSurface ID={output_iosurface_id} (input was {input_iosurface_id})")
 
         # Output
         ctx.output("video_out").set({
