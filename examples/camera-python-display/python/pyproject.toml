@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 # Note: streamlib-python is automatically injected by the Rust host
 dependencies = [
     "skia-python>=87.0",
+    "PyOpenGL>=3.1.0",
 ]
 
 [build-system]

@@ -25,31 +25,21 @@ GL_RGBA8 = 0x8058
 
 
 # =============================================================================
-# Cyberpunk Color Grading
+# Cyberpunk Color Grading - Subtle game-style color pop
 # =============================================================================
 
 def create_cyberpunk_color_matrix():
-    """Create a color matrix for cyberpunk aesthetic.
+    """Create a subtle color matrix for Cyberpunk 2077 style.
 
-    Shifts shadows toward teal/cyan, highlights toward magenta/pink,
-    boosts saturation, and crushes blacks slightly.
+    Lightly boosts reds, yellows, and purples while keeping the image natural.
+    No bloom or overexposure - just subtle color enhancement.
     """
     # Color matrix format: [R, G, B, A, translate] for each row
-    # Row 1: Red output = f(R, G, B, A) + translate
-    # Row 2: Green output
-    # Row 3: Blue output
-    # Row 4: Alpha output
-
-    # Cyberpunk color grading matrix
-    # - Teal in shadows (boost blue/green in darks)
-    # - Magenta in highlights (boost red/blue in lights)
-    # - Crushed blacks (reduce overall in dark regions)
-    # - Boosted contrast
-
+    # Very light adjustments - the game uses subtle color grading
     return [
-        1.1,  0.0,  0.15, 0, -0.05,  # Red: boost red, add blue tint
-        -0.05, 0.95, 0.1,  0, 0.02,   # Green: reduce slightly, add cyan
-        0.1,  0.15, 1.2,  0, 0.0,    # Blue: boost significantly for neon
+        1.08, 0.02, 0.03, 0, 0.0,    # Red: slight boost, tiny warmth
+        0.0,  1.0,  0.0,  0, 0.0,    # Green: unchanged (preserves skin)
+        0.03, 0.02, 1.06, 0, 0.0,    # Blue: slight boost for purple tones
         0,    0,    0,    1, 0,      # Alpha: unchanged
     ]
 
@@ -219,11 +209,10 @@ class CyberpunkProcessor:
         # Cache for Skia surfaces (keyed by dimensions)
         self._surface_cache = {}
 
-        # Color filter for cyberpunk grading
-        self.color_matrix = create_cyberpunk_color_matrix()
-        self.color_filter = skia.ColorFilters.Matrix(self.color_matrix)
+        # Simple color filter - subtle enhancement of reds, yellows, purples
+        self.color_filter = skia.ColorFilters.Matrix(create_cyberpunk_color_matrix())
 
-        logger.info("Cyberpunk processor initialized with Skia GL context")
+        logger.info("Cyberpunk processor initialized with subtle color grading")
 
     def _get_or_create_surface(self, width, height, gl_tex_id, gl_target):
         """Get cached Skia surface or create new one."""
@@ -267,7 +256,7 @@ class CyberpunkProcessor:
         return surface
 
     def process(self, ctx):
-        """Apply cyberpunk effect and watermark to each frame."""
+        """Apply subtle cyberpunk color grading and watermark to each frame."""
         frame = ctx.input("video_in").get()
         if frame is None:
             return
@@ -289,7 +278,6 @@ class CyberpunkProcessor:
         canvas = output_surface.getCanvas()
 
         # Create input image from input texture
-        # Note: Skia images are lightweight wrappers, creation is cheap
         input_gl_info = skia.GrGLTextureInfo(gl_target, input_gl_id, GL_RGBA8)
         input_backend = skia.GrBackendTexture(width, height, skia.GrMipmapped.kNo, input_gl_info)
         input_image = skia.Image.MakeFromTexture(
@@ -306,7 +294,8 @@ class CyberpunkProcessor:
             ctx.output("video_out").set(frame)
             return
 
-        # === DRAW INPUT WITH COLOR GRADING ===
+        # === Draw input with subtle color grading ===
+        # Light boost to reds, yellows, purples - keeps image natural
         paint = skia.Paint(
             ColorFilter=self.color_filter,
         )

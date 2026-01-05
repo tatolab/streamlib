@@ -3,13 +3,15 @@
 
 //! Camera → Python Cyberpunk → Display Pipeline Example
 //!
-//! Demonstrates a full video processing pipeline with a Python-defined
-//! processor using Skia for GPU-accelerated 2D drawing. Features:
+//! Demonstrates a full video processing pipeline with Python-defined
+//! processors using Skia for GPU-accelerated 2D drawing. Features:
 //! - Cyberpunk color grading (teal shadows, magenta highlights)
 //! - Spray paint style watermark with drips and neon glow
+//! - Cyberpunk 2077 style lower third overlay with slide-in animation
+//! - Full-screen glitch effect (RGB separation, scanlines, slice displacement)
 //! - Zero-copy GPU texture sharing via IOSurface ↔ OpenGL
 //!
-//! Pipeline: Camera → CyberpunkProcessor (Python/Skia) → Display
+//! Pipeline: Camera → CyberpunkProcessor → CyberpunkLowerThird → CyberpunkGlitch → Display
 //!
 //! ## Prerequisites
 //!
@@ -67,21 +69,50 @@ fn main() -> Result<()> {
     println!("✓ Camera added: {}\n", camera);
 
     // =========================================================================
-    // Add Python Cyberpunk processor
+    // Add Python Cyberpunk processor (color grading + watermark)
     // =========================================================================
 
-    println!("🐍 Adding Python cyberpunk processor (Skia GPU rendering)...");
+    println!("🐍 Adding Python cyberpunk processor (color grading + watermark)...");
 
-    // Path to the Python project (contains pyproject.toml and cyberpunk_processor.py)
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
     let cyberpunk =
         runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
-            project_path,
+            project_path: project_path.clone(),
             class_name: "CyberpunkProcessor".to_string(),
             entry_point: Some("cyberpunk_processor.py".to_string()),
         }))?;
     println!("✓ Python cyberpunk processor added: {}\n", cyberpunk);
+
+    // =========================================================================
+    // Add Python Cyberpunk Lower Third processor
+    // =========================================================================
+
+    println!("🐍 Adding Python cyberpunk lower third processor (slide-in overlay)...");
+
+    let lower_third =
+        runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
+            project_path: project_path.clone(),
+            class_name: "CyberpunkLowerThird".to_string(),
+            entry_point: Some("cyberpunk_lower_third.py".to_string()),
+        }))?;
+    println!(
+        "✓ Python cyberpunk lower third processor added: {}\n",
+        lower_third
+    );
+
+    // =========================================================================
+    // Add Python Cyberpunk Glitch processor (post-processing)
+    // =========================================================================
+
+    println!("🐍 Adding Python cyberpunk glitch processor (RGB separation, scanlines)...");
+
+    let glitch = runtime.add_processor(PythonHostProcessor::node(PythonHostProcessorConfig {
+        project_path,
+        class_name: "CyberpunkGlitch".to_string(),
+        entry_point: Some("cyberpunk_glitch.py".to_string()),
+    }))?;
+    println!("✓ Python cyberpunk glitch processor added: {}\n", glitch);
 
     // =========================================================================
     // Add Display processor
@@ -91,7 +122,7 @@ fn main() -> Result<()> {
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: 1920,
         height: 1080,
-        title: Some("Camera → Python Cyberpunk → Display".to_string()),
+        title: Some("Camera → Cyberpunk → Lower Third → Glitch → Display".to_string()),
         scaling_mode: Default::default(),
     }))?;
     println!("✓ Display added: {}\n", display);
@@ -109,7 +140,7 @@ fn main() -> Result<()> {
     println!("   Registry: http://127.0.0.1:9000/registry\n");
 
     // =========================================================================
-    // Connect the pipeline: Camera → Cyberpunk → Display
+    // Connect the pipeline: Camera → Cyberpunk → Lower Third → Glitch → Display
     // =========================================================================
 
     println!("🔗 Connecting pipeline...");
@@ -121,12 +152,26 @@ fn main() -> Result<()> {
     )?;
     println!("   ✓ Camera → Cyberpunk");
 
-    // Cyberpunk video_out → Display video
+    // Cyberpunk video_out → Lower Third video_in
     runtime.connect(
         OutputLinkPortRef::new(&cyberpunk, "video_out"),
+        InputLinkPortRef::new(&lower_third, "video_in"),
+    )?;
+    println!("   ✓ Cyberpunk → Lower Third");
+
+    // Lower Third video_out → Glitch video_in
+    runtime.connect(
+        OutputLinkPortRef::new(&lower_third, "video_out"),
+        InputLinkPortRef::new(&glitch, "video_in"),
+    )?;
+    println!("   ✓ Lower Third → Glitch");
+
+    // Glitch video_out → Display video
+    runtime.connect(
+        OutputLinkPortRef::new(&glitch, "video_out"),
         InputLinkPortRef::new(&display, "video"),
     )?;
-    println!("   ✓ Cyberpunk → Display");
+    println!("   ✓ Glitch → Display");
     println!();
 
     // =========================================================================
