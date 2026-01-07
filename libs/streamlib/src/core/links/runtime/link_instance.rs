@@ -8,8 +8,9 @@
 
 use std::any::Any;
 use std::sync::Arc;
+use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -25,6 +26,10 @@ pub struct LinkInstanceInner<T: LinkPortMessage> {
     cached_size: AtomicUsize,
     link_id: LinkUniqueId,
     read_mode: LinkBufferReadMode,
+    /// Condvar for wait_read() - signaled when data is pushed.
+    data_available_condvar: Condvar,
+    /// Mutex for the condvar (parking_lot requires separate mutex).
+    data_available_mutex: Mutex<()>,
 }
 
 impl<T: LinkPortMessage> LinkInstanceInner<T> {
@@ -36,6 +41,8 @@ impl<T: LinkPortMessage> LinkInstanceInner<T> {
             cached_size: AtomicUsize::new(0),
             link_id: LinkUniqueId::new(),
             read_mode: T::link_read_behavior(),
+            data_available_condvar: Condvar::new(),
+            data_available_mutex: Mutex::new(()),
         }
     }
 
@@ -48,7 +55,7 @@ impl<T: LinkPortMessage> LinkInstanceInner<T> {
     /// Returns `true` if no frame was dropped, `false` if an old frame was evicted.
     pub fn push(&self, value: T) -> bool {
         let mut producer = self.producer.lock();
-        match producer.push(value) {
+        let result = match producer.push(value) {
             Ok(()) => {
                 self.cached_size.fetch_add(1, Ordering::Relaxed);
                 true
@@ -88,7 +95,12 @@ impl<T: LinkPortMessage> LinkInstanceInner<T> {
                 }
                 false // Indicate a frame was dropped
             }
-        }
+        };
+
+        // Wake up any threads waiting in wait_read()
+        self.data_available_condvar.notify_one();
+
+        result
     }
 
     /// Read using the frame type's link read behavior.
@@ -118,6 +130,34 @@ impl<T: LinkPortMessage> LinkInstanceInner<T> {
             latest = Some(value);
         }
         latest
+    }
+
+    /// Blocking read with timeout.
+    ///
+    /// First attempts a non-blocking read. If no data is available, waits up to
+    /// `timeout` for data to arrive. Returns `None` if timeout expires without data.
+    ///
+    /// Use at sync points (e.g., display processors) where waiting for the next
+    /// frame is preferable to busy-polling or sleeping. Most realtime processors
+    /// should use non-blocking `read()` instead.
+    pub fn wait_read(&self, timeout: Duration) -> Option<T> {
+        // Fast path: data already available
+        if let Some(value) = self.read() {
+            return Some(value);
+        }
+
+        // Slow path: wait for data
+        let mut guard = self.data_available_mutex.lock();
+        let wait_result = self.data_available_condvar.wait_for(&mut guard, timeout);
+
+        // Try to read regardless of timeout (data may have arrived)
+        drop(guard);
+        if wait_result.timed_out() {
+            // Still try one more read - data could have arrived just before timeout
+            self.read()
+        } else {
+            self.read()
+        }
     }
 
     #[inline]

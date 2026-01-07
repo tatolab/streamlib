@@ -389,6 +389,7 @@ class CyberpunkGlitch:
         self.output_buffer = None
         self._current_width = 0
         self._current_height = 0
+        self._fbo_validated = False  # Only validate FBO on resize, not every frame
 
         self.gl_initialized = True
         logger.info("Cyberpunk Glitch: OpenGL resources initialized")
@@ -437,6 +438,7 @@ class CyberpunkGlitch:
             self.output_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, format_str)
             self._current_width = width
             self._current_height = height
+            self._fbo_validated = False  # Re-validate FBO on resize
 
         # Update output binding (fast rebind, no new GL texture)
         self.output_binding.update(self.output_buffer)
@@ -446,12 +448,14 @@ class CyberpunkGlitch:
         glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, gl_target, output_gl_id, 0)
 
-        # Check FBO status
-        status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
-        if status != GL_FRAMEBUFFER_COMPLETE:
-            logger.warning(f"Framebuffer incomplete: {status}")
-            ctx.output("video_out").set(frame)
-            return
+        # Check FBO status only on first use or after resize (expensive GPU query)
+        if not self._fbo_validated:
+            status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
+            if status != GL_FRAMEBUFFER_COMPLETE:
+                logger.warning(f"Framebuffer incomplete: {status}")
+                ctx.output("video_out").set(frame)
+                return
+            self._fbo_validated = True
 
         # Set viewport
         glViewport(0, 0, width, height)

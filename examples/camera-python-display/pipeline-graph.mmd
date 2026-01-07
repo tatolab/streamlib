@@ -1,0 +1,47 @@
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#fcee0a', 'primaryTextColor': '#000', 'primaryBorderColor': '#00f0ff', 'lineColor': '#00f0ff', 'secondaryColor': '#ff1e3c', 'tertiaryColor': '#1a1a2e'}}}%%
+
+flowchart TD
+    subgraph Sources["📹 Sources"]
+        Camera["📷 CameraProcessor"]
+        LowerThird["🐍 CyberpunkLowerThird<br/><i>Python Generator</i>"]
+        Watermark["🐍 CyberpunkWatermark<br/><i>Python Generator</i>"]
+    end
+
+    subgraph Processing["⚡ Video Processing"]
+        Cyberpunk["🦀 CyberpunkCompositor<br/><i>Vision Segmentation</i>"]
+        Blending["🎨 BlendingCompositor<br/><i>Layer Blending</i>"]
+        CRT["📺 CrtFilmGrain<br/><i>80s Film Effect</i>"]
+        Glitch["🐍 CyberpunkGlitch<br/><i>RGB Separation</i>"]
+    end
+
+    subgraph Output["🖥️ Output"]
+        Display["🖥️ DisplayProcessor<br/><i>1920x1080</i>"]
+    end
+
+    subgraph Utility["🔧 Utility"]
+        API["🌐 ApiServerProcessor<br/><i>:9000</i>"]
+    end
+
+    %% Main video pipeline
+    Camera -->|video| Cyberpunk
+    Cyberpunk -->|video_out| Blending
+
+    %% Parallel overlay inputs
+    LowerThird -->|video_out| Blending
+    Watermark -->|video_out| Blending
+
+    %% Post-processing chain
+    Blending -->|video_out| CRT
+    CRT -->|video_out| Glitch
+    Glitch -->|video_out| Display
+
+    %% Styling
+    classDef rust fill:#f97316,stroke:#fdba74,color:#000
+    classDef python fill:#3b82f6,stroke:#93c5fd,color:#fff
+    classDef output fill:#22c55e,stroke:#86efac,color:#000
+    classDef utility fill:#8b5cf6,stroke:#c4b5fd,color:#fff
+
+    class Camera,Cyberpunk,Blending,CRT rust
+    class LowerThird,Watermark,Glitch python
+    class Display output
+    class API utility

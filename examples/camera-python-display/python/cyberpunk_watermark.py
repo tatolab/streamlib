@@ -12,6 +12,7 @@ Features:
 - Runs at 60fps (16ms interval) continuous mode
 - Zero-copy GPU texture binding (stable GL texture IDs)
 - Outputs transparent RGBA (alpha=0 background for layer compositing)
+- Static elements cached as Skia Picture (drawn once, replayed each frame)
 """
 
 import logging
@@ -32,17 +33,26 @@ DEFAULT_HEIGHT = 1080
 
 
 # =============================================================================
-# Spray Paint Tag Drawing
+# Spray Paint Tag Drawing - Static Elements (cached as Picture)
 # =============================================================================
 
-def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
-    """Draw a spray paint style tag with drips and glow.
+def record_static_watermark(width, height, scale):
+    """Record static watermark elements to a Skia Picture.
 
-    Creates a cyberpunk-inspired watermark that looks like street art.
+    Static elements: glow, main stroke, highlight accent.
+    These are drawn once and replayed each frame.
     """
-    # Colors: neon cyan and magenta
+    # Calculate position (lower-right corner)
+    tag_x = width - 100 * scale
+    tag_y = height - 80 * scale
+
+    # Record to picture
+    recorder = skia.PictureRecorder()
+    bounds = skia.Rect.MakeWH(width, height)
+    canvas = recorder.beginRecording(bounds)
+
+    # Colors
     cyan = skia.Color(0, 255, 255, 255)
-    magenta = skia.Color(255, 0, 255, 255)
 
     # === GLOW LAYER (underneath) ===
     glow_paint = skia.Paint(
@@ -51,9 +61,8 @@ def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
         MaskFilter=skia.MaskFilter.MakeBlur(skia.BlurStyle.kNormal_BlurStyle, 15 * scale),
     )
 
-    # Draw glow for the main symbol
     canvas.save()
-    canvas.translate(x, y)
+    canvas.translate(tag_x, tag_y)
     canvas.scale(scale, scale)
 
     # Main symbol: stylized "CL" in a circuit-like design
@@ -91,8 +100,41 @@ def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
     )
     canvas.drawPath(symbol_path, stroke_paint)
 
-    # === DRIP EFFECTS ===
-    # Animated drips from the bottom of letters
+    # === HIGHLIGHT ACCENT ===
+    highlight_paint = skia.Paint(
+        Color=skia.Color(255, 255, 255, 200),
+        AntiAlias=True,
+        Style=skia.Paint.kStroke_Style,
+        StrokeWidth=1.5,
+    )
+    highlight_path = skia.Path()
+    highlight_path.moveTo(15, 15)
+    highlight_path.lineTo(12, 20)
+    canvas.drawPath(highlight_path, highlight_paint)
+
+    canvas.restore()
+
+    return recorder.finishRecordingAsPicture()
+
+
+def draw_animated_watermark(canvas, width, height, scale, time_offset):
+    """Draw only the animated watermark elements.
+
+    Animated elements: drips (length varies), splatter dots (alpha varies).
+    """
+    # Calculate position (lower-right corner)
+    tag_x = width - 100 * scale
+    tag_y = height - 80 * scale
+
+    # Colors
+    cyan = skia.Color(0, 255, 255, 255)
+    magenta = skia.Color(255, 0, 255, 255)
+
+    canvas.save()
+    canvas.translate(tag_x, tag_y)
+    canvas.scale(scale, scale)
+
+    # === DRIP EFFECTS (animated) ===
     drip_paint = skia.Paint(
         Color=cyan,
         AntiAlias=True,
@@ -122,13 +164,12 @@ def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
     drip3.lineTo(75, 50 + drip3_length)
     canvas.drawPath(drip3, drip_paint)
 
-    # === ACCENT DOTS (spray paint splatter) ===
+    # === ACCENT DOTS (animated alpha) ===
     splatter_paint = skia.Paint(
         Color=magenta,
         AntiAlias=True,
     )
 
-    # Small dots around the tag
     dots = [
         (5, 25, 2),
         (85, 15, 2.5),
@@ -139,19 +180,6 @@ def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
     for dx, dy, r in dots:
         splatter_paint.setAlpha(int(150 + 50 * math.sin(time_offset * 4 + dx)))
         canvas.drawCircle(dx, dy, r, splatter_paint)
-
-    # === HIGHLIGHT ACCENT ===
-    # Small white highlight on the C
-    highlight_paint = skia.Paint(
-        Color=skia.Color(255, 255, 255, 200),
-        AntiAlias=True,
-        Style=skia.Paint.kStroke_Style,
-        StrokeWidth=1.5,
-    )
-    highlight_path = skia.Path()
-    highlight_path.moveTo(15, 15)
-    highlight_path.lineTo(12, 20)
-    canvas.drawPath(highlight_path, highlight_paint)
 
     canvas.restore()
 
@@ -177,6 +205,7 @@ class CyberpunkWatermark:
     - Magenta splatter accents
     - Zero-copy GPU rendering via Skia + IOSurface
     - Transparent background (alpha=0) for layer compositing
+    - Static elements cached as Skia Picture (glow, stroke, highlight)
     """
 
     @output(schema="VideoFrame")
@@ -233,7 +262,18 @@ class CyberpunkWatermark:
         if self.output_skia_surface is None:
             raise RuntimeError("Failed to create Skia surface from pixel buffer")
 
-        logger.info(f"Cyberpunk Watermark initialized as GENERATOR ({self.width}x{self.height})")
+        # Cache scale for animation drawing
+        self.tag_scale = min(self.width, self.height) / 800.0
+
+        # Record static elements to Picture (drawn once, replayed each frame)
+        self.static_picture = record_static_watermark(
+            self.width, self.height, self.tag_scale
+        )
+
+        logger.info(
+            f"Cyberpunk Watermark initialized as GENERATOR ({self.width}x{self.height}, "
+            f"static picture cached)"
+        )
 
     def process(self, ctx):
         """Generate watermark overlay frame with transparent background."""
@@ -246,12 +286,12 @@ class CyberpunkWatermark:
         # Clear to fully transparent (alpha=0) for layer compositing
         canvas.clear(skia.Color(0, 0, 0, 0))
 
-        # Draw watermark in lower-right corner
+        # Draw static elements from cached picture (fast replay)
+        canvas.drawPicture(self.static_picture)
+
+        # Draw animated elements (drips, splatter dots)
         elapsed = ctx.time.elapsed_secs
-        tag_scale = min(self.width, self.height) / 800.0
-        tag_x = self.width - 100 * tag_scale
-        tag_y = self.height - 80 * tag_scale
-        draw_spray_paint_tag(canvas, tag_x, tag_y, tag_scale, elapsed)
+        draw_animated_watermark(canvas, self.width, self.height, self.tag_scale, elapsed)
 
         # Flush Skia and GL
         self.output_skia_surface.flushAndSubmit()
@@ -270,14 +310,16 @@ class CyberpunkWatermark:
 
         if self.frame_count == 1:
             logger.info(f"Watermark: First frame generated ({self.width}x{self.height})")
-        if self.frame_count % 60 == 0:
+        if self.frame_count % 300 == 0:
             # Purge unlocked GPU resources to prevent Skia memory accumulation
+            # Every 300 frames (~5 seconds at 60fps) to avoid micro-stutters
             self.skia_ctx.freeGpuResources()
         if self.frame_count % 300 == 0:
             logger.debug(f"Watermark: generated {self.frame_count} frames")
 
     def teardown(self, ctx):
         """Cleanup."""
+        self.static_picture = None  # Release picture before context
         if self.skia_ctx:
             self.skia_ctx.abandonContext()
         logger.info(f"Cyberpunk Watermark shutdown ({self.frame_count} frames)")

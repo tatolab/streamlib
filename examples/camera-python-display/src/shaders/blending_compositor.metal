@@ -33,6 +33,14 @@ vertex VertexOut blending_vertex(uint vertexID [[vertex_id]]) {
     return out;
 }
 
+// Uniform buffer for layer availability flags
+struct BlendingUniforms {
+    uint hasVideo;
+    uint hasLowerThird;
+    uint hasWatermark;
+    uint _padding;
+};
+
 // Porter-Duff "over" alpha compositing for premultiplied alpha textures
 // Layer order: video (base) -> lower_third -> watermark (top)
 //
@@ -46,24 +54,22 @@ fragment float4 blending_fragment(
     texture2d<float> lowerThirdTexture [[texture(1)]],
     texture2d<float> watermarkTexture [[texture(2)]],
     sampler textureSampler [[sampler(0)]],
-    constant uint &hasVideo [[buffer(0)]],
-    constant uint &hasLowerThird [[buffer(1)]],
-    constant uint &hasWatermark [[buffer(2)]]
+    constant BlendingUniforms &uniforms [[buffer(0)]]
 ) {
     float2 uv = in.texCoord;
 
     // Base layer: video (or black if not yet available)
-    float4 result = hasVideo ? videoTexture.sample(textureSampler, uv) : float4(0.0, 0.0, 0.0, 1.0);
+    float4 result = uniforms.hasVideo ? videoTexture.sample(textureSampler, uv) : float4(0.0, 0.0, 0.0, 1.0);
 
     // Middle layer: lower third (premultiplied alpha blend)
-    if (hasLowerThird) {
+    if (uniforms.hasLowerThird) {
         float4 src = lowerThirdTexture.sample(textureSampler, uv);
         result.rgb = src.rgb + result.rgb * (1.0 - src.a);
         result.a = src.a + result.a * (1.0 - src.a);
     }
 
     // Top layer: watermark (premultiplied alpha blend)
-    if (hasWatermark) {
+    if (uniforms.hasWatermark) {
         float4 src = watermarkTexture.sample(textureSampler, uv);
         result.rgb = src.rgb + result.rgb * (1.0 - src.a);
         result.a = src.a + result.a * (1.0 - src.a);

@@ -142,7 +142,10 @@ pub struct CyberpunkCompositorProcessor {
     render_pipeline: Option<metal::RenderPipelineState>,
     render_pass_desc: Option<metal::RenderPassDescriptor>,
     sampler: Option<metal::SamplerState>,
-    uniforms_buffer: Option<metal::Buffer>,
+    /// Ring buffer of uniform buffers to avoid CPU-GPU sync hazards.
+    /// We rotate through these so the GPU is never reading a buffer the CPU is writing.
+    uniforms_buffers: [Option<metal::Buffer>; 3],
+    uniforms_index: usize,
     default_mask_texture: Option<metal::Texture>,
     current_mask_texture: Option<metal::Texture>,
     current_mask_dimensions: Option<(u64, u64)>,
@@ -161,8 +164,11 @@ pub struct CyberpunkCompositorProcessor {
 
     // RHI resources
     texture_cache: Option<RhiTextureCache>,
-    output_pool: Option<RhiPixelBufferPool>,
-    output_pool_dimensions: Option<(u32, u32)>,
+    /// Ring buffer of output pixel buffers to avoid CPU-GPU sync.
+    /// We rotate through these so the GPU is never reading a buffer we're writing to.
+    output_buffers: [Option<streamlib::core::rhi::RhiPixelBuffer>; 3],
+    output_index: usize,
+    output_dimensions: Option<(u32, u32)>,
 }
 
 /// Run Vision segmentation using a reusable request (for temporal smoothing).
@@ -326,11 +332,22 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
             sampler_desc.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
             let sampler = metal_device_ref.new_sampler(&sampler_desc);
 
-            // Uniforms buffer
-            let uniforms_buffer = metal_device_ref.new_buffer(
-                std::mem::size_of::<CompositorUniforms>() as u64,
-                metal::MTLResourceOptions::CPUCacheModeDefaultCache,
-            );
+            // Uniforms ring buffer (3 buffers to avoid CPU-GPU sync hazards)
+            let uniforms_size = std::mem::size_of::<CompositorUniforms>() as u64;
+            let uniforms_buffers = [
+                Some(metal_device_ref.new_buffer(
+                    uniforms_size,
+                    metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+                )),
+                Some(metal_device_ref.new_buffer(
+                    uniforms_size,
+                    metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+                )),
+                Some(metal_device_ref.new_buffer(
+                    uniforms_size,
+                    metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+                )),
+            ];
 
             // Create render pass descriptor (reused each frame, only texture attachment updated)
             let render_pass_desc_ref = metal::RenderPassDescriptor::new();
@@ -347,7 +364,8 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
             self.blur_h_pipeline = Some(blur_h_pipeline);
             self.blur_v_pipeline = Some(blur_v_pipeline);
             self.sampler = Some(sampler);
-            self.uniforms_buffer = Some(uniforms_buffer);
+            self.uniforms_buffers = uniforms_buffers;
+            self.uniforms_index = 0;
             self.default_mask_texture = Some(default_mask);
 
             // Spawn segmentation thread with REUSED request (stateful for temporal smoothing)
@@ -548,19 +566,36 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
             }
         }
 
-        // Acquire output buffer
-        if self.output_pool.is_none() || self.output_pool_dimensions != Some((width, height)) {
+        // Acquire output buffer from ring (avoids CPU-GPU sync)
+        // Recreate all 3 buffers if dimensions changed
+        if self.output_dimensions != Some((width, height)) {
             let output_desc = PixelBufferDescriptor::new(width, height, PixelFormat::Bgra32);
-            self.output_pool = Some(RhiPixelBufferPool::new_with_descriptor(&output_desc)?);
-            self.output_pool_dimensions = Some((width, height));
+            let pool = RhiPixelBufferPool::new_with_descriptor(&output_desc)?;
+            self.output_buffers = [
+                Some(pool.acquire()?),
+                Some(pool.acquire()?),
+                Some(pool.acquire()?),
+            ];
+            self.output_dimensions = Some((width, height));
+            self.output_index = 0;
         }
-        let output_buffer = self.output_pool.as_ref().unwrap().acquire()?;
+
+        // Rotate to next output buffer (safe - GPU finished with this buffer 2 frames ago)
+        self.output_index = (self.output_index + 1) % 3;
+        let output_buffer = self.output_buffers[self.output_index]
+            .as_ref()
+            .unwrap()
+            .clone();
         let output_view = texture_cache.create_view(&output_buffer)?;
         let output_metal = output_view.as_metal_texture();
 
-        // Update uniforms
+        // Rotate to next uniform buffer (ring buffer pattern)
+        self.uniforms_index = (self.uniforms_index + 1) % 3;
+        let current_uniforms = self.uniforms_buffers[self.uniforms_index].as_ref().unwrap();
+
+        // Update uniforms in current buffer (safe - GPU finished with this buffer 2 frames ago)
         unsafe {
-            let ptr = self.uniforms_buffer.as_ref().unwrap().contents() as *mut CompositorUniforms;
+            let ptr = current_uniforms.contents() as *mut CompositorUniforms;
             (*ptr).time = elapsed;
             (*ptr).mask_threshold = self.config.mask_threshold;
             (*ptr).edge_feather = self.config.edge_feather;
@@ -586,12 +621,12 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
             .unwrap_or_else(|| self.default_mask_texture.as_ref().unwrap());
         render_enc.set_fragment_texture(1, Some(mask_ref));
         render_enc.set_fragment_sampler_state(0, Some(self.sampler.as_ref().unwrap()));
-        render_enc.set_fragment_buffer(0, Some(self.uniforms_buffer.as_ref().unwrap()), 0);
+        render_enc.set_fragment_buffer(0, Some(current_uniforms), 0);
         render_enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
         render_enc.end_encoding();
 
         command_buffer.commit();
-        command_buffer.wait_until_completed();
+        // No wait_until_completed() needed - ring buffer guarantees GPU is done with output_buffer
 
         // Output frame
         let output_frame = VideoFrame::from_buffer(output_buffer, timestamp_ns, frame_number);

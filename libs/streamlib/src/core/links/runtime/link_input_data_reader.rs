@@ -4,6 +4,7 @@
 //! LinkInputDataReader - Weak reference for reading from a LinkInstance.
 
 use std::sync::Weak;
+use std::time::Duration;
 
 use super::link_instance::LinkInstanceInner;
 use crate::core::graph::LinkUniqueId;
@@ -29,6 +30,15 @@ impl<T: LinkPortMessage> LinkInputDataReader<T> {
     /// - No data available
     pub fn read(&self) -> Option<T> {
         self.inner.upgrade().and_then(|inner| inner.read())
+    }
+
+    /// Blocking read with timeout.
+    ///
+    /// Returns `None` if LinkInstance was dropped or timeout expires.
+    pub fn wait_read(&self, timeout: Duration) -> Option<T> {
+        self.inner
+            .upgrade()
+            .and_then(|inner| inner.wait_read(timeout))
     }
 
     /// Check if the LinkInstance is still alive.

@@ -8,11 +8,12 @@
 //! - Python lower third overlay (continuous RGBA generator)
 //! - Python watermark overlay (continuous RGBA generator)
 //! - Rust blending compositor (alpha blends all layers)
+//! - Rust CRT + Film Grain effect (80s Blade Runner look)
 //! - Python glitch effect (RGB separation, scanlines, slice displacement)
 //!
 //! Pipeline Architecture:
 //! ```
-//!   Camera ──→ Cyberpunk ──→ BlendingCompositor ──→ Glitch ──→ Display
+//!   Camera ──→ Cyberpunk ──→ BlendingCompositor ──→ CRT/Film ──→ Glitch ──→ Display
 //!                                  ↑         ↑
 //!   LowerThird (16ms) ─────────────┘         │
 //!   Watermark (16ms) ────────────────────────┘
@@ -29,6 +30,7 @@
 //! ```
 
 mod blending_compositor;
+mod crt_film_grain;
 mod cyberpunk_compositor;
 
 use std::path::PathBuf;
@@ -39,6 +41,7 @@ use streamlib::{
 use streamlib_python::{PythonContinuousHostProcessor, PythonProcessorConfig};
 
 use blending_compositor::{BlendingCompositorConfig, BlendingCompositorProcessor};
+use crt_film_grain::{CrtFilmGrainConfig, CrtFilmGrainProcessor};
 use cyberpunk_compositor::{CyberpunkCompositorConfig, CyberpunkCompositorProcessor};
 
 fn main() -> Result<()> {
@@ -118,6 +121,15 @@ fn main() -> Result<()> {
     println!("✓ Watermark generator added: {}\n", watermark);
 
     // =========================================================================
+    // CRT + Film Grain Effect (80s Blade Runner look)
+    // =========================================================================
+
+    println!("📺 Adding CRT + Film Grain processor (80s Blade Runner look)...");
+    let crt_film_grain =
+        runtime.add_processor(CrtFilmGrainProcessor::node(CrtFilmGrainConfig::default()))?;
+    println!("✓ CRT + Film Grain processor added: {}\n", crt_film_grain);
+
+    // =========================================================================
     // Glitch Effect
     // =========================================================================
 
@@ -190,12 +202,18 @@ fn main() -> Result<()> {
     )?;
     println!("   ✓ Watermark → BlendingCompositor.watermark_in");
 
-    // BlendingCompositor → Glitch → Display
+    // BlendingCompositor → CRT/FilmGrain → Glitch → Display
     runtime.connect(
         OutputLinkPortRef::new(&blending, "video_out"),
+        InputLinkPortRef::new(&crt_film_grain, "video_in"),
+    )?;
+    println!("   ✓ BlendingCompositor → CRT/FilmGrain");
+
+    runtime.connect(
+        OutputLinkPortRef::new(&crt_film_grain, "video_out"),
         InputLinkPortRef::new(&glitch, "video_in"),
     )?;
-    println!("   ✓ BlendingCompositor → Glitch");
+    println!("   ✓ CRT/FilmGrain → Glitch");
 
     runtime.connect(
         OutputLinkPortRef::new(&glitch, "video_out"),
@@ -210,7 +228,9 @@ fn main() -> Result<()> {
 
     println!("▶️  Starting pipeline...");
     println!("   Architecture (parallel blending):");
-    println!("     Camera ──→ Cyberpunk ──→ BlendingCompositor ──→ Glitch ──→ Display");
+    println!(
+        "     Camera ──→ Cyberpunk ──→ BlendingCompositor ──→ CRT/Film ──→ Glitch ──→ Display"
+    );
     println!("                                    ↑         ↑");
     println!("     LowerThird (16ms) ─────────────┘         │");
     println!("     Watermark (16ms) ────────────────────────┘");
