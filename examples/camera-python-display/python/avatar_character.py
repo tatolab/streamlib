@@ -1,29 +1,49 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Avatar Character Processor - Stylized cyberpunk character for PiP overlay.
+"""Avatar Character Processor - 3D cyberpunk character for PiP overlay.
 
 Uses MediaPipe Tasks API (GPU-accelerated) for pose detection,
-then renders a stylized geometric character on transparent background
-for picture-in-picture overlay in the "Breaking News" style.
+then renders a 3D rigged character driven by pose landmarks.
+The character is displayed in a picture-in-picture overlay with
+a "Breaking News" style.
 
 Features:
-- MediaPipe PoseLandmarker with GPU/Metal delegate (33 landmarks)
-- Stylized geometric character inspired by Cyberpunk Edgerunners
-- Yellow jacket with cyan accents
-- Transparent background for compositing
+- MediaPipe PoseLandmarker with GPU/Metal delegate (33 3D landmarks)
+- 3D rigged character from GLB file (Mixamo skeleton)
+- GPU-accelerated skinned mesh rendering via ModernGL
+- Real-time pose-to-bone rotation conversion
+- Optional 3D scene background
 - "Ready" state signaling for slide-in animation timing
 """
 
 import logging
-import math
 import os
 import sys
-import urllib.request
+import time
 from pathlib import Path
 
-import numpy as np
-import skia
+# Delay heavy imports to avoid GIL deadlock during parallel module loading
+moderngl = None
+np = None
+CharacterRenderer3D = None
+
+def _lazy_import():
+    """Import heavy dependencies lazily to avoid import-time GIL issues."""
+    global moderngl, np, CharacterRenderer3D
+    if moderngl is None:
+        import moderngl as _moderngl
+        import numpy as _np
+        moderngl = _moderngl
+        np = _np
+
+        # Ensure local modules can be imported
+        _module_dir = Path(__file__).parent
+        if str(_module_dir) not in sys.path:
+            sys.path.insert(0, str(_module_dir))
+
+        from character_renderer_3d import CharacterRenderer3D as _CR3D
+        CharacterRenderer3D = _CR3D
 
 from streamlib import processor, input, output, PixelFormat
 
@@ -37,9 +57,7 @@ POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarke
 # Assets configuration
 ASSETS_DIR = Path(__file__).parent.parent / "assets"
 BACKGROUND_PATH = ASSETS_DIR / "alley.jpg"
-
-# OpenGL constants
-GL_RGBA8 = 0x8058
+CHARACTER_PATH = ASSETS_DIR / "character" / "character.glb"
 
 
 def ensure_model_downloaded():
@@ -49,6 +67,7 @@ def ensure_model_downloaded():
     if not POSE_MODEL_PATH.exists():
         logger.info(f"Downloading pose model to {POSE_MODEL_PATH}...")
         try:
+            import urllib.request
             urllib.request.urlretrieve(POSE_MODEL_URL, POSE_MODEL_PATH)
             logger.info(f"Downloaded pose model ({POSE_MODEL_PATH.stat().st_size / 1024 / 1024:.1f} MB)")
         except Exception as e:
@@ -83,411 +102,19 @@ except Exception as e:
     logger.warning(f"MediaPipe initialization error: {e}")
 
 
-# MediaPipe landmark indices
-class PoseLandmarkIndex:
-    NOSE = 0
-    LEFT_EYE_INNER = 1
-    LEFT_EYE = 2
-    LEFT_EYE_OUTER = 3
-    RIGHT_EYE_INNER = 4
-    RIGHT_EYE = 5
-    RIGHT_EYE_OUTER = 6
-    LEFT_EAR = 7
-    RIGHT_EAR = 8
-    MOUTH_LEFT = 9
-    MOUTH_RIGHT = 10
-    LEFT_SHOULDER = 11
-    RIGHT_SHOULDER = 12
-    LEFT_ELBOW = 13
-    RIGHT_ELBOW = 14
-    LEFT_WRIST = 15
-    RIGHT_WRIST = 16
-    LEFT_PINKY = 17
-    RIGHT_PINKY = 18
-    LEFT_INDEX = 19
-    RIGHT_INDEX = 20
-    LEFT_THUMB = 21
-    RIGHT_THUMB = 22
-    LEFT_HIP = 23
-    RIGHT_HIP = 24
-    LEFT_KNEE = 25
-    RIGHT_KNEE = 26
-    LEFT_ANKLE = 27
-    RIGHT_ANKLE = 28
-    LEFT_HEEL = 29
-    RIGHT_HEEL = 30
-    LEFT_FOOT_INDEX = 31
-    RIGHT_FOOT_INDEX = 32
-
-
 # =============================================================================
-# Cyberpunk Color Palette
-# =============================================================================
-
-CYBER_YELLOW = (252, 238, 10, 255)       # #fcee0a - jacket
-CYBER_YELLOW_DARK = (180, 160, 0, 255)   # Darker yellow for shading
-CYBER_CYAN = (0, 240, 255, 255)          # #00f0ff - accents
-CYBER_BLACK = (15, 15, 20, 255)          # Near black - shirt/pants
-CYBER_GRAY = (60, 60, 70, 255)           # Gray for jeans
-CYBER_SKIN = (220, 180, 160, 255)        # Skin tone
-CYBER_HAIR = (80, 50, 30, 255)           # Brown hair
-CYBER_HAIR_TIP = (200, 180, 50, 255)     # Yellow-tipped hair
-
-
-def skia_color(rgba):
-    """Convert RGBA tuple to Skia color."""
-    return skia.Color(*rgba)
-
-
-# =============================================================================
-# Character Drawing Functions
-# =============================================================================
-
-def get_landmark_point(landmarks, idx, width, height, min_visibility=0.5, mirror_x=True):
-    """Get 2D pixel coordinates for a landmark from Tasks API format.
-
-    Args:
-        mirror_x: Mirror X coordinate for front-facing camera (selfie mode)
-    """
-    if landmarks is None or idx >= len(landmarks):
-        return None
-    lm = landmarks[idx]
-    visibility = getattr(lm, 'visibility', 1.0)
-    if visibility is not None and visibility < min_visibility:
-        return None
-    # Mirror X for front-facing camera so character matches user movement
-    x = (1.0 - lm.x) if mirror_x else lm.x
-    return (int(x * width), int(lm.y * height))
-
-
-def angle_between_points(p1, p2):
-    """Get angle in radians from p1 to p2."""
-    if p1 is None or p2 is None:
-        return 0
-    dx = p2[0] - p1[0]
-    dy = p2[1] - p1[1]
-    return math.atan2(dy, dx)
-
-
-def distance_between_points(p1, p2):
-    """Get distance between two points."""
-    if p1 is None or p2 is None:
-        return 0
-    dx = p2[0] - p1[0]
-    dy = p2[1] - p1[1]
-    return math.sqrt(dx * dx + dy * dy)
-
-
-def midpoint(p1, p2):
-    """Get midpoint between two points."""
-    if p1 is None or p2 is None:
-        return None
-    return ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
-
-
-def draw_angular_limb(canvas, p1, p2, width, color, outline_color=None):
-    """Draw an angular/geometric limb segment."""
-    if p1 is None or p2 is None:
-        return
-
-    angle = angle_between_points(p1, p2)
-    perpendicular = angle + math.pi / 2
-    half_width = width / 2
-
-    dx = math.cos(perpendicular) * half_width
-    dy = math.sin(perpendicular) * half_width
-
-    path = skia.Path()
-    path.moveTo(p1[0] - dx, p1[1] - dy)
-    path.lineTo(p2[0] - dx * 0.8, p2[1] - dy * 0.8)
-    path.lineTo(p2[0] + dx * 0.8, p2[1] + dy * 0.8)
-    path.lineTo(p1[0] + dx, p1[1] + dy)
-    path.close()
-
-    paint = skia.Paint(Color=skia_color(color), AntiAlias=True)
-    canvas.drawPath(path, paint)
-
-    if outline_color:
-        outline_paint = skia.Paint(
-            Color=skia_color(outline_color),
-            AntiAlias=True,
-            Style=skia.Paint.kStroke_Style,
-            StrokeWidth=2,
-        )
-        canvas.drawPath(path, outline_paint)
-
-
-def draw_angular_joint(canvas, point, size, color, accent_color=None):
-    """Draw an angular joint marker (diamond shape)."""
-    if point is None:
-        return
-
-    x, y = point
-    half = size / 2
-
-    path = skia.Path()
-    path.moveTo(x, y - half)
-    path.lineTo(x + half, y)
-    path.lineTo(x, y + half)
-    path.lineTo(x - half, y)
-    path.close()
-
-    paint = skia.Paint(Color=skia_color(color), AntiAlias=True)
-    canvas.drawPath(path, paint)
-
-    if accent_color:
-        inner_path = skia.Path()
-        inner_half = half * 0.5
-        inner_path.moveTo(x, y - inner_half)
-        inner_path.lineTo(x + inner_half, y)
-        inner_path.lineTo(x, y + inner_half)
-        inner_path.lineTo(x - inner_half, y)
-        inner_path.close()
-
-        accent_paint = skia.Paint(Color=skia_color(accent_color), AntiAlias=True)
-        canvas.drawPath(inner_path, accent_paint)
-
-
-def draw_head(canvas, nose, left_ear, right_ear, shoulder_mid, scale):
-    """Draw stylized angular head with spiky hair."""
-    if nose is None:
-        return
-
-    head_center = (nose[0], nose[1] - int(40 * scale))
-    head_size = int(50 * scale)
-    cx, cy = head_center
-
-    # Angular face shape
-    path = skia.Path()
-    path.moveTo(cx, cy - head_size)
-    path.lineTo(cx + head_size * 0.7, cy - head_size * 0.5)
-    path.lineTo(cx + head_size * 0.6, cy + head_size * 0.3)
-    path.lineTo(cx + head_size * 0.3, cy + head_size * 0.7)
-    path.lineTo(cx - head_size * 0.3, cy + head_size * 0.7)
-    path.lineTo(cx - head_size * 0.6, cy + head_size * 0.3)
-    path.lineTo(cx - head_size * 0.7, cy - head_size * 0.5)
-    path.close()
-
-    face_paint = skia.Paint(Color=skia_color(CYBER_SKIN), AntiAlias=True)
-    canvas.drawPath(path, face_paint)
-
-    outline_paint = skia.Paint(
-        Color=skia_color(CYBER_BLACK),
-        AntiAlias=True,
-        Style=skia.Paint.kStroke_Style,
-        StrokeWidth=2,
-    )
-    canvas.drawPath(path, outline_paint)
-
-    # Spiky hair
-    hair_path = skia.Path()
-    hair_y = cy - head_size * 0.8
-    hair_path.moveTo(cx - head_size * 0.8, hair_y + head_size * 0.3)
-
-    spikes = [
-        (cx - head_size * 0.5, hair_y - head_size * 0.3),
-        (cx - head_size * 0.2, hair_y - head_size * 0.6),
-        (cx + head_size * 0.1, hair_y - head_size * 0.4),
-        (cx + head_size * 0.4, hair_y - head_size * 0.7),
-        (cx + head_size * 0.6, hair_y - head_size * 0.3),
-        (cx + head_size * 0.8, hair_y + head_size * 0.2),
-    ]
-
-    for spike in spikes:
-        hair_path.lineTo(spike[0], spike[1])
-    hair_path.lineTo(cx + head_size * 0.7, hair_y + head_size * 0.5)
-    hair_path.close()
-
-    hair_paint = skia.Paint(Color=skia_color(CYBER_HAIR), AntiAlias=True)
-    canvas.drawPath(hair_path, hair_paint)
-
-    # Yellow tips
-    for i, spike in enumerate(spikes):
-        if i % 2 == 0:
-            tip_path = skia.Path()
-            tip_size = head_size * 0.15
-            tip_path.moveTo(spike[0], spike[1])
-            tip_path.lineTo(spike[0] - tip_size, spike[1] + tip_size * 1.5)
-            tip_path.lineTo(spike[0] + tip_size, spike[1] + tip_size * 1.5)
-            tip_path.close()
-            tip_paint = skia.Paint(Color=skia_color(CYBER_HAIR_TIP), AntiAlias=True)
-            canvas.drawPath(tip_path, tip_paint)
-
-    # Eyes
-    eye_y = cy - head_size * 0.1
-    eye_size = head_size * 0.12
-
-    for eye_x_offset in [-head_size * 0.25, head_size * 0.25]:
-        eye_x = cx + eye_x_offset
-        eye_path = skia.Path()
-        eye_path.moveTo(eye_x - eye_size, eye_y)
-        eye_path.lineTo(eye_x, eye_y - eye_size * 0.5)
-        eye_path.lineTo(eye_x + eye_size, eye_y)
-        eye_path.lineTo(eye_x, eye_y + eye_size * 0.5)
-        eye_path.close()
-        eye_paint = skia.Paint(Color=skia_color(CYBER_BLACK), AntiAlias=True)
-        canvas.drawPath(eye_path, eye_paint)
-
-
-def draw_torso(canvas, left_shoulder, right_shoulder, left_hip, right_hip, scale):
-    """Draw angular torso with yellow jacket."""
-    if any(p is None for p in [left_shoulder, right_shoulder, left_hip, right_hip]):
-        return
-
-    jacket_path = skia.Path()
-    expand = int(20 * scale)
-    ls_outer = (left_shoulder[0] - expand, left_shoulder[1])
-    rs_outer = (right_shoulder[0] + expand, right_shoulder[1])
-
-    jacket_path.moveTo(ls_outer[0], ls_outer[1] - int(10 * scale))
-    jacket_path.lineTo(rs_outer[0], rs_outer[1] - int(10 * scale))
-    jacket_path.lineTo(rs_outer[0] + int(5 * scale), right_shoulder[1])
-    jacket_path.lineTo(right_hip[0] + int(15 * scale), right_hip[1])
-    jacket_path.lineTo(left_hip[0] - int(15 * scale), left_hip[1])
-    jacket_path.lineTo(ls_outer[0] - int(5 * scale), left_shoulder[1])
-    jacket_path.close()
-
-    jacket_paint = skia.Paint(Color=skia_color(CYBER_YELLOW), AntiAlias=True)
-    canvas.drawPath(jacket_path, jacket_paint)
-
-    outline_paint = skia.Paint(
-        Color=skia_color(CYBER_BLACK),
-        AntiAlias=True,
-        Style=skia.Paint.kStroke_Style,
-        StrokeWidth=2,
-    )
-    canvas.drawPath(jacket_path, outline_paint)
-
-    # Cyan stripes
-    stripe_paint = skia.Paint(Color=skia_color(CYBER_CYAN), AntiAlias=True)
-
-    left_stripe = skia.Path()
-    left_stripe.moveTo(ls_outer[0] + int(15 * scale), ls_outer[1])
-    left_stripe.lineTo(ls_outer[0] + int(20 * scale), ls_outer[1])
-    left_stripe.lineTo(left_hip[0] - int(5 * scale), left_hip[1])
-    left_stripe.lineTo(left_hip[0] - int(10 * scale), left_hip[1])
-    left_stripe.close()
-    canvas.drawPath(left_stripe, stripe_paint)
-
-    right_stripe = skia.Path()
-    right_stripe.moveTo(rs_outer[0] - int(15 * scale), rs_outer[1])
-    right_stripe.lineTo(rs_outer[0] - int(20 * scale), rs_outer[1])
-    right_stripe.lineTo(right_hip[0] + int(5 * scale), right_hip[1])
-    right_stripe.lineTo(right_hip[0] + int(10 * scale), right_hip[1])
-    right_stripe.close()
-    canvas.drawPath(right_stripe, stripe_paint)
-
-    # Black shirt (V-neck)
-    shirt_path = skia.Path()
-    neck_center = midpoint(left_shoulder, right_shoulder)
-    if neck_center:
-        shirt_path.moveTo(left_shoulder[0] + int(20 * scale), left_shoulder[1])
-        shirt_path.lineTo(neck_center[0], neck_center[1] + int(60 * scale))
-        shirt_path.lineTo(right_shoulder[0] - int(20 * scale), right_shoulder[1])
-        shirt_path.close()
-        shirt_paint = skia.Paint(Color=skia_color(CYBER_BLACK), AntiAlias=True)
-        canvas.drawPath(shirt_path, shirt_paint)
-
-
-def estimate_hips_from_shoulders(left_shoulder, right_shoulder, scale):
-    """Estimate hip positions when not visible (upper body only in frame)."""
-    if left_shoulder is None or right_shoulder is None:
-        return None, None
-
-    # Hips are typically ~1.2x shoulder width apart and ~1.5x shoulder width below
-    shoulder_mid = midpoint(left_shoulder, right_shoulder)
-    if shoulder_mid is None:
-        return None, None
-
-    shoulder_width = distance_between_points(left_shoulder, right_shoulder)
-    hip_width = shoulder_width * 0.9  # Hips slightly narrower than shoulders
-    torso_length = shoulder_width * 1.3  # Torso length estimate
-
-    left_hip = (int(shoulder_mid[0] - hip_width / 2), int(shoulder_mid[1] + torso_length))
-    right_hip = (int(shoulder_mid[0] + hip_width / 2), int(shoulder_mid[1] + torso_length))
-
-    return left_hip, right_hip
-
-
-def draw_character(canvas, landmarks, width, height):
-    """Draw the full stylized character based on pose landmarks."""
-    if landmarks is None or len(landmarks) == 0:
-        return
-
-    nose = get_landmark_point(landmarks, PoseLandmarkIndex.NOSE, width, height)
-    left_ear = get_landmark_point(landmarks, PoseLandmarkIndex.LEFT_EAR, width, height)
-    right_ear = get_landmark_point(landmarks, PoseLandmarkIndex.RIGHT_EAR, width, height)
-    left_shoulder = get_landmark_point(landmarks, PoseLandmarkIndex.LEFT_SHOULDER, width, height)
-    right_shoulder = get_landmark_point(landmarks, PoseLandmarkIndex.RIGHT_SHOULDER, width, height)
-    left_elbow = get_landmark_point(landmarks, PoseLandmarkIndex.LEFT_ELBOW, width, height)
-    right_elbow = get_landmark_point(landmarks, PoseLandmarkIndex.RIGHT_ELBOW, width, height)
-    left_wrist = get_landmark_point(landmarks, PoseLandmarkIndex.LEFT_WRIST, width, height)
-    right_wrist = get_landmark_point(landmarks, PoseLandmarkIndex.RIGHT_WRIST, width, height)
-
-    # Try to get real hip positions, fall back to estimates
-    left_hip = get_landmark_point(landmarks, PoseLandmarkIndex.LEFT_HIP, width, height, min_visibility=0.1)
-    right_hip = get_landmark_point(landmarks, PoseLandmarkIndex.RIGHT_HIP, width, height, min_visibility=0.1)
-
-    shoulder_width = distance_between_points(left_shoulder, right_shoulder)
-    scale = shoulder_width / 200.0 if shoulder_width > 0 else 1.0
-    scale = max(0.5, min(2.0, scale))
-
-    # Estimate hips if not detected (upper body only in frame)
-    if left_hip is None or right_hip is None:
-        left_hip, right_hip = estimate_hips_from_shoulders(left_shoulder, right_shoulder, scale)
-
-    # Legs only if we have real hip data (not estimated)
-    left_knee = get_landmark_point(landmarks, PoseLandmarkIndex.LEFT_KNEE, width, height, min_visibility=0.1)
-    right_knee = get_landmark_point(landmarks, PoseLandmarkIndex.RIGHT_KNEE, width, height, min_visibility=0.1)
-    left_ankle = get_landmark_point(landmarks, PoseLandmarkIndex.LEFT_ANKLE, width, height, min_visibility=0.1)
-    right_ankle = get_landmark_point(landmarks, PoseLandmarkIndex.RIGHT_ANKLE, width, height, min_visibility=0.1)
-
-    limb_width = int(25 * scale)
-    joint_size = int(15 * scale)
-
-    # Legs (only if detected - won't draw if hips are estimated)
-    if left_knee is not None:
-        draw_angular_limb(canvas, left_hip, left_knee, limb_width, CYBER_GRAY, CYBER_BLACK)
-        draw_angular_limb(canvas, left_knee, left_ankle, limb_width * 0.9, CYBER_GRAY, CYBER_BLACK)
-        draw_angular_joint(canvas, left_knee, joint_size, CYBER_BLACK, CYBER_CYAN)
-    if right_knee is not None:
-        draw_angular_limb(canvas, right_hip, right_knee, limb_width, CYBER_GRAY, CYBER_BLACK)
-        draw_angular_limb(canvas, right_knee, right_ankle, limb_width * 0.9, CYBER_GRAY, CYBER_BLACK)
-        draw_angular_joint(canvas, right_knee, joint_size, CYBER_BLACK, CYBER_CYAN)
-
-    # Torso (works with estimated hips too)
-    draw_torso(canvas, left_shoulder, right_shoulder, left_hip, right_hip, scale)
-
-    # Arms
-    draw_angular_limb(canvas, left_shoulder, left_elbow, limb_width, CYBER_YELLOW, CYBER_BLACK)
-    draw_angular_limb(canvas, left_elbow, left_wrist, limb_width * 0.85, CYBER_YELLOW, CYBER_BLACK)
-    draw_angular_limb(canvas, right_shoulder, right_elbow, limb_width, CYBER_YELLOW, CYBER_BLACK)
-    draw_angular_limb(canvas, right_elbow, right_wrist, limb_width * 0.85, CYBER_YELLOW, CYBER_BLACK)
-
-    draw_angular_joint(canvas, left_elbow, joint_size, CYBER_YELLOW_DARK, CYBER_CYAN)
-    draw_angular_joint(canvas, right_elbow, joint_size, CYBER_YELLOW_DARK, CYBER_CYAN)
-
-    draw_angular_joint(canvas, left_wrist, joint_size * 0.8, CYBER_SKIN, None)
-    draw_angular_joint(canvas, right_wrist, joint_size * 0.8, CYBER_SKIN, None)
-
-    # Head
-    shoulder_mid = midpoint(left_shoulder, right_shoulder)
-    draw_head(canvas, nose, left_ear, right_ear, shoulder_mid, scale)
-
-
-# =============================================================================
-# Avatar Character Processor (PiP Mode - Transparent Background)
+# Avatar Character Processor (3D Rendering Mode)
 # =============================================================================
 
 @processor(
     name="AvatarCharacter",
-    description="Pose-tracking cyberpunk character for PiP overlay",
+    description="3D pose-tracking cyberpunk character for PiP overlay",
 )
 class AvatarCharacter:
-    """Renders a stylized character on transparent background for PiP overlay.
+    """Renders a 3D rigged character driven by MediaPipe pose landmarks.
 
     Uses MediaPipe Tasks API with GPU delegate for pose detection.
-    Outputs frames with transparent background - only the character is visible.
+    Renders a 3D character model with GPU skinning via ModernGL.
     Signals "ready" state when first pose is detected (for slide-in animation).
     """
 
@@ -500,15 +127,19 @@ class AvatarCharacter:
         pass
 
     def setup(self, ctx):
-        """Initialize MediaPipe Tasks API and Skia resources."""
+        """Initialize MediaPipe Tasks API and 3D rendering resources."""
+        # Lazy import heavy dependencies
+        _lazy_import()
+
         self.frame_count = 0
         self.pose_landmarker = None
         self._timestamp_ms = 0
         self._mediapipe_available = MEDIAPIPE_AVAILABLE
 
-        # Ready state - becomes True when first pose is detected
+        # Ready state - becomes True 1.5 seconds after resources are loaded
         self._is_ready = False
-        self._ready_frame_count = 0
+        self._setup_complete_time = None  # Set when 3D renderer is initialized
+        self._ready_delay_seconds = 1.5  # Wait 1.5 seconds after load before sliding in
 
         # Ensure model is downloaded
         if self._mediapipe_available:
@@ -529,7 +160,7 @@ class AvatarCharacter:
                     min_pose_detection_confidence=0.5,
                     min_pose_presence_confidence=0.5,
                     min_tracking_confidence=0.5,
-                    output_segmentation_masks=False,  # Don't need segmentation for PiP
+                    output_segmentation_masks=False,
                 )
                 self.pose_landmarker = PoseLandmarker.create_from_options(options)
                 logger.info("AvatarCharacter: MediaPipe PoseLandmarker initialized with GPU delegate")
@@ -557,16 +188,15 @@ class AvatarCharacter:
         else:
             logger.warning("AvatarCharacter: Running WITHOUT MediaPipe")
 
-        # Get GL context
+        # Get GL context from streamlib
         self.gl_ctx = ctx.gpu._experimental_gl_context()
         self.gl_ctx.make_current()
 
-        # Create Skia GPU context
-        self.skia_ctx = skia.GrDirectContext.MakeGL()
-        if self.skia_ctx is None:
-            raise RuntimeError("Failed to create Skia GL context")
+        # Create ModernGL context wrapping the existing OpenGL context
+        self.moderngl_ctx = moderngl.create_context(standalone=False)
+        logger.info(f"AvatarCharacter: ModernGL context created (GL {self.moderngl_ctx.version_code})")
 
-        # Create texture bindings
+        # Create texture bindings for input (pose detection readback) and output
         self.input_binding = self.gl_ctx.create_texture_binding()
         self.output_binding = self.gl_ctx.create_texture_binding()
 
@@ -574,26 +204,51 @@ class AvatarCharacter:
         self._gpu_ctx = ctx.gpu
         self.output_buffer = None
         self._current_dims = None
-        self.skia_surface = None
 
-        # Last valid pose
-        self.last_landmarks = None
+        # 3D renderer (initialized on first frame when we know dimensions)
+        self.renderer_3d = None
+        self._render_fbo = None
+        self._render_texture = None
+        self._render_depth = None
 
-        # Load background image
-        self.background_image = None
+        # Last valid pose (world landmarks for 3D)
+        self.last_world_landmarks = None
+
+        # Check if character model exists
+        if not CHARACTER_PATH.exists():
+            logger.error(f"AvatarCharacter: Character model not found at {CHARACTER_PATH}")
+            raise FileNotFoundError(f"Character model not found: {CHARACTER_PATH}")
+
+        logger.info("AvatarCharacter: Setup complete (3D mode)")
+
+    def _init_renderer(self, width: int, height: int):
+        """Initialize 3D renderer and FBO on first frame."""
+        # Create 3D character renderer
+        self.renderer_3d = CharacterRenderer3D(self.moderngl_ctx, width, height)
+
+        # Load character model
+        self.renderer_3d.load_character(CHARACTER_PATH)
+        logger.info(f"AvatarCharacter: Loaded 3D character from {CHARACTER_PATH}")
+
+        # Load background if available
         if BACKGROUND_PATH.exists():
-            try:
-                self.background_image = skia.Image.open(str(BACKGROUND_PATH))
-                logger.info(f"AvatarCharacter: Loaded background ({self.background_image.width()}x{self.background_image.height()})")
-            except Exception as e:
-                logger.warning(f"AvatarCharacter: Failed to load background: {e}")
-        else:
-            logger.warning(f"AvatarCharacter: Background not found at {BACKGROUND_PATH}")
+            self.renderer_3d.load_background(BACKGROUND_PATH)
+            logger.info(f"AvatarCharacter: Loaded background from {BACKGROUND_PATH}")
 
-        logger.info("AvatarCharacter: Setup complete (PiP mode)")
+        # Create FBO for rendering
+        self._render_texture = self.moderngl_ctx.texture((width, height), 4)
+        self._render_depth = self.moderngl_ctx.depth_texture((width, height))
+        self._render_fbo = self.moderngl_ctx.framebuffer(
+            color_attachments=[self._render_texture],
+            depth_attachment=self._render_depth,
+        )
+
+        # Record setup completion time for delayed slide-in
+        self._setup_complete_time = time.monotonic()
+        logger.info(f"AvatarCharacter: 3D renderer initialized ({width}x{height}) - sliding in after {self._ready_delay_seconds}s")
 
     def process(self, ctx):
-        """Process frame: detect pose, render character on transparent background."""
+        """Process frame: detect pose, render 3D character."""
         frame = ctx.input("video_in").get()
         if frame is None:
             return
@@ -604,33 +259,38 @@ class AvatarCharacter:
         width = input_buffer.width
         height = input_buffer.height
 
-        # Ensure output buffer exists
+        # Initialize renderer on first frame or resize
         if self._current_dims != (width, height):
+            self._current_dims = (width, height)
+
+            # Create output buffer and update binding
             self.output_buffer = self._gpu_ctx.acquire_pixel_buffer(
                 width, height, PixelFormat.BGRA32
             )
-            self._current_dims = (width, height)
             self.output_binding.update(self.output_buffer)
 
-            output_gl_info = skia.GrGLTextureInfo(
-                self.output_binding.target, self.output_binding.id, GL_RGBA8
-            )
-            output_backend = skia.GrBackendTexture(
-                width, height, skia.GrMipmapped.kNo, output_gl_info
-            )
-            self.skia_surface = skia.Surface.MakeFromBackendTexture(
-                self.skia_ctx,
-                output_backend,
-                skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
-                0,
-                skia.ColorType.kBGRA_8888_ColorType,
-                None,
-                None,
-            )
+            # Initialize 3D renderer
+            if self.renderer_3d is None:
+                self._init_renderer(width, height)
+            else:
+                # Resize existing renderer
+                self.renderer_3d.resize(width, height)
+
+                # Recreate FBO at new size
+                self._render_texture.release()
+                self._render_depth.release()
+                self._render_fbo.release()
+
+                self._render_texture = self.moderngl_ctx.texture((width, height), 4)
+                self._render_depth = self.moderngl_ctx.depth_texture((width, height))
+                self._render_fbo = self.moderngl_ctx.framebuffer(
+                    color_attachments=[self._render_texture],
+                    depth_attachment=self._render_depth,
+                )
 
         self.input_binding.update(input_buffer)
 
-        # Detect pose
+        # Detect pose using MediaPipe
         if self.pose_landmarker is not None:
             try:
                 from OpenGL import GL
@@ -659,50 +319,60 @@ class AvatarCharacter:
                 self._timestamp_ms += 33
                 pose_result = self.pose_landmarker.detect_for_video(mp_image, self._timestamp_ms)
 
-                if pose_result.pose_landmarks and len(pose_result.pose_landmarks) > 0:
-                    self.last_landmarks = pose_result.pose_landmarks[0]
-
-                    # First pose detected - we're ready!
-                    if not self._is_ready:
-                        self._is_ready = True
-                        self._ready_frame_count = self.frame_count
-                        logger.info("AvatarCharacter: First pose detected - READY for display!")
+                # Use world landmarks for 3D pose (better depth information)
+                if pose_result.pose_world_landmarks and len(pose_result.pose_world_landmarks) > 0:
+                    self.last_world_landmarks = pose_result.pose_world_landmarks[0]
 
             except Exception as e:
                 if self.frame_count % 60 == 0:
                     logger.warning(f"MediaPipe processing failed: {e}")
 
-        # Get canvas and draw background (or clear to transparent if no background)
-        canvas = self.skia_surface.getCanvas()
-        if self.background_image is not None:
-            # Scale background to fill the frame
-            src_rect = skia.Rect.MakeWH(self.background_image.width(), self.background_image.height())
-            dst_rect = skia.Rect.MakeWH(width, height)
-            canvas.drawImageRect(self.background_image, src_rect, dst_rect)
-        else:
-            canvas.clear(skia.ColorTRANSPARENT)
+        # Update 3D character pose
+        if self.last_world_landmarks is not None:
+            self.renderer_3d.update_pose(self.last_world_landmarks)
 
-        # Draw character ONLY if we have pose
-        if self.last_landmarks:
-            draw_character(canvas, self.last_landmarks, width, height)
+        # Render 3D scene with bloom to FBO
+        self.renderer_3d.render(output_fbo=self._render_fbo)
 
-        self.skia_surface.flushAndSubmit()
+        # Read rendered pixels from FBO (RGBA)
+        rendered_pixels = self._render_fbo.read(components=4)
+        rendered_array = np.frombuffer(rendered_pixels, dtype=np.uint8).reshape(height, width, 4)
+
+        # Convert RGBA to BGRA for output (swap R and B channels)
+        rendered_bgra = rendered_array[:, :, [2, 1, 0, 3]].copy()
+
+        # Upload to output texture via binding
+        from OpenGL import GL
+        GL.glBindTexture(self.output_binding.target, self.output_binding.id)
+        GL.glTexSubImage2D(
+            self.output_binding.target, 0, 0, 0, width, height,
+            GL.GL_BGRA, GL.GL_UNSIGNED_BYTE, rendered_bgra.tobytes()
+        )
+        GL.glBindTexture(self.output_binding.target, 0)
+
         self.gl_ctx.flush()
 
-        # Output frame with metadata
-        # Include "ready" flag so compositor knows when to show PiP
-        ctx.output("video_out").set({
-            "pixel_buffer": self.output_buffer,
-            "timestamp_ns": frame["timestamp_ns"],
-            "frame_number": frame["frame_number"],
-            "pip_ready": self._is_ready,  # Signal for slide-in animation
-        })
+        # Check if ready delay has passed (5 seconds after resources loaded)
+        if not self._is_ready and self._setup_complete_time is not None:
+            elapsed = time.monotonic() - self._setup_complete_time
+            if elapsed >= self._ready_delay_seconds:
+                self._is_ready = True
+                logger.info(f"AvatarCharacter: Ready after {elapsed:.1f}s - triggering slide-in!")
+
+        # Only output frames after the delay has passed
+        # This triggers the slide-in animation in the compositor when first frame arrives
+        if self._is_ready:
+            ctx.output("video_out").set({
+                "pixel_buffer": self.output_buffer,
+                "timestamp_ns": frame["timestamp_ns"],
+                "frame_number": frame["frame_number"],
+                "pip_ready": True,
+            })
 
         self.frame_count += 1
         if self.frame_count == 1:
             logger.info(f"AvatarCharacter: First frame processed ({width}x{height})")
         if self.frame_count % 300 == 0:
-            self.skia_ctx.freeGpuResources()
             logger.debug(f"AvatarCharacter: {self.frame_count} frames processed (ready={self._is_ready})")
 
     def teardown(self, ctx):
@@ -717,7 +387,12 @@ class AvatarCharacter:
             except Exception:
                 pass
 
-        if self.skia_ctx:
-            self.skia_ctx.abandonContext()
+        # Release ModernGL resources
+        if self._render_fbo is not None:
+            self._render_fbo.release()
+        if self._render_texture is not None:
+            self._render_texture.release()
+        if self._render_depth is not None:
+            self._render_depth.release()
 
         logger.info(f"AvatarCharacter: Shutdown ({self.frame_count} frames, ready={self._is_ready})")
