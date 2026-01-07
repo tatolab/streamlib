@@ -1,15 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Blending Compositor - Multi-layer alpha blending for parallel pipelines.
+//! Blending Compositor - Multi-layer alpha blending with PiP support.
 //!
 //! Composites multiple video layers using Photoshop-style alpha blending:
-//! - Layer 1 (base): Video from camera/segmentation pipeline
+//! - Layer 1 (base): Video from camera
 //! - Layer 2 (middle): Lower third overlay (RGBA with transparency)
-//! - Layer 3 (top): Watermark overlay (RGBA with transparency)
+//! - Layer 3: Watermark overlay (RGBA with transparency)
+//! - Layer 4 (top): PiP overlay with slide-in animation (Breaking News style)
 //!
-//! Continuous execution at 60fps (16ms interval). All inputs are cached
-//! and reused when not updated, decoupling output rate from input rates.
+//! The PiP slides in from the right when the avatar processor signals ready.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,6 +27,8 @@ pub struct BlendingCompositorConfig {
     pub width: u32,
     /// Default output height (used until video arrives)
     pub height: u32,
+    /// Duration of PiP slide-in animation in seconds
+    pub pip_slide_duration: f32,
 }
 
 impl Default for BlendingCompositorConfig {
@@ -34,24 +36,29 @@ impl Default for BlendingCompositorConfig {
         Self {
             width: 1920,
             height: 1080,
+            pip_slide_duration: 0.5, // 500ms slide-in
         }
     }
 }
 
 /// Uniform buffer for blending compositor shader.
-/// Packed into single buffer to reduce set_fragment_bytes calls.
+/// Must match the Metal shader struct layout exactly.
 #[repr(C)]
 struct BlendingUniforms {
     has_video: u32,
     has_lower_third: u32,
     has_watermark: u32,
-    _padding: u32, // Align to 16 bytes
+    has_pip: u32,
+    pip_slide_progress: f32, // 0.0 = off-screen, 1.0 = fully visible
+    _padding1: f32,
+    _padding2: f32,
+    _padding3: f32,
 }
 
 #[streamlib::processor(
     name = "BlendingCompositor",
     execution = Reactive,
-    description = "Multi-layer alpha blending compositor for parallel pipelines",
+    description = "Multi-layer alpha blending compositor with PiP support",
     unsafe_send
 )]
 pub struct BlendingCompositorProcessor {
@@ -64,6 +71,9 @@ pub struct BlendingCompositorProcessor {
     #[streamlib::input(description = "Watermark overlay (RGBA with transparency)")]
     watermark_in: LinkInput<VideoFrame>,
 
+    #[streamlib::input(description = "PiP overlay (avatar character with transparent background)")]
+    pip_in: LinkInput<VideoFrame>,
+
     #[streamlib::output(description = "Composited video frames")]
     video_out: LinkOutput<VideoFrame>,
 
@@ -74,24 +84,26 @@ pub struct BlendingCompositorProcessor {
     render_pipeline: Option<metal::RenderPipelineState>,
     render_pass_desc: Option<metal::RenderPassDescriptor>,
     sampler: Option<metal::SamplerState>,
-    /// Ring buffer of uniform buffers to avoid CPU-GPU sync hazards.
     uniforms_buffers: [Option<metal::Buffer>; 3],
     uniforms_index: usize,
     frame_count: AtomicU64,
 
-    // RHI resources - one texture cache handles all views
+    // RHI resources
     texture_cache: Option<RhiTextureCache>,
-    /// Ring buffer of output pixel buffers to avoid CPU-GPU sync.
     output_buffers: [Option<streamlib::core::rhi::RhiPixelBuffer>; 3],
     output_index: usize,
     output_dimensions: Option<(u32, u32)>,
 
-    // Cached texture views (reused when no new frame arrives)
-    // We store the RhiTextureView which keeps the texture valid
+    // Cached texture views
     cached_video_view: Option<RhiTextureView>,
     cached_lower_third_view: Option<RhiTextureView>,
     cached_watermark_view: Option<RhiTextureView>,
+    cached_pip_view: Option<RhiTextureView>,
     cached_video_dimensions: Option<(u32, u32)>,
+
+    // PiP animation state
+    pip_ready: bool,
+    pip_animation_start: Option<Instant>,
 
     // Debug timing
     last_frame_time: Option<Instant>,
@@ -106,9 +118,8 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             tracing::info!("BlendingCompositor: Setting up (reactive mode)...");
 
             self.gpu_context = Some(ctx.gpu.clone());
-            self.texture_cache = None; // Deferred to first process() to avoid race
+            self.texture_cache = None;
 
-            // Get Metal device ref for shader compilation
             let metal_device_ref = ctx.gpu.device().metal_device_ref();
 
             // Compile shaders
@@ -124,7 +135,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
                 .get_function("blending_fragment", None)
                 .map_err(|e| StreamError::Configuration(format!("Fragment not found: {}", e)))?;
 
-            // Render pipeline with alpha blending enabled
+            // Render pipeline
             let pipeline_desc = metal::RenderPipelineDescriptor::new();
             pipeline_desc.set_vertex_function(Some(&vertex_fn));
             pipeline_desc.set_fragment_function(Some(&fragment_fn));
@@ -136,7 +147,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
                 .new_render_pipeline_state(&pipeline_desc)
                 .map_err(|e| StreamError::Configuration(format!("Pipeline failed: {}", e)))?;
 
-            // Sampler with linear filtering
+            // Sampler
             let sampler_desc = metal::SamplerDescriptor::new();
             sampler_desc.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
             sampler_desc.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
@@ -144,7 +155,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             sampler_desc.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
             let sampler = metal_device_ref.new_sampler(&sampler_desc);
 
-            // Create render pass descriptor (reused each frame, only texture attachment updated)
+            // Render pass descriptor
             let render_pass_desc_ref = metal::RenderPassDescriptor::new();
             let color_attachment = render_pass_desc_ref
                 .color_attachments()
@@ -154,7 +165,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             color_attachment.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
             color_attachment.set_store_action(metal::MTLStoreAction::Store);
 
-            // Uniforms ring buffer (3 buffers to avoid CPU-GPU sync hazards)
+            // Uniforms ring buffer
             let uniforms_size = std::mem::size_of::<BlendingUniforms>() as u64;
             let uniforms_buffers = [
                 Some(metal_device_ref.new_buffer(
@@ -176,11 +187,14 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             self.sampler = Some(sampler);
             self.uniforms_buffers = uniforms_buffers;
             self.uniforms_index = 0;
+            self.pip_ready = false;
+            self.pip_animation_start = None;
 
             tracing::info!(
-                "BlendingCompositor: Initialized ({}x{} default)",
+                "BlendingCompositor: Initialized ({}x{} default, PiP slide: {}s)",
                 self.config.width,
-                self.config.height
+                self.config.height,
+                self.config.pip_slide_duration
             );
             Ok(())
         })();
@@ -199,13 +213,14 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         let process_start = Instant::now();
         let frame_count = self.frame_count.load(Ordering::Relaxed);
 
-        // Check frame interval for stutters (camera is 30fps = ~33ms, threshold at 50ms)
+        // Stutter detection
         if let Some(last_time) = self.last_frame_time {
             let interval_ms = last_time.elapsed().as_secs_f64() * 1000.0;
             if interval_ms > 50.0 {
                 tracing::warn!(
-                    "BlendingCompositor: STUTTER detected! Frame {} interval: {:.1}ms (expected ~33ms for 30fps)",
-                    frame_count, interval_ms
+                    "BlendingCompositor: STUTTER! Frame {} interval: {:.1}ms",
+                    frame_count,
+                    interval_ms
                 );
             }
         }
@@ -216,13 +231,13 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
-        // Lazy texture cache creation (deferred from setup)
+        // Lazy texture cache creation
         if self.texture_cache.is_none() {
             self.texture_cache = Some(gpu_ctx.create_texture_cache()?);
         }
         let texture_cache = self.texture_cache.as_ref().unwrap();
 
-        // Update cached textures from any new input frames
+        // Update cached textures from new input frames
         if let Some(video_frame) = self.video_in.read() {
             self.cached_video_view = Some(texture_cache.create_view(video_frame.buffer())?);
             self.cached_video_dimensions = Some((video_frame.width(), video_frame.height()));
@@ -237,13 +252,37 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             self.cached_watermark_view = Some(texture_cache.create_view(watermark_frame.buffer())?);
         }
 
-        // Use video dimensions if available, otherwise config defaults
+        // Check for PiP frames and "pip_ready" signal
+        if let Some(pip_frame) = self.pip_in.read() {
+            self.cached_pip_view = Some(texture_cache.create_view(pip_frame.buffer())?);
+
+            // Check if avatar processor signaled ready (first pose detected)
+            // The pip_ready flag is passed as metadata in the frame
+            // For now, we trigger animation on first PiP frame with content
+            if !self.pip_ready {
+                // Start animation when first PiP frame arrives
+                self.pip_ready = true;
+                self.pip_animation_start = Some(Instant::now());
+                tracing::info!("BlendingCompositor: PiP ready - starting slide-in animation!");
+            }
+        }
+
+        // Calculate PiP animation progress
+        let pip_slide_progress = if let Some(start_time) = self.pip_animation_start {
+            let elapsed = start_time.elapsed().as_secs_f32();
+            let progress = (elapsed / self.config.pip_slide_duration).min(1.0);
+            // Ease-out cubic: 1 - (1-t)^3
+            1.0 - (1.0 - progress).powi(3)
+        } else {
+            0.0
+        };
+
+        // Determine output dimensions
         let (width, height) = self
             .cached_video_dimensions
             .unwrap_or((self.config.width, self.config.height));
 
-        // Acquire output buffer from ring (avoids CPU-GPU sync)
-        // Recreate all 3 buffers if dimensions changed
+        // Output buffer ring
         if self.output_dimensions != Some((width, height)) {
             let output_desc = PixelBufferDescriptor::new(width, height, PixelFormat::Bgra32);
             let pool = RhiPixelBufferPool::new_with_descriptor(&output_desc)?;
@@ -256,7 +295,6 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             self.output_index = 0;
         }
 
-        // Rotate to next output buffer (safe - GPU finished with this buffer 2 frames ago)
         self.output_index = (self.output_index + 1) % 3;
         let output_buffer = self.output_buffers[self.output_index]
             .as_ref()
@@ -265,7 +303,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         let output_view = texture_cache.create_view(&output_buffer)?;
         let output_metal = output_view.as_metal_texture();
 
-        // Update render pass attachment with current output texture (descriptor cached from setup)
+        // Update render pass
         let render_pass_desc = self.render_pass_desc.as_ref().unwrap();
         render_pass_desc
             .color_attachments()
@@ -279,10 +317,11 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         let render_enc = command_buffer.new_render_command_encoder(render_pass_desc);
         render_enc.set_render_pipeline_state(self.render_pipeline.as_ref().unwrap());
 
-        // Bind textures - use cached views if available, shader handles missing layers
+        // Bind textures
         let has_video = self.cached_video_view.is_some();
         let has_lower_third = self.cached_lower_third_view.is_some();
         let has_watermark = self.cached_watermark_view.is_some();
+        let has_pip = self.cached_pip_view.is_some() && self.pip_ready;
 
         if let Some(ref video_view) = self.cached_video_view {
             render_enc.set_fragment_texture(0, Some(video_view.as_metal_texture()));
@@ -293,33 +332,37 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         if let Some(ref watermark_view) = self.cached_watermark_view {
             render_enc.set_fragment_texture(2, Some(watermark_view.as_metal_texture()));
         }
+        if let Some(ref pip_view) = self.cached_pip_view {
+            render_enc.set_fragment_texture(3, Some(pip_view.as_metal_texture()));
+        }
 
         render_enc.set_fragment_sampler_state(0, Some(self.sampler.as_ref().unwrap()));
 
-        // Rotate to next uniform buffer (ring buffer pattern)
+        // Update uniforms
         self.uniforms_index = (self.uniforms_index + 1) % 3;
         let current_uniforms = self.uniforms_buffers[self.uniforms_index].as_ref().unwrap();
 
-        // Update uniforms in current buffer (safe - GPU finished with this buffer 2 frames ago)
         unsafe {
             let ptr = current_uniforms.contents() as *mut BlendingUniforms;
             (*ptr).has_video = if has_video { 1 } else { 0 };
             (*ptr).has_lower_third = if has_lower_third { 1 } else { 0 };
             (*ptr).has_watermark = if has_watermark { 1 } else { 0 };
-            (*ptr)._padding = 0;
+            (*ptr).has_pip = if has_pip { 1 } else { 0 };
+            (*ptr).pip_slide_progress = pip_slide_progress;
+            (*ptr)._padding1 = 0.0;
+            (*ptr)._padding2 = 0.0;
+            (*ptr)._padding3 = 0.0;
         }
 
-        // Single buffer binding instead of 3 separate set_fragment_bytes calls
         render_enc.set_fragment_buffer(0, Some(current_uniforms), 0);
 
         render_enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
         render_enc.end_encoding();
 
         command_buffer.commit();
-        // No wait_until_completed() needed - ring buffer guarantees GPU is done with output_buffer
 
-        // Always output a frame
-        let timestamp_ns = (frame_count as i64) * 16_666_667; // ~60fps in ns
+        // Output frame
+        let timestamp_ns = (frame_count as i64) * 16_666_667;
         let output_frame = VideoFrame::from_buffer(output_buffer, timestamp_ns, frame_count);
         self.video_out.write(output_frame);
 
@@ -328,7 +371,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         let total_ms = process_start.elapsed().as_secs_f64() * 1000.0;
         if total_ms > 20.0 {
             tracing::warn!(
-                "BlendingCompositor: Frame {} slow: total={:.1}ms",
+                "BlendingCompositor: Frame {} slow: {:.1}ms",
                 frame_count,
                 total_ms
             );

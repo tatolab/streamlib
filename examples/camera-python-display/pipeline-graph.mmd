@@ -8,8 +8,8 @@ flowchart TD
     end
 
     subgraph Processing["⚡ Video Processing"]
-        Cyberpunk["🦀 CyberpunkCompositor<br/><i>Vision Segmentation</i>"]
-        Blending["🎨 BlendingCompositor<br/><i>Layer Blending</i>"]
+        Avatar["🐍 AvatarCharacter<br/><i>MediaPipe Pose → PiP Overlay</i>"]
+        Blending["🎨 BlendingCompositor<br/><i>Breaking News PiP</i>"]
         CRT["📺 CrtFilmGrain<br/><i>80s Film Effect</i>"]
         Glitch["🐍 CyberpunkGlitch<br/><i>RGB Separation</i>"]
     end
@@ -22,9 +22,12 @@ flowchart TD
         API["🌐 ApiServerProcessor<br/><i>:9000</i>"]
     end
 
-    %% Main video pipeline
-    Camera -->|video| Cyberpunk
-    Cyberpunk -->|video_out| Blending
+    %% Camera feeds both compositor (base) and avatar (PiP)
+    Camera -->|video| Blending
+    Camera -->|video| Avatar
+
+    %% Avatar outputs to PiP input (slides in from right)
+    Avatar -->|pip_out| Blending
 
     %% Parallel overlay inputs
     LowerThird -->|video_out| Blending
@@ -41,7 +44,7 @@ flowchart TD
     classDef output fill:#22c55e,stroke:#86efac,color:#000
     classDef utility fill:#8b5cf6,stroke:#c4b5fd,color:#fff
 
-    class Camera,Cyberpunk,Blending,CRT rust
-    class LowerThird,Watermark,Glitch python
+    class Camera,Blending,CRT rust
+    class Avatar,LowerThird,Watermark,Glitch python
     class Display output
     class API utility
