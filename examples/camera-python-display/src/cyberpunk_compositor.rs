@@ -19,7 +19,6 @@ use objc2_vision::{
     VNImageOption, VNImageRequestHandler, VNPixelBufferObservation, VNRequest,
 };
 use serde::{Deserialize, Serialize};
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -140,8 +139,8 @@ pub struct CyberpunkCompositorProcessor {
     config: CyberpunkCompositorConfig,
 
     gpu_context: Option<GpuContext>,
-    metal_command_queue: Option<metal::CommandQueue>,
     render_pipeline: Option<metal::RenderPipelineState>,
+    render_pass_desc: Option<metal::RenderPassDescriptor>,
     sampler: Option<metal::SamplerState>,
     uniforms_buffer: Option<metal::Buffer>,
     default_mask_texture: Option<metal::Texture>,
@@ -252,14 +251,8 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
             self.start_time = Some(Instant::now());
             self.texture_cache = None; // Deferred to avoid race with camera init
 
-            let metal_device = ctx.gpu.metal_device();
-            let metal_device_ref = {
-                use metal::foreign_types::ForeignTypeRef;
-                let device_ptr = metal_device.device() as *const _ as *mut c_void;
-                unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) }
-            };
-
-            let command_queue = metal_device_ref.new_command_queue();
+            // Get Metal device ref for shader/resource creation
+            let metal_device_ref = ctx.gpu.device().metal_device_ref();
 
             // Compile shaders
             let shader_source = include_str!("shaders/cyberpunk_compositor.metal");
@@ -339,8 +332,18 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
                 metal::MTLResourceOptions::CPUCacheModeDefaultCache,
             );
 
-            self.metal_command_queue = Some(command_queue);
+            // Create render pass descriptor (reused each frame, only texture attachment updated)
+            let render_pass_desc_ref = metal::RenderPassDescriptor::new();
+            let color_attachment = render_pass_desc_ref
+                .color_attachments()
+                .object_at(0)
+                .unwrap();
+            color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+            color_attachment.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
+            color_attachment.set_store_action(metal::MTLStoreAction::Store);
+
             self.render_pipeline = Some(render_pipeline);
+            self.render_pass_desc = Some(render_pass_desc_ref.to_owned());
             self.blur_h_pipeline = Some(blur_h_pipeline);
             self.blur_v_pipeline = Some(blur_v_pipeline);
             self.sampler = Some(sampler);
@@ -458,13 +461,9 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
         let input_view = texture_cache.create_view(frame.buffer())?;
         let input_metal = input_view.as_metal_texture();
 
-        let command_queue = self.metal_command_queue.as_ref().unwrap();
-        let metal_device = gpu_ctx.metal_device();
-        let metal_device_ref = {
-            use metal::foreign_types::ForeignTypeRef;
-            let device_ptr = metal_device.device() as *const _ as *mut c_void;
-            unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) }
-        };
+        // Use shared command queue from GpuContext
+        let command_queue = gpu_ctx.command_queue().metal_queue_ref();
+        let metal_device_ref = gpu_ctx.device().metal_device_ref();
 
         // Check for new mask from segmentation thread
         if self.mask_ready.swap(false, Ordering::AcqRel) {
@@ -568,13 +567,13 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
             (*ptr)._padding = 0.0;
         }
 
-        // Render
-        let render_pass_desc = metal::RenderPassDescriptor::new();
-        let color_attachment = render_pass_desc.color_attachments().object_at(0).unwrap();
-        color_attachment.set_texture(Some(output_metal));
-        color_attachment.set_load_action(metal::MTLLoadAction::Clear);
-        color_attachment.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
-        color_attachment.set_store_action(metal::MTLStoreAction::Store);
+        // Render - update cached descriptor's texture attachment
+        let render_pass_desc = self.render_pass_desc.as_ref().unwrap();
+        render_pass_desc
+            .color_attachments()
+            .object_at(0)
+            .unwrap()
+            .set_texture(Some(output_metal));
 
         let render_enc = command_buffer.new_render_command_encoder(render_pass_desc);
         render_enc.set_render_pipeline_state(self.render_pipeline.as_ref().unwrap());
@@ -592,6 +591,7 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
         render_enc.end_encoding();
 
         command_buffer.commit();
+        command_buffer.wait_until_completed();
 
         // Output frame
         let output_frame = VideoFrame::from_buffer(output_buffer, timestamp_ns, frame_number);

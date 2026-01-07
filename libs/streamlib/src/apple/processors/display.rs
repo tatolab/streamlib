@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::metal::MetalDevice;
 use crate::core::rhi::{PixelFormat, RhiTextureCache};
 use crate::core::{LinkInput, Result, RuntimeContext, StreamError, VideoFrame};
 use metal;
@@ -84,8 +83,6 @@ pub struct AppleDisplayProcessor {
     #[allow(dead_code)]
     metal_layer: Option<Retained<CAMetalLayer>>,
     layer_addr: Arc<AtomicUsize>,
-    metal_device: Option<MetalDevice>,
-    metal_command_queue: Option<metal::CommandQueue>,
     gpu_context: Option<crate::core::GpuContext>,
     window_id: AppleWindowId,
     window_title: String,
@@ -119,25 +116,6 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                 .clone()
                 .unwrap_or_else(|| "streamlib Display".to_string());
 
-            tracing::trace!("Display {}: Creating MetalDevice...", self.window_id.0);
-            let metal_device = MetalDevice::new()?;
-            tracing::trace!("Display {}: MetalDevice created", self.window_id.0);
-
-            // Create metal crate command queue from objc2 Metal device
-            tracing::trace!(
-                "Display {}: Creating Metal command queue...",
-                self.window_id.0
-            );
-            let metal_command_queue = {
-                use metal::foreign_types::ForeignTypeRef;
-                let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-                let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-                metal_device_ref.new_command_queue()
-            };
-            tracing::trace!("Display {}: Metal command queue created", self.window_id.0);
-
-            self.metal_command_queue = Some(metal_command_queue);
-
             // Initialize state for game loop rendering
             self.running = Arc::new(AtomicBool::new(false));
 
@@ -148,10 +126,8 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                 self.config.drawable_count
             );
 
-            // Create Metal render pipeline for scaling
-            use metal::foreign_types::ForeignTypeRef;
-            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-            let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
+            // Use shared Metal device from GpuContext
+            let metal_device_ref = ctx.gpu.device().metal_device_ref();
 
             // Compile Metal shader
             let shader_source = include_str!("shaders/fullscreen.metal");
@@ -218,7 +194,6 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             self.metal_sampler = Some(sampler_state);
             self.format_buffer_rgba = Some(format_buffer_rgba);
             self.format_buffer_bgra = Some(format_buffer_bgra);
-            self.metal_device = Some(metal_device);
 
             tracing::info!(
                 "Display {}: Initialized ({}x{}) with Metal render pipeline",
@@ -253,13 +228,14 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
         let running = Arc::clone(&self.running);
         let window_id = self.window_id.0;
 
-        let metal_command_queue = self
-            .metal_command_queue
-            .as_ref()
-            .ok_or_else(|| {
-                StreamError::Configuration("Metal command queue not initialized".into())
-            })?
-            .clone();
+        // Clone gpu context for creating cache texture in render thread
+        let gpu_context = self
+            .gpu_context
+            .clone()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+
+        // Clone shared command queue from GpuContext for render thread
+        let command_queue = gpu_context.command_queue().clone();
 
         let render_pipeline = self
             .metal_render_pipeline
@@ -287,12 +263,6 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             .ok_or_else(|| StreamError::Configuration("Format buffer BGRA not initialized".into()))?
             .clone();
 
-        // Clone gpu context for creating cache texture in render thread
-        let gpu_context = self
-            .gpu_context
-            .clone()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
-
         // Signal that the render thread should run
         running.store(true, Ordering::Release);
 
@@ -314,6 +284,15 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                         None
                     }
                 };
+
+                // Create render pass descriptor (reused each frame, only texture attachment updated)
+                let render_pass_descriptor = metal::RenderPassDescriptor::new().to_owned();
+                {
+                    let color_attachment = render_pass_descriptor.color_attachments().object_at(0).unwrap();
+                    color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                    color_attachment.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
+                    color_attachment.set_store_action(metal::MTLStoreAction::Store);
+                }
 
                 while running.load(Ordering::Acquire) {
                     // Get layer address (window may not be ready yet)
@@ -368,14 +347,8 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                     unsafe {
                         let drawable_texture = drawable.texture();
 
-                        // Create command buffer and render pass
-                        let command_buffer = metal_command_queue.new_command_buffer();
-
-                        let render_pass_descriptor = metal::RenderPassDescriptor::new();
-                        let color_attachment = render_pass_descriptor
-                            .color_attachments()
-                            .object_at(0)
-                            .unwrap();
+                        // Create command buffer from shared queue
+                        let command_buffer = command_queue.metal_queue_ref().new_command_buffer();
 
                         // Convert objc2 texture to metal-rs texture reference
                         use metal::foreign_types::ForeignTypeRef;
@@ -384,14 +357,15 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                         let drawable_texture_ref =
                             metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
 
-                        color_attachment.set_texture(Some(drawable_texture_ref));
-                        color_attachment.set_load_action(metal::MTLLoadAction::Clear);
-                        color_attachment
-                            .set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
-                        color_attachment.set_store_action(metal::MTLStoreAction::Store);
+                        // Update cached descriptor's texture attachment
+                        render_pass_descriptor
+                            .color_attachments()
+                            .object_at(0)
+                            .unwrap()
+                            .set_texture(Some(drawable_texture_ref));
 
                         let render_encoder =
-                            command_buffer.new_render_command_encoder(render_pass_descriptor);
+                            command_buffer.new_render_command_encoder(&render_pass_descriptor);
 
                         // Set pipeline and resources
                         render_encoder.set_render_pipeline_state(&render_pipeline);
@@ -559,11 +533,13 @@ impl AppleDisplayProcessor::Processor {
         let width = self.width;
         let height = self.height;
         let window_title = self.window_title.clone();
-        let metal_device = self
-            .metal_device
+
+        // Get objc2 device handle from shared GpuContext for CAMetalLayer
+        let gpu_ctx = self
+            .gpu_context
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Metal device not initialized".into()))?
-            .clone_device();
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+        let metal_device = gpu_ctx.metal_device().clone_device();
         let window_id = self.window_id;
         let layer_addr = Arc::clone(&self.layer_addr);
         let vsync = self.config.vsync;

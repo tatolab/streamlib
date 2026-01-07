@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::rhi::{
-    GpuDevice, PixelBufferDescriptor, PixelFormat, RhiPixelBuffer, RhiPixelBufferPool,
+    CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelFormat, RhiCommandQueue, RhiPixelBuffer,
+    RhiPixelBufferPool,
 };
 use crate::core::Result;
 use std::collections::HashMap;
@@ -122,6 +123,21 @@ impl GpuContext {
     /// Acquire a texture from the pool.
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         self.texture_pool.acquire(desc)
+    }
+
+    /// Get the shared command queue.
+    ///
+    /// All processors should use this shared queue rather than creating their own.
+    pub fn command_queue(&self) -> &RhiCommandQueue {
+        self.device.command_queue()
+    }
+
+    /// Create a command buffer from the shared queue.
+    ///
+    /// Command buffers are single-use: create, record commands, commit.
+    /// This is the recommended way to submit GPU work in processors.
+    pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
+        self.command_queue().create_command_buffer()
     }
 
     /// Initialize GPU context for the current platform.

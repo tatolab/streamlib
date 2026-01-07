@@ -8,6 +8,7 @@ use std::sync::Mutex;
 pub mod format_converter_macos;
 pub mod gl_interop_macos;
 mod metal_command_buffer;
+mod metal_command_queue;
 mod metal_device;
 mod metal_texture;
 pub mod pixel_buffer_pool_macos;
@@ -16,6 +17,7 @@ mod pixel_format_macos;
 pub mod texture_cache_macos;
 
 pub use metal_command_buffer::MetalCommandBuffer;
+pub use metal_command_queue::MetalCommandQueue;
 pub use metal_device::MetalDevice;
 pub use metal_texture::MetalTexture;
 

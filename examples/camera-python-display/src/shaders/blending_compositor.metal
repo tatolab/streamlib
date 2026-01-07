@@ -33,35 +33,40 @@ vertex VertexOut blending_vertex(uint vertexID [[vertex_id]]) {
     return out;
 }
 
-// Alpha blend fragment shader
+// Porter-Duff "over" alpha compositing for premultiplied alpha textures
 // Layer order: video (base) -> lower_third -> watermark (top)
+//
+// Photoshop-style layer stacking: each layer composites on top of the result below.
+// Formula for premultiplied alpha (Skia GPU output):
+//   out.rgb = src.rgb + dst.rgb * (1 - src.a)
+//   out.a   = src.a   + dst.a   * (1 - src.a)
 fragment float4 blending_fragment(
     VertexOut in [[stage_in]],
     texture2d<float> videoTexture [[texture(0)]],
     texture2d<float> lowerThirdTexture [[texture(1)]],
     texture2d<float> watermarkTexture [[texture(2)]],
     sampler textureSampler [[sampler(0)]],
-    constant uint &hasLowerThird [[buffer(0)]],
-    constant uint &hasWatermark [[buffer(1)]]
+    constant uint &hasVideo [[buffer(0)]],
+    constant uint &hasLowerThird [[buffer(1)]],
+    constant uint &hasWatermark [[buffer(2)]]
 ) {
     float2 uv = in.texCoord;
 
-    // Base layer: video
-    float4 result = videoTexture.sample(textureSampler, uv);
+    // Base layer: video (or black if not yet available)
+    float4 result = hasVideo ? videoTexture.sample(textureSampler, uv) : float4(0.0, 0.0, 0.0, 1.0);
 
-    // Middle layer: lower third (alpha blend)
+    // Middle layer: lower third (premultiplied alpha blend)
     if (hasLowerThird) {
-        float4 lowerThird = lowerThirdTexture.sample(textureSampler, uv);
-        // Standard alpha blending: out = src * src.a + dst * (1 - src.a)
-        result.rgb = lowerThird.rgb * lowerThird.a + result.rgb * (1.0 - lowerThird.a);
-        result.a = lowerThird.a + result.a * (1.0 - lowerThird.a);
+        float4 src = lowerThirdTexture.sample(textureSampler, uv);
+        result.rgb = src.rgb + result.rgb * (1.0 - src.a);
+        result.a = src.a + result.a * (1.0 - src.a);
     }
 
-    // Top layer: watermark (alpha blend)
+    // Top layer: watermark (premultiplied alpha blend)
     if (hasWatermark) {
-        float4 watermark = watermarkTexture.sample(textureSampler, uv);
-        result.rgb = watermark.rgb * watermark.a + result.rgb * (1.0 - watermark.a);
-        result.a = watermark.a + result.a * (1.0 - watermark.a);
+        float4 src = watermarkTexture.sample(textureSampler, uv);
+        result.rgb = src.rgb + result.rgb * (1.0 - src.a);
+        result.a = src.a + result.a * (1.0 - src.a);
     }
 
     return result;

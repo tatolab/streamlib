@@ -63,11 +63,12 @@ impl TextureCacheMacOS {
     ///
     /// Automatically flushes stale cache entries every [`AUTO_FLUSH_INTERVAL`] calls.
     pub fn create_view(&self, buffer: &RhiPixelBuffer) -> Result<RhiTextureView> {
-        // Auto-flush stale entries periodically to prevent memory accumulation
-        let count = self.view_count.fetch_add(1, Ordering::Relaxed);
-        if count > 0 && count.is_multiple_of(AUTO_FLUSH_INTERVAL) {
-            self.flush();
-        }
+        // Auto-flush disabled temporarily - causes video skip
+        // TODO: Investigate why flush causes frame discontinuity
+        // let count = self.view_count.fetch_add(1, Ordering::Relaxed);
+        // if count > 0 && count.is_multiple_of(AUTO_FLUSH_INTERVAL) {
+        //     self.flush();
+        // }
 
         let cv_buffer = buffer.as_ptr();
         let format = buffer.format();

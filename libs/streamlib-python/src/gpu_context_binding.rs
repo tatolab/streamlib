@@ -12,7 +12,7 @@ use streamlib::core::rhi::{PixelFormat, TextureFormat, TextureUsages};
 use streamlib::{GlContext, GpuContext, TexturePoolDescriptor};
 
 use crate::gl_context_binding::PyGlContext;
-use crate::pixel_buffer_binding::{PyPixelFormat, PyRhiPixelBuffer};
+use crate::pixel_buffer_binding::PyRhiPixelBuffer;
 use crate::shader_handle::PyPooledTextureHandle;
 
 /// Python-accessible reference to the shared GpuContext.
@@ -107,23 +107,37 @@ impl PyGpuContext {
     /// Args:
     ///     width: Buffer width in pixels
     ///     height: Buffer height in pixels
-    ///     format: PixelFormat enum value
+    ///     format: Pixel format string: "bgra32", "rgba32", "argb32", "rgba64",
+    ///             "nv12_video", "nv12_full", "uyvy422", "yuyv422", "gray8"
     ///
     /// Returns:
     ///     PixelBuffer ready for rendering
     ///
     /// Example:
-    ///     from streamlib import PixelFormat
-    ///     output = ctx.gpu.acquire_pixel_buffer(1920, 1080, PixelFormat.Bgra32)
-    ///     # Or passthrough from input:
-    ///     output = ctx.gpu.acquire_pixel_buffer(width, height, input_buffer.format)
+    ///     output = ctx.gpu.acquire_pixel_buffer(1920, 1080, "bgra32")
     fn acquire_pixel_buffer(
         &self,
         width: u32,
         height: u32,
-        format: PyPixelFormat,
+        format: &str,
     ) -> PyResult<PyRhiPixelBuffer> {
-        let pixel_format: PixelFormat = format.into();
+        let pixel_format = match format.to_lowercase().as_str() {
+            "bgra32" | "bgra" => PixelFormat::Bgra32,
+            "rgba32" | "rgba" => PixelFormat::Rgba32,
+            "argb32" | "argb" => PixelFormat::Argb32,
+            "rgba64" => PixelFormat::Rgba64,
+            "nv12_video" | "nv12_video_range" => PixelFormat::Nv12VideoRange,
+            "nv12_full" | "nv12_full_range" => PixelFormat::Nv12FullRange,
+            "uyvy422" | "uyvy" => PixelFormat::Uyvy422,
+            "yuyv422" | "yuyv" => PixelFormat::Yuyv422,
+            "gray8" | "gray" => PixelFormat::Gray8,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unsupported pixel format '{}'. Use: bgra32, rgba32, argb32, rgba64, nv12_video, nv12_full, uyvy422, yuyv422, gray8",
+                    other
+                )))
+            }
+        };
         let buffer = self
             .inner
             .acquire_pixel_buffer(width, height, pixel_format)

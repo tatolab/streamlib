@@ -1,17 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → Cyberpunk Pipeline (Serial)
+//! Camera → Cyberpunk Pipeline (Parallel Blending)
 //!
-//! Serial video processing pipeline:
+//! Parallel video processing pipeline with multi-layer compositing:
 //! - Rust Vision-based person segmentation with cyberpunk color grading
-//! - Python lower third overlay
-//! - Python watermark overlay
+//! - Python lower third overlay (continuous RGBA generator)
+//! - Python watermark overlay (continuous RGBA generator)
+//! - Rust blending compositor (alpha blends all layers)
 //! - Python glitch effect (RGB separation, scanlines, slice displacement)
 //!
 //! Pipeline Architecture:
 //! ```
-//!   Camera → Cyberpunk → FrameBoost → LowerThird → Watermark → Glitch → Display
+//!   Camera ──→ Cyberpunk ──→ BlendingCompositor ──→ Glitch ──→ Display
+//!                                  ↑         ↑
+//!   LowerThird (16ms) ─────────────┘         │
+//!   Watermark (16ms) ────────────────────────┘
 //! ```
 //!
 //! ## Prerequisites
@@ -24,9 +28,8 @@
 //! cargo run -p camera-python-display
 //! ```
 
-// mod blending_compositor;  // Unused - parallel compositor for multi-stream blending
+mod blending_compositor;
 mod cyberpunk_compositor;
-mod frame_boost;
 
 use std::path::PathBuf;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
@@ -35,9 +38,8 @@ use streamlib::{
 };
 use streamlib_python::{PythonContinuousHostProcessor, PythonProcessorConfig};
 
-// use blending_compositor::{BlendingCompositorConfig, BlendingCompositorProcessor};
+use blending_compositor::{BlendingCompositorConfig, BlendingCompositorProcessor};
 use cyberpunk_compositor::{CyberpunkCompositorConfig, CyberpunkCompositorProcessor};
-use frame_boost::{FrameBoostConfig, FrameBoostProcessor};
 
 fn main() -> Result<()> {
     // Initialize tracing subscriber FIRST
@@ -56,7 +58,7 @@ fn main() -> Result<()> {
     // THEN initialize LogTracer to forward Python logging (via pyo3-log) to tracing
     tracing_log::LogTracer::init().expect("Failed to initialize LogTracer");
 
-    println!("=== Camera → Cyberpunk Pipeline (Serial) ===\n");
+    println!("=== Camera → Cyberpunk Pipeline (Parallel Blending) ===\n");
 
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
@@ -80,39 +82,40 @@ fn main() -> Result<()> {
     println!("✓ Rust cyberpunk compositor added: {}\n", cyberpunk);
 
     // =========================================================================
-    // FRAME BOOST: 120fps continuous passthrough (after segmentation)
+    // Blending Compositor (Parallel layer blending)
     // =========================================================================
 
-    println!("⚡ Adding frame boost processor (120fps continuous)...");
-    let frame_boost =
-        runtime.add_processor(FrameBoostProcessor::node(FrameBoostConfig::default()))?;
-    println!("✓ Frame boost added: {}\n", frame_boost);
+    println!("🎨 Adding blending compositor (parallel layer blending)...");
+    let blending = runtime.add_processor(BlendingCompositorProcessor::node(
+        BlendingCompositorConfig::default(),
+    ))?;
+    println!("✓ Blending compositor added: {}\n", blending);
 
     // =========================================================================
-    // SERIAL: Lower Third
+    // PARALLEL: Lower Third (continuous RGBA generator)
     // =========================================================================
 
-    println!("🐍 Adding Python lower third FILTER (serial)...");
+    println!("🐍 Adding Python lower third GENERATOR (parallel, 16ms)...");
     let lower_third =
         runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
             project_path: project_path.clone(),
             class_name: "CyberpunkLowerThird".to_string(),
             entry_point: Some("cyberpunk_lower_third.py".to_string()),
         }))?;
-    println!("✓ Lower third filter added: {}\n", lower_third);
+    println!("✓ Lower third generator added: {}\n", lower_third);
 
     // =========================================================================
-    // SERIAL: Watermark
+    // PARALLEL: Watermark (continuous RGBA generator)
     // =========================================================================
 
-    println!("🐍 Adding Python watermark FILTER (serial)...");
+    println!("🐍 Adding Python watermark GENERATOR (parallel, 16ms)...");
     let watermark =
         runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
             project_path: project_path.clone(),
             class_name: "CyberpunkWatermark".to_string(),
             entry_point: Some("cyberpunk_watermark.py".to_string()),
         }))?;
-    println!("✓ Watermark filter added: {}\n", watermark);
+    println!("✓ Watermark generator added: {}\n", watermark);
 
     // =========================================================================
     // Glitch Effect
@@ -135,8 +138,9 @@ fn main() -> Result<()> {
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: 1920,
         height: 1080,
-        title: Some("Cyberpunk Pipeline".to_string()),
+        title: Some("Cyberpunk Pipeline (Parallel)".to_string()),
         scaling_mode: Default::default(),
+        vsync: false, // Uncapped - run as fast as possible
         ..Default::default()
     }))?;
     println!("✓ Display added: {}\n", display);
@@ -154,12 +158,12 @@ fn main() -> Result<()> {
     println!("   Registry: http://127.0.0.1:9000/registry\n");
 
     // =========================================================================
-    // Connect the Pipeline (SERIAL)
+    // Connect the Pipeline (PARALLEL)
     // =========================================================================
 
-    println!("🔗 Connecting pipeline (serial)...");
+    println!("🔗 Connecting pipeline (parallel blending)...");
 
-    // Camera → Cyberpunk → FrameBoost → LowerThird → Watermark → Glitch → Display
+    // Pipeline 1: Camera → Cyberpunk → BlendingCompositor.video_in
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
         InputLinkPortRef::new(&cyberpunk, "video_in"),
@@ -168,27 +172,30 @@ fn main() -> Result<()> {
 
     runtime.connect(
         OutputLinkPortRef::new(&cyberpunk, "video_out"),
-        InputLinkPortRef::new(&frame_boost, "video_in"),
+        InputLinkPortRef::new(&blending, "video_in"),
     )?;
-    println!("   ✓ Cyberpunk → FrameBoost");
+    println!("   ✓ Cyberpunk → BlendingCompositor.video_in");
 
-    runtime.connect(
-        OutputLinkPortRef::new(&frame_boost, "video_out"),
-        InputLinkPortRef::new(&lower_third, "video_in"),
-    )?;
-    println!("   ✓ FrameBoost → LowerThird");
-
+    // Pipeline 2: LowerThird → BlendingCompositor.lower_third_in
     runtime.connect(
         OutputLinkPortRef::new(&lower_third, "video_out"),
-        InputLinkPortRef::new(&watermark, "video_in"),
+        InputLinkPortRef::new(&blending, "lower_third_in"),
     )?;
-    println!("   ✓ LowerThird → Watermark");
+    println!("   ✓ LowerThird → BlendingCompositor.lower_third_in");
 
+    // Pipeline 3: Watermark → BlendingCompositor.watermark_in
     runtime.connect(
         OutputLinkPortRef::new(&watermark, "video_out"),
+        InputLinkPortRef::new(&blending, "watermark_in"),
+    )?;
+    println!("   ✓ Watermark → BlendingCompositor.watermark_in");
+
+    // BlendingCompositor → Glitch → Display
+    runtime.connect(
+        OutputLinkPortRef::new(&blending, "video_out"),
         InputLinkPortRef::new(&glitch, "video_in"),
     )?;
-    println!("   ✓ Watermark → Glitch");
+    println!("   ✓ BlendingCompositor → Glitch");
 
     runtime.connect(
         OutputLinkPortRef::new(&glitch, "video_out"),
@@ -202,10 +209,11 @@ fn main() -> Result<()> {
     // =========================================================================
 
     println!("▶️  Starting pipeline...");
-    println!("   Architecture (serial with 120fps boost):");
-    println!(
-        "     Camera → Cyberpunk → FrameBoost(120fps) → LowerThird → Watermark → Glitch → Display"
-    );
+    println!("   Architecture (parallel blending):");
+    println!("     Camera ──→ Cyberpunk ──→ BlendingCompositor ──→ Glitch ──→ Display");
+    println!("                                    ↑         ↑");
+    println!("     LowerThird (16ms) ─────────────┘         │");
+    println!("     Watermark (16ms) ────────────────────────┘");
     println!();
     #[cfg(target_os = "macos")]
     println!("   Press Cmd+Q to stop\n");

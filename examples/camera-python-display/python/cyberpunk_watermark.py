@@ -1,17 +1,17 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Cyberpunk spray paint watermark processor - CONTINUOUS SOURCE.
+"""Cyberpunk spray paint watermark processor - CONTINUOUS RGBA GENERATOR.
 
 This processor generates watermark overlay frames independently,
-not dependent on incoming video. It outputs frames with transparent
-background that can be composited with the video stream.
+outputting transparent RGBA textures for compositing by the BlendingCompositor.
 
 Features:
 - Spray paint style "CL" tag with drips and neon glow
 - Animated drip effects
-- Runs at display refresh rate (continuous mode)
+- Runs at 60fps (16ms interval) continuous mode
 - Zero-copy GPU texture binding (stable GL texture IDs)
+- Outputs transparent RGBA (alpha=0 background for layer compositing)
 """
 
 import logging
@@ -19,12 +19,16 @@ import math
 
 import skia
 
-from streamlib import processor, input, output
+from streamlib import processor, output, PixelFormat
 
 logger = logging.getLogger(__name__)
 
 # OpenGL constants
 GL_RGBA8 = 0x8058
+
+# Default output dimensions (will be used for overlay generation)
+DEFAULT_WIDTH = 1920
+DEFAULT_HEIGHT = 1080
 
 
 # =============================================================================
@@ -153,31 +157,27 @@ def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
 
 
 # =============================================================================
-# Cyberpunk Watermark Processor (FILTER - composites onto input)
+# Cyberpunk Watermark Processor (GENERATOR - outputs transparent RGBA)
 # =============================================================================
 
 @processor(
     name="CyberpunkWatermark",
-    description="Spray paint watermark overlay filter",
-    execution="Continuous"
+    description="Spray paint watermark RGBA overlay generator",
+    execution="Continuous",
 )
 class CyberpunkWatermark:
-    """Composites animated spray paint watermark onto incoming video.
+    """Generates animated spray paint watermark as transparent RGBA texture.
 
-    This is a FILTER processor - it takes video input and overlays
-    the watermark onto it.
+    This is a GENERATOR processor - it outputs standalone RGBA textures
+    with transparent backgrounds for compositing by BlendingCompositor.
 
     Features:
     - Neon cyan "CL" circuit-style logo
     - Animated drip effects
     - Magenta splatter accents
     - Zero-copy GPU rendering via Skia + IOSurface
-    - Stable GL texture IDs (create once, update per-frame)
+    - Transparent background (alpha=0) for layer compositing
     """
-
-    @input(schema="VideoFrame")
-    def video_in(self):
-        pass
 
     @output(schema="VideoFrame")
     def video_out(self):
@@ -186,6 +186,11 @@ class CyberpunkWatermark:
     def setup(self, ctx):
         """Initialize Skia with StreamLib's GL context."""
         self.frame_count = 0
+        self.frame_number = 0
+
+        # Output dimensions
+        self.width = DEFAULT_WIDTH
+        self.height = DEFAULT_HEIGHT
 
         # Get StreamLib's GL context
         self.gl_ctx = ctx.gpu._experimental_gl_context()
@@ -196,45 +201,24 @@ class CyberpunkWatermark:
         if self.skia_ctx is None:
             raise RuntimeError("Failed to create Skia GL context")
 
-        # Create reusable texture bindings - these have STABLE texture IDs
-        # Input binding: for reading camera frames
-        self.input_binding = self.gl_ctx.create_texture_binding()
-        # Output binding: for writing composited frames
+        # Create output texture binding (stable GL texture ID)
         self.output_binding = self.gl_ctx.create_texture_binding()
 
-        # Lazy initialization - defer pixel buffer creation to first process()
-        # to avoid race with camera initialization
-        self.output_pixel_buffer = None
-        self.output_skia_surface = None
-        self._gpu_ctx = ctx.gpu  # Store for lazy init
-        self._current_width = 0
-        self._current_height = 0
-
-        logger.info("Cyberpunk Watermark initialized as FILTER")
-
-    def _ensure_resources(self, width: int, height: int, input_format: str):
-        """Lazy-initialize GPU resources on first use or resize."""
-        if self.output_pixel_buffer is not None and self._current_width == width and self._current_height == height:
-            return
-
-        self._current_width = width
-        self._current_height = height
-
-        # Create output pixel buffer using input format (passthrough - no conversion)
-        self.output_pixel_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, input_format)
-        logger.debug(f"Watermark: acquired output buffer with format={input_format}")
+        # Create output pixel buffer for RGBA output
+        self._gpu_ctx = ctx.gpu
+        self.output_pixel_buffer = self._gpu_ctx.acquire_pixel_buffer(
+            self.width, self.height, PixelFormat.BGRA32
+        )
 
         # Update output binding to point to the output buffer
-        # This is a fast rebind operation (no new GL textures created)
         self.output_binding.update(self.output_pixel_buffer)
 
-        # Create Skia surface from output binding's STABLE texture ID
-        # We only recreate this on resize, not every frame
+        # Create Skia surface from output binding's stable texture ID
         output_gl_info = skia.GrGLTextureInfo(
             self.output_binding.target, self.output_binding.id, GL_RGBA8
         )
         output_backend = skia.GrBackendTexture(
-            width, height, skia.GrMipmapped.kNo, output_gl_info
+            self.width, self.height, skia.GrMipmapped.kNo, output_gl_info
         )
         self.output_skia_surface = skia.Surface.MakeFromBackendTexture(
             self.skia_ctx,
@@ -249,83 +233,48 @@ class CyberpunkWatermark:
         if self.output_skia_surface is None:
             raise RuntimeError("Failed to create Skia surface from pixel buffer")
 
-        logger.info(f"Cyberpunk Watermark: GPU resources initialized ({width}x{height})")
+        logger.info(f"Cyberpunk Watermark initialized as GENERATOR ({self.width}x{self.height})")
 
     def process(self, ctx):
-        """Composite watermark overlay onto incoming video frame."""
-        # Read input frame
-        input_frame = ctx.input("video_in").get()
-        if input_frame is None:
-            return  # No input yet
-
+        """Generate watermark overlay frame with transparent background."""
         # Ensure GL context is current
         self.gl_ctx.make_current()
-
-        # Get input frame dimensions (frame is a dict)
-        width = input_frame["width"]
-        height = input_frame["height"]
-        pixel_buffer = input_frame["pixel_buffer"]
-        timestamp_ns = input_frame["timestamp_ns"]
-        frame_number = input_frame["frame_number"]
-        input_format = pixel_buffer.format  # Passthrough: use input's format
-
-        # Lazy-init GPU resources (deferred from setup to avoid race)
-        self._ensure_resources(width, height, input_format)
-
-        # Update input binding to point to current frame's buffer
-        # This is FAST - just rebinds the existing GL texture to new IOSurface
-        self.input_binding.update(pixel_buffer)
-
-        # Create Skia image from input binding's STABLE texture ID
-        input_gl_info = skia.GrGLTextureInfo(
-            self.input_binding.target, self.input_binding.id, GL_RGBA8
-        )
-        input_backend = skia.GrBackendTexture(
-            width, height, skia.GrMipmapped.kNo, input_gl_info
-        )
-        input_image = skia.Image.MakeFromTexture(
-            self.skia_ctx,
-            input_backend,
-            skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
-            skia.ColorType.kBGRA_8888_ColorType,
-            skia.AlphaType.kPremul_AlphaType,
-            None,
-        )
 
         # Get canvas from output surface
         canvas = self.output_skia_surface.getCanvas()
 
-        # Draw input frame first
-        if input_image:
-            canvas.drawImage(input_image, 0, 0)
-        else:
-            # Fallback: clear to black if image creation failed
-            canvas.clear(skia.Color(0, 0, 0, 255))
+        # Clear to fully transparent (alpha=0) for layer compositing
+        canvas.clear(skia.Color(0, 0, 0, 0))
 
         # Draw watermark in lower-right corner
         elapsed = ctx.time.elapsed_secs
-        tag_scale = min(width, height) / 800.0
-        tag_x = width - 100 * tag_scale
-        tag_y = height - 80 * tag_scale
+        tag_scale = min(self.width, self.height) / 800.0
+        tag_x = self.width - 100 * tag_scale
+        tag_y = self.height - 80 * tag_scale
         draw_spray_paint_tag(canvas, tag_x, tag_y, tag_scale, elapsed)
 
         # Flush Skia and GL
         self.output_skia_surface.flushAndSubmit()
         self.gl_ctx.flush()
 
-        # Output composited frame
+        # Output overlay frame
+        timestamp_ns = int(elapsed * 1_000_000_000)
         ctx.output("video_out").set({
             "pixel_buffer": self.output_pixel_buffer,
             "timestamp_ns": timestamp_ns,
-            "frame_number": frame_number,
+            "frame_number": self.frame_number,
         })
 
         self.frame_count += 1
+        self.frame_number += 1
+
+        if self.frame_count == 1:
+            logger.info(f"Watermark: First frame generated ({self.width}x{self.height})")
         if self.frame_count % 60 == 0:
             # Purge unlocked GPU resources to prevent Skia memory accumulation
             self.skia_ctx.freeGpuResources()
-        if self.frame_count % 120 == 0:
-            logger.debug(f"Watermark: processed {self.frame_count} frames")
+        if self.frame_count % 300 == 0:
+            logger.debug(f"Watermark: generated {self.frame_count} frames")
 
     def teardown(self, ctx):
         """Cleanup."""

@@ -5,6 +5,7 @@
 
 use crate::core::Result;
 
+use super::command_queue::RhiCommandQueue;
 use super::texture::{StreamTexture, TextureDescriptor};
 
 /// Platform-agnostic GPU device wrapper.
@@ -12,6 +13,9 @@ use super::texture::{StreamTexture, TextureDescriptor};
 /// This type wraps the platform-specific device implementation and provides
 /// a unified interface for GPU operations. Use the `as_*` methods to "dip down"
 /// to the native device when needed for platform-specific operations.
+///
+/// Includes a shared command queue created at device initialization.
+/// All processors should use this shared queue via [`command_queue`](GpuDevice::command_queue).
 #[derive(Clone)]
 pub struct GpuDevice {
     #[cfg(target_os = "macos")]
@@ -22,6 +26,9 @@ pub struct GpuDevice {
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: std::sync::Arc<crate::windows::rhi::DX12Device>,
+
+    /// Shared command queue for all GPU operations.
+    command_queue: RhiCommandQueue,
 }
 
 impl GpuDevice {
@@ -30,24 +37,39 @@ impl GpuDevice {
         #[cfg(target_os = "macos")]
         {
             let metal_device = crate::apple::rhi::MetalDevice::new()?;
+            let metal_queue = metal_device.create_command_queue_wrapper();
+            let command_queue = RhiCommandQueue {
+                inner: std::sync::Arc::new(metal_queue),
+            };
             Ok(Self {
                 inner: std::sync::Arc::new(metal_device),
+                command_queue,
             })
         }
 
         #[cfg(target_os = "linux")]
         {
             let vulkan_device = crate::linux::rhi::VulkanDevice::new()?;
+            let vulkan_queue = vulkan_device.create_command_queue_wrapper();
+            let command_queue = RhiCommandQueue {
+                inner: std::sync::Arc::new(vulkan_queue),
+            };
             Ok(Self {
                 inner: std::sync::Arc::new(vulkan_device),
+                command_queue,
             })
         }
 
         #[cfg(target_os = "windows")]
         {
             let dx12_device = crate::windows::rhi::DX12Device::new()?;
+            let dx12_queue = dx12_device.create_command_queue_wrapper();
+            let command_queue = RhiCommandQueue {
+                inner: std::sync::Arc::new(dx12_queue),
+            };
             Ok(Self {
                 inner: std::sync::Arc::new(dx12_device),
+                command_queue,
             })
         }
     }
@@ -71,6 +93,14 @@ impl GpuDevice {
             let dx12_texture = self.inner.create_texture(desc)?;
             Ok(StreamTexture::from_dx12(dx12_texture))
         }
+    }
+
+    /// Get the shared command queue.
+    ///
+    /// All processors should use this shared queue rather than creating their own.
+    /// The queue is created once at device initialization and reused.
+    pub fn command_queue(&self) -> &RhiCommandQueue {
+        &self.command_queue
     }
 
     /// Get the underlying Metal device (macOS only).

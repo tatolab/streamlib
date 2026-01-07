@@ -10,7 +10,7 @@ use objc2_metal::{MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice};
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{Result, StreamError};
 
-use super::MetalTexture;
+use super::{MetalCommandQueue, MetalTexture};
 
 /// Metal GPU device.
 pub struct MetalDevice {
@@ -99,6 +99,11 @@ impl MetalDevice {
     /// Clone the command queue handle.
     pub fn clone_command_queue(&self) -> Retained<ProtocolObject<dyn MTLCommandQueue>> {
         Retained::clone(&self.command_queue)
+    }
+
+    /// Create a MetalCommandQueue wrapper for the shared command queue.
+    pub fn create_command_queue_wrapper(&self) -> MetalCommandQueue {
+        MetalCommandQueue::new(self.clone_command_queue())
     }
 
     /// Get the device name.

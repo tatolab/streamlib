@@ -35,6 +35,25 @@ Example:
                 })
 """
 
+# Pixel format constants (pure Python - avoids PyO3 type identity issues)
+class PixelFormat:
+    """Pixel format constants for acquire_pixel_buffer().
+
+    Usage:
+        from streamlib import PixelFormat
+        buffer = ctx.gpu.acquire_pixel_buffer(1920, 1080, PixelFormat.BGRA32)
+    """
+    BGRA32 = "bgra32"
+    RGBA32 = "rgba32"
+    ARGB32 = "argb32"
+    RGBA64 = "rgba64"
+    NV12_VIDEO = "nv12_video"
+    NV12_FULL = "nv12_full"
+    UYVY422 = "uyvy422"
+    YUYV422 = "yuyv422"
+    GRAY8 = "gray8"
+
+
 # Re-export decorators and schema API
 from .decorators import (
     # Processor decorators
@@ -64,7 +83,6 @@ try:
         GpuContext,
         ProcessorContext,
         GpuTexture,
-        CompiledShader,
     )
 except ImportError:
     # Native bindings not available - decorators still work for metadata
@@ -93,5 +111,5 @@ __all__ = [
     "GpuContext",
     "ProcessorContext",
     "GpuTexture",
-    "CompiledShader",
+    "PixelFormat",
 ]

@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::apple::iosurface;
-use crate::core::rhi::{GpuDevice, RhiPixelBuffer, StreamTexture};
+use crate::core::rhi::{GpuDevice, RhiCommandQueue, RhiPixelBuffer, StreamTexture};
 use crate::core::{Result, StreamError};
-use metal;
 use metal::foreign_types::ForeignTypeRef;
 use objc2_core_video::CVPixelBuffer;
 use objc2_io_surface::IOSurface;
@@ -53,7 +52,7 @@ mod ffi {
 pub struct PixelTransferSession {
     session: ffi::VTPixelTransferSessionRef,
     device: Arc<GpuDevice>,
-    command_queue: metal::CommandQueue,
+    command_queue: RhiCommandQueue,
 }
 
 impl PixelTransferSession {
@@ -83,9 +82,8 @@ impl PixelTransferSession {
         // - kVTPixelTransferPropertyKey_DestinationYCbCrMatrix (BT.709)
         // For now, defaults should work for our use case
 
-        // Get metal device reference from RHI and create command queue
-        let metal_device_ref = device.metal_device_ref();
-        let command_queue = metal_device_ref.new_command_queue();
+        // Use shared command queue from device
+        let command_queue = device.command_queue().clone();
 
         Ok(Self {
             session,
@@ -201,7 +199,7 @@ impl PixelTransferSession {
         )?;
 
         // Perform Metal blit (GPU copy)
-        let command_buffer = self.command_queue.new_command_buffer();
+        let command_buffer = self.command_queue.metal_queue_ref().new_command_buffer();
         let blit_encoder = command_buffer.new_blit_command_encoder();
 
         let origin = metal::MTLOrigin { x: 0, y: 0, z: 0 };

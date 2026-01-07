@@ -432,7 +432,9 @@ class CyberpunkGlitch:
 
         # Ensure output buffer exists (lazy init on first use or resize)
         if self.output_buffer is None or self._current_width != width or self._current_height != height:
-            self.output_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, input_buffer.format)
+            # Convert PixelFormat enum to string (acquire_pixel_buffer expects string)
+            format_str = str(input_buffer.format).split('.')[-1].lower()
+            self.output_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, format_str)
             self._current_width = width
             self._current_height = height
 
