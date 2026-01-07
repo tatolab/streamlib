@@ -1,0 +1,252 @@
+=== Camera → Cyberpunk Pipeline (Parallel Blending) ===
+
+[2m2026-01-07T13:07:48.274068Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m Creating StreamRuntime with ID: Rl5uty8tfmqrle7bqxigsuku2
+[2m2026-01-07T13:07:48.274391Z[0m [32m INFO[0m [2mstreamlib::core::runtime_hooks[0m[2m:[0m Running 1 init hook(s)
+[2m2026-01-07T13:07:48.274426Z[0m [32m INFO[0m [2mstreamlib::core::runtime_hooks[0m[2m:[0m Running init hook: Python
+[2m2026-01-07T13:07:48.281111Z[0m [32m INFO[0m [2mstreamlib_python::runtime_init[0m[2m:[0m PythonRuntimeInitHook: Dev mode - ensuring wheel is built
+[2m2026-01-07T13:07:48.282880Z[0m [32m INFO[0m [2mstreamlib_python::wheel_cache[0m[2m:[0m WheelCache: Using cached streamlib-python wheel
+[2m2026-01-07T13:07:48.282914Z[0m [32m INFO[0m [2mstreamlib_python::runtime_init[0m[2m:[0m PythonRuntimeInitHook: Initialization complete
+[2m2026-01-07T13:07:48.282925Z[0m [32m INFO[0m [2mstreamlib::core::runtime_hooks[0m[2m:[0m Init hook 'Python' completed
+[2m2026-01-07T13:07:48.284287Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'ChordGeneratorProcessor'
+[2m2026-01-07T13:07:48.284595Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'AudioOutputProcessor'
+[2m2026-01-07T13:07:48.284666Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'CameraProcessor'
+[2m2026-01-07T13:07:48.284724Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'AudioResamplerProcessor'
+[2m2026-01-07T13:07:48.284764Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'ClapEffectProcessor'
+[2m2026-01-07T13:07:48.284778Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'BufferRechunkerProcessor'
+[2m2026-01-07T13:07:48.284814Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'ApiServerProcessor'
+[2m2026-01-07T13:07:48.284869Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'AudioMixerProcessor'
+[2m2026-01-07T13:07:48.284906Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'AudioCaptureProcessor'
+[2m2026-01-07T13:07:48.284955Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'Mp4WriterProcessor'
+[2m2026-01-07T13:07:48.285000Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'AudioChannelConverterProcessor'
+[2m2026-01-07T13:07:48.285024Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'WebRtcWhepProcessor'
+[2m2026-01-07T13:07:48.285040Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'DisplayProcessor'
+[2m2026-01-07T13:07:48.285064Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'WebRtcWhipProcessor'
+[2m2026-01-07T13:07:48.285112Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'SimplePassthroughProcessor'
+[2m2026-01-07T13:07:48.285139Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'PythonReactiveHostProcessor'
+[2m2026-01-07T13:07:48.285163Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'PythonContinuousHostProcessor'
+[2m2026-01-07T13:07:48.285198Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'PythonManualHostProcessor'
+[2m2026-01-07T13:07:48.285248Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'BlendingCompositor'
+[2m2026-01-07T13:07:48.285261Z[0m [32m INFO[0m [2mstreamlib::core::processors::processor_instance_factory[0m[2m:[0m [register] new processor type registered 'CyberpunkCompositor'
+📷 Adding camera processor...
+✓ Camera added: Pdxr5q310qxz3bj1c7f34whqp
+
+🦀 Adding Rust cyberpunk compositor (Vision segmentation)...
+✓ Rust cyberpunk compositor added: Pdv2vd3mjpbpz8lfqmguvec9m
+
+🎨 Adding blending compositor (parallel layer blending)...
+✓ Blending compositor added: Pjtxe7p6wbhacxwee23u0hmsd
+
+🐍 Adding Python lower third GENERATOR (parallel, 16ms)...
+✓ Lower third generator added: Pf6diur2f15hgvdt6f5r6f15y
+
+🐍 Adding Python watermark GENERATOR (parallel, 16ms)...
+✓ Watermark generator added: Pbbok2n2q1mh4fylvjyaarywo
+
+🐍 Adding Python glitch processor (RGB separation, scanlines)...
+✓ Glitch processor added: Pwa0r3m56ahctaqjoudacxesq
+
+🖥️  Adding display processor...
+✓ Display added: Pz9qy3v198sm9lvyik7wf0ror
+
+🌐 Adding API server processor...
+✓ API server running at http://127.0.0.1:9000
+   Registry: http://127.0.0.1:9000/registry
+
+🔗 Connecting pipeline (parallel blending)...
+   ✓ Camera → Cyberpunk
+   ✓ Cyberpunk → BlendingCompositor.video_in
+   ✓ LowerThird → BlendingCompositor.lower_third_in
+   ✓ Watermark → BlendingCompositor.watermark_in
+   ✓ BlendingCompositor → Glitch
+   ✓ Glitch → Display
+
+▶️  Starting pipeline...
+   Architecture (parallel blending):
+     Camera ──→ Cyberpunk ──→ BlendingCompositor ──→ Glitch ──→ Display
+                                    ↑         ↑
+     LowerThird (16ms) ─────────────┘         │
+     Watermark (16ms) ────────────────────────┘
+
+   Press Cmd+Q to stop
+
+[2m2026-01-07T13:07:48.287963Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [start] Starting runtime
+[2m2026-01-07T13:07:48.287977Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [start] Initializing GPU context...
+[2m2026-01-07T13:07:48.313932Z[0m [32m INFO[0m [2mstreamlib::core::context::gpu_context[0m[2m:[0m GPU: Using Metal device
+[2m2026-01-07T13:07:48.313985Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [start] GPU context initialized
+[2m2026-01-07T13:07:48.335125Z[0m [32m INFO[0m [2mstreamlib::core::context::runtime_context[0m[2m:[0m [ensure_platform_ready] Setting up macOS application
+[2m2026-01-07T13:07:48.339740Z[0m [32m INFO[0m [2mstreamlib::apple::runtime_ext[0m[2m:[0m macOS: App configured (activation policy, menu, delegate)
+[2m2026-01-07T13:07:48.339783Z[0m [32m INFO[0m [2mstreamlib::core::context::runtime_context[0m[2m:[0m [ensure_platform_ready] Verifying macOS platform readiness...
+[2m2026-01-07T13:07:48.411101Z[0m [32m INFO[0m [2mstreamlib::apple::runtime_ext[0m[2m:[0m macOS: Platform verified ready (isFinishedLaunching=true) in 137.625µs
+[2m2026-01-07T13:07:48.411175Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [start] Committing pending graph operations
+[2m2026-01-07T13:07:48.411269Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m Compiling: +8 -0 processors, +6 -0 links, 0 config updates
+[2m2026-01-07T13:07:48.411345Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pdxr5q310qxz3bj1c7f34whqp
+[2m2026-01-07T13:07:48.411517Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pdv2vd3mjpbpz8lfqmguvec9m
+[2m2026-01-07T13:07:48.411553Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pjtxe7p6wbhacxwee23u0hmsd
+[2m2026-01-07T13:07:48.411573Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pf6diur2f15hgvdt6f5r6f15y
+[2m2026-01-07T13:07:48.411598Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pbbok2n2q1mh4fylvjyaarywo
+[2m2026-01-07T13:07:48.411618Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pwa0r3m56ahctaqjoudacxesq
+[2m2026-01-07T13:07:48.411638Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pz9qy3v198sm9lvyik7wf0ror
+[2m2026-01-07T13:07:48.411657Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 1: PREPARE] Preparing Pz67femxiz5bapi5dsq9vsgmb
+[2m2026-01-07T13:07:48.411675Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pdxr5q310qxz3bj1c7f34whqp
+[2m2026-01-07T13:07:48.411739Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Spawning with strategy: dedicated thread 'camera-Pdxr5q310qxz3bj1c7f34whqp' (High priority (< 33ms latency, elevated))
+[2m2026-01-07T13:07:48.411901Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pdv2vd3mjpbpz8lfqmguvec9m
+[2m2026-01-07T13:07:48.411954Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Spawning with strategy: dedicated thread 'compositor-Pdv2vd3mjpbpz8lfqmguvec9m' (Real-time (< 10ms latency, time-constrained))
+[2m2026-01-07T13:07:48.412015Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Thread started: name='processor-Pdxr5q310qxz3bj1c7f34whqp', id=ThreadId(22)
+[2m2026-01-07T13:07:48.412027Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pjtxe7p6wbhacxwee23u0hmsd
+[2m2026-01-07T13:07:48.412039Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Manual mode: skipping thread priority (callbacks use OS threads)
+[2m2026-01-07T13:07:48.412044Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Thread started: name='processor-Pdv2vd3mjpbpz8lfqmguvec9m', id=ThreadId(23)
+[2m2026-01-07T13:07:48.412053Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Spawning with strategy: dedicated thread 'compositor-Pjtxe7p6wbhacxwee23u0hmsd' (Real-time (< 10ms latency, time-constrained))
+[2m2026-01-07T13:07:48.412094Z[0m [32m INFO[0m [2mstreamlib::apple::thread_priority[0m[2m:[0m Applied real-time thread priority (10ms period, 5ms computation, 7ms constraint)
+[2m2026-01-07T13:07:48.412115Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pf6diur2f15hgvdt6f5r6f15y
+[2m2026-01-07T13:07:48.412128Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pf6diur2f15hgvdt6f5r6f15y] Spawning with strategy: dedicated thread (Normal priority (no strict latency))
+[2m2026-01-07T13:07:48.412167Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pbbok2n2q1mh4fylvjyaarywo
+[2m2026-01-07T13:07:48.412127Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Thread started: name='processor-Pjtxe7p6wbhacxwee23u0hmsd', id=ThreadId(24)
+[2m2026-01-07T13:07:48.412197Z[0m [32m INFO[0m [2mstreamlib::apple::thread_priority[0m[2m:[0m Applied real-time thread priority (10ms period, 5ms computation, 7ms constraint)
+[2m2026-01-07T13:07:48.412181Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pbbok2n2q1mh4fylvjyaarywo] Spawning with strategy: dedicated thread (Normal priority (no strict latency))
+[2m2026-01-07T13:07:48.412209Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pf6diur2f15hgvdt6f5r6f15y] Thread started: name='processor-Pf6diur2f15hgvdt6f5r6f15y', id=ThreadId(25)
+[2m2026-01-07T13:07:48.412248Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pwa0r3m56ahctaqjoudacxesq
+[2m2026-01-07T13:07:48.412260Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pbbok2n2q1mh4fylvjyaarywo] Thread started: name='processor-Pbbok2n2q1mh4fylvjyaarywo', id=ThreadId(26)
+[2m2026-01-07T13:07:48.412264Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pwa0r3m56ahctaqjoudacxesq] Spawning with strategy: dedicated thread (Normal priority (no strict latency))
+[2m2026-01-07T13:07:48.412298Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pz9qy3v198sm9lvyik7wf0ror
+[2m2026-01-07T13:07:48.412311Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Spawning with strategy: dedicated thread 'display-Pz9qy3v198sm9lvyik7wf0ror' (High priority (< 33ms latency, elevated))
+[2m2026-01-07T13:07:48.412361Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pwa0r3m56ahctaqjoudacxesq] Thread started: name='processor-Pwa0r3m56ahctaqjoudacxesq', id=ThreadId(27)
+[2m2026-01-07T13:07:48.412369Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 2: SPAWN] Spawning Pz67femxiz5bapi5dsq9vsgmb
+[2m2026-01-07T13:07:48.412382Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Spawning with strategy: dedicated thread (Normal priority (no strict latency))
+[2m2026-01-07T13:07:48.412383Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Thread started: name='processor-Pz9qy3v198sm9lvyik7wf0ror', id=ThreadId(28)
+[2m2026-01-07T13:07:48.412393Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Manual mode: skipping thread priority (callbacks use OS threads)
+[2m2026-01-07T13:07:48.412436Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Thread started: name='processor-Pz67femxiz5bapi5dsq9vsgmb', id=ThreadId(29)
+[2m2026-01-07T13:07:48.412446Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Manual mode: skipping thread priority (callbacks use OS threads)
+[2m2026-01-07T13:07:48.412498Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 3: WIRE] Wiring Lqcqesjug04zbzeseiyv7b9vz
+[2m2026-01-07T13:07:48.412509Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Wiring Pdxr5q310qxz3bj1c7f34whqp.video (Pdxr5q310qxz3bj1c7f34whqp:video) → (Pdv2vd3mjpbpz8lfqmguvec9m:video_in) [Lqcqesjug04zbzeseiyv7b9vz]
+[2m2026-01-07T13:07:48.412827Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Registered link: Lqcqesjug04zbzeseiyv7b9vz (state: Wired)
+[2m2026-01-07T13:07:48.412846Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 3: WIRE] Wiring Lg4n5hejbeyninvg8wvmth6op
+[2m2026-01-07T13:07:48.412854Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Wiring Pdv2vd3mjpbpz8lfqmguvec9m.video_out (Pdv2vd3mjpbpz8lfqmguvec9m:video_out) → (Pjtxe7p6wbhacxwee23u0hmsd:video_in) [Lg4n5hejbeyninvg8wvmth6op]
+[2m2026-01-07T13:07:48.412975Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Registered link: Lg4n5hejbeyninvg8wvmth6op (state: Wired)
+[2m2026-01-07T13:07:48.412995Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 3: WIRE] Wiring Lbd9mebwfteggh10hwy81fzze
+[2m2026-01-07T13:07:48.413003Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Wiring Pf6diur2f15hgvdt6f5r6f15y.video_out (Pf6diur2f15hgvdt6f5r6f15y:video_out) → (Pjtxe7p6wbhacxwee23u0hmsd:lower_third_in) [Lbd9mebwfteggh10hwy81fzze]
+[2m2026-01-07T13:07:48.413112Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Registered link: Lbd9mebwfteggh10hwy81fzze (state: Wired)
+[2m2026-01-07T13:07:48.413131Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 3: WIRE] Wiring Lw11fvbnjh013e2d4sc5x7wsa
+[2m2026-01-07T13:07:48.413139Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Wiring Pbbok2n2q1mh4fylvjyaarywo.video_out (Pbbok2n2q1mh4fylvjyaarywo:video_out) → (Pjtxe7p6wbhacxwee23u0hmsd:watermark_in) [Lw11fvbnjh013e2d4sc5x7wsa]
+[2m2026-01-07T13:07:48.413245Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Registered link: Lw11fvbnjh013e2d4sc5x7wsa (state: Wired)
+[2m2026-01-07T13:07:48.413259Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 3: WIRE] Wiring Ll17db4q9vszmw7nggoa0sr5x
+[2m2026-01-07T13:07:48.413268Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Wiring Pjtxe7p6wbhacxwee23u0hmsd.video_out (Pjtxe7p6wbhacxwee23u0hmsd:video_out) → (Pwa0r3m56ahctaqjoudacxesq:video_in) [Ll17db4q9vszmw7nggoa0sr5x]
+[2m2026-01-07T13:07:48.413357Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Registered link: Ll17db4q9vszmw7nggoa0sr5x (state: Wired)
+[2m2026-01-07T13:07:48.413375Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Phase 3: WIRE] Wiring Lbd89ilttrpcorguv2cj9jfyl
+[2m2026-01-07T13:07:48.413383Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Wiring Pwa0r3m56ahctaqjoudacxesq.video_out (Pwa0r3m56ahctaqjoudacxesq:video_out) → (Pz9qy3v198sm9lvyik7wf0ror:video) [Lbd89ilttrpcorguv2cj9jfyl]
+[2m2026-01-07T13:07:48.413488Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::wire_link_op[0m[2m:[0m Registered link: Lbd89ilttrpcorguv2cj9jfyl (state: Wired)
+[2m2026-01-07T13:07:48.413573Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Calling setup on thread 'processor-Pdxr5q310qxz3bj1c7f34whqp' (id=ThreadId(22)) - no locks held
+[2m2026-01-07T13:07:48.413585Z[0m [32m INFO[0m [2mstreamlib::apple::processors::camera[0m[2m:[0m Camera: setup() complete
+[2m2026-01-07T13:07:48.413613Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Calling setup on thread 'processor-Pdv2vd3mjpbpz8lfqmguvec9m' (id=ThreadId(23)) - no locks held
+[2m2026-01-07T13:07:48.413619Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Calling setup on thread 'processor-Pjtxe7p6wbhacxwee23u0hmsd' (id=ThreadId(24)) - no locks held
+[2m2026-01-07T13:07:48.413624Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Setup completed successfully
+[2m2026-01-07T13:07:48.413626Z[0m [32m INFO[0m [2mcamera_python_display::cyberpunk_compositor[0m[2m:[0m CyberpunkCompositor: Setting up (reactive mode)...
+[2m2026-01-07T13:07:48.413641Z[0m [32m INFO[0m [2mcamera_python_display::blending_compositor[0m[2m:[0m BlendingCompositor: Setting up (reactive mode)...
+[2m2026-01-07T13:07:48.413640Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Calling setup on thread 'processor-Pz67femxiz5bapi5dsq9vsgmb' (id=ThreadId(29)) - no locks held
+[2m2026-01-07T13:07:48.413649Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pbbok2n2q1mh4fylvjyaarywo] Calling setup on thread 'processor-Pbbok2n2q1mh4fylvjyaarywo' (id=ThreadId(26)) - no locks held
+[2m2026-01-07T13:07:48.413649Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pf6diur2f15hgvdt6f5r6f15y] Calling setup on thread 'processor-Pf6diur2f15hgvdt6f5r6f15y' (id=ThreadId(25)) - no locks held
+[2m2026-01-07T13:07:48.413659Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Calling setup on thread 'processor-Pz9qy3v198sm9lvyik7wf0ror' (id=ThreadId(28)) - no locks held
+[2m2026-01-07T13:07:48.413733Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Setup completed successfully
+[2m2026-01-07T13:07:48.413691Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m Compile complete: CompileResult { +8 -0 processors, +6 -0 links, 0 configs }
+[2m2026-01-07T13:07:48.413733Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Thread started (Manual)
+[2m2026-01-07T13:07:48.413657Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pwa0r3m56ahctaqjoudacxesq] Calling setup on thread 'processor-Pwa0r3m56ahctaqjoudacxesq' (id=ThreadId(27)) - no locks held
+[2m2026-01-07T13:07:48.413764Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Thread started (Manual)
+[2m2026-01-07T13:07:48.413778Z[0m [32m INFO[0m [2mstreamlib_python::python_processor_core[0m[2m:[0m PythonProcessorCore: Setting up processor Pbbok2n2q1mh4fylvjyaarywo in runtime Rl5uty8tfmqrle7bqxigsuku2
+[2m2026-01-07T13:07:48.413831Z[0m [32m INFO[0m [2mstreamlib_python::python_processor_core[0m[2m:[0m PythonProcessorCore: Setting up processor Pwa0r3m56ahctaqjoudacxesq in runtime Rl5uty8tfmqrle7bqxigsuku2
+[2m2026-01-07T13:07:48.413786Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [start] Runtime started (platform verified)
+[2m2026-01-07T13:07:48.413802Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Invoking start()...
+[2m2026-01-07T13:07:48.413909Z[0m [32m INFO[0m [2mstreamlib::apple::processors::camera[0m[2m:[0m Camera: Callback-driven capture started (buffer-centric)
+[2m2026-01-07T13:07:48.413937Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] start() completed successfully
+[2m2026-01-07T13:07:48.413779Z[0m [32m INFO[0m [2mstreamlib_python::python_processor_core[0m[2m:[0m PythonProcessorCore: Setting up processor Pf6diur2f15hgvdt6f5r6f15y in runtime Rl5uty8tfmqrle7bqxigsuku2
+[2m2026-01-07T13:07:48.413836Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Invoking start()...
+[2m2026-01-07T13:07:48.414043Z[0m [32m INFO[0m [2mstreamlib::core::signals[0m[2m:[0m macOS signal handlers installed (Ctrl+C via ctrlc, SIGTERM via signal-hook)
+[2m2026-01-07T13:07:48.414069Z[0m [32m INFO[0m [2mstreamlib::apple::runtime_ext[0m[2m:[0m macOS: Event loop starting
+[2m2026-01-07T13:07:48.414149Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Creating venv at '/Users/fonta/.streamlib/runtimes/Rl5uty8tfmqrle7bqxigsuku2/processors/Pwa0r3m56ahctaqjoudacxesq/venv'
+[2m2026-01-07T13:07:48.414241Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Creating venv at '/Users/fonta/.streamlib/runtimes/Rl5uty8tfmqrle7bqxigsuku2/processors/Pf6diur2f15hgvdt6f5r6f15y/venv'
+[2m2026-01-07T13:07:48.414259Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Creating venv at '/Users/fonta/.streamlib/runtimes/Rl5uty8tfmqrle7bqxigsuku2/processors/Pbbok2n2q1mh4fylvjyaarywo/venv'
+[2m2026-01-07T13:07:48.414365Z[0m [32m INFO[0m [2mstreamlib::apple::processors::display[0m[2m:[0m Display 1: Game loop mode (vsync=true, drawable_count=2)
+[2m2026-01-07T13:07:48.416385Z[0m [32m INFO[0m [2mcamera_python_display::blending_compositor[0m[2m:[0m BlendingCompositor: Initialized
+[2m2026-01-07T13:07:48.416440Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Setup completed successfully
+[2m2026-01-07T13:07:48.416453Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Thread started (Reactive (runtime calls process() when input data arrives))
+[2m2026-01-07T13:07:48.416562Z[0m [32m INFO[0m [2mstreamlib::apple::processors::display[0m[2m:[0m Display Cyberpunk Pipeline (Parallel): Initialized (1920x1080) with Metal render pipeline
+[2m2026-01-07T13:07:48.416577Z[0m [32m INFO[0m [2mstreamlib::apple::processors::display[0m[2m:[0m Display 1: Window creation dispatched, processor ready
+[2m2026-01-07T13:07:48.416594Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Setup completed successfully
+[2m2026-01-07T13:07:48.416602Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Thread started (Manual)
+[2m2026-01-07T13:07:48.416608Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Invoking start()...
+[2m2026-01-07T13:07:48.416631Z[0m [32m INFO[0m [2mcamera_python_display::cyberpunk_compositor[0m[2m:[0m CyberpunkCompositor: Initialized
+[2m2026-01-07T13:07:48.416639Z[0m [32m INFO[0m [2mstreamlib::apple::processors::display[0m[2m:[0m Display 1: Game loop rendering started
+[2m2026-01-07T13:07:48.416646Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] start() completed successfully
+[2m2026-01-07T13:07:48.416655Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Setup completed successfully
+[2m2026-01-07T13:07:48.416664Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Thread started (Reactive (runtime calls process() when input data arrives))
+[2m2026-01-07T13:07:48.416673Z[0m [32m INFO[0m [2mcamera_python_display::cyberpunk_compositor[0m[2m:[0m Vision thread: applied real-time priority
+[2m2026-01-07T13:07:48.416915Z[0m [32m INFO[0m [2mcamera_python_display::cyberpunk_compositor[0m[2m:[0m Vision segmentation thread started (quality=0, format=OneComponent8)
+[2m2026-01-07T13:07:48.417250Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] start() completed successfully
+[2m2026-01-07T13:07:48.417497Z[0m [32m INFO[0m [2mstreamlib::core::processors::api_server[0m[2m:[0m Api server listening on 127.0.0.1:9000
+[2m2026-01-07T13:07:48.417512Z[0m [32m INFO[0m [2mstreamlib::core::processors::api_server[0m[2m:[0m OpenAPI spec available at http://127.0.0.1:9000/api/openapi.json
+[2m2026-01-07T13:07:48.425105Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Installing project dependencies from '/Users/fonta/Repositories/tatolab/streamlib/examples/camera-python-display/python/pyproject.toml'
+[2m2026-01-07T13:07:48.425105Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Installing project dependencies from '/Users/fonta/Repositories/tatolab/streamlib/examples/camera-python-display/python/pyproject.toml'
+[2m2026-01-07T13:07:48.425263Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Installing project dependencies from '/Users/fonta/Repositories/tatolab/streamlib/examples/camera-python-display/python/pyproject.toml'
+[2m2026-01-07T13:07:48.813569Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Installing streamlib-python from wheel '/Users/fonta/.streamlib/cache/wheels/streamlib-0.1.0-cp310-abi3-macosx_11_0_arm64.whl'
+[2m2026-01-07T13:07:48.873157Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Installing streamlib-python from wheel '/Users/fonta/.streamlib/cache/wheels/streamlib-0.1.0-cp310-abi3-macosx_11_0_arm64.whl'
+[2m2026-01-07T13:07:48.873257Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Installing streamlib-python from wheel '/Users/fonta/.streamlib/cache/wheels/streamlib-0.1.0-cp310-abi3-macosx_11_0_arm64.whl'
+[2m2026-01-07T13:07:49.591281Z[0m [31mERROR[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pf6diur2f15hgvdt6f5r6f15y] Setup failed: Invalid configuration: Failed to load Python module: TypeError: processor() got an unexpected keyword argument 'execution_interval_ms'
+[2m2026-01-07T13:07:49.591320Z[0m [31mERROR[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pbbok2n2q1mh4fylvjyaarywo] Setup failed: Invalid configuration: Failed to load Python module: TypeError: processor() got an unexpected keyword argument 'execution_interval_ms'
+[2m2026-01-07T13:07:49.776820Z[0m [31mERROR[0m [2mstreamlib::core::compiler::compiler_ops::spawn_processor_op[0m[2m:[0m [Pwa0r3m56ahctaqjoudacxesq] Setup failed: Invalid configuration: Failed to load Python module: ImportError: Loaded module 'streamlib_processor' not found in sys.modules
+[2m2026-01-07T13:07:49.956369Z[0m [32m INFO[0m [2mstreamlib::apple::rhi::pixel_buffer_pool_macos[0m[2m:[0m CVPixelBufferPool: Creating pool on main thread: 1920x1080, format=Bgra32, cv_format=0x42475241 ('BGRA')
+[2m2026-01-07T13:07:49.957278Z[0m [32m INFO[0m [2mstreamlib::apple::rhi::pixel_buffer_pool_macos[0m[2m:[0m CVPixelBufferPool: Creating pool on main thread: 1920x1080, format=Bgra32, cv_format=0x42475241 ('BGRA')
+[2m2026-01-07T13:07:54.106294Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [stop] Beginning graceful shutdown
+[2m2026-01-07T13:07:54.106387Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [stop] Queued removal of 8 processor(s)
+[2m2026-01-07T13:07:54.106405Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m Compiling: +0 -8 processors, +0 -0 links, 0 config updates
+[2m2026-01-07T13:07:54.106422Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pdxr5q310qxz3bj1c7f34whqp
+[2m2026-01-07T13:07:54.106467Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Received shutdown signal
+[2m2026-01-07T13:07:54.106483Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Invoking stop()...
+[2m2026-01-07T13:07:54.157521Z[0m [32m INFO[0m [2mstreamlib::apple::processors::camera[0m[2m:[0m Camera : Stopped (127 frames)
+[2m2026-01-07T13:07:54.157557Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] stop() completed successfully
+[2m2026-01-07T13:07:54.157593Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Invoking teardown()...
+[2m2026-01-07T13:07:54.157601Z[0m [32m INFO[0m [2mstreamlib::apple::processors::camera[0m[2m:[0m Camera : Teardown (generated 127 frames)
+[2m2026-01-07T13:07:54.157622Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] teardown() completed successfully
+[2m2026-01-07T13:07:54.157630Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Thread stopped
+[2m2026-01-07T13:07:54.157698Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pdxr5q310qxz3bj1c7f34whqp] Processor thread joined successfully
+[2m2026-01-07T13:07:54.157821Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pdv2vd3mjpbpz8lfqmguvec9m
+[2m2026-01-07T13:07:54.157846Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Received shutdown signal
+[2m2026-01-07T13:07:54.157862Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Invoking teardown()...
+[2m2026-01-07T13:07:54.157884Z[0m [32m INFO[0m [2mcamera_python_display::cyberpunk_compositor[0m[2m:[0m Vision segmentation thread exiting
+[2m2026-01-07T13:07:54.157971Z[0m [32m INFO[0m [2mcamera_python_display::cyberpunk_compositor[0m[2m:[0m CyberpunkCompositor: Shutdown (127 frames)
+[2m2026-01-07T13:07:54.157983Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] teardown() completed successfully
+[2m2026-01-07T13:07:54.157991Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Thread stopped
+[2m2026-01-07T13:07:54.158196Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pdv2vd3mjpbpz8lfqmguvec9m] Processor thread joined successfully
+[2m2026-01-07T13:07:54.159279Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pjtxe7p6wbhacxwee23u0hmsd
+[2m2026-01-07T13:07:54.159309Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Received shutdown signal
+[2m2026-01-07T13:07:54.159318Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Invoking teardown()...
+[2m2026-01-07T13:07:54.159326Z[0m [32m INFO[0m [2mcamera_python_display::blending_compositor[0m[2m:[0m BlendingCompositor: Shutdown (127 frames)
+[2m2026-01-07T13:07:54.159335Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] teardown() completed successfully
+[2m2026-01-07T13:07:54.159341Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Thread stopped
+[2m2026-01-07T13:07:54.159489Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pjtxe7p6wbhacxwee23u0hmsd] Processor thread joined successfully
+[2m2026-01-07T13:07:54.160365Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pf6diur2f15hgvdt6f5r6f15y
+[2m2026-01-07T13:07:54.160397Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pf6diur2f15hgvdt6f5r6f15y] Processor thread joined successfully
+[2m2026-01-07T13:07:54.160436Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Cleaning up venv at '/Users/fonta/.streamlib/runtimes/Rl5uty8tfmqrle7bqxigsuku2/processors/Pf6diur2f15hgvdt6f5r6f15y/venv'
+[2m2026-01-07T13:07:54.323161Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pbbok2n2q1mh4fylvjyaarywo
+[2m2026-01-07T13:07:54.323240Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pbbok2n2q1mh4fylvjyaarywo] Processor thread joined successfully
+[2m2026-01-07T13:07:54.323276Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Cleaning up venv at '/Users/fonta/.streamlib/runtimes/Rl5uty8tfmqrle7bqxigsuku2/processors/Pbbok2n2q1mh4fylvjyaarywo/venv'
+[2m2026-01-07T13:07:54.493695Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pwa0r3m56ahctaqjoudacxesq
+[2m2026-01-07T13:07:54.493764Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pwa0r3m56ahctaqjoudacxesq] Processor thread joined successfully
+[2m2026-01-07T13:07:54.493804Z[0m [32m INFO[0m [2mstreamlib_python::venv_manager[0m[2m:[0m VenvManager: Cleaning up venv at '/Users/fonta/.streamlib/runtimes/Rl5uty8tfmqrle7bqxigsuku2/processors/Pwa0r3m56ahctaqjoudacxesq/venv'
+[2m2026-01-07T13:07:54.654591Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pz9qy3v198sm9lvyik7wf0ror
+[2m2026-01-07T13:07:54.654660Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Received shutdown signal
+[2m2026-01-07T13:07:54.654676Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Invoking stop()...
+[2m2026-01-07T13:07:54.654869Z[0m [32m INFO[0m [2mstreamlib::apple::processors::display[0m[2m:[0m Display 1: Stopped
+[2m2026-01-07T13:07:54.654879Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] stop() completed successfully
+[2m2026-01-07T13:07:54.654887Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Invoking teardown()...
+[2m2026-01-07T13:07:54.654894Z[0m [32m INFO[0m [2mstreamlib::apple::processors::display[0m[2m:[0m Display Cyberpunk Pipeline (Parallel): Teardown
+[2m2026-01-07T13:07:54.654912Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] teardown() completed successfully
+[2m2026-01-07T13:07:54.654918Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Thread stopped
+[2m2026-01-07T13:07:54.654967Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pz9qy3v198sm9lvyik7wf0ror] Processor thread joined successfully
+[2m2026-01-07T13:07:54.655708Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [REMOVE] Pz67femxiz5bapi5dsq9vsgmb
+[2m2026-01-07T13:07:54.655728Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Received shutdown signal
+[2m2026-01-07T13:07:54.655737Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Invoking stop()...
+[2m2026-01-07T13:07:54.655787Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] stop() completed successfully
+[2m2026-01-07T13:07:54.655794Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Invoking teardown()...
+[2m2026-01-07T13:07:54.655802Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] teardown() completed successfully
+[2m2026-01-07T13:07:54.655808Z[0m [32m INFO[0m [2mstreamlib::core::execution::thread_runner[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Thread stopped
+[2m2026-01-07T13:07:54.655862Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m [Pz67femxiz5bapi5dsq9vsgmb] Processor thread joined successfully
+[2m2026-01-07T13:07:54.655903Z[0m [32m INFO[0m [2mstreamlib::core::compiler::compiler[0m[2m:[0m Compile complete: CompileResult { +0 -8 processors, +0 -0 links, 0 configs }
+[2m2026-01-07T13:07:54.655923Z[0m [32m INFO[0m [2mstreamlib::core::runtime::runtime[0m[2m:[0m [stop] Graceful shutdown complete

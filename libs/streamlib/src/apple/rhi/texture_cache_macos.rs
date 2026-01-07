@@ -5,7 +5,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::channel;
 
 use metal::foreign_types::ForeignTypeRef;
@@ -15,6 +15,8 @@ use super::COREVIDEO_INIT_LOCK;
 
 /// Auto-flush interval: flush stale cache entries every N texture creations.
 /// 60 = roughly once per second at 60fps.
+/// NOTE: Currently disabled - investigating frame discontinuity issues.
+#[allow(dead_code)]
 const AUTO_FLUSH_INTERVAL: u64 = 60;
 use crate::apple::corevideo_ffi::{
     kCVReturnSuccess, CFRelease, CVMetalTextureCacheCreate,
@@ -31,6 +33,8 @@ use crate::core::{Result, StreamError};
 pub struct TextureCacheMacOS {
     cache: CVMetalTextureCacheRef,
     /// Counter for auto-flush. Incremented on each create_view call.
+    /// NOTE: Currently unused - auto-flush disabled.
+    #[allow(dead_code)]
     view_count: AtomicU64,
 }
 
