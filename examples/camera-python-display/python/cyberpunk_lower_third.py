@@ -1,14 +1,19 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Cyberpunk-style lower third overlay processor using Skia GPU rendering.
+"""Cyberpunk-style lower third overlay processor - CONTINUOUS SOURCE.
+
+This processor generates lower third overlay frames independently,
+not dependent on incoming video. It outputs frames with transparent
+background that can be composited with the video stream.
 
 Features:
 - Slide-in animation with "back" easing (overshoot) for snappy Cyberpunk feel
 - Cyberpunk 2077 color palette (cyan, magenta, yellow accents)
 - Bitter font (from Cyberpunk website)
-- Glitch/scan line effects
-- Zero-copy GPU texture sharing via IOSurface
+- Scan line effects
+- Runs at display refresh rate (continuous mode)
+- Zero-copy GPU texture binding (stable GL texture IDs)
 """
 
 import logging
@@ -50,14 +55,6 @@ def ease_out_expo(t: float) -> float:
     return 1 if t == 1 else 1 - pow(2, -10 * t)
 
 
-def ease_in_out_cubic(t: float) -> float:
-    """Smooth cubic ease in-out."""
-    if t < 0.5:
-        return 4 * t * t * t
-    else:
-        return 1 - pow(-2 * t + 2, 3) / 2
-
-
 # =============================================================================
 # Lower Third Drawing
 # =============================================================================
@@ -75,7 +72,6 @@ def draw_lower_third(
 
     # Animation timing
     slide_duration = 0.6  # seconds
-    hold_start = 1.0      # when to start showing full
 
     # Calculate animation progress
     if elapsed < slide_duration:
@@ -123,10 +119,11 @@ def draw_lower_third(
     cut_path.lineTo(panel_x + panel_width, panel_y + cut_size)
     cut_path.close()
 
-    # Draw cut in dark color (creates angular look)
+    # Draw cut in transparent (creates angular look)
     cut_paint = skia.Paint(
-        Color=skia.Color(10, 10, 15, 255),
+        Color=skia.Color(0, 0, 0, 0),
         AntiAlias=True,
+        BlendMode=skia.BlendMode.kClear,
     )
     canvas.drawPath(cut_path, cut_paint)
 
@@ -208,19 +205,27 @@ def draw_lower_third(
 
 
 # =============================================================================
-# Cyberpunk Lower Third Processor
+# Cyberpunk Lower Third Processor (FILTER - composites onto input)
 # =============================================================================
 
-@processor(name="CyberpunkLowerThird", description="Cyberpunk-style lower third overlay with Skia")
+@processor(
+    name="CyberpunkLowerThird",
+    description="Cyberpunk-style lower third overlay filter",
+    execution="Continuous"
+)
 class CyberpunkLowerThird:
-    """Renders animated lower third overlay in Cyberpunk 2077 style.
+    """Composites animated lower third overlay onto incoming video.
+
+    This is a FILTER processor - it takes video input and overlays
+    the lower third graphic onto it.
 
     Features:
     - Slide-in animation with back easing (overshoot)
     - Cyberpunk color palette
     - Bitter font for authentic look
-    - Glitch effects and scan lines
+    - Scan lines
     - Zero-copy GPU rendering via Skia + IOSurface
+    - Stable GL texture IDs (create once, update per-frame)
     """
 
     @input(schema="VideoFrame")
@@ -248,95 +253,121 @@ class CyberpunkLowerThird:
         if self.skia_ctx is None:
             raise RuntimeError("Failed to create Skia GL context")
 
+        # Create reusable texture bindings - these have STABLE texture IDs
+        # Input binding: for reading camera frames
+        self.input_binding = self.gl_ctx.create_texture_binding()
+        # Output binding: for writing composited frames
+        self.output_binding = self.gl_ctx.create_texture_binding()
+
+        # Lazy initialization - defer pixel buffer creation to first process()
+        # to avoid race with camera initialization
+        self.output_pixel_buffer = None
+        self.output_skia_surface = None
+        self._gpu_ctx = ctx.gpu  # Store for lazy init
+        self._current_width = 0
+        self._current_height = 0
+
         # Load Bitter font
         self.typeface = skia.Typeface.MakeFromName("Bitter", skia.FontStyle.Bold())
         if self.typeface is None:
             logger.warning("Bitter font not found, falling back to default")
             self.typeface = skia.Typeface.MakeDefault()
 
-        # Surface cache
-        self._surface_cache = {}
+        logger.info(f"Cyberpunk Lower Third initialized as FILTER (font: {self.typeface.getFamilyName()})")
 
-        logger.info(f"Cyberpunk Lower Third initialized (font: {self.typeface.getFamilyName()})")
-
-    def _get_or_create_surface(self, width, height, gl_tex_id, gl_target):
-        """Get cached Skia surface or create new one."""
-        cache_key = (width, height, gl_tex_id)
-
-        if cache_key in self._surface_cache:
-            return self._surface_cache[cache_key]
-
-        gl_info = skia.GrGLTextureInfo(gl_target, gl_tex_id, GL_RGBA8)
-        backend_texture = skia.GrBackendTexture(
-            width, height, skia.GrMipmapped.kNo, gl_info
-        )
-
-        surface = skia.Surface.MakeFromBackendTexture(
-            self.skia_ctx,
-            backend_texture,
-            skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
-            0,
-            skia.ColorType.kRGBA_8888_ColorType,
-            None,
-            None,
-        )
-
-        if surface is None:
-            raise RuntimeError(f"Failed to create Skia surface from GL texture {gl_tex_id}")
-
-        if len(self._surface_cache) > 10:
-            self._surface_cache.clear()
-        self._surface_cache[cache_key] = surface
-
-        return surface
-
-    def process(self, ctx):
-        """Render lower third overlay on each frame."""
-        frame = ctx.input("video_in").get()
-        if frame is None:
+    def _ensure_resources(self, width: int, height: int, input_format: str):
+        """Lazy-initialize GPU resources on first use or resize."""
+        if self.output_pixel_buffer is not None and self._current_width == width and self._current_height == height:
             return
 
-        width = frame["width"]
-        height = frame["height"]
-        input_texture = frame["texture"]
+        self._current_width = width
+        self._current_height = height
 
-        # Log input IOSurface ID for texture flow debugging
-        input_iosurface_id = getattr(input_texture, 'iosurface_id', None)
-        logger.info(f"CyberpunkLowerThird: INPUT IOSurface ID={input_iosurface_id}")
+        # Create output pixel buffer using input format (passthrough - no conversion)
+        self.output_pixel_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, input_format)
+        logger.debug(f"Lower Third: acquired output buffer with format={input_format}")
 
-        # Acquire output surface
-        output_tex = ctx.gpu.acquire_surface(width, height)
+        # Update output binding to point to the output buffer
+        # This is a fast rebind operation (no new GL textures created)
+        self.output_binding.update(self.output_pixel_buffer)
 
-        # Bind textures to GL
-        input_gl_id = input_texture._experimental_gl_texture_id(self.gl_ctx)
-        output_gl_id = output_tex._experimental_gl_texture_id(self.gl_ctx)
-        gl_target = self.gl_ctx.texture_target
+        # Create Skia surface from output binding's STABLE texture ID
+        # We only recreate this on resize, not every frame
+        output_gl_info = skia.GrGLTextureInfo(
+            self.output_binding.target, self.output_binding.id, GL_RGBA8
+        )
+        output_backend = skia.GrBackendTexture(
+            width, height, skia.GrMipmapped.kNo, output_gl_info
+        )
+        self.output_skia_surface = skia.Surface.MakeFromBackendTexture(
+            self.skia_ctx,
+            output_backend,
+            skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
+            0,
+            skia.ColorType.kBGRA_8888_ColorType,
+            None,
+            None,
+        )
 
-        # Get Skia surface for output
-        output_surface = self._get_or_create_surface(width, height, output_gl_id, gl_target)
-        canvas = output_surface.getCanvas()
+        if self.output_skia_surface is None:
+            raise RuntimeError("Failed to create Skia surface from pixel buffer")
 
-        # Create input image
-        input_gl_info = skia.GrGLTextureInfo(gl_target, input_gl_id, GL_RGBA8)
-        input_backend = skia.GrBackendTexture(width, height, skia.GrMipmapped.kNo, input_gl_info)
+        logger.info(f"Cyberpunk Lower Third: GPU resources initialized ({width}x{height})")
+
+    def process(self, ctx):
+        """Composite lower third overlay onto incoming video frame."""
+        # Read input frame
+        input_frame = ctx.input("video_in").get()
+        if input_frame is None:
+            return  # No input yet
+
+        # Ensure GL context is current
+        self.gl_ctx.make_current()
+
+        # Get input frame dimensions (frame is a dict)
+        width = input_frame["width"]
+        height = input_frame["height"]
+        pixel_buffer = input_frame["pixel_buffer"]
+        timestamp_ns = input_frame["timestamp_ns"]
+        frame_number = input_frame["frame_number"]
+        input_format = pixel_buffer.format  # Passthrough: use input's format
+
+        # Lazy-init GPU resources (deferred from setup to avoid race)
+        self._ensure_resources(width, height, input_format)
+
+        # Update input binding to point to current frame's buffer
+        # This is FAST - just rebinds the existing GL texture to new IOSurface
+        self.input_binding.update(pixel_buffer)
+
+        # Create Skia image from input binding's STABLE texture ID
+        # Note: We create this each frame because the underlying buffer changes,
+        # but the texture ID is stable so Skia can cache effectively
+        input_gl_info = skia.GrGLTextureInfo(
+            self.input_binding.target, self.input_binding.id, GL_RGBA8
+        )
+        input_backend = skia.GrBackendTexture(
+            width, height, skia.GrMipmapped.kNo, input_gl_info
+        )
         input_image = skia.Image.MakeFromTexture(
             self.skia_ctx,
             input_backend,
             skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
-            skia.ColorType.kRGBA_8888_ColorType,
+            skia.ColorType.kBGRA_8888_ColorType,
             skia.AlphaType.kPremul_AlphaType,
             None,
         )
 
-        if input_image is None:
-            logger.warning("Failed to create input image, passing through")
-            ctx.output("video_out").set(frame)
-            return
+        # Get canvas from output surface
+        canvas = self.output_skia_surface.getCanvas()
 
-        # Draw input frame
-        canvas.drawImage(input_image, 0, 0)
+        # Draw input frame first
+        if input_image:
+            canvas.drawImage(input_image, 0, 0)
+        else:
+            # Fallback: clear to black if image creation failed
+            canvas.clear(skia.Color(0, 0, 0, 255))
 
-        # Draw lower third overlay
+        # Draw lower third overlay on top
         elapsed = ctx.time.elapsed_secs
         draw_lower_third(
             canvas,
@@ -348,30 +379,26 @@ class CyberpunkLowerThird:
             self.typeface,
         )
 
-        # Flush
-        output_surface.flushAndSubmit()
+        # Flush Skia and GL
+        self.output_skia_surface.flushAndSubmit()
         self.gl_ctx.flush()
 
-        # Log output IOSurface ID for texture flow debugging
-        output_iosurface_id = output_tex.iosurface_id
-        logger.info(f"CyberpunkLowerThird: OUTPUT IOSurface ID={output_iosurface_id} (input was {input_iosurface_id})")
-
-        # Output
+        # Output composited frame
         ctx.output("video_out").set({
-            "texture": output_tex.texture,
-            "width": width,
-            "height": height,
-            "timestamp_ns": frame["timestamp_ns"],
-            "frame_number": frame["frame_number"],
+            "pixel_buffer": self.output_pixel_buffer,
+            "timestamp_ns": timestamp_ns,
+            "frame_number": frame_number,
         })
 
         self.frame_count += 1
+        if self.frame_count % 60 == 0:
+            # Purge unlocked GPU resources to prevent Skia memory accumulation
+            self.skia_ctx.freeGpuResources()
         if self.frame_count % 120 == 0:
-            logger.debug(f"Processed {self.frame_count} frames")
+            logger.debug(f"Lower Third: processed {self.frame_count} frames")
 
     def teardown(self, ctx):
         """Cleanup."""
-        self._surface_cache.clear()
         if self.skia_ctx:
             self.skia_ctx.abandonContext()
         logger.info(f"Cyberpunk Lower Third shutdown ({self.frame_count} frames)")

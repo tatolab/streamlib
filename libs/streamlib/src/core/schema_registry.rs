@@ -430,8 +430,7 @@ mod tests {
         let field_names: Vec<_> = video.fields.iter().map(|f| f.name.as_str()).collect();
         assert!(field_names.contains(&"timestamp_ns"));
         assert!(field_names.contains(&"frame_number"));
-        assert!(field_names.contains(&"width"));
-        assert!(field_names.contains(&"height"));
+        // Note: width/height are now methods derived from the buffer, not struct fields
 
         // Verify AudioFrame fields, read behavior, and default capacity
         let audio = SCHEMA_REGISTRY.get("AudioFrame").unwrap();

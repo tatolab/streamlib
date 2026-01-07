@@ -1,22 +1,30 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Python bindings for GpuContext with texture pool access.
+//! Python bindings for GpuContext - thin wrapper over shared Rust GpuContext.
+//!
+//! IMPORTANT: Python processors NEVER own their context. This is a reference
+//! to the shared GpuContext provided by the Rust runtime. All pool management,
+//! caching, and resource allocation happens on the Rust side.
 
 use pyo3::prelude::*;
-use streamlib::core::rhi::{TextureFormat, TextureUsages};
+use streamlib::core::rhi::{PixelFormat, TextureFormat, TextureUsages};
 use streamlib::{GlContext, GpuContext, TexturePoolDescriptor};
 
 use crate::gl_context_binding::PyGlContext;
+use crate::pixel_buffer_binding::{PyPixelFormat, PyRhiPixelBuffer};
 use crate::shader_handle::PyPooledTextureHandle;
 
-/// Python-accessible GpuContext for texture pool operations.
+/// Python-accessible reference to the shared GpuContext.
+///
+/// This is a thin wrapper that calls through to the Rust GpuContext.
+/// All resource management (pools, caches) is handled on the Rust side.
 ///
 /// Access via `ctx.gpu` in processor methods.
 #[pyclass(name = "GpuContext")]
 pub struct PyGpuContext {
     inner: GpuContext,
-    /// Lazily-created GL context for interop
+    /// Lazily-created GL context for interop (one per processor due to GL's single-threaded nature)
     gl_context: Option<PyGlContext>,
 }
 
@@ -89,6 +97,38 @@ impl PyGpuContext {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
 
         Ok(PyPooledTextureHandle::new(handle))
+    }
+
+    /// Acquire a pixel buffer from the shared runtime pool.
+    ///
+    /// Calls through to the shared GpuContext - pools are cached by (width, height, format)
+    /// at the runtime level, shared across all processors.
+    ///
+    /// Args:
+    ///     width: Buffer width in pixels
+    ///     height: Buffer height in pixels
+    ///     format: PixelFormat enum value
+    ///
+    /// Returns:
+    ///     PixelBuffer ready for rendering
+    ///
+    /// Example:
+    ///     from streamlib import PixelFormat
+    ///     output = ctx.gpu.acquire_pixel_buffer(1920, 1080, PixelFormat.Bgra32)
+    ///     # Or passthrough from input:
+    ///     output = ctx.gpu.acquire_pixel_buffer(width, height, input_buffer.format)
+    fn acquire_pixel_buffer(
+        &self,
+        width: u32,
+        height: u32,
+        format: PyPixelFormat,
+    ) -> PyResult<PyRhiPixelBuffer> {
+        let pixel_format: PixelFormat = format.into();
+        let buffer = self
+            .inner
+            .acquire_pixel_buffer(width, height, pixel_format)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        Ok(PyRhiPixelBuffer::new(buffer))
     }
 
     /// Get the OpenGL context for GPU interop (experimental).

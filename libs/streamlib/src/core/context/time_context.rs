@@ -70,7 +70,7 @@ mod tests {
         let ctx = TimeContext::new();
         thread::sleep(Duration::from_millis(100));
         let secs = ctx.elapsed_secs();
-        assert!(secs >= 0.09 && secs < 0.2, "should be ~0.1 seconds");
+        assert!((0.09..0.2).contains(&secs), "should be ~0.1 seconds");
     }
 
     #[test]

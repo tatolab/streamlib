@@ -17,6 +17,7 @@ use crate::core::rhi::{StreamTexture, TextureFormat};
 use crate::core::{Result, StreamError};
 
 // FFI binding to get IOSurface ID for cross-process sharing
+#[allow(clashing_extern_declarations)]
 #[link(name = "IOSurface", kind = "framework")]
 extern "C" {
     fn IOSurfaceGetID(surface: *const IOSurface) -> u32;
@@ -30,8 +31,8 @@ pub fn get_iosurface_id(surface: &IOSurface) -> u32 {
 /// Convert RHI texture format to IOSurface pixel format.
 fn rhi_format_to_pixel_format(format: TextureFormat) -> Result<PixelFormat> {
     match format {
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(PixelFormat::Bgra8Unorm),
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(PixelFormat::Rgba8Unorm),
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(PixelFormat::Bgra32),
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(PixelFormat::Rgba32),
         _ => Err(StreamError::TextureError(format!(
             "Unsupported texture format for IOSurface: {:?}",
             format
@@ -98,7 +99,7 @@ mod tests {
     #[test]
     fn test_get_iosurface_id() {
         let surface =
-            create_iosurface(64, 64, PixelFormat::Rgba8Unorm).expect("Failed to create IOSurface");
+            create_iosurface(64, 64, PixelFormat::Rgba32).expect("Failed to create IOSurface");
 
         let id = get_iosurface_id(&surface);
         // ID should be non-zero for a valid IOSurface

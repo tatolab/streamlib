@@ -304,17 +304,6 @@ impl PooledTextureHandle {
     pub fn metal_texture(&self) -> &metal::TextureRef {
         self.texture.as_metal_texture()
     }
-
-    /// Bind this texture to an OpenGL texture and return the binding info.
-    ///
-    /// This enables interop with OpenGL-based libraries like Skia.
-    /// See [`StreamTexture::gl_texture_binding`] for details.
-    pub fn gl_texture_binding(
-        &self,
-        gl_ctx: &mut crate::core::rhi::GlContext,
-    ) -> crate::core::Result<crate::core::rhi::GlTextureBinding> {
-        self.texture.gl_texture_binding(gl_ctx)
-    }
 }
 
 impl Drop for PooledTextureHandle {

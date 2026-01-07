@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::apple::iosurface;
-use crate::core::rhi::{GpuDevice, StreamTexture};
+use crate::core::rhi::{GpuDevice, RhiPixelBuffer, StreamTexture};
 use crate::core::{Result, StreamError};
 use metal;
 use metal::foreign_types::ForeignTypeRef;
@@ -113,6 +113,15 @@ impl PixelTransferSession {
         }
 
         Ok(dest_nv12_buffer)
+    }
+
+    /// Converts an RhiPixelBuffer (containing CVPixelBuffer) to NV12 CVPixelBuffer.
+    ///
+    /// This is the buffer-centric path for VideoFrame encoding. The source buffer
+    /// is typically BGRA from camera capture or BGRA from video decoder.
+    pub fn convert_buffer_to_nv12(&self, buffer: &RhiPixelBuffer) -> Result<*mut CVPixelBuffer> {
+        let source_ptr = buffer.ref_.as_ptr() as *mut CVPixelBuffer;
+        self.transfer_rgba_to_nv12(source_ptr, buffer.width, buffer.height)
     }
 
     /// Step 1: Uses Metal blit to copy texture data into RGBA CVPixelBuffer

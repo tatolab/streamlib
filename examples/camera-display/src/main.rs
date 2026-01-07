@@ -60,6 +60,7 @@ fn run_typed_mode() -> Result<()> {
     println!("📷 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
         device_id: None,
+        ..Default::default()
     }))?;
     println!("✓ Camera added: {}\n", camera);
 
@@ -69,6 +70,7 @@ fn run_typed_mode() -> Result<()> {
         height: 1080,
         title: Some("streamlib Camera Display".to_string()),
         scaling_mode: Default::default(),
+        ..Default::default()
     }))?;
     println!("✓ Display added: {}\n", display);
 

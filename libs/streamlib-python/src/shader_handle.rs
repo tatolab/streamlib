@@ -7,8 +7,6 @@ use pyo3::prelude::*;
 use streamlib::core::rhi::StreamTexture;
 use streamlib::PooledTextureHandle;
 
-use crate::gl_context_binding::PyGlContext;
-
 /// Opaque GPU texture handle.
 ///
 /// Python code cannot access the underlying pixel data directly.
@@ -51,32 +49,6 @@ impl PyGpuTexture {
     #[getter]
     fn iosurface_id(&self) -> Option<u32> {
         self.texture.iosurface_id()
-    }
-
-    /// Bind this texture to an OpenGL texture and return the GL texture ID (experimental).
-    ///
-    /// This enables interop with OpenGL-based libraries like skia-python.
-    /// The GL context must be current before calling this method.
-    ///
-    /// Args:
-    ///     gl_ctx: The GlContext from ctx.gpu._experimental_gl_context()
-    ///
-    /// Returns:
-    ///     The OpenGL texture ID (GLuint)
-    fn _experimental_gl_texture_id(&self, gl_ctx: &PyGlContext) -> PyResult<u32> {
-        let binding = self
-            .texture
-            .gl_texture_binding(&mut gl_ctx.lock())
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
-
-        Ok(binding.texture_id)
-    }
-
-    /// Get the OpenGL texture target for this texture (experimental).
-    ///
-    /// Returns GL_TEXTURE_RECTANGLE (0x84F5) for IOSurface-backed textures on macOS.
-    fn _experimental_gl_texture_target(&self) -> u32 {
-        streamlib::gl_constants::GL_TEXTURE_RECTANGLE
     }
 
     fn __repr__(&self) -> String {
@@ -199,44 +171,6 @@ impl PyPooledTextureHandle {
         }
 
         Ok(dict.into())
-    }
-
-    /// Bind this texture to an OpenGL texture and return the GL texture ID (experimental).
-    ///
-    /// This enables interop with OpenGL-based libraries like skia-python.
-    /// The GL context must be current before calling this method.
-    ///
-    /// Args:
-    ///     gl_ctx: The GlContext from ctx.gpu._experimental_gl_context()
-    ///
-    /// Returns:
-    ///     The OpenGL texture ID (GLuint)
-    ///
-    /// Example:
-    ///     gl_ctx = ctx.gpu._experimental_gl_context()
-    ///     gl_ctx.make_current()
-    ///     output = ctx.gpu.acquire_surface(1920, 1080)
-    ///     gl_tex_id = output._experimental_gl_texture_id(gl_ctx)
-    ///     # Use with skia.GrGLTextureInfo(gl_ctx.texture_target, gl_tex_id, gl_ctx.internal_format)
-    fn _experimental_gl_texture_id(&self, gl_ctx: &PyGlContext) -> PyResult<u32> {
-        let handle = self
-            .handle
-            .as_ref()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Handle already consumed"))?;
-
-        let binding = handle
-            .gl_texture_binding(&mut gl_ctx.lock())
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
-
-        Ok(binding.texture_id)
-    }
-
-    /// Get the OpenGL texture target for this texture (experimental).
-    ///
-    /// Returns GL_TEXTURE_RECTANGLE (0x84F5) for IOSurface-backed textures on macOS.
-    /// Use this when constructing skia.GrGLTextureInfo.
-    fn _experimental_gl_texture_target(&self) -> u32 {
-        streamlib::gl_constants::GL_TEXTURE_RECTANGLE
     }
 
     fn __repr__(&self) -> String {

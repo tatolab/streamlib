@@ -19,5 +19,5 @@ use streamlib_macros::{config, input, output, processor};
 fn test_macros_can_be_imported() {
     // This just verifies the macros exist and can be imported
     // Actual functionality is tested in streamlib/tests/attribute_macro_test.rs
-    assert!(true, "Macro imports successful");
+    // Test passes if this compiles - imports work
 }

@@ -269,14 +269,14 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
-    /// Convert wgpu texture to CVPixelBuffer using GPU-accelerated VTPixelTransferSession
-    fn convert_texture_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
+    /// Convert VideoFrame buffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
+    fn convert_buffer_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
         let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
             StreamError::Configuration("PixelTransferSession not initialized".into())
         })?;
 
-        pixel_transfer.convert_to_nv12(&frame.texture, frame.width, frame.height)
+        pixel_transfer.convert_buffer_to_nv12(frame.buffer())
     }
 
     /// Encode a video frame.
@@ -285,8 +285,8 @@ impl VideoToolboxEncoder {
             StreamError::Configuration("Compression session not initialized".into())
         })?;
 
-        // Step 1: Convert VideoFrame texture to CVPixelBuffer
-        let pixel_buffer = self.convert_texture_to_pixel_buffer(frame)?;
+        // Step 1: Convert VideoFrame buffer to NV12 CVPixelBuffer
+        let pixel_buffer = self.convert_buffer_to_pixel_buffer(frame)?;
 
         // Step 2: Create presentation timestamp
         let presentation_time = ffi::CMTime::new(frame.timestamp_ns, 1_000_000_000);

@@ -50,6 +50,7 @@ fn main() -> Result<()> {
     println!("📹 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
         device_id: None, // Use default camera
+        ..Default::default()
     }))?;
     println!("✓ Camera added (capturing video @ 1280x720)\n");
 

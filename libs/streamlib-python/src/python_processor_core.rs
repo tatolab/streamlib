@@ -646,6 +646,17 @@ impl PythonProcessorCore {
 
     /// Initialize Python context and call Python setup() if defined.
     pub fn init_python_context(&mut self) -> Result<()> {
+        let processor_name = self
+            .metadata
+            .as_ref()
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        tracing::info!(
+            "[{}] setup() ENTER - initializing Python context",
+            processor_name
+        );
+
         let gpu_context = self
             .gpu_context
             .clone()
@@ -659,56 +670,91 @@ impl PythonProcessorCore {
             .as_ref()
             .ok_or_else(|| StreamError::Runtime("Metadata not loaded".into()))?;
 
-        Python::attach(|py| {
-            if let Some(ref instance) = self.py_instance {
-                let instance = instance.bind(py);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Python::attach(|py| {
+                if let Some(ref instance) = self.py_instance {
+                    let instance = instance.bind(py);
 
-                let py_ctx = PyProcessorContext::new(py, gpu_context.clone(), time_context.clone())
-                    .map_err(|e| py_err_to_stream_error(e, "Failed to create ProcessorContext"))?;
+                    tracing::debug!("[{}] setup() creating ProcessorContext", processor_name);
+                    let py_ctx =
+                        PyProcessorContext::new(py, gpu_context.clone(), time_context.clone())
+                            .map_err(|e| {
+                                py_err_to_stream_error(e, "Failed to create ProcessorContext")
+                            })?;
 
-                // Register input ports with schema metadata
-                for input in &metadata.inputs {
-                    py_ctx.register_input_port(PortMetadata {
-                        name: input.name.clone(),
-                        schema: Some(input.schema.clone()),
-                        description: input.description.clone(),
-                    });
+                    // Register input ports with schema metadata
+                    for input in &metadata.inputs {
+                        py_ctx.register_input_port(PortMetadata {
+                            name: input.name.clone(),
+                            schema: Some(input.schema.clone()),
+                            description: input.description.clone(),
+                        });
+                    }
+
+                    // Register output ports with schema metadata
+                    for output in &metadata.outputs {
+                        py_ctx.register_output_port(PortMetadata {
+                            name: output.name.clone(),
+                            schema: Some(output.schema.clone()),
+                            description: output.description.clone(),
+                        });
+                    }
+
+                    self.py_context = Some(
+                        Py::new(py, py_ctx)
+                            .map_err(|e| py_err_to_stream_error(e, "Failed to wrap context"))?,
+                    );
+
+                    // Call setup() if defined
+                    if instance
+                        .hasattr("setup")
+                        .map_err(|e| py_err_to_stream_error(e, "Failed to check hasattr"))?
+                    {
+                        tracing::info!("[{}] setup() calling Python setup()", processor_name);
+                        let ctx_ref = self.py_context.as_ref().unwrap().bind(py);
+                        instance.call_method1("setup", (ctx_ref,)).map_err(|e| {
+                            let traceback = e
+                                .traceback(py)
+                                .map(|tb| tb.format().unwrap_or_default())
+                                .unwrap_or_default();
+                            tracing::error!(
+                                "[{}] setup() Python exception: {}\n{}",
+                                processor_name,
+                                e,
+                                traceback
+                            );
+                            StreamError::Runtime(format!(
+                                "Python setup() failed: {}\n{}",
+                                e, traceback
+                            ))
+                        })?;
+                        tracing::info!("[{}] setup() Python setup() completed", processor_name);
+                    }
                 }
+                Ok::<_, StreamError>(())
+            })
+        }));
 
-                // Register output ports with schema metadata
-                for output in &metadata.outputs {
-                    py_ctx.register_output_port(PortMetadata {
-                        name: output.name.clone(),
-                        schema: Some(output.schema.clone()),
-                        description: output.description.clone(),
-                    });
-                }
-
-                self.py_context = Some(
-                    Py::new(py, py_ctx)
-                        .map_err(|e| py_err_to_stream_error(e, "Failed to wrap context"))?,
-                );
-
-                // Call setup() if defined
-                if instance
-                    .hasattr("setup")
-                    .map_err(|e| py_err_to_stream_error(e, "Failed to check hasattr"))?
-                {
-                    let ctx_ref = self.py_context.as_ref().unwrap().bind(py);
-                    instance.call_method1("setup", (ctx_ref,)).map_err(|e| {
-                        let traceback = e
-                            .traceback(py)
-                            .map(|tb| tb.format().unwrap_or_default())
-                            .unwrap_or_default();
-                        StreamError::Runtime(format!("Python setup() failed: {}\n{}", e, traceback))
-                    })?;
-                    tracing::debug!("PythonProcessorCore: Python setup() completed");
-                }
+        match result {
+            Ok(inner_result) => {
+                tracing::info!("[{}] setup() EXIT", processor_name);
+                inner_result
             }
-            Ok::<_, StreamError>(())
-        })?;
-
-        Ok(())
+            Err(panic_info) => {
+                let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!("[{}] setup() PANIC: {}", processor_name, panic_msg);
+                Err(StreamError::Runtime(format!(
+                    "Python setup() panicked: {}",
+                    panic_msg
+                )))
+            }
+        }
     }
 
     /// Common teardown logic for all Python host processors.
@@ -757,47 +803,99 @@ impl PythonProcessorCore {
         &self,
         input_frame: Option<VideoFrame>,
     ) -> Result<Option<VideoFrame>> {
-        Python::attach(|py| {
-            let instance = self
-                .py_instance
-                .as_ref()
-                .ok_or_else(|| StreamError::Runtime("Python instance not initialized".into()))?;
+        let processor_name = self
+            .metadata
+            .as_ref()
+            .map(|m| m.name.as_str())
+            .unwrap_or("unknown");
 
-            let ctx = self
-                .py_context
-                .as_ref()
-                .ok_or_else(|| StreamError::Runtime("Python context not initialized".into()))?;
+        tracing::trace!("[{}] process() ENTER", processor_name);
 
-            // Set input frame on context
-            let ctx_borrowed = ctx.borrow(py);
-            if let Some(frame) = input_frame {
-                ctx_borrowed.set_input_frame("video_in", Some(PyFrame::from_video_frame(frame)));
-            } else {
-                ctx_borrowed.set_input_frame("video_in", None);
-            }
-
-            // Call Python process()
-            let ctx_ref = ctx.bind(py);
-            instance
-                .bind(py)
-                .call_method1("process", (ctx_ref,))
-                .map_err(|e| {
-                    let traceback = e
-                        .traceback(py)
-                        .map(|tb| tb.format().unwrap_or_default())
-                        .unwrap_or_default();
-                    StreamError::Runtime(format!("Python process() failed: {}\n{}", e, traceback))
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Python::attach(|py| {
+                let instance = self.py_instance.as_ref().ok_or_else(|| {
+                    StreamError::Runtime("Python instance not initialized".into())
                 })?;
 
-            // Extract output frame
-            let output = if let Some(py_frame) = ctx_borrowed.take_output_frame("video_out") {
-                py_frame.as_video_frame().cloned()
-            } else {
-                None
-            };
+                let ctx = self
+                    .py_context
+                    .as_ref()
+                    .ok_or_else(|| StreamError::Runtime("Python context not initialized".into()))?;
 
-            Ok::<_, StreamError>(output)
-        })
+                // Set input frame on context
+                tracing::trace!("[{}] process() setting input frame", processor_name);
+                let ctx_borrowed = ctx.borrow(py);
+                if let Some(frame) = input_frame {
+                    tracing::trace!(
+                        "[{}] process() input frame: {}x{} format={:?}",
+                        processor_name,
+                        frame.width(),
+                        frame.height(),
+                        frame.pixel_format()
+                    );
+                    ctx_borrowed
+                        .set_input_frame("video_in", Some(PyFrame::from_video_frame(frame)));
+                } else {
+                    ctx_borrowed.set_input_frame("video_in", None);
+                }
+
+                // Call Python process()
+                tracing::trace!("[{}] process() calling Python", processor_name);
+                let ctx_ref = ctx.bind(py);
+                instance
+                    .bind(py)
+                    .call_method1("process", (ctx_ref,))
+                    .map_err(|e| {
+                        let traceback = e
+                            .traceback(py)
+                            .map(|tb| tb.format().unwrap_or_default())
+                            .unwrap_or_default();
+                        tracing::error!(
+                            "[{}] process() Python exception: {}\n{}",
+                            processor_name,
+                            e,
+                            traceback
+                        );
+                        StreamError::Runtime(format!(
+                            "Python process() failed: {}\n{}",
+                            e, traceback
+                        ))
+                    })?;
+                tracing::trace!("[{}] process() Python returned", processor_name);
+
+                // Extract output frame
+                let output = if let Some(py_frame) = ctx_borrowed.take_output_frame("video_out") {
+                    tracing::trace!("[{}] process() got output frame", processor_name);
+                    py_frame.as_video_frame().cloned()
+                } else {
+                    tracing::trace!("[{}] process() no output frame", processor_name);
+                    None
+                };
+
+                Ok::<_, StreamError>(output)
+            })
+        }));
+
+        match result {
+            Ok(inner_result) => {
+                tracing::trace!("[{}] process() EXIT", processor_name);
+                inner_result
+            }
+            Err(panic_info) => {
+                let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!("[{}] process() PANIC: {}", processor_name, panic_msg);
+                Err(StreamError::Runtime(format!(
+                    "Python process() panicked: {}",
+                    panic_msg
+                )))
+            }
+        }
     }
 
     /// Call Python start() method (for Manual mode).

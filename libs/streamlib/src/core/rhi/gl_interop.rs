@@ -11,8 +11,8 @@
 //! - Linux: DMA-BUF → GL texture via `EGL_EXT_image_dma_buf_import` (future)
 //! - Windows: DXGI → GL texture via `WGL_NV_DX_interop` (future)
 
-use crate::core::{Result, StreamError};
-use std::collections::HashMap;
+use crate::core::rhi::RhiPixelBuffer;
+use crate::core::Result;
 use std::ffi::c_void;
 
 /// OpenGL texture target constants.
@@ -30,21 +30,143 @@ pub mod gl_constants {
 /// This context is owned by StreamLib's runtime and provides OpenGL access
 /// to native GPU textures. Third-party libraries (like Skia) can use this
 /// context to render into StreamLib's texture pool.
+///
+/// # Usage
+///
+/// 1. Create texture bindings in `setup()` (they have stable IDs)
+/// 2. Update bindings to new buffers in `process()` (fast, zero-copy)
+/// 3. Use binding's `texture_id` with Skia or other GL-based libraries
+///
+/// ```ignore
+/// // setup()
+/// let binding = gl_ctx.create_texture_binding()?;
+///
+/// // process() - each frame
+/// binding.update(&gl_ctx, &buffer)?;  // Fast rebind
+/// // Use binding.texture_id with Skia - it never changes!
+/// ```
 pub struct GlContext {
     #[cfg(target_os = "macos")]
     inner: crate::apple::rhi::gl_interop_macos::MacOsGlContext,
-
-    /// Cache of bound GL textures: native_handle_id -> (gl_texture_id, gl_target)
-    texture_cache: HashMap<u64, GlTextureBinding>,
 }
 
-/// A bound OpenGL texture with its target type.
-#[derive(Debug, Clone, Copy)]
+/// A reusable GL texture binding with a STABLE texture ID.
+///
+/// Create via [`GlContext::create_texture_binding()`]. The `texture_id` is
+/// stable and NEVER changes - it's safe to cache in Skia objects.
+///
+/// Call [`update()`](GlTextureBinding::update) each frame to rebind the texture
+/// to a new pixel buffer. This is a fast operation - no new GL resources are
+/// created, just the backing memory pointer is updated.
+///
+/// # Skia Integration
+///
+/// Because `texture_id` is stable, you can create Skia backend objects ONCE
+/// and reuse them:
+///
+/// ```ignore
+/// // setup() - create binding and Skia objects ONCE
+/// let binding = gl_ctx.create_texture_binding()?;
+/// binding.update(&gl_ctx, &first_buffer)?;
+/// let skia_info = GrGLTextureInfo(binding.target, binding.texture_id, GL_RGBA8);
+/// let skia_backend = GrBackendTexture::new(w, h, GrMipmapped::No, skia_info);
+/// let skia_image = Image::MakeFromTexture(ctx, skia_backend, ...);
+///
+/// // process() - just update binding, reuse Skia objects!
+/// binding.update(&gl_ctx, &current_buffer)?;
+/// canvas.drawImage(skia_image, 0, 0);  // Reads from current buffer!
+/// ```
 pub struct GlTextureBinding {
-    /// OpenGL texture ID.
-    pub texture_id: u32,
-    /// OpenGL texture target (e.g., GL_TEXTURE_RECTANGLE).
-    pub target: u32,
+    #[cfg(target_os = "macos")]
+    inner: crate::apple::rhi::gl_interop_macos::GlTextureBinding,
+}
+
+impl GlTextureBinding {
+    /// The OpenGL texture name (ID). STABLE - never changes after creation.
+    pub fn texture_id(&self) -> u32 {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.texture_id
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            0
+        }
+    }
+
+    /// The OpenGL texture target (GL_TEXTURE_RECTANGLE on macOS).
+    pub fn target(&self) -> u32 {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.target
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            0
+        }
+    }
+
+    /// Current bound buffer width (0 if not yet bound).
+    pub fn width(&self) -> u32 {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.width
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            0
+        }
+    }
+
+    /// Current bound buffer height (0 if not yet bound).
+    pub fn height(&self) -> u32 {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.height
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            0
+        }
+    }
+
+    /// Update this binding to a new pixel buffer.
+    ///
+    /// This is a FAST operation - it rebinds the GL texture to the new buffer's
+    /// backing memory via platform-specific zero-copy mechanisms. No new GL
+    /// resources are created.
+    ///
+    /// After calling, any Skia objects using this binding's `texture_id` will
+    /// automatically see the new buffer content when rendered.
+    ///
+    /// # Requirements
+    /// - GL context must be current
+    /// - Pixel buffer must have GPU-compatible backing
+    pub fn update(&mut self, gl_ctx: &GlContext, buffer: &RhiPixelBuffer) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.update(&gl_ctx.inner, buffer)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (gl_ctx, buffer);
+            Err(StreamError::NotSupported(
+                "GL texture binding not supported on this platform".into(),
+            ))
+        }
+    }
+
+    /// Check if this binding is currently bound to a buffer.
+    pub fn is_bound(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.is_bound()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
 }
 
 impl GlContext {
@@ -56,10 +178,7 @@ impl GlContext {
         #[cfg(target_os = "macos")]
         {
             let inner = crate::apple::rhi::gl_interop_macos::MacOsGlContext::new()?;
-            Ok(Self {
-                inner,
-                texture_cache: HashMap::new(),
-            })
+            Ok(Self { inner })
         }
         #[cfg(target_os = "linux")]
         {
@@ -83,8 +202,10 @@ impl GlContext {
 
     /// Make this context current on the calling thread.
     ///
-    /// Must be called before any OpenGL operations, including accessing
-    /// GL texture IDs or using Skia's GrDirectContext.MakeGL().
+    /// Must be called before any OpenGL operations, including:
+    /// - Creating texture bindings
+    /// - Updating texture bindings
+    /// - Using Skia's GrDirectContext.MakeGL()
     pub fn make_current(&self) -> Result<()> {
         #[cfg(target_os = "macos")]
         {
@@ -126,89 +247,55 @@ impl GlContext {
         }
     }
 
-    /// Bind a native texture to an OpenGL texture.
+    /// Create a reusable GL texture binding with a STABLE texture ID.
     ///
-    /// Returns the GL texture ID and target. The binding is cached, so
-    /// subsequent calls with the same native handle return the cached texture.
+    /// The returned binding has a texture ID that NEVER changes. Call
+    /// [`GlTextureBinding::update()`] on the binding to rebind it to different
+    /// pixel buffers - this is a fast operation that just updates the backing
+    /// memory, not the GL texture itself.
     ///
-    /// # Arguments
-    /// * `native_handle` - Platform-native texture handle (IOSurface ID, DMA-BUF fd, etc.)
-    /// * `width` - Texture width in pixels
-    /// * `height` - Texture height in pixels
-    pub fn bind_texture(
-        &mut self,
-        native_handle: &super::NativeTextureHandle,
-        width: u32,
-        height: u32,
-    ) -> Result<GlTextureBinding> {
-        let cache_key = native_handle_to_cache_key(native_handle);
-
-        // Return cached binding if available
-        if let Some(binding) = self.texture_cache.get(&cache_key) {
-            return Ok(*binding);
-        }
-
-        // Create new binding
-        let binding = self.create_texture_binding(native_handle, width, height)?;
-        self.texture_cache.insert(cache_key, binding);
-        Ok(binding)
-    }
-
-    /// Invalidate a cached texture binding.
+    /// # Usage Pattern
     ///
-    /// Call this when the underlying native texture is destroyed or recycled.
-    pub fn invalidate_texture(&mut self, native_handle: &super::NativeTextureHandle) {
-        let cache_key = native_handle_to_cache_key(native_handle);
-        if let Some(binding) = self.texture_cache.remove(&cache_key) {
-            #[cfg(target_os = "macos")]
-            {
-                self.inner.delete_texture(binding.texture_id);
-            }
-        }
-    }
-
-    /// Clear all cached texture bindings.
-    pub fn clear_texture_cache(&mut self) {
+    /// ```ignore
+    /// // In setup() - create binding ONCE
+    /// let binding = gl_ctx.create_texture_binding()?;
+    ///
+    /// // In process() - update to new buffer (fast, zero-copy)
+    /// binding.update(&gl_ctx, &pixel_buffer)?;
+    ///
+    /// // Use binding.texture_id() with Skia - it's stable!
+    /// let skia_info = GrGLTextureInfo(binding.target(), binding.texture_id(), GL_RGBA8);
+    /// ```
+    ///
+    /// # Requirements
+    /// - GL context must be current (call `make_current()` first)
+    pub fn create_texture_binding(&self) -> Result<GlTextureBinding> {
         #[cfg(target_os = "macos")]
         {
-            for binding in self.texture_cache.values() {
-                self.inner.delete_texture(binding.texture_id);
-            }
+            let inner = self.inner.create_texture_binding()?;
+            Ok(GlTextureBinding { inner })
         }
-        self.texture_cache.clear();
-    }
-
-    #[cfg(target_os = "macos")]
-    fn create_texture_binding(
-        &self,
-        native_handle: &super::NativeTextureHandle,
-        width: u32,
-        height: u32,
-    ) -> Result<GlTextureBinding> {
-        match native_handle {
-            super::NativeTextureHandle::IOSurface { id } => {
-                let texture_id = self.inner.bind_iosurface(*id, width, height)?;
-                Ok(GlTextureBinding {
-                    texture_id,
-                    target: gl_constants::GL_TEXTURE_RECTANGLE,
-                })
-            }
-            _ => Err(StreamError::NotSupported(
-                "Only IOSurface handles supported on macOS".into(),
-            )),
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err(StreamError::NotSupported(
+                "GL texture binding not supported on this platform".into(),
+            ))
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    fn create_texture_binding(
-        &self,
-        _native_handle: &super::NativeTextureHandle,
-        _width: u32,
-        _height: u32,
-    ) -> Result<GlTextureBinding> {
-        Err(StreamError::NotSupported(
-            "GL texture binding not implemented for this platform".into(),
-        ))
+    /// Delete a GL texture explicitly.
+    ///
+    /// Normally textures are cleaned up when bindings are dropped, but this
+    /// allows explicit cleanup when needed.
+    pub fn delete_texture(&self, texture_id: u32) {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.delete_texture(texture_id);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = texture_id;
+        }
     }
 
     /// Get the raw CGL context pointer (macOS only).
@@ -220,19 +307,5 @@ impl GlContext {
     }
 }
 
-impl Drop for GlContext {
-    fn drop(&mut self) {
-        self.clear_texture_cache();
-    }
-}
-
 // GlContext is Send but not Sync - GL contexts are thread-bound
 unsafe impl Send for GlContext {}
-
-fn native_handle_to_cache_key(handle: &super::NativeTextureHandle) -> u64 {
-    match handle {
-        super::NativeTextureHandle::IOSurface { id } => *id as u64,
-        super::NativeTextureHandle::DmaBuf { fd } => *fd as u64,
-        super::NativeTextureHandle::DxgiSharedHandle { handle } => *handle,
-    }
-}

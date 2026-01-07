@@ -1,18 +1,75 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::rhi::GpuDevice;
+use crate::core::rhi::{
+    GpuDevice, PixelBufferDescriptor, PixelFormat, RhiPixelBuffer, RhiPixelBufferPool,
+};
 use crate::core::Result;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use super::texture_pool::{
     PooledTextureHandle, TexturePool, TexturePoolConfig, TexturePoolDescriptor,
 };
 
+/// Key for caching pixel buffer pools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PixelBufferPoolKey {
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+}
+
+/// Shared pixel buffer pool manager.
+struct PixelBufferPoolManager {
+    pools: Mutex<HashMap<PixelBufferPoolKey, RhiPixelBufferPool>>,
+}
+
+impl PixelBufferPoolManager {
+    fn new() -> Self {
+        Self {
+            pools: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn acquire(&self, width: u32, height: u32, format: PixelFormat) -> Result<RhiPixelBuffer> {
+        let key = PixelBufferPoolKey {
+            width,
+            height,
+            format,
+        };
+        let mut pools = self.pools.lock().unwrap();
+
+        let pool = if let Some(existing) = pools.get(&key) {
+            tracing::trace!(
+                "PixelBufferPoolManager: reusing cached pool for {}x{} {:?}",
+                width,
+                height,
+                format
+            );
+            existing
+        } else {
+            tracing::info!(
+                "PixelBufferPoolManager: creating new pool for {}x{} {:?}",
+                width,
+                height,
+                format
+            );
+            let desc = PixelBufferDescriptor::new(width, height, format);
+            let new_pool = RhiPixelBufferPool::new_with_descriptor(&desc)?;
+            pools.insert(key, new_pool);
+            pools.get(&key).unwrap()
+        };
+
+        pool.acquire()
+    }
+}
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<GpuDevice>,
     texture_pool: TexturePool,
+    pixel_buffer_pool_manager: Arc<PixelBufferPoolManager>,
 }
 
 impl GpuContext {
@@ -23,6 +80,7 @@ impl GpuContext {
         Self {
             device,
             texture_pool,
+            pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
         }
     }
 
@@ -33,7 +91,22 @@ impl GpuContext {
         Self {
             device,
             texture_pool,
+            pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
         }
+    }
+
+    /// Acquire a pixel buffer from the shared pool.
+    ///
+    /// Pools are cached by (width, height, format) - the first call creates the pool,
+    /// subsequent calls reuse it. This avoids repeated CVPixelBufferPoolCreate calls.
+    pub fn acquire_pixel_buffer(
+        &self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<RhiPixelBuffer> {
+        self.pixel_buffer_pool_manager
+            .acquire(width, height, format)
     }
 
     /// Get a reference to the RHI GPU device.
@@ -91,6 +164,15 @@ impl GpuContext {
     #[cfg(target_os = "macos")]
     pub fn metal_device(&self) -> &crate::apple::rhi::MetalDevice {
         self.device.as_metal_device()
+    }
+
+    /// Create a texture cache for converting pixel buffers to texture views.
+    #[cfg(target_os = "macos")]
+    pub fn create_texture_cache(&self) -> Result<crate::core::rhi::RhiTextureCache> {
+        use metal::foreign_types::ForeignTypeRef;
+        let device_ptr = self.metal_device().device() as *const _ as *mut std::ffi::c_void;
+        let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
+        crate::core::rhi::RhiTextureCache::new_metal(metal_device_ref)
     }
 }
 

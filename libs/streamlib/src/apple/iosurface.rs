@@ -14,8 +14,8 @@ use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, M
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PixelFormat {
-    Bgra8Unorm,
-    Rgba8Unorm,
+    Bgra32,
+    Rgba32,
 }
 
 /// Creates a Metal texture from an IOSurface.
@@ -73,7 +73,7 @@ pub fn create_iosurface(
     let ios_format = pixel_format_to_iosurface(pixel_format)?;
 
     let bytes_per_element = match pixel_format {
-        PixelFormat::Rgba8Unorm | PixelFormat::Bgra8Unorm => 4,
+        PixelFormat::Rgba32 | PixelFormat::Bgra32 => 4,
     };
     let bytes_per_row = (width * bytes_per_element).div_ceil(64) * 64; // Align to 64 bytes
 
@@ -145,8 +145,8 @@ fn iosurface_format_to_metal(ios_format: u32) -> Result<MTLPixelFormat> {
 
 fn pixel_format_to_iosurface(format: PixelFormat) -> Result<u32> {
     match format {
-        PixelFormat::Bgra8Unorm => Ok(0x42475241), // 'BGRA'
-        PixelFormat::Rgba8Unorm => Ok(0x52474241), // 'RGBA'
+        PixelFormat::Bgra32 => Ok(0x42475241), // 'BGRA'
+        PixelFormat::Rgba32 => Ok(0x52474241), // 'RGBA'
     }
 }
 
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_iosurface_creation() {
-        let surface = create_iosurface(1920, 1080, PixelFormat::Bgra8Unorm);
+        let surface = create_iosurface(1920, 1080, PixelFormat::Bgra32);
         assert!(surface.is_ok());
 
         let surface = surface.unwrap();
@@ -170,8 +170,8 @@ mod tests {
 
         let device = MTLCreateSystemDefaultDevice().expect("No Metal device available");
 
-        let surface = create_iosurface(1920, 1080, PixelFormat::Bgra8Unorm)
-            .expect("Failed to create IOSurface");
+        let surface =
+            create_iosurface(1920, 1080, PixelFormat::Bgra32).expect("Failed to create IOSurface");
 
         let texture = create_metal_texture_from_iosurface(&device, &surface, 0);
         assert!(texture.is_ok());
@@ -194,11 +194,11 @@ mod tests {
         );
 
         assert_eq!(
-            pixel_format_to_iosurface(PixelFormat::Bgra8Unorm).unwrap(),
+            pixel_format_to_iosurface(PixelFormat::Bgra32).unwrap(),
             0x42475241
         );
         assert_eq!(
-            pixel_format_to_iosurface(PixelFormat::Rgba8Unorm).unwrap(),
+            pixel_format_to_iosurface(PixelFormat::Rgba32).unwrap(),
             0x52474241
         );
     }

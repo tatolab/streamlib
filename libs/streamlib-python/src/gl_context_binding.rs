@@ -3,6 +3,7 @@
 
 //! Python bindings for OpenGL context interop.
 
+use crate::pixel_buffer_binding::PyRhiPixelBuffer;
 use pyo3::prelude::*;
 use std::sync::Arc;
 use streamlib::GlContext;
@@ -46,7 +47,8 @@ impl PyGlContext {
     /// Make this OpenGL context current on the calling thread.
     ///
     /// Must be called before any OpenGL operations, including:
-    /// - Accessing `_experimental_gl_texture_id()` on textures
+    /// - Creating texture bindings
+    /// - Updating texture bindings
     /// - Creating Skia's `GrDirectContext.MakeGL()`
     /// - Any Skia drawing operations
     ///
@@ -103,7 +105,150 @@ impl PyGlContext {
         streamlib::gl_constants::GL_RGBA8
     }
 
+    /// Create a reusable GL texture binding with a STABLE texture ID.
+    ///
+    /// The returned binding has a texture ID that NEVER changes. Call
+    /// `update()` on the binding to rebind it to different pixel buffers -
+    /// this is a fast operation that just updates the backing memory.
+    ///
+    /// # Usage Pattern
+    ///
+    /// ```python
+    /// # In setup() - create binding ONCE
+    /// gl_ctx.make_current()
+    /// binding = gl_ctx.create_texture_binding()
+    ///
+    /// # In process() - update to new buffer (fast, zero-copy)
+    /// binding.update(pixel_buffer)
+    ///
+    /// # Use binding.id with Skia - it's stable!
+    /// skia_info = skia.GrGLTextureInfo(binding.target, binding.id, GL_RGBA8)
+    /// ```
+    ///
+    /// The GL context must be current before calling this method.
+    fn create_texture_binding(&self) -> PyResult<PyGlTextureBinding> {
+        let guard = self.inner.lock();
+        let binding = guard
+            .create_texture_binding()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        Ok(PyGlTextureBinding::new(binding, Arc::clone(&self.inner)))
+    }
+
     fn __repr__(&self) -> String {
         "GlContext(experimental)".to_string()
+    }
+}
+
+// =============================================================================
+// GL Texture Binding
+// =============================================================================
+
+/// A reusable GL texture binding with a STABLE texture ID.
+///
+/// Create via `gl_ctx.create_texture_binding()`. The `id` is stable and NEVER
+/// changes - it's safe to cache in Skia objects.
+///
+/// Call `update()` each frame to rebind the texture to a new pixel buffer.
+/// This is a fast operation - no new GL resources are created, just the
+/// backing memory pointer is updated.
+///
+/// # Skia Integration
+///
+/// Because `id` is stable, you can create Skia backend objects ONCE and
+/// reuse them:
+///
+/// ```python
+/// # setup() - create binding and Skia objects ONCE
+/// binding = gl_ctx.create_texture_binding()
+/// binding.update(first_buffer)
+/// skia_info = skia.GrGLTextureInfo(binding.target, binding.id, GL_RGBA8)
+/// skia_backend = skia.GrBackendTexture(w, h, skia.GrMipmapped.kNo, skia_info)
+/// skia_image = skia.Image.MakeFromTexture(ctx, skia_backend, ...)
+///
+/// # process() - just update binding, reuse Skia objects!
+/// binding.update(current_buffer)
+/// canvas.drawImage(skia_image, 0, 0)  # Reads from current buffer!
+/// ```
+///
+/// Note: Marked unsendable because GL textures are thread-bound.
+#[pyclass(name = "GlTextureBinding", unsendable)]
+pub struct PyGlTextureBinding {
+    inner: streamlib::GlTextureBinding,
+    /// Reference to parent GL context for update operations
+    gl_ctx: Arc<parking_lot::Mutex<GlContext>>,
+}
+
+impl PyGlTextureBinding {
+    pub fn new(
+        inner: streamlib::GlTextureBinding,
+        gl_ctx: Arc<parking_lot::Mutex<GlContext>>,
+    ) -> Self {
+        Self { inner, gl_ctx }
+    }
+}
+
+#[pymethods]
+impl PyGlTextureBinding {
+    /// The OpenGL texture name (ID). STABLE - never changes after creation.
+    #[getter]
+    fn id(&self) -> u32 {
+        self.inner.texture_id()
+    }
+
+    /// The OpenGL texture target (GL_TEXTURE_RECTANGLE on macOS).
+    #[getter]
+    fn target(&self) -> u32 {
+        self.inner.target()
+    }
+
+    /// Current bound buffer width (0 if not yet bound).
+    #[getter]
+    fn width(&self) -> u32 {
+        self.inner.width()
+    }
+
+    /// Current bound buffer height (0 if not yet bound).
+    #[getter]
+    fn height(&self) -> u32 {
+        self.inner.height()
+    }
+
+    /// Check if this binding is currently bound to a buffer.
+    #[getter]
+    fn is_bound(&self) -> bool {
+        self.inner.is_bound()
+    }
+
+    /// Update this binding to a new pixel buffer.
+    ///
+    /// This is a FAST operation - it rebinds the GL texture to the new buffer's
+    /// backing memory via zero-copy mechanisms. No new GL resources are created.
+    ///
+    /// After calling, any Skia objects using this binding's `id` will
+    /// automatically see the new buffer content when rendered.
+    ///
+    /// # Requirements
+    /// - GL context must be current
+    /// - Pixel buffer must have GPU-compatible backing
+    ///
+    /// Example:
+    ///     binding.update(pixel_buffer)
+    ///     # Now skia_image backed by this binding shows new content
+    fn update(&mut self, buffer: &PyRhiPixelBuffer) -> PyResult<()> {
+        let guard = self.gl_ctx.lock();
+        self.inner
+            .update(&guard, buffer.inner())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "GlTextureBinding(id={}, target=0x{:X}, {}x{}, bound={})",
+            self.inner.texture_id(),
+            self.inner.target(),
+            self.inner.width(),
+            self.inner.height(),
+            self.inner.is_bound()
+        )
     }
 }

@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::{display_link::DisplayLink, metal::MetalDevice};
-use crate::core::rhi::TextureFormat;
+use crate::apple::metal::MetalDevice;
+use crate::core::rhi::{PixelFormat, RhiTextureCache};
 use crate::core::{LinkInput, Result, RuntimeContext, StreamError, VideoFrame};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
@@ -11,9 +11,11 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 // Scaling mode for video content in the display window
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -36,6 +38,15 @@ pub struct AppleDisplayConfig {
     pub height: u32,
     pub title: Option<String>,
     pub scaling_mode: ScalingMode,
+    /// Enable vsync (synchronize to display refresh rate).
+    /// When true: Renders at native display rate (60Hz, 120Hz ProMotion, etc.)
+    /// When false: Renders as fast as possible (uncapped, for benchmarking)
+    /// Default: true
+    pub vsync: bool,
+    /// Number of drawable buffers (2 = double buffer, 3 = triple buffer).
+    /// Triple buffering reduces stutter but adds ~1 frame of latency.
+    /// Default: 2
+    pub drawable_count: u32,
 }
 
 impl Default for AppleDisplayConfig {
@@ -45,6 +56,8 @@ impl Default for AppleDisplayConfig {
             height: 1080,
             title: None,
             scaling_mode: ScalingMode::default(),
+            vsync: true,
+            drawable_count: 2,
         }
     }
 }
@@ -78,14 +91,15 @@ pub struct AppleDisplayProcessor {
     window_title: String,
     width: u32,
     height: u32,
-    frames_rendered: u64,
-    frames_rendered_shared: Arc<AtomicU64>,
     window_creation_dispatched: bool,
-    display_link: Option<DisplayLink>,
     metal_render_pipeline: Option<metal::RenderPipelineState>,
     metal_sampler: Option<metal::SamplerState>,
     format_buffer_rgba: Option<metal::Buffer>,
     format_buffer_bgra: Option<metal::Buffer>,
+    /// Flag to signal render thread to stop
+    running: Arc<AtomicBool>,
+    /// Handle to render thread (for join on stop)
+    render_thread: Option<JoinHandle<()>>,
 }
 
 impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
@@ -124,26 +138,15 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
 
             self.metal_command_queue = Some(metal_command_queue);
 
-            // Initialize shared frame counter for callback-driven rendering
-            self.frames_rendered_shared = Arc::new(AtomicU64::new(0));
+            // Initialize state for game loop rendering
+            self.running = Arc::new(AtomicBool::new(false));
 
-            // Initialize CVDisplayLink for vsync (started later in start())
-            tracing::trace!("Display {}: Creating CVDisplayLink...", self.window_id.0);
-            let display_link = DisplayLink::new()?;
-            tracing::trace!(
-                "Display {}: CVDisplayLink created (will start in start())",
-                self.window_id.0
+            tracing::info!(
+                "Display {}: Game loop mode (vsync={}, drawable_count={})",
+                self.window_id.0,
+                self.config.vsync,
+                self.config.drawable_count
             );
-
-            if let Ok(period) = display_link.get_nominal_output_video_refresh_period() {
-                tracing::info!(
-                    "Display {}: Vsync available (refresh period: {:?})",
-                    self.window_title,
-                    period
-                );
-            }
-
-            self.display_link = Some(display_link);
 
             // Create Metal render pipeline for scaling
             use metal::foreign_types::ForeignTypeRef;
@@ -233,25 +236,21 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
     }
 
     fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
-        tracing::info!(
-            "Display {}: Stopping (rendered {} frames)",
-            self.window_title,
-            self.frames_rendered
-        );
+        tracing::info!("Display {}: Teardown", self.window_title);
         std::future::ready(Ok(()))
     }
 
-    // Callback-driven start - registers render callback with CVDisplayLink and returns immediately
+    // Game loop start - spawns a dedicated render thread that runs at native display refresh rate
     fn start(&mut self) -> Result<()> {
         tracing::trace!(
-            "Display {}: start() called - setting up callback-driven rendering",
+            "Display {}: start() called - spawning game loop render thread",
             self.window_id.0
         );
 
-        // Clone state needed for render callback
+        // Clone state needed for render thread
         let video_input = self.video.clone();
         let layer_addr = Arc::clone(&self.layer_addr);
-        let frames_rendered = Arc::clone(&self.frames_rendered_shared);
+        let running = Arc::clone(&self.running);
         let window_id = self.window_id.0;
 
         let metal_command_queue = self
@@ -288,108 +287,146 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             .ok_or_else(|| StreamError::Configuration("Format buffer BGRA not initialized".into()))?
             .clone();
 
-        // Create render callback - runs on CVDisplayLink thread on each vsync
-        let render_callback = Box::new(move || {
-            // Read latest frame from input
-            let Some(frame) = video_input.read() else {
-                return;
-            };
+        // Clone gpu context for creating cache texture in render thread
+        let gpu_context = self
+            .gpu_context
+            .clone()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
-            // Get layer address (window may not be ready yet)
-            let addr = layer_addr.load(Ordering::Acquire);
-            if addr == 0 {
-                return;
-            }
+        // Signal that the render thread should run
+        running.store(true, Ordering::Release);
 
-            // SAFETY: Layer was created on main thread and address stored atomically
-            let metal_layer = unsafe {
-                let ptr = addr as *const CAMetalLayer;
-                &*ptr
-            };
+        // Spawn dedicated render thread with game loop
+        let render_thread = std::thread::Builder::new()
+            .name(format!("display-{}-render", window_id))
+            .spawn(move || {
+                tracing::debug!("Display {}: Render thread started", window_id);
 
-            // Render frame
-            unsafe {
-                let Some(drawable) = metal_layer.nextDrawable() else {
-                    return;
+                // Create texture cache for converting buffer-backed frames to textures
+                let texture_cache: Option<RhiTextureCache> = match gpu_context.create_texture_cache() {
+                    Ok(cache) => Some(cache),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Display {}: Failed to create texture cache, buffer frames won't work: {}",
+                            window_id,
+                            e
+                        );
+                        None
+                    }
                 };
 
-                let drawable_texture = drawable.texture();
+                while running.load(Ordering::Acquire) {
+                    // Get layer address (window may not be ready yet)
+                    let addr = layer_addr.load(Ordering::Acquire);
+                    if addr == 0 {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
 
-                // Get Metal texture directly from VideoFrame (native RHI)
-                let source_metal = frame.metal_texture();
+                    // SAFETY: Layer was created on main thread and address stored atomically
+                    let metal_layer = unsafe {
+                        let ptr = addr as *const CAMetalLayer;
+                        &*ptr
+                    };
 
-                // Create command buffer and render pass
-                let command_buffer = metal_command_queue.new_command_buffer();
+                    // First check if we have a frame - don't waste drawable if nothing to render
+                    // CAMetalLayer keeps showing last presented content automatically
+                    let mut latest_frame: Option<VideoFrame> = None;
+                    while let Some(f) = video_input.read() {
+                        latest_frame = Some(f);
+                    }
 
-                let render_pass_descriptor = metal::RenderPassDescriptor::new();
-                let color_attachment = render_pass_descriptor
-                    .color_attachments()
-                    .object_at(0)
-                    .unwrap();
+                    let Some(ref frame) = latest_frame else {
+                        // No frame - sleep briefly and check again
+                        // Don't call nextDrawable() as that blocks for vsync
+                        std::thread::sleep(Duration::from_micros(500));
+                        continue;
+                    };
 
-                // Convert objc2 texture to metal-rs texture reference
-                use metal::foreign_types::ForeignTypeRef;
-                let drawable_texture_ptr = &*drawable_texture as *const _ as *mut std::ffi::c_void;
-                let drawable_texture_ref =
-                    metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
+                    // Now get drawable - this blocks for vsync when displaySyncEnabled=true
+                    let Some(drawable) = metal_layer.nextDrawable() else {
+                        continue;
+                    };
 
-                color_attachment.set_texture(Some(drawable_texture_ref));
-                color_attachment.set_load_action(metal::MTLLoadAction::Clear);
-                color_attachment.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
-                color_attachment.set_store_action(metal::MTLStoreAction::Store);
+                    // Get Metal texture from frame buffer via texture cache
+                    let buffer = frame.buffer();
+                    let Some(ref cache) = texture_cache else {
+                        tracing::warn!("Display {}: No texture cache available", window_id);
+                        continue;
+                    };
+                    let texture_view = match cache.create_view(buffer) {
+                        Ok(view) => view,
+                        Err(e) => {
+                            tracing::warn!("Display {}: Failed to create texture view: {}", window_id, e);
+                            continue;
+                        }
+                    };
+                    let is_rgba_format = buffer.format() == PixelFormat::Rgba32;
+                    let source_metal = texture_view.as_metal_texture();
 
-                let render_encoder =
-                    command_buffer.new_render_command_encoder(render_pass_descriptor);
+                    // Render frame directly to drawable
+                    unsafe {
+                        let drawable_texture = drawable.texture();
 
-                // Set pipeline and resources
-                render_encoder.set_render_pipeline_state(&render_pipeline);
-                render_encoder.set_fragment_texture(0, Some(source_metal));
-                render_encoder.set_fragment_sampler_state(0, Some(&sampler));
+                        // Create command buffer and render pass
+                        let command_buffer = metal_command_queue.new_command_buffer();
 
-                // Set format buffer based on VideoFrame format
-                let format_buffer = if frame.format == TextureFormat::Rgba8Unorm {
-                    &format_buffer_rgba
-                } else {
-                    &format_buffer_bgra
-                };
-                render_encoder.set_fragment_buffer(0, Some(format_buffer), 0);
+                        let render_pass_descriptor = metal::RenderPassDescriptor::new();
+                        let color_attachment = render_pass_descriptor
+                            .color_attachments()
+                            .object_at(0)
+                            .unwrap();
 
-                // Draw fullscreen triangle (3 vertices, no vertex buffer needed)
-                render_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                        // Convert objc2 texture to metal-rs texture reference
+                        use metal::foreign_types::ForeignTypeRef;
+                        let drawable_texture_ptr =
+                            &*drawable_texture as *const _ as *mut std::ffi::c_void;
+                        let drawable_texture_ref =
+                            metal::TextureRef::from_ptr(drawable_texture_ptr as *mut _);
 
-                render_encoder.end_encoding();
+                        color_attachment.set_texture(Some(drawable_texture_ref));
+                        color_attachment.set_load_action(metal::MTLLoadAction::Clear);
+                        color_attachment
+                            .set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
+                        color_attachment.set_store_action(metal::MTLStoreAction::Store);
 
-                // Present and commit
-                let drawable_ptr = &*drawable as *const _ as *mut std::ffi::c_void;
-                let drawable_ref = metal::DrawableRef::from_ptr(drawable_ptr as *mut _);
+                        let render_encoder =
+                            command_buffer.new_render_command_encoder(render_pass_descriptor);
 
-                command_buffer.present_drawable(drawable_ref);
-                command_buffer.commit();
+                        // Set pipeline and resources
+                        render_encoder.set_render_pipeline_state(&render_pipeline);
+                        render_encoder.set_fragment_texture(0, Some(source_metal));
+                        render_encoder.set_fragment_sampler_state(0, Some(&sampler));
 
-                let count = frames_rendered.fetch_add(1, Ordering::Relaxed) + 1;
-                if count == 1 || count.is_multiple_of(60) {
-                    tracing::trace!(
-                        "Display {}: Rendered frame {} in callback",
-                        window_id,
-                        count
-                    );
+                        // Set format buffer based on frame format
+                        let format_buffer = if is_rgba_format {
+                            &format_buffer_rgba
+                        } else {
+                            &format_buffer_bgra
+                        };
+                        render_encoder.set_fragment_buffer(0, Some(format_buffer), 0);
+
+                        // Draw fullscreen triangle (3 vertices, no vertex buffer needed)
+                        render_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+
+                        render_encoder.end_encoding();
+
+                        // Present and commit
+                        let drawable_ptr = &*drawable as *const _ as *mut std::ffi::c_void;
+                        let drawable_ref = metal::DrawableRef::from_ptr(drawable_ptr as *mut _);
+
+                        command_buffer.present_drawable(drawable_ref);
+                        command_buffer.commit();
+                    }
                 }
-            }
-        });
 
-        // Set callback and start DisplayLink
-        let display_link = self
-            .display_link
-            .as_mut()
-            .ok_or_else(|| StreamError::Configuration("DisplayLink not initialized".into()))?;
+                tracing::debug!("Display {}: Render thread exiting", window_id);
+            })
+            .map_err(|e| StreamError::Runtime(format!("Failed to spawn render thread: {}", e)))?;
 
-        display_link.set_render_callback(Some(render_callback));
-        display_link.start()?;
+        self.render_thread = Some(render_thread);
 
-        tracing::info!(
-            "Display {}: Callback-driven rendering started",
-            self.window_id.0
-        );
+        tracing::info!("Display {}: Game loop rendering started", self.window_id.0);
 
         Ok(())
     }
@@ -397,19 +434,17 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
     fn stop(&mut self) -> Result<()> {
         tracing::trace!("Display {}: stop() called", self.window_id.0);
 
-        if let Some(ref display_link) = self.display_link {
-            display_link.stop()?;
+        // Signal render thread to stop
+        self.running.store(false, Ordering::Release);
+
+        // Wait for render thread to finish
+        if let Some(handle) = self.render_thread.take() {
+            handle
+                .join()
+                .map_err(|_| StreamError::Runtime("Render thread panicked".into()))?;
         }
 
-        // Brief wait for in-flight callback to complete
-        std::thread::sleep(std::time::Duration::from_millis(20));
-
-        let count = self.frames_rendered_shared.load(Ordering::Relaxed);
-        tracing::info!(
-            "Display {}: Stopped (rendered {} frames)",
-            self.window_id.0,
-            count
-        );
+        tracing::info!("Display {}: Stopped", self.window_id.0);
 
         Ok(())
     }
@@ -531,6 +566,8 @@ impl AppleDisplayProcessor::Processor {
             .clone_device();
         let window_id = self.window_id;
         let layer_addr = Arc::clone(&self.layer_addr);
+        let vsync = self.config.vsync;
+        let drawable_count = self.config.drawable_count;
 
         use dispatch2::DispatchQueue;
 
@@ -580,6 +617,7 @@ impl AppleDisplayProcessor::Processor {
             metal_layer.setDevice(Some(&metal_device));
             metal_layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
 
+            // Configure layer properties using native objc2 methods
             unsafe {
                 use objc2::{msg_send, Encode, Encoding};
 
@@ -601,9 +639,24 @@ impl AppleDisplayProcessor::Processor {
 
                 let _: () = msg_send![&metal_layer, setDrawableSize: size];
             }
+
+            // Use native objc2 methods for proper type conversion
+            // displaySyncEnabled controls vsync - when true, nextDrawable() blocks for vsync
+            metal_layer.setDisplaySyncEnabled(vsync);
+
+            // maximumDrawableCount controls buffer count (2 = double, 3 = triple)
+            metal_layer.setMaximumDrawableCount(drawable_count as usize);
+
+            // Verify settings were applied
+            let actual_vsync = metal_layer.displaySyncEnabled();
+            let actual_drawables = metal_layer.maximumDrawableCount();
             eprintln!(
-                "[TRACE] Display {}: CAMetalLayer configured, attaching to window...",
-                window_id.0
+                "[TRACE] Display {}: CAMetalLayer configured (vsync={} -> {}, drawables={} -> {}), attaching to window...",
+                window_id.0,
+                vsync,
+                actual_vsync,
+                drawable_count,
+                actual_drawables
             );
 
             if let Some(content_view) = window.contentView() {

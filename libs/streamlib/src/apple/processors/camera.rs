@@ -1,11 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::{iosurface, MetalDevice};
-use crate::core::rhi::{TextureFormat, TextureUsages};
-use crate::core::{
-    LinkOutput, Result, RuntimeContext, StreamError, TexturePool, TexturePoolDescriptor, VideoFrame,
-};
+use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::{LinkOutput, Result, RuntimeContext, StreamError, VideoFrame};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -14,12 +11,32 @@ use objc2_av_foundation::{
     AVCaptureVideoDataOutput, AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
 };
 use objc2_core_video::CVPixelBuffer;
-use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
-use objc2_io_surface::IOSurface;
+use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSString};
 use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+/// Frame rate configuration for camera capture.
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ConfigDescriptor,
+)]
+pub struct FrameRateConfig {
+    /// Minimum frames per second (floor). Default: 30.
+    pub min_fps: f64,
+    /// Maximum frames per second (ceiling). Default: auto-detected from display refresh rate.
+    /// If None, uses the main display's refresh rate (60Hz, 120Hz ProMotion, etc.)
+    pub max_fps: Option<f64>,
+}
+
+impl Default for FrameRateConfig {
+    fn default() -> Self {
+        Self {
+            min_fps: 60.0, // Request 60fps minimum, will be clamped to camera's max if unsupported
+            max_fps: None, // Auto-detect from display
+        }
+    }
+}
 
 // Apple-specific configuration and device types
 #[derive(
@@ -27,6 +44,9 @@ use std::sync::Arc;
 )]
 pub struct AppleCameraConfig {
     pub device_id: Option<String>,
+    /// Frame rate configuration. If None, uses default (30fps min, display refresh rate max).
+    #[serde(default)]
+    pub frame_rate: Option<FrameRateConfig>,
 }
 
 impl From<()> for AppleCameraConfig {
@@ -47,9 +67,78 @@ type CMSampleBufferRef = *mut c_void;
 #[allow(clashing_extern_declarations)]
 extern "C" {
     fn CMSampleBufferGetImageBuffer(sbuf: CMSampleBufferRef) -> *mut CVPixelBuffer;
-    fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
-    fn CVPixelBufferGetWidth(pixelBuffer: *const CVPixelBuffer) -> usize;
-    fn CVPixelBufferGetHeight(pixelBuffer: *const CVPixelBuffer) -> usize;
+}
+
+/// CMTime structure for setting frame duration on AVCaptureDevice.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct CMTime {
+    value: i64,
+    timescale: i32,
+    flags: u32,
+    epoch: i64,
+}
+
+// Safety: CMTime is a plain C struct with known layout, matching Apple's CMTime definition.
+unsafe impl objc2::Encode for CMTime {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+        "?",
+        &[
+            objc2::Encoding::LongLong, // value: i64
+            objc2::Encoding::Int,      // timescale: i32
+            objc2::Encoding::UInt,     // flags: u32
+            objc2::Encoding::LongLong, // epoch: i64
+        ],
+    );
+}
+
+// Safety: CMTime contains only primitive types, safe to pass via FFI.
+unsafe impl objc2::RefEncode for CMTime {
+    const ENCODING_REF: objc2::Encoding =
+        objc2::Encoding::Pointer(&<Self as objc2::Encode>::ENCODING);
+}
+
+impl CMTime {
+    /// Create a CMTime representing 1/fps seconds (frame duration for given fps).
+    fn from_fps(fps: f64) -> Self {
+        // Use timescale of 600 for smooth representation of common frame rates
+        let timescale: i32 = 600;
+        let value = (timescale as f64 / fps).round() as i64;
+        Self {
+            value,
+            timescale,
+            flags: 1, // kCMTimeFlags_Valid
+            epoch: 0,
+        }
+    }
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayCopyDisplayMode(display: u32) -> *const c_void;
+    fn CGDisplayModeGetRefreshRate(mode: *const c_void) -> f64;
+    fn CGDisplayModeRelease(mode: *const c_void);
+}
+
+/// Get the refresh rate of the main display in Hz.
+/// Returns 60.0 as fallback if detection fails.
+fn get_main_display_refresh_rate() -> f64 {
+    unsafe {
+        let display_id = CGMainDisplayID();
+        let mode = CGDisplayCopyDisplayMode(display_id);
+        if mode.is_null() {
+            return 60.0;
+        }
+        let rate = CGDisplayModeGetRefreshRate(mode);
+        CGDisplayModeRelease(mode);
+        // Some displays report 0 for "as fast as possible" - default to 60
+        if rate <= 0.0 {
+            60.0
+        } else {
+            rate
+        }
+    }
 }
 
 /// Shared state for AVFoundation initialization (async pattern).
@@ -104,12 +193,8 @@ impl CaptureSessionInitState {
 
 /// Callback context for processing frames directly in AVFoundation callback
 struct CameraCallbackContext {
-    metal_device: MetalDevice,
-    metal_command_queue: metal::CommandQueue,
     video_output: LinkOutput<VideoFrame>,
     frame_count: std::sync::atomic::AtomicU64,
-    /// Texture pool for acquiring IOSurface-backed output textures.
-    texture_pool: TexturePool,
 }
 
 /// Global callback context - set by start(), used by AVFoundation callback
@@ -137,97 +222,33 @@ define_class!(
                 return;
             };
 
-            let pixel_buffer_ref = CMSampleBufferGetImageBuffer(sample_buffer);
-            if pixel_buffer_ref.is_null() {
+            let pixel_buffer_ptr = CMSampleBufferGetImageBuffer(sample_buffer);
+            if pixel_buffer_ptr.is_null() {
                 return;
             }
 
-            // Get IOSurface from pixel buffer
-            let iosurface_ref = CVPixelBufferGetIOSurface(pixel_buffer_ref);
-            if iosurface_ref.is_null() {
+            // Retain the CVPixelBuffer and wrap it in our RHI types
+            // RhiPixelBufferRef::from_cv_pixel_buffer calls CVPixelBufferRetain
+            let Some(buffer_ref) =
+                RhiPixelBufferRef::from_cv_pixel_buffer(pixel_buffer_ptr as *mut std::ffi::c_void)
+            else {
                 return;
-            }
-
-            let iosurface = match Retained::retain(iosurface_ref) {
-                Some(s) => s,
-                None => return,
             };
 
-            let width = CVPixelBufferGetWidth(pixel_buffer_ref);
-            let height = CVPixelBufferGetHeight(pixel_buffer_ref);
-
-            // Create Metal texture from IOSurface (BGRA format)
-            let metal_texture = match iosurface::create_metal_texture_from_iosurface(
-                ctx.metal_device.device(),
-                &iosurface,
-                0,
-            ) {
-                Ok(tex) => tex,
-                Err(_) => return,
-            };
-
-            // Acquire RGBA output texture from pool (IOSurface-backed)
-            let pooled_handle = match ctx.texture_pool.acquire(&TexturePoolDescriptor {
-                width: width as u32,
-                height: height as u32,
-                format: TextureFormat::Rgba8Unorm,
-                usage: TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::COPY_SRC
-                    | TextureUsages::RENDER_ATTACHMENT,
-                label: Some("camera_output"),
-            }) {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-
-            // Blit BGRA → RGBA (to pool's Metal texture)
-            use metal::foreign_types::ForeignTypeRef;
-
-            let source_texture_ptr = &*metal_texture as *const _ as *mut std::ffi::c_void;
-            let source_texture_ref = metal::TextureRef::from_ptr(source_texture_ptr as *mut _);
-
-            // pooled_handle.metal_texture() now returns &TextureRef directly
-            let dest_texture_ref = pooled_handle.metal_texture();
-
-            let command_buffer = ctx.metal_command_queue.new_command_buffer();
-            let blit_encoder = command_buffer.new_blit_command_encoder();
-
-            use metal::MTLOrigin;
-            use metal::MTLSize;
-
-            let origin = MTLOrigin { x: 0, y: 0, z: 0 };
-            let size = MTLSize {
-                width: width as u64,
-                height: height as u64,
-                depth: 1,
-            };
-
-            blit_encoder.copy_from_texture(
-                source_texture_ref,
-                0,
-                0,
-                origin,
-                size,
-                dest_texture_ref,
-                0,
-                0,
-                origin,
-            );
-
-            blit_encoder.end_encoding();
-            command_buffer.commit();
-            command_buffer.wait_until_completed();
+            // Create RhiPixelBuffer with cached dimensions
+            let buffer = RhiPixelBuffer::new(buffer_ref);
 
             let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
             let frame_num = ctx.frame_count.fetch_add(1, Ordering::Relaxed);
 
-            let frame = VideoFrame::from_pooled(pooled_handle, timestamp_ns, frame_num);
+            // Create VideoFrame directly from buffer (no texture blit needed!)
+            let frame = VideoFrame::from_buffer(buffer, timestamp_ns, frame_num);
 
             // Write frame to output
             ctx.video_output.write(frame);
 
             if frame_num == 0 {
-                eprintln!("[Camera] AVFoundation: First frame processed");
+                eprintln!("[Camera] AVFoundation: First frame processed (buffer-centric)");
             } else if frame_num % 60 == 0 {
                 eprintln!("[Camera] AVFoundation: Frame #{}", frame_num);
             }
@@ -256,7 +277,6 @@ pub struct AppleCameraProcessor {
     #[crate::config]
     config: AppleCameraConfig,
 
-    gpu_context: Option<crate::core::GpuContext>,
     camera_name: String,
     /// Async init state - None means init not started yet.
     capture_init_state: Option<Arc<CaptureSessionInitState>>,
@@ -265,9 +285,9 @@ pub struct AppleCameraProcessor {
 impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
     fn setup(
         &mut self,
-        ctx: RuntimeContext,
+        _ctx: RuntimeContext,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.gpu_context = Some(ctx.gpu.clone());
+        // No GPU context needed - camera outputs buffer-backed frames
         tracing::info!("Camera: setup() complete");
         std::future::ready(Ok(()))
     }
@@ -285,37 +305,20 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    // Callback-driven start - initializes Metal and AVFoundation, returns immediately
+    // Callback-driven start - initializes AVFoundation, returns immediately
     fn start(&mut self) -> Result<()> {
         tracing::trace!("Camera: start() called - setting up callback-driven capture");
 
-        // Step 1: Initialize Metal resources
-        let metal_device = MetalDevice::new()?;
-        let metal_command_queue = {
-            use metal::foreign_types::ForeignTypeRef;
-            let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-            let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-            metal_device_ref.new_command_queue()
-        };
-
-        let gpu_context = self
-            .gpu_context
-            .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
-
-        // Step 2: Create and set callback context
+        // Create callback context (no Metal/texture pool needed - buffer-centric!)
         let callback_context = Arc::new(CameraCallbackContext {
-            metal_device,
-            metal_command_queue,
             video_output: self.video.clone(),
             frame_count: std::sync::atomic::AtomicU64::new(0),
-            texture_pool: gpu_context.texture_pool().clone(),
         });
 
         // Store in global - callback will read from here
         let _ = CAMERA_CALLBACK_CONTEXT.set(callback_context);
 
-        // Step 3: Dispatch AVFoundation init to main thread
+        // Dispatch AVFoundation init to main thread
         let init_state = Arc::new(CaptureSessionInitState::new());
         self.capture_init_state = Some(Arc::clone(&init_state));
 
@@ -328,7 +331,7 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
             Self::initialize_capture_session_on_main_thread(mtm, &config, init_state);
         });
 
-        tracing::info!("Camera: Callback-driven capture started");
+        tracing::info!("Camera: Callback-driven capture started (buffer-centric)");
         Ok(())
     }
 
@@ -409,6 +412,7 @@ impl AppleCameraProcessor::Processor {
             }
         };
 
+        // Configure frame rate based on config, display refresh rate, and camera capabilities
         unsafe {
             if let Err(e) = device.lockForConfiguration() {
                 return Err(StreamError::Configuration(format!(
@@ -416,6 +420,54 @@ impl AppleCameraProcessor::Processor {
                     e
                 )));
             }
+
+            // Get frame rate settings from config
+            let frame_rate_config = config.frame_rate.clone().unwrap_or_default();
+            let requested_min_fps = frame_rate_config.min_fps;
+            let requested_max_fps = frame_rate_config
+                .max_fps
+                .unwrap_or_else(get_main_display_refresh_rate);
+
+            // Query camera's supported frame rate range from active format
+            let active_format = device.activeFormat();
+            let frame_rate_ranges: Retained<NSArray<AnyObject>> =
+                msg_send![&active_format, videoSupportedFrameRateRanges];
+
+            // Find the maximum supported fps from all ranges
+            let mut camera_max_fps: f64 = 30.0; // Default fallback
+            let mut camera_min_fps: f64 = 1.0;
+            for i in 0..frame_rate_ranges.count() {
+                let range = frame_rate_ranges.objectAtIndex(i);
+                let range_max: f64 = msg_send![&range, maxFrameRate];
+                let range_min: f64 = msg_send![&range, minFrameRate];
+                if range_max > camera_max_fps {
+                    camera_max_fps = range_max;
+                }
+                if range_min < camera_min_fps || i == 0 {
+                    camera_min_fps = range_min;
+                }
+            }
+
+            // Clamp requested fps to camera's supported range
+            let min_fps = requested_min_fps.max(camera_min_fps).min(camera_max_fps);
+            let max_fps = requested_max_fps.max(camera_min_fps).min(camera_max_fps);
+
+            eprintln!(
+                "[Camera] Frame rate: requested {:.0}-{:.0} fps, camera supports {:.0}-{:.0} fps, using {:.0}-{:.0} fps",
+                requested_min_fps, requested_max_fps,
+                camera_min_fps, camera_max_fps,
+                min_fps, max_fps
+            );
+
+            // Min frame duration = max fps (shorter duration = more frames)
+            // Max frame duration = min fps (longer duration = fewer frames)
+            let min_duration = CMTime::from_fps(max_fps);
+            let max_duration = CMTime::from_fps(min_fps);
+
+            // Set frame duration range on device
+            let _: () = msg_send![&device, setActiveVideoMinFrameDuration: min_duration];
+            let _: () = msg_send![&device, setActiveVideoMaxFrameDuration: max_duration];
+
             device.unlockForConfiguration();
         }
 

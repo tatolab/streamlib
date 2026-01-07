@@ -13,6 +13,7 @@ fn main() -> Result<()> {
     // Add a camera processor
     let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
         device_id: Some("device-abc-123".to_string()),
+        ..Default::default()
     }))?;
 
     // Add a display processor
@@ -20,7 +21,7 @@ fn main() -> Result<()> {
         width: 1920,
         height: 1080,
         title: Some("My Display".to_string()),
-        scaling_mode: Default::default(),
+        ..Default::default()
     }))?;
 
     // Add an MP4 writer processor

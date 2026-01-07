@@ -12,7 +12,7 @@ Features:
 - Scanlines
 - Horizontal slice displacement
 - Intermittent triggering (not constant)
-- Zero-copy GPU texture sharing via IOSurface
+- Zero-copy GPU texture binding (stable GL texture IDs)
 """
 
 import logging
@@ -58,6 +58,7 @@ uniform vec2 resolution;
 uniform float time;
 uniform float intensity;
 uniform float seed;
+uniform float isDramatic;  // 1.0 for dramatic mode, 0.0 for normal
 
 // Hash function for pseudo-random values
 float hash11(float p) {
@@ -67,9 +68,16 @@ float hash11(float p) {
     return fract(p);
 }
 
+// 2D hash for block noise
+float hash21(vec2 p) {
+    p = fract(p * vec2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return fract(p.x * p.y);
+}
+
 void main() {
     vec2 uv = texCoord / resolution;  // Normalized 0-1
-    vec2 sampleCoord = texCoord;  // Use original coordinates (no curvature)
+    vec2 sampleCoord = texCoord;
 
     // No effect when intensity is 0
     if (intensity < 0.01) {
@@ -77,46 +85,79 @@ void main() {
         return;
     }
 
-    // === RGB Chromatic Aberration ===
-    float aberration = 8.0 * intensity;
-    vec2 rOffset = vec2(aberration * (hash11(seed * 1.1) - 0.5) * 2.0, 0.0);
-    vec2 bOffset = vec2(aberration * (hash11(seed * 2.2) - 0.5) * 2.0, 0.0);
+    vec3 color;
 
-    float r = texture(inputTexture, sampleCoord + rOffset).r;
-    float g = texture(inputTexture, sampleCoord).g;
-    float b = texture(inputTexture, sampleCoord + bOffset).b;
+    // =========================================================================
+    // DRAMATIC MODE - Horizontal slice displacement + film grain
+    // =========================================================================
+    if (isDramatic > 0.5) {
+        // Divide screen into rows of ~15-30px height
+        // Use seed to vary slice height between frames
+        float sliceHeight = mix(15.0, 30.0, hash11(seed * 0.5));
+        float sliceIndex = floor(texCoord.y / sliceHeight);
 
-    vec3 color = vec3(r, g, b);
+        // Random horizontal offset for this slice (0-200 pixels, left or right)
+        float sliceRandom = hash11(sliceIndex + seed);
+        float maxOffset = 200.0 * intensity;
+        float xOffset = (sliceRandom - 0.5) * 2.0 * maxOffset;
 
-    // === Scanlines ===
-    float scanline = sin(texCoord.y * 3.14159 * 2.0) * 0.5 + 0.5;
-    scanline = pow(scanline, 0.5);
-    color *= 0.85 + 0.15 * scanline;
+        // Sample with horizontal displacement
+        vec2 displacedCoord = sampleCoord + vec2(xOffset, 0.0);
+        color = texture(inputTexture, displacedCoord).rgb;
 
-    // === Horizontal slice displacement ===
-    // More slices (60 rows) with lower threshold (0.75) for more visible effect
-    float numSlices = 60.0;
-    float sliceNoise = hash11(floor(uv.y * numSlices) + seed);
-    if (sliceNoise > 0.75 && intensity > 0.3) {
-        // Vary slice offset based on position and seed for variety
-        float sliceStrength = (sliceNoise - 0.75) * 4.0;  // 0-1 range for slices that pass
-        float sliceOffset = (hash11(seed + floor(uv.y * numSlices) * 0.1) - 0.5) * 60.0 * intensity * sliceStrength;
-        vec2 sliceCoord = sampleCoord + vec2(sliceOffset, 0.0);
-        color = texture(inputTexture, sliceCoord).rgb;
+        // === FILM GRAIN (Perlin-like noise) ===
+        // Multi-octave noise for organic film grain look
+        float grain = 0.0;
+        float grainScale = 1.0;
+        float grainAmp = 0.5;
+        for (int i = 0; i < 3; i++) {
+            vec2 grainUV = uv * resolution * grainScale * 0.01 + seed;
+            grain += (hash21(grainUV) - 0.5) * grainAmp;
+            grainScale *= 2.0;
+            grainAmp *= 0.5;
+        }
+
+        // Add temporal variation to grain
+        grain += (hash21(uv * 800.0 + time * 10.0) - 0.5) * 0.15;
+
+        // Apply grain (subtle, film-like)
+        color += grain * 0.12 * intensity;
+        color = clamp(color, 0.0, 1.0);
     }
+    // =========================================================================
+    // NORMAL MODE - Subtle glitch
+    // =========================================================================
+    else {
+        // === RGB Chromatic Aberration ===
+        float aberration = 8.0 * intensity;
+        vec2 rOffset = vec2(aberration * (hash11(seed * 1.1) - 0.5) * 2.0, 0.0);
+        vec2 bOffset = vec2(aberration * (hash11(seed * 2.2) - 0.5) * 2.0, 0.0);
 
-    // === Additional fine slice displacement (smaller, more frequent) ===
-    float fineSliceNoise = hash11(floor(uv.y * 120.0) + seed * 1.7);
-    if (fineSliceNoise > 0.85 && intensity > 0.4) {
-        float fineOffset = (hash11(seed * 2.3 + floor(uv.y * 120.0) * 0.1) - 0.5) * 25.0 * intensity;
-        vec2 fineSliceCoord = sampleCoord + vec2(fineOffset, 0.0);
-        color = mix(color, texture(inputTexture, fineSliceCoord).rgb, 0.7);
-    }
+        float r = texture(inputTexture, sampleCoord + rOffset).r;
+        float g = texture(inputTexture, sampleCoord).g;
+        float b = texture(inputTexture, sampleCoord + bOffset).b;
 
-    // === Random noise lines ===
-    float lineNoise = hash11(time * 50.0 + floor(uv.y * resolution.y));
-    if (lineNoise > 0.97) {
-        color += vec3(0.0, 0.3 * intensity, 0.3 * intensity);
+        color = vec3(r, g, b);
+
+        // === Scanlines ===
+        float scanline = sin(texCoord.y * 3.14159 * 2.0) * 0.5 + 0.5;
+        scanline = pow(scanline, 0.5);
+        color *= 0.85 + 0.15 * scanline;
+
+        // === Horizontal slice displacement (sparse) ===
+        float sliceNoise = hash11(floor(uv.y * 60.0) + seed);
+        if (sliceNoise > 0.75 && intensity > 0.3) {
+            float sliceStrength = (sliceNoise - 0.75) / 0.25;
+            float sliceOffset = (hash11(seed + floor(uv.y * 60.0) * 0.1) - 0.5) * 60.0 * intensity * sliceStrength;
+            vec2 sliceCoord = sampleCoord + vec2(sliceOffset, 0.0);
+            color = texture(inputTexture, sliceCoord).rgb;
+        }
+
+        // === Random noise lines ===
+        float lineNoise = hash11(time * 50.0 + floor(uv.y * resolution.y));
+        if (lineNoise > 0.97) {
+            color += vec3(0.0, 0.3 * intensity, 0.3 * intensity);
+        }
     }
 
     fragColor = vec4(color, 1.0);
@@ -142,43 +183,74 @@ void main() {
 # Glitch State Tracking
 # =============================================================================
 
-def hash11(p: float) -> float:
-    """Simple hash function for pseudo-random values."""
-    p = (p * 0.1031) % 1.0
-    p *= p + 33.33
-    p *= p + p
-    return p % 1.0
+import random
 
 
 class GlitchState:
-    """Tracks glitch effect state and timing."""
+    """Tracks glitch effect state and timing.
+
+    Single timer triggers every 0-8 seconds (after 2s cooldown).
+    Randomly chooses between minor or major glitch each time.
+    """
+
+    COOLDOWN = 2.0  # 2 second delay after glitch ends before scheduling next
 
     def __init__(self):
         self.active = False
+        self.is_dramatic = False
         self.intensity = 0.0
         self.start_time = 0.0
         self.duration = 0.0
-        self.last_check = 0.0
         self.seed = 0.0
+        self.in_cooldown = False
+        self.cooldown_end_time = 0.0
+
+        # Single timer for next glitch (0-8 seconds)
+        self.next_glitch = random.uniform(0.0, 8.0)
 
     def update(self, elapsed: float) -> bool:
         """Update glitch state, returns True if glitch should be active."""
-        if elapsed - self.last_check > 0.1:
-            self.last_check = elapsed
 
-            if not self.active:
-                if hash11(elapsed * 7.3) > 0.85:
-                    self.active = True
-                    self.start_time = elapsed
-                    self.duration = 0.1 + hash11(elapsed * 3.7) * 0.4
-                    self.intensity = 0.3 + hash11(elapsed * 11.1) * 0.7
-                    self.seed = elapsed
+        # If currently glitching, check if it should end
+        if self.active:
+            if elapsed - self.start_time > self.duration:
+                self.active = False
+                self.is_dramatic = False
+                self.intensity = 0.0
+                # Start cooldown period
+                self.in_cooldown = True
+                self.cooldown_end_time = elapsed + self.COOLDOWN
+            return self.active
+
+        # If in cooldown, check if it's over and schedule next glitch
+        if self.in_cooldown:
+            if elapsed >= self.cooldown_end_time:
+                self.in_cooldown = False
+                # Schedule next glitch (random 0-8 seconds from now)
+                self.next_glitch = elapsed + random.uniform(0.0, 8.0)
+            return False
+
+        # Check if it's time for a glitch
+        if elapsed >= self.next_glitch:
+            self.active = True
+            self.start_time = elapsed
+            self.seed = elapsed
+
+            # Randomly choose major or minor
+            if random.random() < 0.5:
+                # Major (dramatic) glitch
+                self.is_dramatic = True
+                self.duration = random.uniform(0.3, 0.8)
+                self.intensity = random.uniform(0.8, 1.0)
             else:
-                if elapsed - self.start_time > self.duration:
-                    self.active = False
-                    self.intensity = 0.0
+                # Minor (normal) glitch
+                self.is_dramatic = False
+                self.duration = random.uniform(0.1, 0.3)
+                self.intensity = random.uniform(0.3, 0.6)
 
-        return self.active
+            return True
+
+        return False
 
 
 # =============================================================================
@@ -267,6 +339,7 @@ class CyberpunkGlitch:
             'time': glGetUniformLocation(self.glitch_program, 'time'),
             'intensity': glGetUniformLocation(self.glitch_program, 'intensity'),
             'seed': glGetUniformLocation(self.glitch_program, 'seed'),
+            'isDramatic': glGetUniformLocation(self.glitch_program, 'isDramatic'),
         }
 
         # Get uniform locations for passthrough shader
@@ -306,6 +379,17 @@ class CyberpunkGlitch:
         # Create FBO for rendering to output texture
         self.fbo = glGenFramebuffers(1)
 
+        # Create reusable texture bindings - these have STABLE texture IDs
+        # Only needed when glitch is active (not created in true passthrough mode)
+        self.input_binding = self.gl_ctx.create_texture_binding()
+        self.output_binding = self.gl_ctx.create_texture_binding()
+
+        # Lazy init for output buffer
+        self._gpu_ctx = None  # Set in first process() call
+        self.output_buffer = None
+        self._current_width = 0
+        self._current_height = 0
+
         self.gl_initialized = True
         logger.info("Cyberpunk Glitch: OpenGL resources initialized")
 
@@ -318,28 +402,43 @@ class CyberpunkGlitch:
         # Initialize GL resources on first frame (deferred from setup)
         self._init_gl_resources()
 
-        width = frame["width"]
-        height = frame["height"]
-        input_texture = frame["texture"]
+        # Get pixel buffer from frame (buffer-centric API)
+        input_buffer = frame["pixel_buffer"]
+        width = input_buffer.width
+        height = input_buffer.height
         elapsed = ctx.time.elapsed_secs
-
-        # Log IOSurface IDs for texture flow debugging
-        input_iosurface_id = getattr(input_texture, 'iosurface_id', None)
-        logger.info(f"CyberpunkGlitch: INPUT IOSurface ID={input_iosurface_id}")
 
         # Update glitch state
         glitch_active = self.glitch_state.update(elapsed)
 
+        # TRUE PASSTHROUGH: When not glitching, just forward the input frame directly
+        # No GPU work, no texture copies - zero overhead
+        if not glitch_active:
+            ctx.output("video_out").set(frame)
+            self.frame_count += 1
+            return
+
         # Make GL context current
         self.gl_ctx.make_current()
 
-        # Acquire output surface
-        output_tex = ctx.gpu.acquire_surface(width, height)
+        # Store GPU context reference for lazy buffer allocation
+        if self._gpu_ctx is None:
+            self._gpu_ctx = ctx.gpu
 
-        # Get GL texture IDs
-        input_gl_id = input_texture._experimental_gl_texture_id(self.gl_ctx)
-        output_gl_id = output_tex._experimental_gl_texture_id(self.gl_ctx)
-        gl_target = self.gl_ctx.texture_target  # GL_TEXTURE_RECTANGLE for IOSurface
+        # Update input binding (fast rebind, no new GL texture)
+        self.input_binding.update(input_buffer)
+        input_gl_id = self.input_binding.id
+        gl_target = self.input_binding.target  # GL_TEXTURE_RECTANGLE for IOSurface
+
+        # Ensure output buffer exists (lazy init on first use or resize)
+        if self.output_buffer is None or self._current_width != width or self._current_height != height:
+            self.output_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, input_buffer.format)
+            self._current_width = width
+            self._current_height = height
+
+        # Update output binding (fast rebind, no new GL texture)
+        self.output_binding.update(self.output_buffer)
+        output_gl_id = self.output_binding.id
 
         # Bind FBO with output texture as color attachment
         glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
@@ -355,18 +454,14 @@ class CyberpunkGlitch:
         # Set viewport
         glViewport(0, 0, width, height)
 
-        # Choose shader based on glitch state
-        if glitch_active:
-            glUseProgram(self.glitch_program)
-            glUniform1i(self.glitch_uniforms['inputTexture'], 0)
-            glUniform2f(self.glitch_uniforms['resolution'], float(width), float(height))
-            glUniform1f(self.glitch_uniforms['time'], elapsed)
-            glUniform1f(self.glitch_uniforms['intensity'], self.glitch_state.intensity)
-            glUniform1f(self.glitch_uniforms['seed'], self.glitch_state.seed)
-        else:
-            glUseProgram(self.passthrough_program)
-            glUniform1i(self.passthrough_uniforms['inputTexture'], 0)
-            glUniform2f(self.passthrough_uniforms['resolution'], float(width), float(height))
+        # Apply glitch shader (we only reach here when glitch is active)
+        glUseProgram(self.glitch_program)
+        glUniform1i(self.glitch_uniforms['inputTexture'], 0)
+        glUniform2f(self.glitch_uniforms['resolution'], float(width), float(height))
+        glUniform1f(self.glitch_uniforms['time'], elapsed)
+        glUniform1f(self.glitch_uniforms['intensity'], self.glitch_state.intensity)
+        glUniform1f(self.glitch_uniforms['seed'], self.glitch_state.seed)
+        glUniform1f(self.glitch_uniforms['isDramatic'], 1.0 if self.glitch_state.is_dramatic else 0.0)
 
         # Bind input texture
         glActiveTexture(GL_TEXTURE0)
@@ -385,15 +480,9 @@ class CyberpunkGlitch:
         # Flush GL commands
         self.gl_ctx.flush()
 
-        # Log output IOSurface ID for texture flow debugging
-        output_iosurface_id = output_tex.iosurface_id
-        logger.info(f"CyberpunkGlitch: OUTPUT IOSurface ID={output_iosurface_id} (input was {input_iosurface_id})")
-
-        # Output
+        # Output with pixel buffer
         ctx.output("video_out").set({
-            "texture": output_tex.texture,
-            "width": width,
-            "height": height,
+            "pixel_buffer": self.output_buffer,
             "timestamp_ns": frame["timestamp_ns"],
             "frame_number": frame["frame_number"],
         })

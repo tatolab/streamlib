@@ -83,6 +83,14 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
         };
     }
 
+    // Compositors get real-time priority (video processing with strict timing)
+    if processor_type.contains("Compositor") {
+        return SchedulingStrategy::DedicatedThread {
+            priority: ThreadPriority::RealTime,
+            name: Some(format!("compositor-{}", node.id)),
+        };
+    }
+
     // Default: normal dedicated thread
     SchedulingStrategy::DedicatedThread {
         priority: ThreadPriority::Normal,

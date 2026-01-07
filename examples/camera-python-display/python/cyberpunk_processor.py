@@ -9,6 +9,7 @@ skia-python with StreamLib's GL interop. Features:
 - Cyberpunk color grading (teal shadows, magenta highlights, crushed blacks)
 - Spray paint style watermark tag with drips and neon glow
 - Zero-copy GPU texture sharing via IOSurface
+- Stable GL texture IDs (create once, update per-frame)
 """
 
 import logging
@@ -183,6 +184,7 @@ class CyberpunkProcessor:
     - Skia draws directly on GPU via shared GL context
     - Output uses StreamLib's texture pool (IOSurface-backed)
     - Zero-copy pipeline: Metal -> GL -> Metal
+    - Stable GL texture IDs (create once, update per-frame)
     """
 
     @input(schema="VideoFrame")
@@ -196,6 +198,7 @@ class CyberpunkProcessor:
     def setup(self, ctx):
         """Initialize Skia with StreamLib's GL context."""
         self.frame_count = 0
+        self._gpu_ctx = ctx.gpu
 
         # Get StreamLib's GL context
         self.gl_ctx = ctx.gpu._experimental_gl_context()
@@ -206,36 +209,48 @@ class CyberpunkProcessor:
         if self.skia_ctx is None:
             raise RuntimeError("Failed to create Skia GL context")
 
-        # Cache for Skia surfaces (keyed by dimensions)
-        self._surface_cache = {}
+        # Create reusable texture bindings - these have STABLE texture IDs
+        self.input_binding = self.gl_ctx.create_texture_binding()
+        self.output_binding = self.gl_ctx.create_texture_binding()
+
+        # Lazy init for output resources
+        self.output_buffer = None
+        self.output_surface = None
+        self._current_width = 0
+        self._current_height = 0
 
         # Simple color filter - subtle enhancement of reds, yellows, purples
         self.color_filter = skia.ColorFilters.Matrix(create_cyberpunk_color_matrix())
 
         logger.info("Cyberpunk processor initialized with subtle color grading")
 
-    def _get_or_create_surface(self, width, height, gl_tex_id, gl_target):
-        """Get cached Skia surface or create new one."""
-        cache_key = (width, height, gl_tex_id)
+    def _ensure_output_resources(self, width, height, input_format):
+        """Ensure output buffer and surface are initialized for current size."""
+        if self.output_buffer is not None and self._current_width == width and self._current_height == height:
+            return
 
-        if cache_key in self._surface_cache:
-            return self._surface_cache[cache_key]
+        self._current_width = width
+        self._current_height = height
 
-        # Create backend texture info
+        # Create output pixel buffer
+        self.output_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, input_format)
+
+        # Update output binding (fast rebind, no new GL texture)
+        self.output_binding.update(self.output_buffer)
+
+        # Create Skia surface from output binding's STABLE texture ID
         gl_info = skia.GrGLTextureInfo(
-            gl_target,
-            gl_tex_id,
+            self.output_binding.target,
+            self.output_binding.id,
             GL_RGBA8,
         )
-
         backend_texture = skia.GrBackendTexture(
             width,
             height,
             skia.GrMipmapped.kNo,
             gl_info,
         )
-
-        surface = skia.Surface.MakeFromBackendTexture(
+        self.output_surface = skia.Surface.MakeFromBackendTexture(
             self.skia_ctx,
             backend_texture,
             skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
@@ -245,15 +260,10 @@ class CyberpunkProcessor:
             None,  # surface props
         )
 
-        if surface is None:
-            raise RuntimeError(f"Failed to create Skia surface from GL texture {gl_tex_id}")
+        if self.output_surface is None:
+            raise RuntimeError(f"Failed to create Skia surface from GL texture")
 
-        # Cache with limited size
-        if len(self._surface_cache) > 10:
-            self._surface_cache.clear()
-        self._surface_cache[cache_key] = surface
-
-        return surface
+        logger.info(f"Cyberpunk processor: GPU resources initialized ({width}x{height})")
 
     def process(self, ctx):
         """Apply subtle cyberpunk color grading and watermark to each frame."""
@@ -261,25 +271,32 @@ class CyberpunkProcessor:
         if frame is None:
             return
 
-        width = frame["width"]
-        height = frame["height"]
-        input_texture = frame["texture"]
+        # Get pixel buffer from frame (buffer-centric API)
+        input_buffer = frame["pixel_buffer"]
+        width = input_buffer.width
+        height = input_buffer.height
 
-        # Acquire output surface from StreamLib's pool
-        output_tex = ctx.gpu.acquire_surface(width, height)
+        # Make GL context current
+        self.gl_ctx.make_current()
 
-        # Bind textures to GL (cached internally, cheap after first call per texture)
-        input_gl_id = input_texture._experimental_gl_texture_id(self.gl_ctx)
-        output_gl_id = output_tex._experimental_gl_texture_id(self.gl_ctx)
-        gl_target = self.gl_ctx.texture_target
+        # Ensure output resources are initialized
+        self._ensure_output_resources(width, height, input_buffer.format)
 
-        # Get or create Skia surface for output (cached by texture ID)
-        output_surface = self._get_or_create_surface(width, height, output_gl_id, gl_target)
-        canvas = output_surface.getCanvas()
+        # Update input binding to current frame's buffer (fast rebind)
+        self.input_binding.update(input_buffer)
 
-        # Create input image from input texture
-        input_gl_info = skia.GrGLTextureInfo(gl_target, input_gl_id, GL_RGBA8)
-        input_backend = skia.GrBackendTexture(width, height, skia.GrMipmapped.kNo, input_gl_info)
+        # Get canvas from output surface
+        canvas = self.output_surface.getCanvas()
+
+        # Create input image from input binding's STABLE texture ID
+        input_gl_info = skia.GrGLTextureInfo(
+            self.input_binding.target,
+            self.input_binding.id,
+            GL_RGBA8
+        )
+        input_backend = skia.GrBackendTexture(
+            width, height, skia.GrMipmapped.kNo, input_gl_info
+        )
         input_image = skia.Image.MakeFromTexture(
             self.skia_ctx,
             input_backend,
@@ -309,27 +326,26 @@ class CyberpunkProcessor:
         draw_spray_paint_tag(canvas, tag_x, tag_y, tag_scale, elapsed)
 
         # === FLUSH AND SYNC ===
-        output_surface.flushAndSubmit()
+        self.output_surface.flushAndSubmit()
         self.gl_ctx.flush()
 
-        # Output the processed frame (construct dict with pooled texture)
+        # Output the processed frame with pixel buffer
         ctx.output("video_out").set({
-            "texture": output_tex.texture,
-            "width": width,
-            "height": height,
+            "pixel_buffer": self.output_buffer,
             "timestamp_ns": frame["timestamp_ns"],
             "frame_number": frame["frame_number"],
         })
 
-        # Log periodically
+        # Log periodically and purge Skia caches to prevent memory growth
         self.frame_count += 1
+        if self.frame_count % 60 == 0:
+            # Purge unlocked GPU resources to prevent Skia memory accumulation
+            self.skia_ctx.freeGpuResources()
         if self.frame_count % 120 == 0:
             logger.debug(f"Processed {self.frame_count} frames with cyberpunk effect")
 
     def teardown(self, ctx):
         """Cleanup Skia resources."""
-        self._surface_cache.clear()
-
         if self.skia_ctx:
             self.skia_ctx.abandonContext()
 

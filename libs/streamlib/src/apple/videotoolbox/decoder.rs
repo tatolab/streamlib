@@ -16,9 +16,8 @@
 // **Reference**: Encoder implementation (encoder.rs) - inverse operations
 
 use super::{ffi, format};
-use crate::core::rhi::{StreamTexture, TextureFormat};
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoFrame};
-use objc2_metal::MTLTexture;
+use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::{Result, RuntimeContext, StreamError, VideoFrame};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -44,7 +43,6 @@ impl Default for VideoDecoderConfig {
 /// Uses VTDecompressionSession for hardware-accelerated decoding.
 pub struct VideoToolboxDecoder {
     config: VideoDecoderConfig,
-    gpu_context: Option<GpuContext>,
     runtime_context: Arc<RuntimeContext>,
 
     // VideoToolbox session (null until SPS/PPS received)
@@ -77,11 +75,7 @@ unsafe impl Send for DecodedFrame {}
 
 impl VideoToolboxDecoder {
     /// Create a new VideoToolbox decoder
-    pub fn new(
-        config: VideoDecoderConfig,
-        gpu_context: Option<GpuContext>,
-        ctx: &RuntimeContext,
-    ) -> Result<Self> {
+    pub fn new(config: VideoDecoderConfig, ctx: &RuntimeContext) -> Result<Self> {
         tracing::info!(
             "[VideoToolbox Decoder] Initializing ({}x{})",
             config.width,
@@ -90,7 +84,6 @@ impl VideoToolboxDecoder {
 
         Ok(Self {
             config,
-            gpu_context,
             runtime_context: Arc::new(ctx.clone()),
             decompression_session: None,
             format_description: None,
@@ -394,93 +387,36 @@ impl VideoToolboxDecoder {
         Ok(Some(video_frame))
     }
 
-    /// Convert CVPixelBuffer (BGRA) to VideoFrame with StreamTexture
+    /// Convert CVPixelBuffer (BGRA) to VideoFrame with RhiPixelBuffer
     fn pixel_buffer_to_video_frame(&self, decoded_frame: DecodedFrame) -> Result<VideoFrame> {
-        let gpu_ctx = self
-            .gpu_context
-            .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not available".into()))?;
+        // Wrap CVPixelBuffer in RhiPixelBufferRef.
+        // Use no_retain since the callback already retained the buffer.
+        // When RhiPixelBufferRef is dropped, it will release the CVPixelBuffer.
+        let buffer_ref = unsafe {
+            RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(
+                decoded_frame.pixel_buffer as ffi::CVPixelBufferRef,
+            )
+        }
+        .ok_or_else(|| StreamError::GpuError("Decoded frame has null pixel buffer".into()))?;
 
-        // Query actual dimensions from CVPixelBuffer (ground truth from decoded frame)
-        let (actual_width, actual_height) = unsafe {
-            let width =
-                ffi::CVPixelBufferGetWidth(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
-            let height =
-                ffi::CVPixelBufferGetHeight(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
-            (width as u32, height as u32)
-        };
+        let buffer = RhiPixelBuffer::new(buffer_ref);
 
         // Log resolution discovery on first frame or if resolution changes
-        if actual_width != self.config.width || actual_height != self.config.height {
+        if buffer.width != self.config.width || buffer.height != self.config.height {
             tracing::info!(
                 "[VideoToolbox Decoder] 🎥 Actual decoded resolution: {}x{} (config was {}x{})",
-                actual_width,
-                actual_height,
+                buffer.width,
+                buffer.height,
                 self.config.width,
                 self.config.height
             );
         }
 
-        // Import CVPixelBuffer as StreamTexture via IOSurface
-        let texture =
-            unsafe { self.import_pixel_buffer_as_texture(decoded_frame.pixel_buffer, gpu_ctx)? };
-
-        // Release pixel buffer
-        unsafe {
-            use super::ffi;
-            ffi::CFRelease(decoded_frame.pixel_buffer as *const _);
-        }
-
-        Ok(VideoFrame::new(
-            texture,
-            TextureFormat::Bgra8Unorm,
+        Ok(VideoFrame::from_buffer(
+            buffer,
             decoded_frame.timestamp_ns,
             self.frame_count,
-            actual_width,  // Use actual dimensions from decoded buffer
-            actual_height, // Use actual dimensions from decoded buffer
         ))
-    }
-
-    /// Import CVPixelBuffer as StreamTexture via IOSurface
-    unsafe fn import_pixel_buffer_as_texture(
-        &self,
-        pixel_buffer: *mut objc2_core_video::CVPixelBuffer,
-        gpu_ctx: &GpuContext,
-    ) -> Result<StreamTexture> {
-        use super::ffi;
-        use crate::apple::iosurface;
-        use crate::apple::rhi::MetalTexture;
-
-        // Get IOSurface from CVPixelBuffer
-        let iosurface_ptr = ffi::CVPixelBufferGetIOSurface(pixel_buffer as *const std::ffi::c_void);
-        if iosurface_ptr.is_null() {
-            return Err(StreamError::GpuError(
-                "Failed to get IOSurface from CVPixelBuffer".into(),
-            ));
-        }
-
-        let iosurface = &*iosurface_ptr;
-
-        // Create Metal texture from IOSurface
-        let objc2_metal_texture = iosurface::create_metal_texture_from_iosurface(
-            gpu_ctx.device().as_metal_device().device(),
-            iosurface,
-            0, // plane 0
-        )?;
-
-        // Query dimensions from the Metal texture
-        let width = objc2_metal_texture.width() as u32;
-        let height = objc2_metal_texture.height() as u32;
-
-        // Wrap in MetalTexture and StreamTexture
-        let metal_texture = MetalTexture::new(
-            objc2_metal_texture,
-            width,
-            height,
-            TextureFormat::Bgra8Unorm,
-        );
-
-        Ok(StreamTexture::from_metal(metal_texture))
     }
 }
 

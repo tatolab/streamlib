@@ -7,19 +7,17 @@
 //! or removed in the core library, compilation will fail here, ensuring Python
 //! bindings stay in sync with Rust types.
 
+use crate::pixel_buffer_binding::PyRhiPixelBuffer;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
-use streamlib::core::rhi::{StreamTexture, TextureFormat};
+use streamlib::core::rhi::PixelFormat;
 use streamlib::core::AudioChannelCount;
 use streamlib::{AudioFrame, DataFrame, VideoFrame};
 
-use crate::shader_handle::PyGpuTexture;
-
 /// Field mapper for VideoFrame - compile-time safe field access.
 pub trait VideoFrameFieldMapper {
-    fn get_texture(&self) -> StreamTexture;
-    fn get_format(&self) -> TextureFormat;
+    fn get_pixel_format(&self) -> PixelFormat;
     fn get_timestamp_ns(&self) -> i64;
     fn get_frame_number(&self) -> u64;
     fn get_width(&self) -> u32;
@@ -27,12 +25,8 @@ pub trait VideoFrameFieldMapper {
 }
 
 impl VideoFrameFieldMapper for VideoFrame {
-    fn get_texture(&self) -> StreamTexture {
-        self.texture.clone()
-    }
-
-    fn get_format(&self) -> TextureFormat {
-        self.format
+    fn get_pixel_format(&self) -> PixelFormat {
+        self.pixel_format()
     }
 
     fn get_timestamp_ns(&self) -> i64 {
@@ -44,11 +38,11 @@ impl VideoFrameFieldMapper for VideoFrame {
     }
 
     fn get_width(&self) -> u32 {
-        self.width
+        self.width()
     }
 
     fn get_height(&self) -> u32 {
-        self.height
+        self.height()
     }
 }
 
@@ -89,12 +83,13 @@ pub fn video_frame_field_to_py(
     frame: &VideoFrame,
     field: &str,
 ) -> PyResult<Py<PyAny>> {
+    use crate::schema_field_mappers::VideoFrameFieldMapper;
     match field {
-        "texture" => Ok(PyGpuTexture::new(frame.get_texture())
-            .into_pyobject(py)?
-            .into_any()
-            .unbind()),
-        "format" => Ok(format!("{:?}", frame.get_format())
+        "pixel_buffer" => {
+            let py_buffer = PyRhiPixelBuffer::new(frame.buffer().clone());
+            Ok(py_buffer.into_pyobject(py)?.into_any().unbind())
+        }
+        "pixel_format" => Ok(format!("{:?}", frame.get_pixel_format())
             .into_pyobject(py)?
             .into_any()
             .unbind()),
@@ -119,9 +114,12 @@ pub fn video_frame_field_to_py(
 
 /// Convert a VideoFrame to a Python dict with all fields.
 pub fn video_frame_to_dict(py: Python<'_>, frame: &VideoFrame) -> PyResult<Py<PyDict>> {
+    use crate::schema_field_mappers::VideoFrameFieldMapper;
     let dict = PyDict::new(py);
-    dict.set_item("texture", PyGpuTexture::new(frame.get_texture()))?;
-    dict.set_item("format", format!("{:?}", frame.get_format()))?;
+    // Include pixel_buffer for buffer-centric processing
+    let py_buffer = PyRhiPixelBuffer::new(frame.buffer().clone());
+    dict.set_item("pixel_buffer", py_buffer.into_pyobject(py)?)?;
+    dict.set_item("pixel_format", format!("{:?}", frame.get_pixel_format()))?;
     dict.set_item("timestamp_ns", frame.get_timestamp_ns())?;
     dict.set_item("frame_number", frame.get_frame_number())?;
     dict.set_item("width", frame.get_width())?;

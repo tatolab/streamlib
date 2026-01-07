@@ -338,6 +338,13 @@ extern "C" {
     // Query CVPixelBuffer dimensions
     pub(super) fn CVPixelBufferGetWidth(pixel_buffer: CVPixelBufferRef) -> usize;
     pub(super) fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
+
+    // CVPixelBuffer reference counting
+    pub fn CVPixelBufferRetain(pixel_buffer: CVPixelBufferRef) -> CVPixelBufferRef;
+    pub fn CVPixelBufferRelease(pixel_buffer: CVPixelBufferRef);
+
+    // CVPixelBuffer format query (returns OSType/FourCC)
+    pub fn CVPixelBufferGetPixelFormatType(pixel_buffer: CVPixelBufferRef) -> u32;
 }
 
 // Helper function to create output attributes dictionary for decompression
