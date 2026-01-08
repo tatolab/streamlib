@@ -54,38 +54,38 @@ jobs:
 
       - name: Generate TypeScript types and Zod schemas
         run: |
-          mkdir -p docs/schemas/typescript
+          mkdir -p dist/schemas/typescript
 
           # Generate TypeScript interfaces
-          echo "// Auto-generated from JSON Schema - DO NOT EDIT" > docs/schemas/typescript/types.ts
-          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> docs/schemas/typescript/types.ts
-          echo "// Version: ${{ steps.version.outputs.version }}" >> docs/schemas/typescript/types.ts
-          echo "" >> docs/schemas/typescript/types.ts
+          echo "// Auto-generated from JSON Schema - DO NOT EDIT" > dist/schemas/typescript/types.ts
+          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/schemas/typescript/types.ts
+          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/schemas/typescript/types.ts
+          echo "" >> dist/schemas/typescript/types.ts
 
-          for schema in docs/schemas/*.json; do
+          for schema in dist/schemas/*.json; do
             echo "Generating TypeScript from $schema..."
-            json2ts "$schema" >> docs/schemas/typescript/types.ts
-            echo "" >> docs/schemas/typescript/types.ts
+            json2ts "$schema" >> dist/schemas/typescript/types.ts
+            echo "" >> dist/schemas/typescript/types.ts
           done
 
           # Generate Zod schemas
-          echo "// Auto-generated Zod schemas from JSON Schema - DO NOT EDIT" > docs/schemas/typescript/schemas.ts
-          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> docs/schemas/typescript/schemas.ts
-          echo "// Version: ${{ steps.version.outputs.version }}" >> docs/schemas/typescript/schemas.ts
-          echo "" >> docs/schemas/typescript/schemas.ts
-          echo "import { z } from 'zod';" >> docs/schemas/typescript/schemas.ts
-          echo "" >> docs/schemas/typescript/schemas.ts
+          echo "// Auto-generated Zod schemas from JSON Schema - DO NOT EDIT" > dist/schemas/typescript/schemas.ts
+          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/schemas/typescript/schemas.ts
+          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/schemas/typescript/schemas.ts
+          echo "" >> dist/schemas/typescript/schemas.ts
+          echo "import { z } from 'zod';" >> dist/schemas/typescript/schemas.ts
+          echo "" >> dist/schemas/typescript/schemas.ts
 
-          for schema in docs/schemas/*.json; do
+          for schema in dist/schemas/*.json; do
             name=$(basename "$schema" .schema.json | sed 's/-/_/g')
             echo "Generating Zod schema for $name..."
-            echo "// Schema: $name" >> docs/schemas/typescript/schemas.ts
-            json-schema-to-zod -s "$schema" -n "${name}Schema" >> docs/schemas/typescript/schemas.ts
-            echo "" >> docs/schemas/typescript/schemas.ts
+            echo "// Schema: $name" >> dist/schemas/typescript/schemas.ts
+            json-schema-to-zod -s "$schema" -n "${name}Schema" >> dist/schemas/typescript/schemas.ts
+            echo "" >> dist/schemas/typescript/schemas.ts
           done
 
           # Create index.ts for easy importing
-          cat > docs/schemas/typescript/index.ts << 'EOF'
+          cat > dist/schemas/typescript/index.ts << 'EOF'
           // Auto-generated - DO NOT EDIT
           export * from './types';
           export * from './schemas';
@@ -93,17 +93,17 @@ jobs:
 
           # Show generated files
           echo "=== Generated TypeScript files ==="
-          ls -la docs/schemas/typescript/
+          ls -la dist/schemas/typescript/
           echo ""
           echo "=== types.ts preview ==="
-          head -50 docs/schemas/typescript/types.ts
+          head -50 dist/schemas/typescript/types.ts
           echo ""
           echo "=== schemas.ts preview ==="
-          head -50 docs/schemas/typescript/schemas.ts
+          head -50 dist/schemas/typescript/schemas.ts
 
       - name: Create schema archive
         run: |
-          cd docs/schemas
+          cd dist/schemas
           zip -r ../../streamlib-schemas-v${{ steps.version.outputs.version }}.zip *.json typescript/
           cd ../..
           ls -lh streamlib-schemas-*.zip
@@ -113,8 +113,8 @@ jobs:
         with:
           name: streamlib-schemas-v${{ steps.version.outputs.version }}
           path: |
-            docs/schemas/*.json
-            docs/schemas/typescript/
+            dist/schemas/*.json
+            dist/schemas/typescript/
             streamlib-schemas-*.zip
           retention-days: 90
 
