@@ -1,14 +1,7 @@
 name: Schemas & Client
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'libs/streamlib/src/core/json_schema.rs'
-      - 'libs/streamlib/src/bin/generate_schemas.rs'
-      - 'libs/streamlib/src/bin/generate_openapi.rs'
-      - 'libs/streamlib/src/core/processors/api_server.rs'
-      - '.github/workflows/schemas.yml'
+  workflow_call:  # Called by release-please after version bump
   workflow_dispatch:  # Manual trigger
 
 env:
