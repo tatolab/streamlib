@@ -6,14 +6,7 @@
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "versioning": "default",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        "libs/streamlib/Cargo.toml",
-        "libs/streamlib-macros/Cargo.toml",
-        "libs/streamlib-codegen-shared/Cargo.toml",
-        "libs/streamlib-python/Cargo.toml",
-        "libs/yuv/Cargo.toml"
-      ]
+      "changelog-path": "CHANGELOG.md"
     }
   },
   "changelog-sections": [
