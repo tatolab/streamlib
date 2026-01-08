@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/tatolab/streamlib/compare/v0.2.0...v0.2.1) (2026-01-08)
+
+
+### Bug Fixes
+
+* **clap:** Update clack_host imports for API compatibility ([23d1437](https://github.com/tatolab/streamlib/commit/23d14378f00dc9200a889d2dbcc56a42520d690c))
+
 ## [0.2.0](https://github.com/tatolab/streamlib/compare/v0.1.0...v0.2.0) (2026-01-08)
 
 
