@@ -26,6 +26,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -35,7 +40,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-schemas-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Generate schemas
+      - name: Generate JSON schemas
         run: cargo run --bin generate_schemas
 
       - name: Get version from Cargo.toml
@@ -44,10 +49,62 @@ jobs:
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Install TypeScript generators
+        run: npm install -g json-schema-to-typescript json-schema-to-zod
+
+      - name: Generate TypeScript types and Zod schemas
+        run: |
+          mkdir -p docs/schemas/typescript
+
+          # Generate TypeScript interfaces
+          echo "// Auto-generated from JSON Schema - DO NOT EDIT" > docs/schemas/typescript/types.ts
+          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> docs/schemas/typescript/types.ts
+          echo "// Version: ${{ steps.version.outputs.version }}" >> docs/schemas/typescript/types.ts
+          echo "" >> docs/schemas/typescript/types.ts
+
+          for schema in docs/schemas/*.json; do
+            echo "Generating TypeScript from $schema..."
+            json2ts "$schema" >> docs/schemas/typescript/types.ts
+            echo "" >> docs/schemas/typescript/types.ts
+          done
+
+          # Generate Zod schemas
+          echo "// Auto-generated Zod schemas from JSON Schema - DO NOT EDIT" > docs/schemas/typescript/schemas.ts
+          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> docs/schemas/typescript/schemas.ts
+          echo "// Version: ${{ steps.version.outputs.version }}" >> docs/schemas/typescript/schemas.ts
+          echo "" >> docs/schemas/typescript/schemas.ts
+          echo "import { z } from 'zod';" >> docs/schemas/typescript/schemas.ts
+          echo "" >> docs/schemas/typescript/schemas.ts
+
+          for schema in docs/schemas/*.json; do
+            name=$(basename "$schema" .schema.json | sed 's/-/_/g')
+            echo "Generating Zod schema for $name..."
+            echo "// Schema: $name" >> docs/schemas/typescript/schemas.ts
+            json-schema-to-zod -s "$schema" -n "${name}Schema" >> docs/schemas/typescript/schemas.ts
+            echo "" >> docs/schemas/typescript/schemas.ts
+          done
+
+          # Create index.ts for easy importing
+          cat > docs/schemas/typescript/index.ts << 'EOF'
+          // Auto-generated - DO NOT EDIT
+          export * from './types';
+          export * from './schemas';
+          EOF
+
+          # Show generated files
+          echo "=== Generated TypeScript files ==="
+          ls -la docs/schemas/typescript/
+          echo ""
+          echo "=== types.ts preview ==="
+          head -50 docs/schemas/typescript/types.ts
+          echo ""
+          echo "=== schemas.ts preview ==="
+          head -50 docs/schemas/typescript/schemas.ts
+
       - name: Create schema archive
         run: |
           cd docs/schemas
-          zip -r ../../streamlib-schemas-v${{ steps.version.outputs.version }}.zip *.json
+          zip -r ../../streamlib-schemas-v${{ steps.version.outputs.version }}.zip *.json typescript/
           cd ../..
           ls -lh streamlib-schemas-*.zip
 
@@ -57,6 +114,7 @@ jobs:
           name: streamlib-schemas-v${{ steps.version.outputs.version }}
           path: |
             docs/schemas/*.json
+            docs/schemas/typescript/
             streamlib-schemas-*.zip
           retention-days: 90
 
