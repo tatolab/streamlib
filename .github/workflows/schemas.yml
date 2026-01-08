@@ -38,19 +38,29 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-schemas-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-schemas-${{ hashFiles('**/Cargo.toml') }}
 
       - name: Get version from Cargo.toml
         id: version
         run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          VERSION=$(grep 'version = ' Cargo.toml | head -1 | sed 's/.*version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
 
       - name: Generate JSON schemas
-        run: cargo run --bin generate_schemas
+        run: |
+          cargo run --bin generate_schemas
+          echo "=== Generated schema files ==="
+          ls -la dist/schemas/
+          echo "=== Validating JSON ==="
+          for f in dist/schemas/*.json; do
+            python3 -m json.tool "$f" > /dev/null && echo "✓ $f is valid JSON" || { echo "✗ $f is INVALID"; exit 1; }
+          done
 
       - name: Generate OpenAPI spec
-        run: cargo run --bin generate_openapi
+        run: |
+          cargo run --bin generate_openapi
+          python3 -m json.tool dist/schemas/openapi.json > /dev/null && echo "✓ OpenAPI spec is valid JSON" || { echo "✗ OpenAPI spec is INVALID"; exit 1; }
 
       - name: Create package directory
         run: mkdir -p dist/streamlib-client/src
