@@ -4,13 +4,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::GpuContext;
+use super::{GpuContext, TimeContext};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
 
 #[derive(Clone)]
 pub struct RuntimeContext {
     pub gpu: GpuContext,
+    /// Shared timing context - monotonic clock starting at runtime creation.
+    pub time: Arc<TimeContext>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
     /// Unique identifier for this processor (None for shared/global context).
@@ -26,17 +28,51 @@ pub struct RuntimeContext {
 impl RuntimeContext {
     pub fn new(
         gpu: GpuContext,
+        time: Arc<TimeContext>,
         runtime_id: Arc<RuntimeUniqueId>,
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
             gpu,
+            time,
             runtime_id,
             processor_id: None,
             pause_gate: None,
             runtime_ops,
             tokio_handle,
+        }
+    }
+
+    /// Current platform name.
+    ///
+    /// Returns "macos", "linux", or "windows".
+    /// Use this to branch on platform-specific behavior in processors.
+    pub fn platform(&self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        {
+            "macos"
+        }
+        #[cfg(target_os = "ios")]
+        {
+            "ios"
+        }
+        #[cfg(target_os = "linux")]
+        {
+            "linux"
+        }
+        #[cfg(target_os = "windows")]
+        {
+            "windows"
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "windows"
+        )))]
+        {
+            "unknown"
         }
     }
 
@@ -70,6 +106,7 @@ impl RuntimeContext {
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
             gpu: self.gpu.clone(),
+            time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: Some(processor_id),
             pause_gate: self.pause_gate.clone(),
@@ -82,6 +119,7 @@ impl RuntimeContext {
     pub fn with_pause_gate(&self, pause_gate: Arc<AtomicBool>) -> Self {
         Self {
             gpu: self.gpu.clone(),
+            time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: self.processor_id.clone(),
             pause_gate: Some(pause_gate),

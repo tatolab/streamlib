@@ -22,6 +22,7 @@ use crate::python_processor_core::{PythonProcessorConfig, PythonProcessorCore};
 /// `process()` is called repeatedly in a loop.
 #[streamlib::processor(
     execution = Continuous,
+    execution_interval_ms = 16,
     description = "Continuous host processor for Python-defined processors",
     display_name_from_config = "class_name"
 )]

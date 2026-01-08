@@ -60,15 +60,17 @@ fn run_typed_mode() -> Result<()> {
     println!("📷 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
         device_id: None,
+        ..Default::default()
     }))?;
     println!("✓ Camera added: {}\n", camera);
 
     println!("🖥️  Adding display processor...");
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
-        width: 3840,
-        height: 2160,
+        width: 1920,
+        height: 1080,
         title: Some("streamlib Camera Display".to_string()),
         scaling_mode: Default::default(),
+        ..Default::default()
     }))?;
     println!("✓ Display added: {}\n", display);
 
@@ -116,8 +118,8 @@ fn run_string_mode() -> Result<()> {
     let display_spec = ProcessorSpec::new(
         "DisplayProcessor",
         serde_json::json!({
-            "width": 3840,
-            "height": 2160,
+            "width": 1920,
+            "height": 1080,
             "title": "streamlib Camera Display (String Mode)",
             "scaling_mode": "Stretch"
         }),

@@ -2,12 +2,21 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 [project]
-name = "grayscale-processor"
+name = "cyberpunk-processor"
 version = "0.1.0"
-description = "Grayscale video processor using GPU shader"
+description = "Cyberpunk video overlay processor using Skia GPU rendering"
 requires-python = ">=3.10"
 # Note: streamlib-python is automatically injected by the Rust host
-dependencies = []
+dependencies = [
+    "skia-python>=87.0",
+    "PyOpenGL>=3.1.0",
+    "mediapipe>=0.10.18",
+    "numpy>=1.24.0",
+    "moderngl>=5.8.0",
+    "pygltflib>=1.16.0",
+    "pyrr>=0.10.3",
+    "pillow>=10.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]

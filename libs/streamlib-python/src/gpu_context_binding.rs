@@ -1,27 +1,39 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Python bindings for GpuContext with shader compilation and dispatch.
+//! Python bindings for GpuContext - thin wrapper over shared Rust GpuContext.
+//!
+//! IMPORTANT: Python processors NEVER own their context. This is a reference
+//! to the shared GpuContext provided by the Rust runtime. All pool management,
+//! caching, and resource allocation happens on the Rust side.
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use std::sync::Arc;
-use streamlib::GpuContext;
+use streamlib::core::rhi::{PixelFormat, TextureFormat, TextureUsages};
+use streamlib::{GlContext, GpuContext, TexturePoolDescriptor};
 
-use crate::shader_handle::{PyCompiledShader, PyGpuTexture};
+use crate::gl_context_binding::PyGlContext;
+use crate::pixel_buffer_binding::PyRhiPixelBuffer;
+use crate::shader_handle::PyPooledTextureHandle;
 
-/// Python-accessible GpuContext for shader compilation and dispatch.
+/// Python-accessible reference to the shared GpuContext.
+///
+/// This is a thin wrapper that calls through to the Rust GpuContext.
+/// All resource management (pools, caches) is handled on the Rust side.
 ///
 /// Access via `ctx.gpu` in processor methods.
 #[pyclass(name = "GpuContext")]
-#[derive(Clone)]
 pub struct PyGpuContext {
     inner: GpuContext,
+    /// Lazily-created GL context for interop (one per processor due to GL's single-threaded nature)
+    gl_context: Option<PyGlContext>,
 }
 
 impl PyGpuContext {
     pub fn new(ctx: GpuContext) -> Self {
-        Self { inner: ctx }
+        Self {
+            inner: ctx,
+            gl_context: None,
+        }
     }
 
     pub fn inner(&self) -> &GpuContext {
@@ -31,104 +43,133 @@ impl PyGpuContext {
 
 #[pymethods]
 impl PyGpuContext {
-    /// Compile a WGSL compute shader.
+    /// Acquire an IOSurface-backed texture from the pool.
     ///
-    /// The shader must have an entry point named "main" with workgroup_size(16, 16).
-    ///
-    /// Expected bindings:
-    /// - @group(0) @binding(0) var input_texture: texture_2d<f32>;
-    /// - @group(0) @binding(1) var output_texture: texture_storage_2d<rgba8unorm, write>;
+    /// The texture is automatically returned to the pool when the handle is dropped.
+    /// On macOS, use `handle.iosurface_id` to share with other frameworks like SceneKit.
     ///
     /// Args:
-    ///     name: Shader name for debugging/profiling
-    ///     wgsl_code: WGSL shader source code
+    ///     width: Texture width in pixels
+    ///     height: Texture height in pixels
+    ///     format: Texture format (optional, defaults to "rgba8")
+    ///             Supported: "rgba8", "bgra8", "rgba8_srgb", "bgra8_srgb"
     ///
     /// Returns:
-    ///     CompiledShader handle for use with dispatch()
-    fn compile_shader(&self, name: &str, wgsl_code: &str) -> PyResult<PyCompiledShader> {
-        let device = self.inner.device();
+    ///     PooledTexture handle
+    ///
+    /// Example:
+    ///     output = ctx.gpu.acquire_surface(1920, 1080)
+    ///     # Use output.texture with VideoFrame
+    ///     # output.iosurface_id for cross-framework sharing (macOS)
+    #[pyo3(signature = (width, height, format=None))]
+    fn acquire_surface(
+        &self,
+        width: u32,
+        height: u32,
+        format: Option<&str>,
+    ) -> PyResult<PyPooledTextureHandle> {
+        let texture_format = match format.unwrap_or("rgba8") {
+            "rgba8" => TextureFormat::Rgba8Unorm,
+            "bgra8" => TextureFormat::Bgra8Unorm,
+            "rgba8_srgb" => TextureFormat::Rgba8UnormSrgb,
+            "bgra8_srgb" => TextureFormat::Bgra8UnormSrgb,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unsupported format '{}'. Use: rgba8, bgra8, rgba8_srgb, bgra8_srgb",
+                    other
+                )))
+            }
+        };
 
-        // Create shader module
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(name),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(wgsl_code)),
-        });
+        let desc = TexturePoolDescriptor {
+            width,
+            height,
+            format: texture_format,
+            usage: TextureUsages::TEXTURE_BINDING
+                | TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::COPY_SRC,
+            label: Some("python_pooled_texture"),
+        };
 
-        // Create bind group layout for input texture + output storage texture
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{}_bind_group_layout", name)),
-            entries: &[
-                // @group(0) @binding(0) var input_texture: texture_2d<f32>;
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // @group(0) @binding(1) var output_texture: texture_storage_2d<rgba8unorm, write>;
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let handle = self
+            .inner
+            .acquire_texture(&desc)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
 
-        // Create pipeline layout
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(&format!("{}_pipeline_layout", name)),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        // Create compute pipeline
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(&format!("{}_pipeline", name)),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        tracing::debug!("Compiled shader: {}", name);
-
-        Ok(PyCompiledShader::new(
-            name.to_string(),
-            Arc::new(pipeline),
-            Arc::new(bind_group_layout),
-            self.inner.clone(),
-        ))
+        Ok(PyPooledTextureHandle::new(handle))
     }
 
-    /// Dispatch a compute shader.
+    /// Acquire a pixel buffer from the shared runtime pool.
+    ///
+    /// Calls through to the shared GpuContext - pools are cached by (width, height, format)
+    /// at the runtime level, shared across all processors.
     ///
     /// Args:
-    ///     shader: Compiled shader handle from compile_shader()
-    ///     inputs: Dict mapping binding names to GpuTexture handles
-    ///             Currently expects {"input_texture": GpuTexture}
-    ///     output_width: Output texture width in pixels
-    ///     output_height: Output texture height in pixels
+    ///     width: Buffer width in pixels
+    ///     height: Buffer height in pixels
+    ///     format: Pixel format string: "bgra32", "rgba32", "argb32", "rgba64",
+    ///             "nv12_video", "nv12_full", "uyvy422", "yuyv422", "gray8"
     ///
     /// Returns:
-    ///     GpuTexture containing the shader output
-    fn dispatch(
+    ///     PixelBuffer ready for rendering
+    ///
+    /// Example:
+    ///     output = ctx.gpu.acquire_pixel_buffer(1920, 1080, "bgra32")
+    fn acquire_pixel_buffer(
         &self,
-        shader: &PyCompiledShader,
-        inputs: &Bound<'_, PyDict>,
-        output_width: u32,
-        output_height: u32,
-    ) -> PyResult<PyGpuTexture> {
-        shader.dispatch(inputs, output_width, output_height)
+        width: u32,
+        height: u32,
+        format: &str,
+    ) -> PyResult<PyRhiPixelBuffer> {
+        let pixel_format = match format.to_lowercase().as_str() {
+            "bgra32" | "bgra" => PixelFormat::Bgra32,
+            "rgba32" | "rgba" => PixelFormat::Rgba32,
+            "argb32" | "argb" => PixelFormat::Argb32,
+            "rgba64" => PixelFormat::Rgba64,
+            "nv12_video" | "nv12_video_range" => PixelFormat::Nv12VideoRange,
+            "nv12_full" | "nv12_full_range" => PixelFormat::Nv12FullRange,
+            "uyvy422" | "uyvy" => PixelFormat::Uyvy422,
+            "yuyv422" | "yuyv" => PixelFormat::Yuyv422,
+            "gray8" | "gray" => PixelFormat::Gray8,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unsupported pixel format '{}'. Use: bgra32, rgba32, argb32, rgba64, nv12_video, nv12_full, uyvy422, yuyv422, gray8",
+                    other
+                )))
+            }
+        };
+        let buffer = self
+            .inner
+            .acquire_pixel_buffer(width, height, pixel_format)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        Ok(PyRhiPixelBuffer::new(buffer))
+    }
+
+    /// Get the OpenGL context for GPU interop (experimental).
+    ///
+    /// This provides access to StreamLib's OpenGL context for use with
+    /// libraries like skia-python that require OpenGL.
+    ///
+    /// The context is created lazily on first access and cached for reuse.
+    ///
+    /// Example:
+    ///     gl_ctx = ctx.gpu._experimental_gl_context()
+    ///     gl_ctx.make_current()
+    ///     skia_ctx = skia.GrDirectContext.MakeGL()
+    ///
+    /// Note: This is an experimental API and may change in future versions.
+    fn _experimental_gl_context(&mut self) -> PyResult<PyGlContext> {
+        if let Some(ref gl_ctx) = self.gl_context {
+            return Ok(gl_ctx.clone());
+        }
+
+        // Create new GL context
+        let gl_ctx = GlContext::new()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+        let py_gl_ctx = PyGlContext::new(gl_ctx);
+        self.gl_context = Some(py_gl_ctx.clone());
+        Ok(py_gl_ctx)
     }
 
     fn __repr__(&self) -> String {

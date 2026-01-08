@@ -35,6 +35,7 @@ pub use streamlib_macros::{
 pub use core::{
     are_synchronized,
     convert_audio_to_sample,
+    gl_constants,
     // Port marker traits and helpers for compile-time safe connections
     input,
     media_clock::MediaClock,
@@ -80,6 +81,8 @@ pub use core::{
     EncodedAudioFrame,
     Field,
     FieldType,
+    GlContext,
+    GlTextureBinding,
     GpuContext,
     InputPortMarker,
     LfoWaveform,
@@ -94,6 +97,7 @@ pub use core::{
     ManualProcessor,
     MixingStrategy,
     Mp4WriterConfig,
+    NativeTextureHandle,
     // Streaming utilities:
     OpusEncoder,
     OutputPortMarker,
@@ -101,6 +105,7 @@ pub use core::{
     ParameterInfo,
     ParameterModulator,
     PluginInfo,
+    PooledTextureHandle,
     PortDescriptor,
     ProcessorDescriptor,
     ProcessorSpec,
@@ -113,11 +118,13 @@ pub use core::{
     SemanticVersion,
     SerializationFormat,
     StreamError,
-    Texture,
+    StreamTexture,
     TextureDescriptor,
     TextureFormat,
+    TexturePool,
+    TexturePoolDescriptor,
     TextureUsages,
-    TextureView,
+    TimeContext,
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
@@ -162,8 +169,6 @@ pub use apple::{
     WebRtcWhipConfig,
     // WebRTC WHIP processor and config types:
     WebRtcWhipProcessor,
-    // Metal/wgpu utilities:
-    WgpuBridge,
     WhepClient,
     WhepConfig,
     WhipClient,

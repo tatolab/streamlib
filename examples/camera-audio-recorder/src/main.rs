@@ -52,6 +52,7 @@ fn main() -> Result<()> {
     println!("📷 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
         device_id: Some("0x1424001bcf2284".to_string()), // Use default camera
+        ..Default::default()
     }))?;
     println!("✓ Camera added (capturing video)\n");
 

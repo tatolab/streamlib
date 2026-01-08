@@ -6,7 +6,7 @@
 // Hardware-accelerated H.264 encoding using Apple's VideoToolbox framework.
 // Supports GPU-accelerated texture conversion (wgpu → NV12) and real-time encoding.
 
-use crate::apple::{PixelTransferSession, WgpuBridge};
+use crate::apple::PixelTransferSession;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoFrame};
 use objc2_core_video::CVPixelBuffer;
 use serde::{Deserialize, Serialize};
@@ -74,7 +74,6 @@ pub struct VideoToolboxEncoder {
 
     // GPU-accelerated texture → NV12 conversion
     pixel_transfer: Option<PixelTransferSession>,
-    wgpu_bridge: Option<Arc<WgpuBridge>>,
 
     // For storing encoded output from callback
     encoded_frames: Arc<Mutex<VecDeque<EncodedVideoFrame>>>,
@@ -97,7 +96,6 @@ impl VideoToolboxEncoder {
             force_next_keyframe: true, // First frame should be keyframe
             gpu_context,
             pixel_transfer: None,
-            wgpu_bridge: None,
             encoded_frames: Arc::new(Mutex::new(VecDeque::new())),
             callback_context: None,
         };
@@ -257,22 +255,8 @@ impl VideoToolboxEncoder {
 
         // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
         if let Some(ref gpu_ctx) = self.gpu_context {
-            use crate::apple::MetalDevice;
-
-            // Create Metal device (gets system default, same as wgpu)
-            let metal_device = MetalDevice::new()?;
-
-            // Create WgpuBridge with Metal device and wgpu device/queue from GpuContext
-            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-                metal_device.clone_device(),
-                gpu_ctx.device().as_ref().clone(),
-                gpu_ctx.queue().as_ref().clone(),
-            ));
-
             // Create PixelTransferSession for GPU-accelerated RGBA → NV12 conversion
-            let pixel_transfer = PixelTransferSession::new(wgpu_bridge.clone())?;
-
-            self.wgpu_bridge = Some(wgpu_bridge);
+            let pixel_transfer = PixelTransferSession::new(gpu_ctx.device().clone())?;
             self.pixel_transfer = Some(pixel_transfer);
 
             tracing::info!("GPU-accelerated pixel transfer (RGBA → NV12) initialized");
@@ -285,14 +269,14 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
-    /// Convert wgpu texture to CVPixelBuffer using GPU-accelerated VTPixelTransferSession
-    fn convert_texture_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
+    /// Convert VideoFrame buffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
+    fn convert_buffer_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
         let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
             StreamError::Configuration("PixelTransferSession not initialized".into())
         })?;
 
-        pixel_transfer.convert_to_nv12(&frame.texture, frame.width, frame.height)
+        pixel_transfer.convert_buffer_to_nv12(frame.buffer())
     }
 
     /// Encode a video frame.
@@ -301,8 +285,8 @@ impl VideoToolboxEncoder {
             StreamError::Configuration("Compression session not initialized".into())
         })?;
 
-        // Step 1: Convert VideoFrame texture to CVPixelBuffer
-        let pixel_buffer = self.convert_texture_to_pixel_buffer(frame)?;
+        // Step 1: Convert VideoFrame buffer to NV12 CVPixelBuffer
+        let pixel_buffer = self.convert_buffer_to_pixel_buffer(frame)?;
 
         // Step 2: Create presentation timestamp
         let presentation_time = ffi::CMTime::new(frame.timestamp_ns, 1_000_000_000);

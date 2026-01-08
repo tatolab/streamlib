@@ -16,8 +16,8 @@
 // **Reference**: Encoder implementation (encoder.rs) - inverse operations
 
 use super::{ffi, format};
-use crate::apple::{MetalDevice, WgpuBridge};
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoFrame};
+use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::{Result, RuntimeContext, StreamError, VideoFrame};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -43,7 +43,6 @@ impl Default for VideoDecoderConfig {
 /// Uses VTDecompressionSession for hardware-accelerated decoding.
 pub struct VideoToolboxDecoder {
     config: VideoDecoderConfig,
-    gpu_context: Option<GpuContext>,
     runtime_context: Arc<RuntimeContext>,
 
     // VideoToolbox session (null until SPS/PPS received)
@@ -57,9 +56,6 @@ pub struct VideoToolboxDecoder {
 
     // Callback context (owned pointer for cleanup)
     callback_context: Option<*mut std::ffi::c_void>,
-
-    // wgpu bridge for texture import
-    wgpu_bridge: Option<Arc<WgpuBridge>>,
 
     // Frame counter
     frame_count: u64,
@@ -79,38 +75,20 @@ unsafe impl Send for DecodedFrame {}
 
 impl VideoToolboxDecoder {
     /// Create a new VideoToolbox decoder
-    pub fn new(
-        config: VideoDecoderConfig,
-        gpu_context: Option<GpuContext>,
-        ctx: &RuntimeContext,
-    ) -> Result<Self> {
+    pub fn new(config: VideoDecoderConfig, ctx: &RuntimeContext) -> Result<Self> {
         tracing::info!(
             "[VideoToolbox Decoder] Initializing ({}x{})",
             config.width,
             config.height
         );
 
-        // Initialize wgpu bridge for texture import
-        let wgpu_bridge = if let Some(ref gpu_ctx) = gpu_context {
-            let metal_device = MetalDevice::new()?;
-            Some(Arc::new(WgpuBridge::from_shared_device(
-                metal_device.clone_device(),
-                gpu_ctx.device().as_ref().clone(),
-                gpu_ctx.queue().as_ref().clone(),
-            )))
-        } else {
-            None
-        };
-
         Ok(Self {
             config,
-            gpu_context,
             runtime_context: Arc::new(ctx.clone()),
             decompression_session: None,
             format_description: None,
             decoded_frames: Arc::new(Mutex::new(VecDeque::new())),
             callback_context: None,
-            wgpu_bridge,
             frame_count: 0,
             has_format: false,
         })
@@ -409,94 +387,36 @@ impl VideoToolboxDecoder {
         Ok(Some(video_frame))
     }
 
-    /// Convert CVPixelBuffer (BGRA) to VideoFrame with wgpu texture
+    /// Convert CVPixelBuffer (BGRA) to VideoFrame with RhiPixelBuffer
     fn pixel_buffer_to_video_frame(&self, decoded_frame: DecodedFrame) -> Result<VideoFrame> {
-        let wgpu_bridge = self
-            .wgpu_bridge
-            .as_ref()
-            .ok_or_else(|| StreamError::Configuration("wgpu bridge not initialized".into()))?;
+        // Wrap CVPixelBuffer in RhiPixelBufferRef.
+        // Use no_retain since the callback already retained the buffer.
+        // When RhiPixelBufferRef is dropped, it will release the CVPixelBuffer.
+        let buffer_ref = unsafe {
+            RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(
+                decoded_frame.pixel_buffer as ffi::CVPixelBufferRef,
+            )
+        }
+        .ok_or_else(|| StreamError::GpuError("Decoded frame has null pixel buffer".into()))?;
 
-        let gpu_ctx = self
-            .gpu_context
-            .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not available".into()))?;
-
-        // Query actual dimensions from CVPixelBuffer (ground truth from decoded frame)
-        let (actual_width, actual_height) = unsafe {
-            let width =
-                ffi::CVPixelBufferGetWidth(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
-            let height =
-                ffi::CVPixelBufferGetHeight(decoded_frame.pixel_buffer as ffi::CVPixelBufferRef);
-            (width as u32, height as u32)
-        };
+        let buffer = RhiPixelBuffer::new(buffer_ref);
 
         // Log resolution discovery on first frame or if resolution changes
-        if actual_width != self.config.width || actual_height != self.config.height {
+        if buffer.width != self.config.width || buffer.height != self.config.height {
             tracing::info!(
                 "[VideoToolbox Decoder] 🎥 Actual decoded resolution: {}x{} (config was {}x{})",
-                actual_width,
-                actual_height,
+                buffer.width,
+                buffer.height,
                 self.config.width,
                 self.config.height
             );
         }
 
-        // Import CVPixelBuffer as wgpu texture via IOSurface
-        let texture = unsafe {
-            self.import_pixel_buffer_as_texture(decoded_frame.pixel_buffer, wgpu_bridge, gpu_ctx)?
-        };
-
-        // Release pixel buffer
-        unsafe {
-            use super::ffi;
-            ffi::CFRelease(decoded_frame.pixel_buffer as *const _);
-        }
-
-        Ok(VideoFrame::new(
-            Arc::new(texture),
-            wgpu::TextureFormat::Bgra8Unorm,
+        Ok(VideoFrame::from_buffer(
+            buffer,
             decoded_frame.timestamp_ns,
             self.frame_count,
-            actual_width,  // Use actual dimensions from decoded buffer
-            actual_height, // Use actual dimensions from decoded buffer
         ))
-    }
-
-    /// Import CVPixelBuffer as wgpu texture via IOSurface
-    unsafe fn import_pixel_buffer_as_texture(
-        &self,
-        pixel_buffer: *mut objc2_core_video::CVPixelBuffer,
-        wgpu_bridge: &WgpuBridge,
-        _gpu_ctx: &GpuContext,
-    ) -> Result<wgpu::Texture> {
-        use super::ffi;
-        use crate::apple::iosurface;
-
-        // Get IOSurface from CVPixelBuffer
-        let iosurface_ptr = ffi::CVPixelBufferGetIOSurface(pixel_buffer as *const std::ffi::c_void);
-        if iosurface_ptr.is_null() {
-            return Err(StreamError::GpuError(
-                "Failed to get IOSurface from CVPixelBuffer".into(),
-            ));
-        }
-
-        let iosurface = &*iosurface_ptr;
-
-        // Create Metal texture from IOSurface
-        let metal_texture = iosurface::create_metal_texture_from_iosurface(
-            wgpu_bridge.metal_device(),
-            iosurface,
-            0, // plane 0
-        )?;
-
-        // Wrap Metal texture as wgpu texture
-        let wgpu_texture = wgpu_bridge.wrap_metal_texture(
-            &metal_texture,
-            wgpu::TextureFormat::Bgra8Unorm,
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        )?;
-
-        Ok(wgpu_texture)
     }
 }
 

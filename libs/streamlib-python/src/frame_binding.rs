@@ -159,7 +159,9 @@ impl PyFrame {
             FrameInner::Video(f) => {
                 format!(
                     "Frame(schema='VideoFrame', width={}, height={}, frame_number={})",
-                    f.width, f.height, f.frame_number
+                    f.width(),
+                    f.height(),
+                    f.frame_number
                 )
             }
             FrameInner::Audio(f) => {
@@ -182,51 +184,45 @@ impl PyFrame {
 }
 
 /// Build a VideoFrame from a Python dict.
+///
+/// Expected dict keys:
+/// - `pixel_buffer`: PyRhiPixelBuffer - the underlying pixel buffer
+/// - `timestamp_ns`: i64 - monotonic timestamp in nanoseconds
+/// - `frame_number`: u64 - sequential frame number
 pub fn video_frame_from_dict(
     _py: Python<'_>,
     dict: &Bound<'_, PyDict>,
     _gpu_context: &streamlib::GpuContext,
 ) -> PyResult<VideoFrame> {
-    use crate::shader_handle::PyGpuTexture;
+    use crate::pixel_buffer_binding::PyRhiPixelBuffer;
 
-    // Required fields
-    let texture: PyGpuTexture = dict
-        .get_item("texture")?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'texture' field"))?
+    // Extract pixel buffer (required)
+    let pixel_buffer: PyRhiPixelBuffer = dict
+        .get_item("pixel_buffer")?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err(
+                "VideoFrame dict requires 'pixel_buffer' field with a PixelBuffer",
+            )
+        })?
         .extract()?;
 
-    let width: u32 = dict
-        .get_item("width")?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'width' field"))?
-        .extract()?;
-
-    let height: u32 = dict
-        .get_item("height")?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'height' field"))?
-        .extract()?;
-
-    // Optional fields with defaults
+    // Extract timestamp (required)
     let timestamp_ns: i64 = dict
         .get_item("timestamp_ns")?
-        .map(|v| v.extract())
-        .transpose()?
-        .unwrap_or(0);
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("VideoFrame dict requires 'timestamp_ns' field")
+        })?
+        .extract()?;
 
+    // Extract frame number (required)
     let frame_number: u64 = dict
         .get_item("frame_number")?
-        .map(|v| v.extract())
-        .transpose()?
-        .unwrap_or(0);
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("VideoFrame dict requires 'frame_number' field")
+        })?
+        .extract()?;
 
-    // Get format from texture
-    let format = texture.texture_ref().format();
-
-    Ok(VideoFrame::new(
-        texture.inner(),
-        format,
-        timestamp_ns,
-        frame_number,
-        width,
-        height,
-    ))
+    // Create VideoFrame from the pixel buffer
+    let buffer = pixel_buffer.into_inner();
+    Ok(VideoFrame::from_buffer(buffer, timestamp_ns, frame_number))
 }

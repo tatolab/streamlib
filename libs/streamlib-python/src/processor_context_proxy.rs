@@ -13,10 +13,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::sync::Arc;
-use streamlib::GpuContext;
+use streamlib::{GpuContext, TimeContext};
 
 use crate::frame_binding::{video_frame_from_dict, PyFrame};
 use crate::gpu_context_binding::PyGpuContext;
+use crate::time_context_binding::PyTimeContext;
 
 /// Port metadata from Python decorators.
 #[derive(Clone, Debug)]
@@ -247,7 +248,7 @@ impl PyOutputPortProxy {
 
 /// Processor execution context passed to Python lifecycle methods.
 ///
-/// Provides access to input/output ports and GPU context.
+/// Provides access to input/output ports, GPU context, and timing.
 #[pyclass(name = "ProcessorContext")]
 pub struct PyProcessorContext {
     input_storage: InputFrameStorage,
@@ -255,15 +256,24 @@ pub struct PyProcessorContext {
 
     #[pyo3(get)]
     gpu: Py<PyGpuContext>,
+
+    #[pyo3(get)]
+    time: Py<PyTimeContext>,
 }
 
 impl PyProcessorContext {
-    pub fn new(py: Python<'_>, gpu_context: Arc<GpuContext>) -> PyResult<Self> {
+    pub fn new(
+        py: Python<'_>,
+        gpu_context: Arc<GpuContext>,
+        time_context: Arc<TimeContext>,
+    ) -> PyResult<Self> {
         let py_gpu = PyGpuContext::new((*gpu_context).clone());
+        let py_time = PyTimeContext::new(time_context);
         Ok(Self {
             input_storage: InputFrameStorage::new(),
             output_storage: OutputFrameStorage::new(gpu_context),
             gpu: Py::new(py, py_gpu)?,
+            time: Py::new(py, py_time)?,
         })
     }
 
@@ -295,6 +305,30 @@ impl PyProcessorContext {
 
 #[pymethods]
 impl PyProcessorContext {
+    /// Current platform name.
+    ///
+    /// Returns "macos", "linux", or "windows".
+    /// Use this to branch on platform-specific behavior.
+    #[getter]
+    fn platform(&self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        {
+            "macos"
+        }
+        #[cfg(target_os = "linux")]
+        {
+            "linux"
+        }
+        #[cfg(target_os = "windows")]
+        {
+            "windows"
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            "unknown"
+        }
+    }
+
     /// Get an input port proxy by name.
     ///
     /// Usage:
@@ -318,6 +352,6 @@ impl PyProcessorContext {
     }
 
     fn __repr__(&self) -> String {
-        "ProcessorContext(input=..., output=..., gpu=...)".to_string()
+        "ProcessorContext(input=..., output=..., gpu=..., time=...)".to_string()
     }
 }

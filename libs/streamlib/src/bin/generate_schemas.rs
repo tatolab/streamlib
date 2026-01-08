@@ -5,7 +5,7 @@
 //!
 //! Run with: `cargo run --bin generate_schemas`
 //!
-//! This generates schema files in `docs/schemas/` that can be used for:
+//! This generates schema files in `dist/schemas/` that can be used for:
 //! - API documentation
 //! - Client code generation
 //! - Runtime validation
@@ -18,7 +18,7 @@ use std::path::Path;
 use streamlib::core::json_schema::{GraphResponse, RegistryResponse};
 
 fn main() {
-    let schema_dir = Path::new("docs/schemas");
+    let schema_dir = Path::new("dist/schemas");
 
     // Create the schema directory if it doesn't exist
     if !schema_dir.exists() {

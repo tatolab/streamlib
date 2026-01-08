@@ -37,6 +37,7 @@ fn main() -> Result<()> {
     tracing::info!("Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
         device_id: Some("0x1424001bcf2284".to_string()),
+        ..Default::default()
     }))?;
 
     // 2. Add lower third effect processor

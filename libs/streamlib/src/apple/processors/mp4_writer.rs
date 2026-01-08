@@ -1,10 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::{metal::MetalDevice, WgpuBridge};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, LinkInput, Result, RuntimeContext, StreamError,
-    VideoFrame,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, GpuContext, LinkInput, Result, RuntimeContext,
+    StreamError, VideoFrame,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -18,7 +17,6 @@ use objc2_foundation::{NSDictionary, NSNumber};
 use objc2_foundation::{NSString, NSURL};
 use objc2_io_surface::IOSurface;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing::{debug, error, info, trace};
 
 // FFI bindings for CoreVideo functions
@@ -113,11 +111,8 @@ pub struct AppleMp4WriterProcessor {
     #[allow(dead_code)] // Reserved for audio timestamp calculation
     total_audio_samples_written: u64,
 
-    // GPU resources for texture conversion
-    metal_device: Option<MetalDevice>,
-    metal_command_queue: Option<metal::CommandQueue>,
-    wgpu_bridge: Option<Arc<WgpuBridge>>,
-    gpu_context: Option<crate::core::GpuContext>,
+    // GPU context for texture conversion
+    gpu_context: Option<GpuContext>,
 
     // GPU-accelerated RGBA → NV12 conversion
     pixel_transfer: Option<crate::apple::PixelTransferSession>,
@@ -140,29 +135,8 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
                 .unwrap_or(DEFAULT_SYNC_TOLERANCE_MS);
             self.gpu_context = Some(ctx.gpu.clone());
 
-            // Initialize Metal device and wgpu bridge for texture conversion
-            let metal_device = MetalDevice::new()?;
-
-            // Create metal crate command queue from objc2 Metal device
-            let metal_command_queue = {
-                use metal::foreign_types::ForeignTypeRef;
-                let device_ptr = metal_device.device() as *const _ as *mut std::ffi::c_void;
-                let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-                metal_device_ref.new_command_queue()
-            };
-
-            let wgpu_bridge = Arc::new(WgpuBridge::from_shared_device(
-                metal_device.clone_device(),
-                ctx.gpu.device().as_ref().clone(),
-                ctx.gpu.queue().as_ref().clone(),
-            ));
-
-            // Initialize GPU-accelerated pixel transfer (RGBA → NV12)
-            let pixel_transfer = crate::apple::PixelTransferSession::new(wgpu_bridge.clone())?;
-
-            self.metal_device = Some(metal_device);
-            self.metal_command_queue = Some(metal_command_queue);
-            self.wgpu_bridge = Some(wgpu_bridge);
+            // Initialize GPU-accelerated pixel transfer (RGBA → NV12) using RHI device
+            let pixel_transfer = crate::apple::PixelTransferSession::new(ctx.gpu.device().clone())?;
             self.pixel_transfer = Some(pixel_transfer);
 
             // AVAssetWriter initialization will happen in process() on first frame
@@ -199,17 +173,19 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             if let Some(first_video) = self.video.peek() {
                 info!(
                     "🎬 INITIALIZING AVAssetWriter with video dimensions: {}x{}",
-                    first_video.width, first_video.height
+                    first_video.width(),
+                    first_video.height()
                 );
 
                 // Initialize writer
                 self.initialize_writer()?;
 
                 // Configure video input with dimensions from first frame
-                self.configure_video_input(first_video.width, first_video.height)?;
+                self.configure_video_input(first_video.width(), first_video.height())?;
                 info!(
                     "✅ VIDEO INPUT CONFIGURED: {}x{}",
-                    first_video.width, first_video.height
+                    first_video.width(),
+                    first_video.height()
                 );
 
                 // Configure audio input
@@ -299,7 +275,10 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             if let Some(video) = self.video.read() {
                 debug!(
                     "New video frame received: timestamp_ns={}, frame_number={}, size={}x{}",
-                    video.timestamp_ns, video.frame_number, video.width, video.height
+                    video.timestamp_ns,
+                    video.frame_number,
+                    video.width(),
+                    video.height()
                 );
                 self.last_video_frame = Some(video);
             }
@@ -794,7 +773,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Configure video input on first video frame
         if self.video_input.is_none() {
-            self.configure_video_input(video.width, video.height)?;
+            self.configure_video_input(video.width(), video.height())?;
         }
 
         // Configure audio input on first audio frame
@@ -900,10 +879,9 @@ impl AppleMp4WriterProcessor::Processor {
             StreamError::Configuration("PixelTransferSession not initialized".into())
         })?;
 
-        // Step 1: GPU-accelerated RGBA → NV12 conversion using VTPixelTransferSession
-        // This creates a new NV12 CVPixelBuffer directly from the wgpu texture
-        let nv12_pixel_buffer_ptr =
-            pixel_transfer.convert_to_nv12(&frame.texture, frame.width, frame.height)?;
+        // Step 1: GPU-accelerated conversion to NV12 using VTPixelTransferSession
+        // This creates a new NV12 CVPixelBuffer from the buffer-backed VideoFrame
+        let nv12_pixel_buffer_ptr = pixel_transfer.convert_buffer_to_nv12(frame.buffer())?;
 
         // Wrap in Retained for automatic memory management
         let pixel_buffer = unsafe { objc2::rc::Retained::from_raw(nv12_pixel_buffer_ptr).unwrap() };
@@ -916,8 +894,8 @@ impl AppleMp4WriterProcessor::Processor {
             "Appending video to AVAssetWriter: timestamp={:.6}s ({}ns), size={}x{}",
             timestamp_ns as f64 / 1_000_000_000.0,
             timestamp_ns,
-            frame.width,
-            frame.height
+            frame.width(),
+            frame.height()
         );
 
         // Step 3: Append pixel buffer to adaptor

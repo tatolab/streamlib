@@ -13,8 +13,8 @@ use crate::apple::videotoolbox::VideoToolboxDecoder;
 use crate::apple::webrtc::{WhepClient, WhepConfig};
 use crate::core::streaming::{H264RtpDepacketizer, OpusDecoder};
 use crate::core::{
-    media_clock::MediaClock, AudioFrame, GpuContext, LinkOutput, Result, RuntimeContext,
-    StreamError, VideoFrame,
+    media_clock::MediaClock, AudioFrame, LinkOutput, Result, RuntimeContext, StreamError,
+    VideoFrame,
 };
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -49,9 +49,6 @@ pub struct WebRtcWhepProcessor {
     // RuntimeContext for tokio handle
     ctx: Option<RuntimeContext>,
 
-    // GPU context for video decoder
-    gpu_context: Option<GpuContext>,
-
     // Session state
     session_started: bool,
 
@@ -81,7 +78,6 @@ pub struct WebRtcWhepProcessor {
 
 impl crate::core::ContinuousProcessor for WebRtcWhepProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        self.gpu_context = Some(ctx.gpu.clone());
         self.ctx = Some(ctx.clone());
 
         // Create WHEP client
@@ -303,18 +299,13 @@ impl WebRtcWhepProcessor::Processor {
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("RuntimeContext not available".into()))?;
 
-        let gpu_ctx = self
-            .gpu_context
-            .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GpuContext not available".into()))?;
-
         tracing::info!(
             "[WebRtcWhepProcessor] Initializing VideoToolbox decoder with SPS ({} bytes) and PPS ({} bytes)",
             sps.len(),
             pps.len()
         );
 
-        let mut decoder = VideoToolboxDecoder::new(Default::default(), Some(gpu_ctx.clone()), ctx)?;
+        let mut decoder = VideoToolboxDecoder::new(Default::default(), ctx)?;
         decoder.update_format(&sps, &pps)?;
 
         self.video_decoder = Some(decoder);

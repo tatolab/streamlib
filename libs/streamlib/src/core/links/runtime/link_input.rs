@@ -5,6 +5,7 @@
 
 use std::cell::UnsafeCell;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::link_input_data_reader::LinkInputDataReader;
 use crate::core::graph::LinkUniqueId;
@@ -34,6 +35,10 @@ impl<T: LinkPortMessage> LinkInputFromUpstreamProcessor<T> {
 
     fn read(&self) -> Option<T> {
         self.data_reader.read()
+    }
+
+    fn wait_read(&self, timeout: Duration) -> Option<T> {
+        self.data_reader.wait_read(timeout)
     }
 
     fn is_connected(&self) -> bool {
@@ -131,6 +136,22 @@ impl<T: LinkPortMessage> LinkInput<T> {
             let upstream = self.upstream_processors_mut();
             upstream.retain(|u| u.is_connected());
             upstream.first().and_then(|u| u.read())
+        }
+    }
+
+    /// Blocking read with timeout.
+    ///
+    /// First attempts a non-blocking read. If no data is available, waits up to
+    /// `timeout` for data to arrive. Returns `None` if timeout expires without data.
+    ///
+    /// Use at sync points (e.g., display processors) where waiting for the next
+    /// frame is preferable to busy-polling or sleeping. Most realtime processors
+    /// should use non-blocking `read()` instead.
+    pub fn wait_read(&self, timeout: Duration) -> Option<T> {
+        unsafe {
+            let upstream = self.upstream_processors_mut();
+            upstream.retain(|u| u.is_connected());
+            upstream.first().and_then(|u| u.wait_read(timeout))
         }
     }
 

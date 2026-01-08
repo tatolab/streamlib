@@ -58,3 +58,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 examples/camera-display/no_window_camera.log
+
+# Example assets (user-specific)
+examples/camera-python-display/assets/

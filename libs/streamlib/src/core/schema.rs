@@ -1111,6 +1111,7 @@ mod tests {
 
     #[test]
     fn test_derive_dataframe_schema() {
+        #[allow(dead_code)]
         #[derive(crate::DataFrameSchema)]
         #[schema(name = "test_embedding")]
         struct TestEmbeddingSchema {
@@ -1151,6 +1152,7 @@ mod tests {
 
     #[test]
     fn test_derive_dataframe_schema_multi_dim_array() {
+        #[allow(dead_code)]
         #[derive(crate::DataFrameSchema)]
         #[schema(name = "image_patch")]
         struct ImagePatchSchema {
@@ -1170,6 +1172,7 @@ mod tests {
 
     #[test]
     fn test_derive_dataframe_schema_default_name() {
+        #[allow(dead_code)]
         #[derive(crate::DataFrameSchema)]
         struct MyCustomSchema {
             value: f64,
@@ -1183,6 +1186,7 @@ mod tests {
 
     // Schema type for test_processor_with_schema_attribute test
     // Defined at module level due to macro hygiene requirements
+    #[allow(dead_code)]
     #[derive(Default, crate::DataFrameSchema)]
     #[schema(name = "test_embedding")]
     struct TestProcessorSchema {

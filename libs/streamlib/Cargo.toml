@@ -16,8 +16,9 @@ crate-type = ["rlib"]
 [features]
 default = []
 
-# Debug overlay with FPS, GPU memory, and performance graph
-debug-overlay = ["dep:vello", "dep:skrifa", "dep:wgpu-profiler"]
+# Debug overlay with FPS and performance graph (needs Metal port)
+# TODO: Port wgpu-profiler to Metal-based profiling
+debug-overlay = ["dep:vello", "dep:skrifa"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
@@ -52,10 +53,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 schemars = "0.8"  # JSON Schema generation from Rust types
 
-# WebGPU for cross-platform GPU abstraction
-wgpu.workspace = true
-
-# CLAP audio plugin hosting (core dependency, like wgpu)
+# CLAP audio plugin hosting
 clack-host = { git = "https://github.com/prokopyl/clack" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "params"] }
 
@@ -81,7 +79,7 @@ rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring cryp
 # Optional: Debug overlay dependencies
 vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }
 skrifa = { version = "0.22", optional = true }
-wgpu-profiler = { version = "0.23.0", optional = true }
+# wgpu-profiler removed - needs Metal-based profiling port
 axum.workspace = true
 futures-util = "0.3"  # For StreamExt/SinkExt on WebSocket
 
@@ -94,6 +92,7 @@ utoipa-axum = "0.2"
 objc2.workspace = true
 objc2-metal.workspace = true
 objc2-io-surface.workspace = true
+objc2-core-foundation.workspace = true
 objc2-core-video.workspace = true
 objc2-foundation.workspace = true
 objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
@@ -105,7 +104,7 @@ objc2-core-graphics.workspace = true
 libc.workspace = true
 
 # Apple-specific crates
-metal = "0.31"  # Metal crate for wgpu-hal interop
+metal = "0.31"  # Metal crate for native RHI backend
 dispatch2 = "0.3"  # GCD dispatch queues
 # yuv.workspace = true  # REMOVED - now using GPU-accelerated VTPixelTransferSession
 pollster = "0.3"  # For blocking on async
