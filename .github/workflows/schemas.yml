@@ -88,14 +88,14 @@ jobs:
           echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/streamlib-client/src/schema-validators.ts
           echo "// Version: ${{ steps.version.outputs.version }}" >> dist/streamlib-client/src/schema-validators.ts
           echo "" >> dist/streamlib-client/src/schema-validators.ts
-          echo "import { z } from 'zod';" >> dist/streamlib-client/src/schema-validators.ts
+          echo 'import { z } from "zod";' >> dist/streamlib-client/src/schema-validators.ts
           echo "" >> dist/streamlib-client/src/schema-validators.ts
 
           for schema in dist/schemas/*.schema.json; do
             name=$(basename "$schema" .schema.json | sed 's/-/_/g' | sed 's/\b\(.\)/\u\1/g' | sed 's/_//g')
             echo "Generating Zod schema for $name..."
             echo "// Schema: $name" >> dist/streamlib-client/src/schema-validators.ts
-            json-schema-to-zod -s "$schema" -n "${name}Schema" >> dist/streamlib-client/src/schema-validators.ts
+            json-schema-to-zod -i "$schema" -n "${name}Schema" --noImport >> dist/streamlib-client/src/schema-validators.ts
             echo "" >> dist/streamlib-client/src/schema-validators.ts
           done
 
