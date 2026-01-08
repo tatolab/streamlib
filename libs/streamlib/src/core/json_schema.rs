@@ -17,7 +17,7 @@ use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 // =============================================================================
 
 /// Response from the `/api/graph` endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphResponse {
     /// All processor nodes in the graph.
     pub nodes: Vec<ProcessorNodeOutput>,
@@ -26,7 +26,7 @@ pub struct GraphResponse {
 }
 
 /// A processor node in the graph.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorNodeOutput {
     /// Unique identifier for this processor instance.
     pub id: String,
@@ -48,7 +48,7 @@ pub struct ProcessorNodeOutput {
 }
 
 /// Container for processor input and output ports.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorNodePortsOutput {
     /// Input ports that receive data.
     pub inputs: Vec<PortInfoOutput>,
@@ -57,7 +57,7 @@ pub struct ProcessorNodePortsOutput {
 }
 
 /// Metadata about a port.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct PortInfoOutput {
     /// Port name (e.g., "video_in", "audio_out").
     pub name: String,
@@ -69,7 +69,7 @@ pub struct PortInfoOutput {
 }
 
 /// The kind of port - determines how data flows.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PortKindOutput {
     #[default]
@@ -79,7 +79,7 @@ pub enum PortKindOutput {
 }
 
 /// A link (connection) between two processor ports.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct LinkOutput {
     /// Unique identifier for this link.
     pub id: String,
@@ -98,7 +98,7 @@ pub struct LinkOutput {
 }
 
 /// Reference to a port on a processor.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct LinkPortRefOutput {
     /// Processor instance ID.
     pub processor_id: String,
@@ -107,7 +107,7 @@ pub struct LinkPortRefOutput {
 }
 
 /// State of a link in the graph.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkStateOutput {
     /// Link exists in graph but not yet wired.

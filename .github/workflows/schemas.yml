@@ -1,4 +1,4 @@
-name: Schemas
+name: Schemas & Client
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
     paths:
       - 'libs/streamlib/src/core/json_schema.rs'
       - 'libs/streamlib/src/bin/generate_schemas.rs'
+      - 'libs/streamlib/src/bin/generate_openapi.rs'
+      - 'libs/streamlib/src/core/processors/api_server.rs'
       - '.github/workflows/schemas.yml'
   workflow_dispatch:  # Manual trigger
 
@@ -13,9 +15,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  generate-schemas:
-    name: Generate & Publish Schemas
+  generate-and-publish:
+    name: Generate & Publish Client Package
     runs-on: macos-14  # macOS for Apple-specific code
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +35,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@tatolab'
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -40,88 +47,220 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-schemas-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Generate JSON schemas
-        run: cargo run --bin generate_schemas
-
       - name: Get version from Cargo.toml
         id: version
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Generate JSON schemas
+        run: cargo run --bin generate_schemas
+
+      - name: Generate OpenAPI spec
+        run: cargo run --bin generate_openapi
+
+      - name: Create package directory
+        run: mkdir -p dist/streamlib-client/src
+
       - name: Install TypeScript generators
-        run: npm install -g json-schema-to-typescript json-schema-to-zod
+        run: npm install -g json-schema-to-typescript json-schema-to-zod openapi-typescript
 
-      - name: Generate TypeScript types and Zod schemas
+      - name: Generate TypeScript types from JSON Schema
         run: |
-          mkdir -p dist/schemas/typescript
+          # Generate TypeScript interfaces from JSON schemas
+          echo "// Auto-generated from JSON Schema - DO NOT EDIT" > dist/streamlib-client/src/schema-types.ts
+          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/streamlib-client/src/schema-types.ts
+          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/streamlib-client/src/schema-types.ts
+          echo "" >> dist/streamlib-client/src/schema-types.ts
 
-          # Generate TypeScript interfaces
-          echo "// Auto-generated from JSON Schema - DO NOT EDIT" > dist/schemas/typescript/types.ts
-          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/schemas/typescript/types.ts
-          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/schemas/typescript/types.ts
-          echo "" >> dist/schemas/typescript/types.ts
-
-          for schema in dist/schemas/*.json; do
+          for schema in dist/schemas/*.schema.json; do
             echo "Generating TypeScript from $schema..."
-            json2ts "$schema" >> dist/schemas/typescript/types.ts
-            echo "" >> dist/schemas/typescript/types.ts
+            json2ts "$schema" >> dist/streamlib-client/src/schema-types.ts
+            echo "" >> dist/streamlib-client/src/schema-types.ts
           done
 
-          # Generate Zod schemas
-          echo "// Auto-generated Zod schemas from JSON Schema - DO NOT EDIT" > dist/schemas/typescript/schemas.ts
-          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/schemas/typescript/schemas.ts
-          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/schemas/typescript/schemas.ts
-          echo "" >> dist/schemas/typescript/schemas.ts
-          echo "import { z } from 'zod';" >> dist/schemas/typescript/schemas.ts
-          echo "" >> dist/schemas/typescript/schemas.ts
+      - name: Generate Zod validation schemas
+        run: |
+          echo "// Auto-generated Zod schemas - DO NOT EDIT" > dist/streamlib-client/src/schema-validators.ts
+          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/streamlib-client/src/schema-validators.ts
+          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/streamlib-client/src/schema-validators.ts
+          echo "" >> dist/streamlib-client/src/schema-validators.ts
+          echo "import { z } from 'zod';" >> dist/streamlib-client/src/schema-validators.ts
+          echo "" >> dist/streamlib-client/src/schema-validators.ts
 
-          for schema in dist/schemas/*.json; do
-            name=$(basename "$schema" .schema.json | sed 's/-/_/g')
+          for schema in dist/schemas/*.schema.json; do
+            name=$(basename "$schema" .schema.json | sed 's/-/_/g' | sed 's/\b\(.\)/\u\1/g' | sed 's/_//g')
             echo "Generating Zod schema for $name..."
-            echo "// Schema: $name" >> dist/schemas/typescript/schemas.ts
-            json-schema-to-zod -s "$schema" -n "${name}Schema" >> dist/schemas/typescript/schemas.ts
-            echo "" >> dist/schemas/typescript/schemas.ts
+            echo "// Schema: $name" >> dist/streamlib-client/src/schema-validators.ts
+            json-schema-to-zod -s "$schema" -n "${name}Schema" >> dist/streamlib-client/src/schema-validators.ts
+            echo "" >> dist/streamlib-client/src/schema-validators.ts
           done
 
-          # Create index.ts for easy importing
-          cat > dist/schemas/typescript/index.ts << 'EOF'
-          // Auto-generated - DO NOT EDIT
-          export * from './types';
-          export * from './schemas';
+      - name: Generate API client from OpenAPI
+        run: |
+          echo "// Auto-generated from OpenAPI spec - DO NOT EDIT" > dist/streamlib-client/src/api-types.ts
+          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/streamlib-client/src/api-types.ts
+          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/streamlib-client/src/api-types.ts
+          echo "" >> dist/streamlib-client/src/api-types.ts
+          openapi-typescript dist/schemas/openapi.json >> dist/streamlib-client/src/api-types.ts
+
+      - name: Create package index
+        run: |
+          cat > dist/streamlib-client/src/index.ts << 'EOF'
+          // @tatolab/streamlib-client
+          // Auto-generated TypeScript client for StreamLib Runtime API
+          // DO NOT EDIT - This file is auto-generated
+
+          // JSON Schema types (GraphResponse, RegistryResponse, etc.)
+          export * from './schema-types';
+
+          // Zod validation schemas
+          export * from './schema-validators';
+
+          // OpenAPI-generated API types
+          export type * from './api-types';
+
+          // Re-export paths and components for openapi-fetch usage
+          export type { paths, components, operations } from './api-types';
           EOF
 
-          # Show generated files
-          echo "=== Generated TypeScript files ==="
-          ls -la dist/schemas/typescript/
-          echo ""
-          echo "=== types.ts preview ==="
-          head -50 dist/schemas/typescript/types.ts
-          echo ""
-          echo "=== schemas.ts preview ==="
-          head -50 dist/schemas/typescript/schemas.ts
-
-      - name: Create schema archive
+      - name: Create package.json
         run: |
-          cd dist/schemas
-          zip -r ../../streamlib-schemas-v${{ steps.version.outputs.version }}.zip *.json typescript/
-          cd ../..
-          ls -lh streamlib-schemas-*.zip
+          cat > dist/streamlib-client/package.json << EOF
+          {
+            "name": "@tatolab/streamlib-client",
+            "version": "${{ steps.version.outputs.version }}",
+            "description": "TypeScript client for StreamLib Runtime API with types and Zod validation",
+            "main": "dist/index.js",
+            "module": "dist/index.mjs",
+            "types": "dist/index.d.ts",
+            "exports": {
+              ".": {
+                "import": "./dist/index.mjs",
+                "require": "./dist/index.js",
+                "types": "./dist/index.d.ts"
+              },
+              "./schema-types": {
+                "import": "./dist/schema-types.mjs",
+                "require": "./dist/schema-types.js",
+                "types": "./dist/schema-types.d.ts"
+              },
+              "./schema-validators": {
+                "import": "./dist/schema-validators.mjs",
+                "require": "./dist/schema-validators.js",
+                "types": "./dist/schema-validators.d.ts"
+              },
+              "./api-types": {
+                "import": "./dist/api-types.mjs",
+                "require": "./dist/api-types.js",
+                "types": "./dist/api-types.d.ts"
+              }
+            },
+            "files": [
+              "dist",
+              "src"
+            ],
+            "repository": {
+              "type": "git",
+              "url": "git+https://github.com/tatolab/streamlib.git",
+              "directory": "dist/streamlib-client"
+            },
+            "publishConfig": {
+              "registry": "https://npm.pkg.github.com"
+            },
+            "keywords": [
+              "streamlib",
+              "typescript",
+              "api-client",
+              "zod",
+              "openapi"
+            ],
+            "author": "Jonathan Fontanez",
+            "license": "BUSL-1.1",
+            "peerDependencies": {
+              "zod": "^3.0.0"
+            },
+            "peerDependenciesMeta": {
+              "zod": {
+                "optional": true
+              }
+            },
+            "devDependencies": {
+              "typescript": "^5.0.0",
+              "tsup": "^8.0.0",
+              "zod": "^3.0.0"
+            }
+          }
+          EOF
 
-      - name: Upload schema artifact
+      - name: Create tsconfig.json
+        run: |
+          cat > dist/streamlib-client/tsconfig.json << 'EOF'
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "module": "ESNext",
+              "moduleResolution": "bundler",
+              "declaration": true,
+              "declarationMap": true,
+              "sourceMap": true,
+              "strict": true,
+              "esModuleInterop": true,
+              "skipLibCheck": true,
+              "outDir": "dist"
+            },
+            "include": ["src/**/*"]
+          }
+          EOF
+
+      - name: Create tsup config
+        run: |
+          cat > dist/streamlib-client/tsup.config.ts << 'EOF'
+          import { defineConfig } from 'tsup';
+
+          export default defineConfig({
+            entry: [
+              'src/index.ts',
+              'src/schema-types.ts',
+              'src/schema-validators.ts',
+              'src/api-types.ts'
+            ],
+            format: ['cjs', 'esm'],
+            dts: true,
+            splitting: false,
+            sourcemap: true,
+            clean: true,
+          });
+          EOF
+
+      - name: Build package
+        working-directory: dist/streamlib-client
+        run: |
+          npm install
+          npx tsup
+
+      - name: Show generated files
+        run: |
+          echo "=== Package structure ==="
+          find dist/streamlib-client -type f | head -30
+          echo ""
+          echo "=== schema-types.ts preview ==="
+          head -50 dist/streamlib-client/src/schema-types.ts
+          echo ""
+          echo "=== api-types.ts preview ==="
+          head -50 dist/streamlib-client/src/api-types.ts
+
+      - name: Publish to GitHub Packages
+        working-directory: dist/streamlib-client
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: streamlib-schemas-v${{ steps.version.outputs.version }}
+          name: streamlib-client-v${{ steps.version.outputs.version }}
           path: |
-            dist/schemas/*.json
-            dist/schemas/typescript/
-            streamlib-schemas-*.zip
+            dist/schemas/
+            dist/streamlib-client/
           retention-days: 90
-
-      - name: Upload to release (if tagged)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: streamlib-schemas-*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
