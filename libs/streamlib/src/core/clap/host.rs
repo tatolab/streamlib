@@ -114,9 +114,15 @@ impl ClapPluginHost {
         buffer_size: usize,
     ) -> Result<Self> {
         Self::load_internal_with_filter(path, sample_rate, buffer_size, |mut descriptors| {
-            descriptors.nth(index).ok_or_else(|| {
-                StreamError::Configuration(format!("Plugin index {} not found in bundle", index))
-            })
+            descriptors
+                .nth(index)
+                .ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Plugin index {} not found in bundle",
+                        index
+                    ))
+                })
+                .cloned()
         })
     }
 
@@ -170,12 +176,16 @@ impl ClapPluginHost {
                             name, path_str, available
                         ))
                     })
+                    .cloned()
             })
         } else {
             Self::load_internal_with_filter(path, sample_rate, buffer_size, |mut descriptors| {
-                descriptors.next().ok_or_else(|| {
-                    StreamError::Configuration("CLAP plugin bundle contains no plugins".into())
-                })
+                descriptors
+                    .next()
+                    .ok_or_else(|| {
+                        StreamError::Configuration("CLAP plugin bundle contains no plugins".into())
+                    })
+                    .cloned()
             })
         }
     }
@@ -189,8 +199,8 @@ impl ClapPluginHost {
     where
         P: AsRef<Path>,
         F: for<'a> FnOnce(
-            clack_host::factory::PluginDescriptorsIter<'a>,
-        ) -> Result<clack_host::factory::PluginDescriptor<'a>>,
+            clack_host::factory::plugin::PluginDescriptorsIter<'a>,
+        ) -> Result<clack_host::plugin::PluginDescriptor>,
     {
         let path = path.as_ref();
 
