@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/tatolab/streamlib/compare/v0.2.2...v0.2.3) (2026-01-08)
+
+
+### Bug Fixes
+
+* **ci:** Fix json-schema-to-zod CLI flag (-s -&gt; -i) ([28ba213](https://github.com/tatolab/streamlib/commit/28ba213d4cb98292ee2cf0c1655bc38b9298ed47))
+
 ## [0.2.2](https://github.com/tatolab/streamlib/compare/v0.2.1...v0.2.2) (2026-01-08)
 
 
