@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/tatolab/streamlib/compare/v0.2.1...v0.2.2) (2026-01-08)
+
+
+### Bug Fixes
+
+* **ci:** Fix schema generation cache key and add validation ([8b2ae44](https://github.com/tatolab/streamlib/commit/8b2ae447cec3f05c5cf20beaf5b240c746c9aa7b))
+
 ## [0.2.1](https://github.com/tatolab/streamlib/compare/v0.2.0...v0.2.1) (2026-01-08)
 
 
