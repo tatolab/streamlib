@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/tatolab/streamlib/compare/v0.2.3...v0.2.4) (2026-01-10)
+
+
+### Features
+
+* CLI, Vulkan RHI, and Cross-Platform Codec Abstractions ([#112](https://github.com/tatolab/streamlib/issues/112)) ([415caaa](https://github.com/tatolab/streamlib/commit/415caaa58f411e8f1223b253ba17445924ec60c2))
+
 ## [0.2.3](https://github.com/tatolab/streamlib/compare/v0.2.2...v0.2.3) (2026-01-08)
 
 
