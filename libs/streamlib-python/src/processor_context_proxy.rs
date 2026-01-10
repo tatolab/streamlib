@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use streamlib::{GpuContext, TimeContext};
 
-use crate::frame_binding::{video_frame_from_dict, PyFrame};
+use crate::frame_binding::{audio_frame_from_dict, video_frame_from_dict, PyFrame};
 use crate::gpu_context_binding::PyGpuContext;
 use crate::time_context_binding::PyTimeContext;
 
@@ -218,10 +218,10 @@ impl PyOutputPortProxy {
                     Ok(())
                 }
                 "AudioFrame" => {
-                    // TODO: Implement audio_frame_from_dict
-                    Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                        "AudioFrame from dict not yet implemented",
-                    ))
+                    let audio_frame = audio_frame_from_dict(py, dict)?;
+                    let frame = PyFrame::from_audio_frame(audio_frame);
+                    self.storage.set_frame(&self.port_name, frame);
+                    Ok(())
                 }
                 "DataFrame" => {
                     // TODO: Implement data_frame_from_dict

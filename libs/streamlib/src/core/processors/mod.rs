@@ -51,6 +51,10 @@ pub mod buffer_rechunker;
 pub mod clap_effect;
 pub mod simple_passthrough;
 
+// WebRTC Streaming
+pub mod webrtc_whep;
+pub mod webrtc_whip;
+
 pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
 pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
 pub use chord_generator::{ChordGeneratorConfig, ChordGeneratorProcessor};
@@ -68,3 +72,5 @@ pub use audio_resampler::{AudioResamplerConfig, AudioResamplerProcessor};
 pub use buffer_rechunker::{BufferRechunkerConfig, BufferRechunkerProcessor};
 pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::{SimplePassthroughConfig, SimplePassthroughProcessor};
+pub use webrtc_whep::{WebRtcWhepConfig, WebRtcWhepProcessor};
+pub use webrtc_whip::{WebRtcWhipConfig, WebRtcWhipProcessor};

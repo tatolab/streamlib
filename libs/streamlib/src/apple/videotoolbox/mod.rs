@@ -43,14 +43,13 @@
 // println!("Encoded {} bytes, keyframe={}", encoded.data.len(), encoded.is_keyframe);
 // ```
 
-mod codec;
 mod decoder;
 mod encoder;
 mod ffi;
 pub mod format; // Public for SPS parsing utilities
 
 // Public API exports
-pub use codec::{H264Profile, VideoCodec};
+// Note: VideoCodec, H264Profile, VideoEncoderConfig, EncodedVideoFrame are in core::codec and core::frames
 pub use decoder::VideoToolboxDecoder;
-pub use encoder::{EncodedVideoFrame, VideoEncoderConfig, VideoToolboxEncoder};
+pub use encoder::VideoToolboxEncoder;
 pub use format::parse_nal_units;

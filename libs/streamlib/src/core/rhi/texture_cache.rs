@@ -13,7 +13,7 @@ use crate::core::Result;
 /// The platform handles internal caching and GPU synchronization.
 pub struct RhiTextureCache {
     #[cfg(target_os = "macos")]
-    pub(crate) inner: crate::apple::rhi::texture_cache_macos::TextureCacheMacOS,
+    pub(crate) inner: crate::metal::rhi::texture_cache::TextureCacheMacOS,
 
     #[cfg(not(target_os = "macos"))]
     pub(crate) _marker: std::marker::PhantomData<()>,
@@ -61,7 +61,7 @@ impl std::fmt::Debug for RhiTextureCache {
 /// Holds a reference to the source buffer to keep it alive during rendering.
 pub struct RhiTextureView {
     #[cfg(target_os = "macos")]
-    pub(crate) inner: crate::apple::rhi::texture_cache_macos::TextureViewMacOS,
+    pub(crate) inner: crate::metal::rhi::texture_cache::TextureViewMacOS,
 
     #[cfg(not(target_os = "macos"))]
     pub(crate) _marker: std::marker::PhantomData<()>,

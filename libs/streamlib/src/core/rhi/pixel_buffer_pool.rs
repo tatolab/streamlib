@@ -34,7 +34,7 @@ impl PixelBufferDescriptor {
 /// Buffers are automatically recycled when their refcount drops to zero.
 pub struct RhiPixelBufferPool {
     #[cfg(target_os = "macos")]
-    pub(crate) inner: crate::apple::rhi::pixel_buffer_pool_macos::PixelBufferPoolMacOS,
+    pub(crate) inner: crate::metal::rhi::pixel_buffer_pool::PixelBufferPoolMacOS,
 
     #[cfg(not(target_os = "macos"))]
     pub(crate) _marker: std::marker::PhantomData<()>,

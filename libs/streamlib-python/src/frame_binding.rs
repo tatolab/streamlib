@@ -226,3 +226,83 @@ pub fn video_frame_from_dict(
     let buffer = pixel_buffer.into_inner();
     Ok(VideoFrame::from_buffer(buffer, timestamp_ns, frame_number))
 }
+
+/// Build an AudioFrame from a Python dict.
+///
+/// Expected dict keys:
+/// - `samples`: list[float] - interleaved audio samples (-1.0 to 1.0)
+/// - `channels`: int - number of audio channels (1-8)
+/// - `timestamp_ns`: i64 - monotonic timestamp in nanoseconds
+/// - `frame_number`: u64 - sequential frame number
+/// - `sample_rate`: u32 - sample rate in Hz (e.g., 44100, 48000)
+pub fn audio_frame_from_dict(_py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<AudioFrame> {
+    use streamlib::core::frames::audio_frame::AudioChannelCount;
+
+    // Extract samples (required) - list of f32 values
+    let samples: Vec<f32> = dict
+        .get_item("samples")?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err(
+                "AudioFrame dict requires 'samples' field with a list of floats",
+            )
+        })?
+        .extract()?;
+
+    // Extract channels (required)
+    let channels_usize: usize = dict
+        .get_item("channels")?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("AudioFrame dict requires 'channels' field (1-8)")
+        })?
+        .extract()?;
+
+    let channels = AudioChannelCount::from_usize(channels_usize).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid channel count: {}. Must be 1-8.",
+            channels_usize
+        ))
+    })?;
+
+    // Extract timestamp (required)
+    let timestamp_ns: i64 = dict
+        .get_item("timestamp_ns")?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("AudioFrame dict requires 'timestamp_ns' field")
+        })?
+        .extract()?;
+
+    // Extract frame number (required)
+    let frame_number: u64 = dict
+        .get_item("frame_number")?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err("AudioFrame dict requires 'frame_number' field")
+        })?
+        .extract()?;
+
+    // Extract sample rate (required)
+    let sample_rate: u32 = dict
+        .get_item("sample_rate")?
+        .ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err(
+                "AudioFrame dict requires 'sample_rate' field (e.g., 44100, 48000)",
+            )
+        })?
+        .extract()?;
+
+    // Validate samples length is divisible by channels
+    if !samples.len().is_multiple_of(channels.as_usize()) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "samples length ({}) must be divisible by channels ({})",
+            samples.len(),
+            channels.as_usize()
+        )));
+    }
+
+    Ok(AudioFrame::new(
+        samples,
+        channels,
+        timestamp_ns,
+        frame_number,
+        sample_rate,
+    ))
+}

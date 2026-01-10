@@ -16,16 +16,32 @@ use super::CommandBuffer;
 /// On Metal, this wraps MTLCommandQueue.
 /// On Vulkan, this wraps VkQueue.
 /// On DX12, this wraps ID3D12CommandQueue.
+///
+/// On macOS/iOS, Metal queue is always available for Apple platform services
+/// regardless of which GPU backend is selected for rendering.
 #[derive(Clone)]
 pub struct RhiCommandQueue {
-    #[cfg(target_os = "macos")]
-    pub(crate) inner: std::sync::Arc<crate::apple::rhi::MetalCommandQueue>,
+    // Metal backend: explicit feature OR macOS/iOS default (when vulkan not requested)
+    #[cfg(all(
+        not(feature = "backend-vulkan"),
+        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+    ))]
+    pub(crate) inner: std::sync::Arc<crate::metal::rhi::MetalCommandQueue>,
 
-    #[cfg(target_os = "linux")]
-    pub(crate) inner: std::sync::Arc<crate::linux::rhi::VulkanCommandQueue>,
+    // Vulkan backend: explicit feature OR Linux default
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
+    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::VulkanCommandQueue>,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: std::sync::Arc<crate::windows::rhi::DX12CommandQueue>,
+
+    /// Metal command queue for Apple platform services.
+    /// Always present on macOS/iOS regardless of GPU backend selection.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) metal_queue: std::sync::Arc<crate::metal::rhi::MetalCommandQueue>,
 }
 
 impl RhiCommandQueue {
@@ -34,7 +50,11 @@ impl RhiCommandQueue {
     /// Command buffers are single-use: create, record commands, commit.
     /// This is the standard pattern for GPU work submission.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
-        #[cfg(target_os = "macos")]
+        // Metal backend
+        #[cfg(all(
+            not(feature = "backend-vulkan"),
+            any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+        ))]
         {
             let metal_cmd_buffer = self.inner.create_command_buffer()?;
             Ok(CommandBuffer {
@@ -42,7 +62,11 @@ impl RhiCommandQueue {
             })
         }
 
-        #[cfg(target_os = "linux")]
+        // Vulkan backend
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
         {
             let vulkan_cmd_buffer = self.inner.create_command_buffer()?;
             Ok(CommandBuffer {
@@ -59,16 +83,20 @@ impl RhiCommandQueue {
         }
     }
 
-    /// Get the underlying Metal command queue (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn as_metal_command_queue(&self) -> &crate::apple::rhi::MetalCommandQueue {
-        &self.inner
+    /// Get the underlying Metal command queue for Apple platform services.
+    ///
+    /// Available on macOS/iOS regardless of which GPU backend is selected.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub fn as_metal_command_queue(&self) -> &crate::metal::rhi::MetalCommandQueue {
+        &self.metal_queue
     }
 
-    /// Get the raw Metal command queue reference for interop (macOS only).
-    #[cfg(target_os = "macos")]
+    /// Get the raw Metal command queue reference for Apple platform services.
+    ///
+    /// Available on macOS/iOS regardless of which GPU backend is selected.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn metal_queue_ref(&self) -> &metal::CommandQueueRef {
-        self.inner.queue_ref()
+        self.metal_queue.queue_ref()
     }
 }
 

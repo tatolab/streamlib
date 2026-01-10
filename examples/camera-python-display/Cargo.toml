@@ -9,6 +9,10 @@ authors.workspace = true
 license-file.workspace = true
 publish = false
 
+[features]
+default = []
+backend-vulkan = ["streamlib/backend-vulkan", "streamlib-python/backend-vulkan"]
+
 [dependencies]
 streamlib = { path = "../../libs/streamlib" }
 streamlib-python = { path = "../../libs/streamlib-python" }

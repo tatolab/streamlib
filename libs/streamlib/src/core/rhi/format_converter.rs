@@ -22,7 +22,7 @@ use crate::core::Result;
 /// Thread-safe: can be shared across processors and used concurrently.
 pub struct RhiFormatConverter {
     #[cfg(target_os = "macos")]
-    pub(crate) inner: crate::apple::rhi::format_converter_macos::FormatConverterMacOS,
+    pub(crate) inner: crate::metal::rhi::format_converter::FormatConverterMacOS,
 
     #[cfg(not(target_os = "macos"))]
     _marker: std::marker::PhantomData<()>,
@@ -36,7 +36,7 @@ impl RhiFormatConverter {
     pub fn new(source_format: PixelFormat, dest_format: PixelFormat) -> Result<Self> {
         #[cfg(target_os = "macos")]
         {
-            use crate::apple::rhi::format_converter_macos::FormatConverterMacOS;
+            use crate::metal::rhi::format_converter::FormatConverterMacOS;
             Ok(Self {
                 inner: FormatConverterMacOS::new(source_format, dest_format)?,
             })

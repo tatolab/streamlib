@@ -1,0 +1,25 @@
+{
+  "name": "camera-display",
+  "processors": [
+    {
+      "alias": "camera",
+      "type": "CameraProcessor",
+      "config": {}
+    },
+    {
+      "alias": "display",
+      "type": "DisplayProcessor",
+      "config": {
+        "width": 1280,
+        "height": 720,
+        "title": "Camera Feed",
+        "scaling_mode": "Letterbox",
+        "vsync": true,
+        "drawable_count": 2
+      }
+    }
+  ],
+  "connections": [
+    { "from": "camera.video", "to": "display.video" }
+  ]
+}

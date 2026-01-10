@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "libs/streamlib",           # All-in-one: core, apple (feature-gated)
+    "libs/streamlib-cli",       # Command-line interface for StreamLib runtime
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-python",    # Python bindings via PyO3
@@ -18,7 +19,6 @@ members = [
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
-    # Note: news-cast is a standalone workspace (has its own [workspace] declaration)
 ]
 
 [workspace.package]
@@ -70,10 +70,6 @@ axum = { version = "0.8.8", features = ["ws"] }
 tower-http = "0.6.8"
 hyper = "1.7.0"
 
-# WebGPU (cross-platform GPU abstraction)
-# Using 25.0.2 for compatibility with vello 0.5.0 and pygfx ecosystem
-wgpu = "25.0.2"
-wgpu-hal = "25.0.2"
 
 # YUV/RGB conversion - REMOVED (now using GPU-accelerated VTPixelTransferSession)
 # yuv = "0.8"

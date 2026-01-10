@@ -178,7 +178,7 @@ impl GpuContext {
 
     /// Get the underlying Metal device (macOS only).
     #[cfg(target_os = "macos")]
-    pub fn metal_device(&self) -> &crate::apple::rhi::MetalDevice {
+    pub fn metal_device(&self) -> &crate::metal::rhi::MetalDevice {
         self.device.as_metal_device()
     }
 

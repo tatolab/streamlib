@@ -1,0 +1,42 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-cli"
+description = "Command-line interface for StreamLib runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "streamlib"
+path = "src/main.rs"
+
+[dependencies]
+# Core library (bundles all Rust processors)
+streamlib = { path = "../streamlib" }
+
+# Python bindings (bundles Python host processors)
+streamlib-python = { path = "../streamlib-python" }
+
+# CLI framework
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime
+tokio.workspace = true
+
+# HTTP client for remote inspection
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 pub mod clap;
+pub mod codec;
 pub mod compat;
 pub mod compiler;
 pub mod context;
@@ -11,6 +12,7 @@ pub mod rhi;
 
 pub mod frames;
 pub mod graph;
+pub mod graph_file;
 pub mod json_schema;
 pub mod links;
 pub mod media_clock;
@@ -30,6 +32,7 @@ pub mod texture;
 pub mod utils;
 
 pub use clap::*;
+pub use codec::*;
 pub use compiler::*;
 pub use context::*;
 pub use error::*;
@@ -37,6 +40,7 @@ pub use rhi::{gl_constants, GlContext, GlTextureBinding, NativeTextureHandle};
 
 pub use frames::*;
 pub use graph::*;
+pub use graph_file::*;
 pub use links::*;
 pub use processors::*;
 pub use pubsub::*;

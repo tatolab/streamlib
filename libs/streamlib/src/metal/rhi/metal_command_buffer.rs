@@ -74,8 +74,8 @@ impl MetalCommandBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apple::rhi::MetalDevice;
     use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+    use crate::metal::MetalDevice;
     use objc2_metal::MTLCommandQueue;
 
     #[test]

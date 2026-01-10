@@ -50,5 +50,8 @@ inventory = "0.3"
 # Do NOT enable when linking into a Rust binary.
 extension-module = ["pyo3/extension-module"]
 
+# GPU backend selection (forwards to streamlib)
+backend-vulkan = ["streamlib/backend-vulkan"]
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

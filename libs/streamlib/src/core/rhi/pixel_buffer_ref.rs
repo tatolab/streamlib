@@ -27,7 +27,7 @@ impl RhiPixelBufferRef {
     pub fn format(&self) -> PixelFormat {
         #[cfg(target_os = "macos")]
         {
-            crate::apple::rhi::pixel_buffer_ref_macos::format_impl(self)
+            crate::metal::rhi::pixel_buffer_ref::format_impl(self)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -39,7 +39,7 @@ impl RhiPixelBufferRef {
     pub fn width(&self) -> u32 {
         #[cfg(target_os = "macos")]
         {
-            crate::apple::rhi::pixel_buffer_ref_macos::width_impl(self)
+            crate::metal::rhi::pixel_buffer_ref::width_impl(self)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -51,7 +51,7 @@ impl RhiPixelBufferRef {
     pub fn height(&self) -> u32 {
         #[cfg(target_os = "macos")]
         {
-            crate::apple::rhi::pixel_buffer_ref_macos::height_impl(self)
+            crate::metal::rhi::pixel_buffer_ref::height_impl(self)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -70,7 +70,7 @@ impl Clone for RhiPixelBufferRef {
     fn clone(&self) -> Self {
         #[cfg(target_os = "macos")]
         {
-            crate::apple::rhi::pixel_buffer_ref_macos::clone_impl(self)
+            crate::metal::rhi::pixel_buffer_ref::clone_impl(self)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -85,7 +85,7 @@ impl Drop for RhiPixelBufferRef {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
         {
-            crate::apple::rhi::pixel_buffer_ref_macos::drop_impl(self);
+            crate::metal::rhi::pixel_buffer_ref::drop_impl(self);
         }
     }
 }

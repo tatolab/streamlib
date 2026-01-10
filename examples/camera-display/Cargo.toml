@@ -3,6 +3,10 @@ name = "camera-display"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+backend-vulkan = ["streamlib/backend-vulkan"]
+
 [dependencies]
 streamlib = { path = "../../libs/streamlib" }
 tokio = { version = "1.48.0", features = ["full"] }

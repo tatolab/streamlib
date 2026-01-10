@@ -59,7 +59,7 @@ impl MetalCommandQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apple::rhi::MetalDevice;
+    use crate::metal::MetalDevice;
 
     #[test]
     fn test_command_buffer_creation() {

@@ -6,14 +6,14 @@ pub mod audio_utils;
 pub mod corevideo_ffi;
 pub mod iosurface;
 pub mod media_clock;
-pub mod metal;
+pub mod muxer;
 pub mod pixel_transfer;
-pub mod rhi;
 pub mod texture;
 pub mod texture_pool_macos;
 pub mod videotoolbox;
 pub mod vimage_ffi;
-pub mod webrtc;
+
+// Note: WebRTC module moved to core::streaming
 
 pub mod processors;
 
@@ -27,7 +27,7 @@ pub mod time;
 
 pub mod thread_priority;
 
-pub use metal::MetalDevice;
+pub use crate::metal::MetalDevice;
 pub use pixel_transfer::PixelTransferSession;
 
 pub use processors::{
@@ -38,19 +38,13 @@ pub use processors::{
     // Sinks
     AppleDisplayProcessor,
     AppleMp4WriterProcessor,
-    WebRtcWhepConfig,
-    // WebRTC WHEP processor:
-    WebRtcWhepProcessor,
-    WebRtcWhipConfig,
-    // WebRTC WHIP processor:
-    WebRtcWhipProcessor,
 };
 
-// Re-export webrtc types
-pub use webrtc::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
+// Note: WebRTC types (WhipClient, WhepClient, etc.) are now in core::streaming
+// Note: WHIP/WHEP processors are now in core::processors
 
-// Re-export videotoolbox types (VideoEncoderConfig and H264Profile now come from videotoolbox module)
-pub use videotoolbox::{H264Profile, VideoCodec, VideoEncoderConfig, VideoToolboxEncoder};
+// Re-export videotoolbox encoder (VideoCodec, H264Profile, VideoEncoderConfig are in core::codec)
+pub use videotoolbox::VideoToolboxEncoder;
 
 #[cfg(test)]
 mod tests {

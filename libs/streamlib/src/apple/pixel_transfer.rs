@@ -14,6 +14,7 @@ mod ffi {
     use super::*;
     use std::ffi::c_void;
 
+    #[allow(clashing_extern_declarations)]
     #[link(name = "CoreVideo", kind = "framework")]
     extern "C" {
         pub fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;

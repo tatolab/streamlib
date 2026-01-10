@@ -32,7 +32,7 @@ All platforms supported out of the box—Linux, macOS, Windows—without convolu
 - **Multi-modal by design** - Audio, video, and arbitrary data flow through the same graph. Build applications that see, hear, and process data simultaneously
 - **Graph-based processing** - Connect processors into pipelines. Data flows from inputs through processors to outputs, like nodes in a visual programming environment
 - **Zero legacy dependencies** - No GStreamer, FFmpeg, or libav. Pure Rust with platform-native APIs
-- **GPU-accelerated** - Hardware-accelerated video encoding/decoding via Metal and wgpu
+- **GPU-accelerated** - Hardware-accelerated video encoding/decoding via Metal (macOS/iOS) and VideoToolbox
 - **Real-time audio** - Low-latency audio processing with CLAP plugin support
 - **Built for AI agents** - Designed for applications where AI models need to perceive and act on live data
 - **Cross-platform** - See platform support table below

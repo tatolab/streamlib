@@ -12,11 +12,19 @@ use super::texture::StreamTexture;
 /// On Vulkan, this wraps VkCommandBuffer.
 /// On DX12, this wraps ID3D12CommandList.
 pub struct CommandBuffer {
-    #[cfg(target_os = "macos")]
-    pub(crate) inner: crate::apple::rhi::MetalCommandBuffer,
+    // Metal backend: explicit feature OR macOS/iOS default (when vulkan not requested)
+    #[cfg(all(
+        not(feature = "backend-vulkan"),
+        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+    ))]
+    pub(crate) inner: crate::metal::rhi::MetalCommandBuffer,
 
-    #[cfg(target_os = "linux")]
-    pub(crate) inner: crate::linux::rhi::VulkanCommandBuffer,
+    // Vulkan backend: explicit feature OR Linux default
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
+    pub(crate) inner: crate::vulkan::rhi::VulkanCommandBuffer,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: crate::windows::rhi::DX12CommandBuffer,
@@ -25,12 +33,20 @@ pub struct CommandBuffer {
 impl CommandBuffer {
     /// Copy one texture to another.
     pub fn copy_texture(&mut self, src: &StreamTexture, dst: &StreamTexture) {
-        #[cfg(target_os = "macos")]
+        // Metal backend
+        #[cfg(all(
+            not(feature = "backend-vulkan"),
+            any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+        ))]
         {
             self.inner.copy_texture(&src.inner, &dst.inner);
         }
 
-        #[cfg(target_os = "linux")]
+        // Vulkan backend
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
         {
             self.inner.copy_texture(&src.inner, &dst.inner);
         }
@@ -43,12 +59,20 @@ impl CommandBuffer {
 
     /// Commit the command buffer for execution.
     pub fn commit(self) {
-        #[cfg(target_os = "macos")]
+        // Metal backend
+        #[cfg(all(
+            not(feature = "backend-vulkan"),
+            any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+        ))]
         {
             self.inner.commit();
         }
 
-        #[cfg(target_os = "linux")]
+        // Vulkan backend
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
         {
             self.inner.commit();
         }
@@ -61,12 +85,20 @@ impl CommandBuffer {
 
     /// Commit and wait for completion.
     pub fn commit_and_wait(self) {
-        #[cfg(target_os = "macos")]
+        // Metal backend
+        #[cfg(all(
+            not(feature = "backend-vulkan"),
+            any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+        ))]
         {
             self.inner.commit_and_wait();
         }
 
-        #[cfg(target_os = "linux")]
+        // Vulkan backend
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
         {
             self.inner.commit_and_wait();
         }
@@ -77,9 +109,12 @@ impl CommandBuffer {
         }
     }
 
-    /// Get the underlying Metal command buffer (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn as_metal_command_buffer(&self) -> &crate::apple::rhi::MetalCommandBuffer {
+    /// Get the underlying Metal command buffer (Metal backend only).
+    #[cfg(all(
+        not(feature = "backend-vulkan"),
+        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+    ))]
+    pub fn as_metal_command_buffer(&self) -> &crate::metal::rhi::MetalCommandBuffer {
         &self.inner
     }
 }

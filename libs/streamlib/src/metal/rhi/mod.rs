@@ -1,20 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Metal backend implementation for RHI.
+//! Metal RHI implementation.
 
 use std::sync::Mutex;
 
-pub mod format_converter_macos;
-pub mod gl_interop_macos;
+pub mod format_converter;
+pub mod gl_interop;
 mod metal_command_buffer;
 mod metal_command_queue;
 mod metal_device;
 mod metal_texture;
-pub mod pixel_buffer_pool_macos;
-pub mod pixel_buffer_ref_macos;
-mod pixel_format_macos;
-pub mod texture_cache_macos;
+pub mod pixel_buffer_pool;
+pub mod pixel_buffer_ref;
+mod pixel_format;
+pub mod texture_cache;
 
 pub use metal_command_buffer::MetalCommandBuffer;
 pub use metal_command_queue::MetalCommandQueue;
