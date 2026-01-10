@@ -74,6 +74,7 @@ pub use core::{
     CodeExamples,
     ConfigDescriptor,
     ConfigField,
+    ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
     DataFrame,
@@ -84,6 +85,7 @@ pub use core::{
     GlContext,
     GlTextureBinding,
     GpuContext,
+    GraphFileDefinition,
     InputPortMarker,
     LfoWaveform,
     LinkCapacity,
@@ -107,6 +109,7 @@ pub use core::{
     PluginInfo,
     PooledTextureHandle,
     PortDescriptor,
+    ProcessorDefinition,
     ProcessorDescriptor,
     ProcessorSpec,
     ReactiveProcessor,
@@ -146,6 +149,19 @@ pub use core::{
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::convert_video_to_samples;
 
+// GPU Backends - Metal and Vulkan
+// Metal module is always available on macOS/iOS since Apple platform services need Metal types
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) mod metal;
+
+// Vulkan module: explicit feature OR Linux default
+#[cfg(any(
+    feature = "backend-vulkan",
+    all(target_os = "linux", not(feature = "backend-metal"))
+))]
+pub(crate) mod vulkan;
+
+// Platform services (Apple)
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 

@@ -125,8 +125,8 @@ impl Clone for MetalTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apple::rhi::MetalDevice;
     use crate::core::rhi::TextureDescriptor;
+    use crate::metal::MetalDevice;
 
     #[test]
     fn test_metal_texture_properties() {

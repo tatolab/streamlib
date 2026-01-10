@@ -8,8 +8,8 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorMetrics, ProcessorUniqueId,
-    StateComponent,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphState, LinkInstanceComponent,
+    LinkUniqueId, ProcessorMetrics, ProcessorUniqueId, StateComponent,
 };
 
 use super::snapshots::{
@@ -66,15 +66,21 @@ impl GraphInspector {
 
         let link = graph.traversal().e(id).first()?;
 
+        // Get queue depth from link instance component (ring buffer)
+        let queue_depth = link
+            .get::<LinkInstanceComponent>()
+            .map(|instance| instance.0.len())
+            .unwrap_or(0);
+
         Some(LinkSnapshot {
             id: id.clone(),
             source_processor: link.source.processor_id.clone(),
             source_port: link.source.port_name.clone(),
             target_processor: link.target.processor_id.clone(),
             target_port: link.target.port_name.clone(),
-            queue_depth: 0,      // TODO: Get from link metrics component
-            capacity: 16,        // Default capacity
-            throughput_fps: 0.0, // TODO: Get from link metrics component
+            queue_depth,
+            capacity: link.capacity.into(),
+            throughput_fps: 0.0, // TODO: Get from link metrics component (requires tracking)
         })
     }
 

@@ -15,10 +15,9 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-
-# Debug overlay with FPS and performance graph (needs Metal port)
-# TODO: Port wgpu-profiler to Metal-based profiling
-debug-overlay = ["dep:vello", "dep:skrifa"]
+# GPU backend selection (feature overrides default platform backend)
+backend-metal = []
+backend-vulkan = ["dep:ash"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
@@ -60,6 +59,9 @@ clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["cla
 # Audio resampling for real-time safe sample rate conversion
 rubato = "0.16"
 
+# Vulkan backend (optional, enabled via backend-vulkan feature)
+ash = { version = "0.38", default-features = false, features = ["std", "loaded"], optional = true }
+
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
 
@@ -76,10 +78,6 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", 
 http-body-util = "0.1"  # Body handling utilities
 rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
 
-# Optional: Debug overlay dependencies
-vello = { git = "https://github.com/linebender/vello", rev = "5e3e12559781891b204553161aee761900c7e92d", optional = true }
-skrifa = { version = "0.22", optional = true }
-# wgpu-profiler removed - needs Metal-based profiling port
 axum.workspace = true
 futures-util = "0.3"  # For StreamExt/SinkExt on WebSocket
 

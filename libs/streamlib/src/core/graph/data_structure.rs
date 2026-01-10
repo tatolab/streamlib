@@ -92,9 +92,13 @@ impl Graph {
     }
 
     /// Check if recompilation is needed.
+    ///
+    /// Returns true if the graph has never been compiled.
+    /// Note: This does not track modifications after compilation - callers should
+    /// call `mark_compiled()` after successful compilation and ensure this is
+    /// called before making changes, or always recompile after modifications.
     pub fn needs_recompile(&self) -> bool {
-        // TODO: implement checksum-based change detection
-        true
+        self.compiled_at.is_none()
     }
 }
 

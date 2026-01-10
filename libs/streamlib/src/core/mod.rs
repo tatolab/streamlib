@@ -11,6 +11,7 @@ pub mod rhi;
 
 pub mod frames;
 pub mod graph;
+pub mod graph_file;
 pub mod json_schema;
 pub mod links;
 pub mod media_clock;
@@ -37,6 +38,7 @@ pub use rhi::{gl_constants, GlContext, GlTextureBinding, NativeTextureHandle};
 
 pub use frames::*;
 pub use graph::*;
+pub use graph_file::*;
 pub use links::*;
 pub use processors::*;
 pub use pubsub::*;

@@ -404,10 +404,34 @@ impl VideoToolboxEncoder {
         &self.config
     }
 
-    /// Update encoder bitrate
+    /// Update encoder bitrate in real-time
     pub fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()> {
         self.config.bitrate_bps = bitrate_bps;
-        // TODO: Update VideoToolbox session property in real-time
+
+        // Update VideoToolbox session property if session exists
+        if let Some(session) = self.compression_session {
+            unsafe {
+                let avg_bitrate = bitrate_bps as i32;
+                let avg_bitrate_num = ffi::CFNumberCreate(
+                    std::ptr::null(),
+                    ffi::K_CFNUMBER_SINT32_TYPE,
+                    &avg_bitrate as *const _ as *const _,
+                );
+                let status = ffi::VTSessionSetProperty(
+                    session,
+                    ffi::kVTCompressionPropertyKey_AverageBitRate,
+                    avg_bitrate_num as *const _,
+                );
+                ffi::CFRelease(avg_bitrate_num as *const _);
+                if status != ffi::NO_ERR {
+                    return Err(StreamError::Runtime(format!(
+                        "Failed to update encoder bitrate: {}",
+                        status
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 

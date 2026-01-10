@@ -269,7 +269,7 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 ## Project Overview
 
 StreamLib is a real-time audio/video processing framework for Rust, featuring:
-- GPU-accelerated video processing (wgpu/Metal)
+- GPU-accelerated video processing (Metal on macOS/iOS, Vulkan planned for Linux)
 - Real-time audio processing with CLAP plugin support
 - Graph-based processor pipeline architecture
 - Platform-specific optimizations (macOS/iOS via Apple frameworks)

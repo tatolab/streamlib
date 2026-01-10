@@ -152,8 +152,10 @@ impl ClapScanner {
                     .and_then(|d| d.to_str().ok())
                     .unwrap_or("")
                     .to_string(),
-                // TODO: Parse features() properly when needed
-                features: Vec::new(),
+                features: desc
+                    .features()
+                    .filter_map(|f| f.to_str().ok().map(|s| s.to_string()))
+                    .collect(),
             });
         }
 

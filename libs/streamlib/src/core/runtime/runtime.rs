@@ -619,6 +619,86 @@ impl StreamRuntime {
                 .map_err(|_| StreamError::GraphError("Unable to serialize graph".into()))
         })
     }
+
+    // =========================================================================
+    // Graph File Loading
+    // =========================================================================
+
+    /// Load a graph from a file definition.
+    ///
+    /// Processors are created first, building an alias → ID map. Then connections
+    /// are created by resolving aliases to runtime IDs.
+    pub fn load_graph_file(
+        &self,
+        def: &crate::core::graph_file::GraphFileDefinition,
+    ) -> Result<()> {
+        use std::collections::HashMap;
+
+        // Validate before loading
+        def.validate()?;
+
+        // Phase 1: Create processors, build alias → ID map
+        let mut alias_to_id: HashMap<String, ProcessorUniqueId> = HashMap::new();
+
+        for proc_def in &def.processors {
+            let spec = proc_def.to_processor_spec();
+            let id = self.add_processor(spec)?;
+
+            alias_to_id.insert(proc_def.alias.clone(), id.clone());
+
+            tracing::info!(
+                "Created processor '{}' ({}) → {}",
+                proc_def.alias,
+                proc_def.processor_type,
+                id
+            );
+        }
+
+        // Phase 2: Create connections, resolving aliases
+        for conn_def in &def.connections {
+            let from = conn_def.parse_from()?;
+            let to = conn_def.parse_to()?;
+
+            let from_id = alias_to_id.get(from.alias).ok_or_else(|| {
+                StreamError::GraphError(format!("Unknown processor alias: '{}'", from.alias))
+            })?;
+            let to_id = alias_to_id.get(to.alias).ok_or_else(|| {
+                StreamError::GraphError(format!("Unknown processor alias: '{}'", to.alias))
+            })?;
+
+            self.connect(
+                OutputLinkPortRef::new(from_id, from.port_name),
+                InputLinkPortRef::new(to_id, to.port_name),
+            )?;
+
+            tracing::info!(
+                "Connected {}.{} → {}.{}",
+                from.alias,
+                from.port_name,
+                to.alias,
+                to.port_name
+            );
+        }
+
+        if let Some(name) = &def.name {
+            tracing::info!("Loaded pipeline: {}", name);
+        }
+
+        Ok(())
+    }
+
+    /// Load a graph from a JSON file path.
+    pub fn load_graph_file_path(&self, path: &std::path::Path) -> Result<()> {
+        let def = crate::core::graph_file::GraphFileDefinition::from_json_file(path)?;
+
+        if let Some(name) = &def.name {
+            tracing::info!("Loading pipeline '{}' from {}", name, path.display());
+        } else {
+            tracing::info!("Loading pipeline from {}", path.display());
+        }
+
+        self.load_graph_file(&def)
+    }
 }
 
 #[cfg(test)]

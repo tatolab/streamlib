@@ -47,7 +47,7 @@ pub mod gl_constants {
 /// ```
 pub struct GlContext {
     #[cfg(target_os = "macos")]
-    inner: crate::apple::rhi::gl_interop_macos::MacOsGlContext,
+    inner: crate::metal::rhi::gl_interop::MacOsGlContext,
 }
 
 /// A reusable GL texture binding with a STABLE texture ID.
@@ -78,7 +78,7 @@ pub struct GlContext {
 /// ```
 pub struct GlTextureBinding {
     #[cfg(target_os = "macos")]
-    inner: crate::apple::rhi::gl_interop_macos::GlTextureBinding,
+    inner: crate::metal::rhi::gl_interop::GlTextureBinding,
 }
 
 impl GlTextureBinding {
@@ -177,7 +177,7 @@ impl GlContext {
     pub fn new() -> Result<Self> {
         #[cfg(target_os = "macos")]
         {
-            let inner = crate::apple::rhi::gl_interop_macos::MacOsGlContext::new()?;
+            let inner = crate::metal::rhi::gl_interop::MacOsGlContext::new()?;
             Ok(Self { inner })
         }
         #[cfg(target_os = "linux")]

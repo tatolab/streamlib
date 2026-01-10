@@ -9,12 +9,12 @@ use std::sync::Arc;
 use objc2_io_surface::IOSurface;
 
 use super::iosurface::{create_iosurface, create_metal_texture_from_iosurface, PixelFormat};
-use crate::apple::rhi::MetalTexture;
 use crate::core::context::texture_pool::{
     PoolSlot, TexturePoolDescriptor, TexturePoolInner, TexturePoolKey,
 };
 use crate::core::rhi::{StreamTexture, TextureFormat};
 use crate::core::{Result, StreamError};
+use crate::metal::rhi::MetalTexture;
 
 // FFI binding to get IOSurface ID for cross-process sharing
 #[allow(clashing_extern_declarations)]

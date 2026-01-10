@@ -138,31 +138,63 @@ impl<'a> TextureDescriptor<'a> {
 /// This type wraps the platform-specific texture implementation and provides
 /// a unified interface. Use the `as_*` methods to "dip down" to the native
 /// texture type when needed for platform-specific operations.
+///
+/// On macOS/iOS, Metal texture storage is always available for Apple platform
+/// interop (IOSurface, CVPixelBuffer) regardless of which GPU backend is selected.
 #[derive(Clone)]
 pub struct StreamTexture {
-    #[cfg(target_os = "macos")]
-    pub(crate) inner: Arc<crate::apple::rhi::MetalTexture>,
+    // Metal backend: when vulkan NOT requested AND (explicit metal feature OR macOS/iOS)
+    #[cfg(all(
+        not(feature = "backend-vulkan"),
+        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+    ))]
+    pub(crate) inner: Arc<crate::metal::rhi::MetalTexture>,
 
-    #[cfg(target_os = "linux")]
-    pub(crate) inner: Arc<crate::linux::rhi::VulkanTexture>,
+    // Vulkan backend: explicit feature OR Linux default (when metal not requested)
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
+    pub(crate) inner: Arc<crate::vulkan::rhi::VulkanTexture>,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: Arc<crate::windows::rhi::DX12Texture>,
+
+    /// Metal texture for Apple platform services (IOSurface, CVPixelBuffer).
+    /// On macOS/iOS with Vulkan backend, textures created from IOSurface are
+    /// stored here. When Metal is the backend, this duplicates `inner`.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) metal_texture: Option<Arc<crate::metal::rhi::MetalTexture>>,
 }
 
 impl StreamTexture {
     /// Texture width in pixels.
     pub fn width(&self) -> u32 {
+        // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let Some(ref mt) = self.metal_texture {
+            return mt.width();
+        }
         self.inner.width()
     }
 
     /// Texture height in pixels.
     pub fn height(&self) -> u32 {
+        // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let Some(ref mt) = self.metal_texture {
+            return mt.height();
+        }
         self.inner.height()
     }
 
     /// Texture format.
     pub fn format(&self) -> TextureFormat {
+        // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let Some(ref mt) = self.metal_texture {
+            return mt.format();
+        }
         self.inner.format()
     }
 
@@ -171,11 +203,12 @@ impl StreamTexture {
     /// Returns `Some(id)` on macOS/iOS if the texture is backed by an IOSurface.
     /// Returns `None` on other platforms or if no IOSurface is available.
     pub fn iosurface_id(&self) -> Option<u32> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            self.inner.iosurface_id()
+            // Use metal_texture for IOSurface access
+            self.metal_texture.as_ref().and_then(|mt| mt.iosurface_id())
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             None
         }
@@ -190,10 +223,12 @@ impl StreamTexture {
     ///
     /// Returns `None` if no sharing handle is available.
     pub fn native_handle(&self) -> Option<NativeTextureHandle> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            self.inner
-                .iosurface_id()
+            // Use metal_texture for IOSurface access
+            self.metal_texture
+                .as_ref()
+                .and_then(|mt| mt.iosurface_id())
                 .map(|id| NativeTextureHandle::IOSurface { id })
         }
         #[cfg(target_os = "linux")]
@@ -206,29 +241,64 @@ impl StreamTexture {
             // TODO: Return DxgiSharedHandle when implemented
             None
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "windows"
+        )))]
         {
             None
         }
     }
 
-    /// Get the underlying Metal texture (macOS only).
-    #[cfg(target_os = "macos")]
+    /// Get the underlying Metal texture (macOS/iOS only).
+    ///
+    /// Panics if no Metal texture is available.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn as_metal_texture(&self) -> &metal::TextureRef {
-        self.inner.as_metal_texture()
+        self.metal_texture
+            .as_ref()
+            .expect("No Metal texture available")
+            .as_metal_texture()
     }
 
-    /// Get the underlying IOSurface if this texture is IOSurface-backed (macOS only).
-    #[cfg(target_os = "macos")]
+    /// Get the underlying IOSurface if this texture is IOSurface-backed (macOS/iOS only).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn as_iosurface(&self) -> Option<&objc2_io_surface::IOSurface> {
-        self.inner.iosurface()
+        self.metal_texture.as_ref().and_then(|mt| mt.iosurface())
     }
 
-    /// Create from a Metal texture (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn from_metal(texture: crate::apple::rhi::MetalTexture) -> Self {
+    /// Create from a Metal texture.
+    ///
+    /// When Metal is the GPU backend, this sets both `inner` and `metal_texture`.
+    /// When Vulkan is the GPU backend on macOS, this only sets `metal_texture`
+    /// (used for Apple platform interop like IOSurface).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub fn from_metal(texture: crate::metal::rhi::MetalTexture) -> Self {
+        let arc_texture = Arc::new(texture);
+
+        Self {
+            // When Metal is backend, inner is the MetalTexture
+            #[cfg(not(feature = "backend-vulkan"))]
+            inner: arc_texture.clone(),
+            // When Vulkan is backend on macOS, inner would be VulkanTexture (not set here)
+            #[cfg(feature = "backend-vulkan")]
+            inner: Arc::new(crate::vulkan::rhi::VulkanTexture::placeholder()),
+            metal_texture: Some(arc_texture),
+        }
+    }
+
+    /// Create from a Vulkan texture (Vulkan backend only).
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
+    pub fn from_vulkan(texture: crate::vulkan::rhi::VulkanTexture) -> Self {
         Self {
             inner: Arc::new(texture),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            metal_texture: None,
         }
     }
 }
