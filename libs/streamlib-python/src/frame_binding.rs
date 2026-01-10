@@ -290,7 +290,7 @@ pub fn audio_frame_from_dict(_py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyRes
         .extract()?;
 
     // Validate samples length is divisible by channels
-    if samples.len() % channels.as_usize() != 0 {
+    if !samples.len().is_multiple_of(channels.as_usize()) {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "samples length ({}) must be divisible by channels ({})",
             samples.len(),

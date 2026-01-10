@@ -12,7 +12,10 @@
       "config": {
         "width": 1280,
         "height": 720,
-        "title": "Camera Feed"
+        "title": "Camera Feed",
+        "scaling_mode": "Letterbox",
+        "vsync": true,
+        "drawable_count": 2
       }
     }
   ],
