@@ -18,6 +18,8 @@ default = []
 # GPU backend selection (feature overrides default platform backend)
 backend-metal = []
 backend-vulkan = ["dep:ash"]
+# FFmpeg-based encoding/decoding (Linux)
+ffmpeg = []
 
 [dependencies]
 # Execution types (shared with macros for code generation)

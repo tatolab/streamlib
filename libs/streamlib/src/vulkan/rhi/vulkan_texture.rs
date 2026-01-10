@@ -144,8 +144,10 @@ impl VulkanTexture {
         let vk_format = texture_format_to_vk(format);
 
         // Create import info for IOSurface
-        let mut import_info = vk::ImportMetalIOSurfaceInfoEXT::default();
-        import_info.io_surface = iosurface_ref as *mut _;
+        let import_info = vk::ImportMetalIOSurfaceInfoEXT {
+            io_surface: iosurface_ref as *mut _,
+            ..Default::default()
+        };
 
         // Create image with import info in pNext chain
         let mut image_info = vk::ImageCreateInfo::default()

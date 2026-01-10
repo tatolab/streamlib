@@ -62,19 +62,13 @@ impl VulkanDevice {
         {
             // VK_KHR_portability_enumeration is required for MoltenVK
             let portability_enum = c"VK_KHR_portability_enumeration";
-            if available_ext_names
-                .iter()
-                .any(|&name| name == portability_enum)
-            {
+            if available_ext_names.contains(&portability_enum) {
                 instance_extensions.push(portability_enum.as_ptr());
             }
 
             // VK_EXT_metal_objects for Metal interop
             let metal_objects = c"VK_EXT_metal_objects";
-            if available_ext_names
-                .iter()
-                .any(|&name| name == metal_objects)
-            {
+            if available_ext_names.contains(&metal_objects) {
                 instance_extensions.push(metal_objects.as_ptr());
                 tracing::info!("VK_EXT_metal_objects available - Metal interop enabled");
             } else {

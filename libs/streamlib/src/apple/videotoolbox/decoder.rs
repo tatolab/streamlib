@@ -17,25 +17,9 @@
 
 use super::{ffi, format};
 use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{Result, RuntimeContext, StreamError, VideoFrame};
+use crate::core::{Result, RuntimeContext, StreamError, VideoDecoderConfig, VideoFrame};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-
-/// Decoded video frame configuration
-#[derive(Clone, Debug, PartialEq)]
-pub struct VideoDecoderConfig {
-    pub width: u32,
-    pub height: u32,
-}
-
-impl Default for VideoDecoderConfig {
-    fn default() -> Self {
-        Self {
-            width: 1280,
-            height: 720,
-        }
-    }
-}
 
 /// VideoToolbox-based hardware H.264 decoder
 ///

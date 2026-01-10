@@ -4,16 +4,16 @@
 // WebRTC WHIP Streaming Processor
 //
 // This processor integrates:
-// - H.264 encoding via VideoToolbox
+// - H.264 encoding via platform-specific encoder (VideoToolbox on macOS, FFmpeg on Linux)
 // - Opus audio encoding
 // - WHIP signaling and WebRTC session via WhipClient
 
-use crate::apple::videotoolbox::{VideoEncoderConfig, VideoToolboxEncoder};
-use crate::apple::webrtc::{WhipClient, WhipConfig};
+use crate::core::codec::VideoEncoder;
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
-    OpusEncoder,
+    OpusEncoder, WhipClient, WhipConfig,
 };
+use crate::core::VideoEncoderConfig;
 use crate::core::{
     media_clock::MediaClock, AudioFrame, GpuContext, LinkInput, Result, RuntimeContext,
     StreamError, VideoFrame,
@@ -59,7 +59,7 @@ pub struct WebRtcWhipProcessor {
     session_started: bool,
 
     // Encoders
-    video_encoder: Option<VideoToolboxEncoder>,
+    video_encoder: Option<VideoEncoder>,
     audio_encoder: Option<OpusEncoder>,
 
     // WHIP client (owns WebRTC session)
@@ -145,12 +145,12 @@ impl WebRtcWhipProcessor::Processor {
                 .ctx
                 .as_ref()
                 .ok_or_else(|| StreamError::Runtime("RuntimeContext not available".into()))?;
-            self.video_encoder = Some(VideoToolboxEncoder::new(
+            self.video_encoder = Some(VideoEncoder::new(
                 self.config.video.clone(),
                 gpu_context,
                 ctx,
             )?);
-            tracing::info!("VideoToolbox H.264 encoder initialized");
+            tracing::info!("Video encoder initialized");
         }
 
         // Connect WHIP client
@@ -252,8 +252,9 @@ impl WebRtcWhipProcessor::Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apple::videotoolbox::{parse_nal_units, EncodedVideoFrame};
+    use crate::apple::videotoolbox::parse_nal_units;
     use crate::core::streaming::EncodedAudioFrame;
+    use crate::core::EncodedVideoFrame;
     use std::time::Duration;
 
     #[test]

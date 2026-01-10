@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use tracing::{debug, error, info, trace};
 
 // FFI bindings for CoreVideo functions
+#[allow(clashing_extern_declarations)]
 #[link(name = "CoreVideo", kind = "framework")]
 extern "C" {
     #[allow(dead_code)]

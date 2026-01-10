@@ -7,55 +7,15 @@
 // Supports GPU-accelerated texture conversion (wgpu → NV12) and real-time encoding.
 
 use crate::apple::PixelTransferSession;
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoFrame};
+use crate::core::{
+    EncodedVideoFrame, GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig,
+    VideoFrame,
+};
 use objc2_core_video::CVPixelBuffer;
-use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use super::{
-    codec::{CodecInfo, VideoCodec},
-    ffi, format,
-};
-
-// ============================================================================
-// PUBLIC TYPES
-// ============================================================================
-
-/// Encoded video frame output from VideoToolbox encoder
-#[derive(Clone)]
-pub struct EncodedVideoFrame {
-    pub data: Vec<u8>,
-    pub timestamp_ns: i64,
-    pub is_keyframe: bool,
-    pub frame_number: u64,
-}
-
-/// Video encoder configuration
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct VideoEncoderConfig {
-    pub width: u32,
-    pub height: u32,
-    pub fps: u32,
-    pub bitrate_bps: u32,
-    pub keyframe_interval_frames: u32,
-    pub codec: VideoCodec,
-    pub low_latency: bool,
-}
-
-impl Default for VideoEncoderConfig {
-    fn default() -> Self {
-        Self {
-            width: 1280,
-            height: 720,
-            fps: 30,
-            bitrate_bps: 2_500_000,
-            keyframe_interval_frames: 60,
-            codec: VideoCodec::default(),
-            low_latency: true,
-        }
-    }
-}
+use super::{ffi, format};
 
 // ============================================================================
 // ENCODER IMPLEMENTATION

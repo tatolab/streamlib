@@ -56,12 +56,16 @@ impl VulkanSemaphore {
         }
 
         // Create import info for Metal shared event
-        let mut import_info = vk::ImportMetalSharedEventInfoEXT::default();
-        import_info.mtl_shared_event = mtl_shared_event as vk::MTLSharedEvent_id;
+        let import_info = vk::ImportMetalSharedEventInfoEXT {
+            mtl_shared_event: mtl_shared_event as vk::MTLSharedEvent_id,
+            ..Default::default()
+        };
 
         // Create semaphore with import info in pNext chain
-        let mut semaphore_info = vk::SemaphoreCreateInfo::default();
-        semaphore_info.p_next = &import_info as *const _ as *const _;
+        let semaphore_info = vk::SemaphoreCreateInfo {
+            p_next: &import_info as *const _ as *const _,
+            ..Default::default()
+        };
 
         let semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }.map_err(|e| {
             StreamError::GpuError(format!(

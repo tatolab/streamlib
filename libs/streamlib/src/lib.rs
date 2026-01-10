@@ -50,6 +50,7 @@ pub use core::{
     AudioCaptureConfig,
     AudioChannelConverterConfig,
     AudioChannelConverterProcessor,
+    AudioCodec,
     AudioDevice,
     AudioEncoderConfig,
     AudioEncoderOpus,
@@ -80,12 +81,14 @@ pub use core::{
     DataFrame,
     DisplayConfig,
     EncodedAudioFrame,
+    EncodedVideoFrame,
     Field,
     FieldType,
     GlContext,
     GlTextureBinding,
     GpuContext,
     GraphFileDefinition,
+    H264Profile,
     InputPortMarker,
     LfoWaveform,
     LinkCapacity,
@@ -98,6 +101,8 @@ pub use core::{
     LinkPortType,
     ManualProcessor,
     MixingStrategy,
+    Mp4Muxer,
+    Mp4MuxerConfig,
     Mp4WriterConfig,
     NativeTextureHandle,
     // Streaming utilities:
@@ -128,9 +133,15 @@ pub use core::{
     TexturePoolDescriptor,
     TextureUsages,
     TimeContext,
+    VideoCodec,
+    VideoDecoder,
+    VideoDecoderConfig,
+    VideoEncoder,
+    VideoEncoderConfig,
     VideoFrame,
     WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
+    FOURCC_H264,
     PRIMITIVE_BOOL,
     PRIMITIVE_F32,
     PRIMITIVE_F64,
@@ -161,6 +172,10 @@ pub(crate) mod metal;
 ))]
 pub(crate) mod vulkan;
 
+// Linux platform services (FFmpeg-based encoding)
+#[cfg(target_os = "linux")]
+pub(crate) mod linux;
+
 // Platform services (Apple)
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
@@ -172,23 +187,17 @@ pub use apple::{
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
-    H264Profile,
     MetalDevice,
-    VideoCodec,
-    VideoEncoderConfig,
-    // VideoToolbox encoder and config types:
+    // VideoToolbox encoder (config types are in core::codec):
     VideoToolboxEncoder,
-    WebRtcSession,
-    WebRtcWhepConfig,
-    // WebRTC WHEP processor and config types:
-    WebRtcWhepProcessor,
-    WebRtcWhipConfig,
-    // WebRTC WHIP processor and config types:
-    WebRtcWhipProcessor,
-    WhepClient,
-    WhepConfig,
-    WhipClient,
-    WhipConfig,
+};
+
+// WebRTC streaming (cross-platform)
+pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
+
+// WebRTC WHIP/WHEP processors (cross-platform)
+pub use core::processors::{
+    WebRtcWhepConfig, WebRtcWhepProcessor, WebRtcWhipConfig, WebRtcWhipProcessor,
 };
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

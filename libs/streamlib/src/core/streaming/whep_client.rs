@@ -667,6 +667,16 @@ impl WhepClient {
         self.audio_sample_rx.as_mut()?.try_recv().ok()
     }
 
+    /// Take ownership of the video sample receiver for async processing.
+    pub fn take_video_rx(&mut self) -> Option<mpsc::Receiver<RtpSample>> {
+        self.video_sample_rx.take()
+    }
+
+    /// Take ownership of the audio sample receiver for async processing.
+    pub fn take_audio_rx(&mut self) -> Option<mpsc::Receiver<RtpSample>> {
+        self.audio_sample_rx.take()
+    }
+
     /// Get audio configuration from SDP negotiation.
     pub fn audio_config(&self) -> (Option<u32>, Option<usize>) {
         (self.audio_sample_rate, self.audio_channels)

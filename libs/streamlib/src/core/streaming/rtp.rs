@@ -7,7 +7,8 @@ use bytes::Bytes;
 use std::time::Duration;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use crate::apple::videotoolbox::{parse_nal_units, EncodedVideoFrame};
+use crate::apple::videotoolbox::parse_nal_units;
+use crate::core::EncodedVideoFrame;
 
 /// Converts encoded H.264 video frame to webrtc Sample(s).
 #[cfg(any(target_os = "macos", target_os = "ios"))]

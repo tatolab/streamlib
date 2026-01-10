@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 pub mod clap;
+pub mod codec;
 pub mod compat;
 pub mod compiler;
 pub mod context;
@@ -31,6 +32,7 @@ pub mod texture;
 pub mod utils;
 
 pub use clap::*;
+pub use codec::*;
 pub use compiler::*;
 pub use context::*;
 pub use error::*;
