@@ -245,4 +245,69 @@ extern "C" {
     pub fn CVPixelBufferGetPixelFormatType(pixel_buffer: CVPixelBufferRef) -> u32;
     pub fn CVPixelBufferGetWidth(pixel_buffer: CVPixelBufferRef) -> usize;
     pub fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
+
+    /// Get the IOSurface backing a CVPixelBuffer.
+    /// Returns null if the pixel buffer is not backed by an IOSurface.
+    pub fn CVPixelBufferGetIOSurface(pixel_buffer: CVPixelBufferRef) -> *const c_void;
+
+    /// Create a CVPixelBuffer from an IOSurface.
+    pub fn CVPixelBufferCreateWithIOSurface(
+        allocator: *const c_void,
+        surface: *const c_void,
+        pixel_buffer_attributes: CFDictionaryRef,
+        pixel_buffer_out: *mut CVPixelBufferRef,
+    ) -> i32;
+}
+
+// IOSurface types
+pub type IOSurfaceRef = *const c_void;
+pub type IOSurfaceID = u32;
+
+// Mach port type (allow non-camel-case for FFI compatibility)
+#[allow(non_camel_case_types)]
+pub type mach_port_t = u32;
+
+// IOSurface property key for global visibility.
+// When set to true, the IOSurface can be looked up by ID from any process.
+// Note: Deprecated in macOS 10.11, but may still work for cross-process sharing.
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    pub static kIOSurfaceIsGlobal: CFStringRef;
+}
+
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    /// Get the unique ID of an IOSurface.
+    /// This ID can be used to look up the surface in another process.
+    pub fn IOSurfaceGetID(buffer: *const c_void) -> IOSurfaceID;
+
+    /// Look up an IOSurface by its ID.
+    /// Returns null if no surface exists with this ID.
+    /// The returned surface is retained (caller must release).
+    pub fn IOSurfaceLookup(csid: IOSurfaceID) -> *const c_void;
+
+    /// Increment the reference count of an IOSurface.
+    pub fn IOSurfaceIncrementUseCount(buffer: *const c_void);
+
+    /// Decrement the reference count of an IOSurface.
+    pub fn IOSurfaceDecrementUseCount(buffer: *const c_void);
+
+    /// Create a mach port for sending an IOSurface to another process.
+    /// The returned mach port should be sent via IPC (e.g., SCM_RIGHTS).
+    /// The receiving process uses IOSurfaceLookupFromMachPort.
+    pub fn IOSurfaceCreateMachPort(buffer: IOSurfaceRef) -> mach_port_t;
+
+    /// Look up an IOSurface from a mach port received from another process.
+    /// Returns a retained IOSurface reference.
+    pub fn IOSurfaceLookupFromMachPort(port: mach_port_t) -> IOSurfaceRef;
+}
+
+// Mach port deallocation
+#[link(name = "System")]
+extern "C" {
+    /// Deallocate a mach port right.
+    pub fn mach_port_deallocate(task: mach_port_t, name: mach_port_t) -> i32;
+
+    /// Get the current task's mach port.
+    pub fn mach_task_self() -> mach_port_t;
 }

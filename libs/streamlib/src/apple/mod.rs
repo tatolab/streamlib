@@ -8,6 +8,7 @@ pub mod iosurface;
 pub mod media_clock;
 pub mod muxer;
 pub mod pixel_transfer;
+pub mod subprocess_rhi;
 pub mod texture;
 pub mod texture_pool_macos;
 pub mod videotoolbox;
@@ -27,6 +28,7 @@ pub mod time;
 
 pub mod thread_priority;
 
+pub use crate::metal::rhi::pixel_buffer_blit::blit_pixel_buffer;
 pub use crate::metal::MetalDevice;
 pub use pixel_transfer::PixelTransferSession;
 
