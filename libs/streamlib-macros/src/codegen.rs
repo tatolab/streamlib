@@ -681,11 +681,21 @@ fn generate_add_link_output_data_writer(analysis: &AnalysisResult) -> TokenStrea
 
             quote! {
                 #port_name => {
-                    if let Ok(wrapper) = data_writer.downcast::<::streamlib::core::compiler::wiring::LinkOutputDataWriterWrapper<#msg_type>>() {
-                        let _ = #add_data_writer;
-                        return Ok(());
+                    // Schema-name-based validation for cross-dylib compatibility
+                    let expected_schema = <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name();
+                    if schema_name != expected_schema {
+                        return Err(::streamlib::core::StreamError::PortError(format!(
+                            "Schema mismatch for output port '{}': expected '{}', got '{}'",
+                            #port_name, expected_schema, schema_name
+                        )));
                     }
-                    Err(::streamlib::core::StreamError::PortError(format!("Type mismatch for output port '{}'", #port_name)))
+                    // SAFETY: We've validated schema_name matches, so the struct layout is identical
+                    // even if TypeId differs across dylib boundaries.
+                    let wrapper = unsafe {
+                        Box::from_raw(Box::into_raw(data_writer) as *mut ::streamlib::core::compiler::wiring::LinkOutputDataWriterWrapper<#msg_type>)
+                    };
+                    let _ = #add_data_writer;
+                    return Ok(());
                 }
             }
         })
@@ -696,7 +706,7 @@ fn generate_add_link_output_data_writer(analysis: &AnalysisResult) -> TokenStrea
     }
 
     quote! {
-        fn add_link_output_data_writer(&mut self, port_name: &str, data_writer: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
+        fn add_link_output_data_writer(&mut self, port_name: &str, schema_name: &str, data_writer: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Output port '{}' not found", port_name)))
@@ -723,11 +733,21 @@ fn generate_add_link_input_data_reader(analysis: &AnalysisResult) -> TokenStream
 
             quote! {
                 #port_name => {
-                    if let Ok(wrapper) = data_reader.downcast::<::streamlib::core::compiler::wiring::LinkInputDataReaderWrapper<#msg_type>>() {
-                        let _ = #add_data_reader;
-                        return Ok(());
+                    // Schema-name-based validation for cross-dylib compatibility
+                    let expected_schema = <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name();
+                    if schema_name != expected_schema {
+                        return Err(::streamlib::core::StreamError::PortError(format!(
+                            "Schema mismatch for input port '{}': expected '{}', got '{}'",
+                            #port_name, expected_schema, schema_name
+                        )));
                     }
-                    Err(::streamlib::core::StreamError::PortError(format!("Type mismatch for input port '{}'", #port_name)))
+                    // SAFETY: We've validated schema_name matches, so the struct layout is identical
+                    // even if TypeId differs across dylib boundaries.
+                    let wrapper = unsafe {
+                        Box::from_raw(Box::into_raw(data_reader) as *mut ::streamlib::core::compiler::wiring::LinkInputDataReaderWrapper<#msg_type>)
+                    };
+                    let _ = #add_data_reader;
+                    return Ok(());
                 }
             }
         })
@@ -738,7 +758,7 @@ fn generate_add_link_input_data_reader(analysis: &AnalysisResult) -> TokenStream
     }
 
     quote! {
-        fn add_link_input_data_reader(&mut self, port_name: &str, data_reader: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
+        fn add_link_input_data_reader(&mut self, port_name: &str, schema_name: &str, data_reader: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
             match port_name {
                 #(#arms,)*
                 _ => Err(::streamlib::core::StreamError::PortError(format!("Input port '{}' not found", port_name)))
