@@ -67,6 +67,20 @@ uninstall() {
     success "Uninstalled"
 }
 
+# Install CLI
+install_cli() {
+    local cli_binary="${REPO_ROOT}/target/release/streamlib"
+    local bin_dir="${STREAMLIB_HOME}/bin"
+
+    info "Installing streamlib CLI..."
+
+    mkdir -p "$bin_dir"
+    cp "$cli_binary" "$bin_dir/streamlib"
+    chmod 755 "$bin_dir/streamlib"
+
+    success "Installed CLI to ${bin_dir}/streamlib"
+}
+
 # Install broker
 install_broker() {
     local broker_binary="${REPO_ROOT}/target/release/streamlib-broker"
@@ -91,7 +105,7 @@ install_broker() {
     # Create symlink
     ln -sf "$version_dir/streamlib-broker" "$bin_dir/streamlib-broker"
 
-    success "Installed to ${version_dir}"
+    success "Installed broker to ${version_dir}"
 }
 
 # Generate and install launchd plist
@@ -198,7 +212,7 @@ EOF
 verify() {
     info "Verifying installation..."
 
-    local cli="${REPO_ROOT}/target/release/streamlib"
+    local cli="${STREAMLIB_HOME}/bin/streamlib"
 
     if "$cli" broker status &>/dev/null; then
         success "Broker is healthy!"
@@ -207,6 +221,10 @@ verify() {
     else
         warn "Broker status check failed. Check /tmp/streamlib-broker.log"
     fi
+
+    echo ""
+    info "Installed binaries:"
+    ls -la "${STREAMLIB_HOME}/bin/"
 }
 
 # Main
@@ -225,6 +243,7 @@ main() {
     fi
 
     build
+    install_cli
     install_broker
     install_plist
     start_broker
