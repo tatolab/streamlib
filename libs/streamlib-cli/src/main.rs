@@ -70,6 +70,13 @@ enum Commands {
         #[arg(long, default_value = "pretty")]
         format: String,
     },
+
+    /// XPC broker diagnostics (macOS only)
+    #[cfg(target_os = "macos")]
+    Broker {
+        #[command(subcommand)]
+        action: BrokerCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -79,6 +86,30 @@ enum ListCommands {
 
     /// List all available schemas
     Schemas,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Subcommand)]
+enum BrokerCommands {
+    /// Show broker health and version status
+    Status,
+
+    /// List registered runtimes
+    Runtimes,
+
+    /// List registered processors
+    Processors {
+        /// Filter by runtime ID
+        #[arg(long)]
+        runtime: Option<String>,
+    },
+
+    /// List active connections
+    Connections {
+        /// Filter by runtime ID
+        #[arg(long)]
+        runtime: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -103,6 +134,17 @@ async fn main() -> Result<()> {
         Some(Commands::Graph { url, format }) => {
             commands::inspect::graph(&url, &format).await?;
         }
+        #[cfg(target_os = "macos")]
+        Some(Commands::Broker { action }) => match action {
+            BrokerCommands::Status => commands::broker::status().await?,
+            BrokerCommands::Runtimes => commands::broker::runtimes().await?,
+            BrokerCommands::Processors { runtime } => {
+                commands::broker::processors(runtime.as_deref()).await?
+            }
+            BrokerCommands::Connections { runtime } => {
+                commands::broker::connections(runtime.as_deref()).await?
+            }
+        },
         // No subcommand: start runtime (default behavior)
         None => {
             commands::serve::run(

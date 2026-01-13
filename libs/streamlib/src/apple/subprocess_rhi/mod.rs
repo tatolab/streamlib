@@ -20,7 +20,7 @@
 mod block_helpers;
 mod broker_grpc_service;
 mod broker_state;
-pub(crate) mod proto;
+pub mod proto;
 mod xpc_broker;
 mod xpc_channel;
 mod xpc_frame_transport;
@@ -53,7 +53,7 @@ fn check_and_run_broker() {
 }
 
 /// Default gRPC port for broker diagnostics.
-const GRPC_PORT: u16 = 50051;
+pub const GRPC_PORT: u16 = 50051;
 
 /// Run the XPC broker service.
 ///
