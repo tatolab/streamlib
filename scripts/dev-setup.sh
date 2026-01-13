@@ -15,9 +15,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 STREAMLIB_HOME="${REPO_ROOT}/.streamlib"
 BROKER_PORT=50052
-PROJECT_ID="dev-$(basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')"
-SERVICE_NAME="com.tatolab.streamlib.broker.${PROJECT_ID}"
-LOG_FILE="/tmp/streamlib-broker-${PROJECT_ID}.log"
+
+# Generate short hash from full path (supports multiple worktrees)
+PATH_HASH="$(echo -n "$REPO_ROOT" | shasum | cut -c1-6)"
+SERVICE_LABEL="Streamlib-dev-${PATH_HASH}"
+SERVICE_NAME="com.tatolab.streamlib.broker.dev-${PATH_HASH}"
+LOG_FILE="/tmp/streamlib-broker-dev-${PATH_HASH}.log"
 
 # Colors
 RED='\033[0;31m'
@@ -53,7 +56,7 @@ uninstall() {
 
     info "Stopping broker service..."
     local domain="gui/$(id -u)"
-    launchctl bootout "$domain/${SERVICE_NAME}" 2>/dev/null || true
+    launchctl bootout "$domain/${SERVICE_LABEL}" 2>/dev/null || true
     info "Removing launchd plist..."
     rm -f "${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
     info "Removing .streamlib directory..."
@@ -127,7 +130,7 @@ install_plist() {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${SERVICE_NAME}</string>
+    <string>${SERVICE_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
         <string>${broker_path}</string>
@@ -164,7 +167,7 @@ start_broker() {
     sleep 5
 
     # Verify
-    if launchctl list "$SERVICE_NAME" &>/dev/null; then
+    if launchctl list "$SERVICE_LABEL" &>/dev/null; then
         success "Broker service started"
     else
         warn "Broker may not have started. Check: $LOG_FILE"
@@ -204,7 +207,8 @@ verify() {
     info "Dev environment:"
     echo "  Location:     ${STREAMLIB_HOME}"
     echo "  Broker port:  ${BROKER_PORT}"
-    echo "  Service:      ${SERVICE_NAME}"
+    echo "  Service:      ${SERVICE_LABEL}"
+    echo "  Path hash:    ${PATH_HASH}"
     echo "  Log file:     ${LOG_FILE}"
     echo ""
     info "Proxy scripts:"
