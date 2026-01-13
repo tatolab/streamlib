@@ -14,7 +14,7 @@ use streamlib::GlContext;
 /// StreamLib's GPU textures. The context is owned by StreamLib's runtime
 /// and shared with Python code.
 ///
-/// Access via `ctx.gpu._experimental_gl_context()`.
+/// Access via `ctx.gpu.gl_context()`.
 #[pyclass(name = "GlContext")]
 pub struct PyGlContext {
     /// Shared GL context (wrapped in Arc for Python's reference counting)
@@ -44,6 +44,24 @@ impl Clone for PyGlContext {
 
 #[pymethods]
 impl PyGlContext {
+    /// Create a new OpenGL context for GPU interop.
+    ///
+    /// This creates a platform-appropriate OpenGL context that can share
+    /// GPU memory with the native graphics API (Metal on macOS).
+    ///
+    /// Example:
+    ///     gl_ctx = GlContext()
+    ///     gl_ctx.make_current()
+    ///     skia_ctx = skia.GrDirectContext.MakeGL()
+    #[new]
+    fn py_new() -> PyResult<Self> {
+        let inner = GlContext::new()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        Ok(Self {
+            inner: Arc::new(parking_lot::Mutex::new(inner)),
+        })
+    }
+
     /// Make this OpenGL context current on the calling thread.
     ///
     /// Must be called before any OpenGL operations, including:
@@ -53,7 +71,7 @@ impl PyGlContext {
     /// - Any Skia drawing operations
     ///
     /// Example:
-    ///     gl_ctx = ctx.gpu._experimental_gl_context()
+    ///     gl_ctx = ctx.gpu.gl_context()
     ///     gl_ctx.make_current()
     ///     skia_ctx = skia.GrDirectContext.MakeGL()
     fn make_current(&self) -> PyResult<()> {
@@ -135,7 +153,7 @@ impl PyGlContext {
     }
 
     fn __repr__(&self) -> String {
-        "GlContext(experimental)".to_string()
+        "GlContext()".to_string()
     }
 }
 

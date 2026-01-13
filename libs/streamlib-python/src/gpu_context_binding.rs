@@ -145,7 +145,7 @@ impl PyGpuContext {
         Ok(PyRhiPixelBuffer::new(buffer))
     }
 
-    /// Get the OpenGL context for GPU interop (experimental).
+    /// Get the OpenGL context for GPU interop.
     ///
     /// This provides access to StreamLib's OpenGL context for use with
     /// libraries like skia-python that require OpenGL.
@@ -153,12 +153,10 @@ impl PyGpuContext {
     /// The context is created lazily on first access and cached for reuse.
     ///
     /// Example:
-    ///     gl_ctx = ctx.gpu._experimental_gl_context()
+    ///     gl_ctx = ctx.gpu.gl_context()
     ///     gl_ctx.make_current()
     ///     skia_ctx = skia.GrDirectContext.MakeGL()
-    ///
-    /// Note: This is an experimental API and may change in future versions.
-    fn _experimental_gl_context(&mut self) -> PyResult<PyGlContext> {
+    fn gl_context(&mut self) -> PyResult<PyGlContext> {
         if let Some(ref gl_ctx) = self.gl_context {
             return Ok(gl_ctx.clone());
         }

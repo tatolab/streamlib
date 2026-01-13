@@ -11,7 +11,22 @@ use pyo3::types::{PyDict, PyList, PyModule};
 use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use parking_lot::Mutex;
+
+/// Global lock to serialize pybind11 library initialization.
+///
+/// pybind11 libraries (like skia-python, numpy) use static `call_once` for
+/// initialization. When multiple processor threads race to initialize these
+/// libraries simultaneously, there's a GIL race condition that can crash
+/// in `take_gil`. This lock ensures only one thread at a time can be in
+/// the critical initialization phase.
+static PYBIND11_INIT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Flag indicating pybind11 libraries have been initialized.
+static PYBIND11_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 use streamlib::{
     core::links::LinkBufferReadMode,
@@ -811,6 +826,26 @@ impl PythonProcessorCore {
 
         tracing::trace!("[{}] process() ENTER", processor_name);
 
+        // Serialize pybind11 initialization across all processor threads.
+        // Libraries like skia-python use std::call_once for static init, and
+        // multiple threads racing to initialize can crash in take_gil.
+        // Once initialized, this becomes a no-op (just an atomic load).
+        let _init_guard = if !PYBIND11_INITIALIZED.load(Ordering::Acquire) {
+            let guard = PYBIND11_INIT_LOCK.lock();
+            // Double-check after acquiring lock
+            if !PYBIND11_INITIALIZED.load(Ordering::Acquire) {
+                tracing::debug!(
+                    "[{}] First Python call - holding init lock for pybind11 serialization",
+                    processor_name
+                );
+                Some(guard)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Python::attach(|py| {
                 let instance = self.py_instance.as_ref().ok_or_else(|| {
@@ -878,6 +913,15 @@ impl PythonProcessorCore {
 
         match result {
             Ok(inner_result) => {
+                // Mark pybind11 as initialized after first successful call.
+                // This releases the init lock for future calls from other threads.
+                if !PYBIND11_INITIALIZED.load(Ordering::Relaxed) {
+                    PYBIND11_INITIALIZED.store(true, Ordering::Release);
+                    tracing::debug!(
+                        "[{}] pybind11 initialization complete, releasing lock",
+                        processor_name
+                    );
+                }
                 tracing::trace!("[{}] process() EXIT", processor_name);
                 inner_result
             }
