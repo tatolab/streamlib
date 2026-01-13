@@ -201,7 +201,7 @@ class CyberpunkProcessor:
         self._gpu_ctx = ctx.gpu
 
         # Get StreamLib's GL context
-        self.gl_ctx = ctx.gpu._experimental_gl_context()
+        self.gl_ctx = ctx.gpu.gl_context()
         self.gl_ctx.make_current()
 
         # Create Skia GPU context
@@ -271,8 +271,8 @@ class CyberpunkProcessor:
         if frame is None:
             return
 
-        # Get pixel buffer from frame (buffer-centric API)
-        input_buffer = frame["pixel_buffer"]
+        # In subprocess mode, frame IS the PixelBuffer directly
+        input_buffer = frame
         width = input_buffer.width
         height = input_buffer.height
 
@@ -329,12 +329,8 @@ class CyberpunkProcessor:
         self.output_surface.flushAndSubmit()
         self.gl_ctx.flush()
 
-        # Output the processed frame with pixel buffer
-        ctx.output("video_out").set({
-            "pixel_buffer": self.output_buffer,
-            "timestamp_ns": frame["timestamp_ns"],
-            "frame_number": frame["frame_number"],
-        })
+        # Output the processed frame - in subprocess mode, output PixelBuffer directly
+        ctx.output("video_out").set(self.output_buffer)
 
         # Log periodically and purge Skia caches to prevent memory growth
         self.frame_count += 1

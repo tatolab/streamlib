@@ -1,0 +1,36 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "camera-python-display-processors"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+publish = false
+description = "Rust processors for camera-python-display example (loaded as plugin)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+backend-vulkan = ["streamlib/backend-vulkan"]
+
+[dependencies]
+streamlib = { path = "../../../libs/streamlib" }
+streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi" }
+serde = { workspace = true }
+tracing = { workspace = true }
+parking_lot = "0.12"
+
+# Vision framework for person segmentation (macOS only)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-vision = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-video = { workspace = true }
+objc2-io-surface = { workspace = true }
+objc2-metal = { workspace = true }
+metal = "0.31"
+mach2 = "0.4"
