@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "streamlib": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/../../../target/release/streamlib",
-      "args": ["mcp", "serve"],
-      "env": {}
-    }
-  }
-}

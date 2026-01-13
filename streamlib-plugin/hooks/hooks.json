@@ -1,0 +1,17 @@
+{
+  "description": "StreamLib runtime debugging hooks",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if the conversation involved StreamLib runtime issues, broker problems, or subprocess/XPC errors (look for: 'broker not running', 'connection failed', 'XPC error', 'runtime error', 'subprocess crashed', 'gRPC error').\n\nRespond with JSON:\n- If unresolved issues exist: {\"ok\": true, \"decision\": \"block\", \"reason\": \"Run streamlib broker status or check /tmp/streamlib-broker.log\"}\n- Otherwise: {\"ok\": true, \"decision\": \"approve\"}",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -17,36 +17,39 @@ mod plugin_loader;
 #[command(name = "streamlib")]
 #[command(author, version, about = "StreamLib runtime CLI", long_about = None)]
 struct Cli {
-    /// Pipeline graph file to load (JSON)
-    #[arg(value_name = "GRAPH_FILE")]
-    graph_file: Option<PathBuf>,
-
-    /// Port for the API server (default: 9000)
-    #[arg(short, long, default_value = "9000")]
-    port: u16,
-
-    /// Host address to bind to (default: 127.0.0.1)
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-
-    /// Disable API server
-    #[arg(long)]
-    no_api: bool,
-
-    /// Plugin libraries to load (can be specified multiple times)
-    #[arg(long = "plugin", value_name = "PATH")]
-    plugins: Vec<PathBuf>,
-
-    /// Directory containing plugin libraries
-    #[arg(long = "plugin-dir", value_name = "DIR")]
-    plugin_dir: Option<PathBuf>,
-
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run the StreamLib runtime
+    Run {
+        /// Pipeline graph file to load (JSON)
+        #[arg(value_name = "GRAPH_FILE")]
+        graph_file: Option<PathBuf>,
+
+        /// Port for the API server (default: 9000)
+        #[arg(short, long, default_value = "9000")]
+        port: u16,
+
+        /// Host address to bind to (default: 127.0.0.1)
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Disable API server
+        #[arg(long)]
+        no_api: bool,
+
+        /// Plugin libraries to load (can be specified multiple times)
+        #[arg(long = "plugin", value_name = "PATH")]
+        plugins: Vec<PathBuf>,
+
+        /// Directory containing plugin libraries
+        #[arg(long = "plugin-dir", value_name = "DIR")]
+        plugin_dir: Option<PathBuf>,
+    },
+
     /// List available processors or schemas
     List {
         #[command(subcommand)]
@@ -82,13 +85,6 @@ enum Commands {
     Setup {
         #[command(subcommand)]
         action: SetupCommands,
-    },
-
-    /// MCP server for Claude Code integration (macOS only)
-    #[cfg(target_os = "macos")]
-    Mcp {
-        #[command(subcommand)]
-        action: McpCommands,
     },
 }
 
@@ -156,13 +152,6 @@ enum SetupCommands {
     },
 }
 
-#[cfg(target_os = "macos")]
-#[derive(Subcommand)]
-enum McpCommands {
-    /// Start MCP server on stdio (for Claude Code integration)
-    Serve,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -175,6 +164,16 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Commands::Run {
+            graph_file,
+            port,
+            host,
+            no_api,
+            plugins,
+            plugin_dir,
+        }) => {
+            commands::serve::run(host, port, no_api, graph_file, plugins, plugin_dir).await?;
+        }
         Some(Commands::List { what }) => match what {
             ListCommands::Processors => commands::list::processors()?,
             ListCommands::Schemas => commands::list::schemas()?,
@@ -206,21 +205,9 @@ async fn main() -> Result<()> {
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
         },
-        #[cfg(target_os = "macos")]
-        Some(Commands::Mcp { action }) => match action {
-            McpCommands::Serve => commands::mcp::serve().await?,
-        },
-        // No subcommand: start runtime (default behavior)
         None => {
-            commands::serve::run(
-                cli.host,
-                cli.port,
-                cli.no_api,
-                cli.graph_file,
-                cli.plugins,
-                cli.plugin_dir,
-            )
-            .await?;
+            // No subcommand: show help
+            Cli::parse_from(["streamlib", "--help"]);
         }
     }
 
