@@ -3,17 +3,21 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # StreamLib Developer Setup
-# Builds from source and installs the broker for local development.
+# Creates a local dev environment with proxy scripts that use cargo run.
 #
 # Usage:
-#   ./scripts/dev-setup.sh          # Build and install
+#   ./scripts/dev-setup.sh          # Setup local dev environment
 #   ./scripts/dev-setup.sh --clean  # Uninstall first, then reinstall
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-STREAMLIB_HOME="${HOME}/.streamlib"
+STREAMLIB_HOME="${REPO_ROOT}/.streamlib"
+BROKER_PORT=50052
+PROJECT_ID="dev-$(basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]-')"
+SERVICE_NAME="com.tatolab.streamlib.broker.${PROJECT_ID}"
+LOG_FILE="/tmp/streamlib-broker-${PROJECT_ID}.log"
 
 # Colors
 RED='\033[0;31m'
@@ -43,74 +47,74 @@ check_dependencies() {
     fi
 }
 
-# Build broker and CLI
-build() {
-    info "Building streamlib-broker and streamlib-cli (release)..."
-    cd "$REPO_ROOT"
-    cargo build --release -p streamlib-broker -p streamlib-cli
-    success "Build complete"
-}
-
-# Uninstall existing broker
+# Uninstall existing installation
 uninstall() {
-    info "Uninstalling existing broker..."
+    info "Uninstalling existing dev installation..."
 
-    # Stop service if running
+    info "Stopping broker service..."
     local domain="gui/$(id -u)"
-    launchctl bootout "$domain/com.tatolab.streamlib.broker" 2>/dev/null || true
-
-    # Remove files
-    rm -f "${HOME}/Library/LaunchAgents/com.tatolab.streamlib.broker.plist"
-    rm -rf "${STREAMLIB_HOME}/bin"
-    rm -rf "${STREAMLIB_HOME}/versions"
+    launchctl bootout "$domain/${SERVICE_NAME}" 2>/dev/null || true
+    info "Removing launchd plist..."
+    rm -f "${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
+    info "Removing .streamlib directory..."
+    rm -rf "${STREAMLIB_HOME}"
 
     success "Uninstalled"
 }
 
-# Install CLI
-install_cli() {
-    local cli_binary="${REPO_ROOT}/target/release/streamlib"
+# Create proxy scripts
+create_proxy_scripts() {
     local bin_dir="${STREAMLIB_HOME}/bin"
 
-    info "Installing streamlib CLI..."
+    info "Creating proxy scripts..."
 
     mkdir -p "$bin_dir"
-    cp "$cli_binary" "$bin_dir/streamlib"
+
+    # Get cargo path for launchd environment
+    local cargo_bin
+    cargo_bin="$(dirname "$(which cargo)")"
+
+    # CLI proxy script
+    cat > "$bin_dir/streamlib" << EOF
+#!/usr/bin/env bash
+# StreamLib CLI proxy - calls cargo run for dev mode
+set -euo pipefail
+
+export PATH="${cargo_bin}:\$PATH"
+SOURCE_ROOT="${REPO_ROOT}"
+BROKER_PORT=${BROKER_PORT}
+
+export STREAMLIB_HOME="${STREAMLIB_HOME}"
+export STREAMLIB_BROKER_PORT="\$BROKER_PORT"
+export STREAMLIB_DEV_MODE=1
+
+exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-cli --quiet -- "\$@"
+EOF
     chmod 755 "$bin_dir/streamlib"
+    success "Created CLI proxy: $bin_dir/streamlib"
 
-    success "Installed CLI to ${bin_dir}/streamlib"
-}
+    # Broker proxy script
+    cat > "$bin_dir/streamlib-broker" << EOF
+#!/usr/bin/env bash
+# StreamLib Broker proxy - calls cargo run for dev mode
+set -euo pipefail
 
-# Install broker
-install_broker() {
-    local broker_binary="${REPO_ROOT}/target/release/streamlib-broker"
+export PATH="${cargo_bin}:\$PATH"
+SOURCE_ROOT="${REPO_ROOT}"
+BROKER_PORT=${BROKER_PORT}
 
-    # Get version from workspace Cargo.toml
-    local version
-    version=$(grep '^version' "${REPO_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+export STREAMLIB_HOME="${STREAMLIB_HOME}"
+export STREAMLIB_DEV_MODE=1
 
-    local version_dir="${STREAMLIB_HOME}/versions/${version}"
-    local bin_dir="${STREAMLIB_HOME}/bin"
-
-    info "Installing broker v${version}..."
-
-    # Create directories
-    mkdir -p "$version_dir"
-    mkdir -p "$bin_dir"
-
-    # Copy binary
-    cp "$broker_binary" "$version_dir/streamlib-broker"
-    chmod 755 "$version_dir/streamlib-broker"
-
-    # Create symlink
-    ln -sf "$version_dir/streamlib-broker" "$bin_dir/streamlib-broker"
-
-    success "Installed broker to ${version_dir}"
+exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --quiet -- --port "\$BROKER_PORT" "\$@"
+EOF
+    chmod 755 "$bin_dir/streamlib-broker"
+    success "Created broker proxy: $bin_dir/streamlib-broker"
 }
 
 # Generate and install launchd plist
 install_plist() {
-    local plist_path="${HOME}/Library/LaunchAgents/com.tatolab.streamlib.broker.plist"
+    local plist_path="${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
     local broker_path="${STREAMLIB_HOME}/bin/streamlib-broker"
 
     info "Creating launchd plist..."
@@ -123,24 +127,21 @@ install_plist() {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.tatolab.streamlib.broker</string>
+    <string>${SERVICE_NAME}</string>
     <key>ProgramArguments</key>
     <array>
         <string>${broker_path}</string>
     </array>
-    <key>MachServices</key>
-    <dict>
-        <key>com.tatolab.streamlib.runtime</key>
-        <true/>
-    </dict>
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/streamlib-broker.log</string>
+    <string>${LOG_FILE}</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/streamlib-broker.log</string>
+    <string>${LOG_FILE}</string>
+    <key>WorkingDirectory</key>
+    <string>${REPO_ROOT}</string>
 </dict>
 </plist>
 EOF
@@ -150,7 +151,7 @@ EOF
 
 # Start broker service
 start_broker() {
-    local plist_path="${HOME}/Library/LaunchAgents/com.tatolab.streamlib.broker.plist"
+    local plist_path="${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
     local domain="gui/$(id -u)"
 
     info "Starting broker service..."
@@ -158,54 +159,16 @@ start_broker() {
     # Bootstrap the service
     launchctl bootstrap "$domain" "$plist_path" 2>/dev/null || true
 
-    # Wait for it to start
-    sleep 1
+    # Wait for it to start (cargo run takes longer)
+    info "Waiting for broker to compile and start..."
+    sleep 5
 
     # Verify
-    if launchctl list com.tatolab.streamlib.broker &>/dev/null; then
+    if launchctl list "$SERVICE_NAME" &>/dev/null; then
         success "Broker service started"
     else
-        warn "Broker may not have started. Check: /tmp/streamlib-broker.log"
+        warn "Broker may not have started. Check: $LOG_FILE"
     fi
-}
-
-# Setup shell environment
-setup_shell() {
-    local env_file="${STREAMLIB_HOME}/env"
-
-    info "Creating shell environment file..."
-
-    cat > "$env_file" << 'EOF'
-# StreamLib environment
-# Add this to your shell rc file:
-#   . "$HOME/.streamlib/env"
-
-export PATH="$HOME/.streamlib/bin:$PATH"
-EOF
-
-    success "Created ${env_file}"
-
-    # Detect shell and give instructions
-    local shell_name
-    shell_name=$(basename "$SHELL")
-    local rc_file
-
-    case "$shell_name" in
-        zsh)  rc_file="~/.zshrc" ;;
-        bash) rc_file="~/.bashrc" ;;
-        fish) rc_file="~/.config/fish/config.fish" ;;
-        *)    rc_file="your shell rc file" ;;
-    esac
-
-    echo ""
-    echo "Add this line to ${rc_file}:"
-    echo ""
-    echo "  . \"\$HOME/.streamlib/env\""
-    echo ""
-    echo "Then reload your shell or run:"
-    echo ""
-    echo "  source ${rc_file}"
-    echo ""
 }
 
 # Verify installation
@@ -214,24 +177,45 @@ verify() {
 
     local cli="${STREAMLIB_HOME}/bin/streamlib"
 
-    if "$cli" broker status &>/dev/null; then
-        success "Broker is healthy!"
+    # Give broker more time to start on first run
+    local max_attempts=10
+    local attempt=1
+
+    while [[ $attempt -le $max_attempts ]]; do
+        if "$cli" broker status &>/dev/null; then
+            success "Broker is healthy!"
+            echo ""
+            "$cli" broker status
+            break
+        fi
+        info "Waiting for broker... (attempt $attempt/$max_attempts)"
+        sleep 2
+        ((attempt++))
+    done
+
+    if [[ $attempt -gt $max_attempts ]]; then
+        warn "Broker status check failed. Check: $LOG_FILE"
         echo ""
-        "$cli" broker status
-    else
-        warn "Broker status check failed. Check /tmp/streamlib-broker.log"
+        echo "Last 20 lines of log:"
+        tail -20 "$LOG_FILE" 2>/dev/null || echo "(no log file yet)"
     fi
 
     echo ""
-    info "Installed binaries:"
+    info "Dev environment:"
+    echo "  Location:     ${STREAMLIB_HOME}"
+    echo "  Broker port:  ${BROKER_PORT}"
+    echo "  Service:      ${SERVICE_NAME}"
+    echo "  Log file:     ${LOG_FILE}"
+    echo ""
+    info "Proxy scripts:"
     ls -la "${STREAMLIB_HOME}/bin/"
 }
 
 # Main
 main() {
     echo ""
-    echo "StreamLib Developer Setup"
-    echo "========================="
+    echo "StreamLib Developer Setup (Local Dev Mode)"
+    echo "==========================================="
     echo ""
 
     check_platform
@@ -242,16 +226,16 @@ main() {
         uninstall
     fi
 
-    build
-    install_cli
-    install_broker
+    create_proxy_scripts
     install_plist
     start_broker
-    setup_shell
     verify
 
     echo ""
-    success "Setup complete!"
+    success "Dev setup complete!"
+    echo ""
+    echo "Use the plugin commands or run directly:"
+    echo "  ./.streamlib/bin/streamlib broker status"
     echo ""
 }
 

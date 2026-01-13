@@ -67,3 +67,6 @@ examples/camera-python-display/assets/
 !.claude/streamlib/
 *.log
 .rustup/
+
+# Local dev environment
+.streamlib/

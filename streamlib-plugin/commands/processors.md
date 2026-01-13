@@ -5,6 +5,6 @@ allowed-tools:
 argument-hint: "[--runtime <id>]"
 ---
 
-Run `streamlib broker processors` to list all subprocess processors.
+Run `./.streamlib/bin/streamlib broker processors` to list all subprocess processors.
 
-If the user specifies a runtime ID, use `streamlib broker processors --runtime <id>` to filter.
+If the user specifies a runtime ID, use `./.streamlib/bin/streamlib broker processors --runtime <id>` to filter.

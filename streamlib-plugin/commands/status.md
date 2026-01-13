@@ -4,6 +4,6 @@ allowed-tools:
   - Bash
 ---
 
-Run `streamlib broker status` and report the results.
+Run `./.streamlib/bin/streamlib broker status` and report the results.
 
-If the broker is not running, suggest `streamlib broker install`.
+If the broker is not running, suggest running `./scripts/dev-setup.sh`.

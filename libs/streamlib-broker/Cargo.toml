@@ -19,6 +19,9 @@ name = "streamlib_broker"
 path = "src/lib.rs"
 
 [dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
 # gRPC server
 tonic = "0.12"
 prost = "0.13"

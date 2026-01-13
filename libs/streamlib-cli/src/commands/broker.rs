@@ -320,8 +320,13 @@ pub async fn uninstall() -> Result<()> {
 }
 
 /// Get the broker gRPC endpoint.
+/// Reads from STREAMLIB_BROKER_PORT env var, falls back to default GRPC_PORT.
 fn broker_endpoint() -> String {
-    format!("http://127.0.0.1:{}", GRPC_PORT)
+    let port = std::env::var("STREAMLIB_BROKER_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(GRPC_PORT);
+    format!("http://127.0.0.1:{}", port)
 }
 
 /// Show broker health and version status.

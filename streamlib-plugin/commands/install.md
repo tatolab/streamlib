@@ -2,12 +2,12 @@
 description: Install or reinstall the broker service
 allowed-tools:
   - Bash
-argument-hint: "[--force]"
+argument-hint: "[--clean]"
 ---
 
-Install the broker service:
+Install the dev broker service:
 
-- Normal install: `streamlib broker install`
-- Force reinstall (for updates or protocol mismatch): `streamlib broker install --force`
+- Normal install: `./scripts/dev-setup.sh`
+- Clean reinstall (for updates or fixes): `./scripts/dev-setup.sh --clean`
 
-After install, verify with `streamlib broker status`.
+After install, verify with `./.streamlib/bin/streamlib broker status`.
