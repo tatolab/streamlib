@@ -18,6 +18,8 @@
 //! the broker or configure anything.
 
 mod block_helpers;
+mod broker_grpc_service;
+pub(crate) mod proto;
 mod xpc_broker;
 mod xpc_channel;
 mod xpc_frame_transport;
@@ -49,6 +51,9 @@ fn check_and_run_broker() {
     }
 }
 
+/// Default gRPC port for broker diagnostics.
+const GRPC_PORT: u16 = 50051;
+
 /// Run the XPC broker service.
 ///
 /// This function never returns - it runs the broker indefinitely.
@@ -63,6 +68,20 @@ fn run_broker_service() -> ! {
         std::process::id()
     );
 
+    // Start gRPC server in a separate thread
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime for gRPC");
+
+        rt.block_on(async {
+            if let Err(e) = start_grpc_server().await {
+                tracing::error!("[Broker] gRPC server error: {}", e);
+            }
+        });
+    });
+
     let listener = Arc::new(XpcBrokerListener::new());
 
     match listener.start_listener() {
@@ -75,4 +94,22 @@ fn run_broker_service() -> ! {
             std::process::exit(1);
         }
     }
+}
+
+/// Start the gRPC diagnostics server.
+async fn start_grpc_server() -> Result<(), Box<dyn std::error::Error>> {
+    use proto::broker_service_server::BrokerServiceServer;
+    use tonic::transport::Server;
+
+    let addr = format!("127.0.0.1:{}", GRPC_PORT).parse()?;
+    let service = broker_grpc_service::BrokerGrpcService::new();
+
+    tracing::info!("[Broker] Starting gRPC server on {}", addr);
+
+    Server::builder()
+        .add_service(BrokerServiceServer::new(service))
+        .serve(addr)
+        .await?;
+
+    Ok(())
 }
