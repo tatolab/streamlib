@@ -927,6 +927,12 @@ impl XpcBrokerListener {
                                             "[BrokerListener] Found endpoint for runtime: {}",
                                             runtime_id_str
                                         );
+                                        // Record the connection (subprocess connecting to runtime)
+                                        listener.state.record_connection(
+                                            runtime_id_str,
+                                            "", // processor_id unknown at this point
+                                            "subprocess",
+                                        );
                                         let endpoint_key = CString::new("endpoint").unwrap();
                                         xpc_dictionary_set_value(
                                             reply,
@@ -1036,6 +1042,20 @@ impl XpcBrokerListener {
                                         info!(
                                             "[BrokerListener] Found subprocess endpoint: {}",
                                             subprocess_key_str
+                                        );
+                                        // Parse subprocess_key to get runtime_id and processor_id
+                                        let parts: Vec<&str> =
+                                            subprocess_key_str.splitn(2, ':').collect();
+                                        let (runtime_id, processor_id) = if parts.len() == 2 {
+                                            (parts[0], parts[1])
+                                        } else {
+                                            (subprocess_key_str, "")
+                                        };
+                                        // Record the connection (runtime connecting to subprocess)
+                                        listener.state.record_connection(
+                                            runtime_id,
+                                            processor_id,
+                                            "runtime",
                                         );
                                         let endpoint_key = CString::new("endpoint").unwrap();
                                         xpc_dictionary_set_value(

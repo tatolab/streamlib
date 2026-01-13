@@ -61,6 +61,7 @@ impl BrokerService for BrokerGrpcService {
             .into_iter()
             .map(|r| {
                 let subprocess_count = self.state.subprocess_count_for_runtime(&r.runtime_id);
+                let connection_count = self.state.connection_count_for_runtime(&r.runtime_id);
                 RuntimeInfo {
                     runtime_id: r.runtime_id,
                     registered_at_unix_ms: r
@@ -70,7 +71,7 @@ impl BrokerService for BrokerGrpcService {
                         .try_into()
                         .unwrap_or(0),
                     processor_count: subprocess_count as i32,
-                    connection_count: 0, // M2.5 will implement connection tracking
+                    connection_count: connection_count as i32,
                 }
             })
             .collect();
@@ -111,10 +112,34 @@ impl BrokerService for BrokerGrpcService {
 
     async fn list_connections(
         &self,
-        _request: Request<ListConnectionsRequest>,
+        request: Request<ListConnectionsRequest>,
     ) -> Result<Response<ListConnectionsResponse>, Status> {
-        // M2.5: Will implement with actual connection data
-        let connections: Vec<ConnectionInfo> = vec![];
+        let runtime_id = &request.get_ref().runtime_id;
+
+        let connection_metadata = if runtime_id.is_empty() {
+            self.state.get_connections()
+        } else {
+            self.state.get_connections_for_runtime(runtime_id)
+        };
+
+        let connections: Vec<ConnectionInfo> = connection_metadata
+            .into_iter()
+            .map(|c| ConnectionInfo {
+                connection_id: c.connection_id,
+                runtime_id: c.runtime_id,
+                processor_id: c.processor_id,
+                role: c.role,
+                established_at_unix_ms: c
+                    .established_at
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(0),
+                frames_transferred: 0, // Stats reported by runtime/subprocess (future)
+                bytes_transferred: 0,  // Stats reported by runtime/subprocess (future)
+            })
+            .collect();
+
         Ok(Response::new(ListConnectionsResponse { connections }))
     }
 }

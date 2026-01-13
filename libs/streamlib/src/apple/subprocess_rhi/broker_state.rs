@@ -29,6 +29,16 @@ pub struct SubprocessMetadata {
     pub registered_at: Instant,
 }
 
+/// Metadata about an established connection.
+#[derive(Clone, Debug)]
+pub struct ConnectionMetadata {
+    pub connection_id: String,
+    pub runtime_id: String,
+    pub processor_id: String,
+    pub role: String,
+    pub established_at: Instant,
+}
+
 /// Thread-safe state for broker diagnostics.
 #[derive(Clone)]
 pub struct BrokerState {
@@ -38,7 +48,9 @@ pub struct BrokerState {
 struct BrokerStateInner {
     runtimes: RwLock<HashMap<String, RuntimeMetadata>>,
     subprocesses: RwLock<HashMap<String, SubprocessMetadata>>,
+    connections: RwLock<HashMap<String, ConnectionMetadata>>,
     started_at: Instant,
+    connection_counter: std::sync::atomic::AtomicU64,
 }
 
 impl BrokerState {
@@ -48,7 +60,9 @@ impl BrokerState {
             inner: Arc::new(BrokerStateInner {
                 runtimes: RwLock::new(HashMap::new()),
                 subprocesses: RwLock::new(HashMap::new()),
+                connections: RwLock::new(HashMap::new()),
                 started_at: Instant::now(),
+                connection_counter: std::sync::atomic::AtomicU64::new(0),
             }),
         }
     }
@@ -135,6 +149,60 @@ impl BrokerState {
             .read()
             .values()
             .filter(|s| s.runtime_id == runtime_id)
+            .count()
+    }
+
+    /// Record a connection when an endpoint is retrieved.
+    pub fn record_connection(&self, runtime_id: &str, processor_id: &str, role: &str) -> String {
+        let counter = self
+            .inner
+            .connection_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let connection_id = format!("conn-{}", counter);
+
+        let metadata = ConnectionMetadata {
+            connection_id: connection_id.clone(),
+            runtime_id: runtime_id.to_string(),
+            processor_id: processor_id.to_string(),
+            role: role.to_string(),
+            established_at: Instant::now(),
+        };
+        self.inner
+            .connections
+            .write()
+            .insert(connection_id.clone(), metadata);
+
+        connection_id
+    }
+
+    /// Remove a connection.
+    pub fn remove_connection(&self, connection_id: &str) {
+        self.inner.connections.write().remove(connection_id);
+    }
+
+    /// Get all connections.
+    pub fn get_connections(&self) -> Vec<ConnectionMetadata> {
+        self.inner.connections.read().values().cloned().collect()
+    }
+
+    /// Get connections for a specific runtime.
+    pub fn get_connections_for_runtime(&self, runtime_id: &str) -> Vec<ConnectionMetadata> {
+        self.inner
+            .connections
+            .read()
+            .values()
+            .filter(|c| c.runtime_id == runtime_id)
+            .cloned()
+            .collect()
+    }
+
+    /// Get connection count for a runtime.
+    pub fn connection_count_for_runtime(&self, runtime_id: &str) -> usize {
+        self.inner
+            .connections
+            .read()
+            .values()
+            .filter(|c| c.runtime_id == runtime_id)
             .count()
     }
 }
