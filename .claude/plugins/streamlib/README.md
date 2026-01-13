@@ -4,19 +4,7 @@ This plugin provides Claude Code with native access to StreamLib broker manageme
 
 ## Installation
 
-### Option 1: Symlink (Recommended for Development)
-
-```bash
-# From repo root
-mkdir -p ~/.claude/plugins
-ln -sf "$(pwd)/tools/claude-plugin" ~/.claude/plugins/streamlib
-```
-
-### Option 2: Copy to Claude Plugins Directory
-
-```bash
-cp -r tools/claude-plugin ~/.claude/plugins/streamlib
-```
+This plugin is located in `.claude/plugins/streamlib/` and is automatically discovered by Claude Code when working in the StreamLib repository. No manual installation required.
 
 ## Prerequisites
 
