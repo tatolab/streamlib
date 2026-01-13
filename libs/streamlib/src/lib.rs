@@ -182,8 +182,6 @@ pub(crate) mod apple;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    // GPU pixel buffer operations
-    blit_pixel_buffer,
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
     AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,

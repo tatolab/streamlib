@@ -28,7 +28,6 @@ pub mod time;
 
 pub mod thread_priority;
 
-pub use crate::metal::rhi::pixel_buffer_blit::blit_pixel_buffer;
 pub use crate::metal::MetalDevice;
 pub use pixel_transfer::PixelTransferSession;
 

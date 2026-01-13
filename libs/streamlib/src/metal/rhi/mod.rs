@@ -11,7 +11,6 @@ mod metal_command_buffer;
 mod metal_command_queue;
 mod metal_device;
 mod metal_texture;
-pub mod pixel_buffer_blit;
 pub mod pixel_buffer_pool;
 pub mod pixel_buffer_ref;
 mod pixel_format;
