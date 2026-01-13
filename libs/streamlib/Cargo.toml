@@ -115,6 +115,8 @@ opus = "0.3"  # Opus audio codec encoder/decoder
 xpc-bindgen = "26.0"  # XPC bindings for bidirectional cross-process IPC
 launchd = "0.3"  # Launchd plist generation for broker service
 ctor = "0.4"  # Global constructor for automatic broker mode detection
+tonic = "0.12"  # gRPC server for broker diagnostics control plane
+prost = "0.13"  # Protocol Buffers for gRPC message types
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -126,6 +128,11 @@ hound = "3.5"  # WAV file writing for examples
 rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for config tests
+
+# Build dependencies for protobuf compilation (broker gRPC)
+[target.'cfg(target_os = "macos")'.build-dependencies]
+tonic-build = "0.12"
+prost-build = "0.13"
 
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features
