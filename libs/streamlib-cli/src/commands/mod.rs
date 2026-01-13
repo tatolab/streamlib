@@ -5,5 +5,7 @@
 pub mod broker;
 pub mod inspect;
 pub mod list;
+#[cfg(target_os = "macos")]
+pub mod mcp;
 pub mod serve;
 pub mod setup;

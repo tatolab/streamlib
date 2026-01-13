@@ -83,6 +83,13 @@ enum Commands {
         #[command(subcommand)]
         action: SetupCommands,
     },
+
+    /// MCP server for Claude Code integration (macOS only)
+    #[cfg(target_os = "macos")]
+    Mcp {
+        #[command(subcommand)]
+        action: McpCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -149,6 +156,13 @@ enum SetupCommands {
     },
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Start MCP server on stdio (for Claude Code integration)
+    Serve,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -191,6 +205,10 @@ async fn main() -> Result<()> {
         },
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
+        },
+        #[cfg(target_os = "macos")]
+        Some(Commands::Mcp { action }) => match action {
+            McpCommands::Serve => commands::mcp::serve().await?,
         },
         // No subcommand: start runtime (default behavior)
         None => {
