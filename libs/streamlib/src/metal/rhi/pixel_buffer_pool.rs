@@ -194,8 +194,19 @@ fn create_pool_on_main_thread(
     // Build pixel buffer attributes dictionary using core_foundation crate
     // This ensures proper CF object handling and uses the correct objc2 key constants
     let pixel_buffer_attrs = unsafe {
-        // Create empty dictionary for IOSurface properties (enables GPU interop)
-        let io_surface_props: CFMutableDictionary<CFString, CFTypeRef> = CFMutableDictionary::new();
+        // Create IOSurface properties dictionary with kIOSurfaceIsGlobal = true
+        // This allows the IOSurface to be looked up by ID from another process.
+        // Note: kIOSurfaceIsGlobal is deprecated in macOS 10.11, but still works for
+        // cross-process sharing. The modern alternative is mach port passing.
+        let mut io_surface_props: CFMutableDictionary<CFString, CFTypeRef> =
+            CFMutableDictionary::new();
+
+        // Add kIOSurfaceIsGlobal = true for cross-process visibility
+        let is_global_key = CFString::wrap_under_get_rule(
+            crate::apple::corevideo_ffi::kIOSurfaceIsGlobal as *const _ as *const _,
+        );
+        io_surface_props.set(is_global_key, CFBoolean::true_value().as_CFTypeRef());
+        tracing::debug!("CVPixelBufferPool: Enabled kIOSurfaceIsGlobal for cross-process sharing");
 
         // Build attributes dictionary
         let mut attrs: CFMutableDictionary<CFString, CFTypeRef> = CFMutableDictionary::new();
