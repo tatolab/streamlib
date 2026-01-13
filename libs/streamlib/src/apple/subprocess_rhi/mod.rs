@@ -19,6 +19,7 @@
 
 mod block_helpers;
 mod broker_grpc_service;
+mod broker_state;
 pub(crate) mod proto;
 mod xpc_broker;
 mod xpc_channel;
@@ -68,21 +69,25 @@ fn run_broker_service() -> ! {
         std::process::id()
     );
 
+    // Create shared state for diagnostics
+    let state = broker_state::BrokerState::new();
+
     // Start gRPC server in a separate thread
-    std::thread::spawn(|| {
+    let grpc_state = state.clone();
+    std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("Failed to create tokio runtime for gRPC");
 
         rt.block_on(async {
-            if let Err(e) = start_grpc_server().await {
+            if let Err(e) = start_grpc_server(grpc_state).await {
                 tracing::error!("[Broker] gRPC server error: {}", e);
             }
         });
     });
 
-    let listener = Arc::new(XpcBrokerListener::new());
+    let listener = Arc::new(XpcBrokerListener::new(state));
 
     match listener.start_listener() {
         Ok(()) => {
@@ -97,12 +102,14 @@ fn run_broker_service() -> ! {
 }
 
 /// Start the gRPC diagnostics server.
-async fn start_grpc_server() -> Result<(), Box<dyn std::error::Error>> {
+async fn start_grpc_server(
+    state: broker_state::BrokerState,
+) -> Result<(), Box<dyn std::error::Error>> {
     use proto::broker_service_server::BrokerServiceServer;
     use tonic::transport::Server;
 
     let addr = format!("127.0.0.1:{}", GRPC_PORT).parse()?;
-    let service = broker_grpc_service::BrokerGrpcService::new();
+    let service = broker_grpc_service::BrokerGrpcService::new(state);
 
     tracing::info!("[Broker] Starting gRPC server on {}", addr);
 

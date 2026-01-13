@@ -673,14 +673,17 @@ pub struct XpcBrokerListener {
     /// Registered subprocess endpoints (subprocess-listener pattern).
     /// Key is "runtime_id:processor_id" to allow multiple subprocesses per runtime.
     registered_subprocesses: Arc<RwLock<HashMap<String, xpc_object_t>>>,
+    /// Shared state for diagnostics (gRPC).
+    state: super::broker_state::BrokerState,
 }
 
 impl XpcBrokerListener {
-    /// Create a new broker listener.
-    pub fn new() -> Self {
+    /// Create a new broker listener with shared diagnostics state.
+    pub fn new(state: super::broker_state::BrokerState) -> Self {
         Self {
             registered_runtimes: Arc::new(RwLock::new(HashMap::new())),
             registered_subprocesses: Arc::new(RwLock::new(HashMap::new())),
+            state,
         }
     }
 
@@ -692,6 +695,7 @@ impl XpcBrokerListener {
         self.registered_runtimes
             .write()
             .insert(runtime_id.to_string(), endpoint);
+        self.state.register_runtime(runtime_id);
         info!("[BrokerListener] Registered runtime: {}", runtime_id);
     }
 
@@ -711,6 +715,7 @@ impl XpcBrokerListener {
             unsafe {
                 xpc_release(endpoint);
             }
+            self.state.unregister_runtime(runtime_id);
             info!("[BrokerListener] Unregistered runtime: {}", runtime_id);
         }
     }
@@ -725,6 +730,7 @@ impl XpcBrokerListener {
         self.registered_subprocesses
             .write()
             .insert(subprocess_key.to_string(), endpoint);
+        self.state.register_subprocess(subprocess_key);
         info!("[BrokerListener] Registered subprocess: {}", subprocess_key);
     }
 
@@ -748,6 +754,7 @@ impl XpcBrokerListener {
             unsafe {
                 xpc_release(endpoint);
             }
+            self.state.unregister_subprocess(subprocess_key);
             info!(
                 "[BrokerListener] Unregistered subprocess: {}",
                 subprocess_key

@@ -3,10 +3,9 @@
 
 //! gRPC service implementation for broker diagnostics.
 
-use std::time::Instant;
-
 use tonic::{Request, Response, Status};
 
+use super::broker_state::BrokerState;
 use super::proto::broker_service_server::BrokerService;
 use super::proto::{
     ConnectionInfo, GetHealthRequest, GetHealthResponse, GetVersionRequest, GetVersionResponse,
@@ -16,16 +15,13 @@ use super::proto::{
 
 /// gRPC service for broker diagnostics.
 pub struct BrokerGrpcService {
-    /// Broker start time for uptime calculation.
-    started_at: Instant,
+    state: BrokerState,
 }
 
 impl BrokerGrpcService {
-    /// Create a new gRPC service.
-    pub fn new() -> Self {
-        Self {
-            started_at: Instant::now(),
-        }
+    /// Create a new gRPC service with shared state.
+    pub fn new(state: BrokerState) -> Self {
+        Self { state }
     }
 }
 
@@ -35,7 +31,7 @@ impl BrokerService for BrokerGrpcService {
         &self,
         _request: Request<GetHealthRequest>,
     ) -> Result<Response<GetHealthResponse>, Status> {
-        let uptime = self.started_at.elapsed().as_secs() as i64;
+        let uptime = self.state.uptime_secs();
 
         Ok(Response::new(GetHealthResponse {
             healthy: true,
@@ -59,17 +55,57 @@ impl BrokerService for BrokerGrpcService {
         &self,
         _request: Request<ListRuntimesRequest>,
     ) -> Result<Response<ListRuntimesResponse>, Status> {
-        // M2.4: Will implement with actual runtime data
-        let runtimes: Vec<RuntimeInfo> = vec![];
+        let runtimes: Vec<RuntimeInfo> = self
+            .state
+            .get_runtimes()
+            .into_iter()
+            .map(|r| {
+                let subprocess_count = self.state.subprocess_count_for_runtime(&r.runtime_id);
+                RuntimeInfo {
+                    runtime_id: r.runtime_id,
+                    registered_at_unix_ms: r
+                        .registered_at
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(0),
+                    processor_count: subprocess_count as i32,
+                    connection_count: 0, // M2.5 will implement connection tracking
+                }
+            })
+            .collect();
+
         Ok(Response::new(ListRuntimesResponse { runtimes }))
     }
 
     async fn list_processors(
         &self,
-        _request: Request<ListProcessorsRequest>,
+        request: Request<ListProcessorsRequest>,
     ) -> Result<Response<ListProcessorsResponse>, Status> {
-        // M2.4: Will implement with actual processor data
-        let processors: Vec<ProcessorInfo> = vec![];
+        let runtime_id = &request.get_ref().runtime_id;
+
+        let subprocesses = if runtime_id.is_empty() {
+            self.state.get_subprocesses()
+        } else {
+            self.state.get_subprocesses_for_runtime(runtime_id)
+        };
+
+        let processors: Vec<ProcessorInfo> = subprocesses
+            .into_iter()
+            .map(|s| ProcessorInfo {
+                runtime_id: s.runtime_id,
+                processor_id: s.processor_id,
+                processor_type: "SubprocessProcessor".to_string(), // Generic type for now
+                registered_at_unix_ms: s
+                    .registered_at
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(0),
+                bridge_state: "connected".to_string(), // Assume connected if registered
+            })
+            .collect();
+
         Ok(Response::new(ListProcessorsResponse { processors }))
     }
 
