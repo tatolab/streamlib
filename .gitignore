@@ -61,3 +61,8 @@ examples/camera-display/no_window_camera.log
 
 # Example assets (user-specific)
 examples/camera-python-display/assets/
+
+# Claude Code project files
+.claude/
+*.log
+.rustup/
