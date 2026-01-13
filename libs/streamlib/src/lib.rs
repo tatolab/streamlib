@@ -182,6 +182,8 @@ pub(crate) mod apple;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
+    // GPU pixel buffer operations
+    blit_pixel_buffer,
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
     AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
@@ -191,6 +193,10 @@ pub use apple::{
     // VideoToolbox encoder (config types are in core::codec):
     VideoToolboxEncoder,
 };
+
+// Subprocess RHI for cross-process frame sharing (internal SPI)
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use apple::subprocess_rhi::{XpcBroker, XpcChannel, XpcFrameTransport, BROKER_SERVICE_NAME};
 
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};

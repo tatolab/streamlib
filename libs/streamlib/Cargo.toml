@@ -52,6 +52,7 @@ dirs = "6.0"   # Cross-platform home directory resolution
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+toml.workspace = true
 schemars = "0.8"  # JSON Schema generation from Rust types
 
 # CLAP audio plugin hosting
@@ -111,6 +112,9 @@ pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 mach2 = "0.4"  # Mach kernel API for thread priorities and timing
 opus = "0.3"  # Opus audio codec encoder/decoder
+xpc-bindgen = "26.0"  # XPC bindings for bidirectional cross-process IPC
+launchd = "0.3"  # Launchd plist generation for broker service
+ctor = "0.4"  # Global constructor for automatic broker mode detection
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -121,11 +125,18 @@ tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
+tempfile = "3.14"  # Temporary directories for config tests
 
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features
 all-features = true
 targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+# XPC Broker binary for macOS subprocess RHI
+# This binary is auto-installed as a launchd service for cross-process GPU sharing
+[[bin]]
+name = "streamlib-broker"
+path = "src/bin/streamlib-broker.rs"
 
 # MCP Server Binary removed - needs redesign for Phase 1
 # [[bin]]

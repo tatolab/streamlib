@@ -59,12 +59,14 @@ pub trait DynGeneratedProcessor: Send + 'static {
     fn add_link_output_data_writer(
         &mut self,
         port_name: &str,
+        schema_name: &str,
         data_writer: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()>;
 
     fn add_link_input_data_reader(
         &mut self,
         port_name: &str,
+        schema_name: &str,
         data_reader: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()>;
 
@@ -163,17 +165,29 @@ where
     fn add_link_output_data_writer(
         &mut self,
         port_name: &str,
+        schema_name: &str,
         data_writer: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()> {
-        <Self as GeneratedProcessor>::add_link_output_data_writer(self, port_name, data_writer)
+        <Self as GeneratedProcessor>::add_link_output_data_writer(
+            self,
+            port_name,
+            schema_name,
+            data_writer,
+        )
     }
 
     fn add_link_input_data_reader(
         &mut self,
         port_name: &str,
+        schema_name: &str,
         data_reader: Box<dyn std::any::Any + Send>,
     ) -> crate::core::Result<()> {
-        <Self as GeneratedProcessor>::add_link_input_data_reader(self, port_name, data_reader)
+        <Self as GeneratedProcessor>::add_link_input_data_reader(
+            self,
+            port_name,
+            schema_name,
+            data_reader,
+        )
     }
 
     fn remove_link_output_data_writer(

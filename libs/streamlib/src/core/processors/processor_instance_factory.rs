@@ -27,11 +27,15 @@ pub mod macro_codegen {
     inventory::collect!(FactoryRegistration);
 }
 
-mod private {
-    use super::{ProcessorInstance, ProcessorNode, Result};
+/// Factory function signature for creating processor instances.
+///
+/// Used by `register_dynamic()` for runtime processor registration from plugins.
+pub type DynamicProcessorConstructorFn =
+    Box<dyn Fn(&ProcessorNode) -> Result<ProcessorInstance> + Send + Sync>;
 
-    /// Factory function signature for creating processors.
-    pub type ConstructorFn = Box<dyn Fn(&ProcessorNode) -> Result<ProcessorInstance> + Send + Sync>;
+mod private {
+    /// Factory function signature for creating processors (internal alias).
+    pub type ConstructorFn = super::DynamicProcessorConstructorFn;
 }
 
 /// Result of processor registration.
@@ -172,6 +176,80 @@ impl ProcessorInstanceFactory {
                 processor_type: type_name,
             }),
         );
+    }
+
+    /// Register a processor dynamically at runtime (for plugins).
+    ///
+    /// Unlike `register<P>()` which requires compile-time knowledge of the processor type,
+    /// this method accepts pre-built descriptor and constructor for runtime registration.
+    ///
+    /// # Arguments
+    /// * `descriptor` - Processor metadata including name, ports, and config schema
+    /// * `constructor` - Factory function that creates processor instances
+    ///
+    /// # Returns
+    /// Error if a processor with the same name is already registered.
+    pub fn register_dynamic(
+        &self,
+        descriptor: ProcessorDescriptor,
+        constructor: private::ConstructorFn,
+    ) -> Result<()> {
+        let type_name = descriptor.name.clone();
+
+        // Check for duplicate registration
+        if self.constructors.read().contains_key(&type_name) {
+            return Err(StreamError::Configuration(format!(
+                "Processor '{}' already registered",
+                type_name
+            )));
+        }
+
+        // Build port info from descriptor
+        let inputs: Vec<PortInfo> = descriptor
+            .inputs
+            .iter()
+            .map(|p| PortInfo {
+                name: p.name.clone(),
+                data_type: p.schema.clone(),
+                port_kind: Default::default(),
+            })
+            .collect();
+
+        let outputs: Vec<PortInfo> = descriptor
+            .outputs
+            .iter()
+            .map(|p| PortInfo {
+                name: p.name.clone(),
+                data_type: p.schema.clone(),
+                port_kind: Default::default(),
+            })
+            .collect();
+
+        self.port_info
+            .write()
+            .insert(type_name.clone(), (inputs, outputs));
+
+        self.descriptors
+            .write()
+            .insert(type_name.clone(), descriptor);
+
+        self.constructors
+            .write()
+            .insert(type_name.clone(), constructor);
+
+        tracing::info!(
+            "[register_dynamic] new processor type registered '{}'",
+            type_name
+        );
+
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
+                processor_type: type_name,
+            }),
+        );
+
+        Ok(())
     }
 
     pub fn can_create(&self, processor_type: &str) -> bool {

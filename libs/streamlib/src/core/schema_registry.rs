@@ -49,9 +49,10 @@ impl StaticSchemaField {
 /// Factory trait for creating typed link instances from schema.
 pub trait SchemaLinkFactory: Send + Sync {
     /// Create a link instance with the given capacity and link ID.
-    /// Returns pre-wrapped data writers/readers that include the link ID.
+    /// Returns pre-wrapped data writers/readers that include the link ID and schema name.
     fn create_link_instance(
         &self,
+        schema_name: &'static str,
         capacity: LinkCapacity,
         link_id: &LinkUniqueId,
     ) -> crate::core::Result<LinkInstanceCreationResult>;
@@ -76,6 +77,8 @@ inventory::collect!(SchemaRegistration);
 /// Entry in the schema registry.
 pub struct SchemaEntry {
     pub name: String,
+    /// Static name for cross-dylib validation. Leaked for runtime schemas.
+    pub static_name: &'static str,
     pub version: SemanticVersion,
     pub fields: Vec<DataFrameSchemaField>,
     pub read_behavior: LinkBufferReadMode,
@@ -144,6 +147,7 @@ impl SchemaRegistry {
         for registration in inventory::iter::<SchemaRegistration> {
             let entry = SchemaEntry {
                 name: registration.name.to_string(),
+                static_name: registration.name,
                 version: registration.version.clone(),
                 fields: registration.fields.iter().map(|f| f.to_field()).collect(),
                 read_behavior: registration.read_behavior,
@@ -169,7 +173,7 @@ impl SchemaRegistry {
     }
 
     /// Register a runtime schema (e.g., from Python).
-    pub fn register_runtime(&self, entry: SchemaEntry) -> crate::core::Result<()> {
+    pub fn register_runtime(&self, mut entry: SchemaEntry) -> crate::core::Result<()> {
         self.ensure_initialized();
 
         let mut schemas = self.schemas.write();
@@ -178,6 +182,12 @@ impl SchemaRegistry {
                 "Schema '{}' already registered",
                 entry.name
             )));
+        }
+
+        // Leak the name to create a static reference for cross-dylib validation.
+        // This is safe because schemas are registered once and live for the program lifetime.
+        if entry.static_name.is_empty() {
+            entry.static_name = Box::leak(entry.name.clone().into_boxed_str());
         }
 
         tracing::info!(
@@ -201,6 +211,7 @@ impl SchemaRegistry {
     ) -> crate::core::Result<()> {
         let entry = SchemaEntry {
             name,
+            static_name: "", // Will be filled by register_runtime
             version,
             fields,
             read_behavior,
@@ -284,7 +295,7 @@ impl SchemaRegistry {
             ))
         })?;
 
-        factory.create_link_instance(capacity, link_id)
+        factory.create_link_instance(entry.static_name, capacity, link_id)
     }
 }
 
@@ -302,10 +313,12 @@ struct StaticLinkFactory {
 impl SchemaLinkFactory for StaticLinkFactory {
     fn create_link_instance(
         &self,
+        schema_name: &'static str,
         capacity: LinkCapacity,
         link_id: &LinkUniqueId,
     ) -> crate::core::Result<LinkInstanceCreationResult> {
-        self.factory.create_link_instance(capacity, link_id)
+        self.factory
+            .create_link_instance(schema_name, capacity, link_id)
     }
 }
 
@@ -316,16 +329,18 @@ pub struct DataFrameLinkFactory;
 impl SchemaLinkFactory for DataFrameLinkFactory {
     fn create_link_instance(
         &self,
+        schema_name: &'static str,
         capacity: LinkCapacity,
         link_id: &LinkUniqueId,
     ) -> crate::core::Result<LinkInstanceCreationResult> {
-        create_typed_link_instance::<crate::core::frames::DataFrame>(capacity, link_id)
+        create_typed_link_instance::<crate::core::frames::DataFrame>(schema_name, capacity, link_id)
     }
 }
 
 /// Helper to create a typed link instance. Used by generated schema code.
-/// Returns pre-wrapped data writers/readers that include the link ID.
+/// Returns pre-wrapped data writers/readers that include the link ID and schema name.
 pub fn create_typed_link_instance<T>(
+    schema_name: &'static str,
     capacity: LinkCapacity,
     link_id: &LinkUniqueId,
 ) -> crate::core::Result<LinkInstanceCreationResult>
@@ -338,19 +353,22 @@ where
     let data_writer = instance.create_link_output_data_writer();
     let data_reader = instance.create_link_input_data_reader();
 
-    // Pre-wrap with link_id - factory knows T so it can create the typed wrapper
+    // Pre-wrap with link_id and schema_name for cross-dylib validation
     let wrapped_writer = LinkOutputDataWriterWrapper {
         link_id: link_id.clone(),
+        schema_name,
         data_writer,
     };
     let wrapped_reader = LinkInputDataReaderWrapper {
         link_id: link_id.clone(),
+        schema_name,
         data_reader,
     };
 
     Ok(LinkInstanceCreationResult {
         instance: Box::new(instance),
         type_info: LinkTypeInfoComponent::new::<T>(capacity),
+        schema_name,
         data_writer: Box::new(wrapped_writer),
         data_reader: Box::new(wrapped_reader),
     })
@@ -371,6 +389,7 @@ mod tests {
     fn test_schema_compatibility() {
         let entry_a = SchemaEntry {
             name: "TestSchema".to_string(),
+            static_name: "TestSchema",
             version: SemanticVersion::new(1, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
@@ -380,6 +399,7 @@ mod tests {
 
         let entry_b = SchemaEntry {
             name: "TestSchema".to_string(),
+            static_name: "TestSchema",
             version: SemanticVersion::new(1, 1, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
@@ -389,6 +409,7 @@ mod tests {
 
         let entry_c = SchemaEntry {
             name: "TestSchema".to_string(),
+            static_name: "TestSchema",
             version: SemanticVersion::new(2, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
@@ -455,6 +476,7 @@ mod tests {
 
         let entry = SchemaEntry {
             name: "RuntimeTestSchema".to_string(),
+            static_name: "", // Will be filled by register_runtime
             version: SemanticVersion::new(1, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
@@ -468,6 +490,7 @@ mod tests {
         // Duplicate registration should fail
         let entry2 = SchemaEntry {
             name: "RuntimeTestSchema".to_string(),
+            static_name: "", // Will be filled by register_runtime
             version: SemanticVersion::new(1, 0, 0),
             fields: vec![],
             read_behavior: LinkBufferReadMode::SkipToLatest,
