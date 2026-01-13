@@ -5,6 +5,7 @@ members = [
     "libs/streamlib-cli",       # Command-line interface for StreamLib runtime
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
+    "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
     "libs/streamlib-python",    # Python bindings via PyO3
     "examples/simple-pipeline", # Example: Basic processing pipeline
     "examples/camera-display",  # Example: Camera capture and display
@@ -19,6 +20,8 @@ members = [
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
+    "examples/camera-python-display/rust", # Plugin: Rust processors for camera-python-display
+    "examples/xpc-test",                  # Example: XPC communication test
 ]
 
 [workspace.package]
@@ -39,6 +42,7 @@ tokio = { version = "1.48.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"
+toml = "0.8"
 
 # Platform bindings (objc2 ecosystem - latest versions)
 # Note: All objc2 crates must use compatible versions
