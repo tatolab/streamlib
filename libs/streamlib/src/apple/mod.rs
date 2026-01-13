@@ -3,6 +3,7 @@
 
 pub mod arkit;
 pub mod audio_utils;
+pub mod broker_check;
 pub mod corevideo_ffi;
 pub mod iosurface;
 pub mod media_clock;

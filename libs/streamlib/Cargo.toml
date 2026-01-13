@@ -115,8 +115,9 @@ opus = "0.3"  # Opus audio codec encoder/decoder
 xpc-bindgen = "26.0"  # XPC bindings for bidirectional cross-process IPC
 launchd = "0.3"  # Launchd plist generation for broker service
 ctor = "0.4"  # Global constructor for automatic broker mode detection
-tonic = "0.12"  # gRPC server for broker diagnostics control plane
+tonic = "0.12"  # gRPC client for broker availability check
 prost = "0.13"  # Protocol Buffers for gRPC message types
+streamlib-broker = { path = "../streamlib-broker" }  # Broker proto types for gRPC client
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -138,12 +139,6 @@ prost-build = "0.13"
 # Generate docs for all platforms and features
 all-features = true
 targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
-
-# XPC Broker binary for macOS subprocess RHI
-# This binary is auto-installed as a launchd service for cross-process GPU sharing
-[[bin]]
-name = "streamlib-broker"
-path = "src/bin/streamlib-broker.rs"
 
 # MCP Server Binary removed - needs redesign for Phase 1
 # [[bin]]

@@ -358,6 +358,65 @@ LEFTHOOK=0 git push    # Skip pre-push
 
 Configuration: `.lefthook.yml`
 
+### Broker Service (macOS)
+
+StreamLib requires the broker service for cross-process GPU resource sharing. The runtime will fail to start if the broker is not running.
+
+**First-time setup (developers)**:
+```bash
+# Build and install broker from source
+./scripts/dev-setup.sh
+
+# This script:
+# 1. Builds streamlib-broker and streamlib-cli
+# 2. Installs binaries to ~/.streamlib/bin/
+# 3. Creates launchd service (starts on login)
+# 4. Creates ~/.streamlib/env for PATH setup
+```
+
+**Add to your shell** (one-time):
+```bash
+# Add this line to your ~/.zshrc or ~/.bashrc:
+. "$HOME/.streamlib/env"
+```
+
+**Managing the broker**:
+```bash
+# Check broker status
+streamlib broker status
+
+# View registered runtimes
+streamlib broker runtimes
+
+# View active connections
+streamlib broker connections
+
+# Reinstall/update broker (e.g., after code changes)
+streamlib broker install --force
+
+# Uninstall broker
+streamlib broker uninstall
+```
+
+**After code changes to broker**:
+```bash
+# Rebuild and reinstall
+cargo build --release -p streamlib-broker
+streamlib broker install --force
+```
+
+**Troubleshooting**:
+```bash
+# View broker logs
+tail -f /tmp/streamlib-broker.log
+
+# Check launchd service status
+launchctl list com.tatolab.streamlib.broker
+
+# Clean reinstall
+./scripts/dev-setup.sh --clean
+```
+
 ## Quick Start Commands
 
 ### Building
