@@ -6,11 +6,37 @@ use std::path::PathBuf;
 use anyhow::Result;
 use streamlib::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
 
+use crate::plugin_loader::PluginLoader;
+
 // Force linkage of streamlib-python to ensure Python processors are registered via inventory
 extern crate streamlib_python;
 
 /// Start a StreamLib runtime.
-pub async fn run(host: String, port: u16, no_api: bool, graph_file: Option<PathBuf>) -> Result<()> {
+pub async fn run(
+    host: String,
+    port: u16,
+    no_api: bool,
+    graph_file: Option<PathBuf>,
+    plugins: Vec<PathBuf>,
+    plugin_dir: Option<PathBuf>,
+) -> Result<()> {
+    // Load plugins BEFORE creating runtime (registers processors in global registry)
+    let mut loader = PluginLoader::new();
+
+    // Load individual plugins
+    for plugin_path in &plugins {
+        println!("Loading plugin: {}", plugin_path.display());
+        let count = loader.load_plugin(plugin_path)?;
+        println!("  Registered {} processor(s)", count);
+    }
+
+    // Load all plugins from directory
+    if let Some(ref dir) = plugin_dir {
+        println!("Loading plugins from: {}", dir.display());
+        let count = loader.load_plugin_dir(dir)?;
+        println!("  Registered {} processor(s) total", count);
+    }
+
     let runtime = StreamRuntime::new()?;
 
     // Add API server unless opted out
@@ -40,6 +66,9 @@ pub async fn run(host: String, port: u16, no_api: bool, graph_file: Option<PathB
     println!("Press Ctrl+C to stop");
 
     runtime.wait_for_signal()?;
+
+    // Keep loader alive until runtime stops (libraries must remain loaded)
+    drop(loader);
 
     Ok(())
 }

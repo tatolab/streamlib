@@ -11,6 +11,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod commands;
+mod plugin_loader;
 
 #[derive(Parser)]
 #[command(name = "streamlib")]
@@ -31,6 +32,14 @@ struct Cli {
     /// Disable API server
     #[arg(long)]
     no_api: bool,
+
+    /// Plugin libraries to load (can be specified multiple times)
+    #[arg(long = "plugin", value_name = "PATH")]
+    plugins: Vec<PathBuf>,
+
+    /// Directory containing plugin libraries
+    #[arg(long = "plugin-dir", value_name = "DIR")]
+    plugin_dir: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -96,7 +105,15 @@ async fn main() -> Result<()> {
         }
         // No subcommand: start runtime (default behavior)
         None => {
-            commands::serve::run(cli.host, cli.port, cli.no_api, cli.graph_file).await?;
+            commands::serve::run(
+                cli.host,
+                cli.port,
+                cli.no_api,
+                cli.graph_file,
+                cli.plugins,
+                cli.plugin_dir,
+            )
+            .await?;
         }
     }
 

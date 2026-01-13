@@ -40,3 +40,7 @@ anyhow.workspace = true
 # Logging
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Dynamic plugin loading
+libloading = "0.8"
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
