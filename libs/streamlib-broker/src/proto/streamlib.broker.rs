@@ -26,6 +26,9 @@ pub struct GetVersionResponse {
     /// ISO 8601 date
     #[prost(string, tag = "3")]
     pub build_date: ::prost::alloc::string::String,
+    /// Bump when gRPC API changes (for compatibility check)
+    #[prost(uint32, tag = "4")]
+    pub protocol_version: u32,
 }
 /// Runtime listing
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -110,10 +113,10 @@ pub mod broker_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
-    use tonic::codegen::http::Uri;
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     /// BrokerService provides diagnostics and monitoring for the XPC broker.
     /// Used by CLI tools to inspect broker state without affecting frame transfer.
     #[derive(Debug, Clone)]
@@ -159,8 +162,9 @@ pub mod broker_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
-                Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             BrokerServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -199,97 +203,131 @@ pub mod broker_service_client {
         pub async fn get_health(
             &mut self,
             request: impl tonic::IntoRequest<super::GetHealthRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetHealthResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::GetHealthResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/streamlib.broker.BrokerService/GetHealth");
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/GetHealth",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "streamlib.broker.BrokerService",
-                "GetHealth",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("streamlib.broker.BrokerService", "GetHealth"));
             self.inner.unary(req, path, codec).await
         }
         /// Version info - get broker version and build info
         pub async fn get_version(
             &mut self,
             request: impl tonic::IntoRequest<super::GetVersionRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetVersionResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::GetVersionResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/streamlib.broker.BrokerService/GetVersion");
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/GetVersion",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "streamlib.broker.BrokerService",
-                "GetVersion",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("streamlib.broker.BrokerService", "GetVersion"));
             self.inner.unary(req, path, codec).await
         }
         /// List all registered runtimes
         pub async fn list_runtimes(
             &mut self,
             request: impl tonic::IntoRequest<super::ListRuntimesRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListRuntimesResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::ListRuntimesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/streamlib.broker.BrokerService/ListRuntimes",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "streamlib.broker.BrokerService",
-                "ListRuntimes",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("streamlib.broker.BrokerService", "ListRuntimes"),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// List processors for a specific runtime
         pub async fn list_processors(
             &mut self,
             request: impl tonic::IntoRequest<super::ListProcessorsRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListProcessorsResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::ListProcessorsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/streamlib.broker.BrokerService/ListProcessors",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "streamlib.broker.BrokerService",
-                "ListProcessors",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("streamlib.broker.BrokerService", "ListProcessors"),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// List active XPC connections
         pub async fn list_connections(
             &mut self,
             request: impl tonic::IntoRequest<super::ListConnectionsRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListConnectionsResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::ListConnectionsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/streamlib.broker.BrokerService/ListConnections",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "streamlib.broker.BrokerService",
-                "ListConnections",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("streamlib.broker.BrokerService", "ListConnections"),
+                );
             self.inner.unary(req, path, codec).await
         }
     }
@@ -301,7 +339,7 @@ pub mod broker_service_server {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
     use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with BrokerServiceServer.
@@ -311,27 +349,42 @@ pub mod broker_service_server {
         async fn get_health(
             &self,
             request: tonic::Request<super::GetHealthRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetHealthResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::GetHealthResponse>,
+            tonic::Status,
+        >;
         /// Version info - get broker version and build info
         async fn get_version(
             &self,
             request: tonic::Request<super::GetVersionRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetVersionResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::GetVersionResponse>,
+            tonic::Status,
+        >;
         /// List all registered runtimes
         async fn list_runtimes(
             &self,
             request: tonic::Request<super::ListRuntimesRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListRuntimesResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::ListRuntimesResponse>,
+            tonic::Status,
+        >;
         /// List processors for a specific runtime
         async fn list_processors(
             &self,
             request: tonic::Request<super::ListProcessorsRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListProcessorsResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::ListProcessorsResponse>,
+            tonic::Status,
+        >;
         /// List active XPC connections
         async fn list_connections(
             &self,
             request: tonic::Request<super::ListConnectionsRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListConnectionsResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::ListConnectionsResponse>,
+            tonic::Status,
+        >;
     }
     /// BrokerService provides diagnostics and monitoring for the XPC broker.
     /// Used by CLI tools to inspect broker state without affecting frame transfer.
@@ -356,7 +409,10 @@ pub mod broker_service_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -411,9 +467,15 @@ pub mod broker_service_server {
                 "/streamlib.broker.BrokerService/GetHealth" => {
                     #[allow(non_camel_case_types)]
                     struct GetHealthSvc<T: BrokerService>(pub Arc<T>);
-                    impl<T: BrokerService> tonic::server::UnaryService<super::GetHealthRequest> for GetHealthSvc<T> {
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::GetHealthRequest>
+                    for GetHealthSvc<T> {
                         type Response = super::GetHealthResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::GetHealthRequest>,
@@ -450,9 +512,15 @@ pub mod broker_service_server {
                 "/streamlib.broker.BrokerService/GetVersion" => {
                     #[allow(non_camel_case_types)]
                     struct GetVersionSvc<T: BrokerService>(pub Arc<T>);
-                    impl<T: BrokerService> tonic::server::UnaryService<super::GetVersionRequest> for GetVersionSvc<T> {
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::GetVersionRequest>
+                    for GetVersionSvc<T> {
                         type Response = super::GetVersionResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::GetVersionRequest>,
@@ -489,11 +557,15 @@ pub mod broker_service_server {
                 "/streamlib.broker.BrokerService/ListRuntimes" => {
                     #[allow(non_camel_case_types)]
                     struct ListRuntimesSvc<T: BrokerService>(pub Arc<T>);
-                    impl<T: BrokerService> tonic::server::UnaryService<super::ListRuntimesRequest>
-                        for ListRuntimesSvc<T>
-                    {
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::ListRuntimesRequest>
+                    for ListRuntimesSvc<T> {
                         type Response = super::ListRuntimesResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::ListRuntimesRequest>,
@@ -530,11 +602,15 @@ pub mod broker_service_server {
                 "/streamlib.broker.BrokerService/ListProcessors" => {
                     #[allow(non_camel_case_types)]
                     struct ListProcessorsSvc<T: BrokerService>(pub Arc<T>);
-                    impl<T: BrokerService> tonic::server::UnaryService<super::ListProcessorsRequest>
-                        for ListProcessorsSvc<T>
-                    {
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::ListProcessorsRequest>
+                    for ListProcessorsSvc<T> {
                         type Response = super::ListProcessorsResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::ListProcessorsRequest>,
@@ -571,19 +647,23 @@ pub mod broker_service_server {
                 "/streamlib.broker.BrokerService/ListConnections" => {
                     #[allow(non_camel_case_types)]
                     struct ListConnectionsSvc<T: BrokerService>(pub Arc<T>);
-                    impl<T: BrokerService>
-                        tonic::server::UnaryService<super::ListConnectionsRequest>
-                        for ListConnectionsSvc<T>
-                    {
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::ListConnectionsRequest>
+                    for ListConnectionsSvc<T> {
                         type Response = super::ListConnectionsResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::ListConnectionsRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as BrokerService>::list_connections(&inner, request).await
+                                <T as BrokerService>::list_connections(&inner, request)
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -610,19 +690,23 @@ pub mod broker_service_server {
                     };
                     Box::pin(fut)
                 }
-                _ => Box::pin(async move {
-                    let mut response = http::Response::new(empty_body());
-                    let headers = response.headers_mut();
-                    headers.insert(
-                        tonic::Status::GRPC_STATUS,
-                        (tonic::Code::Unimplemented as i32).into(),
-                    );
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        tonic::metadata::GRPC_CONTENT_TYPE,
-                    );
-                    Ok(response)
-                }),
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(empty_body());
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
             }
         }
     }

@@ -196,18 +196,6 @@ pub use apple::{
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::subprocess_rhi::{XpcBroker, XpcChannel, XpcFrameTransport, BROKER_SERVICE_NAME};
 
-/// Broker gRPC client for diagnostics and CLI tools.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub mod broker_client {
-    pub use crate::apple::subprocess_rhi::proto::broker_service_client::BrokerServiceClient;
-    pub use crate::apple::subprocess_rhi::proto::{
-        GetHealthRequest, GetHealthResponse, GetVersionRequest, GetVersionResponse,
-        ListConnectionsRequest, ListConnectionsResponse, ListProcessorsRequest,
-        ListProcessorsResponse, ListRuntimesRequest, ListRuntimesResponse,
-    };
-    pub use crate::apple::subprocess_rhi::GRPC_PORT;
-}
-
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 

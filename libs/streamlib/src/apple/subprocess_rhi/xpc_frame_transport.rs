@@ -4,9 +4,9 @@
 //! XPC frame transport for IOSurface and shared memory.
 
 use std::ffi::c_void;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
-use tracing::{error, trace};
+use tracing::trace;
 
 use mach2::kern_return::KERN_SUCCESS;
 use mach2::traps::mach_task_self;

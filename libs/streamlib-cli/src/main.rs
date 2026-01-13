@@ -77,6 +77,12 @@ enum Commands {
         #[command(subcommand)]
         action: BrokerCommands,
     },
+
+    /// Setup commands
+    Setup {
+        #[command(subcommand)]
+        action: SetupCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -91,6 +97,27 @@ enum ListCommands {
 #[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 enum BrokerCommands {
+    /// Install the broker service
+    Install {
+        /// Force reinstall even if already installed
+        #[arg(long)]
+        force: bool,
+
+        /// Path to broker binary (default: find in target/release or PATH)
+        #[arg(long)]
+        binary: Option<std::path::PathBuf>,
+    },
+
+    /// Update the broker service (alias for install --force)
+    Update {
+        /// Path to broker binary (default: find in target/release or PATH)
+        #[arg(long)]
+        binary: Option<std::path::PathBuf>,
+    },
+
+    /// Uninstall the broker service
+    Uninstall,
+
     /// Show broker health and version status
     Status,
 
@@ -109,6 +136,16 @@ enum BrokerCommands {
         /// Filter by runtime ID
         #[arg(long)]
         runtime: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SetupCommands {
+    /// Configure shell to add streamlib to PATH
+    Shell {
+        /// Shell type (bash, zsh, fish). Auto-detected if not specified.
+        #[arg(long)]
+        shell: Option<String>,
     },
 }
 
@@ -136,6 +173,13 @@ async fn main() -> Result<()> {
         }
         #[cfg(target_os = "macos")]
         Some(Commands::Broker { action }) => match action {
+            BrokerCommands::Install { force, binary } => {
+                commands::broker::install(force, binary.as_deref()).await?
+            }
+            BrokerCommands::Update { binary } => {
+                commands::broker::install(true, binary.as_deref()).await?
+            }
+            BrokerCommands::Uninstall => commands::broker::uninstall().await?,
             BrokerCommands::Status => commands::broker::status().await?,
             BrokerCommands::Runtimes => commands::broker::runtimes().await?,
             BrokerCommands::Processors { runtime } => {
@@ -144,6 +188,9 @@ async fn main() -> Result<()> {
             BrokerCommands::Connections { runtime } => {
                 commands::broker::connections(runtime.as_deref()).await?
             }
+        },
+        Some(Commands::Setup { action }) => match action {
+            SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
         },
         // No subcommand: start runtime (default behavior)
         None => {

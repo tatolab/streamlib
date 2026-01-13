@@ -5,13 +5,16 @@
 
 use tonic::{Request, Response, Status};
 
-use super::broker_state::BrokerState;
-use super::proto::broker_service_server::BrokerService;
-use super::proto::{
+use crate::proto::broker_service_server::BrokerService;
+use crate::proto::{
     ConnectionInfo, GetHealthRequest, GetHealthResponse, GetVersionRequest, GetVersionResponse,
     ListConnectionsRequest, ListConnectionsResponse, ListProcessorsRequest, ListProcessorsResponse,
     ListRuntimesRequest, ListRuntimesResponse, ProcessorInfo, RuntimeInfo,
 };
+use crate::state::BrokerState;
+
+/// Current protocol version. Bump when gRPC API changes.
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// gRPC service for broker diagnostics.
 pub struct BrokerGrpcService {
@@ -48,6 +51,7 @@ impl BrokerService for BrokerGrpcService {
             version: env!("CARGO_PKG_VERSION").to_string(),
             git_commit: option_env!("GIT_COMMIT").unwrap_or("unknown").to_string(),
             build_date: option_env!("BUILD_DATE").unwrap_or("unknown").to_string(),
+            protocol_version: PROTOCOL_VERSION,
         }))
     }
 

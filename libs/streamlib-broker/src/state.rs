@@ -206,3 +206,9 @@ impl BrokerState {
             .count()
     }
 }
+
+impl Default for BrokerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}

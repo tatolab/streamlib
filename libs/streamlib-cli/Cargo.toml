@@ -47,3 +47,12 @@ streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
 
 # gRPC client for broker diagnostics
 tonic = "0.12"
+
+# Broker crate (for version info)
+streamlib-broker = { path = "../streamlib-broker" }
+
+# Home directory detection
+dirs = "6.0"
+
+# System calls (getuid for launchctl domain)
+libc.workspace = true
