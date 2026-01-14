@@ -1,0 +1,29 @@
+{
+  "description": "StreamLib runtime debugging hooks",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ ! -f ./.streamlib/bin/streamlib ]; then echo 'Dev environment not set up. Running ./scripts/dev-setup.sh...' && ./scripts/dev-setup.sh; fi",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if the conversation involved StreamLib runtime issues, broker problems, or subprocess/XPC errors (look for: 'broker not running', 'connection failed', 'XPC error', 'runtime error', 'subprocess crashed', 'gRPC error').\n\nRespond with JSON:\n- If unresolved issues exist: {\"ok\": true, \"decision\": \"block\", \"reason\": \"Run ./.streamlib/bin/streamlib broker status or check /tmp/streamlib-broker-dev-streamlib.log\"}\n- Otherwise: {\"ok\": true, \"decision\": \"approve\"}",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

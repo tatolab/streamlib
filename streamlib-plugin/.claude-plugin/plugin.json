@@ -1,0 +1,8 @@
+{
+	"name": "streamlib",
+	"version": "0.1.0",
+	"description": "StreamLib runtime and broker debugging via code execution",
+	"author": {
+		"name": "TatoLab"
+	}
+}

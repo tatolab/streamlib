@@ -62,7 +62,11 @@ examples/camera-display/no_window_camera.log
 # Example assets (user-specific)
 examples/camera-python-display/assets/
 
-# Claude Code project files
-.claude/
+# Claude Code project files (except streamlib plugin which is versioned)
+.claude/*
+!.claude/streamlib/
 *.log
 .rustup/
+
+# Local dev environment
+.streamlib/
