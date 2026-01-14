@@ -362,36 +362,25 @@ Configuration: `.lefthook.yml`
 
 StreamLib requires the broker service for cross-process GPU resource sharing. The runtime will fail to start if the broker is not running.
 
-#### ⚠️ CRITICAL: Always Use the Dev CLI Wrapper
-
-In dev mode, you **MUST** use `./.streamlib/bin/streamlib` instead of bare `cargo run`. The wrapper sets essential environment variables:
-
-```bash
-# ✅ CORRECT - uses dev environment
-./.streamlib/bin/streamlib run
-./.streamlib/bin/streamlib broker status
-
-# ❌ WRONG - missing environment variables, will fail
-cargo run -p streamlib-cli -- run
-cargo run -p camera-display
-```
-
-The dev wrapper automatically sets:
-- `STREAMLIB_HOME` → `./.streamlib/` (project-local, not `~/`)
-- `STREAMLIB_BROKER_PORT` → `50052` (dev port, not production 50051)
-- `STREAMLIB_DEV_MODE` → `1` (enables wheel building, source detection)
-
 **First-time setup (developers)**:
 ```bash
-# Creates local dev environment with proxy scripts
+# Creates local dev environment
 ./scripts/dev-setup.sh
 
 # This script:
 # 1. Creates ./.streamlib/ directory in project root
 # 2. Creates proxy scripts that use `cargo run` (auto-rebuild on changes)
-# 3. Starts broker on port 50052 with unique service name
-# 4. Each git worktree gets isolated broker (based on path hash)
+# 3. Updates .cargo/config.toml with dev environment variables
+# 4. Starts broker on port 50052 with unique service name
+# 5. Each git worktree gets isolated broker (based on path hash)
 ```
+
+After running `dev-setup.sh`, these environment variables are set in `.cargo/config.toml`:
+- `STREAMLIB_HOME` → `./.streamlib/` (project-local, not `~/`)
+- `STREAMLIB_BROKER_PORT` → `50052` (dev port, not production 50051)
+- `STREAMLIB_DEV_MODE` → `1` (enables wheel building, source detection)
+
+This means `cargo run` works directly without manual env var setup.
 
 **No shell config needed** - dev environment is project-local.
 
@@ -466,22 +455,21 @@ cargo test -- --nocapture
 
 ### Running Examples
 
-**⚠️ Examples that create a StreamRuntime MUST use the dev wrapper** to get the correct broker port and environment:
+After running `./scripts/dev-setup.sh`, the dev environment variables are configured in `.cargo/config.toml`, so `cargo run` works directly:
 
 ```bash
-# ✅ CORRECT - examples that use StreamRuntime
-RUST_LOG=info ./.streamlib/bin/streamlib run  # If using CLI
-# Or set env vars manually for cargo run:
-STREAMLIB_HOME=./.streamlib STREAMLIB_BROKER_PORT=50052 STREAMLIB_DEV_MODE=1 \
-  cargo run -p camera-display
-
-# ✅ OK - examples that don't use StreamRuntime (pure library tests)
-cargo run -p graph-json-export
+# ✅ Works - .cargo/config.toml has STREAMLIB_* env vars
+cargo run -p camera-display
+cargo run -p camera-python-display
 
 # With logging
-RUST_LOG=debug STREAMLIB_HOME=./.streamlib STREAMLIB_BROKER_PORT=50052 STREAMLIB_DEV_MODE=1 \
-  cargo run -p camera-display
+RUST_LOG=debug cargo run -p camera-display
+
+# Using CLI wrapper (also works)
+./.streamlib/bin/streamlib run
 ```
+
+**Note**: If you haven't run `dev-setup.sh`, examples using StreamRuntime will fail to connect to the broker.
 
 ### Documentation
 ```bash
