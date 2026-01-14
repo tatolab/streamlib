@@ -61,8 +61,49 @@ uninstall() {
     rm -f "${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
     info "Removing .streamlib directory..."
     rm -rf "${STREAMLIB_HOME}"
+    info "Removing cargo config env vars..."
+    remove_cargo_config_env
 
     success "Uninstalled"
+}
+
+# Update .cargo/config.toml with dev environment variables
+update_cargo_config() {
+    local config_file="${REPO_ROOT}/.cargo/config.toml"
+
+    info "Updating .cargo/config.toml with dev environment..."
+
+    # First remove any existing StreamLib env vars
+    remove_cargo_config_env
+
+    # Append StreamLib env vars to the [env] section
+    # We add them at the end of the file since [env] section exists
+    cat >> "$config_file" << EOF
+
+# StreamLib dev environment (managed by dev-setup.sh - DO NOT EDIT)
+STREAMLIB_HOME = "${STREAMLIB_HOME}"
+STREAMLIB_BROKER_PORT = "${BROKER_PORT}"
+STREAMLIB_DEV_MODE = "1"
+# End StreamLib dev environment
+EOF
+
+    success "Updated .cargo/config.toml"
+}
+
+# Remove StreamLib env vars from .cargo/config.toml
+remove_cargo_config_env() {
+    local config_file="${REPO_ROOT}/.cargo/config.toml"
+
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+
+    # Remove lines between markers (inclusive)
+    # Using sed to delete from marker start to marker end
+    sed -i '' '/^# StreamLib dev environment/,/^# End StreamLib dev environment/d' "$config_file" 2>/dev/null || true
+
+    # Also remove any trailing empty lines that might be left
+    # This is a bit tricky with sed, so we'll just leave them
 }
 
 # Create proxy scripts
@@ -231,6 +272,7 @@ main() {
     fi
 
     create_proxy_scripts
+    update_cargo_config
     install_plist
     start_broker
     verify
