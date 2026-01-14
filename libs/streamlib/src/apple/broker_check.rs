@@ -24,7 +24,11 @@ const EXPECTED_PROTOCOL_VERSION: u32 = PROTOCOL_VERSION;
 /// - The broker is not running (with instructions to install it)
 /// - The broker's protocol version is incompatible (with upgrade instructions)
 pub async fn check_broker_availability() -> Result<()> {
-    let endpoint = format!("http://127.0.0.1:{}", GRPC_PORT);
+    let port = std::env::var("STREAMLIB_BROKER_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(GRPC_PORT);
+    let endpoint = format!("http://127.0.0.1:{}", port);
 
     // Try to connect to the broker
     let mut client = match BrokerServiceClient::connect(endpoint.clone()).await {
