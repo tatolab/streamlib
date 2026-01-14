@@ -358,64 +358,78 @@ LEFTHOOK=0 git push    # Skip pre-push
 
 Configuration: `.lefthook.yml`
 
-### Broker Service (macOS)
+### Broker Service (macOS) - Dev Environment
 
 StreamLib requires the broker service for cross-process GPU resource sharing. The runtime will fail to start if the broker is not running.
 
+#### ⚠️ CRITICAL: Always Use the Dev CLI Wrapper
+
+In dev mode, you **MUST** use `./.streamlib/bin/streamlib` instead of bare `cargo run`. The wrapper sets essential environment variables:
+
+```bash
+# ✅ CORRECT - uses dev environment
+./.streamlib/bin/streamlib run
+./.streamlib/bin/streamlib broker status
+
+# ❌ WRONG - missing environment variables, will fail
+cargo run -p streamlib-cli -- run
+cargo run -p camera-display
+```
+
+The dev wrapper automatically sets:
+- `STREAMLIB_HOME` → `./.streamlib/` (project-local, not `~/`)
+- `STREAMLIB_BROKER_PORT` → `50052` (dev port, not production 50051)
+- `STREAMLIB_DEV_MODE` → `1` (enables wheel building, source detection)
+
 **First-time setup (developers)**:
 ```bash
-# Build and install broker from source
+# Creates local dev environment with proxy scripts
 ./scripts/dev-setup.sh
 
 # This script:
-# 1. Builds streamlib-broker and streamlib-cli
-# 2. Installs binaries to ~/.streamlib/bin/
-# 3. Creates launchd service (starts on login)
-# 4. Creates ~/.streamlib/env for PATH setup
+# 1. Creates ./.streamlib/ directory in project root
+# 2. Creates proxy scripts that use `cargo run` (auto-rebuild on changes)
+# 3. Starts broker on port 50052 with unique service name
+# 4. Each git worktree gets isolated broker (based on path hash)
 ```
 
-**Add to your shell** (one-time):
-```bash
-# Add this line to your ~/.zshrc or ~/.bashrc:
-. "$HOME/.streamlib/env"
-```
+**No shell config needed** - dev environment is project-local.
 
 **Managing the broker**:
 ```bash
 # Check broker status
-streamlib broker status
+./.streamlib/bin/streamlib broker status
 
 # View registered runtimes
-streamlib broker runtimes
+./.streamlib/bin/streamlib broker runtimes
 
 # View active connections
-streamlib broker connections
-
-# Reinstall/update broker (e.g., after code changes)
-streamlib broker install --force
-
-# Uninstall broker
-streamlib broker uninstall
+./.streamlib/bin/streamlib broker connections
 ```
 
-**After code changes to broker**:
+**After code changes**: No action needed - proxy scripts use `cargo run`, so changes are picked up automatically on next invocation.
+
+**Clean reinstall** (if needed):
 ```bash
-# Rebuild and reinstall
-cargo build --release -p streamlib-broker
-streamlib broker install --force
+./scripts/dev-setup.sh --clean
 ```
 
 **Troubleshooting**:
 ```bash
-# View broker logs
-tail -f /tmp/streamlib-broker.log
+# View broker logs (path includes unique hash)
+tail -f /tmp/streamlib-broker-dev-*.log
 
 # Check launchd service status
-launchctl list com.tatolab.streamlib.broker
-
-# Clean reinstall
-./scripts/dev-setup.sh --clean
+launchctl list | grep Streamlib-dev
 ```
+
+#### Multiple Worktrees Support
+
+Each git worktree gets its own isolated dev environment:
+- Unique service name: `Streamlib-dev-<6-char-hash>`
+- Unique broker port: `50052` (same port, but separate launchd service)
+- Separate `.streamlib/` directory per worktree
+- No conflicts between worktrees
 
 ## Quick Start Commands
 
@@ -451,13 +465,22 @@ cargo test -- --nocapture
 ```
 
 ### Running Examples
+
+**⚠️ Examples that create a StreamRuntime MUST use the dev wrapper** to get the correct broker port and environment:
+
 ```bash
-# Run example (must be from workspace root)
-cargo run -p camera-display
+# ✅ CORRECT - examples that use StreamRuntime
+RUST_LOG=info ./.streamlib/bin/streamlib run  # If using CLI
+# Or set env vars manually for cargo run:
+STREAMLIB_HOME=./.streamlib STREAMLIB_BROKER_PORT=50052 STREAMLIB_DEV_MODE=1 \
+  cargo run -p camera-display
+
+# ✅ OK - examples that don't use StreamRuntime (pure library tests)
+cargo run -p graph-json-export
 
 # With logging
-RUST_LOG=debug cargo run -p camera-audio-recorder
-RUST_LOG=trace cargo run -p news-cast
+RUST_LOG=debug STREAMLIB_HOME=./.streamlib STREAMLIB_BROKER_PORT=50052 STREAMLIB_DEV_MODE=1 \
+  cargo run -p camera-display
 ```
 
 ### Documentation
