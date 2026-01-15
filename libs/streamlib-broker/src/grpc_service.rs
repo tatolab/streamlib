@@ -5,16 +5,53 @@
 
 use tonic::{Request, Response, Status};
 
+use std::time::Instant;
+
 use crate::proto::broker_service_server::BrokerService;
 use crate::proto::{
-    ConnectionInfo, GetHealthRequest, GetHealthResponse, GetRuntimeEndpointRequest,
-    GetRuntimeEndpointResponse, GetVersionRequest, GetVersionResponse, ListConnectionsRequest,
-    ListConnectionsResponse, ListProcessorsRequest, ListProcessorsResponse, ListRuntimesRequest,
-    ListRuntimesResponse, ProcessorInfo, PruneDeadRuntimesRequest, PruneDeadRuntimesResponse,
-    RegisterRuntimeRequest, RegisterRuntimeResponse, RuntimeInfo, UnregisterRuntimeRequest,
+    // Phase 4 XPC Bridge messages
+    AllocateConnectionRequest,
+    AllocateConnectionResponse,
+    ClientAliveRequest,
+    ClientAliveResponse,
+    CloseConnectionRequest,
+    CloseConnectionResponse,
+    // Existing Phase 3 messages
+    ConnectionInfo,
+    GetClientStatusRequest,
+    GetClientStatusResponse,
+    GetConnectionInfoRequest,
+    GetConnectionInfoResponse,
+    GetHealthRequest,
+    GetHealthResponse,
+    GetHostStatusRequest,
+    GetHostStatusResponse,
+    GetRuntimeEndpointRequest,
+    GetRuntimeEndpointResponse,
+    GetVersionRequest,
+    GetVersionResponse,
+    HostAliveRequest,
+    HostAliveResponse,
+    HostXpcReadyRequest,
+    HostXpcReadyResponse,
+    ListConnectionsRequest,
+    ListConnectionsResponse,
+    ListProcessorsRequest,
+    ListProcessorsResponse,
+    ListRuntimesRequest,
+    ListRuntimesResponse,
+    MarkAckedRequest,
+    MarkAckedResponse,
+    ProcessorInfo,
+    PruneDeadRuntimesRequest,
+    PruneDeadRuntimesResponse,
+    RegisterRuntimeRequest,
+    RegisterRuntimeResponse,
+    RuntimeInfo,
+    UnregisterRuntimeRequest,
     UnregisterRuntimeResponse,
 };
-use crate::state::BrokerState;
+use crate::state::{BrokerState, ClientState, HostState};
 
 /// Current protocol version. Bump when gRPC API changes.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -250,6 +287,303 @@ impl BrokerService for BrokerGrpcService {
         Ok(Response::new(PruneDeadRuntimesResponse {
             pruned_count,
             pruned_names,
+        }))
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // XPC Bridge Connection Management (Phase 4)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    async fn allocate_connection(
+        &self,
+        request: Request<AllocateConnectionRequest>,
+    ) -> Result<Response<AllocateConnectionResponse>, Status> {
+        let req = request.into_inner();
+
+        let connection_id = self
+            .state
+            .allocate_xpc_bridge_connection(&req.runtime_id, &req.processor_id);
+
+        tracing::info!(
+            "Allocated XPC bridge connection: {} (runtime: {}, processor: {})",
+            connection_id,
+            req.runtime_id,
+            req.processor_id
+        );
+
+        Ok(Response::new(AllocateConnectionResponse {
+            connection_id,
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    async fn host_alive(
+        &self,
+        request: Request<HostAliveRequest>,
+    ) -> Result<Response<HostAliveResponse>, Status> {
+        let req = request.into_inner();
+
+        let updated = self
+            .state
+            .update_xpc_bridge_connection(&req.connection_id, |conn| {
+                conn.host_state = HostState::Alive;
+                conn.host_alive_at = Some(Instant::now());
+                conn.host_last_seen = Instant::now();
+            });
+
+        if !updated {
+            return Ok(Response::new(HostAliveResponse {
+                success: false,
+                client_state: String::new(),
+            }));
+        }
+
+        let client_state = self
+            .state
+            .get_xpc_bridge_connection(&req.connection_id)
+            .map(|c| c.client_state.as_str().to_string())
+            .unwrap_or_default();
+
+        tracing::debug!(
+            "Host alive for connection: {}, client_state: {}",
+            req.connection_id,
+            client_state
+        );
+
+        Ok(Response::new(HostAliveResponse {
+            success: true,
+            client_state,
+        }))
+    }
+
+    async fn host_xpc_ready(
+        &self,
+        request: Request<HostXpcReadyRequest>,
+    ) -> Result<Response<HostXpcReadyResponse>, Status> {
+        let req = request.into_inner();
+
+        let updated = self
+            .state
+            .update_xpc_bridge_connection(&req.connection_id, |conn| {
+                conn.host_state = HostState::XpcReady;
+                conn.host_xpc_endpoint_stored = true;
+                conn.host_xpc_endpoint_stored_at = Some(Instant::now());
+                conn.host_last_seen = Instant::now();
+            });
+
+        if !updated {
+            return Ok(Response::new(HostXpcReadyResponse {
+                success: false,
+                client_state: String::new(),
+            }));
+        }
+
+        let client_state = self
+            .state
+            .get_xpc_bridge_connection(&req.connection_id)
+            .map(|c| c.client_state.as_str().to_string())
+            .unwrap_or_default();
+
+        tracing::info!(
+            "Host XPC ready for connection: {}, client_state: {}",
+            req.connection_id,
+            client_state
+        );
+
+        Ok(Response::new(HostXpcReadyResponse {
+            success: true,
+            client_state,
+        }))
+    }
+
+    async fn client_alive(
+        &self,
+        request: Request<ClientAliveRequest>,
+    ) -> Result<Response<ClientAliveResponse>, Status> {
+        let req = request.into_inner();
+
+        let updated = self
+            .state
+            .update_xpc_bridge_connection(&req.connection_id, |conn| {
+                conn.client_state = ClientState::Alive;
+                conn.client_alive_at = Some(Instant::now());
+                conn.client_last_seen = Instant::now();
+            });
+
+        if !updated {
+            return Ok(Response::new(ClientAliveResponse {
+                success: false,
+                host_state: String::new(),
+            }));
+        }
+
+        let host_state = self
+            .state
+            .get_xpc_bridge_connection(&req.connection_id)
+            .map(|c| c.host_state.as_str().to_string())
+            .unwrap_or_default();
+
+        tracing::debug!(
+            "Client alive for connection: {}, host_state: {}",
+            req.connection_id,
+            host_state
+        );
+
+        Ok(Response::new(ClientAliveResponse {
+            success: true,
+            host_state,
+        }))
+    }
+
+    async fn get_client_status(
+        &self,
+        request: Request<GetClientStatusRequest>,
+    ) -> Result<Response<GetClientStatusResponse>, Status> {
+        let req = request.into_inner();
+
+        // Update host_last_seen while polling
+        self.state
+            .update_xpc_bridge_connection(&req.connection_id, |conn| {
+                conn.host_last_seen = Instant::now();
+            });
+
+        let client_state = self
+            .state
+            .get_xpc_bridge_connection(&req.connection_id)
+            .map(|c| c.client_state.as_str().to_string())
+            .unwrap_or_else(|| "not_found".to_string());
+
+        Ok(Response::new(GetClientStatusResponse { client_state }))
+    }
+
+    async fn get_host_status(
+        &self,
+        request: Request<GetHostStatusRequest>,
+    ) -> Result<Response<GetHostStatusResponse>, Status> {
+        let req = request.into_inner();
+
+        // Update client_last_seen while polling
+        self.state
+            .update_xpc_bridge_connection(&req.connection_id, |conn| {
+                conn.client_last_seen = Instant::now();
+            });
+
+        let host_state = self
+            .state
+            .get_xpc_bridge_connection(&req.connection_id)
+            .map(|c| c.host_state.as_str().to_string())
+            .unwrap_or_else(|| "not_found".to_string());
+
+        Ok(Response::new(GetHostStatusResponse { host_state }))
+    }
+
+    async fn mark_acked(
+        &self,
+        request: Request<MarkAckedRequest>,
+    ) -> Result<Response<MarkAckedResponse>, Status> {
+        let req = request.into_inner();
+
+        let updated = self
+            .state
+            .update_xpc_bridge_connection(&req.connection_id, |conn| {
+                let now = Instant::now();
+                match req.side.as_str() {
+                    "host" => {
+                        conn.host_state = HostState::Acked;
+                        conn.host_acked_at = Some(now);
+                        conn.host_last_seen = now;
+                    }
+                    "client" => {
+                        conn.client_state = ClientState::Acked;
+                        conn.client_acked_at = Some(now);
+                        conn.client_last_seen = now;
+                    }
+                    _ => {}
+                }
+
+                // Check if both sides are acked → connection ready
+                if matches!(conn.host_state, HostState::Acked)
+                    && matches!(conn.client_state, ClientState::Acked)
+                {
+                    conn.ready_at = Some(now);
+                }
+            });
+
+        if !updated {
+            return Ok(Response::new(MarkAckedResponse {
+                success: false,
+                connection_state: "not_found".to_string(),
+            }));
+        }
+
+        let connection_state = self
+            .state
+            .get_xpc_bridge_connection(&req.connection_id)
+            .map(|c| c.derived_state().as_str().to_string())
+            .unwrap_or_else(|| "not_found".to_string());
+
+        tracing::info!(
+            "Marked {} acked for connection: {}, state: {}",
+            req.side,
+            req.connection_id,
+            connection_state
+        );
+
+        Ok(Response::new(MarkAckedResponse {
+            success: true,
+            connection_state,
+        }))
+    }
+
+    async fn get_connection_info(
+        &self,
+        request: Request<GetConnectionInfoRequest>,
+    ) -> Result<Response<GetConnectionInfoResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.state.get_xpc_bridge_connection(&req.connection_id) {
+            Some(conn) => Ok(Response::new(GetConnectionInfoResponse {
+                found: true,
+                host_state: conn.host_state.as_str().to_string(),
+                client_state: conn.client_state.as_str().to_string(),
+                derived_state: conn.derived_state().as_str().to_string(),
+                host_xpc_endpoint_stored: conn.host_xpc_endpoint_stored,
+                client_connected: conn.client_endpoint_delivered,
+                age_secs: conn.age_secs() as i64,
+                timeout_secs: conn.timeout_secs as i64,
+            })),
+            None => Ok(Response::new(GetConnectionInfoResponse {
+                found: false,
+                host_state: String::new(),
+                client_state: String::new(),
+                derived_state: String::new(),
+                host_xpc_endpoint_stored: false,
+                client_connected: false,
+                age_secs: 0,
+                timeout_secs: 0,
+            })),
+        }
+    }
+
+    async fn close_connection(
+        &self,
+        request: Request<CloseConnectionRequest>,
+    ) -> Result<Response<CloseConnectionResponse>, Status> {
+        let req = request.into_inner();
+
+        let removed = self.state.remove_xpc_bridge_connection(&req.connection_id);
+
+        if removed.is_some() {
+            tracing::info!(
+                "Closed XPC bridge connection: {} (reason: {})",
+                req.connection_id,
+                req.reason
+            );
+        }
+
+        Ok(Response::new(CloseConnectionResponse {
+            success: removed.is_some(),
         }))
     }
 }
