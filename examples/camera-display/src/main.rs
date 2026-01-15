@@ -19,7 +19,8 @@
 
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{
-    input, output, CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
+    input, output, ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor,
+    ProcessorSpec, Result, StreamRuntime,
 };
 
 fn main() -> Result<()> {
@@ -74,6 +75,14 @@ fn run_typed_mode() -> Result<()> {
     }))?;
     println!("✓ Display added: {}\n", display);
 
+    println!("🌐 Adding API server processor...");
+    runtime.add_processor(ApiServerProcessor::node(ApiServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 9000,
+        ..Default::default()
+    }))?;
+    println!("✓ API server at http://127.0.0.1:9000\n");
+
     // =========================================================================
     // Connect ports using typed API
     // =========================================================================
@@ -126,6 +135,16 @@ fn run_string_mode() -> Result<()> {
     );
     let display = runtime.add_processor(display_spec)?;
     println!("✓ Display added: {}\n", display);
+
+    println!("🌐 Adding API server processor (string mode)...");
+    runtime.add_processor(ProcessorSpec::new(
+        "ApiServerProcessor",
+        serde_json::json!({
+            "host": "127.0.0.1",
+            "port": 9000
+        }),
+    ))?;
+    println!("✓ API server at http://127.0.0.1:9000\n");
 
     // =========================================================================
     // Connect ports using string-based API (REST API style)

@@ -5,8 +5,8 @@ allowed-tools:
 argument-hint: "[--runtime <id>]"
 ---
 
-Run `./.streamlib/bin/streamlib broker connections` to list all active XPC connections.
+Run `./.streamlib/bin/streamlib broker xpc` to list all active XPC connections.
 
-If the user specifies a runtime ID, use `./.streamlib/bin/streamlib broker connections --runtime <id>` to filter.
+If the user specifies a runtime ID, use `./.streamlib/bin/streamlib broker xpc --runtime <id>` to filter.
 
 No connections typically means XPC setup failed - suggest checking broker logs.
