@@ -82,6 +82,7 @@ http-body-util = "0.1"  # Body handling utilities
 rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
 
 axum.workspace = true
+tower-http = { version = "0.6", features = ["trace"] }  # HTTP request/response logging middleware
 futures-util = "0.3"  # For StreamExt/SinkExt on WebSocket
 
 # OpenAPI documentation generation

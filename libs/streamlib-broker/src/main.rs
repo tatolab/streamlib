@@ -64,6 +64,20 @@ fn main() {
         });
     });
 
+    // Start periodic cleanup thread (prunes dead runtimes every 30 seconds)
+    let cleanup_state = state.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let pruned = cleanup_state.prune_dead_runtimes();
+        if !pruned.is_empty() {
+            tracing::info!(
+                "[Broker] Pruned {} dead runtime(s): {:?}",
+                pruned.len(),
+                pruned
+            );
+        }
+    });
+
     // Start XPC listener (blocks forever)
     let listener = Arc::new(XpcBrokerListener::new(state));
 

@@ -43,6 +43,18 @@ pub struct RuntimeInfo {
     pub processor_count: i32,
     #[prost(int32, tag = "4")]
     pub connection_count: i32,
+    /// Human-readable runtime name
+    #[prost(string, tag = "5")]
+    pub name: ::prost::alloc::string::String,
+    /// API server endpoint (e.g., "127.0.0.1:9000")
+    #[prost(string, tag = "6")]
+    pub api_endpoint: ::prost::alloc::string::String,
+    /// Path to runtime log file
+    #[prost(string, tag = "7")]
+    pub log_path: ::prost::alloc::string::String,
+    /// Process ID of the runtime
+    #[prost(int32, tag = "8")]
+    pub pid: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListRuntimesResponse {
@@ -105,6 +117,91 @@ pub struct ConnectionInfo {
 pub struct ListConnectionsResponse {
     #[prost(message, repeated, tag = "1")]
     pub connections: ::prost::alloc::vec::Vec<ConnectionInfo>,
+}
+/// Runtime endpoint lookup (DNS-like)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetRuntimeEndpointRequest {
+    /// Query can be by name or ID
+    #[prost(oneof = "get_runtime_endpoint_request::Query", tags = "1, 2")]
+    pub query: ::core::option::Option<get_runtime_endpoint_request::Query>,
+}
+/// Nested message and enum types in `GetRuntimeEndpointRequest`.
+pub mod get_runtime_endpoint_request {
+    /// Query can be by name or ID
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Query {
+        /// Look up by human-readable name
+        #[prost(string, tag = "1")]
+        Name(::prost::alloc::string::String),
+        /// Look up by runtime ID
+        #[prost(string, tag = "2")]
+        RuntimeId(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetRuntimeEndpointResponse {
+    #[prost(bool, tag = "1")]
+    pub found: bool,
+    #[prost(string, tag = "2")]
+    pub runtime_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
+    /// e.g., "127.0.0.1:9000"
+    #[prost(string, tag = "4")]
+    pub api_endpoint: ::prost::alloc::string::String,
+    /// e.g., "/Users/x/.streamlib/logs/fancy-tiger.log"
+    #[prost(string, tag = "5")]
+    pub log_path: ::prost::alloc::string::String,
+}
+/// Runtime registration (called by runtime on startup via gRPC)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegisterRuntimeRequest {
+    /// Unique runtime ID
+    #[prost(string, tag = "1")]
+    pub runtime_id: ::prost::alloc::string::String,
+    /// Human-readable name (e.g., "fancy-tiger")
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    /// API server endpoint (e.g., "127.0.0.1:9000")
+    #[prost(string, tag = "3")]
+    pub api_endpoint: ::prost::alloc::string::String,
+    /// Path to log file
+    #[prost(string, tag = "4")]
+    pub log_path: ::prost::alloc::string::String,
+    /// Process ID of the runtime
+    #[prost(int32, tag = "5")]
+    pub pid: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegisterRuntimeResponse {
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// Error message if success is false
+    #[prost(string, tag = "2")]
+    pub error: ::prost::alloc::string::String,
+}
+/// Runtime unregistration (called by runtime on shutdown)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnregisterRuntimeRequest {
+    #[prost(string, tag = "1")]
+    pub runtime_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct UnregisterRuntimeResponse {
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+}
+/// Prune dead runtimes
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct PruneDeadRuntimesRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PruneDeadRuntimesResponse {
+    /// Number of runtimes removed
+    #[prost(int32, tag = "1")]
+    pub pruned_count: i32,
+    /// Names of removed runtimes
+    #[prost(string, repeated, tag = "2")]
+    pub pruned_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// Generated client implementations.
 pub mod broker_service_client {
@@ -330,6 +427,123 @@ pub mod broker_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Get runtime endpoint by name or ID (DNS-like lookup)
+        pub async fn get_runtime_endpoint(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetRuntimeEndpointRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetRuntimeEndpointResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/GetRuntimeEndpoint",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "streamlib.broker.BrokerService",
+                        "GetRuntimeEndpoint",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Register a runtime (called by runtime on startup)
+        pub async fn register_runtime(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RegisterRuntimeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RegisterRuntimeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/RegisterRuntime",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("streamlib.broker.BrokerService", "RegisterRuntime"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Unregister a runtime (called by runtime on shutdown)
+        pub async fn unregister_runtime(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UnregisterRuntimeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UnregisterRuntimeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/UnregisterRuntime",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "streamlib.broker.BrokerService",
+                        "UnregisterRuntime",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Prune dead runtimes (removes runtimes whose PIDs no longer exist)
+        pub async fn prune_dead_runtimes(
+            &mut self,
+            request: impl tonic::IntoRequest<super::PruneDeadRuntimesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PruneDeadRuntimesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/PruneDeadRuntimes",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "streamlib.broker.BrokerService",
+                        "PruneDeadRuntimes",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -383,6 +597,38 @@ pub mod broker_service_server {
             request: tonic::Request<super::ListConnectionsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ListConnectionsResponse>,
+            tonic::Status,
+        >;
+        /// Get runtime endpoint by name or ID (DNS-like lookup)
+        async fn get_runtime_endpoint(
+            &self,
+            request: tonic::Request<super::GetRuntimeEndpointRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetRuntimeEndpointResponse>,
+            tonic::Status,
+        >;
+        /// Register a runtime (called by runtime on startup)
+        async fn register_runtime(
+            &self,
+            request: tonic::Request<super::RegisterRuntimeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RegisterRuntimeResponse>,
+            tonic::Status,
+        >;
+        /// Unregister a runtime (called by runtime on shutdown)
+        async fn unregister_runtime(
+            &self,
+            request: tonic::Request<super::UnregisterRuntimeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UnregisterRuntimeResponse>,
+            tonic::Status,
+        >;
+        /// Prune dead runtimes (removes runtimes whose PIDs no longer exist)
+        async fn prune_dead_runtimes(
+            &self,
+            request: tonic::Request<super::PruneDeadRuntimesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PruneDeadRuntimesResponse>,
             tonic::Status,
         >;
     }
@@ -675,6 +921,190 @@ pub mod broker_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListConnectionsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/streamlib.broker.BrokerService/GetRuntimeEndpoint" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetRuntimeEndpointSvc<T: BrokerService>(pub Arc<T>);
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::GetRuntimeEndpointRequest>
+                    for GetRuntimeEndpointSvc<T> {
+                        type Response = super::GetRuntimeEndpointResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetRuntimeEndpointRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BrokerService>::get_runtime_endpoint(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetRuntimeEndpointSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/streamlib.broker.BrokerService/RegisterRuntime" => {
+                    #[allow(non_camel_case_types)]
+                    struct RegisterRuntimeSvc<T: BrokerService>(pub Arc<T>);
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::RegisterRuntimeRequest>
+                    for RegisterRuntimeSvc<T> {
+                        type Response = super::RegisterRuntimeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RegisterRuntimeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BrokerService>::register_runtime(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RegisterRuntimeSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/streamlib.broker.BrokerService/UnregisterRuntime" => {
+                    #[allow(non_camel_case_types)]
+                    struct UnregisterRuntimeSvc<T: BrokerService>(pub Arc<T>);
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::UnregisterRuntimeRequest>
+                    for UnregisterRuntimeSvc<T> {
+                        type Response = super::UnregisterRuntimeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UnregisterRuntimeRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BrokerService>::unregister_runtime(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UnregisterRuntimeSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/streamlib.broker.BrokerService/PruneDeadRuntimes" => {
+                    #[allow(non_camel_case_types)]
+                    struct PruneDeadRuntimesSvc<T: BrokerService>(pub Arc<T>);
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::PruneDeadRuntimesRequest>
+                    for PruneDeadRuntimesSvc<T> {
+                        type Response = super::PruneDeadRuntimesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::PruneDeadRuntimesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BrokerService>::prune_dead_runtimes(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = PruneDeadRuntimesSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

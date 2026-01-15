@@ -21,6 +21,8 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -169,9 +171,16 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         };
 
         // Add WebSocket route and OpenAPI spec endpoint (not documented in OpenAPI)
+        // TraceLayer logs all HTTP requests with method, path, status, and latency
+        let trace_layer = TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_request(DefaultOnRequest::new().level(Level::INFO))
+            .on_response(DefaultOnResponse::new().level(Level::INFO));
+
         let app = router
             .route("/ws/events", get(websocket_handler))
             .route("/api/openapi.json", get(get_openapi_spec))
+            .layer(trace_layer)
             .with_state(state);
 
         let config = self.config.clone();
@@ -213,7 +222,6 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
     )
 )]
 async fn health() -> &'static str {
-    tracing::info!("Health function called");
     "ok"
 }
 

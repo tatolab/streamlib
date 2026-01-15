@@ -143,7 +143,7 @@ EOF
 # StreamLib Broker proxy - calls cargo run for dev mode
 set -euo pipefail
 
-export PATH="${cargo_bin}:\$PATH"
+export PATH="/opt/homebrew/bin:${cargo_bin}:\$PATH"
 SOURCE_ROOT="${REPO_ROOT}"
 BROKER_PORT=${BROKER_PORT}
 

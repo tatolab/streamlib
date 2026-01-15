@@ -5,5 +5,7 @@
 pub mod broker;
 pub mod inspect;
 pub mod list;
+pub mod logs;
+pub mod runtimes;
 pub mod serve;
 pub mod setup;
