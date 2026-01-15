@@ -7,9 +7,12 @@ use tonic::{Request, Response, Status};
 
 use crate::proto::broker_service_server::BrokerService;
 use crate::proto::{
-    ConnectionInfo, GetHealthRequest, GetHealthResponse, GetVersionRequest, GetVersionResponse,
-    ListConnectionsRequest, ListConnectionsResponse, ListProcessorsRequest, ListProcessorsResponse,
-    ListRuntimesRequest, ListRuntimesResponse, ProcessorInfo, RuntimeInfo,
+    ConnectionInfo, GetHealthRequest, GetHealthResponse, GetRuntimeEndpointRequest,
+    GetRuntimeEndpointResponse, GetVersionRequest, GetVersionResponse, ListConnectionsRequest,
+    ListConnectionsResponse, ListProcessorsRequest, ListProcessorsResponse, ListRuntimesRequest,
+    ListRuntimesResponse, ProcessorInfo, PruneDeadRuntimesRequest, PruneDeadRuntimesResponse,
+    RegisterRuntimeRequest, RegisterRuntimeResponse, RuntimeInfo, UnregisterRuntimeRequest,
+    UnregisterRuntimeResponse,
 };
 use crate::state::BrokerState;
 
@@ -68,6 +71,10 @@ impl BrokerService for BrokerGrpcService {
                 let connection_count = self.state.connection_count_for_runtime(&r.runtime_id);
                 RuntimeInfo {
                     runtime_id: r.runtime_id,
+                    name: r.name,
+                    api_endpoint: r.api_endpoint,
+                    log_path: r.log_path,
+                    pid: r.pid,
                     registered_at_unix_ms: r
                         .registered_at
                         .elapsed()
@@ -145,5 +152,104 @@ impl BrokerService for BrokerGrpcService {
             .collect();
 
         Ok(Response::new(ListConnectionsResponse { connections }))
+    }
+
+    async fn get_runtime_endpoint(
+        &self,
+        request: Request<GetRuntimeEndpointRequest>,
+    ) -> Result<Response<GetRuntimeEndpointResponse>, Status> {
+        use crate::proto::get_runtime_endpoint_request::Query;
+
+        let query = request.into_inner().query;
+
+        let runtime = match query {
+            Some(Query::Name(name)) => self.state.get_runtime_by_name(&name),
+            Some(Query::RuntimeId(id)) => self.state.get_runtime_by_id(&id),
+            None => {
+                return Err(Status::invalid_argument(
+                    "Query must specify name or runtime_id",
+                ))
+            }
+        };
+
+        match runtime {
+            Some(r) => Ok(Response::new(GetRuntimeEndpointResponse {
+                found: true,
+                runtime_id: r.runtime_id,
+                name: r.name,
+                api_endpoint: r.api_endpoint,
+                log_path: r.log_path,
+            })),
+            None => Ok(Response::new(GetRuntimeEndpointResponse {
+                found: false,
+                runtime_id: String::new(),
+                name: String::new(),
+                api_endpoint: String::new(),
+                log_path: String::new(),
+            })),
+        }
+    }
+
+    async fn register_runtime(
+        &self,
+        request: Request<RegisterRuntimeRequest>,
+    ) -> Result<Response<RegisterRuntimeResponse>, Status> {
+        let req = request.into_inner();
+
+        tracing::info!(
+            "Registering runtime: {} (name: {}, pid: {}, api: {}, log: {})",
+            req.runtime_id,
+            req.name,
+            req.pid,
+            req.api_endpoint,
+            req.log_path
+        );
+
+        self.state.register_runtime_with_metadata(
+            &req.runtime_id,
+            &req.name,
+            &req.api_endpoint,
+            &req.log_path,
+            req.pid,
+        );
+
+        Ok(Response::new(RegisterRuntimeResponse {
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    async fn unregister_runtime(
+        &self,
+        request: Request<UnregisterRuntimeRequest>,
+    ) -> Result<Response<UnregisterRuntimeResponse>, Status> {
+        let req = request.into_inner();
+
+        tracing::info!("Unregistering runtime: {}", req.runtime_id);
+
+        self.state.unregister_runtime(&req.runtime_id);
+
+        Ok(Response::new(UnregisterRuntimeResponse { success: true }))
+    }
+
+    async fn prune_dead_runtimes(
+        &self,
+        _request: Request<PruneDeadRuntimesRequest>,
+    ) -> Result<Response<PruneDeadRuntimesResponse>, Status> {
+        let pruned_names = self.state.prune_dead_runtimes();
+        let pruned_count = pruned_names.len() as i32;
+
+        if pruned_count > 0 {
+            tracing::info!(
+                "Pruned {} dead runtime(s): {:?}",
+                pruned_count,
+                pruned_names
+            );
+        }
+
+        Ok(Response::new(PruneDeadRuntimesResponse {
+            pruned_count,
+            pruned_names,
+        }))
     }
 }

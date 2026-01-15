@@ -17,6 +17,10 @@ use parking_lot::RwLock;
 #[derive(Clone, Debug)]
 pub struct RuntimeMetadata {
     pub runtime_id: String,
+    pub name: String,
+    pub api_endpoint: String,
+    pub log_path: String,
+    pub pid: i32,
     pub registered_at: Instant,
 }
 
@@ -72,16 +76,47 @@ impl BrokerState {
         self.inner.started_at.elapsed().as_secs() as i64
     }
 
-    /// Register a runtime.
+    /// Register a runtime with minimal metadata (legacy, for backwards compatibility).
     pub fn register_runtime(&self, runtime_id: &str) {
+        self.register_runtime_with_metadata(runtime_id, runtime_id, "", "", 0);
+    }
+
+    /// Register a runtime with full metadata.
+    pub fn register_runtime_with_metadata(
+        &self,
+        runtime_id: &str,
+        name: &str,
+        api_endpoint: &str,
+        log_path: &str,
+        pid: i32,
+    ) {
         let metadata = RuntimeMetadata {
             runtime_id: runtime_id.to_string(),
+            name: name.to_string(),
+            api_endpoint: api_endpoint.to_string(),
+            log_path: log_path.to_string(),
+            pid,
             registered_at: Instant::now(),
         };
         self.inner
             .runtimes
             .write()
             .insert(runtime_id.to_string(), metadata);
+    }
+
+    /// Get a runtime by name.
+    pub fn get_runtime_by_name(&self, name: &str) -> Option<RuntimeMetadata> {
+        self.inner
+            .runtimes
+            .read()
+            .values()
+            .find(|r| r.name == name)
+            .cloned()
+    }
+
+    /// Get a runtime by ID.
+    pub fn get_runtime_by_id(&self, runtime_id: &str) -> Option<RuntimeMetadata> {
+        self.inner.runtimes.read().get(runtime_id).cloned()
     }
 
     /// Unregister a runtime.
@@ -205,6 +240,33 @@ impl BrokerState {
             .filter(|c| c.runtime_id == runtime_id)
             .count()
     }
+
+    /// Prune dead runtimes by checking if their PIDs still exist.
+    /// Returns the names of pruned runtimes.
+    pub fn prune_dead_runtimes(&self) -> Vec<String> {
+        let mut pruned = Vec::new();
+        let mut runtimes = self.inner.runtimes.write();
+
+        runtimes.retain(|_id, metadata| {
+            let alive = is_process_alive(metadata.pid);
+            if !alive {
+                pruned.push(metadata.name.clone());
+            }
+            alive
+        });
+
+        pruned
+    }
+}
+
+/// Check if a process is alive using kill(pid, 0).
+/// Signal 0 doesn't send any signal - it just checks if the process exists.
+fn is_process_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: kill with signal 0 is safe - it only checks process existence
+    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 impl Default for BrokerState {
