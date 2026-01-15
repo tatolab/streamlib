@@ -189,7 +189,7 @@ class AvatarCharacter:
             logger.warning("AvatarCharacter: Running WITHOUT MediaPipe")
 
         # Get GL context from streamlib
-        self.gl_ctx = ctx.gpu.gl_context()
+        self.gl_ctx = ctx.gpu._experimental_gl_context()
         self.gl_ctx.make_current()
 
         # Create ModernGL context wrapping the existing OpenGL context
@@ -255,8 +255,7 @@ class AvatarCharacter:
 
         self.gl_ctx.make_current()
 
-        # In subprocess mode, frame IS the PixelBuffer directly
-        input_buffer = frame
+        input_buffer = frame["pixel_buffer"]
         width = input_buffer.width
         height = input_buffer.height
 
@@ -363,8 +362,12 @@ class AvatarCharacter:
         # Only output frames after the delay has passed
         # This triggers the slide-in animation in the compositor when first frame arrives
         if self._is_ready:
-            # In subprocess mode, output the PixelBuffer directly
-            ctx.output("video_out").set(self.output_buffer)
+            ctx.output("video_out").set({
+                "pixel_buffer": self.output_buffer,
+                "timestamp_ns": frame["timestamp_ns"],
+                "frame_number": frame["frame_number"],
+                "pip_ready": True,
+            })
 
         self.frame_count += 1
         if self.frame_count == 1:

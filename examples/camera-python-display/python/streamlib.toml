@@ -1,7 +1,0 @@
-# StreamLib Project Configuration
-# This file configures the StreamLib runtime for this Python processor project.
-
-[env]
-# Use OpenGL backend for Skia rendering in Python processors
-# Metal is still used for cross-process IOSurface sharing
-STREAMLIB_RHI_BACKEND = "opengl"

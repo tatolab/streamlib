@@ -21,7 +21,8 @@ members = [
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
-    "examples/camera-python-display/rust", # Plugin: Rust processors for camera-python-display
+    "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline
+    "examples/camera-dylib-display/rust", # Plugin: Rust processors for camera-dylib-display
     "examples/xpc-test",                  # Example: XPC communication test
 ]
 

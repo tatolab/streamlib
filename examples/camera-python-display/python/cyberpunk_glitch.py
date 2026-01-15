@@ -280,7 +280,7 @@ class CyberpunkGlitch:
         self.gl_initialized = False
 
         # Get GL context reference (but don't initialize GL resources yet)
-        self.gl_ctx = ctx.gpu.gl_context()
+        self.gl_ctx = ctx.gpu._experimental_gl_context()
 
         logger.info("Cyberpunk Glitch processor setup complete (GL init deferred)")
 
@@ -403,8 +403,8 @@ class CyberpunkGlitch:
         # Initialize GL resources on first frame (deferred from setup)
         self._init_gl_resources()
 
-        # Get pixel buffer from frame (subprocess returns PixelBuffer directly)
-        input_buffer = frame
+        # Get pixel buffer from frame (buffer-centric API)
+        input_buffer = frame["pixel_buffer"]
         width = input_buffer.width
         height = input_buffer.height
         elapsed = ctx.time.elapsed_secs
@@ -487,8 +487,11 @@ class CyberpunkGlitch:
         self.gl_ctx.flush()
 
         # Output with pixel buffer
-        # In subprocess mode, set the PixelBuffer directly (timestamps managed by runtime)
-        ctx.output("video_out").set(self.output_buffer)
+        ctx.output("video_out").set({
+            "pixel_buffer": self.output_buffer,
+            "timestamp_ns": frame["timestamp_ns"],
+            "frame_number": frame["frame_number"],
+        })
 
         self.frame_count += 1
         if self.frame_count % 120 == 0:

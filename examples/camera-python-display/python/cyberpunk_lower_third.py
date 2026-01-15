@@ -564,7 +564,7 @@ class CyberpunkLowerThird:
         self.height = DEFAULT_HEIGHT
 
         # Get GL context
-        self.gl_ctx = ctx.gpu.gl_context()
+        self.gl_ctx = ctx.gpu._experimental_gl_context()
         self.gl_ctx.make_current()
 
         # Create Skia GPU context
