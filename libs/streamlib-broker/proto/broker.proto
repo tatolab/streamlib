@@ -34,6 +34,38 @@ service BrokerService {
 
   // Prune dead runtimes (removes runtimes whose PIDs no longer exist)
   rpc PruneDeadRuntimes(PruneDeadRuntimesRequest) returns (PruneDeadRuntimesResponse);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // XPC Bridge Connection Management (Phase 4)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Host processor allocates a connection before spawning subprocess
+  rpc AllocateConnection(AllocateConnectionRequest) returns (AllocateConnectionResponse);
+
+  // Host reports alive (Rust code is running)
+  rpc HostAlive(HostAliveRequest) returns (HostAliveResponse);
+
+  // Host confirms XPC endpoint was stored (called AFTER XPC store_endpoint)
+  // NOTE: The actual endpoint is transferred via XPC, not gRPC (Mach ports can't serialize)
+  rpc HostXpcReady(HostXpcReadyRequest) returns (HostXpcReadyResponse);
+
+  // Subprocess reports alive (first contact with broker)
+  rpc ClientAlive(ClientAliveRequest) returns (ClientAliveResponse);
+
+  // Host polls for client status
+  rpc GetClientStatus(GetClientStatusRequest) returns (GetClientStatusResponse);
+
+  // Client polls for host status
+  rpc GetHostStatus(GetHostStatusRequest) returns (GetHostStatusResponse);
+
+  // Either side marks their ACK complete
+  rpc MarkAcked(MarkAckedRequest) returns (MarkAckedResponse);
+
+  // Get full connection info (for debugging)
+  rpc GetConnectionInfo(GetConnectionInfoRequest) returns (GetConnectionInfoResponse);
+
+  // Called by host processor on teardown to release broker resources
+  rpc CloseConnection(CloseConnectionRequest) returns (CloseConnectionResponse);
 }
 
 // Health check
@@ -155,4 +187,109 @@ message PruneDeadRuntimesRequest {}
 message PruneDeadRuntimesResponse {
   int32 pruned_count = 1;           // Number of runtimes removed
   repeated string pruned_names = 2; // Names of removed runtimes
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// XPC Bridge Connection Management Messages (Phase 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// AllocateConnection - Host processor allocates a connection before spawning subprocess
+message AllocateConnectionRequest {
+  string runtime_id = 1;
+  string processor_id = 2;
+}
+
+message AllocateConnectionResponse {
+  string connection_id = 1;  // Pass to subprocess via env var
+  bool success = 2;
+  string error = 3;
+}
+
+// HostAlive - Host reports alive (Rust code is running)
+message HostAliveRequest {
+  string connection_id = 1;
+}
+
+message HostAliveResponse {
+  bool success = 1;
+  string client_state = 2;  // "pending", "alive", "xpc_ready", etc.
+}
+
+// HostXpcReady - Host confirms XPC endpoint was stored (called AFTER XPC store_endpoint)
+// NOTE: The actual endpoint is transferred via XPC, not gRPC (Mach ports can't serialize)
+message HostXpcReadyRequest {
+  string connection_id = 1;
+  // NO xpc_endpoint field - endpoint already stored via XPC message
+}
+
+message HostXpcReadyResponse {
+  bool success = 1;
+  string client_state = 2;
+}
+
+// ClientAlive - Subprocess reports alive (first contact with broker)
+message ClientAliveRequest {
+  string connection_id = 1;  // From env var STREAMLIB_CONNECTION_ID
+}
+
+message ClientAliveResponse {
+  bool success = 1;
+  string host_state = 2;  // "pending", "alive", "xpc_ready", etc.
+}
+
+// GetClientStatus - Host polls for client status
+message GetClientStatusRequest {
+  string connection_id = 1;
+}
+
+message GetClientStatusResponse {
+  string client_state = 1;  // "pending", "alive", "xpc_ready", "acked", "failed"
+  // NOTE: No xpc_endpoint field - XPC endpoints transferred via broker XPC interface, not gRPC
+}
+
+// GetHostStatus - Client polls for host status
+message GetHostStatusRequest {
+  string connection_id = 1;
+}
+
+message GetHostStatusResponse {
+  string host_state = 1;
+  // NOTE: No xpc_endpoint field - XPC endpoints transferred via broker XPC interface, not gRPC
+}
+
+// MarkAcked - Either side marks their ACK complete
+message MarkAckedRequest {
+  string connection_id = 1;
+  string side = 2;  // "host" or "client"
+}
+
+message MarkAckedResponse {
+  bool success = 1;
+  string connection_state = 2;  // "awaiting_ack", "ready"
+}
+
+// GetConnectionInfo - Get full connection info (for debugging)
+message GetConnectionInfoRequest {
+  string connection_id = 1;
+}
+
+message GetConnectionInfoResponse {
+  bool found = 1;
+  string host_state = 2;
+  string client_state = 3;
+  string derived_state = 4;
+  bool host_xpc_endpoint_stored = 5;  // Whether host has stored endpoint
+  bool client_connected = 6;           // Whether client has connected to host
+  int64 age_secs = 7;
+  int64 timeout_secs = 8;
+}
+
+// CloseConnection - Called by host processor on teardown to release broker resources
+message CloseConnectionRequest {
+  string connection_id = 1;
+  string reason = 2;  // "shutdown", "error", "timeout", etc.
+}
+
+message CloseConnectionResponse {
+  bool success = 1;
 }
