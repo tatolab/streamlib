@@ -102,9 +102,13 @@ enum Commands {
 
     /// Show the graph of a running runtime
     Graph {
-        /// URL of the runtime API server
-        #[arg(long, default_value = "http://127.0.0.1:9000")]
-        url: String,
+        /// Runtime name or ID (queries broker for endpoint)
+        #[arg(long = "runtime", short = 'r')]
+        runtime: Option<String>,
+
+        /// URL of the runtime API server (alternative to --runtime)
+        #[arg(long)]
+        url: Option<String>,
 
         /// Output format (json, dot, or pretty)
         #[arg(long, default_value = "pretty")]
@@ -196,8 +200,8 @@ enum BrokerCommands {
         runtime: Option<String>,
     },
 
-    /// List active connections
-    Connections {
+    /// List active XPC connections
+    Xpc {
         /// Filter by runtime ID
         #[arg(long)]
         runtime: Option<String>,
@@ -298,8 +302,12 @@ async fn async_main(cli: Cli) -> Result<()> {
         Some(Commands::Inspect { url }) => {
             commands::inspect::run(&url).await?;
         }
-        Some(Commands::Graph { url, format }) => {
-            commands::inspect::graph(&url, &format).await?;
+        Some(Commands::Graph {
+            runtime,
+            url,
+            format,
+        }) => {
+            commands::inspect::graph(runtime.as_deref(), url.as_deref(), &format).await?;
         }
         #[cfg(target_os = "macos")]
         Some(Commands::Broker { action }) => match action {
@@ -315,7 +323,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             BrokerCommands::Processors { runtime } => {
                 commands::broker::processors(runtime.as_deref()).await?
             }
-            BrokerCommands::Connections { runtime } => {
+            BrokerCommands::Xpc { runtime } => {
                 commands::broker::connections(runtime.as_deref()).await?
             }
         },

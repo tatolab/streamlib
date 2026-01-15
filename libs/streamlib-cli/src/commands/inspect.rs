@@ -1,8 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+
+use streamlib::core::json_schema::GraphResponse;
+use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
+use streamlib_broker::proto::get_runtime_endpoint_request::Query;
+use streamlib_broker::proto::GetRuntimeEndpointRequest;
+use streamlib_broker::GRPC_PORT;
 
 #[derive(Debug, Deserialize)]
 struct RegistryResponse {
@@ -68,12 +74,55 @@ pub async fn run(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Get the broker gRPC endpoint.
+fn broker_endpoint() -> String {
+    let port = std::env::var("STREAMLIB_BROKER_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(GRPC_PORT);
+    format!("http://127.0.0.1:{}", port)
+}
+
+/// Resolve runtime name/ID to API URL via broker.
+async fn resolve_runtime_url(runtime: &str) -> Result<String> {
+    let endpoint = broker_endpoint();
+    let mut client = BrokerServiceClient::connect(endpoint)
+        .await
+        .context("Failed to connect to broker. Is the broker running?")?;
+
+    let request = GetRuntimeEndpointRequest {
+        query: Some(Query::Name(runtime.to_string())),
+    };
+
+    let response = client
+        .get_runtime_endpoint(request)
+        .await
+        .context("Failed to query broker for runtime endpoint")?
+        .into_inner();
+
+    if !response.found {
+        bail!(
+            "Runtime '{}' not found. Use 'streamlib runtimes list' to see available runtimes.",
+            runtime
+        );
+    }
+
+    Ok(format!("http://{}", response.api_endpoint))
+}
+
 /// Get and display the graph from a running runtime.
-pub async fn graph(url: &str, format: &str) -> Result<()> {
+pub async fn graph(runtime: Option<&str>, url: Option<&str>, format: &str) -> Result<()> {
+    // Resolve URL: prefer --runtime over --url, default to localhost:9000
+    let resolved_url = match (runtime, url) {
+        (Some(r), _) => resolve_runtime_url(r).await?,
+        (None, Some(u)) => u.to_string(),
+        (None, None) => "http://127.0.0.1:9000".to_string(),
+    };
+
     let client = reqwest::Client::new();
 
-    let graph_url = format!("{}/api/graph", url);
-    let graph: serde_json::Value = client
+    let graph_url = format!("{}/api/graph", resolved_url);
+    let graph: GraphResponse = client
         .get(&graph_url)
         .send()
         .await
@@ -87,85 +136,62 @@ pub async fn graph(url: &str, format: &str) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         "dot" => {
-            print_graph_as_dot(&graph)?;
+            print_graph_as_dot(&graph);
         }
         "pretty" | _ => {
-            print_graph_pretty(&graph)?;
+            print_graph_pretty(&graph);
         }
     }
 
     Ok(())
 }
 
-fn print_graph_pretty(graph: &serde_json::Value) -> Result<()> {
-    let processors = graph
-        .get("processors")
-        .and_then(|p| p.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
+fn print_graph_pretty(graph: &GraphResponse) {
+    println!(
+        "Graph: {} processors, {} links\n",
+        graph.nodes.len(),
+        graph.links.len()
+    );
 
-    let links = graph
-        .get("links")
-        .and_then(|l| l.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-
-    println!("Graph: {} processors, {} links\n", processors, links);
-
-    if let Some(procs) = graph.get("processors").and_then(|p| p.as_array()) {
+    if !graph.nodes.is_empty() {
         println!("Processors:");
-        for proc in procs {
-            let id = proc.get("id").and_then(|i| i.as_str()).unwrap_or("?");
-            let proc_type = proc
-                .get("processor_type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("?");
-            println!("  [{}] {}", id, proc_type);
+        for node in &graph.nodes {
+            println!("  [{}] {}", node.id, node.processor_type);
         }
     }
 
-    if let Some(links_arr) = graph.get("links").and_then(|l| l.as_array()) {
-        if !links_arr.is_empty() {
-            println!("\nLinks:");
-            for link in links_arr {
-                let from = link.get("from").and_then(|f| f.as_str()).unwrap_or("?");
-                let to = link.get("to").and_then(|t| t.as_str()).unwrap_or("?");
-                println!("  {} -> {}", from, to);
-            }
+    if !graph.links.is_empty() {
+        println!("\nLinks:");
+        for link in &graph.links {
+            println!(
+                "  {}.{} -> {}.{}",
+                link.source.processor_id,
+                link.source.port_name,
+                link.target.processor_id,
+                link.target.port_name
+            );
         }
     }
-
-    Ok(())
 }
 
-fn print_graph_as_dot(graph: &serde_json::Value) -> Result<()> {
+fn print_graph_as_dot(graph: &GraphResponse) {
     println!("digraph streamlib {{");
     println!("  rankdir=LR;");
     println!("  node [shape=box];");
 
-    if let Some(procs) = graph.get("processors").and_then(|p| p.as_array()) {
-        for proc in procs {
-            let id = proc.get("id").and_then(|i| i.as_str()).unwrap_or("?");
-            let proc_type = proc
-                .get("processor_type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("?");
-            println!("  \"{}\" [label=\"{}\\n({})\"];", id, id, proc_type);
-        }
+    for node in &graph.nodes {
+        println!(
+            "  \"{}\" [label=\"{}\\n({})\"];",
+            node.id, node.id, node.processor_type
+        );
     }
 
-    if let Some(links) = graph.get("links").and_then(|l| l.as_array()) {
-        for link in links {
-            let from = link.get("from").and_then(|f| f.as_str()).unwrap_or("?");
-            let to = link.get("to").and_then(|t| t.as_str()).unwrap_or("?");
-            // Parse "processor.port" format
-            let from_proc = from.split('.').next().unwrap_or(from);
-            let to_proc = to.split('.').next().unwrap_or(to);
-            println!("  \"{}\" -> \"{}\";", from_proc, to_proc);
-        }
+    for link in &graph.links {
+        println!(
+            "  \"{}\" -> \"{}\";",
+            link.source.processor_id, link.target.processor_id
+        );
     }
 
     println!("}}");
-
-    Ok(())
 }

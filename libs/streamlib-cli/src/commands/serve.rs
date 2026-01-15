@@ -3,11 +3,8 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use streamlib::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
-use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
-use streamlib_broker::proto::{RegisterRuntimeRequest, UnregisterRuntimeRequest};
-use streamlib_broker::GRPC_PORT;
 use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::plugin_loader::PluginLoader;
@@ -89,67 +86,6 @@ fn get_logs_dir() -> Result<PathBuf> {
     Ok(home.join(".streamlib").join("logs"))
 }
 
-/// Get the broker gRPC endpoint.
-fn broker_endpoint() -> String {
-    let port = std::env::var("STREAMLIB_BROKER_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(GRPC_PORT);
-    format!("http://127.0.0.1:{}", port)
-}
-
-/// Register the runtime with the broker via gRPC.
-async fn register_with_broker(
-    runtime_id: &str,
-    name: &str,
-    api_endpoint: &str,
-    log_path: &str,
-    pid: i32,
-) -> Result<()> {
-    let endpoint = broker_endpoint();
-
-    match BrokerServiceClient::connect(endpoint.clone()).await {
-        Ok(mut client) => {
-            client
-                .register_runtime(RegisterRuntimeRequest {
-                    runtime_id: runtime_id.to_string(),
-                    name: name.to_string(),
-                    api_endpoint: api_endpoint.to_string(),
-                    log_path: log_path.to_string(),
-                    pid,
-                })
-                .await
-                .context("Failed to register with broker")?;
-
-            tracing::info!("Registered with broker at {}", endpoint);
-            Ok(())
-        }
-        Err(e) => {
-            // Broker not running is not a fatal error - runtime can still work standalone
-            tracing::warn!(
-                "Could not connect to broker at {}: {}. Runtime will run standalone.",
-                endpoint,
-                e
-            );
-            Ok(())
-        }
-    }
-}
-
-/// Unregister the runtime from the broker via gRPC.
-async fn unregister_from_broker(runtime_id: &str) {
-    let endpoint = broker_endpoint();
-
-    if let Ok(mut client) = BrokerServiceClient::connect(endpoint).await {
-        let _ = client
-            .unregister_runtime(UnregisterRuntimeRequest {
-                runtime_id: runtime_id.to_string(),
-            })
-            .await;
-        tracing::info!("Unregistered from broker");
-    }
-}
-
 /// Set up file-based logging and return the guard (must be kept alive).
 /// When `daemon` is true, only logs to file (no stdout).
 fn setup_file_logging(runtime_name: &str, daemon: bool) -> Result<WorkerGuard> {
@@ -195,9 +131,8 @@ pub async fn run(
     let runtime_name = name.unwrap_or_else(generate_runtime_name);
 
     let log_path = get_logs_dir()?.join(format!("{}.log", runtime_name));
-    let api_endpoint = format!("{}:{}", host, port);
 
-    // Generate runtime ID and set env var BEFORE creating runtime
+    // Set runtime ID env var BEFORE creating runtime
     // StreamRuntime::new() reads STREAMLIB_RUNTIME_ID from env
     let runtime_id = format!("R{}", cuid2::create_id());
     std::env::set_var("STREAMLIB_RUNTIME_ID", &runtime_id);
@@ -207,7 +142,7 @@ pub async fn run(
 
     tracing::info!("Starting runtime: {} ({})", runtime_name, runtime_id);
     tracing::info!("Log file: {}", log_path.display());
-    tracing::info!("API endpoint: {}", api_endpoint);
+
     // Load plugins BEFORE creating runtime (registers processors in global registry)
     let mut loader = PluginLoader::new();
 
@@ -227,10 +162,12 @@ pub async fn run(
 
     let runtime = StreamRuntime::new()?;
 
-    // Add API server
+    // Add API server with name and log_path for broker registration
     let config = ApiServerConfig {
         host: host.clone(),
         port,
+        name: Some(runtime_name.clone()),
+        log_path: Some(log_path.clone()),
     };
     runtime.add_processor(ApiServerProcessor::node(config))?;
 
@@ -242,19 +179,6 @@ pub async fn run(
 
     runtime.start()?;
 
-    let log_path_str = log_path.to_string_lossy().to_string();
-
-    // Register with broker (non-blocking, continues even if broker unavailable)
-    let pid = std::process::id() as i32;
-    register_with_broker(
-        &runtime_id,
-        &runtime_name,
-        &api_endpoint,
-        &log_path_str,
-        pid,
-    )
-    .await?;
-
     if graph_file.is_none() {
         println!("Empty graph ready - use API to add processors");
     }
@@ -264,11 +188,6 @@ pub async fn run(
     }
 
     runtime.wait_for_signal()?;
-
-    // Unregister from broker before shutdown
-    tracing::info!("Runtime stopped, unregistering from broker...");
-    unregister_from_broker(&runtime_id).await;
-    tracing::info!("Unregistration complete");
 
     // Keep loader alive until runtime stops (libraries must remain loaded)
     drop(loader);

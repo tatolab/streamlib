@@ -192,6 +192,7 @@ fn main() -> Result<()> {
     let _api_server = runtime.add_processor(ApiServerProcessor::node(ApiServerConfig {
         host: "127.0.0.1".to_string(),
         port: 9000,
+        ..Default::default()
     }))?;
     println!("✓ API server running at http://127.0.0.1:9000");
     println!("   Registry: http://127.0.0.1:9000/registry\n");
