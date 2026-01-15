@@ -64,10 +64,12 @@ fn main() {
         });
     });
 
-    // Start periodic cleanup thread (prunes dead runtimes every 30 seconds)
+    // Start periodic cleanup thread (prunes dead runtimes and stale connections every 30 seconds)
     let cleanup_state = state.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(30));
+
+        // Prune dead runtimes (Phase 3)
         let pruned = cleanup_state.prune_dead_runtimes();
         if !pruned.is_empty() {
             tracing::info!(
@@ -75,6 +77,20 @@ fn main() {
                 pruned.len(),
                 pruned
             );
+        }
+
+        // Prune timed out XPC bridge connections (Phase 4)
+        let timed_out = cleanup_state.get_timed_out_xpc_bridge_connections();
+        for conn_id in timed_out {
+            if let Some(conn) = cleanup_state.remove_xpc_bridge_connection(&conn_id) {
+                tracing::warn!(
+                    "[Broker] XPC bridge connection {} timed out after {}s (host: {}, client: {})",
+                    conn_id,
+                    conn.age_secs(),
+                    conn.host_state.as_str(),
+                    conn.client_state.as_str()
+                );
+            }
         }
     });
 
