@@ -115,7 +115,7 @@ enum Commands {
         format: String,
     },
 
-    /// XPC broker diagnostics (macOS only)
+    /// Broker diagnostics (macOS only)
     #[cfg(target_os = "macos")]
     Broker {
         #[command(subcommand)]

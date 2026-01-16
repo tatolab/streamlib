@@ -67,8 +67,8 @@ impl RhiPixelBufferRef {
 
     /// Create an RhiPixelBufferRef from a raw IOSurfaceRef (macOS only).
     ///
-    /// This is useful for XPC-based frame sharing where the IOSurfaceRef
-    /// is received via XpcFrameChannel.
+    /// This is useful for cross-process frame sharing where the IOSurfaceRef
+    /// is received from another process.
     ///
     /// # Safety
     /// The caller must ensure the IOSurfaceRef is valid.

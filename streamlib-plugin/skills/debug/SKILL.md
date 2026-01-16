@@ -1,5 +1,5 @@
 ---
-description: Use this skill when debugging StreamLib runtime issues, broker problems, XPC failures, or subprocess errors. Activates on "broker not running", "runtime error", "XPC failed", "subprocess not connecting".
+description: Use this skill when debugging StreamLib runtime issues or broker problems. Activates on "broker not running", "runtime error", "gRPC error".
 ---
 
 # StreamLib Debugging
@@ -10,8 +10,7 @@ Use these commands to diagnose issues:
 |---------|---------|
 | `/streamlib:status` | Check broker health |
 | `/streamlib:runtimes` | List registered runtimes |
-| `/streamlib:processors` | List subprocess processors |
-| `/streamlib:connections` | List XPC connections |
+| `/streamlib:processors` | List processors |
 | `/streamlib:logs` | View broker logs |
 | `/streamlib:install` | Install/reinstall broker |
 
@@ -19,5 +18,4 @@ Use these commands to diagnose issues:
 
 1. `/streamlib:status` - Is broker running?
 2. `/streamlib:runtimes` - Any runtimes registered?
-3. `/streamlib:connections` - Are subprocesses connected?
-4. `/streamlib:logs --errors` - What errors occurred?
+3. `/streamlib:logs --errors` - What errors occurred?

@@ -113,7 +113,6 @@ pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 mach2 = "0.4"  # Mach kernel API for thread priorities and timing
 opus = "0.3"  # Opus audio codec encoder/decoder
-xpc-bindgen = "26.0"  # XPC bindings for bidirectional cross-process IPC
 launchd = "0.3"  # Launchd plist generation for broker service
 ctor = "0.4"  # Global constructor for automatic broker mode detection
 tonic = "0.12"  # gRPC client for broker availability check

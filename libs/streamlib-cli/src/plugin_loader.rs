@@ -83,7 +83,7 @@ impl PluginLoader {
 
         // Call the plugin's registration function with host's registry
         // This ensures processors register with the host's registry, not a duplicate
-        (decl.register)(&*PROCESSOR_REGISTRY);
+        (decl.register)(&PROCESSOR_REGISTRY);
 
         // Count processors after registration
         let after_count = PROCESSOR_REGISTRY.list_registered().len();

@@ -86,7 +86,6 @@ update_cargo_config() {
 STREAMLIB_HOME = "${STREAMLIB_HOME}"
 STREAMLIB_BROKER_PORT = "${BROKER_PORT}"
 STREAMLIB_DEV_MODE = "1"
-STREAMLIB_BROKER_XPC_SERVICE = "${SERVICE_NAME}"
 # End StreamLib dev environment
 EOF
 
@@ -134,7 +133,6 @@ BROKER_PORT=${BROKER_PORT}
 export STREAMLIB_HOME="${STREAMLIB_HOME}"
 export STREAMLIB_BROKER_PORT="\$BROKER_PORT"
 export STREAMLIB_DEV_MODE=1
-export STREAMLIB_BROKER_XPC_SERVICE="${SERVICE_NAME}"
 
 exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-cli --quiet -- "\$@"
 EOF
@@ -153,7 +151,6 @@ BROKER_PORT=${BROKER_PORT}
 
 export STREAMLIB_HOME="${STREAMLIB_HOME}"
 export STREAMLIB_DEV_MODE=1
-export STREAMLIB_BROKER_XPC_SERVICE="${SERVICE_NAME}"
 
 exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --quiet -- --port "\$BROKER_PORT" "\$@"
 EOF

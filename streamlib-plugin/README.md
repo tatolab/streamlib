@@ -8,8 +8,7 @@ Runtime and broker debugging.
 |---------|-------------|
 | `/streamlib:status` | Broker health, version, uptime |
 | `/streamlib:runtimes` | List registered runtimes |
-| `/streamlib:processors` | List subprocess processors |
-| `/streamlib:connections` | List XPC connections |
+| `/streamlib:processors` | List processors |
 | `/streamlib:logs` | View broker logs |
 | `/streamlib:install` | Install/reinstall broker |
 
@@ -17,7 +16,7 @@ Runtime and broker debugging.
 
 | Skill | Triggers On |
 |-------|-------------|
-| debug | Runtime errors, broker issues, XPC failures |
+| debug | Runtime errors, broker issues |
 
 ## Hooks
 

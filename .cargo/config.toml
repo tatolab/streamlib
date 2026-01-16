@@ -17,5 +17,4 @@ PYTHONHOME = "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions
 STREAMLIB_HOME = "/Users/fonta/Repositories/tatolab/streamlib/.streamlib"
 STREAMLIB_BROKER_PORT = "50052"
 STREAMLIB_DEV_MODE = "1"
-STREAMLIB_BROKER_XPC_SERVICE = "com.tatolab.streamlib.broker.dev-a416a1"
 # End StreamLib dev environment

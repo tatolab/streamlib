@@ -106,7 +106,7 @@ fn setup_file_logging(runtime_name: &str, daemon: bool) -> Result<WorkerGuard> {
         .with_ansi(false);
 
     // Optional stdout layer - None in daemon mode
-    let stdout_layer = (!daemon).then(|| tracing_subscriber::fmt::layer());
+    let stdout_layer = (!daemon).then(tracing_subscriber::fmt::layer);
 
     tracing_subscriber::registry()
         .with(env_filter)

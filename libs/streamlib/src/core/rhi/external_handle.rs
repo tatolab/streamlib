@@ -9,9 +9,6 @@ use crate::core::Result;
 ///
 /// This enum represents a handle that can be sent to another process,
 /// which can then import the GPU resource without copying data.
-///
-/// On macOS, XPC is used to transfer IOSurface objects directly via
-/// `IOSurfaceCreateXPCObject()` and `IOSurfaceLookupFromXPCObject()`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RhiExternalHandle {
     /// macOS: IOSurface ID (u32).
@@ -24,16 +21,6 @@ pub enum RhiExternalHandle {
     /// The mach port is created via IOSurfaceCreateMachPort().
     #[cfg(target_os = "macos")]
     IOSurfaceMachPort { port: u32 },
-
-    /// macOS: IOSurface via XPC object for cross-process sharing.
-    /// The XPC object is created via IOSurfaceCreateXPCObject() and
-    /// transferred via XPC connection. This is the preferred method
-    /// as XPC handles mach port transfer automatically.
-    #[cfg(target_os = "macos")]
-    IOSurfaceXpc {
-        /// Opaque XPC object pointer. Sent via XPC connection, not serialized.
-        xpc_object: *mut std::ffi::c_void,
-    },
 
     /// Linux: DMA-BUF file descriptor.
     /// Must be passed via SCM_RIGHTS ancillary data.

@@ -50,7 +50,7 @@ impl RhiPixelBufferRef {
 
     /// Get the IOSurfaceRef backing this buffer.
     ///
-    /// Returns the raw IOSurfaceRef for XPC-based cross-process sharing.
+    /// Returns the raw IOSurfaceRef for cross-process sharing.
     /// Returns None if the buffer is not backed by an IOSurface.
     pub fn iosurface_ref(&self) -> Option<crate::apple::corevideo_ffi::IOSurfaceRef> {
         let surface =
@@ -225,69 +225,6 @@ impl RhiPixelBufferRef {
             mach_port,
         ))
     }
-
-    /// Export the CVPixelBuffer's IOSurface as an XPC object for cross-process sharing.
-    ///
-    /// This is the preferred method for cross-process IOSurface sharing on macOS.
-    /// XPC handles mach port transfer automatically, eliminating the need for
-    /// SCM_RIGHTS handling.
-    ///
-    /// Returns: `RhiExternalHandle::IOSurfaceXpc` containing the XPC object pointer.
-    /// The XPC object should be sent via XPC connection (see `XpcFrameChannel`).
-    pub fn export_handle_as_xpc(&self) -> Result<RhiExternalHandle> {
-        // IOSurface XPC functions for cross-process sharing
-        #[link(name = "IOSurface", kind = "framework")]
-        extern "C" {
-            fn IOSurfaceCreateXPCObject(surface: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        }
-
-        let cv_buffer = self.inner.as_ptr();
-
-        // Get the IOSurface backing this CVPixelBuffer
-        let iosurface = unsafe { CVPixelBufferGetIOSurface(cv_buffer) };
-
-        if iosurface.is_null() {
-            tracing::error!(
-                "IOSurface export (XPC) FAILED: CVPixelBuffer {:p} is not backed by an IOSurface (pid={})",
-                cv_buffer,
-                std::process::id()
-            );
-            return Err(StreamError::Configuration(
-                "CVPixelBuffer is not backed by an IOSurface".into(),
-            ));
-        }
-
-        // Get IOSurface ID for logging/debugging
-        let id = unsafe { IOSurfaceGetID(iosurface) };
-
-        // Create XPC object for cross-process sharing
-        // Cast to *mut c_void as IOSurfaceCreateXPCObject doesn't modify the surface
-        let xpc_object = unsafe { IOSurfaceCreateXPCObject(iosurface as *mut std::ffi::c_void) };
-
-        if xpc_object.is_null() {
-            tracing::error!(
-                "IOSurface export (XPC) FAILED: IOSurfaceCreateXPCObject returned null \
-                 for IOSurface {:p} (ID={}) (pid={})",
-                iosurface,
-                id,
-                std::process::id()
-            );
-            return Err(StreamError::Configuration(
-                "IOSurfaceCreateXPCObject failed".into(),
-            ));
-        }
-
-        tracing::trace!(
-            "IOSurface export (XPC): CVPixelBuffer {:p} -> IOSurface {:p} (ID={}) -> xpc_object={:?} (pid={})",
-            cv_buffer,
-            iosurface,
-            id,
-            xpc_object,
-            std::process::id()
-        );
-
-        Ok(RhiExternalHandle::IOSurfaceXpc { xpc_object })
-    }
 }
 
 impl RhiPixelBufferImport for RhiPixelBufferRef {
@@ -388,52 +325,6 @@ impl RhiPixelBufferImport for RhiPixelBufferRef {
                         std::process::id()
                     );
                 }
-
-                create_cv_buffer_from_iosurface(iosurface)
-            }
-
-            RhiExternalHandle::IOSurfaceXpc { xpc_object } => {
-                // IOSurface XPC functions for cross-process sharing
-                #[link(name = "IOSurface", kind = "framework")]
-                extern "C" {
-                    fn IOSurfaceLookupFromXPCObject(
-                        xobj: *mut std::ffi::c_void,
-                    ) -> *mut std::ffi::c_void;
-                }
-
-                tracing::trace!(
-                    "IOSurface import (XPC): looking up xpc_object={:?} (pid={}, {}x{} {:?})",
-                    xpc_object,
-                    std::process::id(),
-                    width,
-                    height,
-                    format
-                );
-
-                // Look up the IOSurface from the XPC object
-                let iosurface = unsafe { IOSurfaceLookupFromXPCObject(xpc_object) };
-
-                if iosurface.is_null() {
-                    tracing::error!(
-                        "IOSurface import FAILED: XPC object {:?} lookup returned null (pid={}). \
-                         The XPC object may be invalid.",
-                        xpc_object,
-                        std::process::id()
-                    );
-                    return Err(StreamError::Configuration(
-                        "IOSurface XPC object lookup failed".into(),
-                    ));
-                }
-
-                // Get the ID for logging
-                let id = unsafe { IOSurfaceGetID(iosurface) };
-                tracing::trace!(
-                    "IOSurface import: xpc_object={:?} -> IOSurface {:p} (ID={}) (pid={})",
-                    xpc_object,
-                    iosurface,
-                    id,
-                    std::process::id()
-                );
 
                 create_cv_buffer_from_iosurface(iosurface)
             }
