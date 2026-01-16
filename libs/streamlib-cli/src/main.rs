@@ -199,13 +199,6 @@ enum BrokerCommands {
         #[arg(long)]
         runtime: Option<String>,
     },
-
-    /// List active XPC connections
-    Xpc {
-        /// Filter by runtime ID
-        #[arg(long)]
-        runtime: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -322,9 +315,6 @@ async fn async_main(cli: Cli) -> Result<()> {
             BrokerCommands::Runtimes => commands::broker::runtimes().await?,
             BrokerCommands::Processors { runtime } => {
                 commands::broker::processors(runtime.as_deref()).await?
-            }
-            BrokerCommands::Xpc { runtime } => {
-                commands::broker::connections(runtime.as_deref()).await?
             }
         },
         Some(Commands::Setup { action }) => match action {

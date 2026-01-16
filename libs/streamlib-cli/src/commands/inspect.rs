@@ -138,7 +138,7 @@ pub async fn graph(runtime: Option<&str>, url: Option<&str>, format: &str) -> Re
         "dot" => {
             print_graph_as_dot(&graph);
         }
-        "pretty" | _ => {
+        _ => {
             print_graph_pretty(&graph);
         }
     }

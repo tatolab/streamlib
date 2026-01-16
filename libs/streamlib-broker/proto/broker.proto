@@ -5,8 +5,8 @@ syntax = "proto3";
 
 package streamlib.broker;
 
-// BrokerService provides diagnostics and monitoring for the XPC broker.
-// Used by CLI tools to inspect broker state without affecting frame transfer.
+// BrokerService provides diagnostics and monitoring for the StreamLib broker.
+// Used by CLI tools to inspect broker state.
 service BrokerService {
   // Health check - verify broker is responsive
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
@@ -20,7 +20,7 @@ service BrokerService {
   // List processors for a specific runtime
   rpc ListProcessors(ListProcessorsRequest) returns (ListProcessorsResponse);
 
-  // List active XPC connections
+  // List active connections
   rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
 
   // Get runtime endpoint by name or ID (DNS-like lookup)
@@ -81,9 +81,9 @@ message ListProcessorsRequest {
 message ProcessorInfo {
   string runtime_id = 1;
   string processor_id = 2;
-  string processor_type = 3;  // e.g., "PythonContinuousProcessor"
+  string processor_type = 3;  // e.g., "PythonContinuousHostProcessor"
   int64 registered_at_unix_ms = 4;
-  string bridge_state = 5;  // "connected", "awaiting", "failed"
+  string state = 5;  // "running", "stopped", etc.
 }
 
 message ListProcessorsResponse {
@@ -99,7 +99,7 @@ message ConnectionInfo {
   string connection_id = 1;
   string runtime_id = 2;
   string processor_id = 3;
-  string role = 4;  // "runtime" or "subprocess"
+  string role = 4;  // "runtime" or "client"
   int64 established_at_unix_ms = 5;
   int64 frames_transferred = 6;
   int64 bytes_transferred = 7;

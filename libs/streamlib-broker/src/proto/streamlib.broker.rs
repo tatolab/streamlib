@@ -74,14 +74,14 @@ pub struct ProcessorInfo {
     pub runtime_id: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub processor_id: ::prost::alloc::string::String,
-    /// e.g., "PythonContinuousProcessor"
+    /// e.g., "PythonContinuousHostProcessor"
     #[prost(string, tag = "3")]
     pub processor_type: ::prost::alloc::string::String,
     #[prost(int64, tag = "4")]
     pub registered_at_unix_ms: i64,
-    /// "connected", "awaiting", "failed"
+    /// "running", "stopped", etc.
     #[prost(string, tag = "5")]
-    pub bridge_state: ::prost::alloc::string::String,
+    pub state: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProcessorsResponse {
@@ -103,7 +103,7 @@ pub struct ConnectionInfo {
     pub runtime_id: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
     pub processor_id: ::prost::alloc::string::String,
-    /// "runtime" or "subprocess"
+    /// "runtime" or "client"
     #[prost(string, tag = "4")]
     pub role: ::prost::alloc::string::String,
     #[prost(int64, tag = "5")]
@@ -214,8 +214,8 @@ pub mod broker_service_client {
     )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
-    /// BrokerService provides diagnostics and monitoring for the XPC broker.
-    /// Used by CLI tools to inspect broker state without affecting frame transfer.
+    /// BrokerService provides diagnostics and monitoring for the StreamLib broker.
+    /// Used by CLI tools to inspect broker state.
     #[derive(Debug, Clone)]
     pub struct BrokerServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -400,7 +400,7 @@ pub mod broker_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// List active XPC connections
+        /// List active connections
         pub async fn list_connections(
             &mut self,
             request: impl tonic::IntoRequest<super::ListConnectionsRequest>,
@@ -591,7 +591,7 @@ pub mod broker_service_server {
             tonic::Response<super::ListProcessorsResponse>,
             tonic::Status,
         >;
-        /// List active XPC connections
+        /// List active connections
         async fn list_connections(
             &self,
             request: tonic::Request<super::ListConnectionsRequest>,
@@ -632,8 +632,8 @@ pub mod broker_service_server {
             tonic::Status,
         >;
     }
-    /// BrokerService provides diagnostics and monitoring for the XPC broker.
-    /// Used by CLI tools to inspect broker state without affecting frame transfer.
+    /// BrokerService provides diagnostics and monitoring for the StreamLib broker.
+    /// Used by CLI tools to inspect broker state.
     #[derive(Debug)]
     pub struct BrokerServiceServer<T> {
         inner: Arc<T>,

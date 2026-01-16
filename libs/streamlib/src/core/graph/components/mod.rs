@@ -17,7 +17,6 @@ mod processor_pause_gate_component;
 mod processor_ready_barrier_component;
 mod shutdown_channel_component;
 mod state_component;
-mod subprocess_bridge_component;
 mod thread_handle_component;
 
 pub use component_map::*;
@@ -36,5 +35,4 @@ pub use processor_pause_gate_component::*;
 pub use processor_ready_barrier_component::*;
 pub use shutdown_channel_component::*;
 pub use state_component::*;
-pub use subprocess_bridge_component::*;
 pub use thread_handle_component::*;

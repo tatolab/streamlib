@@ -2,10 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Thread-safe state for broker diagnostics.
-//!
-//! This module provides a separate state structure that tracks metadata
-//! about registrations without storing XPC objects (raw pointers).
-//! This allows safe sharing between the gRPC service and XPC listener.
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -107,14 +107,14 @@ impl BrokerService for BrokerGrpcService {
             .map(|s| ProcessorInfo {
                 runtime_id: s.runtime_id,
                 processor_id: s.processor_id,
-                processor_type: "SubprocessProcessor".to_string(), // Generic type for now
+                processor_type: "Processor".to_string(),
                 registered_at_unix_ms: s
                     .registered_at
                     .elapsed()
                     .as_millis()
                     .try_into()
                     .unwrap_or(0),
-                bridge_state: "connected".to_string(), // Assume connected if registered
+                state: "running".to_string(),
             })
             .collect();
 
@@ -146,8 +146,8 @@ impl BrokerService for BrokerGrpcService {
                     .as_millis()
                     .try_into()
                     .unwrap_or(0),
-                frames_transferred: 0, // Stats reported by runtime/subprocess (future)
-                bytes_transferred: 0,  // Stats reported by runtime/subprocess (future)
+                frames_transferred: 0,
+                bytes_transferred: 0,
             })
             .collect();
 
