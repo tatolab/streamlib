@@ -23,7 +23,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
 ]
-dependencies = []
+dependencies = [
+    "grpcio>=1.60.0",
+    "protobuf>=4.25.0",
+]
 
 [tool.maturin]
 features = ["extension-module"]
@@ -35,4 +38,5 @@ python-source = "python"
 dev = [
     "pytest>=7.0",
     "numpy>=1.24.0",
+    "grpcio-tools>=1.60.0",
 ]
