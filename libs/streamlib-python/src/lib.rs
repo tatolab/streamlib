@@ -30,6 +30,7 @@ mod venv_manager;
 mod video_frame_binding;
 mod wheel_cache;
 mod xpc_channel_binding;
+mod xpc_connection_binding;
 
 // Re-export Python processor variants (subprocess-based)
 pub use python_continuous_processor::PythonContinuousProcessor;
@@ -76,6 +77,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // XPC frame channel (macOS GPU sharing)
     m.add_class::<xpc_channel_binding::PyXpcFrameChannel>()?;
+
+    // XPC connection (Phase 4 connection-based pattern)
+    m.add_class::<xpc_connection_binding::PyXpcConnection>()?;
+    m.add_class::<xpc_connection_binding::PyXpcConnectionState>()?;
 
     Ok(())
 }
