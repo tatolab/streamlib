@@ -452,6 +452,163 @@ impl XpcBroker {
             Ok(())
         }
     }
+
+    /// Store an XPC endpoint for a connection (Phase 4 connection-based pattern).
+    /// Called by host processor after creating anonymous XPC listener.
+    pub fn store_connection_endpoint(
+        &self,
+        connection_id: &str,
+        endpoint: xpc_object_t,
+    ) -> Result<(), StreamError> {
+        unsafe {
+            trace!(
+                "[XpcBroker] Storing endpoint for connection: {}",
+                connection_id
+            );
+
+            let msg = xpc_dictionary_create(null_mut(), null_mut(), 0);
+
+            let type_key = CString::new("type").unwrap();
+            let type_val = CString::new("store_endpoint").unwrap();
+            xpc_dictionary_set_string(msg, type_key.as_ptr(), type_val.as_ptr());
+
+            let conn_id_key = CString::new("connection_id").unwrap();
+            let conn_id_val = CString::new(connection_id)
+                .map_err(|e| StreamError::Configuration(format!("Invalid connection_id: {}", e)))?;
+            xpc_dictionary_set_string(msg, conn_id_key.as_ptr(), conn_id_val.as_ptr());
+
+            let endpoint_key = CString::new("endpoint").unwrap();
+            xpc_dictionary_set_value(msg, endpoint_key.as_ptr(), endpoint);
+
+            let reply = xpc_connection_send_message_with_reply_sync(self.connection, msg);
+            xpc_release(msg);
+
+            if reply.is_null() {
+                return Err(StreamError::Configuration(
+                    "No reply from broker for store_endpoint".to_string(),
+                ));
+            }
+
+            let dict_type = std::ptr::addr_of!(_xpc_type_dictionary) as xpc_type_t;
+            let reply_type = xpc_get_type(reply);
+
+            if reply_type != dict_type {
+                xpc_release(reply);
+                return Err(StreamError::Configuration(
+                    "Invalid reply type from broker for store_endpoint".to_string(),
+                ));
+            }
+
+            let error_key = CString::new("error").unwrap();
+            let error_val = xpc_dictionary_get_string(reply, error_key.as_ptr());
+
+            if !error_val.is_null() {
+                let error_str = std::ffi::CStr::from_ptr(error_val)
+                    .to_str()
+                    .unwrap_or("unknown");
+                xpc_release(reply);
+                return Err(StreamError::Configuration(format!(
+                    "Broker store_endpoint error: {}",
+                    error_str
+                )));
+            }
+
+            xpc_release(reply);
+            info!(
+                "[XpcBroker] Stored endpoint for connection: {}",
+                connection_id
+            );
+            Ok(())
+        }
+    }
+
+    /// Get an XPC endpoint for a connection (Phase 4 connection-based pattern).
+    /// Called by client processor to retrieve host's endpoint.
+    /// Returns Ok(Some(endpoint)) if found, Ok(None) if not yet stored.
+    pub fn get_connection_endpoint(
+        &self,
+        connection_id: &str,
+    ) -> Result<Option<xpc_object_t>, StreamError> {
+        unsafe {
+            trace!(
+                "[XpcBroker] Requesting endpoint for connection: {}",
+                connection_id
+            );
+
+            let msg = xpc_dictionary_create(null_mut(), null_mut(), 0);
+
+            let type_key = CString::new("type").unwrap();
+            let type_val = CString::new("get_endpoint_for_connection").unwrap();
+            xpc_dictionary_set_string(msg, type_key.as_ptr(), type_val.as_ptr());
+
+            let conn_id_key = CString::new("connection_id").unwrap();
+            let conn_id_val = CString::new(connection_id)
+                .map_err(|e| StreamError::Configuration(format!("Invalid connection_id: {}", e)))?;
+            xpc_dictionary_set_string(msg, conn_id_key.as_ptr(), conn_id_val.as_ptr());
+
+            let reply = xpc_connection_send_message_with_reply_sync(self.connection, msg);
+            xpc_release(msg);
+
+            if reply.is_null() {
+                return Err(StreamError::Configuration(
+                    "No reply from broker for get_endpoint_for_connection".to_string(),
+                ));
+            }
+
+            let dict_type = std::ptr::addr_of!(_xpc_type_dictionary) as xpc_type_t;
+            let reply_type = xpc_get_type(reply);
+
+            if reply_type != dict_type {
+                xpc_release(reply);
+                return Err(StreamError::Configuration(
+                    "Invalid reply type from broker".to_string(),
+                ));
+            }
+
+            // Check for error
+            let error_key = CString::new("error").unwrap();
+            let error_val = xpc_dictionary_get_string(reply, error_key.as_ptr());
+
+            if !error_val.is_null() {
+                let error_str = std::ffi::CStr::from_ptr(error_val)
+                    .to_str()
+                    .unwrap_or("unknown");
+                xpc_release(reply);
+
+                if error_str == "not_found" || error_str == "endpoint_not_ready" {
+                    return Ok(None);
+                }
+
+                return Err(StreamError::Configuration(format!(
+                    "Broker get_endpoint_for_connection error: {}",
+                    error_str
+                )));
+            }
+
+            // Get endpoint
+            let endpoint_key = CString::new("endpoint").unwrap();
+            let endpoint = xpc_dictionary_get_value(reply, endpoint_key.as_ptr());
+
+            if endpoint.is_null() {
+                xpc_release(reply);
+                return Ok(None);
+            }
+
+            let endpoint_type = std::ptr::addr_of!(_xpc_type_endpoint) as xpc_type_t;
+            if xpc_get_type(endpoint) != endpoint_type {
+                xpc_release(reply);
+                return Err(StreamError::Configuration(
+                    "Invalid endpoint type in broker reply".to_string(),
+                ));
+            }
+
+            xpc_retain(endpoint);
+            xpc_release(reply);
+
+            info!("[XpcBroker] Got endpoint for connection: {}", connection_id);
+            Ok(Some(endpoint))
+        }
+    }
 }
 
 impl SubprocessRhiBroker for XpcBroker {
