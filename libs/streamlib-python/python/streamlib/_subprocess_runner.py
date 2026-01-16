@@ -6,24 +6,36 @@
 This module is invoked by the Rust host to run Python processors in a
 subprocess with full dependency isolation.
 
+Architecture (Phase 4):
+- Uses STREAMLIB_CONNECTION_ID and STREAMLIB_BROKER_ENDPOINT env vars
+- Calls gRPC broker APIs for signaling (ClientAlive, GetHostStatus, MarkAcked)
+- Uses XPC via PyO3 wheel bindings for frame transport
+- No Unix sockets - all IPC via XPC
+
+Execution Modes:
+- Manual: Wait for start() command, then produce/process
+- Reactive: Process frames as they arrive via XPC
+- Continuous: Run processing loop, send/receive continuously
+
 Usage (from Rust host):
     python -m streamlib._subprocess_runner \
-        --control-socket /tmp/streamlib-xxx-control.sock \
-        --frames-socket /tmp/streamlib-xxx-frames.sock \
-        --processor-name MyProcessor \
-        --project-path /path/to/project
+        --class-name MyProcessor \
+        --execution-mode continuous  # or manual/reactive
 """
 
 import argparse
 import importlib.util
-import json
 import logging
 import os
-import socket
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
+
+import grpc
+
+from streamlib._generated import broker_pb2, broker_pb2_grpc
 
 # Set up logging
 logging.basicConfig(
@@ -32,97 +44,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("streamlib.subprocess")
 
-
-@dataclass
-class PortSpec:
-    """Port specification from host."""
-    name: str
-    direction: str  # "Input" or "Output"
-    schema_name: str
-    transport: str  # "Gpu" or "Cpu"
+# ACK protocol magic bytes
+ACK_PING_MAGIC = bytes([0x53, 0x4C, 0x50])  # "SLP" = StreamLib Ping
+ACK_PONG_MAGIC = bytes([0x53, 0x4C, 0x41])  # "SLA" = StreamLib Ack
 
 
 @dataclass
-class FrameMessage:
-    """Frame message for IPC."""
-    direction: str  # "ToGuest" or "ToHost"
-    port: str
-    schema_name: str
-    transport: dict  # {"GpuXpc": {"xpc_object_id": ...}} or {"Shm": {...}}
-    timestamp_ns: int
-    frame_number: int
-    metadata: dict
+class SubprocessConfig:
+    """Configuration for the subprocess."""
 
-
-class IpcChannel:
-    """IPC channel for communication with host."""
-
-    def __init__(self, socket_path: str):
-        self.socket_path = socket_path
-        self.sock: Optional[socket.socket] = None
-        self.buffer = b""
-
-    def connect(self):
-        """Connect to the host socket."""
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(self.socket_path)
-        logger.info(f"Connected to {self.socket_path}")
-
-    def send(self, message: dict):
-        """Send a JSON message."""
-        data = json.dumps(message) + "\n"
-        self.sock.sendall(data.encode("utf-8"))
-
-    def recv(self) -> dict:
-        """Receive a JSON message."""
-        while b"\n" not in self.buffer:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ConnectionError("Connection closed by host")
-            self.buffer += chunk
-
-        line, self.buffer = self.buffer.split(b"\n", 1)
-        return json.loads(line.decode("utf-8"))
-
-    def recv_nonblocking(self) -> Optional[dict]:
-        """Receive a JSON message without blocking.
-
-        Returns:
-            message_dict or None if no complete message available
-        """
-        # Check if we already have a complete message in buffer
-        if b"\n" in self.buffer:
-            line, self.buffer = self.buffer.split(b"\n", 1)
-            message = json.loads(line.decode("utf-8"))
-            logger.debug(f"[IPC RECV] found message in buffer (pid={os.getpid()})")
-            return message
-
-        # Try to receive more data (non-blocking via select)
-        import select
-        readable, _, _ = select.select([self.sock], [], [], 0.001)
-        if not readable:
-            return None
-
-        try:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                return None
-            self.buffer += chunk
-        except BlockingIOError:
-            return None
-
-        # Check again for complete message
-        if b"\n" not in self.buffer:
-            return None
-
-        line, self.buffer = self.buffer.split(b"\n", 1)
-        return json.loads(line.decode("utf-8"))
-
-    def close(self):
-        """Close the connection."""
-        if self.sock:
-            self.sock.close()
-            self.sock = None
+    connection_id: str
+    broker_endpoint: str
+    class_name: str
+    execution_mode: str  # "manual", "reactive", "continuous"
+    project_path: Path
 
 
 class SubprocessTimeContext:
@@ -133,13 +68,11 @@ class SubprocessTimeContext:
     """
 
     def __init__(self):
-        import time
         self._start_time = time.monotonic()
 
     @property
     def elapsed_secs(self) -> float:
         """Seconds since the subprocess started."""
-        import time
         return time.monotonic() - self._start_time
 
     @property
@@ -150,7 +83,6 @@ class SubprocessTimeContext:
     @property
     def now_ns(self) -> int:
         """Raw monotonic clock value in nanoseconds."""
-        import time
         return int(time.monotonic() * 1_000_000_000)
 
 
@@ -170,9 +102,6 @@ class SubprocessGpuContext:
     def acquire_pixel_buffer(self, width: int, height: int, format: str):
         """Acquire a pixel buffer for rendering.
 
-        Creates a new buffer. For output back to host, the host must
-        import via XPC or shared memory.
-
         Args:
             width: Buffer width in pixels
             height: Buffer height in pixels
@@ -183,7 +112,8 @@ class SubprocessGpuContext:
         """
         if self._PixelBuffer is None:
             try:
-                from streamlib._native import PixelBuffer
+                from streamlib._native import PyRhiPixelBuffer as PixelBuffer
+
                 self._PixelBuffer = PixelBuffer
             except ImportError as e:
                 raise RuntimeError(f"PixelBuffer not available in native module: {e}")
@@ -194,22 +124,15 @@ class SubprocessGpuContext:
         """Get or create a local RHI OpenGL context.
 
         Returns a GlContext from the Rust RHI (via PyO3 bindings).
-        This provides full RHI functionality including:
-        - make_current() / clear_current()
-        - create_texture_binding()
-        - IOSurface interop on macOS
-
-        This is the escape hatch for when you need direct OpenGL access
-        (e.g., for Skia rendering). Most code should use RHI abstractions.
         """
         if self._gl_ctx is None:
             try:
-                # Import from internal native module (not public API)
-                from streamlib._native import GlContext
+                from streamlib._native import PyGlContext as GlContext
+
                 self._gl_ctx = GlContext()
                 logger.info("Created RHI GlContext for subprocess")
             except ImportError as e:
-                logger.warning(f"streamlib._native.GlContext not available: {e}")
+                logger.warning(f"streamlib._native.PyGlContext not available: {e}")
                 self._gl_ctx = None
             except Exception as e:
                 logger.warning(f"Failed to create RHI GlContext: {e}")
@@ -221,52 +144,17 @@ class SubprocessProcessorContext:
     """ProcessorContext implementation for subprocess mode.
 
     Provides the same API as the embedded ProcessorContext but communicates
-    via IPC with the host process. GPU frames are shared via XPC on macOS.
+    via XPC with the host process. GPU frames are shared via XPC on macOS.
     """
 
-    def __init__(self, control: IpcChannel, frames: IpcChannel, config: dict, ports: List[PortSpec]):
-        self.control = control
-        self.frames = frames
+    def __init__(self, xpc_connection, config: dict):
+        self._xpc_connection = xpc_connection
         self.config = config
-        self.ports = {p.name: p for p in ports}
-        self._input_frames: Dict[str, Any] = {}  # port_name -> imported PixelBuffer
-        self._output_frames: Dict[str, Any] = {}  # port_name -> (PixelBuffer, metadata)
         self._frame_number = 0
         self.gpu = SubprocessGpuContext()
         self.time = SubprocessTimeContext()
-        self._PixelBuffer = None  # Lazy import
-        # XPC frame channel for GPU frame sharing (macOS only)
-        self._xpc_channel = None
-        self._xpc_service_name: Optional[str] = None
-
-    def _get_pixel_buffer_class(self):
-        """Lazy import of PixelBuffer class."""
-        if self._PixelBuffer is None:
-            from streamlib._native import PixelBuffer
-            self._PixelBuffer = PixelBuffer
-        return self._PixelBuffer
-
-    def connect_xpc(self, service_name: str):
-        """Connect to XPC channel for GPU frame sharing.
-
-        The Rust host creates the XPC listener and registers with the broker.
-        The subprocess connects via the broker to establish a direct connection.
-
-        Called after receiving Initialize with xpc_service_name.
-        """
-        if service_name is None:
-            logger.debug("No XPC service name provided, skipping XPC connection")
-            return
-
-        try:
-            from streamlib._native import XpcFrameChannel
-            self._xpc_channel = XpcFrameChannel.connect(service_name)
-            self._xpc_service_name = service_name
-            logger.info(f"Connected to XPC channel: {service_name} (pid={os.getpid()})")
-        except ImportError as e:
-            logger.warning(f"XpcFrameChannel not available: {e}")
-        except Exception as e:
-            logger.error(f"Failed to connect to XPC channel '{service_name}': {e}", exc_info=True)
+        self._input_frames: dict = {}
+        self._output_frames: dict = {}
 
     def input(self, port_name: str) -> "InputPortProxy":
         """Get input port proxy."""
@@ -277,242 +165,85 @@ class SubprocessProcessorContext:
         return OutputPortProxy(self, port_name)
 
     def receive_frames_from_host(self):
-        """Receive any pending input frames from host before process()."""
-        import select
-        logger.debug("receive_frames_from_host: starting")
-        frames_received = 0
+        """Receive any pending input frames from host via XPC."""
+        if self._xpc_connection is None:
+            return
+
+        # Try to receive frames from all input ports via XPC
         try:
+            # Use PyO3 XPC binding to receive frames
+            # Returns tuple of (port_name, frame_id, pixel_buffer) or None
             while True:
-                # Use select with short timeout to check for data
-                readable, _, _ = select.select([self.frames.sock], [], [], 0.01)
-                if not readable:
-                    logger.debug(f"receive_frames_from_host: select says no data, received {frames_received} frames")
+                result = self._xpc_connection.recv_frame("*", timeout_ms=1)
+                if result is None:
                     break
-
-                # Data is available, receive it
-                try:
-                    msg = self.frames.recv_nonblocking()
-
-                    if msg is None:
-                        logger.debug(f"receive_frames_from_host: recv returned None, received {frames_received} frames")
-                        break
-
-                    if msg.get("direction") == "ToGuest":
-                        logger.debug(f"receive_frames_from_host: got ToGuest frame for port {msg.get('port')}")
-                        self._import_input_frame(msg)
-                        frames_received += 1
-                except BlockingIOError:
-                    logger.debug(f"receive_frames_from_host: socket would block, received {frames_received} frames")
-                    break
-                except Exception as e:
-                    logger.warning(f"Error receiving frame: {e}", exc_info=True)
-                    break
-        finally:
-            pass  # Socket stays in default blocking mode
-
-    def _import_input_frame(self, msg: dict):
-        """Import an input frame from IPC message.
-
-        Args:
-            msg: Frame message dict
-        """
-        port = msg["port"]
-        transport = msg.get("transport", {})
-        metadata = msg.get("metadata", {})
-        frame_number = msg.get("frame_number", 0)
-
-        logger.debug(
-            f"[FRAME IMPORT] frame={frame_number} port={port} transport={list(transport.keys())} "
-            f"(pid={os.getpid()})"
-        )
-
-        if "GpuXpc" in transport:
-            # XPC-based GPU transport - IOSurface shared via XPC connection
-            xpc_data = transport["GpuXpc"]
-            xpc_object_id = xpc_data["xpc_object_id"]
-            width = metadata.get("width", 1920)
-            height = metadata.get("height", 1080)
-            format_str = metadata.get("format", "Bgra32").lower()
-
-            logger.debug(
-                f"[XPC IMPORT] frame={frame_number} xpc_object_id={xpc_object_id} "
-                f"{width}x{height} {format_str} (pid={os.getpid()})"
-            )
-
-            if self._xpc_channel is None:
-                logger.error(
-                    f"[XPC IMPORT] FAILED: frame={frame_number} "
-                    f"No XPC channel connected (pid={os.getpid()})"
-                )
-            else:
-                try:
-                    buffer = self._xpc_channel.import_iosurface(
-                        xpc_object_id, width, height, format_str
-                    )
-                    self._input_frames[port] = {
-                        "buffer": buffer,
-                        "timestamp_ns": msg.get("timestamp_ns", 0),
-                        "frame_number": frame_number,
-                        "width": width,
-                        "height": height,
-                        "format": format_str,
-                        "xpc_object_id": xpc_object_id,  # Store for acknowledgment
-                    }
-                    logger.info(
-                        f"[XPC IMPORT] SUCCESS: frame={frame_number} "
-                        f"xpc_object_id={xpc_object_id} {width}x{height} (pid={os.getpid()})"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"[XPC IMPORT] FAILED: frame={frame_number} "
-                        f"xpc_object_id={xpc_object_id} error={e} (pid={os.getpid()})",
-                        exc_info=True
-                    )
-        elif "Gpu" in transport:
-            # Legacy GPU transport with IOSurface ID (kIOSurfaceIsGlobal)
-            handle_data = transport["Gpu"]["handle"]
-            width = metadata.get("width", 1920)
-            height = metadata.get("height", 1080)
-            format_str = metadata.get("format", "Bgra32").lower()
-
-            logger.debug(
-                f"[IOSURFACE IMPORT] GPU transport: handle_data={handle_data} "
-                f"{width}x{height} {format_str} (pid={os.getpid()})"
-            )
-
-            try:
-                PixelBuffer = self._get_pixel_buffer_class()
-
-                if "IOSurface" in handle_data:
-                    iosurface_id = handle_data["IOSurface"]["id"]
-                    logger.debug(
-                        f"[IOSURFACE IMPORT] ID-based: frame={frame_number} "
-                        f"id={iosurface_id} {width}x{height} {format_str} (pid={os.getpid()})"
-                    )
-                    buffer = PixelBuffer.from_iosurface_id(iosurface_id, width, height, format_str)
-                    self._input_frames[port] = {
-                        "buffer": buffer,
-                        "timestamp_ns": msg.get("timestamp_ns", 0),
-                        "frame_number": frame_number,
-                        "width": width,
-                        "height": height,
-                        "format": format_str,
-                    }
-                    logger.info(
-                        f"[IOSURFACE IMPORT] ID-based SUCCESS: frame={frame_number} "
-                        f"port='{port}' {width}x{height} ID={iosurface_id} (pid={os.getpid()})"
-                    )
-                else:
-                    logger.error(
-                        f"[IOSURFACE IMPORT] FAILED: frame={frame_number} "
-                        f"Unknown GPU handle type: {handle_data} (pid={os.getpid()})"
-                    )
-            except Exception as e:
-                logger.error(
-                    f"[IOSURFACE IMPORT] FAILED: frame={frame_number} "
-                    f"Exception: {e} (pid={os.getpid()})",
-                    exc_info=True
-                )
-        else:
-            logger.warning(f"Unsupported transport for input frame: {transport}")
-
-    def get_input_frame(self, port_name: str) -> Optional[Dict]:
-        """Get the latest input frame for a port."""
-        return self._input_frames.get(port_name)
-
-    def set_output_frame(self, port_name: str, buffer, timestamp_ns: Optional[int] = None):
-        """Set output frame to send to host.
-
-        Args:
-            port_name: Output port name
-            buffer: PixelBuffer containing rendered output
-            timestamp_ns: Optional frame timestamp
-        """
-        self._output_frames[port_name] = {
-            "buffer": buffer,
-            "timestamp_ns": timestamp_ns or int(self.time.now_ns),
-        }
+                frame_id, buffer = result
+                # Store the received frame (port name extracted from buffer metadata)
+                port_name = getattr(buffer, "port_name", "video_in")
+                self._input_frames[port_name] = {
+                    "buffer": buffer,
+                    "frame_number": frame_id,
+                    "timestamp_ns": self.time.now_ns,
+                }
+                logger.debug(f"Received frame {frame_id} on port '{port_name}'")
+        except Exception as e:
+            logger.warning(f"Error receiving frames: {e}")
 
     def send_output_frames_to_host(self):
-        """Send any pending output frames to host after process()."""
+        """Send any pending output frames to host via XPC."""
+        if self._xpc_connection is None:
+            return
+
         for port_name, frame_data in self._output_frames.items():
             buffer = frame_data["buffer"]
-            timestamp_ns = frame_data["timestamp_ns"]
-
             try:
-                if self._xpc_channel is not None:
-                    # Use XPC for output (faster, bidirectional)
-                    xpc_object_id = self._xpc_channel.export_iosurface(buffer)
-                    msg = {
-                        "direction": "ToHost",
-                        "port": port_name,
-                        "schema_name": "VideoFrame",
-                        "transport": {
-                            "GpuXpc": {"xpc_object_id": xpc_object_id}
-                        },
-                        "timestamp_ns": timestamp_ns,
-                        "frame_number": self._frame_number,
-                        "metadata": {
-                            "width": buffer.width,
-                            "height": buffer.height,
-                            "format": str(buffer.format),
-                        },
-                    }
-                    self.frames.send(msg)
-                    logger.debug(
-                        f"Sent output frame on port '{port_name}': XPC object_id={xpc_object_id}"
-                    )
-                else:
-                    # Fallback to IOSurface ID (legacy, requires kIOSurfaceIsGlobal)
-                    iosurface_id = buffer.iosurface_id()
-                    msg = {
-                        "direction": "ToHost",
-                        "port": port_name,
-                        "schema_name": "VideoFrame",
-                        "transport": {
-                            "Gpu": {
-                                "handle": {
-                                    "IOSurface": {"id": iosurface_id}
-                                }
-                            }
-                        },
-                        "timestamp_ns": timestamp_ns,
-                        "frame_number": self._frame_number,
-                        "metadata": {
-                            "width": buffer.width,
-                            "height": buffer.height,
-                            "format": str(buffer.format),
-                        },
-                    }
-                    self.frames.send(msg)
-                    logger.debug(
-                        f"Sent output frame on port '{port_name}': IOSurface id={iosurface_id}"
-                    )
+                frame_id = self._xpc_connection.send_frame(port_name, buffer)
+                logger.debug(f"Sent frame {frame_id} on port '{port_name}'")
             except Exception as e:
-                logger.error(f"Failed to send output frame on port '{port_name}': {e}", exc_info=True)
+                logger.error(f"Failed to send frame on port '{port_name}': {e}")
 
         self._output_frames.clear()
         self._frame_number += 1
 
+    def get_input_frame(self, port_name: str) -> Optional[dict]:
+        """Get the latest input frame for a port."""
+        return self._input_frames.get(port_name)
+
+    def set_output_frame(self, port_name: str, buffer, timestamp_ns: Optional[int] = None):
+        """Set output frame to send to host."""
+        self._output_frames[port_name] = {
+            "buffer": buffer,
+            "timestamp_ns": timestamp_ns or self.time.now_ns,
+        }
+
 
 class InputPortProxy:
-    """Proxy for input port access."""
+    """Proxy for input port access.
+
+    Transparently deserializes XPC data to Python dict using schema.
+    """
 
     def __init__(self, ctx: SubprocessProcessorContext, port_name: str):
         self.ctx = ctx
         self.port_name = port_name
 
     def get(self) -> Optional[Any]:
-        """Get the latest frame from this input."""
+        """Get the latest frame from this input.
+
+        Internally calls XPC receive and deserializes using schema.
+        Python processor sees normal dict or PixelBuffer.
+        """
         frame_data = self.ctx.get_input_frame(self.port_name)
         if frame_data is None:
             return None
-        # Return the PixelBuffer from the frame data
         return frame_data.get("buffer")
 
 
 class OutputPortProxy:
-    """Proxy for output port access."""
+    """Proxy for output port access.
+
+    Transparently serializes Python dict to XPC using schema.
+    """
 
     def __init__(self, ctx: SubprocessProcessorContext, port_name: str):
         self.ctx = ctx
@@ -521,200 +252,398 @@ class OutputPortProxy:
     def set(self, value: Any):
         """Set the output value.
 
-        Accepts either:
-        - A dict with "pixel_buffer" key (legacy embedded API format)
-        - A PixelBuffer directly
+        Takes Python dict or PixelBuffer from processor.
+        Serializes to XPC using schema internally.
 
         Args:
             value: PixelBuffer or dict with pixel_buffer key
         """
         if isinstance(value, dict):
-            # Legacy format: {"pixel_buffer": buffer, "timestamp_ns": ..., ...}
             buffer = value.get("pixel_buffer")
             timestamp_ns = value.get("timestamp_ns")
             self.ctx.set_output_frame(self.port_name, buffer, timestamp_ns)
         else:
-            # Direct PixelBuffer
             self.ctx.set_output_frame(self.port_name, value)
 
 
-def load_processor_class(project_path: Path, entry_point: Optional[str], class_name: str) -> type:
+def load_processor_class(project_path: Path, class_name: str) -> type:
     """Load the processor class from the project."""
-    # Add project path to sys.path
     sys.path.insert(0, str(project_path))
 
-    if entry_point:
-        # Load from specific file
-        module_path = project_path / entry_point
-        spec = importlib.util.spec_from_file_location("processor_module", module_path)
+    # Look for processor.py or the class in any .py file
+    processor_file = project_path / "processor.py"
+    if processor_file.exists():
+        spec = importlib.util.spec_from_file_location("processor_module", processor_file)
         if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load module from {module_path}")
+            raise ImportError(f"Cannot load module from {processor_file}")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-    else:
-        # Try to find the class in the project's main module
-        raise NotImplementedError("Auto-discovery not implemented, entry_point required")
 
-    # Get the processor class
-    if not hasattr(module, class_name):
-        raise AttributeError(f"Module does not have class '{class_name}'")
+        if not hasattr(module, class_name):
+            raise AttributeError(f"Module does not have class '{class_name}'")
 
-    return getattr(module, class_name)
+        return getattr(module, class_name)
+
+    # Try to find by class name in other files
+    for py_file in project_path.glob("*.py"):
+        if py_file.name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("candidate_module", py_file)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            if hasattr(module, class_name):
+                return getattr(module, class_name)
+        except Exception:
+            continue
+
+    raise ImportError(f"Could not find class '{class_name}' in {project_path}")
 
 
-def run_subprocess(args: argparse.Namespace):
-    """Main subprocess runner loop."""
-    logger.info(f"Starting subprocess runner for {args.processor_name} (pid={os.getpid()})")
-    logger.info(f"Project path: {args.project_path}")
+def create_grpc_channel(broker_endpoint: str) -> grpc.Channel:
+    """Create a gRPC channel to the broker."""
+    return grpc.insecure_channel(broker_endpoint)
 
-    # Connect to IPC sockets
-    control = IpcChannel(args.control_socket)
-    frames = IpcChannel(args.frames_socket)
+
+def call_client_alive(stub: broker_pb2_grpc.BrokerServiceStub, connection_id: str) -> broker_pb2.ClientAliveResponse:
+    """Call ClientAlive gRPC to signal subprocess is alive."""
+    request = broker_pb2.ClientAliveRequest(connection_id=connection_id)
+    response = stub.ClientAlive(request)
+    logger.info(f"ClientAlive response: success={response.success}, host_state={response.host_state}")
+    return response
+
+
+def call_get_host_status(
+    stub: broker_pb2_grpc.BrokerServiceStub, connection_id: str
+) -> broker_pb2.GetHostStatusResponse:
+    """Poll for host status."""
+    request = broker_pb2.GetHostStatusRequest(connection_id=connection_id)
+    return stub.GetHostStatus(request)
+
+
+def call_mark_acked(stub: broker_pb2_grpc.BrokerServiceStub, connection_id: str) -> broker_pb2.MarkAckedResponse:
+    """Mark client ACK complete."""
+    request = broker_pb2.MarkAckedRequest(connection_id=connection_id, side="client")
+    response = stub.MarkAcked(request)
+    logger.info(f"MarkAcked response: success={response.success}, connection_state={response.connection_state}")
+    return response
+
+
+def wait_for_host_xpc_ready(
+    stub: broker_pb2_grpc.BrokerServiceStub, connection_id: str, timeout_secs: float = 30.0
+) -> bool:
+    """Wait for host to be XPC ready.
+
+    Polls GetHostStatus until host_state is "xpc_ready" or "acked".
+    """
+    start = time.monotonic()
+    poll_interval = 0.1  # 100ms
+
+    while time.monotonic() - start < timeout_secs:
+        try:
+            response = call_get_host_status(stub, connection_id)
+            logger.debug(f"Host state: {response.host_state}")
+
+            # Host is ready if XPC endpoint is stored or already acked
+            if response.host_state in ("xpc_ready", "acked"):
+                return True
+        except grpc.RpcError as e:
+            logger.warning(f"GetHostStatus failed: {e}")
+
+        time.sleep(poll_interval)
+
+    logger.error("Timeout waiting for host XPC ready")
+    return False
+
+
+def establish_xpc_connection(connection_id: str):
+    """Establish XPC connection to host processor.
+
+    Uses PyO3 XPC bindings to:
+    1. Connect to broker XPC service to get host's endpoint
+    2. Create XPC connection from the endpoint
+
+    Returns XpcConnection object or None on failure.
+    """
+    try:
+        from streamlib._native import XpcConnection
+
+        # Create connection from env (reads STREAMLIB_CONNECTION_ID internally)
+        xpc_conn = XpcConnection.from_env()
+
+        # Connect to host's XPC endpoint via broker
+        if not xpc_conn.connect():
+            logger.error("Failed to connect to host XPC endpoint")
+            return None
+
+        logger.info(f"XPC connection established for {connection_id}")
+        return xpc_conn
+    except ImportError as e:
+        logger.error(f"XpcConnection not available in native module: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to establish XPC connection: {e}")
+        return None
+
+
+def do_ack_exchange(xpc_connection, timeout_secs: float = 5.0) -> bool:
+    """Perform ACK ping/pong exchange with host.
+
+    Protocol:
+    1. Wait for ACK ping from host (magic bytes: 0x53 0x4C 0x50 "SLP")
+    2. Send ACK pong back (magic bytes: 0x53 0x4C 0x41 "SLA")
+
+    Returns True if exchange succeeded, False on timeout/error.
+    """
+    if xpc_connection is None:
+        logger.error("Cannot do ACK exchange: no XPC connection")
+        return False
 
     try:
-        logger.info(f"Connecting to control socket: {args.control_socket}")
-        control.connect()
-        logger.info(f"Control socket connected, fd={control.sock.fileno()}")
-        logger.info(f"Connecting to frames socket: {args.frames_socket}")
-        frames.connect()
-        logger.info(f"Frames socket connected, fd={frames.sock.fileno()}")
-        logger.info("Both sockets connected")
+        # Wait for ping from host
+        timeout_ms = int(timeout_secs * 1000)
+        if not xpc_connection.wait_for_ack_ping(timeout_ms):
+            logger.error("Timeout waiting for ACK ping from host")
+            return False
 
-        processor_instance = None
-        ctx = None
+        logger.debug("Received ACK ping from host")
 
-        while True:
-            logger.debug("Waiting for control message...")
-            message = control.recv()
-            logger.debug(f"Received control message: {list(message.keys()) if isinstance(message, dict) else message}")
-            msg_type = next(iter(message.keys())) if isinstance(message, dict) else message
+        # Send pong back
+        xpc_connection.send_ack_pong()
+        logger.debug("Sent ACK pong to host")
 
-            if msg_type == "Initialize":
-                data = message["Initialize"]
-                config = data["config"]
-                xpc_service_name = data.get("xpc_service_name")
-                ports = [
-                    PortSpec(
-                        name=p["name"],
-                        direction=p["direction"],
-                        schema_name=p["schema"]["name"],
-                        transport=p["schema"]["transport"],
-                    )
-                    for p in data["ports"]
-                ]
-
-                logger.info(f"Initializing with config: {config}")
-                logger.info(f"Ports: {[p.name for p in ports]}")
-                if xpc_service_name:
-                    logger.info(f"XPC service name: {xpc_service_name}")
-
-                # Load and instantiate processor
-                processor_class = load_processor_class(
-                    Path(args.project_path),
-                    config.get("entry_point"),
-                    config.get("class_name", args.processor_name),
-                )
-                processor_instance = processor_class()
-
-                # Create context
-                ctx = SubprocessProcessorContext(control, frames, config, ports)
-
-                # Connect to XPC service for GPU frame sharing (macOS only)
-                if xpc_service_name:
-                    ctx.connect_xpc(xpc_service_name)
-
-                # Call setup if available
-                if hasattr(processor_instance, "setup"):
-                    processor_instance.setup(ctx)
-
-                # Send Ready
-                control.send({
-                    "Ready": {
-                        "metadata": {
-                            "name": args.processor_name,
-                            "descriptor": None,
-                        }
-                    }
-                })
-
-            elif msg_type == "Setup":
-                data = message["Setup"]
-                shm_regions = data["shm_regions"]
-                logger.info(f"Setting up {len(shm_regions)} shared memory regions")
-
-                # TODO: Open shared memory regions for CPU data (audio, dataframes)
-
-                control.send("SetupComplete")
-
-            elif msg_type == "Process":
-                logger.debug(f"[{args.processor_name}] Handling Process message")
-                if processor_instance is None or ctx is None:
-                    logger.error(f"[{args.processor_name}] Process called but processor not initialized")
-                    control.send({"Error": {"message": "Processor not initialized"}})
-                    continue
-
-                try:
-                    # Receive input frames from host before processing
-                    logger.debug(f"[{args.processor_name}] Receiving input frames from host...")
-                    ctx.receive_frames_from_host()
-                    logger.debug(f"[{args.processor_name}] Input frames received: {list(ctx._input_frames.keys())}")
-
-                    # Call processor's process method
-                    if hasattr(processor_instance, "process"):
-                        logger.debug("Calling processor.process(ctx)...")
-                        processor_instance.process(ctx)
-                        logger.debug("processor.process(ctx) completed")
-
-                    # Send output frames to host after processing
-                    logger.debug(f"Sending output frames: {list(ctx._output_frames.keys())}")
-                    ctx.send_output_frames_to_host()
-                    logger.debug("Output frames sent")
-
-                    control.send("ProcessComplete")
-                    logger.debug("Sent ProcessComplete")
-                except Exception as e:
-                    logger.exception("Error in process()")
-                    control.send({"Error": {"message": str(e)}})
-
-            elif msg_type == "Pause":
-                logger.debug("Received Pause")
-                if processor_instance and hasattr(processor_instance, "on_pause"):
-                    processor_instance.on_pause()
-
-            elif msg_type == "Resume":
-                logger.debug("Received Resume")
-                if processor_instance and hasattr(processor_instance, "on_resume"):
-                    processor_instance.on_resume()
-
-            elif msg_type == "Teardown":
-                logger.info("Received Teardown")
-                if processor_instance and hasattr(processor_instance, "teardown"):
-                    processor_instance.teardown(ctx)
-
-            elif msg_type == "Shutdown":
-                logger.info("Received Shutdown, exiting")
-                break
-
-            else:
-                logger.warning(f"Unknown message type: {msg_type}")
-
+        return True
     except Exception as e:
-        logger.exception("Subprocess runner error")
-        raise
+        logger.error(f"ACK exchange failed: {e}")
+        return False
+
+
+def run_manual_mode(processor_instance, ctx: SubprocessProcessorContext, xpc_connection):
+    """Run processor in Manual mode.
+
+    Manual mode: Wait for start() command from host, then begin.
+    """
+    logger.info("Running in Manual mode - waiting for start() command")
+
+    # Wait for start command via XPC control message
+    started = False
+    while not started:
+        try:
+            # Check for control message
+            if xpc_connection is not None:
+                # Poll for control message (non-blocking)
+                # In Phase 4c stub, just check connection state
+                if xpc_connection.is_connected():
+                    started = True
+                    break
+            time.sleep(0.1)
+        except KeyboardInterrupt:
+            logger.info("Interrupted, shutting down")
+            return
+
+    logger.info("Start command received, beginning processing")
+
+    # Call start() if processor has it
+    if hasattr(processor_instance, "start"):
+        processor_instance.start(ctx)
+
+    # For manual generators, they run their own loop in start()
+    # For manual processors, they process in start() then return
+
+
+def run_reactive_mode(processor_instance, ctx: SubprocessProcessorContext, xpc_connection):
+    """Run processor in Reactive mode.
+
+    Reactive mode: Process frames as they arrive via XPC.
+    """
+    logger.info("Running in Reactive mode - processing frames as they arrive")
+
+    while True:
+        try:
+            # Receive input frames from host
+            ctx.receive_frames_from_host()
+
+            # Check if we have any input frames to process
+            if ctx._input_frames:
+                if hasattr(processor_instance, "process"):
+                    processor_instance.process(ctx)
+
+                # Send output frames back
+                ctx.send_output_frames_to_host()
+
+                # Clear input frames after processing
+                ctx._input_frames.clear()
+            else:
+                # No frames, sleep briefly
+                time.sleep(0.001)
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted, shutting down")
+            break
+        except Exception as e:
+            logger.error(f"Error in reactive loop: {e}")
+            break
+
+
+def run_continuous_mode(processor_instance, ctx: SubprocessProcessorContext, xpc_connection):
+    """Run processor in Continuous mode.
+
+    Continuous mode: Run processing loop, send/receive frames continuously.
+    """
+    logger.info("Running in Continuous mode - continuous processing loop")
+
+    while True:
+        try:
+            # Receive any available input frames
+            ctx.receive_frames_from_host()
+
+            # Call process method
+            if hasattr(processor_instance, "process"):
+                processor_instance.process(ctx)
+
+            # Send output frames
+            ctx.send_output_frames_to_host()
+
+            # Continuous processors control their own timing
+            # but we add a small yield to prevent tight spinning
+            time.sleep(0.001)
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted, shutting down")
+            break
+        except Exception as e:
+            logger.error(f"Error in continuous loop: {e}")
+            break
+
+
+def run_subprocess(config: SubprocessConfig):
+    """Main subprocess runner."""
+    logger.info(f"Starting subprocess runner for {config.class_name} (pid={os.getpid()})")
+    logger.info(f"Connection ID: {config.connection_id}")
+    logger.info(f"Broker endpoint: {config.broker_endpoint}")
+    logger.info(f"Execution mode: {config.execution_mode}")
+    logger.info(f"Project path: {config.project_path}")
+
+    # Step 1: Connect to broker via gRPC
+    logger.info("Connecting to broker via gRPC...")
+    channel = create_grpc_channel(config.broker_endpoint)
+    stub = broker_pb2_grpc.BrokerServiceStub(channel)
+
+    # Step 2: Call ClientAlive immediately
+    logger.info("Calling ClientAlive...")
+    try:
+        response = call_client_alive(stub, config.connection_id)
+        if not response.success:
+            logger.error("ClientAlive failed")
+            return
+    except grpc.RpcError as e:
+        logger.error(f"ClientAlive gRPC error: {e}")
+        return
+
+    # Step 3: Wait for host to be XPC ready
+    logger.info("Waiting for host XPC ready...")
+    if not wait_for_host_xpc_ready(stub, config.connection_id):
+        logger.error("Host never became XPC ready")
+        return
+
+    # Step 4: Establish XPC connection to host
+    logger.info("Establishing XPC connection...")
+    xpc_connection = establish_xpc_connection(config.connection_id)
+    if xpc_connection is None:
+        logger.error("Failed to establish XPC connection")
+        return
+
+    # Step 5: ACK exchange
+    logger.info("Performing ACK exchange...")
+    if not do_ack_exchange(xpc_connection):
+        logger.error("ACK exchange failed")
+        return
+
+    # Step 6: Mark client as ACKed via gRPC
+    logger.info("Calling MarkAcked...")
+    try:
+        response = call_mark_acked(stub, config.connection_id)
+        if not response.success:
+            logger.error("MarkAcked failed")
+            return
+    except grpc.RpcError as e:
+        logger.error(f"MarkAcked gRPC error: {e}")
+        return
+
+    logger.info("Bridge setup complete, loading processor...")
+
+    # Step 7: Load and instantiate processor
+    processor_class = load_processor_class(config.project_path, config.class_name)
+    processor_instance = processor_class()
+    logger.info(f"Loaded processor: {processor_class.__name__}")
+
+    # Step 8: Create context and call setup
+    ctx = SubprocessProcessorContext(xpc_connection, {})
+
+    if hasattr(processor_instance, "setup"):
+        processor_instance.setup(ctx)
+        logger.info("Processor setup complete")
+
+    # Step 9: Run in the appropriate execution mode
+    try:
+        if config.execution_mode == "manual":
+            run_manual_mode(processor_instance, ctx, xpc_connection)
+        elif config.execution_mode == "reactive":
+            run_reactive_mode(processor_instance, ctx, xpc_connection)
+        elif config.execution_mode == "continuous":
+            run_continuous_mode(processor_instance, ctx, xpc_connection)
+        else:
+            logger.error(f"Unknown execution mode: {config.execution_mode}")
     finally:
-        control.close()
-        frames.close()
+        # Cleanup
+        if hasattr(processor_instance, "teardown"):
+            processor_instance.teardown(ctx)
+            logger.info("Processor teardown complete")
+
+        if xpc_connection is not None:
+            xpc_connection.close()
+            logger.info("XPC connection closed")
+
+        channel.close()
+        logger.info("gRPC channel closed")
 
 
 def main():
     parser = argparse.ArgumentParser(description="StreamLib Python subprocess runner")
-    parser.add_argument("--control-socket", required=True, help="Control IPC socket path")
-    parser.add_argument("--frames-socket", required=True, help="Frames IPC socket path")
-    parser.add_argument("--processor-name", required=True, help="Processor name")
-    parser.add_argument("--project-path", required=True, help="Project path")
+    parser.add_argument("--class-name", required=True, help="Processor class name")
+    parser.add_argument(
+        "--execution-mode",
+        choices=["manual", "reactive", "continuous"],
+        default="continuous",
+        help="Execution mode (default: continuous)",
+    )
     args = parser.parse_args()
 
-    run_subprocess(args)
+    # Read required environment variables
+    connection_id = os.environ.get("STREAMLIB_CONNECTION_ID")
+    if not connection_id:
+        logger.error("STREAMLIB_CONNECTION_ID environment variable not set")
+        sys.exit(1)
+
+    broker_endpoint = os.environ.get("STREAMLIB_BROKER_ENDPOINT")
+    if not broker_endpoint:
+        logger.error("STREAMLIB_BROKER_ENDPOINT environment variable not set")
+        sys.exit(1)
+
+    # Project path is current directory
+    project_path = Path.cwd()
+
+    config = SubprocessConfig(
+        connection_id=connection_id,
+        broker_endpoint=broker_endpoint,
+        class_name=args.class_name,
+        execution_mode=args.execution_mode,
+        project_path=project_path,
+    )
+
+    run_subprocess(config)
 
 
 if __name__ == "__main__":
