@@ -37,6 +37,10 @@ pub struct XpcBrokerListener {
     /// Registered subprocess endpoints.
     /// Key is "runtime_id:processor_id" to allow multiple subprocesses per runtime.
     registered_subprocesses: Arc<RwLock<HashMap<String, xpc_object_t>>>,
+    /// XPC bridge connection endpoints (Phase 4).
+    /// Key is connection_id from AllocateConnection gRPC call.
+    /// Host stores endpoint here, client retrieves it.
+    registered_connection_endpoints: Arc<RwLock<HashMap<String, xpc_object_t>>>,
     /// Shared state for diagnostics (gRPC).
     pub state: BrokerState,
 }
@@ -47,6 +51,7 @@ impl XpcBrokerListener {
         Self {
             registered_runtimes: Arc::new(RwLock::new(HashMap::new())),
             registered_subprocesses: Arc::new(RwLock::new(HashMap::new())),
+            registered_connection_endpoints: Arc::new(RwLock::new(HashMap::new())),
             state,
         }
     }
@@ -119,6 +124,55 @@ impl XpcBrokerListener {
             info!(
                 "[BrokerListener] Unregistered subprocess: {}",
                 subprocess_key
+            );
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // XPC Bridge Connection Endpoints (Phase 4)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Store an XPC endpoint for a connection (called by host processor).
+    pub fn store_connection_endpoint(&self, connection_id: &str, endpoint: xpc_object_t) {
+        unsafe {
+            xpc_retain(endpoint);
+        }
+        self.registered_connection_endpoints
+            .write()
+            .insert(connection_id.to_string(), endpoint);
+        info!(
+            "[BrokerListener] Stored endpoint for connection: {}",
+            connection_id
+        );
+    }
+
+    /// Get an XPC endpoint for a connection (called by client processor).
+    /// Returns None if not yet stored by host.
+    pub fn get_connection_endpoint(&self, connection_id: &str) -> Option<xpc_object_t> {
+        self.registered_connection_endpoints
+            .read()
+            .get(connection_id)
+            .map(|&ep| {
+                unsafe {
+                    xpc_retain(ep);
+                }
+                ep
+            })
+    }
+
+    /// Remove an XPC endpoint for a connection.
+    pub fn remove_connection_endpoint(&self, connection_id: &str) {
+        if let Some(endpoint) = self
+            .registered_connection_endpoints
+            .write()
+            .remove(connection_id)
+        {
+            unsafe {
+                xpc_release(endpoint);
+            }
+            info!(
+                "[BrokerListener] Removed endpoint for connection: {}",
+                connection_id
             );
         }
     }
@@ -443,6 +497,106 @@ impl XpcBrokerListener {
                                             .to_str()
                                             .unwrap_or("");
                                     listener.unregister_subprocess(subprocess_key_str);
+                                }
+                            }
+                            // ─────────────────────────────────────────────────────────────
+                            // XPC Bridge Connection Handlers (Phase 4)
+                            // ─────────────────────────────────────────────────────────────
+                            "store_endpoint" => {
+                                // Host processor stores its XPC endpoint by connection_id
+                                let connection_id_key = CString::new("connection_id").unwrap();
+                                let endpoint_key = CString::new("endpoint").unwrap();
+
+                                let connection_id =
+                                    xpc_dictionary_get_string(msg, connection_id_key.as_ptr());
+                                let endpoint = xpc_dictionary_get_value(msg, endpoint_key.as_ptr());
+
+                                let reply = xpc_dictionary_create_reply(msg);
+
+                                if !connection_id.is_null() && !endpoint.is_null() {
+                                    let connection_id_str = std::ffi::CStr::from_ptr(connection_id)
+                                        .to_str()
+                                        .unwrap_or("");
+                                    listener.store_connection_endpoint(connection_id_str, endpoint);
+
+                                    if !reply.is_null() {
+                                        let status_key = CString::new("status").unwrap();
+                                        let status_val = CString::new("ok").unwrap();
+                                        xpc_dictionary_set_string(
+                                            reply,
+                                            status_key.as_ptr(),
+                                            status_val.as_ptr(),
+                                        );
+                                    }
+                                } else {
+                                    if !reply.is_null() {
+                                        let error_key = CString::new("error").unwrap();
+                                        let error_val = CString::new("missing_fields").unwrap();
+                                        xpc_dictionary_set_string(
+                                            reply,
+                                            error_key.as_ptr(),
+                                            error_val.as_ptr(),
+                                        );
+                                    }
+                                }
+
+                                if !reply.is_null() {
+                                    xpc_connection_send_message(client_conn, reply);
+                                    xpc_release(reply);
+                                }
+                            }
+                            "get_endpoint_for_connection" => {
+                                // Client processor retrieves XPC endpoint by connection_id
+                                let connection_id_key = CString::new("connection_id").unwrap();
+                                let connection_id =
+                                    xpc_dictionary_get_string(msg, connection_id_key.as_ptr());
+
+                                if !connection_id.is_null() {
+                                    let connection_id_str = std::ffi::CStr::from_ptr(connection_id)
+                                        .to_str()
+                                        .unwrap_or("");
+
+                                    debug!(
+                                        "[BrokerListener] Client requesting endpoint for connection: {}",
+                                        connection_id_str
+                                    );
+
+                                    let reply = xpc_dictionary_create_reply(msg);
+                                    if reply.is_null() {
+                                        warn!("[BrokerListener] Failed to create reply");
+                                        return;
+                                    }
+
+                                    if let Some(endpoint) =
+                                        listener.get_connection_endpoint(connection_id_str)
+                                    {
+                                        info!(
+                                            "[BrokerListener] Found endpoint for connection: {}",
+                                            connection_id_str
+                                        );
+                                        let endpoint_key = CString::new("endpoint").unwrap();
+                                        xpc_dictionary_set_value(
+                                            reply,
+                                            endpoint_key.as_ptr(),
+                                            endpoint as *mut c_void,
+                                        );
+                                        xpc_release(endpoint as *mut c_void);
+                                    } else {
+                                        debug!(
+                                            "[BrokerListener] Endpoint not yet stored for connection: {}",
+                                            connection_id_str
+                                        );
+                                        let error_key = CString::new("error").unwrap();
+                                        let error_val = CString::new("not_found").unwrap();
+                                        xpc_dictionary_set_string(
+                                            reply,
+                                            error_key.as_ptr(),
+                                            error_val.as_ptr(),
+                                        );
+                                    }
+
+                                    xpc_connection_send_message(client_conn, reply);
+                                    xpc_release(reply);
                                 }
                             }
                             _ => {
