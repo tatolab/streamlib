@@ -153,10 +153,10 @@ impl PyGpuContext {
     /// The context is created lazily on first access and cached for reuse.
     ///
     /// Example:
-    ///     gl_ctx = ctx.gpu.gl_context()
+    ///     gl_ctx = ctx.gpu._experimental_gl_context()
     ///     gl_ctx.make_current()
     ///     skia_ctx = skia.GrDirectContext.MakeGL()
-    fn gl_context(&mut self) -> PyResult<PyGlContext> {
+    fn _experimental_gl_context(&mut self) -> PyResult<PyGlContext> {
         if let Some(ref gl_ctx) = self.gl_context {
             return Ok(gl_ctx.clone());
         }

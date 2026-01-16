@@ -41,8 +41,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# XPC bindings
-xpc-bindgen = "26.0"
 libc.workspace = true
 
 [build-dependencies]

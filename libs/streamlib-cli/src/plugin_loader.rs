@@ -137,6 +137,7 @@ impl PluginLoader {
     }
 
     /// Returns the number of loaded plugin libraries.
+    #[allow(dead_code)]
     pub fn loaded_count(&self) -> usize {
         self.loaded_libraries.len()
     }

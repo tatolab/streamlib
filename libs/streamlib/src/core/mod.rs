@@ -28,8 +28,6 @@ pub mod schema_registry;
 pub mod signals;
 pub mod streaming;
 pub mod streamlib_home;
-pub mod subprocess;
-pub mod subprocess_rhi;
 pub mod sync;
 pub mod texture;
 pub mod utils;

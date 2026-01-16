@@ -6,8 +6,10 @@
 # Creates a local dev environment with proxy scripts that use cargo run.
 #
 # Usage:
-#   ./scripts/dev-setup.sh          # Setup local dev environment
-#   ./scripts/dev-setup.sh --clean  # Uninstall first, then reinstall
+#   ./scripts/dev-setup.sh              # Setup local dev environment
+#   ./scripts/dev-setup.sh uninstall    # Uninstall dev broker and clean up
+#   ./scripts/dev-setup.sh reinstall    # Uninstall then reinstall (rebuilds broker)
+#   ./scripts/dev-setup.sh --clean      # Alias for reinstall
 
 set -euo pipefail
 
@@ -84,6 +86,7 @@ update_cargo_config() {
 STREAMLIB_HOME = "${STREAMLIB_HOME}"
 STREAMLIB_BROKER_PORT = "${BROKER_PORT}"
 STREAMLIB_DEV_MODE = "1"
+STREAMLIB_BROKER_XPC_SERVICE = "${SERVICE_NAME}"
 # End StreamLib dev environment
 EOF
 
@@ -131,6 +134,7 @@ BROKER_PORT=${BROKER_PORT}
 export STREAMLIB_HOME="${STREAMLIB_HOME}"
 export STREAMLIB_BROKER_PORT="\$BROKER_PORT"
 export STREAMLIB_DEV_MODE=1
+export STREAMLIB_BROKER_XPC_SERVICE="${SERVICE_NAME}"
 
 exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-cli --quiet -- "\$@"
 EOF
@@ -149,6 +153,7 @@ BROKER_PORT=${BROKER_PORT}
 
 export STREAMLIB_HOME="${STREAMLIB_HOME}"
 export STREAMLIB_DEV_MODE=1
+export STREAMLIB_BROKER_XPC_SERVICE="${SERVICE_NAME}"
 
 exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --quiet -- --port "\$BROKER_PORT" "\$@"
 EOF
@@ -172,6 +177,11 @@ install_plist() {
 <dict>
     <key>Label</key>
     <string>${SERVICE_LABEL}</string>
+    <key>MachServices</key>
+    <dict>
+        <key>${SERVICE_NAME}</key>
+        <true/>
+    </dict>
     <key>ProgramArguments</key>
     <array>
         <string>${broker_path}</string>
@@ -256,21 +266,8 @@ verify() {
     ls -la "${STREAMLIB_HOME}/bin/"
 }
 
-# Main
-main() {
-    echo ""
-    echo "StreamLib Developer Setup (Local Dev Mode)"
-    echo "==========================================="
-    echo ""
-
-    check_platform
-    check_dependencies
-
-    # Handle --clean flag
-    if [[ "${1:-}" == "--clean" ]]; then
-        uninstall
-    fi
-
+# Install (setup) the dev environment
+install() {
     create_proxy_scripts
     update_cargo_config
     install_plist
@@ -283,6 +280,41 @@ main() {
     echo "Use the plugin commands or run directly:"
     echo "  ./.streamlib/bin/streamlib broker status"
     echo ""
+}
+
+# Main
+main() {
+    echo ""
+    echo "StreamLib Developer Setup (Local Dev Mode)"
+    echo "==========================================="
+    echo ""
+
+    check_platform
+    check_dependencies
+
+    local cmd="${1:-install}"
+
+    case "$cmd" in
+        uninstall)
+            uninstall
+            ;;
+        reinstall|--clean)
+            uninstall
+            install
+            ;;
+        install|"")
+            install
+            ;;
+        *)
+            error "Unknown command: $cmd"
+            echo ""
+            echo "Usage:"
+            echo "  ./scripts/dev-setup.sh              # Setup local dev environment"
+            echo "  ./scripts/dev-setup.sh uninstall    # Uninstall dev broker and clean up"
+            echo "  ./scripts/dev-setup.sh reinstall    # Uninstall then reinstall (rebuilds broker)"
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"

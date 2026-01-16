@@ -23,7 +23,7 @@ members = [
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
     "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline
     "examples/camera-dylib-display/rust", # Plugin: Rust processors for camera-dylib-display
-    "examples/xpc-test",                  # Example: XPC communication test
+    "examples/iceoryx2-ipc-test",         # Example: iceoryx2 IPC evaluation
 ]
 
 [workspace.package]

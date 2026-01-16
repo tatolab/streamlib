@@ -160,11 +160,6 @@ fn generate_plist(broker_path: &Path) -> String {
     <array>
         <string>{broker_path}</string>
     </array>
-    <key>MachServices</key>
-    <dict>
-        <key>com.tatolab.streamlib.runtime</key>
-        <true/>
-    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -446,7 +441,7 @@ pub async fn processors(runtime_id: Option<&str>) -> Result<()> {
         println!("  Processor: {}", proc.processor_id);
         println!("    Runtime: {}", proc.runtime_id);
         println!("    Type:    {}", proc.processor_type);
-        println!("    State:   {}", proc.bridge_state);
+        println!("    State:   {}", proc.state);
         println!("    Age:     {}ms", proc.registered_at_unix_ms);
         println!();
     }
@@ -455,6 +450,7 @@ pub async fn processors(runtime_id: Option<&str>) -> Result<()> {
 }
 
 /// List active connections.
+#[allow(dead_code)]
 pub async fn connections(runtime_id: Option<&str>) -> Result<()> {
     let endpoint = broker_endpoint();
     let mut client = BrokerServiceClient::connect(endpoint)

@@ -41,7 +41,7 @@ use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{
     ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor, Result, StreamRuntime,
 };
-use streamlib_python::{PythonContinuousProcessor, PythonProcessorConfig};
+use streamlib_python::{PythonContinuousHostProcessor, PythonProcessorConfig};
 
 fn main() -> Result<()> {
     // Initialize tracing subscriber FIRST
@@ -90,11 +90,12 @@ fn main() -> Result<()> {
 
     // Avatar Character (MediaPipe pose detection + stylized character)
     println!("🐍 Adding Python avatar character (MediaPipe pose + stylized character)...");
-    let avatar = runtime.add_processor(PythonContinuousProcessor::node(PythonProcessorConfig {
-        project_path: project_path.clone(),
-        class_name: "AvatarCharacter".to_string(),
-        entry_point: Some("avatar_character.py".to_string()),
-    }))?;
+    let avatar =
+        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
+            project_path: project_path.clone(),
+            class_name: "AvatarCharacter".to_string(),
+            entry_point: Some("avatar_character.py".to_string()),
+        }))?;
     println!("✓ Avatar character processor added: {}\n", avatar);
 
     // =========================================================================
@@ -118,7 +119,7 @@ fn main() -> Result<()> {
 
     println!("🐍 Adding Python lower third GENERATOR (parallel, 16ms)...");
     let lower_third =
-        runtime.add_processor(PythonContinuousProcessor::node(PythonProcessorConfig {
+        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
             project_path: project_path.clone(),
             class_name: "CyberpunkLowerThird".to_string(),
             entry_point: Some("cyberpunk_lower_third.py".to_string()),
@@ -131,7 +132,7 @@ fn main() -> Result<()> {
 
     println!("🐍 Adding Python watermark GENERATOR (parallel, 16ms)...");
     let watermark =
-        runtime.add_processor(PythonContinuousProcessor::node(PythonProcessorConfig {
+        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
             project_path: project_path.clone(),
             class_name: "CyberpunkWatermark".to_string(),
             entry_point: Some("cyberpunk_watermark.py".to_string()),
@@ -162,11 +163,12 @@ fn main() -> Result<()> {
     // =========================================================================
 
     println!("🐍 Adding Python glitch processor (RGB separation, scanlines)...");
-    let glitch = runtime.add_processor(PythonContinuousProcessor::node(PythonProcessorConfig {
-        project_path,
-        class_name: "CyberpunkGlitch".to_string(),
-        entry_point: Some("cyberpunk_glitch.py".to_string()),
-    }))?;
+    let glitch =
+        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
+            project_path,
+            class_name: "CyberpunkGlitch".to_string(),
+            entry_point: Some("cyberpunk_glitch.py".to_string()),
+        }))?;
     println!("✓ Glitch processor added: {}\n", glitch);
 
     // =========================================================================

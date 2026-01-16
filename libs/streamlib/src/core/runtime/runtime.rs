@@ -89,13 +89,6 @@ impl StreamRuntime {
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::run_init_hooks(&streamlib_home)?;
 
-        // On macOS, verify broker is running and version-compatible
-        #[cfg(target_os = "macos")]
-        {
-            tracing::debug!("Checking broker availability...");
-            crate::apple::broker_check::check_broker_availability_sync()?;
-        }
-
         // Auto-detect tokio context (issue #92)
         // If inside tokio runtime: use current handle (external handle mode)
         // If outside tokio runtime: create owned runtime

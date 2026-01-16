@@ -21,7 +21,6 @@ crate-type = ["cdylib", "rlib"]
 # Core StreamLib
 streamlib = { path = "../streamlib" }
 streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
-streamlib-broker = { path = "../streamlib-broker" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.27", features = ["abi3-py310", "auto-initialize"] }
@@ -37,9 +36,6 @@ tracing.workspace = true
 # Async runtime
 tokio = { workspace = true }
 
-# gRPC client for broker communication
-tonic = "0.12"
-
 # Synchronization
 parking_lot = "0.12"
 
@@ -48,11 +44,6 @@ dirs = "5.0"
 
 # Hook registration (matches streamlib's version)
 inventory = "0.3"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# XPC bindings for macOS subprocess bridge
-xpc-bindgen = "26.0"
-libc.workspace = true
 
 [features]
 # Enable this feature when building as a Python extension (via maturin).

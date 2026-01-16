@@ -58,15 +58,14 @@ impl PluginLoader {
                 path.display(),
                 decl.abi_version,
                 STREAMLIB_ABI_VERSION
-            ))
-            .into());
+            )));
         }
 
         // Count processors before registration
         let before_count = PROCESSOR_REGISTRY.list_registered().len();
 
         // Call the plugin's registration function with host's registry
-        (decl.register)(&*PROCESSOR_REGISTRY);
+        (decl.register)(&PROCESSOR_REGISTRY);
 
         // Count processors after registration
         let after_count = PROCESSOR_REGISTRY.list_registered().len();

@@ -1,0 +1,21 @@
+[package]
+name = "iceoryx2-ipc-test"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sender"
+path = "src/bin/sender.rs"
+
+[[bin]]
+name = "receiver"
+path = "src/bin/receiver.rs"
+
+[dependencies]
+iceoryx2 = "0.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-io-surface = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true }

@@ -192,10 +192,6 @@ pub use apple::{
     VideoToolboxEncoder,
 };
 
-// Subprocess RHI for cross-process frame sharing (internal SPI)
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::subprocess_rhi::{XpcBroker, XpcChannel, XpcFrameTransport, BROKER_SERVICE_NAME};
-
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
