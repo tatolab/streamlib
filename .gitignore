@@ -70,3 +70,5 @@ examples/camera-python-display/assets/
 
 # Local dev environment
 .streamlib/
+.envrc
+.cargo/config.toml
