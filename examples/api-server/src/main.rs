@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
     let config = ApiServerConfig {
         host: "127.0.0.1".to_string(),
         port: 9000,
+        ..Default::default()
     };
 
     runtime.add_processor(ApiServerProcessor::node(config))?;

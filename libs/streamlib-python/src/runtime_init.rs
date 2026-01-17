@@ -28,6 +28,18 @@ impl RuntimeInitHook for PythonRuntimeInitHook {
     }
 
     fn on_runtime_init(&self, streamlib_home: &Path) -> Result<()> {
+        // Initialize Python with multi-threading support.
+        // This MUST be called before any threads access Python, otherwise
+        // the GIL won't be properly set up for multi-threaded use.
+        // This is safe to call multiple times - subsequent calls are no-ops.
+        pyo3::Python::initialize();
+
+        // CRITICAL: Acquire and release the GIL to fully initialize thread state.
+        // This ensures the main thread's Python state is set up before processors start.
+        pyo3::Python::attach(|_py| {
+            tracing::debug!("PythonRuntimeInitHook: GIL acquired for thread state init");
+        });
+
         // Check if uv is available (required for venv management)
         check_uv_available()?;
 

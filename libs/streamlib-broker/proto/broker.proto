@@ -1,0 +1,158 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+syntax = "proto3";
+
+package streamlib.broker;
+
+// BrokerService provides diagnostics and monitoring for the StreamLib broker.
+// Used by CLI tools to inspect broker state.
+service BrokerService {
+  // Health check - verify broker is responsive
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+
+  // Version info - get broker version and build info
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+
+  // List all registered runtimes
+  rpc ListRuntimes(ListRuntimesRequest) returns (ListRuntimesResponse);
+
+  // List processors for a specific runtime
+  rpc ListProcessors(ListProcessorsRequest) returns (ListProcessorsResponse);
+
+  // List active connections
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
+
+  // Get runtime endpoint by name or ID (DNS-like lookup)
+  rpc GetRuntimeEndpoint(GetRuntimeEndpointRequest) returns (GetRuntimeEndpointResponse);
+
+  // Register a runtime (called by runtime on startup)
+  rpc RegisterRuntime(RegisterRuntimeRequest) returns (RegisterRuntimeResponse);
+
+  // Unregister a runtime (called by runtime on shutdown)
+  rpc UnregisterRuntime(UnregisterRuntimeRequest) returns (UnregisterRuntimeResponse);
+
+  // Prune dead runtimes (removes runtimes whose PIDs no longer exist)
+  rpc PruneDeadRuntimes(PruneDeadRuntimesRequest) returns (PruneDeadRuntimesResponse);
+}
+
+// Health check
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  bool healthy = 1;
+  string status = 2;  // "ok", "degraded", etc.
+  int64 uptime_secs = 3;
+}
+
+// Version info
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string version = 1;         // e.g., "0.2.4"
+  string git_commit = 2;      // Short commit hash if available
+  string build_date = 3;      // ISO 8601 date
+  uint32 protocol_version = 4; // Bump when gRPC API changes (for compatibility check)
+}
+
+// Runtime listing
+message ListRuntimesRequest {}
+
+message RuntimeInfo {
+  string runtime_id = 1;
+  int64 registered_at_unix_ms = 2;
+  int32 processor_count = 3;
+  int32 connection_count = 4;
+  string name = 5;           // Human-readable runtime name
+  string api_endpoint = 6;   // API server endpoint (e.g., "127.0.0.1:9000")
+  string log_path = 7;       // Path to runtime log file
+  int32 pid = 8;             // Process ID of the runtime
+}
+
+message ListRuntimesResponse {
+  repeated RuntimeInfo runtimes = 1;
+}
+
+// Processor listing
+message ListProcessorsRequest {
+  string runtime_id = 1;  // Empty = all runtimes
+}
+
+message ProcessorInfo {
+  string runtime_id = 1;
+  string processor_id = 2;
+  string processor_type = 3;  // e.g., "PythonContinuousHostProcessor"
+  int64 registered_at_unix_ms = 4;
+  string state = 5;  // "running", "stopped", etc.
+}
+
+message ListProcessorsResponse {
+  repeated ProcessorInfo processors = 1;
+}
+
+// Connection listing
+message ListConnectionsRequest {
+  string runtime_id = 1;  // Empty = all runtimes
+}
+
+message ConnectionInfo {
+  string connection_id = 1;
+  string runtime_id = 2;
+  string processor_id = 3;
+  string role = 4;  // "runtime" or "client"
+  int64 established_at_unix_ms = 5;
+  int64 frames_transferred = 6;
+  int64 bytes_transferred = 7;
+}
+
+message ListConnectionsResponse {
+  repeated ConnectionInfo connections = 1;
+}
+
+// Runtime endpoint lookup (DNS-like)
+message GetRuntimeEndpointRequest {
+  // Query can be by name or ID
+  oneof query {
+    string name = 1;       // Look up by human-readable name
+    string runtime_id = 2; // Look up by runtime ID
+  }
+}
+
+message GetRuntimeEndpointResponse {
+  bool found = 1;
+  string runtime_id = 2;
+  string name = 3;
+  string api_endpoint = 4;  // e.g., "127.0.0.1:9000"
+  string log_path = 5;      // e.g., "/Users/x/.streamlib/logs/fancy-tiger.log"
+}
+
+// Runtime registration (called by runtime on startup via gRPC)
+message RegisterRuntimeRequest {
+  string runtime_id = 1;     // Unique runtime ID
+  string name = 2;           // Human-readable name (e.g., "fancy-tiger")
+  string api_endpoint = 3;   // API server endpoint (e.g., "127.0.0.1:9000")
+  string log_path = 4;       // Path to log file
+  int32 pid = 5;             // Process ID of the runtime
+}
+
+message RegisterRuntimeResponse {
+  bool success = 1;
+  string error = 2;          // Error message if success is false
+}
+
+// Runtime unregistration (called by runtime on shutdown)
+message UnregisterRuntimeRequest {
+  string runtime_id = 1;
+}
+
+message UnregisterRuntimeResponse {
+  bool success = 1;
+}
+
+// Prune dead runtimes
+message PruneDeadRuntimesRequest {}
+
+message PruneDeadRuntimesResponse {
+  int32 pruned_count = 1;           // Number of runtimes removed
+  repeated string pruned_names = 2; // Names of removed runtimes
+}

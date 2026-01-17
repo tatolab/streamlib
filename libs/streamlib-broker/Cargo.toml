@@ -1,0 +1,48 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-broker"
+description = "StreamLib broker service for cross-process coordination"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "streamlib-broker"
+path = "src/main.rs"
+
+[lib]
+name = "streamlib_broker"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# gRPC server
+tonic = "0.12"
+prost = "0.13"
+
+# Async runtime
+tokio.workspace = true
+
+# State management
+parking_lot = "0.12"
+
+# Logging
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
+[build-dependencies]
+tonic-build = "0.12"
+prost-build = "0.13"

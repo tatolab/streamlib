@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-plugin-abi"
+version.workspace = true
+edition.workspace = true
+license = "BUSL-1.1"
+description = "Plugin interface for StreamLib dynamic processor loading"
+repository.workspace = true
+
+# Depends on streamlib for ProcessorInstanceFactory type in the registration function signature
+[dependencies]
+streamlib = { path = "../streamlib" }

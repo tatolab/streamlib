@@ -64,6 +64,20 @@ impl RhiPixelBufferRef {
     pub fn as_ptr(&self) -> *mut std::ffi::c_void {
         self.inner.as_ptr()
     }
+
+    /// Create an RhiPixelBufferRef from a raw IOSurfaceRef (macOS only).
+    ///
+    /// This is useful for cross-process frame sharing where the IOSurfaceRef
+    /// is received from another process.
+    ///
+    /// # Safety
+    /// The caller must ensure the IOSurfaceRef is valid.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub unsafe fn from_iosurface_ref(
+        iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
+    ) -> crate::core::Result<Self> {
+        crate::metal::rhi::pixel_buffer_ref::from_iosurface_ref_impl(iosurface)
+    }
 }
 
 impl Clone for RhiPixelBufferRef {

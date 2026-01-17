@@ -166,10 +166,20 @@ fn wire_link_ports(
     link.insert(creation_result.type_info);
 
     // Wire pre-wrapped data writer to source processor
-    wire_data_writer_to_processor(&source_processor, &source_port, creation_result.data_writer)?;
+    wire_data_writer_to_processor(
+        &source_processor,
+        &source_port,
+        creation_result.schema_name,
+        creation_result.data_writer,
+    )?;
 
     // Wire pre-wrapped data reader to destination processor
-    wire_data_reader_to_processor(&dest_processor, &dest_port, creation_result.data_reader)?;
+    wire_data_reader_to_processor(
+        &dest_processor,
+        &dest_port,
+        creation_result.schema_name,
+        creation_result.data_reader,
+    )?;
 
     setup_link_output_to_processor_message_writer(
         graph,
@@ -281,22 +291,24 @@ fn get_default_capacity_for_schema(schema_name: &str) -> usize {
 fn wire_data_writer_to_processor(
     processor: &Arc<Mutex<ProcessorInstance>>,
     port_name: &str,
+    schema_name: &str,
     data_writer: Box<dyn std::any::Any + Send>,
 ) -> Result<()> {
     // Data writer is pre-wrapped with link_id by the schema factory
     let mut guard = processor.lock();
-    guard.add_link_output_data_writer(port_name, data_writer)?;
+    guard.add_link_output_data_writer(port_name, schema_name, data_writer)?;
     Ok(())
 }
 
 fn wire_data_reader_to_processor(
     processor: &Arc<Mutex<ProcessorInstance>>,
     port_name: &str,
+    schema_name: &str,
     data_reader: Box<dyn std::any::Any + Send>,
 ) -> Result<()> {
     // Data reader is pre-wrapped with link_id by the schema factory
     let mut guard = processor.lock();
-    guard.add_link_input_data_reader(port_name, data_reader)?;
+    guard.add_link_input_data_reader(port_name, schema_name, data_reader)?;
     Ok(())
 }
 

@@ -74,6 +74,7 @@ pub trait GeneratedProcessor: Send + 'static {
     fn add_link_output_data_writer(
         &mut self,
         port_name: &str,
+        _schema_name: &str,
         _data_writer: Box<dyn std::any::Any + Send>,
     ) -> Result<()> {
         Err(crate::core::StreamError::PortError(format!(
@@ -86,6 +87,7 @@ pub trait GeneratedProcessor: Send + 'static {
     fn add_link_input_data_reader(
         &mut self,
         port_name: &str,
+        _schema_name: &str,
         _data_reader: Box<dyn std::any::Any + Send>,
     ) -> Result<()> {
         Err(crate::core::StreamError::PortError(format!(

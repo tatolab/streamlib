@@ -541,10 +541,11 @@ pub fn generate_schema(attrs: SchemaAttributes, item: ItemStruct) -> TokenStream
         impl ::streamlib::core::SchemaLinkFactory for #factory_name {
             fn create_link_instance(
                 &self,
+                schema_name: &'static str,
                 capacity: ::streamlib::core::graph::LinkCapacity,
                 link_id: &::streamlib::core::graph::LinkUniqueId,
             ) -> ::streamlib::core::Result<::streamlib::core::links::LinkInstanceCreationResult> {
-                ::streamlib::core::create_typed_link_instance::<#struct_name>(capacity, link_id)
+                ::streamlib::core::create_typed_link_instance::<#struct_name>(schema_name, capacity, link_id)
             }
         }
 

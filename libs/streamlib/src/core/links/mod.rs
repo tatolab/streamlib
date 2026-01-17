@@ -12,4 +12,4 @@ pub use link_factory::{DefaultLinkFactory, LinkFactoryDelegate, LinkInstanceCrea
 pub use runtime::*;
 pub(crate) use sealed::LinkPortMessageImplementor;
 pub use traits::*;
-pub use wrappers::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper};
+pub use wrappers::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper, SchemaTagged};

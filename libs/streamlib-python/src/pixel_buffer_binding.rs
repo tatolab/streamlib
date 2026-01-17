@@ -4,7 +4,9 @@
 //! Python bindings for RhiPixelBuffer and PixelFormat.
 
 use pyo3::prelude::*;
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib::core::rhi::{
+    PixelBufferDescriptor, PixelFormat, RhiPixelBuffer, RhiPixelBufferPool,
+};
 
 // =============================================================================
 // PixelFormat enum - 1:1 mapping with Rust PixelFormat
@@ -103,6 +105,46 @@ impl PyRhiPixelBuffer {
 
 #[pymethods]
 impl PyRhiPixelBuffer {
+    /// Create a new pixel buffer with the specified dimensions and format.
+    ///
+    /// This creates an IOSurface-backed pixel buffer suitable for GPU rendering
+    /// and cross-process sharing.
+    ///
+    /// Args:
+    ///     width: Buffer width in pixels
+    ///     height: Buffer height in pixels
+    ///     format: Pixel format string: "bgra32", "rgba32", "argb32", "rgba64",
+    ///             "nv12_video", "nv12_full", "uyvy422", "yuyv422", "gray8"
+    #[new]
+    fn py_new(width: u32, height: u32, format: &str) -> PyResult<Self> {
+        let pixel_format = match format.to_lowercase().as_str() {
+            "bgra32" | "bgra" => PixelFormat::Bgra32,
+            "rgba32" | "rgba" => PixelFormat::Rgba32,
+            "argb32" | "argb" => PixelFormat::Argb32,
+            "rgba64" => PixelFormat::Rgba64,
+            "nv12_video" | "nv12_video_range" => PixelFormat::Nv12VideoRange,
+            "nv12_full" | "nv12_full_range" => PixelFormat::Nv12FullRange,
+            "uyvy422" | "uyvy" => PixelFormat::Uyvy422,
+            "yuyv422" | "yuyv" => PixelFormat::Yuyv422,
+            "gray8" | "gray" => PixelFormat::Gray8,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unsupported pixel format '{}'. Use: bgra32, rgba32, argb32, rgba64, nv12_video, nv12_full, uyvy422, yuyv422, gray8",
+                    other
+                )))
+            }
+        };
+
+        let desc = PixelBufferDescriptor::new(width, height, pixel_format);
+        let pool = RhiPixelBufferPool::new_with_descriptor(&desc)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+        let buffer = pool
+            .acquire()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+        Ok(Self::new(buffer))
+    }
+
     /// Width in pixels.
     #[getter]
     fn width(&self) -> u32 {

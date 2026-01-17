@@ -20,14 +20,121 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
+use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
+use streamlib_broker::proto::{RegisterRuntimeRequest, UnregisterRuntimeRequest};
+use streamlib_broker::GRPC_PORT;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
+
+/// Docker-style adjectives for runtime name generation.
+const ADJECTIVES: &[&str] = &[
+    "admiring",
+    "brave",
+    "clever",
+    "dazzling",
+    "eager",
+    "fancy",
+    "graceful",
+    "happy",
+    "inspiring",
+    "jolly",
+    "keen",
+    "lively",
+    "merry",
+    "noble",
+    "optimistic",
+    "peaceful",
+    "quirky",
+    "radiant",
+    "serene",
+    "trusting",
+    "upbeat",
+    "vibrant",
+    "witty",
+    "xenial",
+    "youthful",
+    "zealous",
+];
+
+/// Docker-style nouns for runtime name generation.
+const NOUNS: &[&str] = &[
+    "albatross",
+    "beaver",
+    "cheetah",
+    "dolphin",
+    "eagle",
+    "falcon",
+    "gazelle",
+    "hawk",
+    "ibis",
+    "jaguar",
+    "koala",
+    "leopard",
+    "meerkat",
+    "nightingale",
+    "otter",
+    "panther",
+    "quail",
+    "raven",
+    "sparrow",
+    "tiger",
+    "urchin",
+    "viper",
+    "walrus",
+    "xerus",
+    "yak",
+    "zebra",
+];
+
+/// Generate a Docker-style random name (adjective-noun).
+fn generate_runtime_name() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Use time + pid for randomness without adding fastrand dependency
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+        ^ (std::process::id() as u64);
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let adj = ADJECTIVES[(hash as usize) % ADJECTIVES.len()];
+    let noun = NOUNS[((hash >> 32) as usize) % NOUNS.len()];
+    format!("{}-{}", adj, noun)
+}
+
+/// Get the broker gRPC endpoint from environment or default.
+fn broker_endpoint() -> String {
+    let port = std::env::var("STREAMLIB_BROKER_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(GRPC_PORT);
+    format!("http://127.0.0.1:{}", port)
+}
+
+/// Get the default logs directory (~/.streamlib/logs).
+fn default_logs_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".streamlib").join("logs"))
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct ApiServerConfig {
     pub host: String,
     pub port: u16,
+    /// Runtime name for broker registration (auto-generated if None).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Log file path for broker registration (derived from name if None).
+    #[serde(default)]
+    pub log_path: Option<PathBuf>,
 }
 
 impl Default for ApiServerConfig {
@@ -35,6 +142,8 @@ impl Default for ApiServerConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 9000,
+            name: None,
+            log_path: None,
         }
     }
 }
@@ -122,6 +231,12 @@ pub struct ApiServerProcessor {
     config: ApiServerConfig,
     runtime_ctx: Option<RuntimeContext>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Runtime ID for broker registration (from env or generated).
+    runtime_id: Option<String>,
+    /// Resolved runtime name (from config or auto-generated).
+    resolved_name: Option<String>,
+    /// Actual bound port (may differ from config if port was in use).
+    actual_port: Option<u16>,
 }
 
 impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
@@ -152,6 +267,26 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
+        // Resolve runtime name (from config or auto-generate)
+        let runtime_name = self
+            .config
+            .name
+            .clone()
+            .unwrap_or_else(generate_runtime_name);
+        self.resolved_name = Some(runtime_name.clone());
+
+        // Get runtime ID from env (set by CLI) or generate one
+        let runtime_id = std::env::var("STREAMLIB_RUNTIME_ID")
+            .unwrap_or_else(|_| format!("R{}", cuid2::create_id()));
+        self.runtime_id = Some(runtime_id.clone());
+
+        // Resolve log path (from config or derive from name)
+        let log_path = self.config.log_path.clone().unwrap_or_else(|| {
+            default_logs_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp/streamlib/logs"))
+                .join(format!("{}.log", runtime_name))
+        });
+
         // Build OpenAPI router with documented routes
         let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
             .routes(routes!(health))
@@ -169,18 +304,103 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         };
 
         // Add WebSocket route and OpenAPI spec endpoint (not documented in OpenAPI)
+        // TraceLayer logs all HTTP requests with method, path, status, and latency
+        let trace_layer = TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_request(DefaultOnRequest::new().level(Level::INFO))
+            .on_response(DefaultOnResponse::new().level(Level::INFO));
+
         let app = router
             .route("/ws/events", get(websocket_handler))
             .route("/api/openapi.json", get(get_openapi_spec))
+            .layer(trace_layer)
             .with_state(state);
 
         let config = self.config.clone();
-        let addr = format!("{}:{}", config.host, config.port);
+        let host = config.host.clone();
+        let base_port = config.port;
+
+        // Try to bind to port, incrementing if in use (up to 10 attempts)
+        let (listener, actual_port) = ctx.tokio_handle().block_on(async {
+            for port_offset in 0..10u16 {
+                let port = base_port + port_offset;
+                let addr = format!("{}:{}", host, port);
+                match tokio::net::TcpListener::bind(&addr).await {
+                    Ok(listener) => {
+                        if port_offset > 0 {
+                            tracing::info!("Port {} in use, bound to {} instead", base_port, port);
+                        }
+                        return Ok((listener, port));
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(crate::core::StreamError::Other(anyhow::anyhow!(
+                            "Failed to bind to {}: {}",
+                            addr,
+                            e
+                        )));
+                    }
+                }
+            }
+            Err(crate::core::StreamError::Other(anyhow::anyhow!(
+                "Could not find available port in range {}-{}",
+                base_port,
+                base_port + 9
+            )))
+        })?;
+
+        self.actual_port = Some(actual_port);
+        let api_endpoint = format!("{}:{}", host, actual_port);
+
+        tracing::info!("Api server listening on {}", api_endpoint);
+        tracing::info!(
+            "OpenAPI spec available at http://{}/api/openapi.json",
+            api_endpoint
+        );
+
+        // Register with broker (non-blocking, continues even if broker unavailable)
+        let log_path_str = log_path.to_string_lossy().to_string();
+        let pid = std::process::id() as i32;
+        let endpoint = broker_endpoint();
+        let reg_runtime_id = runtime_id.clone();
+        let reg_name = runtime_name.clone();
+        let reg_api_endpoint = api_endpoint.clone();
 
         ctx.tokio_handle().spawn(async move {
-            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-            tracing::info!("Api server listening on {}", addr);
-            tracing::info!("OpenAPI spec available at http://{}/api/openapi.json", addr);
+            match BrokerServiceClient::connect(endpoint.clone()).await {
+                Ok(mut client) => {
+                    match client
+                        .register_runtime(RegisterRuntimeRequest {
+                            runtime_id: reg_runtime_id,
+                            name: reg_name,
+                            api_endpoint: reg_api_endpoint,
+                            log_path: log_path_str,
+                            pid,
+                        })
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!("Registered with broker at {}", endpoint);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to register with broker: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Could not connect to broker at {}: {}. Runtime will run standalone.",
+                        endpoint,
+                        e
+                    );
+                }
+            }
+        });
+
+        // Spawn the HTTP server
+        ctx.tokio_handle().spawn(async move {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
@@ -193,6 +413,27 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
     }
 
     fn stop(&mut self) -> Result<()> {
+        // Unregister from broker before stopping
+        if let Some(runtime_id) = self.runtime_id.take() {
+            let endpoint = broker_endpoint();
+            // Use a new tokio runtime for cleanup since we may not have access to the original
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            if let Ok(rt) = rt {
+                rt.block_on(async {
+                    if let Ok(mut client) = BrokerServiceClient::connect(endpoint).await {
+                        let _ = client
+                            .unregister_runtime(UnregisterRuntimeRequest {
+                                runtime_id: runtime_id.clone(),
+                            })
+                            .await;
+                        tracing::info!("Unregistered runtime {} from broker", runtime_id);
+                    }
+                });
+            }
+        }
+
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -213,7 +454,6 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
     )
 )]
 async fn health() -> &'static str {
-    tracing::info!("Health function called");
     "ok"
 }
 

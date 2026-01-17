@@ -358,6 +358,68 @@ LEFTHOOK=0 git push    # Skip pre-push
 
 Configuration: `.lefthook.yml`
 
+### Broker Service (macOS) - Dev Environment
+
+StreamLib requires the broker service for cross-process GPU resource sharing. The runtime will fail to start if the broker is not running.
+
+**First-time setup (developers)**:
+```bash
+# Creates local dev environment
+./scripts/dev-setup.sh
+
+# This script:
+# 1. Creates ./.streamlib/ directory in project root
+# 2. Creates proxy scripts that use `cargo run` (auto-rebuild on changes)
+# 3. Updates .cargo/config.toml with dev environment variables
+# 4. Starts broker on port 50052 with unique service name
+# 5. Each git worktree gets isolated broker (based on path hash)
+```
+
+After running `dev-setup.sh`, these environment variables are set in `.cargo/config.toml`:
+- `STREAMLIB_HOME` → `./.streamlib/` (project-local, not `~/`)
+- `STREAMLIB_BROKER_PORT` → `50052` (dev port, not production 50051)
+- `STREAMLIB_DEV_MODE` → `1` (enables wheel building, source detection)
+
+This means `cargo run` works directly without manual env var setup.
+
+**No shell config needed** - dev environment is project-local.
+
+**Managing the broker**:
+```bash
+# Check broker status
+./.streamlib/bin/streamlib broker status
+
+# View registered runtimes
+./.streamlib/bin/streamlib broker runtimes
+
+# View active connections
+./.streamlib/bin/streamlib broker connections
+```
+
+**After code changes**: No action needed - proxy scripts use `cargo run`, so changes are picked up automatically on next invocation.
+
+**Clean reinstall** (if needed):
+```bash
+./scripts/dev-setup.sh --clean
+```
+
+**Troubleshooting**:
+```bash
+# View broker logs (path includes unique hash)
+tail -f /tmp/streamlib-broker-dev-*.log
+
+# Check launchd service status
+launchctl list | grep Streamlib-dev
+```
+
+#### Multiple Worktrees Support
+
+Each git worktree gets its own isolated dev environment:
+- Unique service name: `Streamlib-dev-<6-char-hash>`
+- Unique broker port: `50052` (same port, but separate launchd service)
+- Separate `.streamlib/` directory per worktree
+- No conflicts between worktrees
+
 ## Quick Start Commands
 
 ### Building
@@ -392,14 +454,22 @@ cargo test -- --nocapture
 ```
 
 ### Running Examples
+
+After running `./scripts/dev-setup.sh`, the dev environment variables are configured in `.cargo/config.toml`, so `cargo run` works directly:
+
 ```bash
-# Run example (must be from workspace root)
+# ✅ Works - .cargo/config.toml has STREAMLIB_* env vars
 cargo run -p camera-display
+cargo run -p camera-python-display
 
 # With logging
-RUST_LOG=debug cargo run -p camera-audio-recorder
-RUST_LOG=trace cargo run -p news-cast
+RUST_LOG=debug cargo run -p camera-display
+
+# Using CLI wrapper (also works)
+./.streamlib/bin/streamlib run
 ```
+
+**Note**: If you haven't run `dev-setup.sh`, examples using StreamRuntime will fail to connect to the broker.
 
 ### Documentation
 ```bash

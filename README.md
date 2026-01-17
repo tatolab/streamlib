@@ -184,6 +184,37 @@ streamlib/
 - macOS 13+ (for Apple framework features)
 - Metal-capable GPU (for video processing)
 
+## Development Setup
+
+StreamLib uses [direnv](https://direnv.net/) to manage environment variables for development.
+
+**1. Install direnv:**
+```bash
+brew install direnv
+```
+
+**2. Add the hook to your shell** (add to `~/.zshrc` or `~/.bashrc`):
+```bash
+eval "$(direnv hook zsh)"  # or bash
+```
+
+**3. Run the dev setup script:**
+```bash
+./scripts/dev-setup.sh
+```
+
+**4. Allow direnv to load the environment:**
+```bash
+direnv allow
+```
+
+This sets up:
+- PyO3 Python paths for building Python processor support
+- StreamLib broker service (runs in background via launchd)
+- Development environment variables
+
+See `.envrc.example` for the environment variables used.
+
 ## Building
 
 ```bash

@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
     let _api_server = runtime.add_processor(ApiServerProcessor::node(ApiServerConfig {
         host: "127.0.0.1".to_string(),
         port: 9000,
+        ..Default::default()
     }))?;
 
     // Start the runtime

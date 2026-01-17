@@ -17,6 +17,8 @@ pub struct LinkInstanceCreationResult {
     pub instance: BoxedLinkInstance,
     /// Type info for the link.
     pub type_info: LinkTypeInfoComponent,
+    /// Schema name for cross-dylib validation.
+    pub schema_name: &'static str,
     /// Data writer for the source processor (boxed for type erasure).
     pub data_writer: Box<dyn Any + Send>,
     /// Data reader for the destination processor (boxed for type erasure).
