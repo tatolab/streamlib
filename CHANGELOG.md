@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.5](https://github.com/tatolab/streamlib/compare/v0.2.4...v0.2.5) (2026-01-17)
+
+
+### Features
+
+* Dynamic plugin loading and broker infrastructure ([#125](https://github.com/tatolab/streamlib/issues/125)) ([b9b2f75](https://github.com/tatolab/streamlib/commit/b9b2f75877470a7c18e9f08dbd19649c48a442d2))
+
+
+### Bug Fixes
+
+* **broker:** Add copyright header to generated proto file ([188129b](https://github.com/tatolab/streamlib/commit/188129bfc168f232abc5cd4b3a5eddfcff927b8a))
+
 ## [0.2.4](https://github.com/tatolab/streamlib/compare/v0.2.3...v0.2.4) (2026-01-10)
 
 
