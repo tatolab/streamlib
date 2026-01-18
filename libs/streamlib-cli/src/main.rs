@@ -152,6 +152,12 @@ enum Commands {
         #[arg(long)]
         since: Option<String>,
     },
+
+    /// Schema management (sync, add, new, validate)
+    Schema {
+        #[command(subcommand)]
+        action: SchemaCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -217,6 +223,34 @@ enum RuntimesCommands {
     List,
     /// Remove dead runtimes from the broker
     Prune,
+}
+
+#[derive(Subcommand)]
+enum SchemaCommands {
+    /// Sync all schemas (fetch remote + generate code)
+    Sync {
+        /// Generate for specific language only (rust, python, typescript)
+        #[arg(long)]
+        lang: Option<String>,
+    },
+
+    /// Add a remote schema to streamlib.toml
+    Add {
+        /// Schema name (e.g., com.tatolab.videoframe@1.0.0)
+        schema: String,
+    },
+
+    /// Create a new local schema template
+    New {
+        /// Schema name (e.g., my-detection)
+        name: String,
+    },
+
+    /// Validate local schema files
+    Validate,
+
+    /// List all configured schemas
+    List,
 }
 
 fn main() -> Result<()> {
@@ -332,6 +366,13 @@ async fn async_main(cli: Cli) -> Result<()> {
         }) => {
             commands::logs::stream(&runtime, follow, lines, since.as_deref()).await?;
         }
+        Some(Commands::Schema { action }) => match action {
+            SchemaCommands::Sync { lang } => commands::schema::sync(lang.as_deref())?,
+            SchemaCommands::Add { schema } => commands::schema::add(&schema)?,
+            SchemaCommands::New { name } => commands::schema::new_schema(&name)?,
+            SchemaCommands::Validate => commands::schema::validate()?,
+            SchemaCommands::List => commands::schema::list()?,
+        },
         None => {
             // No subcommand: show help
             Cli::parse_from(["streamlib", "--help"]);
