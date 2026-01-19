@@ -15,8 +15,11 @@ pub fn generate_python(schema: &SchemaDefinition) -> Result<String> {
         r#"# Generated from {}
 # DO NOT EDIT - regenerate with `streamlib schema sync`
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Optional, Any
+
+import msgpack
 
 "#,
         schema.full_name()
@@ -104,7 +107,23 @@ fn generate_class(
         }
     }
 
+    // Add msgpack methods
     code.push('\n');
+    code.push_str(&format!(
+        r#"    @classmethod
+    def from_msgpack(cls, data: bytes) -> "{}":
+        """Deserialize from MessagePack bytes."""
+        d = msgpack.unpackb(data, raw=False)
+        return cls(**d)
+
+    def to_msgpack(self) -> bytes:
+        """Serialize to MessagePack bytes."""
+        return msgpack.packb(dataclasses.asdict(self))
+
+"#,
+        class_name
+    ));
+
     code
 }
 

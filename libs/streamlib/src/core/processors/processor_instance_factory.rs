@@ -10,7 +10,7 @@ use crate::core::error::{Result, StreamError};
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-use crate::core::schema::ProcessorDescriptor;
+use crate::core::ProcessorDescriptor;
 
 /// A created processor instance for runtime use.
 pub type ProcessorInstance = Box<dyn DynGeneratedProcessor + Send>;

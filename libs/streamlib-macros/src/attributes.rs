@@ -30,6 +30,23 @@ pub struct ProcessorAttributes {
     /// Extract display_name from a config field: `display_name_from_config = "field_name"`
     /// The generated `node()` will call `.with_display_name(config.field_name.clone())`.
     pub display_name_from_config: Option<String>,
+
+    /// Input port declarations: `inputs = [input("name", schema = "schema@version")]`
+    pub inputs: Vec<PortDeclaration>,
+
+    /// Output port declarations: `outputs = [output("name", schema = "schema@version")]`
+    pub outputs: Vec<PortDeclaration>,
+}
+
+/// A port declaration from the processor attribute.
+#[derive(Debug, Clone)]
+pub struct PortDeclaration {
+    /// Port name (e.g., "video_in")
+    pub name: String,
+    /// Schema name with version (e.g., "com.tatolab.videoframe@1.0.0")
+    pub schema: String,
+    /// Optional history depth for input ports (default: 1)
+    pub history: Option<usize>,
 }
 
 /// Parsed attributes from `#[input(...)]` or `#[output(...)]`
@@ -189,6 +206,22 @@ impl ProcessorAttributes {
                 return Ok(());
             }
 
+            // inputs = [input("name", schema = "schema@version"), ...]
+            if meta.path.is_ident("inputs") {
+                let value = meta.value()?;
+                let expr: syn::ExprArray = value.parse()?;
+                result.inputs = parse_port_declarations_from_expr(&expr)?;
+                return Ok(());
+            }
+
+            // outputs = [output("name", schema = "schema@version"), ...]
+            if meta.path.is_ident("outputs") {
+                let value = meta.value()?;
+                let expr: syn::ExprArray = value.parse()?;
+                result.outputs = parse_port_declarations_from_expr(&expr)?;
+                return Ok(());
+            }
+
             Err(meta.error("unsupported processor attribute"))
         })
     }
@@ -284,6 +317,105 @@ fn parse_string_value(meta: &syn::meta::ParseNestedMeta) -> Result<String> {
     } else {
         Err(Error::new_spanned(value, "expected string literal"))
     }
+}
+
+/// Parse port declarations from an array expression: [input("name", schema = "..."), ...]
+fn parse_port_declarations_from_expr(expr: &syn::ExprArray) -> Result<Vec<PortDeclaration>> {
+    expr.elems
+        .iter()
+        .map(|elem| parse_single_port_declaration(elem))
+        .collect()
+}
+
+/// Parse a single port declaration from a function call expression.
+fn parse_single_port_declaration(expr: &syn::Expr) -> Result<PortDeclaration> {
+    // Expect: input("name", schema = "schema@version") or output("name", schema = "...")
+    let call = match expr {
+        syn::Expr::Call(call) => call,
+        _ => return Err(Error::new_spanned(expr, "expected input(...) or output(...)")),
+    };
+
+    // Verify function name is 'input' or 'output'
+    let func_name = match call.func.as_ref() {
+        syn::Expr::Path(path) => {
+            path.path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default()
+        }
+        _ => String::new(),
+    };
+
+    if func_name != "input" && func_name != "output" {
+        return Err(Error::new_spanned(
+            &call.func,
+            "expected 'input' or 'output'",
+        ));
+    }
+
+    // Parse arguments
+    let mut args = call.args.iter();
+
+    // First argument: port name as string literal
+    let name = match args.next() {
+        Some(syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(s),
+            ..
+        })) => s.value(),
+        Some(other) => return Err(Error::new_spanned(other, "expected string literal for port name")),
+        None => return Err(Error::new_spanned(call, "port declaration requires a name")),
+    };
+
+    let mut schema = String::new();
+    let mut history = None;
+
+    // Remaining arguments: key = value pairs
+    for arg in args {
+        match arg {
+            syn::Expr::Assign(assign) => {
+                let key = match assign.left.as_ref() {
+                    syn::Expr::Path(path) => {
+                        path.path.get_ident().map(|i| i.to_string()).unwrap_or_default()
+                    }
+                    _ => return Err(Error::new_spanned(&assign.left, "expected identifier")),
+                };
+
+                if key == "schema" {
+                    schema = match assign.right.as_ref() {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) => s.value(),
+                        _ => return Err(Error::new_spanned(&assign.right, "expected string literal")),
+                    };
+                } else if key == "history" {
+                    history = match assign.right.as_ref() {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Int(i),
+                            ..
+                        }) => Some(i.base10_parse()?),
+                        _ => return Err(Error::new_spanned(&assign.right, "expected integer")),
+                    };
+                } else {
+                    return Err(Error::new_spanned(&assign.left, "unknown port attribute"));
+                }
+            }
+            _ => return Err(Error::new_spanned(arg, "expected key = value")),
+        }
+    }
+
+    if schema.is_empty() {
+        return Err(Error::new_spanned(
+            call,
+            "port declaration requires 'schema' attribute",
+        ));
+    }
+
+    Ok(PortDeclaration {
+        name,
+        schema,
+        history,
+    })
 }
 
 #[cfg(test)]
@@ -413,5 +545,57 @@ mod tests {
         let result = PortAttributes::parse(&attrs, "input").unwrap();
         assert_eq!(result.custom_name, None);
         assert_eq!(result.description, None);
+    }
+
+    #[test]
+    fn test_parse_ipc_inputs() {
+        let args: TokenStream = quote::quote! {
+            inputs = [input("video_in", schema = "com.tatolab.videoframe@1.0.0")]
+        };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.inputs.len(), 1);
+        assert_eq!(result.inputs[0].name, "video_in");
+        assert_eq!(result.inputs[0].schema, "com.tatolab.videoframe@1.0.0");
+        assert_eq!(result.inputs[0].history, None);
+    }
+
+    #[test]
+    fn test_parse_ipc_outputs() {
+        let args: TokenStream = quote::quote! {
+            outputs = [output("detections", schema = "com.tatolab.detections@1.0.0")]
+        };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.outputs.len(), 1);
+        assert_eq!(result.outputs[0].name, "detections");
+        assert_eq!(result.outputs[0].schema, "com.tatolab.detections@1.0.0");
+    }
+
+    #[test]
+    fn test_parse_ipc_input_with_history() {
+        let args: TokenStream = quote::quote! {
+            inputs = [input("video_in", schema = "com.tatolab.videoframe@1.0.0", history = 10)]
+        };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.inputs.len(), 1);
+        assert_eq!(result.inputs[0].history, Some(10));
+    }
+
+    #[test]
+    fn test_parse_multiple_ipc_ports() {
+        let args: TokenStream = quote::quote! {
+            inputs = [
+                input("video", schema = "com.tatolab.videoframe@1.0.0"),
+                input("audio", schema = "com.tatolab.audioframe@1.0.0")
+            ],
+            outputs = [
+                output("composite", schema = "com.tatolab.videoframe@1.0.0")
+            ]
+        };
+        let result = ProcessorAttributes::parse_from_args(args).unwrap();
+        assert_eq!(result.inputs.len(), 2);
+        assert_eq!(result.outputs.len(), 1);
+        assert_eq!(result.inputs[0].name, "video");
+        assert_eq!(result.inputs[1].name, "audio");
+        assert_eq!(result.outputs[0].name, "composite");
     }
 }

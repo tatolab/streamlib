@@ -138,17 +138,23 @@ impl AnalysisResult {
             });
         }
 
+        // Check that the processor has at least one port declared
+        // (either via field attributes or via processor attribute syntax)
+        let has_field_ports = !port_fields.is_empty();
+        let has_ipc_ports =
+            !processor_attrs.inputs.is_empty() || !processor_attrs.outputs.is_empty();
+        let is_manual = matches!(
+            processor_attrs.execution_mode,
+            Some(ProcessExecution::Manual)
+        );
+
         // Manual processors (like API servers) may have no ports - they control
         // the runtime rather than processing data flow
-        if port_fields.is_empty()
-            && !matches!(
-                processor_attrs.execution_mode,
-                Some(ProcessExecution::Manual)
-            )
-        {
+        if !has_field_ports && !has_ipc_ports && !is_manual {
             return Err(Error::new_spanned(
                 item,
-                "Processor must have at least one #[input] or #[output] port \
+                "Processor must have at least one port declaration \
+                 (use #[input]/#[output] on fields, or inputs=[...]/outputs=[...] in processor attribute) \
                  (Manual execution mode processors are exempt)",
             ));
         }

@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::frames::{AudioChannelCount, AudioFrame};
-use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
+use crate::core::{Result, RuntimeContext, StreamError};
+use crate::schemas::{Audioframe1ch, Audioframe2ch};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -31,15 +31,11 @@ impl Default for AudioChannelConverterConfig {
 
 #[crate::processor(
     execution = Reactive,
-    description = "Converts mono audio to stereo using configurable channel mapping"
+    description = "Converts mono audio to stereo using configurable channel mapping",
+    inputs = [input("audio_in", schema = "com.tatolab.audioframe.1ch@1.0.0")],
+    outputs = [output("audio_out", schema = "com.tatolab.audioframe.2ch@1.0.0")]
 )]
 pub struct AudioChannelConverterProcessor {
-    #[crate::input(description = "Mono audio input")]
-    audio_in: LinkInput<AudioFrame>,
-
-    #[crate::output(description = "Stereo audio output")]
-    audio_out: LinkOutput<AudioFrame>,
-
     #[crate::config]
     config: AudioChannelConverterConfig,
 
@@ -67,8 +63,11 @@ impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processo
     }
 
     fn process(&mut self) -> Result<()> {
-        // Read mono input frame
-        if let Some(input_frame) = self.audio_in.read() {
+        // Read mono input frame from iceoryx2
+        if let Some(payload) = self.inputs.get("audio_in") {
+            let input_frame = Audioframe1ch::from_msgpack(payload.data())
+                .map_err(|e| StreamError::Runtime(format!("msgpack decode: {}", e)))?;
+
             // Convert mono samples to stereo based on mode
             let stereo_samples: Vec<f32> = match self.config.mode {
                 ChannelConversionMode::Duplicate => {
@@ -97,16 +96,16 @@ impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processo
                 }
             };
 
-            // Create stereo output frame
-            let output_frame = AudioFrame::new(
-                stereo_samples,
-                AudioChannelCount::Two,
-                input_frame.timestamp_ns,
-                self.frame_counter,
-                input_frame.sample_rate,
-            );
+            let output_frame = Audioframe2ch {
+                samples: stereo_samples,
+                sample_rate: input_frame.sample_rate,
+                timestamp_ns: input_frame.timestamp_ns,
+                frame_index: self.frame_counter,
+            };
 
-            self.audio_out.write(output_frame);
+            let bytes = output_frame.to_msgpack()
+                .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
+            self.outputs.write("audio_out", &bytes)?;
             self.frame_counter += 1;
 
             tracing::debug!(

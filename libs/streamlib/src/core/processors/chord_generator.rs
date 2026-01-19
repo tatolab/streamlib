@@ -1,11 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::frames::{AudioChannelCount, AudioFrame};
-use crate::core::{LinkOutput, Result, RuntimeContext};
+use crate::core::{Result, RuntimeContext, StreamError};
+use crate::schemas::Audioframe2ch;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 pub struct ChordGeneratorConfig {
@@ -63,25 +61,21 @@ impl SineOscillator {
 }
 
 #[crate::processor(
-    execution = Manual,
+    execution = Continuous,
     description = "Generates a C major chord (C4, E4, G4) pre-mixed into a stereo output",
-    unsafe_send
+    unsafe_send,
+    outputs = [output("chord", schema = "com.tatolab.audioframe.2ch@1.0.0")]
 )]
 pub struct ChordGeneratorProcessor {
-    #[crate::output(description = "Stereo C Major chord (C4 + E4 + G4 mixed to both channels)")]
-    chord: LinkOutput<AudioFrame>,
-
     #[crate::config]
     config: ChordGeneratorConfig,
 
-    osc_c4: Arc<Mutex<SineOscillator>>,
-    osc_e4: Arc<Mutex<SineOscillator>>,
-    osc_g4: Arc<Mutex<SineOscillator>>,
+    osc_c4: SineOscillator,
+    osc_e4: SineOscillator,
+    osc_g4: SineOscillator,
     sample_rate: u32,
     buffer_size: usize,
-    frame_counter: Arc<Mutex<u64>>,
-    running: Arc<AtomicBool>,
-    loop_handle: Option<std::thread::JoinHandle<()>>,
+    frame_counter: u64,
 }
 
 impl ChordGeneratorProcessor::Processor {
@@ -90,34 +84,22 @@ impl ChordGeneratorProcessor::Processor {
     const FREQ_G4: f64 = 392.00;
 }
 
-impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
+impl crate::core::ContinuousProcessor for ChordGeneratorProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: RuntimeContext,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.buffer_size = self.config.buffer_size;
         self.sample_rate = self.config.sample_rate;
-        *self.frame_counter.lock().unwrap() = 0;
+        self.frame_counter = 0;
 
         let amp = self.config.amplitude as f32;
-        self.osc_c4 = Arc::new(Mutex::new(SineOscillator::new(
-            Self::FREQ_C4,
-            amp,
-            self.sample_rate,
-        )));
-        self.osc_e4 = Arc::new(Mutex::new(SineOscillator::new(
-            Self::FREQ_E4,
-            amp,
-            self.sample_rate,
-        )));
-        self.osc_g4 = Arc::new(Mutex::new(SineOscillator::new(
-            Self::FREQ_G4,
-            amp,
-            self.sample_rate,
-        )));
+        self.osc_c4 = SineOscillator::new(Self::FREQ_C4, amp, self.sample_rate);
+        self.osc_e4 = SineOscillator::new(Self::FREQ_E4, amp, self.sample_rate);
+        self.osc_g4 = SineOscillator::new(Self::FREQ_G4, amp, self.sample_rate);
 
         tracing::info!(
-            "ChordGenerator: start() called (Pull mode - {}Hz, {} samples buffer)",
+            "ChordGenerator: setup() called (Continuous mode - {}Hz, {} samples buffer)",
             self.sample_rate,
             self.buffer_size
         );
@@ -129,117 +111,45 @@ impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn stop(&mut self) -> Result<()> {
-        tracing::info!("ChordGenerator: stop() called");
-        self.running.store(false, Ordering::Relaxed);
-        if let Some(handle) = self.loop_handle.take() {
-            let _ = handle.join();
-        }
-        tracing::info!("ChordGenerator: generation thread stopped");
-        Ok(())
-    }
+    fn process(&mut self) -> Result<()> {
+        // Generate one buffer of audio samples
+        let mut stereo_samples = Vec::with_capacity(self.buffer_size * 2);
 
-    fn start(&mut self) -> Result<()> {
-        if self.running.load(Ordering::Relaxed) {
-            return Ok(());
+        for _ in 0..self.buffer_size {
+            let sample_c4 = self.osc_c4.next();
+            let sample_e4 = self.osc_e4.next();
+            let sample_g4 = self.osc_g4.next();
+            let mixed = sample_c4 + sample_e4 + sample_g4;
+            stereo_samples.push(mixed);
+            stereo_samples.push(mixed);
         }
 
-        tracing::info!("ChordGenerator: process() called - spawning audio generation thread");
-        self.running.store(true, Ordering::Relaxed);
+        let timestamp_ns = crate::MediaClock::now().as_nanos() as i64;
+        let counter = self.frame_counter;
+        self.frame_counter += 1;
 
-        let osc_c4 = Arc::clone(&self.osc_c4);
-        let osc_e4 = Arc::clone(&self.osc_e4);
-        let osc_g4 = Arc::clone(&self.osc_g4);
-        let chord_output = self.chord.clone();
-        let frame_counter = Arc::clone(&self.frame_counter);
-        let running = Arc::clone(&self.running);
-        let buffer_size = self.buffer_size;
-        let sample_rate = self.sample_rate;
+        let chord_frame = Audioframe2ch {
+            samples: stereo_samples,
+            sample_rate: self.sample_rate,
+            timestamp_ns,
+            frame_index: counter,
+        };
 
-        let buffer_duration_us = (buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64;
+        if counter == 0 {
+            tracing::info!("ChordGenerator FIRST iteration: writing stereo chord frame");
+        }
 
-        tracing::info!(
-            "ChordGenerator: Starting loop at {}Hz rate ({} us per buffer, buffer_size={}, sample_rate={})",
-            sample_rate as f64 / buffer_size as f64,
-            buffer_duration_us,
-            buffer_size,
-            sample_rate
-        );
+        if counter % 100 == 0 && counter > 0 {
+            tracing::debug!(
+                "ChordGenerator iteration {}: Writing stereo chord frame",
+                counter
+            );
+        }
 
-        let handle = std::thread::spawn(move || {
-            use std::time::{Duration, Instant};
+        let bytes = chord_frame.to_msgpack()
+            .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
+        self.outputs.write("chord", &bytes)?;
 
-            let buffer_duration = Duration::from_micros(buffer_duration_us);
-            let mut next_tick = Instant::now() + buffer_duration;
-            let mut iteration_count = 0u64;
-
-            while running.load(Ordering::Relaxed) {
-                iteration_count += 1;
-                tracing::debug!(
-                    "ChordGenerator: Generation loop iteration {}",
-                    iteration_count
-                );
-
-                let mut osc_c4 = osc_c4.lock().unwrap();
-                let mut osc_e4 = osc_e4.lock().unwrap();
-                let mut osc_g4 = osc_g4.lock().unwrap();
-
-                let mut stereo_samples = Vec::with_capacity(buffer_size * 2);
-
-                for _ in 0..buffer_size {
-                    let sample_c4 = osc_c4.next();
-                    let sample_e4 = osc_e4.next();
-                    let sample_g4 = osc_g4.next();
-                    let mixed = sample_c4 + sample_e4 + sample_g4;
-                    stereo_samples.push(mixed);
-                    stereo_samples.push(mixed);
-                }
-
-                drop(osc_c4);
-                drop(osc_e4);
-                drop(osc_g4);
-
-                let timestamp_ns = crate::MediaClock::now().as_nanos() as i64;
-                let counter = {
-                    let mut c = frame_counter.lock().unwrap();
-                    let val = *c;
-                    *c += 1;
-                    val
-                };
-
-                let chord_frame = AudioFrame::new(
-                    stereo_samples,
-                    AudioChannelCount::Two,
-                    timestamp_ns,
-                    counter,
-                    sample_rate,
-                );
-
-                if iteration_count == 1 {
-                    tracing::info!("ChordGenerator FIRST iteration: writing stereo chord frame");
-                }
-
-                if iteration_count.is_multiple_of(100) {
-                    tracing::debug!(
-                        "ChordGenerator iteration {}: Writing stereo chord frame",
-                        iteration_count
-                    );
-                }
-
-                chord_output.write(chord_frame);
-
-                let now = Instant::now();
-                if now < next_tick {
-                    std::thread::sleep(next_tick - now);
-                }
-                next_tick += buffer_duration;
-            }
-
-            tracing::info!("ChordGenerator: Generation loop ended");
-        });
-
-        self.loop_handle = Some(handle);
-        tracing::info!("ChordGenerator: Thread spawned successfully");
         Ok(())
     }
 }

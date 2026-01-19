@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::frames::{AudioChannelCount, AudioFrame};
-use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
-use dasp::Signal;
+use crate::core::{Result, RuntimeContext, StreamError};
+use crate::schemas::{Audioframe1ch, Audioframe2ch};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
@@ -29,18 +28,14 @@ pub enum MixingStrategy {
 
 #[crate::processor(
     execution = Reactive,
-    description = "Mixes two mono signals (left and right) into a stereo signal"
+    description = "Mixes two mono signals (left and right) into a stereo signal",
+    inputs = [
+        input("left", schema = "com.tatolab.audioframe.1ch@1.0.0"),
+        input("right", schema = "com.tatolab.audioframe.1ch@1.0.0")
+    ],
+    outputs = [output("audio", schema = "com.tatolab.audioframe.2ch@1.0.0")]
 )]
 pub struct AudioMixerProcessor {
-    #[crate::input(description = "Left channel mono audio input")]
-    left: LinkInput<AudioFrame>,
-
-    #[crate::input(description = "Right channel mono audio input")]
-    right: LinkInput<AudioFrame>,
-
-    #[crate::output(description = "Mixed stereo audio output")]
-    audio: LinkOutput<AudioFrame>,
-
     #[crate::config]
     config: AudioMixerConfig,
 
@@ -73,21 +68,26 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[AudioMixer] process() called");
 
-        let left_frame = match self.left.read() {
-            Some(f) => f,
+        let left_payload = match self.inputs.get("left") {
+            Some(p) => p,
             None => {
                 tracing::debug!("[AudioMixer] Left input has no data");
                 return Ok(());
             }
         };
 
-        let right_frame = match self.right.read() {
-            Some(f) => f,
+        let right_payload = match self.inputs.get("right") {
+            Some(p) => p,
             None => {
                 tracing::debug!("[AudioMixer] Right input has no data");
                 return Ok(());
             }
         };
+
+        let left_frame = Audioframe1ch::from_msgpack(left_payload.data())
+            .map_err(|e| StreamError::Runtime(format!("left msgpack decode: {}", e)))?;
+        let right_frame = Audioframe1ch::from_msgpack(right_payload.data())
+            .map_err(|e| StreamError::Runtime(format!("right msgpack decode: {}", e)))?;
 
         if self.sample_rate == 0 {
             self.sample_rate = left_frame.sample_rate;
@@ -135,14 +135,12 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
 
         let timestamp_ns = left_frame.timestamp_ns.max(right_frame.timestamp_ns);
 
-        let mut left_signal = left_frame.read();
-        let mut right_signal = right_frame.read();
-
+        // Both inputs are mono, interleave into stereo
         let mut stereo_samples = Vec::with_capacity(self.buffer_size * 2);
 
-        for _ in 0..self.buffer_size {
-            let left_sample = left_signal.next().as_slice()[0];
-            let right_sample = right_signal.next().as_slice()[0];
+        for i in 0..self.buffer_size {
+            let left_sample = left_frame.samples[i];
+            let right_sample = right_frame.samples[i];
 
             let (final_left, final_right) = match self.config.strategy {
                 MixingStrategy::Sum => (left_sample, right_sample),
@@ -156,14 +154,16 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             stereo_samples.push(final_right);
         }
 
-        let output_frame = AudioFrame::new(
-            stereo_samples,
-            AudioChannelCount::Two,
+        let output_frame = Audioframe2ch {
+            samples: stereo_samples,
+            sample_rate: self.sample_rate,
             timestamp_ns,
-            self.frame_counter,
-            self.sample_rate,
-        );
-        self.audio.write(output_frame);
+            frame_index: self.frame_counter,
+        };
+
+        let bytes = output_frame.to_msgpack()
+            .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
+        self.outputs.write("audio", &bytes)?;
 
         tracing::debug!("[AudioMixer] Wrote mixed stereo frame");
         self.frame_counter += 1;

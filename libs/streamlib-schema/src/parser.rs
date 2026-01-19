@@ -207,4 +207,52 @@ version: 1.0.0
         let schema = parse_yaml(yaml).unwrap();
         assert_eq!(schema.full_name(), "com.tatolab.videoframe@1.0.0");
     }
+
+    #[test]
+    fn test_parse_builtin_videoframe_schema() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("schemas")
+            .join("com.tatolab.videoframe.yaml");
+
+        let schema = parse_yaml_file(&schema_path).unwrap();
+        assert_eq!(schema.name, "com.tatolab.videoframe");
+        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.fields.len(), 6);
+
+        // Verify key fields
+        assert_eq!(schema.fields[0].name, "surface_id");
+        assert_eq!(schema.fields[3].name, "pixel_format");
+    }
+
+    #[test]
+    fn test_parse_builtin_audioframe_schema() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("schemas")
+            .join("com.tatolab.audioframe.yaml");
+
+        let schema = parse_yaml_file(&schema_path).unwrap();
+        assert_eq!(schema.name, "com.tatolab.audioframe");
+        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.fields.len(), 5);
+
+        // Verify key fields
+        assert_eq!(schema.fields[0].name, "samples");
+        assert_eq!(schema.fields[1].name, "channels");
+    }
+
+    #[test]
+    fn test_parse_builtin_encodedvideoframe_schema() {
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("schemas")
+            .join("com.tatolab.encodedvideoframe.yaml");
+
+        let schema = parse_yaml_file(&schema_path).unwrap();
+        assert_eq!(schema.name, "com.tatolab.encodedvideoframe");
+        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.fields.len(), 4);
+
+        // Verify key fields
+        assert_eq!(schema.fields[0].name, "data");
+        assert_eq!(schema.fields[2].name, "is_keyframe");
+    }
 }

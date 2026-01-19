@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{LinkInput, LinkOutput, Result, VideoFrame};
+use crate::core::Result;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
 #[serde(default)]
@@ -19,15 +18,11 @@ impl Default for SimplePassthroughConfig {
 
 #[crate::processor(
     execution = Manual,
-    description = "Passes video frames through unchanged (for testing)"
+    description = "Passes video frames through unchanged (for testing)",
+    inputs = [input("input", schema = "com.tatolab.videoframe@1.0.0")],
+    outputs = [output("output", schema = "com.tatolab.videoframe@1.0.0")]
 )]
 pub struct SimplePassthroughProcessor {
-    #[crate::input(description = "Input video stream")]
-    input: LinkInput<VideoFrame>,
-
-    #[crate::output(description = "Output video stream")]
-    output: Arc<LinkOutput<VideoFrame>>,
-
     #[crate::config]
     config: SimplePassthroughConfig,
 }
@@ -36,8 +31,9 @@ impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
     // Uses default setup() and teardown() implementations from Processor trait
 
     fn start(&mut self) -> Result<()> {
-        if let Some(frame) = self.input.read() {
-            self.output.write(frame);
+        // Read from iceoryx2 input mailbox and write to output
+        if let Some(payload) = self.inputs.get("input") {
+            self.outputs.write("output", payload.data())?;
         }
         Ok(())
     }

@@ -338,8 +338,8 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
     }
 }
 
-impl From<&crate::core::schema::ProcessorDescriptor> for ProcessorDescriptorOutput {
-    fn from(desc: &crate::core::schema::ProcessorDescriptor) -> Self {
+impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
+    fn from(desc: &crate::core::ProcessorDescriptor) -> Self {
         Self {
             name: desc.name.clone(),
             description: desc.description.clone(),
@@ -357,8 +357,8 @@ impl From<&crate::core::schema::ProcessorDescriptor> for ProcessorDescriptorOutp
     }
 }
 
-impl From<&crate::core::schema::ConfigField> for ConfigFieldOutput {
-    fn from(field: &crate::core::schema::ConfigField) -> Self {
+impl From<&crate::core::ConfigField> for ConfigFieldOutput {
+    fn from(field: &crate::core::ConfigField) -> Self {
         Self {
             name: field.name.clone(),
             field_type: field.field_type.clone(),
@@ -368,8 +368,8 @@ impl From<&crate::core::schema::ConfigField> for ConfigFieldOutput {
     }
 }
 
-impl From<&crate::core::schema::PortDescriptor> for PortDescriptorOutput {
-    fn from(port: &crate::core::schema::PortDescriptor) -> Self {
+impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
+    fn from(port: &crate::core::PortDescriptor) -> Self {
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
@@ -379,8 +379,8 @@ impl From<&crate::core::schema::PortDescriptor> for PortDescriptorOutput {
     }
 }
 
-impl From<&crate::core::schema::CodeExamples> for CodeExamplesOutput {
-    fn from(examples: &crate::core::schema::CodeExamples) -> Self {
+impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
+    fn from(examples: &crate::core::CodeExamples) -> Self {
         Self {
             rust: examples.rust.clone(),
             python: examples.python.clone(),
@@ -389,49 +389,3 @@ impl From<&crate::core::schema::CodeExamples> for CodeExamplesOutput {
     }
 }
 
-impl From<&crate::core::schema_registry::SchemaDescriptor> for SchemaDescriptorOutput {
-    fn from(desc: &crate::core::schema_registry::SchemaDescriptor) -> Self {
-        Self {
-            name: desc.name.clone(),
-            version: SemanticVersionOutput::from(&desc.version),
-            fields: desc.fields.iter().map(SchemaFieldOutput::from).collect(),
-            read_behavior: LinkBufferReadModeOutput::from(desc.read_behavior),
-            default_capacity: desc.default_capacity,
-        }
-    }
-}
-
-impl From<&crate::core::schema::SemanticVersion> for SemanticVersionOutput {
-    fn from(version: &crate::core::schema::SemanticVersion) -> Self {
-        Self {
-            major: version.major,
-            minor: version.minor,
-            patch: version.patch,
-        }
-    }
-}
-
-impl From<&crate::core::schema::DataFrameSchemaField> for SchemaFieldOutput {
-    fn from(field: &crate::core::schema::DataFrameSchemaField) -> Self {
-        Self {
-            name: field.name.clone(),
-            description: field.description.clone(),
-            type_name: field.type_name.clone(),
-            shape: field.shape.clone(),
-            internal: field.internal,
-        }
-    }
-}
-
-impl From<crate::core::links::LinkBufferReadMode> for LinkBufferReadModeOutput {
-    fn from(mode: crate::core::links::LinkBufferReadMode) -> Self {
-        match mode {
-            crate::core::links::LinkBufferReadMode::SkipToLatest => {
-                LinkBufferReadModeOutput::SkipToLatest
-            }
-            crate::core::links::LinkBufferReadMode::ReadNextInOrder => {
-                LinkBufferReadModeOutput::ReadNextInOrder
-            }
-        }
-    }
-}

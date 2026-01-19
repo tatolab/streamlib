@@ -48,8 +48,6 @@ mod analysis;
 mod attributes;
 mod codegen;
 mod config_descriptor;
-mod dataframe_schema;
-mod schema_macro;
 
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput, ItemStruct};
@@ -143,42 +141,6 @@ pub fn config(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-/// Derive macro for DataFrameSchema trait.
-///
-/// Generates a `DataFrameSchema` implementation for structs with primitive fields.
-///
-/// # Supported Types
-///
-/// - Scalars: `bool`, `i32`, `i64`, `u32`, `u64`, `f32`, `f64`
-/// - Fixed-size arrays: `[f32; 512]`, `[[f32; 4]; 4]`, etc.
-///
-/// # Attributes
-///
-/// - `#[schema(name = "...")]` - Custom schema name (defaults to struct name)
-///
-/// # Example
-///
-/// ```ignore
-/// use streamlib::DataFrameSchema;
-///
-/// #[derive(DataFrameSchema)]
-/// #[schema(name = "clip_embedding")]
-/// pub struct ClipEmbeddingSchema {
-///     pub embedding: [f32; 512],
-///     pub timestamp: i64,
-///     pub normalized: bool,
-/// }
-/// ```
-#[proc_macro_derive(DataFrameSchema, attributes(schema))]
-pub fn derive_dataframe_schema(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-
-    match dataframe_schema::derive_dataframe_schema(input) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
 /// Derive macro for ConfigDescriptor trait.
 ///
 /// Generates a `ConfigDescriptor` implementation for config structs,
@@ -215,72 +177,3 @@ pub fn derive_config_descriptor(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Schema attribute macro for defining schema types.
-///
-/// Transforms a struct into a schema type that can be used with `LinkInput<T>` and `LinkOutput<T>`.
-///
-/// # Attributes
-///
-/// - `version = "1.0.0"` - Schema version (semver format, default: "1.0.0")
-/// - `read_behavior = "skip_to_latest"` - Buffer read mode (default: "skip_to_latest")
-///   - `"skip_to_latest"` - Skip to most recent value (video, data)
-///   - `"read_next_in_order"` - Read all values in order (audio)
-/// - `name = "..."` - Override schema name (default: struct name)
-///
-/// # Field Attributes
-///
-/// Use `#[streamlib::field(...)]` on fields:
-/// - `not_serializable` - Field cannot be serialized (e.g., GPU resources)
-/// - `skip` - Exclude field from schema metadata
-/// - `display = "..."` - UI display hint
-///
-/// # Example
-///
-/// ```ignore
-/// #[streamlib::schema(version = "1.0.0")]
-/// pub struct ImageEmbedding {
-///     pub embedding: [f32; 512],
-///     pub confidence: f32,
-///     pub timestamp_ns: i64,
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item_struct = parse_macro_input!(item as ItemStruct);
-    let attr_tokens: proc_macro2::TokenStream = attr.into();
-
-    let attrs = match schema_macro::SchemaAttributes::parse_from_args(attr_tokens) {
-        Ok(attrs) => attrs,
-        Err(err) => return err.to_compile_error().into(),
-    };
-
-    let generated = schema_macro::generate_schema(attrs, item_struct);
-    TokenStream::from(generated)
-}
-
-/// Field attribute for schema field customization.
-///
-/// Use within `#[streamlib::schema]` structs to customize field behavior.
-///
-/// # Attributes
-///
-/// - `not_serializable` - Field cannot cross language boundary (GPU resources)
-/// - `skip` - Exclude field from schema metadata
-/// - `display = "..."` - UI display hint
-///
-/// # Example
-///
-/// ```ignore
-/// #[streamlib::schema]
-/// pub struct VideoFrame {
-///     #[streamlib::field(not_serializable)]
-///     pub texture: Arc<wgpu::Texture>,
-///
-///     #[streamlib::field(display = "timestamp")]
-///     pub timestamp_ns: i64,
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn field(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
-}

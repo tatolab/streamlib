@@ -9,7 +9,7 @@
 //! - `OutputLink` module with port markers
 //! - Processor trait implementation
 
-use crate::analysis::{AnalysisResult, PortDirection};
+use crate::analysis::AnalysisResult;
 use proc_macro2::TokenStream;
 use quote::quote;
 use streamlib_codegen_shared::ProcessExecution;
@@ -78,15 +78,7 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
 
 /// Generate the Processor struct with public fields
 fn generate_processor_struct(analysis: &AnalysisResult) -> TokenStream {
-    let port_fields: Vec<TokenStream> = analysis
-        .port_fields
-        .iter()
-        .map(|field| {
-            let name = &field.field_name;
-            let ty = &field.field_type;
-            quote! { pub #name: #ty }
-        })
-        .collect();
+    // Legacy port fields removed - use iceoryx2 ports via inputs = [...] / outputs = [...] syntax
 
     let config_field = analysis
         .config_field_name
@@ -105,79 +97,39 @@ fn generate_processor_struct(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
+    // Generate iceoryx2-based IPC fields if new port syntax is used
+    let ipc_input_field = if !analysis.processor_attrs.inputs.is_empty() {
+        quote! { pub inputs: ::streamlib::iceoryx2::InputMailboxes, }
+    } else {
+        quote! {}
+    };
+
+    let ipc_output_field = if !analysis.processor_attrs.outputs.is_empty() {
+        quote! { pub outputs: ::streamlib::iceoryx2::OutputWriter, }
+    } else {
+        quote! {}
+    };
+
     quote! {
         pub struct Processor {
-            #(#port_fields,)*
+            #ipc_input_field
+            #ipc_output_field
             #config_field
             #(#state_fields,)*
         }
     }
 }
 
-/// Generate InputLink module with port markers
-fn generate_input_link_module(analysis: &AnalysisResult) -> TokenStream {
-    let input_ports: Vec<_> = analysis.input_ports().collect();
-
-    if input_ports.is_empty() {
-        return quote! { pub mod InputLink {} };
-    }
-
-    let markers: Vec<TokenStream> = input_ports
-        .iter()
-        .map(|port| {
-            let name = &port.field_name;
-            let port_name = &port.port_name;
-            quote! {
-                #[allow(non_camel_case_types)]
-                #[derive(Debug, Clone, Copy)]
-                pub struct #name;
-
-                impl ::streamlib::core::InputPortMarker for #name {
-                    const PORT_NAME: &'static str = #port_name;
-                    type Processor = super::Processor;
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        pub mod InputLink {
-            #(#markers)*
-        }
-    }
+/// Generate InputLink module with port markers (empty - legacy port markers removed)
+fn generate_input_link_module(_analysis: &AnalysisResult) -> TokenStream {
+    // Legacy port markers removed - use iceoryx2 ports via inputs = [...] syntax
+    quote! { pub mod InputLink {} }
 }
 
-/// Generate OutputLink module with port markers
-fn generate_output_link_module(analysis: &AnalysisResult) -> TokenStream {
-    let output_ports: Vec<_> = analysis.output_ports().collect();
-
-    if output_ports.is_empty() {
-        return quote! { pub mod OutputLink {} };
-    }
-
-    let markers: Vec<TokenStream> = output_ports
-        .iter()
-        .map(|port| {
-            let name = &port.field_name;
-            let port_name = &port.port_name;
-            quote! {
-                #[allow(non_camel_case_types)]
-                #[derive(Debug, Clone, Copy)]
-                pub struct #name;
-
-                impl ::streamlib::core::OutputPortMarker for #name {
-                    const PORT_NAME: &'static str = #port_name;
-                    type Processor = super::Processor;
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        pub mod OutputLink {
-            #(#markers)*
-        }
-    }
+/// Generate OutputLink module with port markers (empty - legacy port markers removed)
+fn generate_output_link_module(_analysis: &AnalysisResult) -> TokenStream {
+    // Legacy port markers removed - use iceoryx2 ports via outputs = [...] syntax
+    quote! { pub mod OutputLink {} }
 }
 
 /// Generate Processor trait implementation
@@ -213,14 +165,8 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     };
 
     let descriptor_impl = generate_descriptor(analysis);
-    let get_output_port_type = generate_get_output_port_type(analysis);
-    let get_input_port_type = generate_get_input_port_type(analysis);
-    let add_link_output_data_writer = generate_add_link_output_data_writer(analysis);
-    let add_link_input_data_reader = generate_add_link_input_data_reader(analysis);
-    let remove_link_output_data_writer = generate_remove_link_output_data_writer(analysis);
-    let remove_link_input_data_reader = generate_remove_link_input_data_reader(analysis);
-    let set_link_output_to_processor_message_writer =
-        generate_set_link_output_to_processor_message_writer(analysis);
+    // Legacy link methods removed - iceoryx2 ports use InputMailboxes/OutputWriter
+    let iceoryx2_accessors = generate_iceoryx2_accessors(analysis);
 
     let update_config = analysis.config_field_name.as_ref().map(|name| {
         quote! {
@@ -383,13 +329,7 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
             }
 
             #descriptor_impl
-            #get_output_port_type
-            #get_input_port_type
-            #add_link_output_data_writer
-            #add_link_input_data_reader
-            #remove_link_output_data_writer
-            #remove_link_input_data_reader
-            #set_link_output_to_processor_message_writer
+            #iceoryx2_accessors
 
             fn __generated_setup(&mut self, ctx: ::streamlib::core::RuntimeContext) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as #processor_trait>::setup(self, ctx)
@@ -412,33 +352,38 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
 
 /// Generate from_config method
 fn generate_from_config(analysis: &AnalysisResult) -> TokenStream {
-    let port_inits: Vec<TokenStream> = analysis
-        .port_fields
-        .iter()
-        .map(|field| {
-            let name = &field.field_name;
-            let port_name = &field.port_name;
-            let msg_type = &field.message_type;
-            let is_arc = field.is_arc_wrapped;
+    // Legacy port_inits removed - use iceoryx2 ports via inputs = [...] / outputs = [...] syntax
 
-            match field.direction {
-                PortDirection::Input => {
-                    if is_arc {
-                        quote! { #name: std::sync::Arc::new(::streamlib::core::LinkInput::<#msg_type>::new(#port_name)) }
-                    } else {
-                        quote! { #name: ::streamlib::core::LinkInput::<#msg_type>::new(#port_name) }
-                    }
-                }
-                PortDirection::Output => {
-                    if is_arc {
-                        quote! { #name: std::sync::Arc::new(::streamlib::core::LinkOutput::<#msg_type>::new(#port_name)) }
-                    } else {
-                        quote! { #name: ::streamlib::core::LinkOutput::<#msg_type>::new(#port_name) }
-                    }
-                }
-            }
-        })
-        .collect();
+    // Generate iceoryx2-based IPC field initializers
+    let ipc_input_init = if !analysis.processor_attrs.inputs.is_empty() {
+        let add_port_calls: Vec<TokenStream> = analysis
+            .processor_attrs
+            .inputs
+            .iter()
+            .map(|port| {
+                let name = &port.name;
+                let history = port.history.unwrap_or(1);
+                quote! { inputs.add_port(#name, #history); }
+            })
+            .collect();
+        quote! {
+            inputs: {
+                let mut inputs = ::streamlib::iceoryx2::InputMailboxes::new();
+                #(#add_port_calls)*
+                inputs
+            },
+        }
+    } else {
+        quote! {}
+    };
+
+    let ipc_output_init = if !analysis.processor_attrs.outputs.is_empty() {
+        // Note: For outputs, the dest_port is set during wiring, not at construction time.
+        // We just store the schema for now; add_port will be called during wiring.
+        quote! { outputs: ::streamlib::iceoryx2::OutputWriter::new(), }
+    } else {
+        quote! {}
+    };
 
     let config_init = analysis
         .config_field_name
@@ -465,7 +410,8 @@ fn generate_from_config(analysis: &AnalysisResult) -> TokenStream {
     quote! {
         fn from_config(config: Self::Config) -> ::streamlib::core::Result<Self> {
             Ok(Self {
-                #(#port_inits,)*
+                #ipc_input_init
+                #ipc_output_init
                 #config_init
                 #(#state_inits,)*
             })
@@ -488,59 +434,44 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
         .as_deref()
         .unwrap_or("Processor");
 
-    let input_ports: Vec<TokenStream> = analysis
-        .input_ports()
+    // Legacy field-based input/output ports removed
+    // Use iceoryx2 ports via inputs = [...] / outputs = [...] syntax
+
+    // iceoryx2-based input ports (from processor attribute)
+    let ipc_input_ports: Vec<TokenStream> = analysis
+        .processor_attrs
+        .inputs
+        .iter()
         .map(|p| {
-            let port_name = &p.port_name;
-            let msg_type = &p.message_type;
-            let port_desc = p.attributes.description.as_deref().unwrap_or("");
-            // Use explicit schema type if provided (via DataFrameSchema trait),
-            // otherwise use message type (via LinkPortMessage trait)
-            let schema_name_expr = match &p.attributes.schema {
-                Some(schema_type) => quote! {
-                    ::streamlib::core::schema::DataFrameSchema::name(
-                        &<#schema_type as ::core::default::Default>::default()
-                    ).to_string()
-                },
-                None => quote! {
-                    <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name().to_string()
-                },
-            };
+            let port_name = &p.name;
+            let schema = &p.schema;
             quote! {
                 .with_input(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    description: #port_desc.to_string(),
-                    schema: #schema_name_expr,
+                    description: String::new(),
+                    schema: #schema.to_string(),
                     required: true,
+                    is_iceoryx2: true,
                 })
             }
         })
         .collect();
 
-    let output_ports: Vec<TokenStream> = analysis
-        .output_ports()
+    // New iceoryx2-based output ports (from processor attribute)
+    let ipc_output_ports: Vec<TokenStream> = analysis
+        .processor_attrs
+        .outputs
+        .iter()
         .map(|p| {
-            let port_name = &p.port_name;
-            let msg_type = &p.message_type;
-            let port_desc = p.attributes.description.as_deref().unwrap_or("");
-            // Use explicit schema type if provided (via DataFrameSchema trait),
-            // otherwise use message type (via LinkPortMessage trait)
-            let schema_name_expr = match &p.attributes.schema {
-                Some(schema_type) => quote! {
-                    ::streamlib::core::schema::DataFrameSchema::name(
-                        &<#schema_type as ::core::default::Default>::default()
-                    ).to_string()
-                },
-                None => quote! {
-                    <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name().to_string()
-                },
-            };
+            let port_name = &p.name;
+            let schema = &p.schema;
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    description: #port_desc.to_string(),
-                    schema: #schema_name_expr,
+                    description: String::new(),
+                    schema: #schema.to_string(),
                     required: true,
+                    is_iceoryx2: true,
                 })
             }
         })
@@ -553,7 +484,7 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
     // Generate config fields call if config type is available
     let config_fields = analysis.config_field_type.as_ref().map(|config_type| {
         quote! {
-            .with_config(<#config_type as ::streamlib::core::schema::ConfigDescriptor>::config_fields())
+            .with_config(<#config_type as ::streamlib::core::ConfigDescriptor>::config_fields())
         }
     });
 
@@ -564,304 +495,67 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
                     .with_version(#version)
                     .with_repository(#repository)
                     #config_fields
-                    #(#input_ports)*
-                    #(#output_ports)*
+                    #(#ipc_input_ports)*
+                    #(#ipc_output_ports)*
             )
         }
     }
 }
 
-/// Generate get_output_port_type method (deprecated, use get_output_schema_name)
-fn generate_get_output_port_type(analysis: &AnalysisResult) -> TokenStream {
-    let port_type_arms: Vec<TokenStream> = analysis
-        .output_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let msg_type = &p.message_type;
-            quote! {
-                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::port_type())
-            }
-        })
-        .collect();
+/// Generate iceoryx2 accessor methods for processors that use iceoryx2 ports.
+fn generate_iceoryx2_accessors(analysis: &AnalysisResult) -> TokenStream {
+    let has_iceoryx2_outputs = !analysis.processor_attrs.outputs.is_empty();
+    let has_iceoryx2_inputs = !analysis.processor_attrs.inputs.is_empty();
 
-    let schema_name_arms: Vec<TokenStream> = analysis
-        .output_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let msg_type = &p.message_type;
-            quote! {
-                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name())
-            }
-        })
-        .collect();
-
-    if port_type_arms.is_empty() {
+    if !has_iceoryx2_outputs && !has_iceoryx2_inputs {
+        // No iceoryx2 ports, use default implementations (return false/None)
         return quote! {};
     }
 
-    quote! {
-        #[allow(deprecated)]
-        fn get_output_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
-            match port_name {
-                #(#port_type_arms,)*
-                _ => None
+    let has_outputs_impl = if has_iceoryx2_outputs {
+        quote! {
+            fn has_iceoryx2_outputs(&self) -> bool {
+                true
             }
         }
+    } else {
+        quote! {}
+    };
 
-        fn get_output_schema_name(&self, port_name: &str) -> Option<&'static str> {
-            match port_name {
-                #(#schema_name_arms,)*
-                _ => None
+    let has_inputs_impl = if has_iceoryx2_inputs {
+        quote! {
+            fn has_iceoryx2_inputs(&self) -> bool {
+                true
             }
         }
-    }
-}
+    } else {
+        quote! {}
+    };
 
-/// Generate get_input_port_type method (deprecated, use get_input_schema_name)
-fn generate_get_input_port_type(analysis: &AnalysisResult) -> TokenStream {
-    let port_type_arms: Vec<TokenStream> = analysis
-        .input_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let msg_type = &p.message_type;
-            quote! {
-                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::port_type())
+    let get_output_writer_impl = if has_iceoryx2_outputs {
+        quote! {
+            fn get_iceoryx2_output_writer(&mut self) -> Option<&mut ::streamlib::iceoryx2::OutputWriter> {
+                Some(&mut self.outputs)
             }
-        })
-        .collect();
+        }
+    } else {
+        quote! {}
+    };
 
-    let schema_name_arms: Vec<TokenStream> = analysis
-        .input_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let msg_type = &p.message_type;
-            quote! {
-                #port_name => Some(<#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name())
+    let get_input_mailboxes_impl = if has_iceoryx2_inputs {
+        quote! {
+            fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut ::streamlib::iceoryx2::InputMailboxes> {
+                Some(&mut self.inputs)
             }
-        })
-        .collect();
-
-    if port_type_arms.is_empty() {
-        return quote! {};
-    }
+        }
+    } else {
+        quote! {}
+    };
 
     quote! {
-        #[allow(deprecated)]
-        fn get_input_port_type(&self, port_name: &str) -> Option<::streamlib::core::LinkPortType> {
-            match port_name {
-                #(#port_type_arms,)*
-                _ => None
-            }
-        }
-
-        fn get_input_schema_name(&self, port_name: &str) -> Option<&'static str> {
-            match port_name {
-                #(#schema_name_arms,)*
-                _ => None
-            }
-        }
-    }
-}
-
-/// Generate add_link_output_data_writer method
-fn generate_add_link_output_data_writer(analysis: &AnalysisResult) -> TokenStream {
-    let arms: Vec<TokenStream> = analysis
-        .output_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let field_name = &p.field_name;
-            let msg_type = &p.message_type;
-            let is_arc = p.is_arc_wrapped;
-
-            let add_data_writer = if is_arc {
-                quote! { self.#field_name.as_ref().add_data_writer(wrapper.link_id, wrapper.data_writer) }
-            } else {
-                quote! { self.#field_name.add_data_writer(wrapper.link_id, wrapper.data_writer) }
-            };
-
-            quote! {
-                #port_name => {
-                    // Schema-name-based validation for cross-dylib compatibility
-                    let expected_schema = <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name();
-                    if schema_name != expected_schema {
-                        return Err(::streamlib::core::StreamError::PortError(format!(
-                            "Schema mismatch for output port '{}': expected '{}', got '{}'",
-                            #port_name, expected_schema, schema_name
-                        )));
-                    }
-                    // SAFETY: We've validated schema_name matches, so the struct layout is identical
-                    // even if TypeId differs across dylib boundaries.
-                    let wrapper = unsafe {
-                        Box::from_raw(Box::into_raw(data_writer) as *mut ::streamlib::core::compiler::wiring::LinkOutputDataWriterWrapper<#msg_type>)
-                    };
-                    let _ = #add_data_writer;
-                    return Ok(());
-                }
-            }
-        })
-        .collect();
-
-    if arms.is_empty() {
-        return quote! {};
-    }
-
-    quote! {
-        fn add_link_output_data_writer(&mut self, port_name: &str, schema_name: &str, data_writer: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
-            match port_name {
-                #(#arms,)*
-                _ => Err(::streamlib::core::StreamError::PortError(format!("Output port '{}' not found", port_name)))
-            }
-        }
-    }
-}
-
-/// Generate add_link_input_data_reader method
-fn generate_add_link_input_data_reader(analysis: &AnalysisResult) -> TokenStream {
-    let arms: Vec<TokenStream> = analysis
-        .input_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let field_name = &p.field_name;
-            let msg_type = &p.message_type;
-            let is_arc = p.is_arc_wrapped;
-
-            let add_data_reader = if is_arc {
-                quote! { self.#field_name.as_ref().add_data_reader(wrapper.link_id, wrapper.data_reader, None) }
-            } else {
-                quote! { self.#field_name.add_data_reader(wrapper.link_id, wrapper.data_reader, None) }
-            };
-
-            quote! {
-                #port_name => {
-                    // Schema-name-based validation for cross-dylib compatibility
-                    let expected_schema = <#msg_type as ::streamlib::core::links::LinkPortMessage>::schema_name();
-                    if schema_name != expected_schema {
-                        return Err(::streamlib::core::StreamError::PortError(format!(
-                            "Schema mismatch for input port '{}': expected '{}', got '{}'",
-                            #port_name, expected_schema, schema_name
-                        )));
-                    }
-                    // SAFETY: We've validated schema_name matches, so the struct layout is identical
-                    // even if TypeId differs across dylib boundaries.
-                    let wrapper = unsafe {
-                        Box::from_raw(Box::into_raw(data_reader) as *mut ::streamlib::core::compiler::wiring::LinkInputDataReaderWrapper<#msg_type>)
-                    };
-                    let _ = #add_data_reader;
-                    return Ok(());
-                }
-            }
-        })
-        .collect();
-
-    if arms.is_empty() {
-        return quote! {};
-    }
-
-    quote! {
-        fn add_link_input_data_reader(&mut self, port_name: &str, schema_name: &str, data_reader: Box<dyn std::any::Any + Send>) -> ::streamlib::core::Result<()> {
-            match port_name {
-                #(#arms,)*
-                _ => Err(::streamlib::core::StreamError::PortError(format!("Input port '{}' not found", port_name)))
-            }
-        }
-    }
-}
-
-/// Generate remove_link_output_data_writer method
-fn generate_remove_link_output_data_writer(analysis: &AnalysisResult) -> TokenStream {
-    let arms: Vec<TokenStream> = analysis
-        .output_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let field_name = &p.field_name;
-            let is_arc = p.is_arc_wrapped;
-
-            let remove = if is_arc {
-                quote! { self.#field_name.as_ref().remove_data_writer(link_id) }
-            } else {
-                quote! { self.#field_name.remove_data_writer(link_id) }
-            };
-
-            quote! { #port_name => { #remove } }
-        })
-        .collect();
-
-    if arms.is_empty() {
-        return quote! {};
-    }
-
-    quote! {
-        fn remove_link_output_data_writer(&mut self, port_name: &str, link_id: &::streamlib::core::LinkUniqueId) -> ::streamlib::core::Result<()> {
-            match port_name {
-                #(#arms,)*
-                _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown output port: {}", port_name)))
-            }
-        }
-    }
-}
-
-/// Generate remove_link_input_data_reader method
-fn generate_remove_link_input_data_reader(analysis: &AnalysisResult) -> TokenStream {
-    let arms: Vec<TokenStream> = analysis
-        .input_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let field_name = &p.field_name;
-            let is_arc = p.is_arc_wrapped;
-
-            let remove = if is_arc {
-                quote! { self.#field_name.as_ref().remove_data_reader(link_id) }
-            } else {
-                quote! { self.#field_name.remove_data_reader(link_id) }
-            };
-
-            quote! { #port_name => { #remove } }
-        })
-        .collect();
-
-    if arms.is_empty() {
-        return quote! {};
-    }
-
-    quote! {
-        fn remove_link_input_data_reader(&mut self, port_name: &str, link_id: &::streamlib::core::LinkUniqueId) -> ::streamlib::core::Result<()> {
-            match port_name {
-                #(#arms,)*
-                _ => Err(::streamlib::core::StreamError::PortError(format!("Unknown input port: {}", port_name)))
-            }
-        }
-    }
-}
-
-/// Generate set_link_output_to_processor_message_writer method
-fn generate_set_link_output_to_processor_message_writer(analysis: &AnalysisResult) -> TokenStream {
-    let arms: Vec<TokenStream> = analysis
-        .output_ports()
-        .map(|p| {
-            let port_name = &p.port_name;
-            let field_name = &p.field_name;
-            let is_arc = p.is_arc_wrapped;
-
-            let set_writer = if is_arc {
-                quote! { self.#field_name.as_ref().set_link_output_to_processor_message_writer(message_writer) }
-            } else {
-                quote! { self.#field_name.set_link_output_to_processor_message_writer(message_writer) }
-            };
-
-            quote! { #port_name => { #set_writer } }
-        })
-        .collect();
-
-    if arms.is_empty() {
-        return quote! {};
-    }
-
-    quote! {
-        fn set_link_output_to_processor_message_writer(&mut self, port_name: &str, message_writer: ::streamlib::crossbeam_channel::Sender<::streamlib::core::links::LinkOutputToProcessorMessage>) {
-            match port_name {
-                #(#arms,)*
-                _ => {}
-            }
-        }
+        #has_outputs_impl
+        #has_inputs_impl
+        #get_output_writer_impl
+        #get_input_mailboxes_impl
     }
 }

@@ -8,7 +8,7 @@ pub use crate::core::{
     error::{Result, StreamError},
 
     // Frames
-    frames::{AudioFrame, DataFrame, VideoFrame},
+    frames::{AudioFrame, VideoFrame},
 
     // Graph
     graph::{LinkUniqueId, ProcessorUniqueId},

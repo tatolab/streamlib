@@ -30,7 +30,31 @@ use serde::{{Deserialize, Serialize}};
     let main_struct = generate_struct(schema, &schema.fields, &schema.rust_struct_name(), true);
     code.push_str(&main_struct);
 
+    // Generate msgpack impl for main struct
+    let msgpack_impl = generate_msgpack_impl(&schema.rust_struct_name());
+    code.push_str(&msgpack_impl);
+
     Ok(code)
+}
+
+/// Generate MessagePack serialization impl block.
+fn generate_msgpack_impl(struct_name: &str) -> String {
+    format!(
+        r#"impl {} {{
+    /// Deserialize from MessagePack bytes.
+    pub fn from_msgpack(data: &[u8]) -> Result<Self, rmp_serde::decode::Error> {{
+        rmp_serde::from_slice(data)
+    }}
+
+    /// Serialize to MessagePack bytes.
+    pub fn to_msgpack(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {{
+        rmp_serde::to_vec(self)
+    }}
+}}
+
+"#,
+        struct_name
+    )
 }
 
 /// Generate nested structs for object fields.

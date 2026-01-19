@@ -1,0 +1,23 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+name: com.tatolab.videoframe
+version: 1.0.0
+description: "Video frame for IPC - references GPU surface by ID"
+
+fields:
+  - name: surface_id
+    type: uint64
+    description: "GPU surface ID (IOSurface on macOS)"
+  - name: width
+    type: uint32
+    description: "Frame width in pixels"
+  - name: height
+    type: uint32
+    description: "Frame height in pixels"
+  - name: timestamp_ns
+    type: int64
+    description: "Monotonic timestamp in nanoseconds"
+  - name: frame_index
+    type: uint64
+    description: "Sequential frame counter"

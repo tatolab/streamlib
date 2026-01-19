@@ -21,12 +21,10 @@ mod pending_operation;
 mod pending_operation_queue;
 mod processor_config_change;
 pub(crate) mod scheduling;
-pub mod wiring;
 
 pub use compile_phase::CompilePhase;
 pub use compile_result::CompileResult;
 pub use compiler::Compiler;
-pub use compiler_ops::{LinkInputDataReaderWrapper, LinkOutputDataWriterWrapper};
 pub use compiler_transaction::CompilerTransactionHandle;
 pub use link_config_change::LinkConfigChange;
 pub use pending_operation::PendingOperation;

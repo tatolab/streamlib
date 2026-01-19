@@ -1,0 +1,17 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+name: com.streamlib.bench.dataframe
+version: 1.0.0
+description: "DataFrame with large binary payload (16KB stress test)"
+
+fields:
+  - name: timestamp_ns
+    type: int64
+    description: "Timestamp in nanoseconds"
+  - name: frame_number
+    type: uint64
+    description: "Monotonic frame counter"
+  - name: payload
+    type: bytes
+    description: "Binary payload data (up to 16KB)"

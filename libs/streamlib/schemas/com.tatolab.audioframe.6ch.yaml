@@ -1,0 +1,20 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+name: com.tatolab.audioframe.6ch
+version: 1.0.0
+description: "5.1 surround audio frame (6 channels, interleaved)"
+
+fields:
+  - name: samples
+    type: array<float32>
+    description: "Interleaved audio samples"
+  - name: sample_rate
+    type: uint32
+    description: "Sample rate in Hz"
+  - name: timestamp_ns
+    type: int64
+    description: "Monotonic timestamp in nanoseconds"
+  - name: frame_index
+    type: uint64
+    description: "Sequential frame counter"

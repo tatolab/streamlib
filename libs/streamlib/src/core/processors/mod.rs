@@ -35,43 +35,59 @@ pub use processor_spec::ProcessorSpec;
 pub struct EmptyConfig;
 
 // Sources
-pub mod audio_capture;
-pub mod camera;
+// TODO: Migrate to iceoryx2 API
+// pub mod audio_capture;
+// pub mod camera;
 pub mod chord_generator;
 
 // Sinks
-pub mod audio_output;
-pub mod display;
-pub mod mp4_writer;
+// TODO: Migrate to iceoryx2 API
+// pub mod audio_output;
+// pub mod display;
+// pub mod mp4_writer;
 
 // Transformers
 pub mod audio_channel_converter;
 pub mod audio_mixer;
 pub mod audio_resampler;
 pub mod buffer_rechunker;
-pub mod clap_effect;
+// TODO: Migrate to iceoryx2 API
+// pub mod clap_effect;
 pub mod simple_passthrough;
 
-// WebRTC Streaming
-pub mod webrtc_whep;
-pub mod webrtc_whip;
+// Test processors for iceoryx2 communication validation
+pub mod iceoryx2_test_consumer;
+pub mod iceoryx2_test_producer;
 
-pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
-pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
+// WebRTC Streaming
+// TODO: Migrate to iceoryx2 API
+// pub mod webrtc_whep;
+// pub mod webrtc_whip;
+
+// TODO: Migrate to iceoryx2 API
+// pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
+// pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
 pub use chord_generator::{ChordGeneratorConfig, ChordGeneratorProcessor};
 
-pub use audio_output::{AudioDevice, AudioOutputConfig, AudioOutputProcessor};
-pub use display::{DisplayConfig, DisplayProcessor, WindowId};
-pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
+// TODO: Migrate to iceoryx2 API
+// pub use audio_output::{AudioDevice, AudioOutputConfig, AudioOutputProcessor};
+// pub use display::{DisplayConfig, DisplayProcessor, WindowId};
+// pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
 
 pub use api_server::*;
 pub use audio_channel_converter::{
     AudioChannelConverterConfig, AudioChannelConverterProcessor, ChannelConversionMode,
 };
 pub use audio_mixer::{AudioMixerConfig, AudioMixerProcessor, MixingStrategy};
-pub use audio_resampler::{AudioResamplerConfig, AudioResamplerProcessor};
-pub use buffer_rechunker::{BufferRechunkerConfig, BufferRechunkerProcessor};
-pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
+pub use audio_resampler::{AudioResampler1chProcessor, AudioResampler2chProcessor, AudioResamplerConfig};
+pub use buffer_rechunker::{BufferRechunker1chProcessor, BufferRechunker2chProcessor, BufferRechunkerConfig};
+// TODO: Migrate to iceoryx2 API
+// pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::{SimplePassthroughConfig, SimplePassthroughProcessor};
-pub use webrtc_whep::{WebRtcWhepConfig, WebRtcWhepProcessor};
-pub use webrtc_whip::{WebRtcWhipConfig, WebRtcWhipProcessor};
+// TODO: Migrate to iceoryx2 API
+// pub use webrtc_whep::{WebRtcWhepConfig, WebRtcWhepProcessor};
+// pub use webrtc_whip::{WebRtcWhipConfig, WebRtcWhipProcessor};
+
+// iceoryx2 test processors
+pub use iceoryx2_test_consumer::{Iceoryx2TestConsumerConfig, Iceoryx2TestConsumerProcessor};
+pub use iceoryx2_test_producer::{Iceoryx2TestProducerConfig, Iceoryx2TestProducerProcessor};

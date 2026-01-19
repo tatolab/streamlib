@@ -3,9 +3,8 @@
 
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, LinkOutputToProcessorWriterAndReader,
-    ProcessorPauseGateComponent, ProcessorReadyBarrierComponent, ProcessorReadyBarrierHandle,
-    ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
+    Graph, GraphNodeWithComponents, ProcessorPauseGateComponent, ProcessorReadyBarrierComponent,
+    ProcessorReadyBarrierHandle, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
 };
 
 /// Attach infrastructure components to a processor node.
@@ -28,7 +27,6 @@ pub(crate) fn prepare_processor(
     // Attach infrastructure components (NO ProcessorInstanceComponent - thread creates it)
     node_mut.insert(barrier_component);
     node_mut.insert(ShutdownChannelComponent::new());
-    node_mut.insert(LinkOutputToProcessorWriterAndReader::new());
     node_mut.insert(StateComponent::default());
     node_mut.insert(ProcessorPauseGateComponent::new());
 

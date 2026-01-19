@@ -15,10 +15,10 @@ use super::RuntimeUniqueId;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{GpuContext, RuntimeContext, TimeContext};
 use crate::core::graph::{
-    GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader, LinkUniqueId,
-    ProcessorPauseGateComponent, ProcessorUniqueId,
+    GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorPauseGateComponent,
+    ProcessorUniqueId,
 };
-use crate::core::links::LinkOutputToProcessorMessage;
+use crate::iceoryx2::Iceoryx2Node;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
@@ -204,6 +204,11 @@ impl StreamRuntime {
         // Create shared timing context - clock starts now
         let time = Arc::new(TimeContext::new());
 
+        // Create iceoryx2 Node for cross-process communication
+        tracing::info!("[start] Creating iceoryx2 Node...");
+        let iceoryx2_node = Iceoryx2Node::new()?;
+        tracing::info!("[start] iceoryx2 Node created");
+
         // Pass runtime directly to RuntimeContext. Processors call runtime operations
         // directly - this is safe because processor lifecycle methods (setup, process)
         // run on their own threads with no locks held.
@@ -215,6 +220,7 @@ impl StreamRuntime {
             Arc::clone(&self.runtime_id),
             runtime_ops,
             self.tokio_runtime_variant.handle(),
+            iceoryx2_node,
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
@@ -363,16 +369,6 @@ impl StreamRuntime {
             // Update processor state
             if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
                 *state.0.lock() = ProcessorState::Running;
-            }
-
-            // Send a wake-up message to reactive processors so they can process
-            // any buffered data. Without this, a reactive processor could stay
-            // blocked if its upstream buffer was full during pause (no new
-            // InvokeProcessingNow messages would be sent since writes fail).
-            if let Some(channel) = node.get::<LinkOutputToProcessorWriterAndReader>() {
-                let _ = channel
-                    .writer
-                    .send(LinkOutputToProcessorMessage::InvokeProcessingNow);
             }
 
             // Publish event

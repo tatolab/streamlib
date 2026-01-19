@@ -15,6 +15,8 @@ pub fn generate_typescript(schema: &SchemaDefinition) -> Result<String> {
         r#"// Generated from {}
 // DO NOT EDIT - regenerate with `streamlib schema sync`
 
+import * as msgpack from "@msgpack/msgpack";
+
 "#,
         schema.full_name()
     ));
@@ -57,51 +59,118 @@ fn generate_nested_interfaces(
     code
 }
 
-/// Generate a single interface.
+/// Generate a single class with msgpack support.
 fn generate_interface(
     schema: &SchemaDefinition,
     fields: &[Field],
-    interface_name: &str,
+    class_name: &str,
     is_main: bool,
 ) -> String {
     let mut code = String::new();
 
-    // JSDoc comment (only for main interface)
+    // JSDoc comment (only for main class)
     if is_main {
         if let Some(ref desc) = schema.description {
             code.push_str(&format!("/** {} */\n", desc));
         }
     }
 
-    // Export interface
-    code.push_str(&format!("export interface {} {{\n", interface_name));
+    // Export class
+    code.push_str(&format!("export class {} {{\n", class_name));
 
-    // Fields
+    // Collect field info for constructor
+    let mut field_params = Vec::new();
+    let mut field_assignments = Vec::new();
+
+    // Fields as public properties
     for field in fields {
         let field_name = to_camel_case(&field.name);
-        let nested_interface_name = if matches!(field.field_type, FieldType::Complex(ref s) if s.to_lowercase() == "object")
+        let nested_class_name = if matches!(field.field_type, FieldType::Complex(ref s) if s.to_lowercase() == "object")
         {
-            Some(format!("{}{}", interface_name, to_pascal_case(&field.name)))
+            Some(format!("{}{}", class_name, to_pascal_case(&field.name)))
         } else {
             None
         };
 
         let ts_type = field
             .field_type
-            .to_typescript_type(nested_interface_name.as_deref());
+            .to_typescript_type(nested_class_name.as_deref());
+
+        // Use original name for serde compatibility
+        let prop_name = if field_name != field.name {
+            field.name.clone()
+        } else {
+            field_name.clone()
+        };
 
         // Field with JSDoc comment
         if let Some(ref desc) = field.description {
             code.push_str(&format!("    /** {} */\n", desc));
         }
+        code.push_str(&format!("    public {}: {};\n", prop_name, ts_type));
 
-        // Use original name if different from camelCase (for serde compatibility)
-        if field_name != field.name {
-            code.push_str(&format!("    {}: {};\n", field.name, ts_type));
-        } else {
-            code.push_str(&format!("    {}: {};\n", field_name, ts_type));
-        }
+        field_params.push(format!("{}: {}", prop_name, ts_type));
+        field_assignments.push(format!("        this.{} = {};", prop_name, prop_name));
     }
+
+    code.push('\n');
+
+    // Constructor
+    code.push_str(&format!(
+        "    constructor({}) {{\n",
+        field_params.join(", ")
+    ));
+    for assignment in &field_assignments {
+        code.push_str(assignment);
+        code.push('\n');
+    }
+    code.push_str("    }\n\n");
+
+    // Static fromMsgpack method
+    code.push_str(&format!(
+        r#"    static fromMsgpack(data: Uint8Array): {} {{
+        const obj = msgpack.decode(data) as any;
+        return new {}({});
+    }}
+
+"#,
+        class_name,
+        class_name,
+        fields
+            .iter()
+            .map(|f| {
+                let field_name = to_camel_case(&f.name);
+                let prop_name = if field_name != f.name {
+                    f.name.clone()
+                } else {
+                    field_name
+                };
+                format!("obj.{}", prop_name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+
+    // Instance toMsgpack method
+    code.push_str(&format!(
+        r#"    toMsgpack(): Uint8Array {{
+        return msgpack.encode({{ {} }});
+    }}
+"#,
+        fields
+            .iter()
+            .map(|f| {
+                let field_name = to_camel_case(&f.name);
+                let prop_name = if field_name != f.name {
+                    f.name.clone()
+                } else {
+                    field_name
+                };
+                format!("{}: this.{}", prop_name, prop_name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
 
     code.push_str("}\n\n");
     code
@@ -183,11 +252,13 @@ fields:
         let schema = parse_yaml(yaml).unwrap();
         let code = generate_typescript(&schema).unwrap();
 
-        assert!(code.contains("export interface Videoframe {"));
-        assert!(code.contains("surface_id: number;"));
-        assert!(code.contains("width: number;"));
-        assert!(code.contains("timestamp_ns: number;"));
+        assert!(code.contains("export class Videoframe {"));
+        assert!(code.contains("public surface_id: number;"));
+        assert!(code.contains("public width: number;"));
+        assert!(code.contains("public timestamp_ns: number;"));
         assert!(code.contains("/** GPU surface ID */"));
+        assert!(code.contains("static fromMsgpack(data: Uint8Array)"));
+        assert!(code.contains("toMsgpack(): Uint8Array"));
     }
 
     #[test]
@@ -217,9 +288,9 @@ fields:
         let schema = parse_yaml(yaml).unwrap();
         let code = generate_typescript(&schema).unwrap();
 
-        assert!(code.contains("export interface Detection {"));
-        assert!(code.contains("export interface DetectionBoundingBox {"));
-        assert!(code.contains("bounding_box: DetectionBoundingBox;"));
+        assert!(code.contains("export class Detection {"));
+        assert!(code.contains("export class DetectionBoundingBox {"));
+        assert!(code.contains("public bounding_box: DetectionBoundingBox;"));
     }
 
     #[test]
@@ -240,9 +311,9 @@ fields:
         let schema = parse_yaml(yaml).unwrap();
         let code = generate_typescript(&schema).unwrap();
 
-        assert!(code.contains("tags: string[];"));
-        assert!(code.contains("metadata: Record<string, number>;"));
-        assert!(code.contains("optional_value: number | null;"));
+        assert!(code.contains("public tags: string[];"));
+        assert!(code.contains("public metadata: Record<string, number>;"));
+        assert!(code.contains("public optional_value: number | null;"));
     }
 
     #[test]

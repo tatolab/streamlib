@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::pubsub::{topics, Event, EventListener, PUBSUB};
-use crate::core::schema_registry::SCHEMA_REGISTRY;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
 use crate::{
@@ -186,9 +185,7 @@ struct IdResponse {
 
 // Note: RegistryResponse is now defined in crate::core::json_schema
 // and imported below for the get_registry handler.
-use crate::core::json_schema::{
-    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput,
-};
+use crate::core::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 
 #[derive(Serialize, utoipa::ToSchema)]
 struct ErrorResponse {
@@ -596,14 +593,10 @@ async fn get_registry() -> Json<RegistryResponse> {
         .into_iter()
         .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
-    let schemas: Vec<SchemaDescriptorOutput> = SCHEMA_REGISTRY
-        .list_descriptors()
-        .into_iter()
-        .map(|d| SchemaDescriptorOutput::from(&d))
-        .collect();
+    // Schema registry removed - iceoryx2 handles schemas via MessagePack
     Json(RegistryResponse {
         processors,
-        schemas,
+        schemas: vec![],
     })
 }
 

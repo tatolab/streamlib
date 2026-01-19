@@ -10,9 +10,9 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, LinkOutputToProcessorWriterAndReader,
-    ProcessorInstanceComponent, ProcessorPauseGateComponent, ProcessorReadyBarrierComponent,
-    ProcessorUniqueId, ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+    Graph, GraphNodeWithComponents, ProcessorInstanceComponent, ProcessorPauseGateComponent,
+    ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
+    ThreadHandleComponent,
 };
 use crate::core::processors::{ProcessorInstanceFactory, ProcessorState};
 
@@ -196,7 +196,7 @@ fn spawn_dedicated_thread(
             );
 
             // === PHASE 3: Extract components for setup and loop ===
-            let (state_arc, shutdown_rx, message_reader, pause_gate_inner, exec_config) = {
+            let (state_arc, shutdown_rx, pause_gate_inner, exec_config) = {
                 let mut graph = graph_arc_clone.write();
                 let node = match graph.traversal_mut().v(&proc_id_clone).first_mut() {
                     Some(n) => n,
@@ -228,23 +228,6 @@ fn spawn_dedicated_thread(
                     }
                 };
 
-                let message_reader = match node.get_mut::<LinkOutputToProcessorWriterAndReader>() {
-                    Some(writer_and_reader) => match writer_and_reader.take_reader() {
-                        Some(reader) => reader,
-                        None => {
-                            tracing::error!("[{}] Message reader already taken", proc_id_clone);
-                            return;
-                        }
-                    },
-                    None => {
-                        tracing::error!(
-                            "[{}] No LinkOutputToProcessorWriterAndReader",
-                            proc_id_clone
-                        );
-                        return;
-                    }
-                };
-
                 let pause_gate_inner = match node.get::<ProcessorPauseGateComponent>() {
                     Some(pg) => pg.clone_inner(),
                     None => {
@@ -255,13 +238,7 @@ fn spawn_dedicated_thread(
 
                 let exec_config = processor_arc_clone.lock().execution_config();
 
-                (
-                    state,
-                    shutdown_rx,
-                    message_reader,
-                    pause_gate_inner,
-                    exec_config,
-                )
+                (state, shutdown_rx, pause_gate_inner, exec_config)
             }; // Lock released here
 
             // === PHASE 4: Setup (NO LOCK HELD - safe to call runtime ops) ===
@@ -303,7 +280,6 @@ fn spawn_dedicated_thread(
                 proc_id_clone,
                 processor_arc_clone,
                 shutdown_rx,
-                message_reader,
                 state_arc,
                 pause_gate_inner,
                 exec_config,
