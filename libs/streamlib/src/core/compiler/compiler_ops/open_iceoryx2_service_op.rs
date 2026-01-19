@@ -15,7 +15,7 @@ use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, LinkState,
     LinkStateComponent, LinkUniqueId, OutputLinkPortRef, ProcessorInstanceComponent,
 };
-use crate::core::processors::ProcessorInstance;
+use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
 use crate::core::ProcessorUniqueId;
 
 /// Open an iceoryx2 service for a connection in the graph.
@@ -148,11 +148,37 @@ fn open_iceoryx2_pubsub(
         service_name
     );
 
+    // Look up schema for the output port from the registry
+    let output_schema = {
+        let source_proc_type = graph
+            .traversal_mut()
+            .v(source_proc_id)
+            .first()
+            .map(|node| node.processor_type().to_string())
+            .unwrap_or_default();
+
+        PROCESSOR_REGISTRY
+            .port_info(&source_proc_type)
+            .and_then(|(_, outputs)| {
+                outputs
+                    .iter()
+                    .find(|p| p.name == source_port)
+                    .map(|p| p.data_type.clone())
+            })
+            .unwrap_or_default()
+    };
+
+    tracing::debug!(
+        "Output port '{}' has schema '{}'",
+        source_port,
+        output_schema
+    );
+
     // Configure source OutputWriter with port mapping and set the Publisher
     {
         let mut source_guard = source_processor.lock();
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
-            output_writer.add_port(source_port, "", dest_port);
+            output_writer.add_port(source_port, &output_schema, dest_port);
             output_writer.set_publisher(publisher);
             tracing::debug!(
                 "Configured OutputWriter port '{}' -> '{}' with Publisher",
