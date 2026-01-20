@@ -4,7 +4,8 @@
 use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -166,6 +167,7 @@ impl CaptureSessionInitState {
 /// This is guaranteed by the processor lifecycle: stop() clears the context before drop.
 struct CameraCallbackContext {
     output_writer: *const OutputWriter,
+    gpu_context: crate::core::GpuContext,
     frame_count: std::sync::atomic::AtomicU64,
 }
 
@@ -209,19 +211,37 @@ define_class!(
                 eprintln!("[Camera] CVPixelBuffer not backed by IOSurface");
                 return;
             }
-            let surface_id = IOSurfaceGetID(iosurface);
 
             // Get dimensions from CVPixelBuffer
             let width = CVPixelBufferGetWidth(pixel_buffer_ptr as *mut _) as u32;
             let height = CVPixelBufferGetHeight(pixel_buffer_ptr as *mut _) as u32;
 
+            // Try to use surface store for cross-process sharing via broker
+            // Fall back to raw IOSurfaceID if surface store is unavailable
+            let surface_id_str = match RhiPixelBufferRef::from_iosurface_ref(iosurface) {
+                Ok(pixel_buffer_ref) => {
+                    let pixel_buffer = RhiPixelBuffer::new(pixel_buffer_ref);
+                    match ctx.gpu_context.check_in_surface(&pixel_buffer) {
+                        Ok(id) => id,
+                        Err(_) => {
+                            // Surface store not available, fall back to raw IOSurface ID
+                            IOSurfaceGetID(iosurface).to_string()
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Failed to create pixel buffer, use raw IOSurface ID
+                    IOSurfaceGetID(iosurface).to_string()
+                }
+            };
+
             let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
             let frame_num = ctx.frame_count.fetch_add(1, Ordering::Relaxed);
 
             // Create IPC frame with surface_id as string
-            // The receiving process will use IOSurfaceLookup(id) or XPC broker to access the surface
+            // The receiving process will use check_out_surface() or IOSurfaceLookup(id) to access the surface
             let ipc_frame = crate::_generated_::Videoframe {
-                surface_id: surface_id.to_string(),
+                surface_id: surface_id_str,
                 width,
                 height,
                 timestamp_ns: timestamp_ns.to_string(),
@@ -259,14 +279,17 @@ pub struct AppleCameraProcessor {
     camera_name: String,
     /// Async init state - None means init not started yet.
     capture_init_state: Option<Arc<CaptureSessionInitState>>,
+    /// GPU context for surface store access (set in setup, used in start).
+    gpu_context: Option<GpuContext>,
 }
 
 impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: RuntimeContext,
+        ctx: RuntimeContext,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
-        // No GPU context needed - camera outputs buffer-backed frames
+        // Store GPU context for surface store access in start()
+        self.gpu_context = Some(ctx.gpu.clone());
         tracing::info!("Camera: setup() complete");
         std::future::ready(Ok(()))
     }
@@ -288,11 +311,17 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
     fn start(&mut self) -> Result<()> {
         tracing::trace!("Camera: start() called - setting up callback-driven capture");
 
-        // Create callback context with pointer to OutputWriter
+        // Get GPU context (set during setup)
+        let gpu_context = self.gpu_context.clone().ok_or_else(|| {
+            StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
+        })?;
+
+        // Create callback context with pointer to OutputWriter and GPU context
         // SAFETY: The processor outlives the callback context (stop() clears it before drop)
         let output_writer_ptr = &self.outputs as *const OutputWriter;
         let callback_context = Arc::new(CameraCallbackContext {
             output_writer: output_writer_ptr,
+            gpu_context,
             frame_count: std::sync::atomic::AtomicU64::new(0),
         });
 

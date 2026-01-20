@@ -127,18 +127,3 @@ impl Default for OutputWriter {
         Self::new()
     }
 }
-
-impl Clone for OutputWriter {
-    /// Clone creates a new OutputWriter that shares the same publisher.
-    ///
-    /// This is useful for callback-driven processors that need to write
-    /// from multiple threads (e.g., AVFoundation camera callbacks).
-    fn clone(&self) -> Self {
-        // Note: We can't actually clone the publisher, so cloned writers
-        // start without a publisher. For shared access, use Arc<OutputWriter>.
-        Self {
-            publisher: Mutex::new(None),
-            port_schemas: RwLock::new(self.port_schemas.read().clone()),
-        }
-    }
-}

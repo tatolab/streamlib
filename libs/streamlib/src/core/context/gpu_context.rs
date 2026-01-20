@@ -9,6 +9,7 @@ use crate::core::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use super::surface_store::SurfaceStore;
 use super::texture_pool::{
     PooledTextureHandle, TexturePool, TexturePoolConfig, TexturePoolDescriptor,
 };
@@ -71,6 +72,9 @@ pub struct GpuContext {
     device: Arc<GpuDevice>,
     texture_pool: TexturePool,
     pixel_buffer_pool_manager: Arc<PixelBufferPoolManager>,
+    /// Surface store for cross-process GPU surface sharing (macOS only).
+    /// Set during runtime.start(), None before that.
+    surface_store: Arc<Mutex<Option<SurfaceStore>>>,
 }
 
 impl GpuContext {
@@ -82,6 +86,7 @@ impl GpuContext {
             device,
             texture_pool,
             pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
+            surface_store: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -93,6 +98,7 @@ impl GpuContext {
             device,
             texture_pool,
             pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
+            surface_store: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -189,6 +195,78 @@ impl GpuContext {
         let device_ptr = self.metal_device().device() as *const _ as *mut std::ffi::c_void;
         let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
         crate::core::rhi::RhiTextureCache::new_metal(metal_device_ref)
+    }
+
+    // =========================================================================
+    // Surface Store (Cross-Process GPU Surface Sharing)
+    // =========================================================================
+
+    /// Set the surface store for cross-process GPU surface sharing.
+    ///
+    /// Called internally during runtime.start() to enable check_in/check_out.
+    pub(crate) fn set_surface_store(&self, store: SurfaceStore) {
+        *self.surface_store.lock().unwrap() = Some(store);
+    }
+
+    /// Clear the surface store.
+    ///
+    /// Called internally during runtime.stop().
+    pub(crate) fn clear_surface_store(&self) {
+        *self.surface_store.lock().unwrap() = None;
+    }
+
+    /// Get the surface store, if initialized.
+    pub fn surface_store(&self) -> Option<SurfaceStore> {
+        self.surface_store.lock().unwrap().clone()
+    }
+
+    /// Check in a pixel buffer to the broker, returning a surface ID.
+    ///
+    /// The surface ID can be shared with other processes (e.g., Python subprocesses)
+    /// which can then call `check_out_surface` to get the same IOSurface.
+    ///
+    /// If this pixel buffer was already checked in, returns the existing ID.
+    #[cfg(target_os = "macos")]
+    pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+        let store = self.surface_store.lock().unwrap();
+        let store = store.as_ref().ok_or_else(|| {
+            crate::core::StreamError::Configuration(
+                "SurfaceStore not initialized. Call runtime.start() first.".into(),
+            )
+        })?;
+        store.check_in(pixel_buffer)
+    }
+
+    /// Check out a surface by ID, returning the pixel buffer.
+    ///
+    /// Returns from local cache if available, otherwise fetches from broker.
+    /// The first checkout for a given ID incurs XPC overhead (~100-200µs),
+    /// subsequent checkouts are cache hits (~10-50ns).
+    #[cfg(target_os = "macos")]
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+        let store = self.surface_store.lock().unwrap();
+        let store = store.as_ref().ok_or_else(|| {
+            crate::core::StreamError::Configuration(
+                "SurfaceStore not initialized. Call runtime.start() first.".into(),
+            )
+        })?;
+        store.check_out(surface_id)
+    }
+
+    /// Check in a pixel buffer (non-macOS stub).
+    #[cfg(not(target_os = "macos"))]
+    pub fn check_in_surface(&self, _pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+        Err(crate::core::StreamError::NotSupported(
+            "Surface store is only supported on macOS".into(),
+        ))
+    }
+
+    /// Check out a surface (non-macOS stub).
+    #[cfg(not(target_os = "macos"))]
+    pub fn check_out_surface(&self, _surface_id: &str) -> Result<RhiPixelBuffer> {
+        Err(crate::core::StreamError::NotSupported(
+            "Surface store is only supported on macOS".into(),
+        ))
     }
 }
 

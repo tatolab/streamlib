@@ -62,8 +62,8 @@ pub trait GeneratedProcessor: Send + 'static {
         false
     }
 
-    /// Get a mutable reference to the OutputWriter if this processor uses iceoryx2 outputs.
-    fn get_iceoryx2_output_writer(&mut self) -> Option<&mut crate::iceoryx2::OutputWriter> {
+    /// Get the OutputWriter if this processor uses iceoryx2 outputs.
+    fn get_iceoryx2_output_writer(&self) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriter>> {
         None
     }
 

@@ -38,6 +38,7 @@ crossbeam-channel = "0.5"
 inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
 rtrb = "0.3.2"  # Lock-free SPSC ring buffer for real-time audio/video
+crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
 iceoryx2 = "0.8.1"  # Zero-copy IPC pub/sub for cross-process communication
 rmp-serde = "1.3"  # MessagePack serialization for frame payloads
 signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus

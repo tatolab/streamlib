@@ -20,7 +20,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # gRPC server
 tonic = "0.12"
@@ -42,6 +42,9 @@ thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
+
+# UUID generation for surface IDs
+uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 tonic-build = "0.12"

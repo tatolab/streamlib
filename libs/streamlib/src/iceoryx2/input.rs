@@ -60,6 +60,9 @@ struct PortConfig {
 ///
 /// The mailsorter task routes incoming payloads to the appropriate mailbox
 /// based on the port_key in the payload.
+///
+/// Thread-safe: All read operations can be called from any thread.
+/// The subscriber is still single-threaded (set once, used from one thread).
 pub struct InputMailboxes {
     ports: HashMap<String, PortConfig>,
     subscriber: SendableSubscriber,
@@ -94,34 +97,20 @@ impl InputMailboxes {
 
     /// Receive all pending payloads from the iceoryx2 Subscriber and route them to mailboxes.
     ///
-    /// This is called automatically by `pop()` and `has_data()`, but can be called
+    /// This is called automatically by `read()` and `has_data()`, but can be called
     /// explicitly if needed.
-    pub fn receive_pending(&mut self) {
-        // Collect payloads first to avoid borrow conflicts
-        let payloads: Vec<FramePayload> = {
-            let Some(subscriber) = self.subscriber.get() else {
-                return;
-            };
-
-            let mut collected = Vec::new();
-            while let Ok(Some(sample)) = subscriber.receive() {
-                collected.push(*sample.payload());
-            }
-            collected
+    ///
+    /// Note: This should only be called from the thread that owns the subscriber.
+    pub fn receive_pending(&self) {
+        let Some(subscriber) = self.subscriber.get() else {
+            return;
         };
 
-        // Route all collected payloads to mailboxes
-        for payload in payloads {
+        // Receive and route payloads directly (no collection needed with thread-safe mailboxes)
+        while let Ok(Some(sample)) = subscriber.receive() {
+            let payload = *sample.payload();
             self.route(payload);
         }
-    }
-
-    /// Get the most recent payload for the given port.
-    ///
-    /// Returns None if no payload is available or the port doesn't exist.
-    /// Note: This does NOT receive pending data first.
-    pub fn peek(&self, port: &str) -> Option<&FramePayload> {
-        self.ports.get(port).and_then(|p| p.mailbox.peek())
     }
 
     /// Read and deserialize a frame from the given port.
@@ -132,12 +121,15 @@ impl InputMailboxes {
     ///
     /// This first receives any pending data from the iceoryx2 Subscriber,
     /// routes it to the appropriate mailboxes, then reads from the requested port.
-    pub fn read<T: DeserializeOwned>(&mut self, port: &str) -> Result<T> {
+    ///
+    /// Thread-safe for the pop operation, but receive_pending should only be
+    /// called from the subscriber's thread.
+    pub fn read<T: DeserializeOwned>(&self, port: &str) -> Result<T> {
         self.receive_pending();
 
         let port_config = self
             .ports
-            .get_mut(port)
+            .get(port)
             .ok_or_else(|| StreamError::Link(format!("Unknown input port: {}", port)))?;
 
         let payload = match port_config.read_mode {
@@ -153,7 +145,7 @@ impl InputMailboxes {
     /// Check if a port has any payloads available.
     ///
     /// This first receives any pending data from the iceoryx2 Subscriber.
-    pub fn has_data(&mut self, port: &str) -> bool {
+    pub fn has_data(&self, port: &str) -> bool {
         self.receive_pending();
         self.ports
             .get(port)
@@ -162,9 +154,9 @@ impl InputMailboxes {
     }
 
     /// Drain all payloads from the given port's mailbox.
-    pub fn drain(&mut self, port: &str) -> impl Iterator<Item = FramePayload> + '_ {
+    pub fn drain(&self, port: &str) -> impl Iterator<Item = FramePayload> + '_ {
         self.ports
-            .get_mut(port)
+            .get(port)
             .into_iter()
             .flat_map(|p| p.mailbox.drain())
     }
@@ -172,9 +164,10 @@ impl InputMailboxes {
     /// Route a payload to the appropriate mailbox based on its port_key.
     ///
     /// Returns true if the payload was routed, false if no matching mailbox exists.
-    pub fn route(&mut self, payload: FramePayload) -> bool {
+    /// Thread-safe: can be called from any thread.
+    pub fn route(&self, payload: FramePayload) -> bool {
         let port = payload.port();
-        if let Some(port_config) = self.ports.get_mut(port) {
+        if let Some(port_config) = self.ports.get(port) {
             port_config.mailbox.push(payload);
             true
         } else {

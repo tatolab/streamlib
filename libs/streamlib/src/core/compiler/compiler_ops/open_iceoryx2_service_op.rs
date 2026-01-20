@@ -170,7 +170,7 @@ fn open_iceoryx2_pubsub(
 
     // Configure source OutputWriter with port mapping and set the Publisher
     {
-        let mut source_guard = source_processor.lock();
+        let source_guard = source_processor.lock();
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
             output_writer.add_port(source_port, &output_schema, dest_port);
             output_writer.set_publisher(publisher);
@@ -187,7 +187,8 @@ fn open_iceoryx2_pubsub(
         let mut dest_guard = dest_processor.lock();
         if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
             // Default history of 1 - keeps only the most recent payload
-            input_mailboxes.add_port(dest_port, 1);
+            // Default read mode is SkipToLatest (optimal for video)
+            input_mailboxes.add_port(dest_port, 1, Default::default());
             input_mailboxes.set_subscriber(subscriber);
             tracing::debug!(
                 "Configured InputMailboxes port '{}' with Subscriber",

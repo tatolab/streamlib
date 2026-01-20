@@ -179,7 +179,7 @@ fn generate_processor_struct_from_schema(
     };
 
     let ipc_output_field = if !schema.outputs.is_empty() {
-        quote! { pub outputs: ::streamlib::iceoryx2::OutputWriter, }
+        quote! { pub outputs: ::std::sync::Arc<::streamlib::iceoryx2::OutputWriter>, }
     } else {
         quote! {}
     };
@@ -436,7 +436,8 @@ fn generate_from_config_from_schema(
             .map(|port| {
                 let name = &port.name;
                 let history = 1usize; // Default history depth
-                quote! { inputs.add_port(#name, #history); }
+                // Default read mode (SkipToLatest) - TODO: add read_mode to schema
+                quote! { inputs.add_port(#name, #history, Default::default()); }
             })
             .collect();
         quote! {
@@ -451,7 +452,7 @@ fn generate_from_config_from_schema(
     };
 
     let ipc_output_init = if !schema.outputs.is_empty() {
-        quote! { outputs: ::streamlib::iceoryx2::OutputWriter::new(), }
+        quote! { outputs: ::std::sync::Arc::new(::streamlib::iceoryx2::OutputWriter::new()), }
     } else {
         quote! {}
     };
@@ -584,8 +585,8 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
 
     let get_output_writer_impl = if has_iceoryx2_outputs {
         quote! {
-            fn get_iceoryx2_output_writer(&mut self) -> Option<&mut ::streamlib::iceoryx2::OutputWriter> {
-                Some(&mut self.outputs)
+            fn get_iceoryx2_output_writer(&self) -> Option<::std::sync::Arc<::streamlib::iceoryx2::OutputWriter>> {
+                Some(self.outputs.clone())
             }
         }
     } else {

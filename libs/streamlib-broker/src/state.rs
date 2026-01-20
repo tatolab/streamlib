@@ -4,6 +4,7 @@
 //! Thread-safe state for broker diagnostics.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -39,6 +40,21 @@ pub struct ConnectionMetadata {
     pub established_at: Instant,
 }
 
+/// Metadata about a registered surface for cross-process GPU sharing.
+#[derive(Clone, Debug)]
+pub struct SurfaceMetadata {
+    /// The surface ID (UUID).
+    pub surface_id: String,
+    /// The runtime that registered this surface.
+    pub runtime_id: String,
+    /// The mach port send right for the IOSurface.
+    pub mach_port: u32,
+    /// When the surface was registered.
+    pub registered_at: Instant,
+    /// Number of times this surface has been checked out.
+    pub checkout_count: u64,
+}
+
 /// Thread-safe state for broker diagnostics.
 #[derive(Clone)]
 pub struct BrokerState {
@@ -49,8 +65,10 @@ struct BrokerStateInner {
     runtimes: RwLock<HashMap<String, RuntimeMetadata>>,
     subprocesses: RwLock<HashMap<String, SubprocessMetadata>>,
     connections: RwLock<HashMap<String, ConnectionMetadata>>,
+    surfaces: RwLock<HashMap<String, SurfaceMetadata>>,
     started_at: Instant,
-    connection_counter: std::sync::atomic::AtomicU64,
+    connection_counter: AtomicU64,
+    surface_counter: AtomicU64,
 }
 
 impl BrokerState {
@@ -61,8 +79,10 @@ impl BrokerState {
                 runtimes: RwLock::new(HashMap::new()),
                 subprocesses: RwLock::new(HashMap::new()),
                 connections: RwLock::new(HashMap::new()),
+                surfaces: RwLock::new(HashMap::new()),
                 started_at: Instant::now(),
-                connection_counter: std::sync::atomic::AtomicU64::new(0),
+                connection_counter: AtomicU64::new(0),
+                surface_counter: AtomicU64::new(0),
             }),
         }
     }
@@ -252,6 +272,80 @@ impl BrokerState {
         });
 
         pruned
+    }
+
+    // =========================================================================
+    // Surface Store (Cross-Process GPU Surface Sharing)
+    // =========================================================================
+
+    /// Register a surface and return a new surface ID.
+    #[cfg(target_os = "macos")]
+    pub fn register_surface(&self, runtime_id: &str, mach_port: u32) -> String {
+        use std::sync::atomic::Ordering;
+
+        self.inner.surface_counter.fetch_add(1, Ordering::Relaxed);
+        let surface_id = uuid::Uuid::new_v4().to_string();
+
+        let metadata = SurfaceMetadata {
+            surface_id: surface_id.clone(),
+            runtime_id: runtime_id.to_string(),
+            mach_port,
+            registered_at: Instant::now(),
+            checkout_count: 0,
+        };
+
+        self.inner
+            .surfaces
+            .write()
+            .insert(surface_id.clone(), metadata);
+
+        surface_id
+    }
+
+    /// Get the mach port for a surface ID (for check_out).
+    #[cfg(target_os = "macos")]
+    pub fn get_surface_mach_port(&self, surface_id: &str) -> Option<u32> {
+        let mut surfaces = self.inner.surfaces.write();
+        if let Some(metadata) = surfaces.get_mut(surface_id) {
+            metadata.checkout_count += 1;
+            Some(metadata.mach_port)
+        } else {
+            None
+        }
+    }
+
+    /// Release a surface by ID.
+    #[cfg(target_os = "macos")]
+    pub fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
+        let mut surfaces = self.inner.surfaces.write();
+        if let Some(metadata) = surfaces.get(surface_id) {
+            if metadata.runtime_id == runtime_id {
+                surfaces.remove(surface_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Release all surfaces for a runtime.
+    #[cfg(target_os = "macos")]
+    pub fn release_surfaces_for_runtime(&self, runtime_id: &str) -> usize {
+        let mut surfaces = self.inner.surfaces.write();
+        let before = surfaces.len();
+        surfaces.retain(|_, metadata| metadata.runtime_id != runtime_id);
+        before - surfaces.len()
+    }
+
+    /// Get all surfaces.
+    #[cfg(target_os = "macos")]
+    pub fn get_surfaces(&self) -> Vec<SurfaceMetadata> {
+        self.inner.surfaces.read().values().cloned().collect()
+    }
+
+    /// Get surface count.
+    #[cfg(target_os = "macos")]
+    pub fn surface_count(&self) -> usize {
+        self.inner.surfaces.read().len()
     }
 }
 

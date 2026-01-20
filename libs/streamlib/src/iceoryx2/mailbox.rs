@@ -1,61 +1,59 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Per-port mailbox using rtrb ring buffer for real-time history.
+//! Per-port mailbox using crossbeam ArrayQueue for thread-safe access.
 
-use rtrb::{Consumer, Producer, RingBuffer};
+use crossbeam_queue::ArrayQueue;
 
 use super::FramePayload;
 
 /// Per-port mailbox with configurable history depth.
 ///
-/// Uses an rtrb ring buffer internally for lock-free, real-time safe access.
+/// Uses a crossbeam ArrayQueue internally for lock-free, thread-safe access.
+/// Multiple threads can push and pop concurrently (MPMC).
 pub struct PortMailbox {
-    producer: Producer<FramePayload>,
-    consumer: Consumer<FramePayload>,
-    history: usize,
+    queue: ArrayQueue<FramePayload>,
+    capacity: usize,
 }
 
 impl PortMailbox {
     /// Create a new mailbox with the given history depth.
     pub fn new(history: usize) -> Self {
         let capacity = history.max(1);
-        let (producer, consumer) = RingBuffer::new(capacity);
         Self {
-            producer,
-            consumer,
-            history: capacity,
+            queue: ArrayQueue::new(capacity),
+            capacity,
         }
     }
 
     /// Push a payload into the mailbox.
     ///
     /// If the mailbox is full, the oldest payload is dropped to make room.
-    pub fn push(&mut self, payload: FramePayload) {
+    /// Thread-safe: can be called from any thread.
+    pub fn push(&self, payload: FramePayload) {
         // If full, pop oldest to make room
-        while self.producer.is_full() {
-            let _ = self.consumer.pop();
+        while self.queue.is_full() {
+            let _ = self.queue.pop();
         }
-        // Push should succeed now
-        let _ = self.producer.push(payload);
-    }
-
-    /// Get the most recent payload without removing it.
-    ///
-    /// Returns None if the mailbox is empty.
-    pub fn peek(&self) -> Option<&FramePayload> {
-        self.consumer.peek().ok()
+        // Push should succeed now (may fail if another thread filled it, retry)
+        while self.queue.push(payload).is_err() {
+            let _ = self.queue.pop();
+        }
     }
 
     /// Pop the oldest payload from the mailbox (FIFO).
-    pub fn pop(&mut self) -> Option<FramePayload> {
-        self.consumer.pop().ok()
+    ///
+    /// Thread-safe: can be called from any thread.
+    pub fn pop(&self) -> Option<FramePayload> {
+        self.queue.pop()
     }
 
     /// Drain buffer and return only the newest payload.
-    pub fn pop_latest(&mut self) -> Option<FramePayload> {
+    ///
+    /// Thread-safe: can be called from any thread.
+    pub fn pop_latest(&self) -> Option<FramePayload> {
         let mut latest = None;
-        while let Ok(value) = self.consumer.pop() {
+        while let Some(value) = self.queue.pop() {
             latest = Some(value);
         }
         latest
@@ -63,21 +61,23 @@ impl PortMailbox {
 
     /// Check if the mailbox is empty.
     pub fn is_empty(&self) -> bool {
-        self.consumer.is_empty()
+        self.queue.is_empty()
     }
 
     /// Get the number of payloads currently in the mailbox.
     pub fn len(&self) -> usize {
-        self.consumer.slots()
+        self.queue.len()
     }
 
-    /// Get the configured history depth.
-    pub fn history(&self) -> usize {
-        self.history
+    /// Get the configured capacity (history depth).
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Drain all payloads from the mailbox.
-    pub fn drain(&mut self) -> impl Iterator<Item = FramePayload> + '_ {
-        std::iter::from_fn(move || self.consumer.pop().ok())
+    ///
+    /// Thread-safe: can be called from any thread.
+    pub fn drain(&self) -> impl Iterator<Item = FramePayload> + '_ {
+        std::iter::from_fn(move || self.queue.pop())
     }
 }

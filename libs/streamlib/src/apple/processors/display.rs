@@ -1,11 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// TODO: Re-enable IOSurface lookup when XPC broker is implemented
-// use crate::apple::corevideo_ffi::IOSurfaceLookup;
-use crate::core::rhi::{PixelFormat, RhiTextureCache};
+use crate::apple::corevideo_ffi::IOSurfaceLookup;
+use crate::core::frames::VideoFrame;
+use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef, RhiTextureCache};
 use crate::core::{Result, RuntimeContext, StreamError};
-use crate::iceoryx2::InputMailboxes;
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMask};
@@ -18,9 +17,6 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 use std::time::Duration;
-
-// Config type generated from JTD schema
-pub use crate::_generated_::DisplayConfig;
 
 // Re-export ScalingMode from generated config for external use
 pub type ScalingMode = crate::_generated_::com_tatolab_display_config::ScalingMode;
@@ -68,7 +64,6 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                 .title
                 .clone()
                 .unwrap_or_else(|| "streamlib Display".to_string());
-            self.scaling_mode = ScalingMode::from_schema(&self.config.scaling_mode);
 
             // Initialize state for game loop rendering
             self.running = Arc::new(AtomicBool::new(false));
@@ -276,32 +271,40 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                         continue;
                     };
 
-                    // Convert IPC frame to VideoFrame by looking up IOSurface
-                    let surface_id: u32 = match ipc_frame.surface_id.parse() {
-                        Ok(id) => id,
-                        Err(_) => {
-                            tracing::warn!("Display {}: Invalid surface_id: {}", window_id, ipc_frame.surface_id);
-                            continue;
-                        }
-                    };
-
-                    // Look up IOSurface by ID
-                    let iosurface = unsafe { IOSurfaceLookup(surface_id) };
-                    if iosurface.is_null() {
-                        tracing::warn!("Display {}: IOSurface {} not found", window_id, surface_id);
-                        continue;
-                    }
-
-                    // Create RhiPixelBufferRef from IOSurface
-                    let buffer_ref = match unsafe { RhiPixelBufferRef::from_iosurface_ref(iosurface) } {
+                    // Convert IPC frame to VideoFrame by looking up surface
+                    // Try surface store first (cross-process via broker), fall back to IOSurfaceLookup (same-process)
+                    let buffer: RhiPixelBuffer = match gpu_context.check_out_surface(&ipc_frame.surface_id) {
                         Ok(buf) => buf,
-                        Err(e) => {
-                            tracing::warn!("Display {}: Failed to create buffer from IOSurface: {}", window_id, e);
-                            continue;
+                        Err(_) => {
+                            // Surface store not available or surface not found, try raw IOSurface ID lookup
+                            let surface_id: u32 = match ipc_frame.surface_id.parse() {
+                                Ok(id) => id,
+                                Err(_) => {
+                                    tracing::warn!("Display {}: Invalid surface_id: {}", window_id, ipc_frame.surface_id);
+                                    continue;
+                                }
+                            };
+
+                            // Look up IOSurface by ID (same-process only)
+                            let iosurface = unsafe { IOSurfaceLookup(surface_id) };
+                            if iosurface.is_null() {
+                                tracing::warn!("Display {}: IOSurface {} not found", window_id, surface_id);
+                                continue;
+                            }
+
+                            // Create RhiPixelBufferRef from IOSurface
+                            let buffer_ref = match unsafe { RhiPixelBufferRef::from_iosurface_ref(iosurface) } {
+                                Ok(buf) => buf,
+                                Err(e) => {
+                                    tracing::warn!("Display {}: Failed to create buffer from IOSurface: {}", window_id, e);
+                                    continue;
+                                }
+                            };
+
+                            RhiPixelBuffer::new(buffer_ref)
                         }
                     };
 
-                    let buffer = RhiPixelBuffer::new(buffer_ref);
                     let timestamp_ns: i64 = ipc_frame.timestamp_ns.parse().unwrap_or(0);
                     let frame_index: u64 = ipc_frame.frame_index.parse().unwrap_or(0);
                     let frame = VideoFrame::from_buffer(buffer, timestamp_ns, frame_index);
@@ -433,7 +436,7 @@ impl AppleDisplayProcessor::Processor {
     ) -> (metal::MTLOrigin, metal::MTLSize) {
         use metal::{MTLOrigin, MTLSize};
 
-        match self.scaling_mode {
+        match self.config.scaling_mode {
             ScalingMode::Stretch => {
                 // Stretch to fill entire window (ignore aspect ratio)
                 (

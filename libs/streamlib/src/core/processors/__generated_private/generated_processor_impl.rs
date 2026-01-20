@@ -56,8 +56,8 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// Check if this processor has iceoryx2-based input ports.
     fn has_iceoryx2_inputs(&self) -> bool;
 
-    /// Get a mutable reference to the OutputWriter if this processor uses iceoryx2 outputs.
-    fn get_iceoryx2_output_writer(&mut self) -> Option<&mut crate::iceoryx2::OutputWriter>;
+    /// Get the OutputWriter if this processor uses iceoryx2 outputs.
+    fn get_iceoryx2_output_writer(&self) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriter>>;
 
     /// Get a mutable reference to the InputMailboxes if this processor uses iceoryx2 inputs.
     fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut crate::iceoryx2::InputMailboxes>;
@@ -127,7 +127,7 @@ where
         <Self as GeneratedProcessor>::has_iceoryx2_inputs(self)
     }
 
-    fn get_iceoryx2_output_writer(&mut self) -> Option<&mut crate::iceoryx2::OutputWriter> {
+    fn get_iceoryx2_output_writer(&self) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriter>> {
         <Self as GeneratedProcessor>::get_iceoryx2_output_writer(self)
     }
 

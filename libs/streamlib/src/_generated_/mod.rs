@@ -3,25 +3,25 @@
 
 //! Generated schema types. DO NOT EDIT.
 
-mod com_tatolab_videoframe;
-mod com_tatolab_audioframe_1ch;
-mod com_tatolab_audioframe_2ch;
-mod com_tatolab_audioframe_3ch;
-mod com_tatolab_audioframe_4ch;
-mod com_tatolab_audioframe_5ch;
-mod com_tatolab_audioframe_6ch;
-mod com_tatolab_audioframe_7ch;
-mod com_tatolab_audioframe_8ch;
-mod com_streamlib_api_server_config;
-mod com_streamlib_clap_effect_config;
-mod com_tatolab_audio_channel_converter_config;
-mod com_tatolab_audio_mixer_config;
-mod com_tatolab_audio_resampler_config;
-mod com_tatolab_buffer_rechunker_config;
-mod com_tatolab_camera_config;
-mod com_tatolab_chord_generator_config;
-mod com_tatolab_display_config;
-mod com_tatolab_simple_passthrough_config;
+pub mod com_tatolab_videoframe;
+pub mod com_tatolab_audioframe_1ch;
+pub mod com_tatolab_audioframe_2ch;
+pub mod com_tatolab_audioframe_3ch;
+pub mod com_tatolab_audioframe_4ch;
+pub mod com_tatolab_audioframe_5ch;
+pub mod com_tatolab_audioframe_6ch;
+pub mod com_tatolab_audioframe_7ch;
+pub mod com_tatolab_audioframe_8ch;
+pub mod com_streamlib_api_server_config;
+pub mod com_streamlib_clap_effect_config;
+pub mod com_tatolab_audio_channel_converter_config;
+pub mod com_tatolab_audio_mixer_config;
+pub mod com_tatolab_audio_resampler_config;
+pub mod com_tatolab_buffer_rechunker_config;
+pub mod com_tatolab_camera_config;
+pub mod com_tatolab_chord_generator_config;
+pub mod com_tatolab_display_config;
+pub mod com_tatolab_simple_passthrough_config;
 
 pub use com_tatolab_videoframe::Videoframe;
 pub use com_tatolab_audioframe_1ch::Audioframe1Ch;

@@ -201,6 +201,25 @@ impl StreamRuntime {
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
 
+        // Initialize SurfaceStore for cross-process GPU surface sharing (macOS only)
+        #[cfg(target_os = "macos")]
+        {
+            use crate::core::context::SurfaceStore;
+
+            if let Ok(xpc_service_name) = std::env::var("STREAMLIB_XPC_SERVICE_NAME") {
+                tracing::info!("[start] Initializing SurfaceStore with XPC service '{}'...", xpc_service_name);
+                let surface_store = SurfaceStore::new(xpc_service_name, self.runtime_id.to_string());
+                if let Err(e) = surface_store.connect() {
+                    tracing::warn!("[start] SurfaceStore XPC connection failed (surface sharing disabled): {}", e);
+                } else {
+                    gpu.set_surface_store(surface_store);
+                    tracing::info!("[start] SurfaceStore initialized");
+                }
+            } else {
+                tracing::debug!("[start] STREAMLIB_XPC_SERVICE_NAME not set, surface sharing disabled");
+            }
+        }
+
         // Create shared timing context - clock starts now
         let time = Arc::new(TimeContext::new());
 
@@ -277,6 +296,13 @@ impl StreamRuntime {
             tracing::debug!("[stop] Committing processor teardown");
             self.compiler.commit(&ctx)?;
             tracing::debug!("[stop] Processor teardown complete");
+
+            // Cleanup SurfaceStore (macOS only) - releases all surfaces and disconnects XPC
+            #[cfg(target_os = "macos")]
+            {
+                ctx.gpu.clear_surface_store();
+                tracing::debug!("[stop] SurfaceStore cleared");
+            }
         }
 
         // Clear runtime context - allows fresh context on next start().

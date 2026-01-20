@@ -96,6 +96,7 @@ EOF
 # =============================================================================
 export STREAMLIB_HOME="${STREAMLIB_HOME}"
 export STREAMLIB_BROKER_PORT="${BROKER_PORT}"
+export STREAMLIB_XPC_SERVICE_NAME="${SERVICE_NAME}"
 export STREAMLIB_DEV_MODE="1"
 EOF
 
@@ -153,11 +154,13 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:${cargo_bin}:\$PATH"
 SOURCE_ROOT="${REPO_ROOT}"
 BROKER_PORT=${BROKER_PORT}
+XPC_SERVICE_NAME="${SERVICE_NAME}"
 
 export STREAMLIB_HOME="${STREAMLIB_HOME}"
+export STREAMLIB_XPC_SERVICE_NAME="\$XPC_SERVICE_NAME"
 export STREAMLIB_DEV_MODE=1
 
-exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --quiet -- --port "\$BROKER_PORT" "\$@"
+exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --quiet -- --port "\$BROKER_PORT" --xpc-service-name "\$XPC_SERVICE_NAME" "\$@"
 EOF
     chmod 755 "$bin_dir/streamlib-broker"
     success "Created broker proxy: $bin_dir/streamlib-broker"

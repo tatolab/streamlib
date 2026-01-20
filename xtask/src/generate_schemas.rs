@@ -292,7 +292,7 @@ fn generate_mod_rs(modules: &[(String, String)]) -> String {
     );
 
     for (module_name, _) in modules {
-        content.push_str(&format!("mod {};\n", module_name));
+        content.push_str(&format!("pub mod {};\n", module_name));
     }
 
     content.push('\n');
