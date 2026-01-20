@@ -3,28 +3,17 @@
 
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::schemas::{Audioframe1ch, Audioframe2ch};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct BufferRechunkerConfig {
-    /// Target buffer size in samples per channel
-    pub target_buffer_size: usize,
-}
-
-impl Default for BufferRechunkerConfig {
-    fn default() -> Self {
-        Self {
-            target_buffer_size: 512,
-        }
-    }
-}
 
 // =============================================================================
 // Mono (1-channel) Buffer Rechunker
 // =============================================================================
 
-#[crate::processor("schemas/processors/buffer_rechunker_1ch.yaml")]
-pub struct BufferRechunker1chProcessor;
+#[crate::processor("src/core/processors/buffer_rechunker_1ch.yaml")]
+pub struct BufferRechunker1chProcessor {
+    buffer: Vec<f32>,
+    sample_rate: u32,
+    frame_counter: u64,
+}
 
 impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
     fn setup(
@@ -93,8 +82,12 @@ impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
 // Stereo (2-channel) Buffer Rechunker
 // =============================================================================
 
-#[crate::processor("schemas/processors/buffer_rechunker_2ch.yaml")]
-pub struct BufferRechunker2chProcessor;
+#[crate::processor("src/core/processors/buffer_rechunker_2ch.yaml")]
+pub struct BufferRechunker2chProcessor {
+    buffer: Vec<f32>,
+    sample_rate: u32,
+    frame_counter: u64,
+}
 
 impl crate::core::ReactiveProcessor for BufferRechunker2chProcessor::Processor {
     fn setup(

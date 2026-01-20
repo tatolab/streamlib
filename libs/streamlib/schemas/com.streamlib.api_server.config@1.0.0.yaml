@@ -1,0 +1,28 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for ApiServer config
+
+metadata:
+  name: com.streamlib.api_server.config
+  version: 1.0.0
+  description: "Configuration for the runtime API server"
+
+properties:
+  host:
+    metadata:
+      description: "Host address to bind to"
+    type: string
+  port:
+    metadata:
+      description: "Port number to listen on"
+    type: uint16
+optionalProperties:
+  name:
+    metadata:
+      description: "Runtime name for broker registration (auto-generated if not provided)"
+    type: string
+  log_path:
+    metadata:
+      description: "Log file path for broker registration"
+    type: string

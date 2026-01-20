@@ -21,7 +21,10 @@ pub use serde_json;
 
 pub mod core;
 pub mod iceoryx2;
-pub mod schemas;
+
+/// Generated types from JTD schemas.
+/// Run `cargo xtask generate-schemas` to regenerate.
+pub mod _generated_;
 
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("path/to/schema.yaml")] - YAML-based processor definition
@@ -40,11 +43,9 @@ pub use core::{
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
-    ApiServerConfig,
     ApiServerProcessor,
     // TODO: Migrate to iceoryx2 API
     // AudioCaptureConfig,
-    AudioChannelConverterConfig,
     AudioChannelConverterProcessor,
     AudioCodec,
     // TODO: Migrate to iceoryx2 API
@@ -54,21 +55,17 @@ pub use core::{
     AudioFrame,
     // TODO: Migrate to iceoryx2 API
     // AudioInputDevice,
-    AudioMixerConfig,
     AudioMixerProcessor,
     // TODO: Migrate to iceoryx2 API
     // AudioOutputConfig,
     AudioResampler1chProcessor,
     AudioResampler2chProcessor,
-    AudioResamplerConfig,
     BufferRechunker1chProcessor,
     BufferRechunker2chProcessor,
-    BufferRechunkerConfig,
     // TODO: Migrate to iceoryx2 API
     // CameraConfig,
     // CameraDevice,
     ChannelConversionMode,
-    ChordGeneratorConfig,
     ChordGeneratorProcessor,
     // TODO: Migrate to iceoryx2 API
     // ClapEffectConfig,

@@ -1,0 +1,32 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for ClapEffect config
+
+metadata:
+  name: com.streamlib.clap.effect.config
+  version: 1.0.0
+  description: "Configuration for CLAP audio plugin processing"
+
+properties:
+  plugin_path:
+    metadata:
+      description: "Path to the CLAP plugin file"
+    type: string
+  sample_rate:
+    metadata:
+      description: "Audio sample rate in Hz"
+    type: uint32
+  buffer_size:
+    metadata:
+      description: "Processing buffer size in samples"
+    type: uint32
+optionalProperties:
+  plugin_name:
+    metadata:
+      description: "Name of the plugin to load (if multiple in file)"
+    type: string
+  plugin_index:
+    metadata:
+      description: "Index of the plugin to load (if multiple in file)"
+    type: uint32

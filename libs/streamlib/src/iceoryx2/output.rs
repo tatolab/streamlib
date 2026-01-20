@@ -3,11 +3,11 @@
 
 //! Output writer for sending frames to downstream processors.
 
-use std::cell::UnsafeCell;
 use std::collections::HashMap;
 
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::prelude::*;
+use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 
 use super::FramePayload;
@@ -17,81 +17,45 @@ use crate::core::media_clock::MediaClock;
 /// Mapping from output port name to (schema_name, dest_port_name).
 type PortSchemaMap = HashMap<String, (String, String)>;
 
-/// Thread-local publisher wrapper.
-///
-/// # Safety
-/// This wrapper is safe to send between threads because:
-/// 1. The Publisher is only ever set AFTER the processor is spawned on its execution thread
-/// 2. Once set, the Publisher is only accessed from that same thread
-/// 3. The wrapper starts with `None` and is populated during wiring on the target thread
-struct SendablePublisher(UnsafeCell<Option<Publisher<ipc::Service, FramePayload, ()>>>);
-
-// SAFETY: The Publisher is only accessed from a single thread after being set.
-// The processor lifecycle ensures that:
-// 1. OutputWriter is created with publisher = None (safe to send)
-// 2. After spawn, the processor is on its execution thread
-// 3. set_publisher() is called from that execution thread during wiring
-// 4. All subsequent access is from the same thread
-unsafe impl Send for SendablePublisher {}
-
-impl SendablePublisher {
-    fn new() -> Self {
-        Self(UnsafeCell::new(None))
-    }
-
-    fn set(&self, publisher: Publisher<ipc::Service, FramePayload, ()>) {
-        // SAFETY: Only called from the processor's execution thread after spawn
-        unsafe {
-            *self.0.get() = Some(publisher);
-        }
-    }
-
-    fn get(&self) -> Option<&Publisher<ipc::Service, FramePayload, ()>> {
-        // SAFETY: Only called from the processor's execution thread
-        unsafe { (*self.0.get()).as_ref() }
-    }
-}
-
 /// Output writer that publishes frames via iceoryx2.
 ///
+/// Thread-safe: can be written from any thread (e.g., AVFoundation callbacks).
 /// Each OutputWriter holds a single Publisher that sends to one downstream processor.
 /// The port_schemas map stores the schema and destination port for each output port.
 pub struct OutputWriter {
-    publisher: SendablePublisher,
-    port_schemas: PortSchemaMap,
+    publisher: Mutex<Option<Publisher<ipc::Service, FramePayload, ()>>>,
+    port_schemas: RwLock<PortSchemaMap>,
 }
+
+// OutputWriter is Send + Sync via Mutex and RwLock
+unsafe impl Send for OutputWriter {}
+unsafe impl Sync for OutputWriter {}
 
 impl OutputWriter {
     /// Create a new output writer without a publisher (will be set during wiring).
     pub fn new() -> Self {
         Self {
-            publisher: SendablePublisher::new(),
-            port_schemas: HashMap::new(),
+            publisher: Mutex::new(None),
+            port_schemas: RwLock::new(HashMap::new()),
         }
     }
 
     /// Create a new output writer with the given publisher.
-    ///
-    /// Note: This should only be called from the processor's execution thread.
     pub fn with_publisher(publisher: Publisher<ipc::Service, FramePayload, ()>) -> Self {
-        let writer = Self {
-            publisher: SendablePublisher::new(),
-            port_schemas: HashMap::new(),
-        };
-        writer.publisher.set(publisher);
-        writer
+        Self {
+            publisher: Mutex::new(Some(publisher)),
+            port_schemas: RwLock::new(HashMap::new()),
+        }
     }
 
     /// Set the publisher for this output writer.
-    ///
-    /// Note: This should only be called from the processor's execution thread.
     pub fn set_publisher(&self, publisher: Publisher<ipc::Service, FramePayload, ()>) {
-        self.publisher.set(publisher);
+        *self.publisher.lock() = Some(publisher);
     }
 
     /// Add a port mapping with its schema and destination port name.
-    pub fn add_port(&mut self, output_port: &str, schema: &str, dest_port: &str) {
-        self.port_schemas.insert(
+    pub fn add_port(&self, output_port: &str, schema: &str, dest_port: &str) {
+        self.port_schemas.write().insert(
             output_port.to_string(),
             (schema.to_string(), dest_port.to_string()),
         );
@@ -101,12 +65,16 @@ impl OutputWriter {
     ///
     /// The frame is serialized to MessagePack, wrapped in a FramePayload with
     /// the configured schema and destination port name, then published via iceoryx2.
+    ///
+    /// Thread-safe: can be called from any thread.
     pub fn write<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
         self.write_with_timestamp(port, value, timestamp_ns)
     }
 
     /// Write a frame to the specified output port with an explicit timestamp.
+    ///
+    /// Thread-safe: can be called from any thread.
     pub fn write_with_timestamp<T: Serialize>(
         &self,
         port: &str,
@@ -116,12 +84,15 @@ impl OutputWriter {
         let data = rmp_serde::to_vec(value)
             .map_err(|e| StreamError::Link(format!("Failed to serialize frame: {}", e)))?;
 
-        let publisher = self.publisher.get().ok_or_else(|| {
+        // Lock publisher for the duration of loan + send
+        let publisher_guard = self.publisher.lock();
+        let publisher = publisher_guard.as_ref().ok_or_else(|| {
             StreamError::Link("OutputWriter has no publisher configured".to_string())
         })?;
 
-        let (schema, dest_port) = self
-            .port_schemas
+        // Read lock for port schemas
+        let schemas = self.port_schemas.read();
+        let (schema, dest_port) = schemas
             .get(port)
             .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
 
@@ -142,17 +113,32 @@ impl OutputWriter {
 
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
-        self.port_schemas.contains_key(port)
+        self.port_schemas.read().contains_key(port)
     }
 
     /// Get the list of configured output port names.
-    pub fn ports(&self) -> impl Iterator<Item = &str> {
-        self.port_schemas.keys().map(|s| s.as_str())
+    pub fn port_names(&self) -> Vec<String> {
+        self.port_schemas.read().keys().cloned().collect()
     }
 }
 
 impl Default for OutputWriter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for OutputWriter {
+    /// Clone creates a new OutputWriter that shares the same publisher.
+    ///
+    /// This is useful for callback-driven processors that need to write
+    /// from multiple threads (e.g., AVFoundation camera callbacks).
+    fn clone(&self) -> Self {
+        // Note: We can't actually clone the publisher, so cloned writers
+        // start without a publisher. For shared access, use Arc<OutputWriter>.
+        Self {
+            publisher: Mutex::new(None),
+            port_schemas: RwLock::new(self.port_schemas.read().clone()),
+        }
     }
 }

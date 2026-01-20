@@ -1,0 +1,23 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for Camera config
+
+metadata:
+  name: com.tatolab.camera.config
+  version: 1.0.0
+  description: "Configuration for camera capture (macOS/iOS)"
+
+optionalProperties:
+  device_id:
+    metadata:
+      description: "Camera device unique ID. If None, uses default camera"
+    type: string
+  min_fps:
+    metadata:
+      description: "Minimum frames per second (floor). Default: 60.0"
+    type: float64
+  max_fps:
+    metadata:
+      description: "Maximum frames per second (ceiling). If None, uses main display refresh rate"
+    type: float64

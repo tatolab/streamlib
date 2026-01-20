@@ -38,11 +38,15 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
         .as_ref()
         .map(|c| Ident::new(&c.name, Span::call_site()));
 
-    let processor_struct = generate_processor_struct_from_schema(schema, &config_field_name);
+    // Extract custom fields from the user's struct
+    let custom_fields = extract_custom_fields(item);
+
+    let processor_struct =
+        generate_processor_struct_from_schema(schema, &config_field_name, &custom_fields);
     let input_link_module = generate_input_link_module_from_schema(schema);
     let output_link_module = generate_output_link_module_from_schema(schema);
     let processor_impl =
-        generate_processor_impl_from_schema(schema, &config_type, &config_field_name);
+        generate_processor_impl_from_schema(schema, &config_type, &config_field_name, &custom_fields);
 
     // Auto-registration via inventory crate
     let inventory_submit = quote! {
@@ -83,20 +87,37 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
 
 /// Derive a Rust config type from a schema reference.
 ///
-/// For "com.example.blur.config@1.0.0", derives "BlurConfig" as the type name.
+/// For "com.tatolab.buffer_rechunker.config@1.0.0", derives "BufferRechunkerConfig".
+/// For "com.streamlib.api_server.config@1.0.0", derives "ApiServerConfig".
 /// The actual type must be defined by the user and match this name.
 fn derive_config_type_from_schema(schema_ref: &str) -> TokenStream {
-    // Extract the name part before @ (e.g., "com.example.blur.config")
+    // Extract the name part before @ (e.g., "com.tatolab.buffer_rechunker.config")
     let name_part = schema_ref.split('@').next().unwrap_or(schema_ref);
 
-    // Get the last segment (e.g., "config" from "com.example.blur.config")
-    let last_segment = name_part.split('.').next_back().unwrap_or(name_part);
+    // Split by dots and collect segments
+    let segments: Vec<&str> = name_part.split('.').collect();
 
-    // Convert to PascalCase (e.g., "blur_config" -> "BlurConfig")
-    let pascal_name = to_pascal_case(last_segment);
+    // Find the segment before "config" (the processor name)
+    // e.g., ["com", "tatolab", "buffer_rechunker", "config"] -> "buffer_rechunker"
+    // e.g., ["com", "streamlib", "api_server", "config"] -> "api_server"
+    let processor_segment = if segments.len() >= 2 {
+        let last = segments[segments.len() - 1];
+        if last == "config" && segments.len() >= 2 {
+            segments[segments.len() - 2]
+        } else {
+            last
+        }
+    } else {
+        segments.last().copied().unwrap_or("Unknown")
+    };
+
+    // Convert to PascalCase and append "Config"
+    // e.g., "buffer_rechunker" -> "BufferRechunkerConfig"
+    let pascal_name = format!("{}Config", to_pascal_case(processor_segment));
     let ident = Ident::new(&pascal_name, Span::call_site());
 
-    quote! { #ident }
+    // Use full path to the generated type in _generated_ module
+    quote! { crate::_generated_::#ident }
 }
 
 /// Convert a string to PascalCase.
@@ -118,10 +139,33 @@ fn to_pascal_case(s: &str) -> String {
     result
 }
 
+/// Custom field extracted from the user's struct definition.
+struct CustomField {
+    name: Ident,
+    ty: syn::Type,
+}
+
+/// Extract custom fields from the user's struct definition.
+fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
+    match &item.fields {
+        syn::Fields::Named(fields) => fields
+            .named
+            .iter()
+            .map(|f| CustomField {
+                name: f.ident.clone().expect("Named field must have ident"),
+                ty: f.ty.clone(),
+            })
+            .collect(),
+        syn::Fields::Unit => Vec::new(),
+        syn::Fields::Unnamed(_) => Vec::new(),
+    }
+}
+
 /// Generate the Processor struct from schema.
 fn generate_processor_struct_from_schema(
     schema: &ProcessorSchema,
     config_field_name: &Option<Ident>,
+    custom_fields: &[CustomField],
 ) -> TokenStream {
     let config_field = config_field_name.as_ref().map(|name| {
         quote! { pub #name: Config, }
@@ -140,18 +184,13 @@ fn generate_processor_struct_from_schema(
         quote! {}
     };
 
-    // Generate state fields from schema
-    let state_fields: Vec<TokenStream> = schema
-        .state
+    // Generate custom fields from the user's struct definition
+    let custom_field_defs: Vec<TokenStream> = custom_fields
         .iter()
-        .map(|field| {
-            let field_name = Ident::new(&field.name, Span::call_site());
-            let field_type: TokenStream = field.field_type.parse().unwrap_or_else(|_| {
-                // Fallback for complex types
-                let ty = Ident::new(&field.field_type, Span::call_site());
-                quote! { #ty }
-            });
-            quote! { pub #field_name: #field_type, }
+        .map(|f| {
+            let name = &f.name;
+            let ty = &f.ty;
+            quote! { pub #name: #ty, }
         })
         .collect();
 
@@ -160,7 +199,7 @@ fn generate_processor_struct_from_schema(
             #ipc_input_field
             #ipc_output_field
             #config_field
-            #(#state_fields)*
+            #(#custom_field_defs)*
         }
     }
 }
@@ -218,6 +257,7 @@ fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
+    custom_fields: &[CustomField],
 ) -> TokenStream {
     use streamlib_schema::ProcessExecution;
 
@@ -291,7 +331,7 @@ fn generate_processor_impl_from_schema(
         }
     };
 
-    let from_config_body = generate_from_config_from_schema(schema, config_field_name);
+    let from_config_body = generate_from_config_from_schema(schema, config_field_name, custom_fields);
     let descriptor_impl = generate_descriptor_from_schema(schema, description, version);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
@@ -386,6 +426,7 @@ fn generate_processor_impl_from_schema(
 fn generate_from_config_from_schema(
     schema: &ProcessorSchema,
     config_field_name: &Option<Ident>,
+    custom_fields: &[CustomField],
 ) -> TokenStream {
     // Generate iceoryx2-based IPC field initializers
     let ipc_input_init = if !schema.inputs.is_empty() {
@@ -420,18 +461,12 @@ fn generate_from_config_from_schema(
         .map(|name| quote! { #name: config, })
         .unwrap_or_default();
 
-    // Generate state field initializers
-    let state_inits: Vec<TokenStream> = schema
-        .state
+    // Initialize custom fields with Default::default()
+    let custom_field_inits: Vec<TokenStream> = custom_fields
         .iter()
-        .map(|field| {
-            let field_name = Ident::new(&field.name, Span::call_site());
-            let default_expr: TokenStream = field
-                .default
-                .as_ref()
-                .map(|d| d.parse().unwrap_or_else(|_| quote! { Default::default() }))
-                .unwrap_or_else(|| quote! { Default::default() });
-            quote! { #field_name: #default_expr, }
+        .map(|f| {
+            let name = &f.name;
+            quote! { #name: ::std::default::Default::default(), }
         })
         .collect();
 
@@ -441,7 +476,7 @@ fn generate_from_config_from_schema(
                 #ipc_input_init
                 #ipc_output_init
                 #config_init
-                #(#state_inits)*
+                #(#custom_field_inits)*
             })
         }
     }

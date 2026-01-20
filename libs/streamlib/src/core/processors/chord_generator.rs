@@ -3,24 +3,6 @@
 
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::schemas::Audioframe2ch;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct ChordGeneratorConfig {
-    pub amplitude: f64,
-    pub sample_rate: u32,
-    pub buffer_size: usize,
-}
-
-impl Default for ChordGeneratorConfig {
-    fn default() -> Self {
-        Self {
-            amplitude: 0.15,
-            sample_rate: 48000,
-            buffer_size: 512,
-        }
-    }
-}
 
 struct SineOscillator {
     phase: f64,
@@ -60,8 +42,15 @@ impl SineOscillator {
     }
 }
 
-#[crate::processor("schemas/processors/chord_generator.yaml")]
-pub struct ChordGeneratorProcessor;
+#[crate::processor("src/core/processors/chord_generator.yaml")]
+pub struct ChordGeneratorProcessor {
+    osc_c4: SineOscillator,
+    osc_e4: SineOscillator,
+    osc_g4: SineOscillator,
+    sample_rate: u32,
+    buffer_size: usize,
+    frame_counter: u64,
+}
 
 impl ChordGeneratorProcessor::Processor {
     const FREQ_C4: f64 = 261.63;

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "xtask",                    # Development tasks (cargo xtask <command>)
     "libs/streamlib",           # All-in-one: core, apple (feature-gated)
     "libs/streamlib-broker",    # Broker service for cross-process coordination (macOS)
     "libs/streamlib-cli",       # Command-line interface for StreamLib runtime

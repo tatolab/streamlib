@@ -3,47 +3,12 @@
 
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
 use crate::core::frames::AudioFrame;
-use crate::core::{LinkInput, LinkOutput, Result, RuntimeContext};
+use crate::core::{Result, RuntimeContext};
 
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct ClapEffectConfig {
-    pub plugin_path: PathBuf,
-    pub plugin_name: Option<String>,
-    pub plugin_index: Option<usize>,
-    pub sample_rate: u32,
-    pub buffer_size: usize,
-}
-
-impl Default for ClapEffectConfig {
-    fn default() -> Self {
-        Self {
-            plugin_path: PathBuf::new(),
-            plugin_name: None,
-            plugin_index: None,
-            sample_rate: 48000,
-            buffer_size: 512,
-        }
-    }
-}
-
-#[crate::processor(
-    execution = Reactive,
-    description = "CLAP audio plugin processor with parameter control and automation"
-)]
+#[crate::processor("src/core/processors/clap_effect.yaml")]
 pub struct ClapEffectProcessor {
-    #[crate::input(description = "Stereo audio frame to process through CLAP plugin")]
-    audio_in: LinkInput<AudioFrame>,
-
-    #[crate::output(description = "Processed stereo audio frame from CLAP plugin")]
-    audio_out: Arc<LinkOutput<AudioFrame>>,
-
-    #[crate::config]
-    config: ClapEffectConfig,
-
     host: Option<ClapPluginHost>,
     sample_rate: u32,
     buffer_size: usize,

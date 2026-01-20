@@ -3,9 +3,8 @@
 
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::schemas::{Audioframe1ch, Audioframe2ch};
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum ChannelConversionMode {
     /// Duplicate mono signal to both left and right channels
     #[default]
@@ -16,21 +15,10 @@ pub enum ChannelConversionMode {
     RightOnly,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct AudioChannelConverterConfig {
-    pub mode: ChannelConversionMode,
+#[crate::processor("src/core/processors/audio_channel_converter.yaml")]
+pub struct AudioChannelConverterProcessor {
+    frame_counter: u64,
 }
-
-impl Default for AudioChannelConverterConfig {
-    fn default() -> Self {
-        Self {
-            mode: ChannelConversionMode::Duplicate,
-        }
-    }
-}
-
-#[crate::processor("schemas/processors/audio_channel_converter.yaml")]
-pub struct AudioChannelConverterProcessor;
 
 impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processor {
     fn setup(

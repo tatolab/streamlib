@@ -1,0 +1,23 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for ChordGenerator config
+
+metadata:
+  name: com.tatolab.chord_generator.config
+  version: 1.0.0
+  description: "Configuration for C major chord generation"
+
+properties:
+  amplitude:
+    metadata:
+      description: "Output amplitude (0.0 to 1.0)"
+    type: float64
+  sample_rate:
+    metadata:
+      description: "Audio sample rate in Hz"
+    type: uint32
+  buffer_size:
+    metadata:
+      description: "Output buffer size in samples"
+    type: uint32

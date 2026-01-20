@@ -142,6 +142,47 @@ prost-build = "0.13"
 all-features = true
 targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
+[package.metadata.streamlib]
+# Data type schemas (JTD format)
+schemas = [
+    "schemas/com.tatolab.videoframe.yaml",
+    "schemas/com.tatolab.audioframe.1ch.yaml",
+    "schemas/com.tatolab.audioframe.2ch.yaml",
+    "schemas/com.tatolab.audioframe.3ch.yaml",
+    "schemas/com.tatolab.audioframe.4ch.yaml",
+    "schemas/com.tatolab.audioframe.5ch.yaml",
+    "schemas/com.tatolab.audioframe.6ch.yaml",
+    "schemas/com.tatolab.audioframe.7ch.yaml",
+    "schemas/com.tatolab.audioframe.8ch.yaml",
+    # Config schemas (JTD format)
+    "schemas/com.streamlib.api_server.config@1.0.0.yaml",
+    "schemas/com.streamlib.clap.effect.config@1.0.0.yaml",
+    "schemas/com.tatolab.audio_channel_converter.config@1.0.0.yaml",
+    "schemas/com.tatolab.audio_mixer.config@1.0.0.yaml",
+    "schemas/com.tatolab.audio_resampler.config@1.0.0.yaml",
+    "schemas/com.tatolab.buffer_rechunker.config@1.0.0.yaml",
+    "schemas/com.tatolab.camera.config@1.0.0.yaml",
+    "schemas/com.tatolab.chord_generator.config@1.0.0.yaml",
+    "schemas/com.tatolab.display.config@1.0.0.yaml",
+    "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
+]
+
+# Processor schemas (co-located with Rust source)
+processors = [
+    "src/apple/processors/camera.yaml",
+    "src/apple/processors/display.yaml",
+    "src/core/processors/api_server.yaml",
+    "src/core/processors/audio_channel_converter.yaml",
+    "src/core/processors/audio_mixer.yaml",
+    "src/core/processors/audio_resampler_1ch.yaml",
+    "src/core/processors/audio_resampler_2ch.yaml",
+    "src/core/processors/buffer_rechunker_1ch.yaml",
+    "src/core/processors/buffer_rechunker_2ch.yaml",
+    "src/core/processors/chord_generator.yaml",
+    "src/core/processors/clap_effect.yaml",
+    "src/core/processors/simple_passthrough.yaml",
+]
+
 # MCP Server Binary removed - needs redesign for Phase 1
 # [[bin]]
 # name = "streamlib-mcp"

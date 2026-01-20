@@ -5,31 +5,17 @@ use crate::core::frames::AudioChannelCount;
 use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::schemas::{Audioframe1ch, Audioframe2ch};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct AudioResamplerConfig {
-    pub source_sample_rate: u32,
-    pub target_sample_rate: u32,
-    pub quality: ResamplingQuality,
-}
-
-impl Default for AudioResamplerConfig {
-    fn default() -> Self {
-        Self {
-            source_sample_rate: 48000,
-            target_sample_rate: 48000,
-            quality: ResamplingQuality::High,
-        }
-    }
-}
 
 // =============================================================================
 // Mono (1-channel) Resampler
 // =============================================================================
 
-#[crate::processor("schemas/processors/audio_resampler_1ch.yaml")]
-pub struct AudioResampler1chProcessor;
+#[crate::processor("src/core/processors/audio_resampler_1ch.yaml")]
+pub struct AudioResampler1chProcessor {
+    resampler: Option<AudioResampler>,
+    output_sample_rate: u32,
+    frame_counter: u64,
+}
 
 impl crate::core::ReactiveProcessor for AudioResampler1chProcessor::Processor {
     fn setup(
@@ -121,8 +107,12 @@ impl crate::core::ReactiveProcessor for AudioResampler1chProcessor::Processor {
 // Stereo (2-channel) Resampler
 // =============================================================================
 
-#[crate::processor("schemas/processors/audio_resampler_2ch.yaml")]
-pub struct AudioResampler2chProcessor;
+#[crate::processor("src/core/processors/audio_resampler_2ch.yaml")]
+pub struct AudioResampler2chProcessor {
+    resampler: Option<AudioResampler>,
+    output_sample_rate: u32,
+    frame_counter: u64,
+}
 
 impl crate::core::ReactiveProcessor for AudioResampler2chProcessor::Processor {
     fn setup(

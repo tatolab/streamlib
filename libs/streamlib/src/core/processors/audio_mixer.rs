@@ -3,20 +3,6 @@
 
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::schemas::{Audioframe1ch, Audioframe2ch};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct AudioMixerConfig {
-    pub strategy: MixingStrategy,
-}
-
-impl Default for AudioMixerConfig {
-    fn default() -> Self {
-        Self {
-            strategy: MixingStrategy::SumNormalized,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum MixingStrategy {
@@ -26,8 +12,12 @@ pub enum MixingStrategy {
     SumClipped,
 }
 
-#[crate::processor("schemas/processors/audio_mixer.yaml")]
-pub struct AudioMixerProcessor;
+#[crate::processor("src/core/processors/audio_mixer.yaml")]
+pub struct AudioMixerProcessor {
+    sample_rate: u32,
+    buffer_size: usize,
+    frame_counter: u64,
+}
 
 impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
     fn setup(

@@ -1,0 +1,21 @@
+name: com.tatolab.audio_mixer
+version: 1.0.0
+description: "Mixes two mono signals (left and right) into a stereo signal"
+execution: reactive
+
+config:
+  name: config
+  schema: com.tatolab.audio_mixer.config@1.0.0
+
+inputs:
+  - name: left
+    schema: com.tatolab.audioframe.1ch@1.0.0
+    description: Left channel mono audio
+  - name: right
+    schema: com.tatolab.audioframe.1ch@1.0.0
+    description: Right channel mono audio
+
+outputs:
+  - name: audio
+    schema: com.tatolab.audioframe.2ch@1.0.0
+    description: Mixed stereo audio output

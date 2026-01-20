@@ -1,8 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+// TODO: Re-enable IOSurface lookup when XPC broker is implemented
+// use crate::apple::corevideo_ffi::IOSurfaceLookup;
 use crate::core::rhi::{PixelFormat, RhiTextureCache};
-use crate::core::{LinkInput, Result, RuntimeContext, StreamError, VideoFrame};
+use crate::core::{Result, RuntimeContext, StreamError};
+use crate::iceoryx2::InputMailboxes;
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMask};
@@ -16,69 +19,19 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-// Scaling mode for video content in the display window
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-pub enum ScalingMode {
-    /// Stretch video to fill window (ignores aspect ratio)
-    #[default]
-    Stretch,
-    /// Scale video to fit window while maintaining aspect ratio (letterbox/pillarbox)
-    Letterbox,
-    /// Scale video to fill window while maintaining aspect ratio (crops edges)
-    Crop,
-}
+// Config type generated from JTD schema
+pub use crate::_generated_::DisplayConfig;
 
-// Apple-specific configuration and types
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ConfigDescriptor,
-)]
-pub struct AppleDisplayConfig {
-    pub width: u32,
-    pub height: u32,
-    pub title: Option<String>,
-    pub scaling_mode: ScalingMode,
-    /// Enable vsync (synchronize to display refresh rate).
-    /// When true: Renders at native display rate (60Hz, 120Hz ProMotion, etc.)
-    /// When false: Renders as fast as possible (uncapped, for benchmarking)
-    /// Default: true
-    pub vsync: bool,
-    /// Number of drawable buffers (2 = double buffer, 3 = triple buffer).
-    /// Triple buffering reduces stutter but adds ~1 frame of latency.
-    /// Default: 2
-    pub drawable_count: u32,
-}
-
-impl Default for AppleDisplayConfig {
-    fn default() -> Self {
-        Self {
-            width: 1920,
-            height: 1080,
-            title: None,
-            scaling_mode: ScalingMode::default(),
-            vsync: true,
-            drawable_count: 2,
-        }
-    }
-}
+// Re-export ScalingMode from generated config for external use
+pub type ScalingMode = crate::_generated_::com_tatolab_display_config::ScalingMode;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct AppleWindowId(pub u64);
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
-#[crate::processor(
-    name = "DisplayProcessor",
-    execution = Manual,
-    description = "Displays video frames in a window using Metal with vsync",
-    unsafe_send
-)]
+#[crate::processor("src/apple/processors/display.yaml")]
 pub struct AppleDisplayProcessor {
-    #[crate::input(description = "Video frames to display in the window")]
-    video: LinkInput<VideoFrame>,
-
-    #[crate::config]
-    config: AppleDisplayConfig,
-
     window: Option<Retained<NSWindow>>,
     #[allow(dead_code)]
     metal_layer: Option<Retained<CAMetalLayer>>,
@@ -115,6 +68,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                 .title
                 .clone()
                 .unwrap_or_else(|| "streamlib Display".to_string());
+            self.scaling_mode = ScalingMode::from_schema(&self.config.scaling_mode);
 
             // Initialize state for game loop rendering
             self.running = Arc::new(AtomicBool::new(false));
@@ -223,7 +177,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
         );
 
         // Clone state needed for render thread
-        let video_input = self.video.clone();
+        let inputs = self.inputs.clone();
         let layer_addr = Arc::clone(&self.layer_addr);
         let running = Arc::clone(&self.running);
         let window_id = self.window_id.0;
@@ -308,19 +262,49 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                         &*ptr
                     };
 
-                    // First check if we have a frame - don't waste drawable if nothing to render
-                    // CAMetalLayer keeps showing last presented content automatically
-                    let mut latest_frame: Option<VideoFrame> = None;
-                    while let Some(f) = video_input.read() {
-                        latest_frame = Some(f);
+                    // Read IPC frame from inputs and convert to VideoFrame
+                    // Drain all pending frames, keep only the latest
+                    let mut latest_ipc: Option<crate::_generated_::Videoframe> = None;
+                    while let Ok(Some(ipc_frame)) = inputs.read::<crate::_generated_::Videoframe>("video") {
+                        latest_ipc = Some(ipc_frame);
                     }
 
-                    let Some(ref frame) = latest_frame else {
+                    let Some(ref ipc_frame) = latest_ipc else {
                         // No frame - sleep briefly and check again
                         // Don't call nextDrawable() as that blocks for vsync
                         std::thread::sleep(Duration::from_micros(500));
                         continue;
                     };
+
+                    // Convert IPC frame to VideoFrame by looking up IOSurface
+                    let surface_id: u32 = match ipc_frame.surface_id.parse() {
+                        Ok(id) => id,
+                        Err(_) => {
+                            tracing::warn!("Display {}: Invalid surface_id: {}", window_id, ipc_frame.surface_id);
+                            continue;
+                        }
+                    };
+
+                    // Look up IOSurface by ID
+                    let iosurface = unsafe { IOSurfaceLookup(surface_id) };
+                    if iosurface.is_null() {
+                        tracing::warn!("Display {}: IOSurface {} not found", window_id, surface_id);
+                        continue;
+                    }
+
+                    // Create RhiPixelBufferRef from IOSurface
+                    let buffer_ref = match unsafe { RhiPixelBufferRef::from_iosurface_ref(iosurface) } {
+                        Ok(buf) => buf,
+                        Err(e) => {
+                            tracing::warn!("Display {}: Failed to create buffer from IOSurface: {}", window_id, e);
+                            continue;
+                        }
+                    };
+
+                    let buffer = RhiPixelBuffer::new(buffer_ref);
+                    let timestamp_ns: i64 = ipc_frame.timestamp_ns.parse().unwrap_or(0);
+                    let frame_index: u64 = ipc_frame.frame_index.parse().unwrap_or(0);
+                    let frame = VideoFrame::from_buffer(buffer, timestamp_ns, frame_index);
 
                     // Now get drawable - this blocks for vsync when displaySyncEnabled=true
                     let Some(drawable) = metal_layer.nextDrawable() else {
@@ -449,7 +433,7 @@ impl AppleDisplayProcessor::Processor {
     ) -> (metal::MTLOrigin, metal::MTLSize) {
         use metal::{MTLOrigin, MTLSize};
 
-        match self.config.scaling_mode {
+        match self.scaling_mode {
             ScalingMode::Stretch => {
                 // Stretch to fill entire window (ignore aspect ratio)
                 (

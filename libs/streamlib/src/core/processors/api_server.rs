@@ -124,29 +124,6 @@ fn default_logs_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".streamlib").join("logs"))
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct ApiServerConfig {
-    pub host: String,
-    pub port: u16,
-    /// Runtime name for broker registration (auto-generated if None).
-    #[serde(default)]
-    pub name: Option<String>,
-    /// Log file path for broker registration (derived from name if None).
-    #[serde(default)]
-    pub log_path: Option<PathBuf>,
-}
-
-impl Default for ApiServerConfig {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 9000,
-            name: None,
-            log_path: None,
-        }
-    }
-}
-
 #[derive(Clone)]
 struct AppState {
     runtime_ctx: RuntimeContext,
@@ -219,8 +196,14 @@ struct ApiDoc;
 // Processor Definition
 // ============================================================================
 
-#[crate::processor("schemas/processors/api_server.yaml")]
-pub struct ApiServerProcessor;
+#[crate::processor("src/core/processors/api_server.yaml")]
+pub struct ApiServerProcessor {
+    runtime_ctx: Option<RuntimeContext>,
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    runtime_id: Option<String>,
+    resolved_name: Option<String>,
+    actual_port: Option<u16>,
+}
 
 impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
     fn setup(&mut self, ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
