@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::prelude::*;
+use serde::Serialize;
 
 use super::FramePayload;
 use crate::core::error::{Result, StreamError};
@@ -96,17 +97,25 @@ impl OutputWriter {
         );
     }
 
-    /// Write data to the specified output port.
+    /// Write a frame to the specified output port.
     ///
-    /// The data is wrapped in a FramePayload with the configured schema
-    /// and destination port name, then published via iceoryx2.
-    pub fn write(&self, port: &str, data: &[u8]) -> Result<()> {
+    /// The frame is serialized to MessagePack, wrapped in a FramePayload with
+    /// the configured schema and destination port name, then published via iceoryx2.
+    pub fn write<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
-        self.write_with_timestamp(port, data, timestamp_ns)
+        self.write_with_timestamp(port, value, timestamp_ns)
     }
 
-    /// Write data to the specified output port with an explicit timestamp.
-    pub fn write_with_timestamp(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
+    /// Write a frame to the specified output port with an explicit timestamp.
+    pub fn write_with_timestamp<T: Serialize>(
+        &self,
+        port: &str,
+        value: &T,
+        timestamp_ns: i64,
+    ) -> Result<()> {
+        let data = rmp_serde::to_vec(value)
+            .map_err(|e| StreamError::Link(format!("Failed to serialize frame: {}", e)))?;
+
         let publisher = self.publisher.get().ok_or_else(|| {
             StreamError::Link("OutputWriter has no publisher configured".to_string())
         })?;
@@ -116,7 +125,7 @@ impl OutputWriter {
             .get(port)
             .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
 
-        let payload = FramePayload::new(dest_port, schema, timestamp_ns, data);
+        let payload = FramePayload::new(dest_port, schema, timestamp_ns, &data);
 
         // Loan a sample from the publisher and copy the payload
         let sample = publisher

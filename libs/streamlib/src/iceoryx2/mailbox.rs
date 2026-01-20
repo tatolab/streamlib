@@ -47,9 +47,18 @@ impl PortMailbox {
         self.consumer.peek().ok()
     }
 
-    /// Pop the oldest payload from the mailbox.
+    /// Pop the oldest payload from the mailbox (FIFO).
     pub fn pop(&mut self) -> Option<FramePayload> {
         self.consumer.pop().ok()
+    }
+
+    /// Drain buffer and return only the newest payload.
+    pub fn pop_latest(&mut self) -> Option<FramePayload> {
+        let mut latest = None;
+        while let Ok(value) = self.consumer.pop() {
+            latest = Some(value);
+        }
+        latest
     }
 
     /// Check if the mailbox is empty.
