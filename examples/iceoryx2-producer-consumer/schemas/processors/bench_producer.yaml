@@ -1,0 +1,23 @@
+name: com.streamlib.bench.producer
+version: 1.0.0
+description: "Benchmark producer"
+execution:
+  type: continuous
+  interval_ms: 0
+
+config:
+  name: config
+  schema: BenchProducerConfig
+
+state:
+  - name: counter
+    type: u64
+    default: "0"
+  - name: cached_payload
+    type: Option<Vec<u8>>
+    default: None
+
+outputs:
+  - name: out
+    schema: com.streamlib.bench@1.0.0
+    description: Benchmark output

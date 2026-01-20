@@ -28,20 +28,8 @@ impl Default for AudioResamplerConfig {
 // Mono (1-channel) Resampler
 // =============================================================================
 
-#[crate::processor(
-    execution = Reactive,
-    description = "Resamples mono audio from source to target sample rate",
-    inputs = [input("audio_in", schema = "com.tatolab.audioframe.1ch@1.0.0")],
-    outputs = [output("audio_out", schema = "com.tatolab.audioframe.1ch@1.0.0")]
-)]
-pub struct AudioResampler1chProcessor {
-    #[crate::config]
-    config: AudioResamplerConfig,
-
-    resampler: Option<AudioResampler>,
-    output_sample_rate: u32,
-    frame_counter: u64,
-}
+#[crate::processor("schemas/processors/audio_resampler_1ch.yaml")]
+pub struct AudioResampler1chProcessor;
 
 impl crate::core::ReactiveProcessor for AudioResampler1chProcessor::Processor {
     fn setup(
@@ -116,7 +104,8 @@ impl crate::core::ReactiveProcessor for AudioResampler1chProcessor::Processor {
                 frame_index: self.frame_counter,
             };
 
-            let bytes = output_frame.to_msgpack()
+            let bytes = output_frame
+                .to_msgpack()
                 .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
             self.outputs.write("audio_out", &bytes)?;
             self.frame_counter += 1;
@@ -132,20 +121,8 @@ impl crate::core::ReactiveProcessor for AudioResampler1chProcessor::Processor {
 // Stereo (2-channel) Resampler
 // =============================================================================
 
-#[crate::processor(
-    execution = Reactive,
-    description = "Resamples stereo audio from source to target sample rate",
-    inputs = [input("audio_in", schema = "com.tatolab.audioframe.2ch@1.0.0")],
-    outputs = [output("audio_out", schema = "com.tatolab.audioframe.2ch@1.0.0")]
-)]
-pub struct AudioResampler2chProcessor {
-    #[crate::config]
-    config: AudioResamplerConfig,
-
-    resampler: Option<AudioResampler>,
-    output_sample_rate: u32,
-    frame_counter: u64,
-}
+#[crate::processor("schemas/processors/audio_resampler_2ch.yaml")]
+pub struct AudioResampler2chProcessor;
 
 impl crate::core::ReactiveProcessor for AudioResampler2chProcessor::Processor {
     fn setup(
@@ -221,7 +198,8 @@ impl crate::core::ReactiveProcessor for AudioResampler2chProcessor::Processor {
                 frame_index: self.frame_counter,
             };
 
-            let bytes = output_frame.to_msgpack()
+            let bytes = output_frame
+                .to_msgpack()
                 .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
             self.outputs.write("audio_out", &bytes)?;
             self.frame_counter += 1;

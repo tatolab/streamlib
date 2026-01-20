@@ -219,22 +219,8 @@ struct ApiDoc;
 // Processor Definition
 // ============================================================================
 
-#[crate::processor(
-    execution = Manual,
-    description = "Runtime api server for streamlib"
-)]
-pub struct ApiServerProcessor {
-    #[crate::config]
-    config: ApiServerConfig,
-    runtime_ctx: Option<RuntimeContext>,
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Runtime ID for broker registration (from env or generated).
-    runtime_id: Option<String>,
-    /// Resolved runtime name (from config or auto-generated).
-    resolved_name: Option<String>,
-    /// Actual bound port (may differ from config if port was in use).
-    actual_port: Option<u16>,
-}
+#[crate::processor("schemas/processors/api_server.yaml")]
+pub struct ApiServerProcessor;
 
 impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
     fn setup(&mut self, ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {

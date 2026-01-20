@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// Test message for basic validation.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestMessage {
     pub sequence: u64,
@@ -16,6 +17,7 @@ pub struct TestMessage {
     pub values: Vec<f32>,
 }
 
+#[allow(dead_code)]
 impl TestMessage {
     pub fn from_msgpack(data: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
         rmp_serde::from_slice(data)

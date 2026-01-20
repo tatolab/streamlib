@@ -136,6 +136,16 @@ pub struct RegistryResponse {
     pub schemas: Vec<SchemaDescriptorOutput>,
 }
 
+/// Runtime environment for a processor.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProcessorRuntimeOutput {
+    #[default]
+    Rust,
+    Python,
+    TypeScript,
+}
+
 /// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
@@ -147,8 +157,15 @@ pub struct ProcessorDescriptorOutput {
     pub version: String,
     /// Repository URL.
     pub repository: String,
-    /// Configuration fields.
-    pub config: Vec<ConfigFieldOutput>,
+    /// Runtime environment.
+    #[serde(default)]
+    pub runtime: ProcessorRuntimeOutput,
+    /// Entrypoint for non-Rust runtimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Reference to config schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<String>,
     /// Input port descriptors.
     pub inputs: Vec<PortDescriptorOutput>,
     /// Output port descriptors.
@@ -345,7 +362,9 @@ impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
             description: desc.description.clone(),
             version: desc.version.clone(),
             repository: desc.repository.clone(),
-            config: desc.config.iter().map(ConfigFieldOutput::from).collect(),
+            runtime: ProcessorRuntimeOutput::from(&desc.runtime),
+            entrypoint: desc.entrypoint.clone(),
+            config_schema: desc.config_schema.clone(),
             inputs: desc.inputs.iter().map(PortDescriptorOutput::from).collect(),
             outputs: desc
                 .outputs
@@ -353,6 +372,16 @@ impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
                 .map(PortDescriptorOutput::from)
                 .collect(),
             examples: CodeExamplesOutput::from(&desc.examples),
+        }
+    }
+}
+
+impl From<&crate::core::ProcessorRuntime> for ProcessorRuntimeOutput {
+    fn from(runtime: &crate::core::ProcessorRuntime) -> Self {
+        match runtime {
+            crate::core::ProcessorRuntime::Rust => ProcessorRuntimeOutput::Rust,
+            crate::core::ProcessorRuntime::Python => ProcessorRuntimeOutput::Python,
+            crate::core::ProcessorRuntime::TypeScript => ProcessorRuntimeOutput::TypeScript,
         }
     }
 }
@@ -388,4 +417,3 @@ impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
         }
     }
 }
-

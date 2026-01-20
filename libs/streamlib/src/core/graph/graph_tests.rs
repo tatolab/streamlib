@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use serde_json::{json, Value as JsonValue};
 
-use crate::core::frames::DataFrame;
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
-use crate::core::links::{LinkInput, LinkOutput};
 use crate::core::processors::ProcessorState;
 use crate::core::JsonSerializableComponent;
 
@@ -30,17 +28,8 @@ pub struct MockConfig {
 }
 
 /// Mock processor for testing graph operations.
-#[crate::processor(execution = Manual, description = "Test processor")]
-struct MockProcessor {
-    #[crate::input(description = "Test input")]
-    input: LinkInput<DataFrame>,
-
-    #[crate::output(description = "Test output")]
-    output: LinkOutput<DataFrame>,
-
-    #[crate::config]
-    config: MockConfig,
-}
+#[crate::processor("schemas/processors/test/mock_processor.yaml")]
+struct MockProcessor;
 
 impl crate::core::ManualProcessor for MockProcessor::Processor {
     fn setup(
@@ -60,17 +49,8 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 }
 
 /// Processor with only output ports.
-#[crate::processor(execution = Manual, description = "Processor with output ports only")]
-struct MockOutputOnlyProcessor {
-    #[crate::output(description = "Output 1")]
-    out1: LinkOutput<DataFrame>,
-
-    #[crate::output(description = "Output 2")]
-    out2: LinkOutput<DataFrame>,
-
-    #[crate::config]
-    config: MockConfig,
-}
+#[crate::processor("schemas/processors/test/mock_output_only_processor.yaml")]
+struct MockOutputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
     fn setup(
@@ -90,17 +70,8 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 }
 
 /// Processor with only input ports.
-#[crate::processor(execution = Manual, description = "Processor with input ports only")]
-struct MockInputOnlyProcessor {
-    #[crate::input(description = "Input 1")]
-    in1: LinkInput<DataFrame>,
-
-    #[crate::input(description = "Input 2")]
-    in2: LinkInput<DataFrame>,
-
-    #[crate::config]
-    config: MockConfig,
-}
+#[crate::processor("schemas/processors/test/mock_input_only_processor.yaml")]
+struct MockInputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     fn setup(
@@ -277,7 +248,10 @@ mod query_ops {
 
         let found = graph.traversal().v(id.as_str()).first();
         assert!(found.is_some());
-        assert_eq!(found.unwrap().processor_type, "MockProcessor");
+        assert_eq!(
+            found.unwrap().processor_type,
+            "com.streamlib.test.mock_processor"
+        );
     }
 
     #[test]
@@ -380,9 +354,9 @@ mod query_ops {
             .collect();
 
         assert_eq!(types.len(), 3);
-        assert!(types.contains(&"MockProcessor".to_string()));
-        assert!(types.contains(&"MockOutputOnlyProcessor".to_string()));
-        assert!(types.contains(&"MockInputOnlyProcessor".to_string()));
+        assert!(types.contains(&"com.streamlib.test.mock_processor".to_string()));
+        assert!(types.contains(&"com.streamlib.test.mock_output_only_processor".to_string()));
+        assert!(types.contains(&"com.streamlib.test.mock_input_only_processor".to_string()));
     }
 }
 
@@ -547,7 +521,7 @@ mod filter_ops {
         let mock_processors: Vec<_> = graph
             .traversal()
             .v(())
-            .filter(|n| n.processor_type == "MockProcessor")
+            .filter(|n| n.processor_type == "com.streamlib.test.mock_processor")
             .ids();
 
         assert_eq!(mock_processors.len(), 2);

@@ -60,23 +60,8 @@ impl SineOscillator {
     }
 }
 
-#[crate::processor(
-    execution = Continuous,
-    description = "Generates a C major chord (C4, E4, G4) pre-mixed into a stereo output",
-    unsafe_send,
-    outputs = [output("chord", schema = "com.tatolab.audioframe.2ch@1.0.0")]
-)]
-pub struct ChordGeneratorProcessor {
-    #[crate::config]
-    config: ChordGeneratorConfig,
-
-    osc_c4: SineOscillator,
-    osc_e4: SineOscillator,
-    osc_g4: SineOscillator,
-    sample_rate: u32,
-    buffer_size: usize,
-    frame_counter: u64,
-}
+#[crate::processor("schemas/processors/chord_generator.yaml")]
+pub struct ChordGeneratorProcessor;
 
 impl ChordGeneratorProcessor::Processor {
     const FREQ_C4: f64 = 261.63;
@@ -139,14 +124,15 @@ impl crate::core::ContinuousProcessor for ChordGeneratorProcessor::Processor {
             tracing::info!("ChordGenerator FIRST iteration: writing stereo chord frame");
         }
 
-        if counter % 100 == 0 && counter > 0 {
+        if counter.is_multiple_of(100) && counter > 0 {
             tracing::debug!(
                 "ChordGenerator iteration {}: Writing stereo chord frame",
                 counter
             );
         }
 
-        let bytes = chord_frame.to_msgpack()
+        let bytes = chord_frame
+            .to_msgpack()
             .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
         self.outputs.write("chord", &bytes)?;
 

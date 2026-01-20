@@ -24,9 +24,9 @@ pub struct Iceoryx2Node {
 impl Iceoryx2Node {
     /// Create a new iceoryx2 Node.
     pub fn new() -> Result<Self> {
-        let node = NodeBuilder::new()
-            .create::<ipc::Service>()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create iceoryx2 node: {:?}", e)))?;
+        let node = NodeBuilder::new().create::<ipc::Service>().map_err(|e| {
+            StreamError::Runtime(format!("Failed to create iceoryx2 node: {:?}", e))
+        })?;
 
         Ok(Self {
             inner: Arc::new(Mutex::new(node)),
@@ -36,14 +36,11 @@ impl Iceoryx2Node {
     /// Open or create a publish-subscribe service for FramePayload.
     ///
     /// The service name should follow the format: "streamlib/{source_processor}/{dest_processor}"
-    pub fn open_or_create_service(
-        &self,
-        service_name: &str,
-    ) -> Result<Iceoryx2Service> {
+    pub fn open_or_create_service(&self, service_name: &str) -> Result<Iceoryx2Service> {
         let node = self.inner.lock();
-        let service_name: ServiceName = service_name
-            .try_into()
-            .map_err(|e| StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e)))?;
+        let service_name: ServiceName = service_name.try_into().map_err(|e| {
+            StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+        })?;
 
         let service = node
             .service_builder(&service_name)

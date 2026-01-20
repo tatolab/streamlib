@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 // Generated from com.tatolab.audioframe.3ch@1.0.0
 // DO NOT EDIT - regenerate with `streamlib schema sync`
 

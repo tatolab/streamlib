@@ -4,9 +4,9 @@
 pub mod clap;
 pub mod codec;
 pub mod compiler;
-pub mod descriptors;
 pub mod config;
 pub mod context;
+pub mod descriptors;
 pub mod error;
 pub mod execution;
 pub mod rhi;
@@ -33,8 +33,8 @@ pub use clap::*;
 pub use codec::*;
 pub use compiler::*;
 pub use config::ProjectConfig;
-pub use descriptors::*;
 pub use context::*;
+pub use descriptors::*;
 pub use error::*;
 pub use rhi::{gl_constants, GlContext, GlTextureBinding, NativeTextureHandle, RhiBackend};
 
@@ -53,4 +53,3 @@ pub use streaming::*;
 pub use streamlib_home::*;
 pub use sync::*;
 pub use texture::*;
-

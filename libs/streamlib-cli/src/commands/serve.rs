@@ -9,9 +9,6 @@ use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::plugin_loader::PluginLoader;
 
-// Force linkage of streamlib-python to ensure Python processors are registered via inventory
-extern crate streamlib_python;
-
 /// Docker-style adjectives for runtime name generation.
 const ADJECTIVES: &[&str] = &[
     "admiring",

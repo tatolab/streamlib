@@ -18,11 +18,11 @@ use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorPauseGateComponent,
     ProcessorUniqueId,
 };
-use crate::iceoryx2::Iceoryx2Node;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
+use crate::iceoryx2::Iceoryx2Node;
 
 /// Storage variant for tokio runtime in StreamRuntime.
 ///

@@ -23,20 +23,8 @@ impl Default for BufferRechunkerConfig {
 // Mono (1-channel) Buffer Rechunker
 // =============================================================================
 
-#[crate::processor(
-    execution = Reactive,
-    description = "Rechunks variable-sized mono audio buffers into fixed-size chunks",
-    inputs = [input("audio_in", schema = "com.tatolab.audioframe.1ch@1.0.0")],
-    outputs = [output("audio_out", schema = "com.tatolab.audioframe.1ch@1.0.0")]
-)]
-pub struct BufferRechunker1chProcessor {
-    #[crate::config]
-    config: BufferRechunkerConfig,
-
-    buffer: Vec<f32>,
-    sample_rate: u32,
-    frame_counter: u64,
-}
+#[crate::processor("schemas/processors/buffer_rechunker_1ch.yaml")]
+pub struct BufferRechunker1chProcessor;
 
 impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
     fn setup(
@@ -71,7 +59,10 @@ impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
 
             // Output chunks when we have enough samples
             while self.buffer.len() >= self.config.target_buffer_size {
-                let chunk: Vec<f32> = self.buffer.drain(..self.config.target_buffer_size).collect();
+                let chunk: Vec<f32> = self
+                    .buffer
+                    .drain(..self.config.target_buffer_size)
+                    .collect();
 
                 let output_frame = Audioframe1ch {
                     samples: chunk,
@@ -80,7 +71,8 @@ impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
                     frame_index: self.frame_counter,
                 };
 
-                let bytes = output_frame.to_msgpack()
+                let bytes = output_frame
+                    .to_msgpack()
                     .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
                 self.outputs.write("audio_out", &bytes)?;
                 self.frame_counter += 1;
@@ -101,20 +93,8 @@ impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
 // Stereo (2-channel) Buffer Rechunker
 // =============================================================================
 
-#[crate::processor(
-    execution = Reactive,
-    description = "Rechunks variable-sized stereo audio buffers into fixed-size chunks",
-    inputs = [input("audio_in", schema = "com.tatolab.audioframe.2ch@1.0.0")],
-    outputs = [output("audio_out", schema = "com.tatolab.audioframe.2ch@1.0.0")]
-)]
-pub struct BufferRechunker2chProcessor {
-    #[crate::config]
-    config: BufferRechunkerConfig,
-
-    buffer: Vec<f32>,
-    sample_rate: u32,
-    frame_counter: u64,
-}
+#[crate::processor("schemas/processors/buffer_rechunker_2ch.yaml")]
+pub struct BufferRechunker2chProcessor;
 
 impl crate::core::ReactiveProcessor for BufferRechunker2chProcessor::Processor {
     fn setup(
@@ -162,7 +142,8 @@ impl crate::core::ReactiveProcessor for BufferRechunker2chProcessor::Processor {
                     frame_index: self.frame_counter,
                 };
 
-                let bytes = output_frame.to_msgpack()
+                let bytes = output_frame
+                    .to_msgpack()
                     .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
                 self.outputs.write("audio_out", &bytes)?;
                 self.frame_counter += 1;

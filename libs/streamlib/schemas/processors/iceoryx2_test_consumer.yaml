@@ -1,0 +1,18 @@
+name: com.streamlib.test.iceoryx2_consumer
+version: 1.0.0
+description: "Test consumer for iceoryx2 communication validation"
+execution: reactive
+
+config:
+  name: config
+  schema: Iceoryx2TestConsumerConfig
+
+state:
+  - name: received_count
+    type: u64
+    default: "0"
+
+inputs:
+  - name: data_in
+    schema: com.streamlib.test.rawdata@1.0.0
+    description: Raw test data input

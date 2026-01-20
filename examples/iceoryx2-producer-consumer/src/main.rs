@@ -7,10 +7,9 @@
 
 mod schema;
 
-use schema::{AudioFrame, DataFrame, TestMessage, VideoFrameMeta};
+use schema::{AudioFrame, DataFrame, VideoFrameMeta};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{Result, StreamRuntime};
@@ -63,17 +62,8 @@ impl Default for BenchProducerConfig {
     }
 }
 
-#[streamlib::processor(
-    execution = Continuous,
-    description = "Benchmark producer",
-    outputs = [output("out", schema = "com.streamlib.bench@1.0.0")]
-)]
-pub struct BenchProducerProcessor {
-    #[streamlib::config]
-    config: BenchProducerConfig,
-    counter: u64,
-    cached_payload: Option<Vec<u8>>,
-}
+#[streamlib::processor("schemas/processors/bench_producer.yaml")]
+pub struct BenchProducerProcessor;
 
 impl streamlib::ContinuousProcessor for BenchProducerProcessor::Processor {
     fn process(&mut self) -> Result<()> {
@@ -108,7 +98,9 @@ impl streamlib::ContinuousProcessor for BenchProducerProcessor::Processor {
                     msg.to_msgpack().unwrap()
                 }
                 "data" => {
-                    let payload_data: Vec<u8> = (0..self.config.payload_size).map(|i| (i % 256) as u8).collect();
+                    let payload_data: Vec<u8> = (0..self.config.payload_size)
+                        .map(|i| (i % 256) as u8)
+                        .collect();
                     let msg = DataFrame {
                         timestamp_ns: 0,
                         frame_number: self.counter,
@@ -145,19 +137,12 @@ impl Default for BenchConsumerConfig {
     }
 }
 
-#[streamlib::processor(
-    execution = Reactive,
-    description = "Benchmark consumer",
-    inputs = [input("in", schema = "com.streamlib.bench@1.0.0")]
-)]
-pub struct BenchConsumerProcessor {
-    #[streamlib::config]
-    config: BenchConsumerConfig,
-}
+#[streamlib::processor("schemas/processors/bench_consumer.yaml")]
+pub struct BenchConsumerProcessor;
 
 impl streamlib::ReactiveProcessor for BenchConsumerProcessor::Processor {
     fn process(&mut self) -> Result<()> {
-        while let Some(payload) = self.inputs.read("in") {
+        while let Some(payload) = self.inputs.read("data_in") {
             let data = payload.data();
 
             // Verify deserialization works
@@ -181,7 +166,11 @@ impl streamlib::ReactiveProcessor for BenchConsumerProcessor::Processor {
 // Benchmark Runner
 // ============================================================================
 
-fn run_benchmark(payload_type: &str, payload_size: usize, duration_secs: u64) -> Result<BenchmarkResult> {
+fn run_benchmark(
+    payload_type: &str,
+    payload_size: usize,
+    duration_secs: u64,
+) -> Result<BenchmarkResult> {
     reset_counters();
 
     let runtime = StreamRuntime::new()?;
@@ -230,7 +219,11 @@ fn run_benchmark(payload_type: &str, payload_size: usize, duration_secs: u64) ->
         duration_secs: duration_secs_f,
         throughput_msgs_per_sec: throughput_msgs,
         throughput_mb_per_sec: throughput_mb,
-        avg_latency_us: if throughput_msgs > 0.0 { 1_000_000.0 / throughput_msgs } else { 0.0 },
+        avg_latency_us: if throughput_msgs > 0.0 {
+            1_000_000.0 / throughput_msgs
+        } else {
+            0.0
+        },
     })
 }
 
@@ -243,10 +236,17 @@ fn generate_html_report(results: &[BenchmarkResult]) -> String {
     let audio = results.iter().find(|r| r.name == "audio").unwrap();
     let data = results.iter().find(|r| r.name == "data").unwrap();
 
-    let max_throughput = results.iter().map(|r| r.throughput_msgs_per_sec).fold(0.0_f64, f64::max);
-    let max_mb = results.iter().map(|r| r.throughput_mb_per_sec).fold(0.0_f64, f64::max);
+    let max_throughput = results
+        .iter()
+        .map(|r| r.throughput_msgs_per_sec)
+        .fold(0.0_f64, f64::max);
+    let max_mb = results
+        .iter()
+        .map(|r| r.throughput_mb_per_sec)
+        .fold(0.0_f64, f64::max);
 
-    format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -796,14 +796,16 @@ fn main() -> Result<()> {
 
         let runtime = StreamRuntime::new()?;
 
-        let producer = runtime.add_processor(BenchProducerProcessor::node(BenchProducerConfig {
-            payload_type: "video".to_string(),
-            payload_size: 48,
-        }))?;
+        let producer =
+            runtime.add_processor(BenchProducerProcessor::node(BenchProducerConfig {
+                payload_type: "video".to_string(),
+                payload_size: 48,
+            }))?;
 
-        let consumer = runtime.add_processor(BenchConsumerProcessor::node(BenchConsumerConfig {
-            payload_type: "video".to_string(),
-        }))?;
+        let consumer =
+            runtime.add_processor(BenchConsumerProcessor::node(BenchConsumerConfig {
+                payload_type: "video".to_string(),
+            }))?;
 
         runtime.connect(
             OutputLinkPortRef::new(&producer, "out"),
@@ -815,7 +817,11 @@ fn main() -> Result<()> {
         runtime.stop()?;
 
         let count = RECEIVED_COUNT.load(Ordering::SeqCst);
-        println!("✅ Received {} messages in 2 seconds ({:.0} msg/s)", count, count as f64 / 2.0);
+        println!(
+            "✅ Received {} messages in 2 seconds ({:.0} msg/s)",
+            count,
+            count as f64 / 2.0
+        );
         println!("\nRun with --benchmark to see full report!");
 
         Ok(())
@@ -824,9 +830,7 @@ fn main() -> Result<()> {
 
 fn run_benchmark_mode() -> Result<()> {
     // Minimal logging for benchmark
-    tracing_subscriber::fmt()
-        .with_env_filter("warn")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("warn").init();
 
     println!("╔════════════════════════════════════════════════════════════╗");
     println!("║       StreamLib iceoryx2 + MessagePack Benchmark           ║");
@@ -836,15 +840,24 @@ fn run_benchmark_mode() -> Result<()> {
 
     println!("🎬 Benchmarking VideoFrame metadata (~48 bytes)...");
     let video_result = run_benchmark("video", 48, duration)?;
-    println!("   ✓ {:.0} msg/s, {:.2} MB/s\n", video_result.throughput_msgs_per_sec, video_result.throughput_mb_per_sec);
+    println!(
+        "   ✓ {:.0} msg/s, {:.2} MB/s\n",
+        video_result.throughput_msgs_per_sec, video_result.throughput_mb_per_sec
+    );
 
     println!("🎵 Benchmarking AudioFrame (~4KB)...");
     let audio_result = run_benchmark("audio", 4096, duration)?;
-    println!("   ✓ {:.0} msg/s, {:.2} MB/s\n", audio_result.throughput_msgs_per_sec, audio_result.throughput_mb_per_sec);
+    println!(
+        "   ✓ {:.0} msg/s, {:.2} MB/s\n",
+        audio_result.throughput_msgs_per_sec, audio_result.throughput_mb_per_sec
+    );
 
     println!("📦 Benchmarking DataFrame (~16KB)...");
     let data_result = run_benchmark("data", 16000, duration)?;
-    println!("   ✓ {:.0} msg/s, {:.2} MB/s\n", data_result.throughput_msgs_per_sec, data_result.throughput_mb_per_sec);
+    println!(
+        "   ✓ {:.0} msg/s, {:.2} MB/s\n",
+        data_result.throughput_msgs_per_sec, data_result.throughput_mb_per_sec
+    );
 
     let results = vec![video_result, audio_result, data_result];
 

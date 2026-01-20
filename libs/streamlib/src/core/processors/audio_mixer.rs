@@ -26,23 +26,8 @@ pub enum MixingStrategy {
     SumClipped,
 }
 
-#[crate::processor(
-    execution = Reactive,
-    description = "Mixes two mono signals (left and right) into a stereo signal",
-    inputs = [
-        input("left", schema = "com.tatolab.audioframe.1ch@1.0.0"),
-        input("right", schema = "com.tatolab.audioframe.1ch@1.0.0")
-    ],
-    outputs = [output("audio", schema = "com.tatolab.audioframe.2ch@1.0.0")]
-)]
-pub struct AudioMixerProcessor {
-    #[crate::config]
-    config: AudioMixerConfig,
-
-    sample_rate: u32,
-    buffer_size: usize,
-    frame_counter: u64,
-}
+#[crate::processor("schemas/processors/audio_mixer.yaml")]
+pub struct AudioMixerProcessor;
 
 impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
     fn setup(
@@ -161,7 +146,8 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             frame_index: self.frame_counter,
         };
 
-        let bytes = output_frame.to_msgpack()
+        let bytes = output_frame
+            .to_msgpack()
             .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
         self.outputs.write("audio", &bytes)?;
 

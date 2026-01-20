@@ -91,7 +91,7 @@ impl InputMailboxes {
 
             let mut collected = Vec::new();
             while let Ok(Some(sample)) = subscriber.receive() {
-                collected.push(sample.payload().clone());
+                collected.push(*sample.payload());
             }
             collected
         };

@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, LinkState,
-    LinkStateComponent, LinkUniqueId, OutputLinkPortRef, ProcessorInstanceComponent,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
+    LinkUniqueId, ProcessorInstanceComponent,
 };
 use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
 use crate::core::ProcessorUniqueId;
@@ -136,17 +136,11 @@ fn open_iceoryx2_pubsub(
 
     // Create Publisher for source processor
     let publisher = service.create_publisher()?;
-    tracing::debug!(
-        "Created iceoryx2 Publisher for service '{}'",
-        service_name
-    );
+    tracing::debug!("Created iceoryx2 Publisher for service '{}'", service_name);
 
     // Create Subscriber for destination processor
     let subscriber = service.create_subscriber()?;
-    tracing::debug!(
-        "Created iceoryx2 Subscriber for service '{}'",
-        service_name
-    );
+    tracing::debug!("Created iceoryx2 Subscriber for service '{}'", service_name);
 
     // Look up schema for the output port from the registry
     let output_schema = {
@@ -195,7 +189,10 @@ fn open_iceoryx2_pubsub(
             // Default history of 1 - keeps only the most recent payload
             input_mailboxes.add_port(dest_port, 1);
             input_mailboxes.set_subscriber(subscriber);
-            tracing::debug!("Configured InputMailboxes port '{}' with Subscriber", dest_port);
+            tracing::debug!(
+                "Configured InputMailboxes port '{}' with Subscriber",
+                dest_port
+            );
         }
     }
 

@@ -106,31 +106,27 @@ impl OutputWriter {
     }
 
     /// Write data to the specified output port with an explicit timestamp.
-    pub fn write_with_timestamp(
-        &self,
-        port: &str,
-        data: &[u8],
-        timestamp_ns: i64,
-    ) -> Result<()> {
+    pub fn write_with_timestamp(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
         let publisher = self.publisher.get().ok_or_else(|| {
             StreamError::Link("OutputWriter has no publisher configured".to_string())
         })?;
 
-        let (schema, dest_port) = self.port_schemas.get(port).ok_or_else(|| {
-            StreamError::Link(format!("Unknown output port: {}", port))
-        })?;
+        let (schema, dest_port) = self
+            .port_schemas
+            .get(port)
+            .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
 
         let payload = FramePayload::new(dest_port, schema, timestamp_ns, data);
 
         // Loan a sample from the publisher and copy the payload
-        let sample = publisher.loan_uninit().map_err(|e| {
-            StreamError::Link(format!("Failed to loan sample: {:?}", e))
-        })?;
+        let sample = publisher
+            .loan_uninit()
+            .map_err(|e| StreamError::Link(format!("Failed to loan sample: {:?}", e)))?;
 
         let sample = sample.write_payload(payload);
-        sample.send().map_err(|e| {
-            StreamError::Link(format!("Failed to send sample: {:?}", e))
-        })?;
+        sample
+            .send()
+            .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
 
         Ok(())
     }

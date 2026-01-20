@@ -249,6 +249,12 @@ enum SchemaCommands {
     /// Validate local schema files
     Validate,
 
+    /// Validate a processor YAML schema file
+    ValidateProcessor {
+        /// Path to the processor YAML file
+        path: PathBuf,
+    },
+
     /// List all configured schemas
     List,
 }
@@ -371,6 +377,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             SchemaCommands::Add { schema } => commands::schema::add(&schema)?,
             SchemaCommands::New { name } => commands::schema::new_schema(&name)?,
             SchemaCommands::Validate => commands::schema::validate()?,
+            SchemaCommands::ValidateProcessor { path } => {
+                commands::schema::validate_processor(&path)?
+            }
             SchemaCommands::List => commands::schema::list()?,
         },
         None => {

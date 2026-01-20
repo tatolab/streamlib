@@ -31,7 +31,10 @@ pub mod error;
 pub mod parser;
 pub mod registry;
 
-pub use definition::{compute_schema_id, Field, FieldType, SchemaDefinition};
+pub use definition::{
+    compute_schema_id, Field, FieldType, ProcessExecution, ProcessorConfigSchema,
+    ProcessorPortSchema, ProcessorRuntime, ProcessorSchema, ProcessorStateField, SchemaDefinition,
+};
 pub use error::{Result, SchemaError};
-pub use parser::{parse_yaml, parse_yaml_file};
+pub use parser::{parse_processor_yaml, parse_processor_yaml_file, parse_yaml, parse_yaml_file};
 pub use registry::SchemaRegistry;

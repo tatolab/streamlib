@@ -17,6 +17,9 @@ proc-macro2 = "1.0"
 # Execution types (shared with streamlib for code generation)
 streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
 
+# Schema parsing for YAML-based processor definitions
+streamlib-schema = { path = "../streamlib-schema" }
+
 [dev-dependencies]
 crossbeam-channel = "0.5"
 serde = { version = "1.0", features = ["derive"] }

@@ -1,0 +1,18 @@
+name: com.streamlib.test.mock_processor
+version: 1.0.0
+description: "Test processor for graph operations"
+execution: manual
+
+config:
+  name: config
+  schema: MockConfig
+
+inputs:
+  - name: input
+    schema: com.streamlib.dataframe@1.0.0
+    description: Test input
+
+outputs:
+  - name: output
+    schema: com.streamlib.dataframe@1.0.0
+    description: Test output

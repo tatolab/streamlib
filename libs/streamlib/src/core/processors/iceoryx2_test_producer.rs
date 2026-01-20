@@ -24,20 +24,8 @@ impl Default for Iceoryx2TestProducerConfig {
 }
 
 /// Test producer that sends raw bytes via iceoryx2.
-///
-/// Uses the new `outputs = [...]` syntax for iceoryx2-based communication.
-#[crate::processor(
-    execution = Continuous,
-    description = "Test producer for iceoryx2 communication validation",
-    outputs = [output("data_out", schema = "com.streamlib.test.rawdata@1.0.0")]
-)]
-pub struct Iceoryx2TestProducerProcessor {
-    #[crate::config]
-    config: Iceoryx2TestProducerConfig,
-
-    /// Counter for generating test data.
-    counter: u64,
-}
+#[crate::processor("schemas/processors/iceoryx2_test_producer.yaml")]
+pub struct Iceoryx2TestProducerProcessor;
 
 impl crate::core::ContinuousProcessor for Iceoryx2TestProducerProcessor::Processor {
     fn process(&mut self) -> Result<()> {

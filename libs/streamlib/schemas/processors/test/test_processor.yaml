@@ -1,0 +1,14 @@
+name: com.streamlib.test.processor
+version: 1.0.0
+description: "Test processor for attribute macro tests"
+execution: manual
+
+inputs:
+  - name: video_in
+    schema: com.tatolab.videoframe@1.0.0
+    description: Video input
+
+outputs:
+  - name: video_out
+    schema: com.tatolab.videoframe@1.0.0
+    description: Video output

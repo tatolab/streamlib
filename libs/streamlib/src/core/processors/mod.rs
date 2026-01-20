@@ -79,8 +79,12 @@ pub use audio_channel_converter::{
     AudioChannelConverterConfig, AudioChannelConverterProcessor, ChannelConversionMode,
 };
 pub use audio_mixer::{AudioMixerConfig, AudioMixerProcessor, MixingStrategy};
-pub use audio_resampler::{AudioResampler1chProcessor, AudioResampler2chProcessor, AudioResamplerConfig};
-pub use buffer_rechunker::{BufferRechunker1chProcessor, BufferRechunker2chProcessor, BufferRechunkerConfig};
+pub use audio_resampler::{
+    AudioResampler1chProcessor, AudioResampler2chProcessor, AudioResamplerConfig,
+};
+pub use buffer_rechunker::{
+    BufferRechunker1chProcessor, BufferRechunker2chProcessor, BufferRechunkerConfig,
+};
 // TODO: Migrate to iceoryx2 API
 // pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::{SimplePassthroughConfig, SimplePassthroughProcessor};

@@ -1,0 +1,25 @@
+name: com.streamlib.api_server
+version: 1.0.0
+description: "Runtime api server for streamlib"
+execution: manual
+
+config:
+  name: config
+  schema: ApiServerConfig
+
+state:
+  - name: runtime_ctx
+    type: Option<RuntimeContext>
+    default: None
+  - name: shutdown_tx
+    type: Option<tokio::sync::oneshot::Sender<()>>
+    default: None
+  - name: runtime_id
+    type: Option<String>
+    default: None
+  - name: resolved_name
+    type: Option<String>
+    default: None
+  - name: actual_port
+    type: Option<u16>
+    default: None

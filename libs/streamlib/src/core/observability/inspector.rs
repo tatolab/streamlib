@@ -8,8 +8,8 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphState, LinkUniqueId,
-    ProcessorMetrics, ProcessorUniqueId, StateComponent,
+    Graph, GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorMetrics, ProcessorUniqueId,
+    StateComponent,
 };
 
 use super::snapshots::{

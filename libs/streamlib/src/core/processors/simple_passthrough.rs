@@ -16,16 +16,8 @@ impl Default for SimplePassthroughConfig {
     }
 }
 
-#[crate::processor(
-    execution = Manual,
-    description = "Passes video frames through unchanged (for testing)",
-    inputs = [input("input", schema = "com.tatolab.videoframe@1.0.0")],
-    outputs = [output("output", schema = "com.tatolab.videoframe@1.0.0")]
-)]
-pub struct SimplePassthroughProcessor {
-    #[crate::config]
-    config: SimplePassthroughConfig,
-}
+#[crate::processor("schemas/processors/simple_passthrough.yaml")]
+pub struct SimplePassthroughProcessor;
 
 impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
     // Uses default setup() and teardown() implementations from Processor trait

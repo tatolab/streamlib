@@ -1,22 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Test for new #[streamlib::processor] attribute macro syntax
+//! Test for YAML-based #[streamlib::processor] attribute macro syntax
 //!
-//! This test verifies the module-based processor generation works correctly.
+//! This test verifies the module-based processor generation works correctly
+//! with YAML schema definitions.
 
 use streamlib::core::GeneratedProcessor;
-use streamlib::core::{EmptyConfig, LinkInput, LinkOutput, Result, RuntimeContext, VideoFrame};
+use streamlib::core::{EmptyConfig, Result, RuntimeContext};
 
-// Define a simple processor using the new attribute macro syntax
-#[streamlib::processor(execution = Manual)]
-pub struct TestProcessor {
-    #[streamlib::input]
-    video_in: LinkInput<VideoFrame>,
-
-    #[streamlib::output]
-    video_out: LinkOutput<VideoFrame>,
-}
+// Define a simple processor using YAML schema
+#[streamlib::processor("schemas/processors/test/test_processor.yaml")]
+pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
 impl streamlib::ManualProcessor for TestProcessor::Processor {
@@ -32,10 +27,9 @@ impl streamlib::ManualProcessor for TestProcessor::Processor {
     }
 
     fn start(&mut self) -> Result<()> {
-        // Simple passthrough - read from input and push to output
-        while let Some(frame) = self.video_in.read() {
-            self.video_out.push(frame);
-        }
+        // With iceoryx2 IPC, data is read via self.inputs.read("port_name")
+        // and written via self.outputs.write("port_name", &data)
+        // For this test, we just verify the structure exists
         Ok(())
     }
 }
@@ -82,9 +76,8 @@ fn test_processor_instantiation() {
     // Create processor from empty config
     let processor = TestProcessor::Processor::from_config(EmptyConfig).unwrap();
 
-    // Verify it has the expected name
-
-    assert_eq!(processor.name(), "TestProcessor");
+    // Verify it has the expected name from YAML schema
+    assert_eq!(processor.name(), "com.streamlib.test.processor");
 }
 
 // Test with config field
@@ -101,14 +94,8 @@ pub struct MyConfig {
     pub threshold: f32,
 }
 
-#[streamlib::processor(execution = Continuous)]
-pub struct ConfiguredProcessor {
-    #[streamlib::output]
-    data: LinkOutput<VideoFrame>,
-
-    #[streamlib::config]
-    config: MyConfig,
-}
+#[streamlib::processor("schemas/processors/test/configured_processor.yaml")]
+pub struct ConfiguredProcessor;
 
 impl streamlib::ContinuousProcessor for ConfiguredProcessor::Processor {
     fn setup(

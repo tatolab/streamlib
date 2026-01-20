@@ -5,6 +5,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Runtime environment for a processor.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProcessorRuntime {
+    #[default]
+    Rust,
+    Python,
+    TypeScript,
+}
+
 /// Describes an input or output port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortDescriptor {
@@ -104,7 +114,15 @@ pub struct ProcessorDescriptor {
     pub description: String,
     pub version: String,
     pub repository: String,
-    pub config: Vec<ConfigField>,
+    /// Runtime environment (Rust, Python, TypeScript).
+    #[serde(default)]
+    pub runtime: ProcessorRuntime,
+    /// Entrypoint for non-Rust runtimes (e.g., "src.blur:BlurProcessor").
+    #[serde(default)]
+    pub entrypoint: Option<String>,
+    /// Reference to config schema (e.g., "com.example.blur.config@1.0.0").
+    #[serde(default)]
+    pub config_schema: Option<String>,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -117,7 +135,9 @@ impl ProcessorDescriptor {
             description: description.into(),
             version: String::new(),
             repository: String::new(),
-            config: Vec::new(),
+            runtime: ProcessorRuntime::default(),
+            entrypoint: None,
+            config_schema: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
@@ -134,13 +154,18 @@ impl ProcessorDescriptor {
         self
     }
 
-    pub fn with_config(mut self, fields: Vec<ConfigField>) -> Self {
-        self.config = fields;
+    pub fn with_runtime(mut self, runtime: ProcessorRuntime) -> Self {
+        self.runtime = runtime;
         self
     }
 
-    pub fn with_config_field(mut self, field: ConfigField) -> Self {
-        self.config.push(field);
+    pub fn with_entrypoint(mut self, entrypoint: impl Into<String>) -> Self {
+        self.entrypoint = Some(entrypoint.into());
+        self
+    }
+
+    pub fn with_config_schema(mut self, schema: impl Into<String>) -> Self {
+        self.config_schema = Some(schema.into());
         self
     }
 

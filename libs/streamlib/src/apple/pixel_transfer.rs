@@ -14,7 +14,7 @@ mod ffi {
     use super::*;
     use std::ffi::c_void;
 
-    #[allow(clashing_extern_declarations)]
+    #[allow(clashing_extern_declarations, dead_code)]
     #[link(name = "CoreVideo", kind = "framework")]
     extern "C" {
         pub fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
@@ -52,10 +52,13 @@ mod ffi {
 /// GPU-accelerated pixel format converter using VTPixelTransferSession.
 pub struct PixelTransferSession {
     session: ffi::VTPixelTransferSessionRef,
+    #[allow(dead_code)]
     device: Arc<GpuDevice>,
+    #[allow(dead_code)]
     command_queue: RhiCommandQueue,
 }
 
+#[allow(dead_code)]
 impl PixelTransferSession {
     /// Creates a new pixel transfer session.
     pub fn new(device: Arc<GpuDevice>) -> Result<Self> {
@@ -94,6 +97,7 @@ impl PixelTransferSession {
     }
 
     /// Converts an RGBA texture to NV12 CVPixelBuffer.
+    #[allow(dead_code)]
     pub fn convert_to_nv12(
         &self,
         texture: &StreamTexture,
@@ -124,6 +128,7 @@ impl PixelTransferSession {
     }
 
     /// Step 1: Uses Metal blit to copy texture data into RGBA CVPixelBuffer
+    #[allow(dead_code)]
     fn blit_to_rgba_pixel_buffer(
         &self,
         texture: &StreamTexture,

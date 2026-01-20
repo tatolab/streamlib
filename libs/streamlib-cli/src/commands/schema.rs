@@ -6,7 +6,9 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use streamlib_schema::{codegen, parser, SchemaDefinition, SchemaRegistry};
+use streamlib_schema::{
+    codegen, parse_processor_yaml_file, parser, SchemaDefinition, SchemaRegistry,
+};
 
 /// Configuration from streamlib.toml
 #[derive(Debug, Deserialize, Default)]
@@ -389,4 +391,46 @@ pub fn list() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Validate a processor YAML schema file.
+pub fn validate_processor(path: &Path) -> Result<()> {
+    println!("Validating processor schema: {}", path.display());
+
+    match parse_processor_yaml_file(path) {
+        Ok(schema) => {
+            println!();
+            println!("  Name:        {}", schema.name);
+            println!("  Version:     {}", schema.version);
+            if let Some(desc) = &schema.description {
+                println!("  Description: {}", desc);
+            }
+            if let Some(runtime) = &schema.runtime {
+                println!("  Runtime:     {:?}", runtime);
+            }
+            println!("  Execution:   {:?}", schema.execution);
+            if let Some(config) = &schema.config {
+                println!("  Config:      {} (schema: {})", config.name, config.schema);
+            }
+            if !schema.inputs.is_empty() {
+                println!("  Inputs:");
+                for input in &schema.inputs {
+                    println!("    - {} ({})", input.name, input.schema);
+                }
+            }
+            if !schema.outputs.is_empty() {
+                println!("  Outputs:");
+                for output in &schema.outputs {
+                    println!("    - {} ({})", output.name, output.schema);
+                }
+            }
+            println!();
+            println!("Processor schema is valid.");
+            Ok(())
+        }
+        Err(e) => {
+            println!();
+            anyhow::bail!("Validation failed: {}", e);
+        }
+    }
 }

@@ -9,33 +9,40 @@
 //! - `OutputLink` module with port markers
 //! - Processor trait implementation
 
+#[allow(unused_imports)]
 use crate::analysis::AnalysisResult;
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
+#[allow(unused_imports)]
 use streamlib_codegen_shared::ProcessExecution;
+use streamlib_schema::ProcessorSchema;
+use syn::ItemStruct;
 
-/// Generate a module wrapping the processor and port markers.
-pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
-    let module_name = &analysis.struct_name;
+// ============================================================================
+// YAML-based code generation
+// ============================================================================
 
-    let processor_struct = generate_processor_struct(analysis);
-    let input_link_module = generate_input_link_module(analysis);
-    let output_link_module = generate_output_link_module(analysis);
-    let processor_impl = generate_processor_impl(analysis);
+/// Generate a processor module from a YAML ProcessorSchema.
+pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchema) -> TokenStream {
+    let module_name = &item.ident;
 
-    let config_type = analysis
-        .config_field_type
+    // Derive config type from schema reference if present
+    let config_type = schema
+        .config
         .as_ref()
-        .map(|ty| quote! { #ty })
+        .map(|c| derive_config_type_from_schema(&c.schema))
         .unwrap_or_else(|| quote! { ::streamlib::core::EmptyConfig });
 
-    let unsafe_send_impl = if analysis.processor_attrs.unsafe_send {
-        quote! {
-            unsafe impl Send for Processor {}
-        }
-    } else {
-        quote! {}
-    };
+    let config_field_name = schema
+        .config
+        .as_ref()
+        .map(|c| Ident::new(&c.name, Span::call_site()));
+
+    let processor_struct = generate_processor_struct_from_schema(schema, &config_field_name);
+    let input_link_module = generate_input_link_module_from_schema(schema);
+    let output_link_module = generate_output_link_module_from_schema(schema);
+    let processor_impl =
+        generate_processor_impl_from_schema(schema, &config_type, &config_field_name);
 
     // Auto-registration via inventory crate
     let inventory_submit = quote! {
@@ -69,168 +76,168 @@ pub fn generate_processor_module(analysis: &AnalysisResult) -> TokenStream {
 
             #processor_impl
 
-            #unsafe_send_impl
-
             #inventory_submit
         }
     }
 }
 
-/// Generate the Processor struct with public fields
-fn generate_processor_struct(analysis: &AnalysisResult) -> TokenStream {
-    // Legacy port fields removed - use iceoryx2 ports via inputs = [...] / outputs = [...] syntax
+/// Derive a Rust config type from a schema reference.
+///
+/// For "com.example.blur.config@1.0.0", derives "BlurConfig" as the type name.
+/// The actual type must be defined by the user and match this name.
+fn derive_config_type_from_schema(schema_ref: &str) -> TokenStream {
+    // Extract the name part before @ (e.g., "com.example.blur.config")
+    let name_part = schema_ref.split('@').next().unwrap_or(schema_ref);
 
-    let config_field = analysis
-        .config_field_name
-        .as_ref()
-        .zip(analysis.config_field_type.as_ref())
-        .map(|(name, ty)| quote! { pub #name: #ty, })
-        .unwrap_or_default();
+    // Get the last segment (e.g., "config" from "com.example.blur.config")
+    let last_segment = name_part.split('.').next_back().unwrap_or(name_part);
 
-    let state_fields: Vec<TokenStream> = analysis
-        .state_fields
-        .iter()
-        .map(|field| {
-            let name = &field.field_name;
-            let ty = &field.field_type;
-            quote! { pub #name: #ty }
-        })
-        .collect();
+    // Convert to PascalCase (e.g., "blur_config" -> "BlurConfig")
+    let pascal_name = to_pascal_case(last_segment);
+    let ident = Ident::new(&pascal_name, Span::call_site());
 
-    // Generate iceoryx2-based IPC fields if new port syntax is used
-    let ipc_input_field = if !analysis.processor_attrs.inputs.is_empty() {
+    quote! { #ident }
+}
+
+/// Convert a string to PascalCase.
+fn to_pascal_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = true;
+
+    for c in s.chars() {
+        if c == '_' || c == '-' || c == '.' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+/// Generate the Processor struct from schema.
+fn generate_processor_struct_from_schema(
+    schema: &ProcessorSchema,
+    config_field_name: &Option<Ident>,
+) -> TokenStream {
+    let config_field = config_field_name.as_ref().map(|name| {
+        quote! { pub #name: Config, }
+    });
+
+    // Generate iceoryx2-based IPC fields if ports are defined
+    let ipc_input_field = if !schema.inputs.is_empty() {
         quote! { pub inputs: ::streamlib::iceoryx2::InputMailboxes, }
     } else {
         quote! {}
     };
 
-    let ipc_output_field = if !analysis.processor_attrs.outputs.is_empty() {
+    let ipc_output_field = if !schema.outputs.is_empty() {
         quote! { pub outputs: ::streamlib::iceoryx2::OutputWriter, }
     } else {
         quote! {}
     };
+
+    // Generate state fields from schema
+    let state_fields: Vec<TokenStream> = schema
+        .state
+        .iter()
+        .map(|field| {
+            let field_name = Ident::new(&field.name, Span::call_site());
+            let field_type: TokenStream = field.field_type.parse().unwrap_or_else(|_| {
+                // Fallback for complex types
+                let ty = Ident::new(&field.field_type, Span::call_site());
+                quote! { #ty }
+            });
+            quote! { pub #field_name: #field_type, }
+        })
+        .collect();
 
     quote! {
         pub struct Processor {
             #ipc_input_field
             #ipc_output_field
             #config_field
-            #(#state_fields,)*
+            #(#state_fields)*
         }
     }
 }
 
-/// Generate InputLink module with port markers (empty - legacy port markers removed)
-fn generate_input_link_module(_analysis: &AnalysisResult) -> TokenStream {
-    // Legacy port markers removed - use iceoryx2 ports via inputs = [...] syntax
-    quote! { pub mod InputLink {} }
-}
-
-/// Generate OutputLink module with port markers (empty - legacy port markers removed)
-fn generate_output_link_module(_analysis: &AnalysisResult) -> TokenStream {
-    // Legacy port markers removed - use iceoryx2 ports via outputs = [...] syntax
-    quote! { pub mod OutputLink {} }
-}
-
-/// Generate Processor trait implementation
-fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
-    // Use custom name from attribute, or fall back to struct name
-    let processor_name = analysis
-        .processor_attrs
-        .name
-        .clone()
-        .unwrap_or_else(|| analysis.struct_name.to_string());
-
-    let config_type = analysis
-        .config_field_type
-        .as_ref()
-        .map(|ty| quote! { #ty })
-        .unwrap_or_else(|| quote! { ::streamlib::core::EmptyConfig });
-
-    let from_config_body = generate_from_config(analysis);
-
-    // Generate execution config based on parsed execution_mode
-    let execution_variant = match &analysis.processor_attrs.execution_mode {
-        Some(ProcessExecution::Continuous { interval_ms }) => {
-            quote! { ::streamlib::core::ProcessExecution::Continuous { interval_ms: #interval_ms } }
-        }
-        Some(ProcessExecution::Reactive) => {
-            quote! { ::streamlib::core::ProcessExecution::Reactive }
-        }
-        Some(ProcessExecution::Manual) => {
-            quote! { ::streamlib::core::ProcessExecution::Manual }
-        }
-        // Default: Reactive (process() called when input data arrives)
-        None => quote! { ::streamlib::core::ProcessExecution::Reactive },
-    };
-
-    let descriptor_impl = generate_descriptor(analysis);
-    // Legacy link methods removed - iceoryx2 ports use InputMailboxes/OutputWriter
-    let iceoryx2_accessors = generate_iceoryx2_accessors(analysis);
-
-    let update_config = analysis.config_field_name.as_ref().map(|name| {
-        quote! {
-            fn update_config(&mut self, config: Self::Config) -> ::streamlib::core::Result<()> {
-                self.#name = config;
-                Ok(())
+/// Generate InputLink module from schema.
+fn generate_input_link_module_from_schema(schema: &ProcessorSchema) -> TokenStream {
+    let port_markers: Vec<TokenStream> = schema
+        .inputs
+        .iter()
+        .map(|port| {
+            let port_name = Ident::new(&port.name, proc_macro2::Span::call_site());
+            quote! {
+                pub struct #port_name;
+                impl ::streamlib::core::InputPortMarker for #port_name {
+                    const PORT_NAME: &'static str = stringify!(#port_name);
+                    type Processor = super::Processor;
+                }
             }
-        }
-    });
+        })
+        .collect();
 
-    // Generate execution mode description for debugging (uses Display impl)
-    let execution_description = analysis
-        .processor_attrs
-        .execution_mode
-        .as_ref()
-        .map(|m| m.to_string())
-        .unwrap_or_else(|| "Reactive (default)".to_string());
+    quote! {
+        pub mod InputLink {
+            #(#port_markers)*
+        }
+    }
+}
 
-    // Determine which mode-specific trait to use based on execution mode
-    let processor_trait = match &analysis.processor_attrs.execution_mode {
-        Some(ProcessExecution::Continuous { .. }) => {
-            quote! { ::streamlib::core::ContinuousProcessor }
-        }
-        Some(ProcessExecution::Manual) => {
-            quote! { ::streamlib::core::ManualProcessor }
-        }
-        Some(ProcessExecution::Reactive) | None => {
-            quote! { ::streamlib::core::ReactiveProcessor }
-        }
-    };
+/// Generate OutputLink module from schema.
+fn generate_output_link_module_from_schema(schema: &ProcessorSchema) -> TokenStream {
+    let port_markers: Vec<TokenStream> = schema
+        .outputs
+        .iter()
+        .map(|port| {
+            let port_name = Ident::new(&port.name, proc_macro2::Span::call_site());
+            quote! {
+                pub struct #port_name;
+                impl ::streamlib::core::OutputPortMarker for #port_name {
+                    const PORT_NAME: &'static str = stringify!(#port_name);
+                    type Processor = super::Processor;
+                }
+            }
+        })
+        .collect();
 
-    // Generate mode-specific implementations for process(), start(), and stop()
-    // Manual mode: start()/stop() work, process() returns error
-    // Continuous/Reactive: process() works, start()/stop() return error
-    let (process_impl, start_impl, stop_impl) = match &analysis.processor_attrs.execution_mode {
-        Some(ProcessExecution::Manual) => (
-            quote! {
-                Err(::streamlib::core::StreamError::Runtime(
-                    "process() is not valid for Manual execution mode. Use start() instead.".into()
-                ))
-            },
-            quote! {
-                <Self as ::streamlib::core::ManualProcessor>::start(self)
-            },
-            quote! {
-                <Self as ::streamlib::core::ManualProcessor>::stop(self)
-            },
-        ),
-        Some(ProcessExecution::Continuous { .. }) => (
-            quote! {
-                <Self as ::streamlib::core::ContinuousProcessor>::process(self)
-            },
-            quote! {
-                Err(::streamlib::core::StreamError::Runtime(
-                    "start() is only valid for Manual execution mode.".into()
-                ))
-            },
-            quote! {
-                Err(::streamlib::core::StreamError::Runtime(
-                    "stop() is only valid for Manual execution mode.".into()
-                ))
-            },
-        ),
-        Some(ProcessExecution::Reactive) | None => (
+    quote! {
+        pub mod OutputLink {
+            #(#port_markers)*
+        }
+    }
+}
+
+/// Generate Processor trait implementation from schema.
+fn generate_processor_impl_from_schema(
+    schema: &ProcessorSchema,
+    config_type: &TokenStream,
+    config_field_name: &Option<Ident>,
+) -> TokenStream {
+    use streamlib_schema::ProcessExecution;
+
+    let processor_name = &schema.name;
+    let description = schema.description.as_deref().unwrap_or("Processor");
+    let version = &schema.version;
+
+    // Derive execution mode from schema
+    let (
+        execution_variant,
+        execution_description,
+        processor_trait,
+        process_impl,
+        start_impl,
+        stop_impl,
+    ) = match &schema.execution {
+        ProcessExecution::Reactive => (
+            quote! { ::streamlib::core::ProcessExecution::Reactive },
+            "Reactive",
+            quote! { ::streamlib::core::ReactiveProcessor },
             quote! {
                 <Self as ::streamlib::core::ReactiveProcessor>::process(self)
             },
@@ -245,25 +252,63 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
                 ))
             },
         ),
+        ProcessExecution::Manual => (
+            quote! { ::streamlib::core::ProcessExecution::Manual },
+            "Manual",
+            quote! { ::streamlib::core::ManualProcessor },
+            quote! {
+                Err(::streamlib::core::StreamError::Runtime(
+                    "process() is only valid for Reactive/Continuous execution modes.".into()
+                ))
+            },
+            quote! {
+                <Self as ::streamlib::core::ManualProcessor>::start(self)
+            },
+            quote! {
+                <Self as ::streamlib::core::ManualProcessor>::stop(self)
+            },
+        ),
+        ProcessExecution::Continuous { interval_ms } => {
+            let interval = *interval_ms;
+            (
+                quote! { ::streamlib::core::ProcessExecution::Continuous { interval_ms: #interval } },
+                "Continuous",
+                quote! { ::streamlib::core::ContinuousProcessor },
+                quote! {
+                    <Self as ::streamlib::core::ContinuousProcessor>::process(self)
+                },
+                quote! {
+                    Err(::streamlib::core::StreamError::Runtime(
+                        "start() is only valid for Manual execution mode.".into()
+                    ))
+                },
+                quote! {
+                    Err(::streamlib::core::StreamError::Runtime(
+                        "stop() is only valid for Manual execution mode.".into()
+                    ))
+                },
+            )
+        }
     };
 
-    // Generate node() function - optionally extracts display_name from config field
-    let node_fn = if let Some(field_name) = &analysis.processor_attrs.display_name_from_config {
-        let field_ident = syn::Ident::new(field_name, proc_macro2::Span::call_site());
+    let from_config_body = generate_from_config_from_schema(schema, config_field_name);
+    let descriptor_impl = generate_descriptor_from_schema(schema, description, version);
+    let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
+
+    let update_config = config_field_name.as_ref().map(|name| {
         quote! {
-            /// Create a ProcessorSpec for adding this processor to a runtime.
-            pub fn node(config: #config_type) -> ::streamlib::core::ProcessorSpec {
-                let display_name = config.#field_ident.clone();
-                ::streamlib::core::ProcessorSpec {
-                    name: Self::NAME.to_string(),
-                    config: ::streamlib::serde_json::to_value(&config)
-                        .expect("Config serialization failed"),
-                    display_name: Some(display_name),
-                }
+            fn update_config(&mut self, config: Self::Config) -> ::streamlib::core::Result<()> {
+                self.#name = config;
+                Ok(())
             }
         }
-    } else {
-        quote! {
+    });
+
+    quote! {
+        impl Processor {
+            /// Processor name for registration and lookup.
+            pub const NAME: &'static str = #processor_name;
+
             /// Create a ProcessorSpec for adding this processor to a runtime.
             pub fn node(config: #config_type) -> ::streamlib::core::ProcessorSpec {
                 ::streamlib::core::ProcessorSpec {
@@ -273,26 +318,13 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
                     display_name: None,
                 }
             }
-        }
-    };
-
-    quote! {
-        impl Processor {
-            /// Processor name for registration and lookup.
-            pub const NAME: &'static str = #processor_name;
-
-            #node_fn
 
             /// Returns the execution mode for this processor.
-            ///
-            /// Useful for debugging and logging to understand when `process()` will be called.
             pub fn execution_mode(&self) -> ::streamlib::core::ProcessExecution {
                 #execution_variant
             }
 
             /// Returns a human-readable description of the execution mode.
-            ///
-            /// Useful for debug output and logs.
             pub fn execution_mode_description(&self) -> &'static str {
                 #execution_description
             }
@@ -350,19 +382,19 @@ fn generate_processor_impl(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate from_config method
-fn generate_from_config(analysis: &AnalysisResult) -> TokenStream {
-    // Legacy port_inits removed - use iceoryx2 ports via inputs = [...] / outputs = [...] syntax
-
+/// Generate from_config method from schema.
+fn generate_from_config_from_schema(
+    schema: &ProcessorSchema,
+    config_field_name: &Option<Ident>,
+) -> TokenStream {
     // Generate iceoryx2-based IPC field initializers
-    let ipc_input_init = if !analysis.processor_attrs.inputs.is_empty() {
-        let add_port_calls: Vec<TokenStream> = analysis
-            .processor_attrs
+    let ipc_input_init = if !schema.inputs.is_empty() {
+        let add_port_calls: Vec<TokenStream> = schema
             .inputs
             .iter()
             .map(|port| {
                 let name = &port.name;
-                let history = port.history.unwrap_or(1);
+                let history = 1usize; // Default history depth
                 quote! { inputs.add_port(#name, #history); }
             })
             .collect();
@@ -377,33 +409,29 @@ fn generate_from_config(analysis: &AnalysisResult) -> TokenStream {
         quote! {}
     };
 
-    let ipc_output_init = if !analysis.processor_attrs.outputs.is_empty() {
-        // Note: For outputs, the dest_port is set during wiring, not at construction time.
-        // We just store the schema for now; add_port will be called during wiring.
+    let ipc_output_init = if !schema.outputs.is_empty() {
         quote! { outputs: ::streamlib::iceoryx2::OutputWriter::new(), }
     } else {
         quote! {}
     };
 
-    let config_init = analysis
-        .config_field_name
+    let config_init = config_field_name
         .as_ref()
-        .map(|_| quote! { config: config, })
+        .map(|name| quote! { #name: config, })
         .unwrap_or_default();
 
-    let state_inits: Vec<TokenStream> = analysis
-        .state_fields
+    // Generate state field initializers
+    let state_inits: Vec<TokenStream> = schema
+        .state
         .iter()
         .map(|field| {
-            let name = &field.field_name;
-            if let Some(expr) = &field.attributes.default_expr {
-                let tokens: TokenStream = expr
-                    .parse()
-                    .unwrap_or_else(|_| quote! { Default::default() });
-                quote! { #name: #tokens }
-            } else {
-                quote! { #name: Default::default() }
-            }
+            let field_name = Ident::new(&field.name, Span::call_site());
+            let default_expr: TokenStream = field
+                .default
+                .as_ref()
+                .map(|d| d.parse().unwrap_or_else(|_| quote! { Default::default() }))
+                .unwrap_or_else(|| quote! { Default::default() });
+            quote! { #field_name: #default_expr, }
         })
         .collect();
 
@@ -413,43 +441,34 @@ fn generate_from_config(analysis: &AnalysisResult) -> TokenStream {
                 #ipc_input_init
                 #ipc_output_init
                 #config_init
-                #(#state_inits,)*
+                #(#state_inits)*
             })
         }
     }
 }
 
-/// Generate descriptor method
-fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
-    // Use custom name from attribute, or fall back to struct name
-    let name = analysis
-        .processor_attrs
-        .name
-        .clone()
-        .unwrap_or_else(|| analysis.struct_name.to_string());
+/// Generate descriptor method from schema.
+fn generate_descriptor_from_schema(
+    schema: &ProcessorSchema,
+    description: &str,
+    version: &str,
+) -> TokenStream {
+    let name = &schema.name;
+    let repository = "https://github.com/tatolab/streamlib";
 
-    let desc = analysis
-        .processor_attrs
-        .description
-        .as_deref()
-        .unwrap_or("Processor");
-
-    // Legacy field-based input/output ports removed
-    // Use iceoryx2 ports via inputs = [...] / outputs = [...] syntax
-
-    // iceoryx2-based input ports (from processor attribute)
-    let ipc_input_ports: Vec<TokenStream> = analysis
-        .processor_attrs
+    // iceoryx2-based input ports
+    let ipc_input_ports: Vec<TokenStream> = schema
         .inputs
         .iter()
         .map(|p| {
             let port_name = &p.name;
-            let schema = &p.schema;
+            let port_schema = &p.schema;
+            let port_desc = p.description.as_deref().unwrap_or("");
             quote! {
                 .with_input(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    description: String::new(),
-                    schema: #schema.to_string(),
+                    description: #port_desc.to_string(),
+                    schema: #port_schema.to_string(),
                     required: true,
                     is_iceoryx2: true,
                 })
@@ -457,19 +476,19 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
-    // New iceoryx2-based output ports (from processor attribute)
-    let ipc_output_ports: Vec<TokenStream> = analysis
-        .processor_attrs
+    // iceoryx2-based output ports
+    let ipc_output_ports: Vec<TokenStream> = schema
         .outputs
         .iter()
         .map(|p| {
             let port_name = &p.name;
-            let schema = &p.schema;
+            let port_schema = &p.schema;
+            let port_desc = p.description.as_deref().unwrap_or("");
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
-                    description: String::new(),
-                    schema: #schema.to_string(),
+                    description: #port_desc.to_string(),
+                    schema: #port_schema.to_string(),
                     required: true,
                     is_iceoryx2: true,
                 })
@@ -477,24 +496,21 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
         })
         .collect();
 
-    // Default version and repository for built-in processors
-    let version = "0.1.0";
-    let repository = "https://github.com/tatolab/streamlib";
-
-    // Generate config fields call if config type is available
-    let config_fields = analysis.config_field_type.as_ref().map(|config_type| {
+    // Config schema reference (if present)
+    let config_schema = schema.config.as_ref().map(|c| {
+        let schema_ref = &c.schema;
         quote! {
-            .with_config(<#config_type as ::streamlib::core::ConfigDescriptor>::config_fields())
+            .with_config_schema(#schema_ref)
         }
     });
 
     quote! {
         fn descriptor() -> Option<::streamlib::core::ProcessorDescriptor> {
             Some(
-                ::streamlib::core::ProcessorDescriptor::new(#name, #desc)
+                ::streamlib::core::ProcessorDescriptor::new(#name, #description)
                     .with_version(#version)
                     .with_repository(#repository)
-                    #config_fields
+                    #config_schema
                     #(#ipc_input_ports)*
                     #(#ipc_output_ports)*
             )
@@ -502,13 +518,12 @@ fn generate_descriptor(analysis: &AnalysisResult) -> TokenStream {
     }
 }
 
-/// Generate iceoryx2 accessor methods for processors that use iceoryx2 ports.
-fn generate_iceoryx2_accessors(analysis: &AnalysisResult) -> TokenStream {
-    let has_iceoryx2_outputs = !analysis.processor_attrs.outputs.is_empty();
-    let has_iceoryx2_inputs = !analysis.processor_attrs.inputs.is_empty();
+/// Generate iceoryx2 accessor methods from schema.
+fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStream {
+    let has_iceoryx2_outputs = !schema.outputs.is_empty();
+    let has_iceoryx2_inputs = !schema.inputs.is_empty();
 
     if !has_iceoryx2_outputs && !has_iceoryx2_inputs {
-        // No iceoryx2 ports, use default implementations (return false/None)
         return quote! {};
     }
 

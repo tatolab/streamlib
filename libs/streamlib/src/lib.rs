@@ -24,11 +24,9 @@ pub mod iceoryx2;
 pub mod schemas;
 
 // Re-export attribute macros for processor syntax:
-// - #[streamlib::processor(execution = Reactive)] - Main processor definition
-// - #[streamlib::input] - Input port marker
-// - #[streamlib::output] - Output port marker
-// - #[streamlib::config] - Config field marker
-pub use streamlib_macros::{config, input, output, processor, ConfigDescriptor};
+// - #[streamlib::processor("path/to/schema.yaml")] - YAML-based processor definition
+// - #[derive(ConfigDescriptor)] - Config field metadata derive macro
+pub use streamlib_macros::{processor, ConfigDescriptor};
 
 pub use core::{
     are_synchronized,

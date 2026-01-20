@@ -18,9 +18,6 @@ path = "src/main.rs"
 # Core library (bundles all Rust processors)
 streamlib = { path = "../streamlib" }
 
-# Python bindings (bundles Python host processors)
-streamlib-python = { path = "../streamlib-python" }
-
 # Schema definition and codegen
 streamlib-schema = { path = "../streamlib-schema" }
 

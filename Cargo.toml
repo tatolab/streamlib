@@ -7,23 +7,24 @@ members = [
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
-    "libs/streamlib-python",    # Python bindings via PyO3
+    # "libs/streamlib-python",    # Python bindings via PyO3 (temporarily disabled - host processors obsolete with multi-runtime architecture)
     "libs/streamlib-schema",    # Schema definition, parsing, and code generation
-    "examples/simple-pipeline", # Example: Basic processing pipeline
-    "examples/camera-display",  # Example: Camera capture and display
-    "examples/camera-audio-recorder", # Example: Record camera + audio to MP4
-    "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP
-    "examples/audio-mixer-demo", # Example: Mixing multiple audio streams
-    "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare
-    "examples/whep-player",     # Example: WHEP (WebRTC egress) player
-    "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization
-    "examples/graph-json-export",         # Example: Graph data structure JSON export (no runtime)
+    # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
+    # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
+    # "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)
+    # "examples/camera-audio-recorder", # Example: Record camera + audio to MP4 (uses camera, audio, mp4 writer)
+    # "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
+    # "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
+    # "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
+    # "examples/whep-player",     # Example: WHEP (WebRTC egress) player (uses WebRTC WHEP)
+    # "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization (uses CameraProcessor, etc.)
+    # "examples/graph-json-export",         # Example: Graph data structure JSON export (uses custom processors with old syntax)
     "examples/api-server",                # Example: Minimal API server (runtime + wait_for_signal)
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
-    "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
-    "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline
-    "examples/camera-dylib-display/rust", # Plugin: Rust processors for camera-dylib-display
+    # "examples/camera-python-display",     # Example: Camera → Python → Display pipeline (temporarily disabled - depends on streamlib-python)
+    # "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline (temporarily disabled - depends on streamlib-python)
+    # "examples/camera-dylib-display/rust", # Plugin: Rust processors for camera-dylib-display
     "examples/iceoryx2-ipc-test",         # Example: iceoryx2 IPC evaluation
     "examples/iceoryx2-producer-consumer", # Example: iceoryx2 pub/sub pipeline test
 ]

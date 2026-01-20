@@ -29,18 +29,8 @@ impl Default for AudioChannelConverterConfig {
     }
 }
 
-#[crate::processor(
-    execution = Reactive,
-    description = "Converts mono audio to stereo using configurable channel mapping",
-    inputs = [input("audio_in", schema = "com.tatolab.audioframe.1ch@1.0.0")],
-    outputs = [output("audio_out", schema = "com.tatolab.audioframe.2ch@1.0.0")]
-)]
-pub struct AudioChannelConverterProcessor {
-    #[crate::config]
-    config: AudioChannelConverterConfig,
-
-    frame_counter: u64,
-}
+#[crate::processor("schemas/processors/audio_channel_converter.yaml")]
+pub struct AudioChannelConverterProcessor;
 
 impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processor {
     fn setup(
@@ -103,7 +93,8 @@ impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processo
                 frame_index: self.frame_counter,
             };
 
-            let bytes = output_frame.to_msgpack()
+            let bytes = output_frame
+                .to_msgpack()
                 .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
             self.outputs.write("audio_out", &bytes)?;
             self.frame_counter += 1;

@@ -28,7 +28,6 @@ pub mod time;
 
 pub mod thread_priority;
 
-pub use crate::metal::MetalDevice;
 pub use pixel_transfer::PixelTransferSession;
 
 // TODO: Migrate to iceoryx2 API
@@ -45,8 +44,9 @@ pub use pixel_transfer::PixelTransferSession;
 // Note: WebRTC types (WhipClient, WhepClient, etc.) are now in core::streaming
 // Note: WHIP/WHEP processors are now in core::processors
 
-// Re-export videotoolbox encoder (VideoCodec, H264Profile, VideoEncoderConfig are in core::codec)
-pub use videotoolbox::VideoToolboxEncoder;
+// TODO: Re-export when processors are migrated to iceoryx2
+// pub use crate::metal::MetalDevice;
+// pub use videotoolbox::VideoToolboxEncoder;
 
 #[cfg(test)]
 mod tests {
