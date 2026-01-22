@@ -271,7 +271,13 @@ pub fn fourcc_to_string(fourcc: u32) -> String {
     let bytes = fourcc.to_be_bytes();
     let chars: Vec<char> = bytes
         .iter()
-        .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '?' })
+        .map(|&b| {
+            if b.is_ascii_graphic() || b == b' ' {
+                b as char
+            } else {
+                '?'
+            }
+        })
         .collect();
     chars.into_iter().collect()
 }

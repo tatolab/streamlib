@@ -301,9 +301,9 @@ impl BrokerService for BrokerGrpcService {
         #[cfg(target_os = "macos")]
         {
             use crate::xpc_ffi::{
-                fourcc_to_string, CFRelease, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow,
-                IOSurfaceGetHeight, IOSurfaceGetPixelFormat, IOSurfaceGetWidth,
-                IOSurfaceLookupFromMachPort, IOSurfaceLock, IOSurfaceUnlock, kIOSurfaceLockReadOnly,
+                fourcc_to_string, kIOSurfaceLockReadOnly, CFRelease, IOSurfaceGetBaseAddress,
+                IOSurfaceGetBytesPerRow, IOSurfaceGetHeight, IOSurfaceGetPixelFormat,
+                IOSurfaceGetWidth, IOSurfaceLock, IOSurfaceLookupFromMachPort, IOSurfaceUnlock,
             };
 
             let surface_id = &request.get_ref().surface_id;

@@ -5,13 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 /// Configuration for C major chord generation
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChordGeneratorConfig {
-
     /// Output amplitude (0.0 to 1.0)
     #[serde(rename = "amplitude")]
     pub amplitude: f64,
@@ -24,4 +21,3 @@ pub struct ChordGeneratorConfig {
     #[serde(rename = "sample_rate")]
     pub sample_rate: u32,
 }
-

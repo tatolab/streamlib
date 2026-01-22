@@ -5,13 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 /// Configuration for CLAP audio plugin processing
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EffectConfig {
-
     /// Processing buffer size in samples
     #[serde(rename = "buffer_size")]
     pub buffer_size: u32,
@@ -32,4 +29,3 @@ pub struct EffectConfig {
     #[serde(rename = "sample_rate")]
     pub sample_rate: u32,
 }
-

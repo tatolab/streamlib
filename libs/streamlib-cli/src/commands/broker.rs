@@ -543,10 +543,7 @@ pub async fn surfaces(runtime_id: Option<&str>) -> Result<()> {
     for surface in &response.surfaces {
         println!("  Surface: {}", surface.surface_id);
         println!("    Runtime:   {}", surface.runtime_id);
-        println!(
-            "    Size:      {}x{}",
-            surface.width, surface.height
-        );
+        println!("    Size:      {}x{}", surface.width, surface.height);
         println!("    Format:    {}", surface.format);
         println!("    Checkouts: {}", surface.checkout_count);
         println!("    Age:       {}ms", surface.registered_at_unix_ms);

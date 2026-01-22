@@ -45,8 +45,12 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
         generate_processor_struct_from_schema(schema, &config_field_name, &custom_fields);
     let input_link_module = generate_input_link_module_from_schema(schema);
     let output_link_module = generate_output_link_module_from_schema(schema);
-    let processor_impl =
-        generate_processor_impl_from_schema(schema, &config_type, &config_field_name, &custom_fields);
+    let processor_impl = generate_processor_impl_from_schema(
+        schema,
+        &config_type,
+        &config_field_name,
+        &custom_fields,
+    );
 
     // Auto-registration via inventory crate
     let inventory_submit = quote! {
@@ -331,7 +335,8 @@ fn generate_processor_impl_from_schema(
         }
     };
 
-    let from_config_body = generate_from_config_from_schema(schema, config_field_name, custom_fields);
+    let from_config_body =
+        generate_from_config_from_schema(schema, config_field_name, custom_fields);
     let descriptor_impl = generate_descriptor_from_schema(schema, description, version);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
@@ -436,7 +441,7 @@ fn generate_from_config_from_schema(
             .map(|port| {
                 let name = &port.name;
                 let history = 1usize; // Default history depth
-                // Default read mode (SkipToLatest) - TODO: add read_mode to schema
+                                      // Default read mode (SkipToLatest) - TODO: add read_mode to schema
                 quote! { inputs.add_port(#name, #history, Default::default()); }
             })
             .collect();

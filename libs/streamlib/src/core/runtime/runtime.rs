@@ -212,16 +212,25 @@ impl StreamRuntime {
             use crate::core::context::SurfaceStore;
 
             if let Ok(xpc_service_name) = std::env::var("STREAMLIB_XPC_SERVICE_NAME") {
-                tracing::info!("[start] Initializing SurfaceStore with XPC service '{}'...", xpc_service_name);
-                let surface_store = SurfaceStore::new(xpc_service_name, self.runtime_id.to_string());
+                tracing::info!(
+                    "[start] Initializing SurfaceStore with XPC service '{}'...",
+                    xpc_service_name
+                );
+                let surface_store =
+                    SurfaceStore::new(xpc_service_name, self.runtime_id.to_string());
                 if let Err(e) = surface_store.connect() {
-                    tracing::warn!("[start] SurfaceStore XPC connection failed (surface sharing disabled): {}", e);
+                    tracing::warn!(
+                        "[start] SurfaceStore XPC connection failed (surface sharing disabled): {}",
+                        e
+                    );
                 } else {
                     gpu.set_surface_store(surface_store);
                     tracing::info!("[start] SurfaceStore initialized");
                 }
             } else {
-                tracing::debug!("[start] STREAMLIB_XPC_SERVICE_NAME not set, surface sharing disabled");
+                tracing::debug!(
+                    "[start] STREAMLIB_XPC_SERVICE_NAME not set, surface sharing disabled"
+                );
             }
         }
 

@@ -4,13 +4,13 @@
 use crate::core::frames::VideoFrame;
 use crate::core::rhi::{PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiTextureCache};
 use crate::core::{Result, RuntimeContext, StreamError};
+use crossbeam_channel::{Receiver, Sender};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
-use crossbeam_channel::{Receiver, Sender};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
@@ -423,12 +423,10 @@ impl AppleDisplayProcessor::Processor {
             // Title change must be dispatched to main thread
             let title_owned = title.to_string();
             use dispatch2::DispatchQueue;
-            DispatchQueue::main().exec_async(move || {
-                unsafe {
-                    let window = &*(window_addr as *const NSWindow);
-                    let title_string = NSString::from_str(&title_owned);
-                    window.setTitle(&title_string);
-                }
+            DispatchQueue::main().exec_async(move || unsafe {
+                let window = &*(window_addr as *const NSWindow);
+                let title_string = NSString::from_str(&title_owned);
+                window.setTitle(&title_string);
             });
         }
     }
@@ -444,7 +442,12 @@ impl AppleDisplayProcessor::Processor {
     ) -> (metal::MTLOrigin, metal::MTLSize) {
         use metal::{MTLOrigin, MTLSize};
 
-        match self.config.scaling_mode.clone().unwrap_or(ScalingMode::Letterbox) {
+        match self
+            .config
+            .scaling_mode
+            .clone()
+            .unwrap_or(ScalingMode::Letterbox)
+        {
             ScalingMode::Stretch => {
                 // Stretch to fill entire window (ignore aspect ratio)
                 (

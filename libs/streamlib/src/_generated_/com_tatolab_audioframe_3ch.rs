@@ -5,13 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 /// 3-channel audio frame (interleaved)
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Audioframe3Ch {
-
     /// Sequential frame counter (uint64 as string - parse to native uint64)
     #[serde(rename = "frame_index")]
     pub frame_index: String,
@@ -28,4 +25,3 @@ pub struct Audioframe3Ch {
     #[serde(rename = "timestamp_ns")]
     pub timestamp_ns: String,
 }
-

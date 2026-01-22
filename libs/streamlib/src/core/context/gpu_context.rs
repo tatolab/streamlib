@@ -282,11 +282,11 @@ impl GpuContext {
     /// Returns the buffer if found, or an error if not found anywhere.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
         // Check local cache first
-        if let Some(buffer) = self.pixel_buffer_pool_manager.get_from_cache(pool_id.as_str()) {
-            tracing::trace!(
-                "GpuContext::get_pixel_buffer: cache hit for '{}'",
-                pool_id
-            );
+        if let Some(buffer) = self
+            .pixel_buffer_pool_manager
+            .get_from_cache(pool_id.as_str())
+        {
+            tracing::trace!("GpuContext::get_pixel_buffer: cache hit for '{}'", pool_id);
             return Ok(buffer);
         }
 

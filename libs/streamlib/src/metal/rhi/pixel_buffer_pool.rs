@@ -8,7 +8,6 @@ use std::ptr::NonNull;
 use std::sync::mpsc::channel;
 
 use core_foundation::base::{CFTypeRef, TCFType};
-use parking_lot::RwLock;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFMutableDictionary;
 use core_foundation::number::CFNumber;
@@ -19,6 +18,7 @@ use objc2_core_video::{
     kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, CVPixelBufferPool,
 };
 use objc2_foundation::NSThread;
+use parking_lot::RwLock;
 
 use super::COREVIDEO_INIT_LOCK;
 use crate::apple::corevideo_ffi::{

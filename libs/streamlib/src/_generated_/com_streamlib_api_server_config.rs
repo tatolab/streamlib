@@ -5,13 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 /// Configuration for the runtime API server
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiServerConfig {
-
     /// Host address to bind to
     #[serde(rename = "host")]
     pub host: String,
@@ -28,4 +25,3 @@ pub struct ApiServerConfig {
     #[serde(rename = "port")]
     pub port: u16,
 }
-

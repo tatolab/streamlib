@@ -21,11 +21,12 @@ use crate::core::{Result, StreamError};
 #[cfg(target_os = "macos")]
 use crate::apple::xpc_ffi::{
     _NSConcreteMallocBlock, xpc_connection_cancel, xpc_connection_create_mach_service,
-    xpc_connection_resume, xpc_connection_send_message, xpc_connection_send_message_with_reply_sync,
-    xpc_connection_set_event_handler, xpc_connection_t, xpc_dictionary_copy_mach_send,
-    xpc_dictionary_create, xpc_dictionary_get_string, xpc_dictionary_set_mach_send,
-    xpc_dictionary_set_string, xpc_error_connection_interrupted, xpc_error_connection_invalid,
-    xpc_is_error, xpc_object_t, xpc_release, Block, BlockDescriptor, BLOCK_FLAGS_NEEDS_FREE,
+    xpc_connection_resume, xpc_connection_send_message,
+    xpc_connection_send_message_with_reply_sync, xpc_connection_set_event_handler,
+    xpc_connection_t, xpc_dictionary_copy_mach_send, xpc_dictionary_create,
+    xpc_dictionary_get_string, xpc_dictionary_set_mach_send, xpc_dictionary_set_string,
+    xpc_error_connection_interrupted, xpc_error_connection_invalid, xpc_is_error, xpc_object_t,
+    xpc_release, Block, BlockDescriptor, BLOCK_FLAGS_NEEDS_FREE,
 };
 
 /// Surface metadata stored alongside the cached pixel buffer.
@@ -818,10 +819,7 @@ unsafe impl Sync for SurfaceStoreInner {}
 #[cfg(target_os = "macos")]
 unsafe fn create_xpc_event_handler() -> *mut c_void {
     // Trampoline function that handles XPC events
-    extern "C" fn event_handler_trampoline(
-        _block: *mut Block<()>,
-        event: xpc_object_t,
-    ) {
+    extern "C" fn event_handler_trampoline(_block: *mut Block<()>, event: xpc_object_t) {
         if xpc_is_error(event) {
             if event == xpc_error_connection_invalid() {
                 tracing::debug!("SurfaceStore: XPC connection invalid");

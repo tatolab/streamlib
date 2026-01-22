@@ -29,4 +29,3 @@ impl SimplePassthroughProcessor::Processor {
         self.config.scale = scale;
     }
 }
-

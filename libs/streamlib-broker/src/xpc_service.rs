@@ -12,10 +12,11 @@ use crate::state::BrokerState;
 use crate::xpc_ffi::{
     _NSConcreteMallocBlock, xpc_connection_cancel, xpc_connection_create_mach_service,
     xpc_connection_resume, xpc_connection_send_message, xpc_connection_set_event_handler,
-    xpc_dictionary_copy_mach_send, xpc_dictionary_create_reply, xpc_dictionary_get_remote_connection,
-    xpc_dictionary_get_string, xpc_dictionary_set_mach_send, xpc_dictionary_set_string,
-    xpc_error_connection_interrupted, xpc_error_connection_invalid, xpc_is_dictionary, xpc_is_error,
-    xpc_object_t, xpc_release, xpc_connection_t, Block, BlockDescriptor, BLOCK_FLAGS_NEEDS_FREE,
+    xpc_connection_t, xpc_dictionary_copy_mach_send, xpc_dictionary_create_reply,
+    xpc_dictionary_get_remote_connection, xpc_dictionary_get_string, xpc_dictionary_set_mach_send,
+    xpc_dictionary_set_string, xpc_error_connection_interrupted, xpc_error_connection_invalid,
+    xpc_is_dictionary, xpc_is_error, xpc_object_t, xpc_release, Block, BlockDescriptor,
+    BLOCK_FLAGS_NEEDS_FREE,
 };
 
 /// XPC service for surface store operations.
@@ -285,7 +286,10 @@ unsafe fn handle_register(context: &HandlerContext, message: xpc_object_t) {
     };
 
     // Register the surface with client-provided ID
-    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
+    let success =
+        context
+            .state
+            .register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
 
     if success {
         tracing::debug!(
@@ -464,7 +468,10 @@ unsafe fn handle_check_in(context: &HandlerContext, message: xpc_object_t) {
     };
 
     // Register the surface
-    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
+    let success =
+        context
+            .state
+            .register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
 
     if success {
         tracing::debug!(

@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, RuntimeContext};
 use crate::_generated_::Audioframe2Ch;
+use crate::core::{Result, RuntimeContext};
 
 struct SineOscillator {
     phase: f64,

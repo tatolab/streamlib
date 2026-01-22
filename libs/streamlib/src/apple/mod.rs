@@ -6,7 +6,6 @@ pub mod arkit;
 // pub mod audio_utils;
 pub mod corevideo_ffi;
 pub mod iosurface;
-pub mod xpc_ffi;
 pub mod media_clock;
 pub mod muxer;
 pub mod pixel_transfer;
@@ -14,6 +13,7 @@ pub mod texture;
 pub mod texture_pool_macos;
 pub mod videotoolbox;
 pub mod vimage_ffi;
+pub mod xpc_ffi;
 
 // Note: WebRTC module moved to core::streaming
 

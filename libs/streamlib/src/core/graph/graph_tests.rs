@@ -9,8 +9,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
-
 use serde_json::{json, Value as JsonValue};
 
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
@@ -20,12 +18,6 @@ use crate::core::JsonSerializableComponent;
 // =============================================================================
 // Mock Processor and Config
 // =============================================================================
-
-/// Mock config for testing.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct MockConfig {
-    pub label: String,
-}
 
 /// Mock processor for testing graph operations.
 #[crate::processor("schemas/processors/test/mock_processor.yaml")]
@@ -213,17 +205,13 @@ mod query_ops {
 
         graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()));
+            .add_v(MockProcessor::Processor::node(Default::default()));
         graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ));
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()));
         graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ));
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()));
 
         let ids = graph.traversal().v(()).ids();
         assert_eq!(ids.len(), 3);
@@ -235,16 +223,14 @@ mod query_ops {
 
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ));
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()));
 
         let found = graph.traversal().v(id.as_str()).first();
         assert!(found.is_some());
@@ -267,7 +253,7 @@ mod query_ops {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -289,16 +275,14 @@ mod query_ops {
 
         let id1 = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let id2 = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -315,7 +299,7 @@ mod query_ops {
         let mut graph = Graph::new();
         graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()));
+            .add_v(MockProcessor::Processor::node(Default::default()));
 
         let first = graph.traversal().v(()).first();
         assert!(first.is_some());
@@ -334,17 +318,13 @@ mod query_ops {
 
         graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()));
+            .add_v(MockProcessor::Processor::node(Default::default()));
         graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ));
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()));
         graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ));
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()));
 
         let types: Vec<_> = graph
             .traversal()
@@ -374,27 +354,21 @@ mod edge_query_ops {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream1_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream2_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -419,18 +393,14 @@ mod edge_query_ops {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -457,18 +427,14 @@ mod edge_query_ops {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -508,15 +474,13 @@ mod filter_ops {
 
         graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()));
+            .add_v(MockProcessor::Processor::node(Default::default()));
         graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()));
+            .add_v(MockProcessor::Processor::node(Default::default()));
         graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ));
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()));
 
         let mock_processors: Vec<_> = graph
             .traversal()
@@ -533,14 +497,14 @@ mod filter_ops {
 
         let id1 = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()));
+            .add_v(MockProcessor::Processor::node(Default::default()));
 
         graph
             .traversal_mut()
@@ -561,27 +525,21 @@ mod filter_ops {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream1_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream2_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -619,7 +577,7 @@ mod component_ops {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -648,7 +606,7 @@ mod component_ops {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -681,7 +639,7 @@ mod component_ops {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -716,7 +674,7 @@ mod component_ops {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -742,18 +700,14 @@ mod component_ops {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -801,7 +755,7 @@ mod mutation_persistence {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -837,7 +791,7 @@ mod mutation_persistence {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -871,7 +825,7 @@ mod mutation_persistence {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -890,18 +844,14 @@ mod mutation_persistence {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -938,7 +888,7 @@ mod real_world_scenarios {
         let mut graph = Graph::new();
         let id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -963,18 +913,14 @@ mod real_world_scenarios {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -1009,21 +955,21 @@ mod real_world_scenarios {
 
         let id1 = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let id2 = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let id3 = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -1064,21 +1010,21 @@ mod real_world_scenarios {
 
         let id1 = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let id2 = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()));
+            .add_v(MockProcessor::Processor::node(Default::default()));
 
         graph
             .traversal_mut()
@@ -1118,25 +1064,21 @@ mod real_world_scenarios {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let middle_id = graph
             .traversal_mut()
-            .add_v(MockProcessor::Processor::node(MockConfig::default()))
+            .add_v(MockProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -1144,10 +1086,10 @@ mod real_world_scenarios {
 
         graph.traversal_mut().add_e(
             OutputLinkPortRef::new(&upstream_id, "out1"),
-            InputLinkPortRef::new(&middle_id, "input"),
+            InputLinkPortRef::new(&middle_id, "in1"),
         );
         graph.traversal_mut().add_e(
-            OutputLinkPortRef::new(&middle_id, "output"),
+            OutputLinkPortRef::new(&middle_id, "out1"),
             InputLinkPortRef::new(&downstream_id, "in1"),
         );
 
@@ -1170,27 +1112,21 @@ mod edge_navigation {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream1_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream2_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -1215,27 +1151,21 @@ mod edge_navigation {
 
         let upstream1_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let upstream2_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -1260,18 +1190,14 @@ mod edge_navigation {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
@@ -1299,18 +1225,14 @@ mod edge_navigation {
 
         let upstream_id = graph
             .traversal_mut()
-            .add_v(MockOutputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id
             .to_string();
         let downstream_id = graph
             .traversal_mut()
-            .add_v(MockInputOnlyProcessor::Processor::node(
-                MockConfig::default(),
-            ))
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
             .first()
             .expect("should create processor")
             .id

@@ -5,13 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 /// Video frame for IPC - references GPU surface by ID
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Videoframe {
-
     /// Sequential frame counter (uint64 as string - parse to native uint64)
     #[serde(rename = "frame_index")]
     pub frame_index: String,
@@ -32,4 +29,3 @@ pub struct Videoframe {
     #[serde(rename = "width")]
     pub width: u32,
 }
-

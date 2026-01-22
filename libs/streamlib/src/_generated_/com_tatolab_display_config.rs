@@ -5,12 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 /// How video content is scaled within the window. Default: Letterbox
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum ScalingMode {
-
     #[serde(rename = "Crop")]
     #[default]
     Crop,
@@ -22,12 +19,10 @@ pub enum ScalingMode {
     Stretch,
 }
 
-
 /// Configuration for video display window (macOS/iOS)
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayConfig {
-
     /// Number of drawable buffers (2=double, 3=triple). Default: 2
     #[serde(rename = "drawable_count")]
     pub drawable_count: Option<u32>,
@@ -52,4 +47,3 @@ pub struct DisplayConfig {
     #[serde(rename = "width")]
     pub width: u32,
 }
-

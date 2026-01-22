@@ -46,14 +46,10 @@ struct JtdMetadata {
 
 pub fn run() -> Result<()> {
     // Verify jtd-codegen is available
-    let jtd_check = Command::new("jtd-codegen")
-        .arg("--version")
-        .output();
+    let jtd_check = Command::new("jtd-codegen").arg("--version").output();
 
     if jtd_check.is_err() {
-        anyhow::bail!(
-            "jtd-codegen not found. Install with: cargo install jtd-codegen"
-        );
+        anyhow::bail!("jtd-codegen not found. Install with: cargo install jtd-codegen");
     }
 
     let workspace_root = crate::workspace_root()?;
@@ -63,8 +59,8 @@ pub fn run() -> Result<()> {
     println!("Reading schemas from: {}", cargo_toml_path.display());
 
     // Read and parse Cargo.toml
-    let cargo_toml_content = fs::read_to_string(&cargo_toml_path)
-        .context("Failed to read libs/streamlib/Cargo.toml")?;
+    let cargo_toml_content =
+        fs::read_to_string(&cargo_toml_path).context("Failed to read libs/streamlib/Cargo.toml")?;
     let cargo_toml: CargoToml =
         toml::from_str(&cargo_toml_content).context("Failed to parse Cargo.toml")?;
 
@@ -114,8 +110,8 @@ pub fn run() -> Result<()> {
         // Write JSON to temp file (jtd-codegen uses filename for struct name)
         let json_filename = format!("{}.json", struct_name);
         let json_path = temp_dir.path().join(&json_filename);
-        let json_content = serde_json::to_string_pretty(&json_value)
-            .context("Failed to serialize to JSON")?;
+        let json_content =
+            serde_json::to_string_pretty(&json_value).context("Failed to serialize to JSON")?;
         fs::write(&json_path, &json_content)
             .with_context(|| format!("Failed to write {}", json_path.display()))?;
 
@@ -187,7 +183,8 @@ fn post_process_generated_code(code: &str, _struct_name: &str) -> Result<String>
 
         // Add Clone, PartialEq, Default to derives for both enums and structs
         if line.contains("#[derive(Debug, Serialize, Deserialize)]") {
-            result.push_str("#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n");
+            result
+                .push_str("#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n");
             continue;
         }
 
@@ -221,7 +218,10 @@ fn post_process_generated_code(code: &str, _struct_name: &str) -> Result<String>
         }
 
         // Make fields public
-        if line.starts_with("    ") && !line.trim().starts_with("#") && !line.trim().starts_with("//") {
+        if line.starts_with("    ")
+            && !line.trim().starts_with("#")
+            && !line.trim().starts_with("//")
+        {
             // Check if it's a field declaration (contains a colon but not in an attribute)
             let trimmed = line.trim();
             if trimmed.contains(": ") && !trimmed.starts_with("#") && !trimmed.starts_with("pub ") {
@@ -245,7 +245,7 @@ fn schema_name_to_struct_name(name: &str) -> String {
     let name = name.split('@').next().unwrap_or(name);
 
     // Get last segment
-    let last_segment = name.split('.').last().unwrap_or(name);
+    let last_segment = name.split('.').next_back().unwrap_or(name);
 
     // Handle special case for "config" suffix
     if last_segment == "config" {
@@ -266,11 +266,7 @@ fn schema_name_to_struct_name(name: &str) -> String {
         let segments: Vec<&str> = name.split('.').collect();
         if segments.len() >= 2 {
             let parent = segments[segments.len() - 2];
-            return format!(
-                "{}{}",
-                to_pascal_case(parent),
-                to_pascal_case(last_segment)
-            );
+            return format!("{}{}", to_pascal_case(parent), to_pascal_case(last_segment));
         }
     }
 

@@ -5,13 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 /// Configuration for camera capture (macOS/iOS)
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CameraConfig {
-
     /// Camera device unique ID. If None, uses default camera
     #[serde(rename = "device_id")]
     pub device_id: Option<String>,
@@ -24,4 +21,3 @@ pub struct CameraConfig {
     #[serde(rename = "min_fps")]
     pub min_fps: Option<f64>,
 }
-

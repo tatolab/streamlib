@@ -5,12 +5,11 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
 use crate::apple::iosurface::create_metal_texture_from_iosurface;
-use crate::core::rhi::{PixelFormat, RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferRef};
 use crate::core::rhi::GpuDevice;
+use crate::core::rhi::{PixelFormat, RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferRef};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
 use metal::foreign_types::ForeignTypeRef;
-use objc2_io_surface::IOSurface;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -20,6 +19,7 @@ use objc2_av_foundation::{
 };
 use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSString};
+use objc2_io_surface::IOSurface;
 use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -229,42 +229,42 @@ define_class!(
             let frame_num = ctx.frame_count.fetch_add(1, Ordering::Relaxed);
 
             // Acquire pooled buffer from GpuContext (pool is managed centrally)
-            let surface_id_str = match ctx.gpu_context.acquire_pixel_buffer(
-                width,
-                height,
-                PixelFormat::Bgra32,
-            ) {
-                Ok((pool_id, pooled_buffer)) => {
-                    // GPU blit from camera IOSurface to pooled IOSurface
-                    match blit_iosurface_to_pooled_buffer(
-                        ctx,
-                        camera_iosurface,
-                        &pooled_buffer,
-                        width,
-                        height,
-                    ) {
-                        Ok(()) => {
-                            // Use the PixelBufferPoolId directly - no need to extract IOSurfaceID
-                            // pooled_buffer is dropped here, releasing it back to the pool
-                            pool_id.to_string()
-                        }
-                        Err(e) => {
-                            if frame_num == 0 {
-                                eprintln!("[Camera] Blit failed: {}, falling back", e);
+            let surface_id_str =
+                match ctx
+                    .gpu_context
+                    .acquire_pixel_buffer(width, height, PixelFormat::Bgra32)
+                {
+                    Ok((pool_id, pooled_buffer)) => {
+                        // GPU blit from camera IOSurface to pooled IOSurface
+                        match blit_iosurface_to_pooled_buffer(
+                            ctx,
+                            camera_iosurface,
+                            &pooled_buffer,
+                            width,
+                            height,
+                        ) {
+                            Ok(()) => {
+                                // Use the PixelBufferPoolId directly - no need to extract IOSurfaceID
+                                // pooled_buffer is dropped here, releasing it back to the pool
+                                pool_id.to_string()
                             }
-                            // Blit failed, fall back to direct forwarding
-                            forward_camera_iosurface_directly(ctx, camera_iosurface)
+                            Err(e) => {
+                                if frame_num == 0 {
+                                    eprintln!("[Camera] Blit failed: {}, falling back", e);
+                                }
+                                // Blit failed, fall back to direct forwarding
+                                forward_camera_iosurface_directly(ctx, camera_iosurface)
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    if frame_num == 0 {
-                        eprintln!("[Camera] Pool acquire failed: {}, falling back", e);
+                    Err(e) => {
+                        if frame_num == 0 {
+                            eprintln!("[Camera] Pool acquire failed: {}, falling back", e);
+                        }
+                        // Pool exhausted or error, fall back to direct forwarding
+                        forward_camera_iosurface_directly(ctx, camera_iosurface)
                     }
-                    // Pool exhausted or error, fall back to direct forwarding
-                    forward_camera_iosurface_directly(ctx, camera_iosurface)
-                }
-            };
+                };
 
             let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
@@ -320,9 +320,10 @@ unsafe fn blit_iosurface_to_pooled_buffer(
     height: u32,
 ) -> crate::core::Result<()> {
     // Get destination IOSurface from pooled buffer
-    let dest_iosurface = pooled_buffer.buffer_ref().iosurface_ref().ok_or_else(|| {
-        StreamError::GpuError("Pooled buffer not backed by IOSurface".into())
-    })?;
+    let dest_iosurface = pooled_buffer
+        .buffer_ref()
+        .iosurface_ref()
+        .ok_or_else(|| StreamError::GpuError("Pooled buffer not backed by IOSurface".into()))?;
 
     // Cast IOSurfaceRef pointers to objc2 IOSurface references
     let src_iosurface_ref = &*(camera_iosurface as *const IOSurface);
