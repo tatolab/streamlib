@@ -68,7 +68,7 @@ impl XpcSurfaceService {
         // Set up the event handler for new connections
         unsafe {
             let handler = create_connection_handler(handler_context);
-            xpc_connection_set_event_handler(connection, handler as *mut c_void);
+            xpc_connection_set_event_handler(connection, handler);
             xpc_connection_resume(connection);
         }
 
@@ -126,9 +126,9 @@ unsafe fn create_connection_handler(context: *mut HandlerContext) -> *mut c_void
 
             // Check if this is an error
             if xpc_is_error(peer as xpc_object_t) {
-                if peer as xpc_object_t == xpc_error_connection_invalid() {
+                if std::ptr::eq(peer as xpc_object_t, xpc_error_connection_invalid()) {
                     tracing::debug!("[Broker] XPC connection invalid");
-                } else if peer as xpc_object_t == xpc_error_connection_interrupted() {
+                } else if std::ptr::eq(peer as xpc_object_t, xpc_error_connection_interrupted()) {
                     tracing::debug!("[Broker] XPC connection interrupted");
                 }
                 return;
@@ -136,7 +136,7 @@ unsafe fn create_connection_handler(context: *mut HandlerContext) -> *mut c_void
 
             // Set up handler for messages from this peer
             let message_handler = create_message_handler(context);
-            xpc_connection_set_event_handler(peer, message_handler as *mut c_void);
+            xpc_connection_set_event_handler(peer, message_handler);
             xpc_connection_resume(peer);
 
             tracing::trace!("[Broker] XPC accepted new peer connection");
@@ -150,7 +150,7 @@ unsafe fn create_connection_handler(context: *mut HandlerContext) -> *mut c_void
     };
 
     let block = Box::new(Block {
-        isa: &_NSConcreteMallocBlock as *const _ as *const c_void,
+        isa: &_NSConcreteMallocBlock as *const _,
         flags: BLOCK_FLAGS_NEEDS_FREE,
         reserved: 0,
         invoke: connection_handler_trampoline as *const c_void,
@@ -175,9 +175,9 @@ unsafe fn create_message_handler(context: *mut HandlerContext) -> *mut c_void {
 
             // Check if this is an error
             if xpc_is_error(event) {
-                if event == xpc_error_connection_invalid() {
+                if std::ptr::eq(event, xpc_error_connection_invalid()) {
                     tracing::trace!("[Broker] XPC peer connection closed");
-                } else if event == xpc_error_connection_interrupted() {
+                } else if std::ptr::eq(event, xpc_error_connection_interrupted()) {
                     tracing::trace!("[Broker] XPC peer connection interrupted");
                 }
                 return;
@@ -196,7 +196,7 @@ unsafe fn create_message_handler(context: *mut HandlerContext) -> *mut c_void {
     };
 
     let block = Box::new(Block {
-        isa: &_NSConcreteMallocBlock as *const _ as *const c_void,
+        isa: &_NSConcreteMallocBlock as *const _,
         flags: BLOCK_FLAGS_NEEDS_FREE,
         reserved: 0,
         invoke: message_handler_trampoline as *const c_void,

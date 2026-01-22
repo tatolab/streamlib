@@ -30,11 +30,10 @@ pub type mach_port_t = u32;
 // =============================================================================
 
 /// XPC type for dictionary objects.
-pub const XPC_TYPE_DICTIONARY: *const c_void =
-    unsafe { &_xpc_type_dictionary as *const _ as *const c_void };
+pub const XPC_TYPE_DICTIONARY: *const c_void = unsafe { &_xpc_type_dictionary as *const _ };
 
 /// XPC type for error objects.
-pub const XPC_TYPE_ERROR: *const c_void = unsafe { &_xpc_type_error as *const _ as *const c_void };
+pub const XPC_TYPE_ERROR: *const c_void = unsafe { &_xpc_type_error as *const _ };
 
 // External type symbols (opaque, just for pointer identity)
 extern "C" {
@@ -56,12 +55,12 @@ extern "C" {
 
 /// Get the connection interrupted error object.
 pub fn xpc_error_connection_interrupted() -> xpc_object_t {
-    unsafe { &_xpc_error_connection_interrupted as *const _ as xpc_object_t }
+    unsafe { &_xpc_error_connection_interrupted as *const _ as *mut _ }
 }
 
 /// Get the connection invalid error object.
 pub fn xpc_error_connection_invalid() -> xpc_object_t {
-    unsafe { &_xpc_error_connection_invalid as *const _ as xpc_object_t }
+    unsafe { &_xpc_error_connection_invalid as *const _ as *mut _ }
 }
 
 // =============================================================================

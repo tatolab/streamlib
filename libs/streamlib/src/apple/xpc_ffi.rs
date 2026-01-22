@@ -44,18 +44,16 @@ pub const XPC_CONNECTION_MACH_SERVICE_PRIVILEGED: u64 = 1 << 1;
 // =============================================================================
 
 /// XPC type for dictionary objects.
-pub const XPC_TYPE_DICTIONARY: *const c_void =
-    unsafe { &_xpc_type_dictionary as *const _ as *const c_void };
+pub const XPC_TYPE_DICTIONARY: *const c_void = unsafe { &_xpc_type_dictionary as *const _ };
 
 /// XPC type for string objects.
-pub const XPC_TYPE_STRING: *const c_void =
-    unsafe { &_xpc_type_string as *const _ as *const c_void };
+pub const XPC_TYPE_STRING: *const c_void = unsafe { &_xpc_type_string as *const _ };
 
 /// XPC type for int64 objects.
-pub const XPC_TYPE_INT64: *const c_void = unsafe { &_xpc_type_int64 as *const _ as *const c_void };
+pub const XPC_TYPE_INT64: *const c_void = unsafe { &_xpc_type_int64 as *const _ };
 
 /// XPC type for error objects.
-pub const XPC_TYPE_ERROR: *const c_void = unsafe { &_xpc_type_error as *const _ as *const c_void };
+pub const XPC_TYPE_ERROR: *const c_void = unsafe { &_xpc_type_error as *const _ };
 
 // External type symbols (opaque, just for pointer identity)
 extern "C" {
