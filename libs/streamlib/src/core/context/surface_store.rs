@@ -837,7 +837,7 @@ unsafe fn create_xpc_event_handler() -> *mut c_void {
 
     // Create heap-allocated block with proper ABI
     let block = Box::new(Block {
-        isa: &_NSConcreteMallocBlock as *const _ as *const c_void,
+        isa: &_NSConcreteMallocBlock as *const _,
         flags: BLOCK_FLAGS_NEEDS_FREE,
         reserved: 0,
         invoke: event_handler_trampoline as *const c_void,

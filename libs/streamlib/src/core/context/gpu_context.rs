@@ -37,6 +37,8 @@ struct PixelBufferRingEntry {
 /// `acquire()` cycles through buffers, skipping any currently in use.
 struct PixelBufferRingPool {
     /// The underlying CVPixelBufferPool (used only for initial allocation).
+    /// Kept alive for ownership - buffers reference its backing storage.
+    #[allow(dead_code)]
     pool: RhiPixelBufferPool,
     /// Permanently held buffers.
     buffers: Vec<PixelBufferRingEntry>,
@@ -84,7 +86,7 @@ impl PixelBufferPoolManager {
         let mut pools = self.pools.lock().unwrap();
 
         // Create new ring pool if needed
-        if !pools.contains_key(&key) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = pools.entry(key) {
             tracing::info!(
                 "PixelBufferPoolManager: creating new pool for {}x{} {:?}",
                 width,
@@ -163,7 +165,7 @@ impl PixelBufferPoolManager {
                 buffers,
                 next_index: 0,
             };
-            pools.insert(key, ring_pool);
+            entry.insert(ring_pool);
         }
 
         // Get the ring pool and find next available buffer
