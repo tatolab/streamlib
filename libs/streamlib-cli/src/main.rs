@@ -205,6 +205,24 @@ enum BrokerCommands {
         #[arg(long)]
         runtime: Option<String>,
     },
+
+    /// List registered IOSurfaces (GPU surfaces for cross-process sharing)
+    Surfaces {
+        /// Filter by runtime ID
+        #[arg(long)]
+        runtime: Option<String>,
+    },
+
+    /// Snapshot an IOSurface to a PNG file
+    Snapshot {
+        /// Surface ID (UUID) to snapshot
+        #[arg(long)]
+        id: String,
+
+        /// Output file path for the PNG image
+        #[arg(long, short = 'o', default_value = "snapshot.png")]
+        output: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -355,6 +373,12 @@ async fn async_main(cli: Cli) -> Result<()> {
             BrokerCommands::Runtimes => commands::broker::runtimes().await?,
             BrokerCommands::Processors { runtime } => {
                 commands::broker::processors(runtime.as_deref()).await?
+            }
+            BrokerCommands::Surfaces { runtime } => {
+                commands::broker::surfaces(runtime.as_deref()).await?
+            }
+            BrokerCommands::Snapshot { id, output } => {
+                commands::broker::snapshot(&id, &output).await?
             }
         },
         Some(Commands::Setup { action }) => match action {

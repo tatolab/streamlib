@@ -221,3 +221,57 @@ pub const BLOCK_FLAGS_NEEDS_FREE: i32 = 1 << 24;
 
 /// Flags indicating the block has a signature.
 pub const BLOCK_HAS_SIGNATURE: i32 = 1 << 30;
+
+// =============================================================================
+// IOSurface Functions (for extracting dimensions from surfaces)
+// =============================================================================
+
+/// Opaque IOSurface reference type.
+pub type IOSurfaceRef = *mut c_void;
+
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    /// Look up an IOSurface from a mach port.
+    pub fn IOSurfaceLookupFromMachPort(port: mach_port_t) -> IOSurfaceRef;
+
+    /// Get the width of an IOSurface.
+    pub fn IOSurfaceGetWidth(surface: IOSurfaceRef) -> usize;
+
+    /// Get the height of an IOSurface.
+    pub fn IOSurfaceGetHeight(surface: IOSurfaceRef) -> usize;
+
+    /// Get the pixel format of an IOSurface (OSType/FourCC).
+    pub fn IOSurfaceGetPixelFormat(surface: IOSurfaceRef) -> u32;
+
+    /// Get the bytes per row of an IOSurface.
+    pub fn IOSurfaceGetBytesPerRow(surface: IOSurfaceRef) -> usize;
+
+    /// Get the base address of an IOSurface (requires lock).
+    pub fn IOSurfaceGetBaseAddress(surface: IOSurfaceRef) -> *mut c_void;
+
+    /// Lock an IOSurface for CPU access.
+    /// seed can be NULL. Returns 0 on success.
+    pub fn IOSurfaceLock(surface: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+
+    /// Unlock an IOSurface after CPU access.
+    pub fn IOSurfaceUnlock(surface: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    /// Decrement the reference count of a CoreFoundation object.
+    pub fn CFRelease(cf: *mut c_void);
+}
+
+/// IOSurface lock option for read-only access.
+pub const kIOSurfaceLockReadOnly: u32 = 0x00000001;
+
+/// Convert a FourCC pixel format code to a string.
+pub fn fourcc_to_string(fourcc: u32) -> String {
+    let bytes = fourcc.to_be_bytes();
+    let chars: Vec<char> = bytes
+        .iter()
+        .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '?' })
+        .collect();
+    chars.into_iter().collect()
+}

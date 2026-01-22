@@ -49,6 +49,12 @@ pub struct SurfaceMetadata {
     pub runtime_id: String,
     /// The mach port send right for the IOSurface.
     pub mach_port: u32,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Pixel format (e.g., "BGRA", "NV12").
+    pub format: String,
     /// When the surface was registered.
     pub registered_at: Instant,
     /// Number of times this surface has been checked out.
@@ -283,7 +289,15 @@ impl BrokerState {
     /// The client generates the surface_id (UUID) and provides it along with the mach_port.
     /// Returns true if registration succeeded, false if surface_id already exists.
     #[cfg(target_os = "macos")]
-    pub fn register_surface(&self, surface_id: &str, runtime_id: &str, mach_port: u32) -> bool {
+    pub fn register_surface(
+        &self,
+        surface_id: &str,
+        runtime_id: &str,
+        mach_port: u32,
+        width: u32,
+        height: u32,
+        format: &str,
+    ) -> bool {
         use std::sync::atomic::Ordering;
 
         let mut surfaces = self.inner.surfaces.write();
@@ -299,6 +313,9 @@ impl BrokerState {
             surface_id: surface_id.to_string(),
             runtime_id: runtime_id.to_string(),
             mach_port,
+            width,
+            height,
+            format: format.to_string(),
             registered_at: Instant::now(),
             checkout_count: 0,
         };

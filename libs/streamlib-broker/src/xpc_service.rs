@@ -269,8 +269,23 @@ unsafe fn handle_register(context: &HandlerContext, message: xpc_object_t) {
         return;
     }
 
+    // Look up IOSurface to extract dimensions
+    let iosurface = crate::xpc_ffi::IOSurfaceLookupFromMachPort(mach_port);
+    let (width, height, format) = if !iosurface.is_null() {
+        let w = crate::xpc_ffi::IOSurfaceGetWidth(iosurface) as u32;
+        let h = crate::xpc_ffi::IOSurfaceGetHeight(iosurface) as u32;
+        let fmt_code = crate::xpc_ffi::IOSurfaceGetPixelFormat(iosurface);
+        let fmt_str = crate::xpc_ffi::fourcc_to_string(fmt_code);
+        // Release the IOSurface reference (we don't need to keep it, just extracted info)
+        crate::xpc_ffi::CFRelease(iosurface);
+        (w, h, fmt_str)
+    } else {
+        tracing::warn!("[Broker] XPC register: could not lookup IOSurface from mach port");
+        (0, 0, "unknown".to_string())
+    };
+
     // Register the surface with client-provided ID
-    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port);
+    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
 
     if success {
         tracing::debug!(
@@ -435,15 +450,31 @@ unsafe fn handle_check_in(context: &HandlerContext, message: xpc_object_t) {
     // Generate UUID on broker side (legacy behavior)
     let surface_id = uuid::Uuid::new_v4().to_string();
 
+    // Look up IOSurface to extract dimensions
+    let iosurface = crate::xpc_ffi::IOSurfaceLookupFromMachPort(mach_port);
+    let (width, height, format) = if !iosurface.is_null() {
+        let w = crate::xpc_ffi::IOSurfaceGetWidth(iosurface) as u32;
+        let h = crate::xpc_ffi::IOSurfaceGetHeight(iosurface) as u32;
+        let fmt_code = crate::xpc_ffi::IOSurfaceGetPixelFormat(iosurface);
+        let fmt_str = crate::xpc_ffi::fourcc_to_string(fmt_code);
+        crate::xpc_ffi::CFRelease(iosurface);
+        (w, h, fmt_str)
+    } else {
+        (0, 0, "unknown".to_string())
+    };
+
     // Register the surface
-    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port);
+    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
 
     if success {
         tracing::debug!(
-            "[Broker] XPC check_in: registered surface '{}' for runtime '{}' (port {})",
+            "[Broker] XPC check_in: registered surface '{}' for runtime '{}' (port {}, {}x{} {})",
             surface_id,
             runtime_id,
-            mach_port
+            mach_port,
+            width,
+            height,
+            format
         );
     }
 

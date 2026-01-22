@@ -203,6 +203,66 @@ pub struct PruneDeadRuntimesResponse {
     #[prost(string, repeated, tag = "2")]
     pub pruned_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+/// Surface listing (IOSurfaces for cross-process GPU sharing)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSurfacesRequest {
+    /// Empty = all runtimes
+    #[prost(string, tag = "1")]
+    pub runtime_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SurfaceInfo {
+    /// UUID of the surface
+    #[prost(string, tag = "1")]
+    pub surface_id: ::prost::alloc::string::String,
+    /// Runtime that registered the surface
+    #[prost(string, tag = "2")]
+    pub runtime_id: ::prost::alloc::string::String,
+    /// Width in pixels
+    #[prost(uint32, tag = "3")]
+    pub width: u32,
+    /// Height in pixels
+    #[prost(uint32, tag = "4")]
+    pub height: u32,
+    /// Pixel format (e.g., "BGRA", "NV12")
+    #[prost(string, tag = "5")]
+    pub format: ::prost::alloc::string::String,
+    /// When the surface was registered
+    #[prost(int64, tag = "6")]
+    pub registered_at_unix_ms: i64,
+    /// Number of times looked up by other processes
+    #[prost(uint64, tag = "7")]
+    pub checkout_count: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSurfacesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub surfaces: ::prost::alloc::vec::Vec<SurfaceInfo>,
+}
+/// Surface snapshot (read pixels and encode as PNG)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SnapshotSurfaceRequest {
+    /// UUID of the surface to snapshot
+    #[prost(string, tag = "1")]
+    pub surface_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SnapshotSurfaceResponse {
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// Error message if success is false
+    #[prost(string, tag = "2")]
+    pub error: ::prost::alloc::string::String,
+    /// PNG-encoded image data
+    #[prost(bytes = "vec", tag = "3")]
+    pub png_data: ::prost::alloc::vec::Vec<u8>,
+    /// Width in pixels
+    #[prost(uint32, tag = "4")]
+    pub width: u32,
+    /// Height in pixels
+    #[prost(uint32, tag = "5")]
+    pub height: u32,
+}
 /// Generated client implementations.
 pub mod broker_service_client {
     #![allow(
@@ -544,6 +604,60 @@ pub mod broker_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// List all registered surfaces (IOSurfaces for cross-process GPU sharing)
+        pub async fn list_surfaces(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListSurfacesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSurfacesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/ListSurfaces",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("streamlib.broker.BrokerService", "ListSurfaces"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Snapshot a surface (read pixels and encode as PNG)
+        pub async fn snapshot_surface(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SnapshotSurfaceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SnapshotSurfaceResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/streamlib.broker.BrokerService/SnapshotSurface",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("streamlib.broker.BrokerService", "SnapshotSurface"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -629,6 +743,22 @@ pub mod broker_service_server {
             request: tonic::Request<super::PruneDeadRuntimesRequest>,
         ) -> std::result::Result<
             tonic::Response<super::PruneDeadRuntimesResponse>,
+            tonic::Status,
+        >;
+        /// List all registered surfaces (IOSurfaces for cross-process GPU sharing)
+        async fn list_surfaces(
+            &self,
+            request: tonic::Request<super::ListSurfacesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSurfacesResponse>,
+            tonic::Status,
+        >;
+        /// Snapshot a surface (read pixels and encode as PNG)
+        async fn snapshot_surface(
+            &self,
+            request: tonic::Request<super::SnapshotSurfaceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SnapshotSurfaceResponse>,
             tonic::Status,
         >;
     }
@@ -1105,6 +1235,97 @@ pub mod broker_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = PruneDeadRuntimesSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/streamlib.broker.BrokerService/ListSurfaces" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSurfacesSvc<T: BrokerService>(pub Arc<T>);
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::ListSurfacesRequest>
+                    for ListSurfacesSvc<T> {
+                        type Response = super::ListSurfacesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListSurfacesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BrokerService>::list_surfaces(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSurfacesSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/streamlib.broker.BrokerService/SnapshotSurface" => {
+                    #[allow(non_camel_case_types)]
+                    struct SnapshotSurfaceSvc<T: BrokerService>(pub Arc<T>);
+                    impl<
+                        T: BrokerService,
+                    > tonic::server::UnaryService<super::SnapshotSurfaceRequest>
+                    for SnapshotSurfaceSvc<T> {
+                        type Response = super::SnapshotSurfaceResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SnapshotSurfaceRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BrokerService>::snapshot_surface(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SnapshotSurfaceSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

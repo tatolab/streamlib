@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
 use streamlib_broker::proto::{
     GetHealthRequest, GetVersionRequest, ListConnectionsRequest, ListProcessorsRequest,
-    ListRuntimesRequest,
+    ListRuntimesRequest, ListSurfacesRequest, SnapshotSurfaceRequest,
 };
 use streamlib_broker::GRPC_PORT;
 
@@ -499,6 +499,94 @@ pub async fn connections(runtime_id: Option<&str>) -> Result<()> {
         }
         println!();
     }
+
+    Ok(())
+}
+
+/// List registered IOSurfaces.
+pub async fn surfaces(runtime_id: Option<&str>) -> Result<()> {
+    let endpoint = broker_endpoint();
+    let mut client = BrokerServiceClient::connect(endpoint)
+        .await
+        .context("Failed to connect to broker. Is the broker running?")?;
+
+    let response = client
+        .list_surfaces(ListSurfacesRequest {
+            runtime_id: runtime_id.unwrap_or("").to_string(),
+        })
+        .await
+        .context("Failed to list surfaces")?
+        .into_inner();
+
+    if response.surfaces.is_empty() {
+        if let Some(id) = runtime_id {
+            println!("No surfaces registered for runtime '{}'.", id);
+        } else {
+            println!("No surfaces registered.");
+        }
+        return Ok(());
+    }
+
+    let title = if let Some(id) = runtime_id {
+        format!(
+            "Surfaces for Runtime '{}' ({}):",
+            id,
+            response.surfaces.len()
+        )
+    } else {
+        format!("All Surfaces ({}):", response.surfaces.len())
+    };
+
+    println!("{}", title);
+    println!("─────────────────────────────────────────────────────────");
+
+    for surface in &response.surfaces {
+        println!("  Surface: {}", surface.surface_id);
+        println!("    Runtime:   {}", surface.runtime_id);
+        println!(
+            "    Size:      {}x{}",
+            surface.width, surface.height
+        );
+        println!("    Format:    {}", surface.format);
+        println!("    Checkouts: {}", surface.checkout_count);
+        println!("    Age:       {}ms", surface.registered_at_unix_ms);
+        println!();
+    }
+
+    Ok(())
+}
+
+/// Snapshot an IOSurface to a PNG file.
+pub async fn snapshot(surface_id: &str, output_path: &Path) -> Result<()> {
+    let endpoint = broker_endpoint();
+    let mut client = BrokerServiceClient::connect(endpoint)
+        .await
+        .context("Failed to connect to broker. Is the broker running?")?;
+
+    println!("Requesting snapshot of surface '{}'...", surface_id);
+
+    let response = client
+        .snapshot_surface(SnapshotSurfaceRequest {
+            surface_id: surface_id.to_string(),
+        })
+        .await
+        .context("Failed to snapshot surface")?
+        .into_inner();
+
+    if !response.success {
+        bail!("Snapshot failed: {}", response.error);
+    }
+
+    // Write PNG data to file
+    fs::write(output_path, &response.png_data)
+        .with_context(|| format!("Failed to write PNG to {}", output_path.display()))?;
+
+    println!(
+        "Saved {}x{} snapshot to {}",
+        response.width,
+        response.height,
+        output_path.display()
+    );
 
     Ok(())
 }

@@ -43,6 +43,9 @@ thiserror.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
 
+# PNG encoding for surface snapshots
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # UUID generation for surface IDs
 uuid = { version = "1", features = ["v4"] }
 
