@@ -6,6 +6,47 @@
 use super::{PixelFormat, RhiPixelBuffer};
 use crate::core::Result;
 
+/// Platform-agnostic identifier for a pooled pixel buffer.
+///
+/// Uses UUID for global uniqueness across parallel runtimes.
+/// Serializable as string for messagepack transport in frame payloads.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PixelBufferPoolId(String);
+
+impl PixelBufferPoolId {
+    /// Generate a new unique ID.
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+
+    /// Create from an existing string (e.g., from IPC deserialization).
+    pub fn from_string(s: String) -> Self {
+        Self(s)
+    }
+
+    /// Create from a string slice.
+    pub fn from_str(s: &str) -> Self {
+        Self(s.to_string())
+    }
+
+    /// Get the ID as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for PixelBufferPoolId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for PixelBufferPoolId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Descriptor for creating pixel buffers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PixelBufferDescriptor {
@@ -43,8 +84,9 @@ pub struct RhiPixelBufferPool {
 impl RhiPixelBufferPool {
     /// Acquire a buffer from the pool.
     ///
+    /// Returns (id, buffer) where id is the platform-agnostic identifier.
     /// Returns a recycled buffer if available, or allocates a new one.
-    pub fn acquire(&self) -> Result<RhiPixelBuffer> {
+    pub fn acquire(&self) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
         #[cfg(target_os = "macos")]
         {
             self.inner.acquire()

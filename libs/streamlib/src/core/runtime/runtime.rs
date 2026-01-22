@@ -186,6 +186,11 @@ impl StreamRuntime {
     /// Takes `&Arc<Self>` to allow passing the runtime to processors via RuntimeContext.
     /// Processors can then call runtime operations directly without indirection.
     pub fn start(self: &Arc<Self>) -> Result<()> {
+        // Load .env file if present (development environment variables)
+        if let Ok(path) = dotenvy::dotenv() {
+            tracing::info!("[start] Loaded environment from {}", path.display());
+        }
+
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(

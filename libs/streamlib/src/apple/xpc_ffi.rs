@@ -201,11 +201,11 @@ extern "C" {
     /// Get a uint64 value from a dictionary.
     pub fn xpc_dictionary_get_uint64(dictionary: xpc_object_t, key: *const c_char) -> u64;
 
-    /// Get a mach send right from a dictionary.
+    /// Copy a mach send right from a dictionary.
     ///
     /// Returns MACH_PORT_NULL (0) if the key doesn't exist or isn't a mach port.
-    /// The caller receives a send right to the port.
-    pub fn xpc_dictionary_get_mach_send(
+    /// The caller receives a send right to the port (with COPY disposition).
+    pub fn xpc_dictionary_copy_mach_send(
         dictionary: xpc_object_t,
         key: *const c_char,
     ) -> mach_port_t;
@@ -298,10 +298,14 @@ pub struct BlockDescriptor {
     pub size: u64,
 }
 
-// Global block class (for stack blocks that don't capture anything mutable)
+// Block class symbols
 extern "C" {
+    /// Global block class (for blocks with no captures).
     pub static _NSConcreteGlobalBlock: c_void;
+    /// Stack block class (for blocks allocated on stack).
     pub static _NSConcreteStackBlock: c_void;
+    /// Malloc block class (for blocks allocated on heap).
+    pub static _NSConcreteMallocBlock: c_void;
 }
 
 /// Flags for a global block (no captures, no copy/dispose).
@@ -309,3 +313,6 @@ pub const BLOCK_FLAGS_GLOBAL: i32 = 1 << 28;
 
 /// Flags for a stack block.
 pub const BLOCK_FLAGS_STACK: i32 = 1 << 25;
+
+/// Flags for a heap-allocated block that needs release.
+pub const BLOCK_FLAGS_NEEDS_FREE: i32 = 1 << 24;

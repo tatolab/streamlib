@@ -49,7 +49,9 @@ petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
 ahash = "0.8"  # Fast hashing for graph checksum computation
 anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
 cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
+uuid = { version = "1.11", features = ["v4"] }  # UUID generation for PixelBufferPoolId
 dirs = "6.0"   # Cross-platform home directory resolution
+dotenvy = "0.15"  # Load .env files for development environment
 
 # Serialization
 serde.workspace = true

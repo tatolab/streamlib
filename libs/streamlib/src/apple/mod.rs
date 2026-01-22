@@ -31,16 +31,16 @@ pub mod thread_priority;
 
 pub use pixel_transfer::PixelTransferSession;
 
-// TODO: Migrate to iceoryx2 API
-// pub use processors::{
-//     AppleAudioCaptureProcessor,
-//     AppleAudioOutputProcessor,
-//     // Sources
-//     AppleCameraProcessor,
-//     // Sinks
-//     AppleDisplayProcessor,
-//     AppleMp4WriterProcessor,
-// };
+// Sources and sinks migrated to iceoryx2 API
+pub use processors::{
+    // AppleAudioCaptureProcessor,
+    // AppleAudioOutputProcessor,
+    // Sources
+    AppleCameraProcessor,
+    // Sinks
+    AppleDisplayProcessor,
+    // AppleMp4WriterProcessor,
+};
 
 // Note: WebRTC types (WhipClient, WhepClient, etc.) are now in core::streaming
 // Note: WHIP/WHEP processors are now in core::processors

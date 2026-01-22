@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 
 /// Channel conversion mode
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
 
     #[serde(rename = "Duplicate")]
+    #[default]
     Duplicate,
 
     #[serde(rename = "LeftOnly")]
@@ -23,7 +24,7 @@ pub enum Mode {
 
 
 /// Configuration for mono to stereo channel conversion
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioChannelConverterConfig {
 

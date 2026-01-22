@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 
 /// Resampling quality level
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Quality {
 
     #[serde(rename = "High")]
+    #[default]
     High,
 
     #[serde(rename = "Low")]
@@ -23,7 +24,7 @@ pub enum Quality {
 
 
 /// Configuration for audio sample rate conversion
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioResamplerConfig {
 

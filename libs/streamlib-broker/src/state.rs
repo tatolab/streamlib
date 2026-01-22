@@ -278,28 +278,33 @@ impl BrokerState {
     // Surface Store (Cross-Process GPU Surface Sharing)
     // =========================================================================
 
-    /// Register a surface and return a new surface ID.
+    /// Register a surface with client-provided ID.
+    ///
+    /// The client generates the surface_id (UUID) and provides it along with the mach_port.
+    /// Returns true if registration succeeded, false if surface_id already exists.
     #[cfg(target_os = "macos")]
-    pub fn register_surface(&self, runtime_id: &str, mach_port: u32) -> String {
+    pub fn register_surface(&self, surface_id: &str, runtime_id: &str, mach_port: u32) -> bool {
         use std::sync::atomic::Ordering;
 
+        let mut surfaces = self.inner.surfaces.write();
+
+        // Don't overwrite existing registrations
+        if surfaces.contains_key(surface_id) {
+            return false;
+        }
+
         self.inner.surface_counter.fetch_add(1, Ordering::Relaxed);
-        let surface_id = uuid::Uuid::new_v4().to_string();
 
         let metadata = SurfaceMetadata {
-            surface_id: surface_id.clone(),
+            surface_id: surface_id.to_string(),
             runtime_id: runtime_id.to_string(),
             mach_port,
             registered_at: Instant::now(),
             checkout_count: 0,
         };
 
-        self.inner
-            .surfaces
-            .write()
-            .insert(surface_id.clone(), metadata);
-
-        surface_id
+        surfaces.insert(surface_id.to_string(), metadata);
+        true
     }
 
     /// Get the mach port for a surface ID (for check_out).

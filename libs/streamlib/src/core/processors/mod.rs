@@ -71,8 +71,8 @@ pub use chord_generator::ChordGeneratorProcessor;
 // pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
 
 pub use api_server::*;
-pub use audio_channel_converter::{AudioChannelConverterProcessor, ChannelConversionMode};
-pub use audio_mixer::{AudioMixerProcessor, MixingStrategy};
+pub use audio_channel_converter::AudioChannelConverterProcessor;
+pub use audio_mixer::AudioMixerProcessor;
 pub use audio_resampler::{AudioResampler1chProcessor, AudioResampler2chProcessor};
 pub use buffer_rechunker::{BufferRechunker1chProcessor, BufferRechunker2chProcessor};
 // TODO: Migrate to iceoryx2 API

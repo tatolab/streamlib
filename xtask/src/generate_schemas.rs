@@ -175,8 +175,9 @@ fn post_process_generated_code(code: &str, _struct_name: &str) -> Result<String>
          //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.\n\n",
     );
 
-    // Check if this is an enum (enums can't derive Default without #[default] attribute)
-    let is_enum = code.contains("pub enum ");
+    // Track whether we're inside an enum and if we've marked the first variant
+    let mut in_enum = false;
+    let mut marked_first_variant = false;
 
     for line in code.lines() {
         // Skip the chrono import if unused (jtd-codegen adds it but we may not need it)
@@ -184,14 +185,39 @@ fn post_process_generated_code(code: &str, _struct_name: &str) -> Result<String>
             continue;
         }
 
-        // Add Clone, PartialEq to derives (and Default only for structs)
+        // Add Clone, PartialEq, Default to derives for both enums and structs
         if line.contains("#[derive(Debug, Serialize, Deserialize)]") {
-            if is_enum {
-                result.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
-            } else {
-                result.push_str("#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n");
-            }
+            result.push_str("#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n");
             continue;
+        }
+
+        // Track enum boundaries
+        if line.starts_with("pub enum ") {
+            in_enum = true;
+            marked_first_variant = false;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        // Add #[default] to first enum variant
+        if in_enum && !marked_first_variant {
+            let trimmed = line.trim();
+            // Check if this is a variant (starts with uppercase letter after any #[serde] attr)
+            if !trimmed.is_empty()
+                && !trimmed.starts_with("#")
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with("}")
+            {
+                // This is the first variant - add #[default] before it
+                result.push_str("    #[default]\n");
+                marked_first_variant = true;
+            }
+        }
+
+        // End of enum
+        if in_enum && line.trim() == "}" {
+            in_enum = false;
         }
 
         // Make fields public

@@ -17,9 +17,10 @@ properties:
     metadata:
       description: "Window height in pixels"
     type: uint32
+optionalProperties:
   scaling_mode:
     metadata:
-      description: "How video content is scaled within the window"
+      description: "How video content is scaled within the window. Default: Letterbox"
     enum:
       - Stretch
       - Letterbox
@@ -32,8 +33,7 @@ properties:
     metadata:
       description: "Number of drawable buffers (2=double, 3=triple). Default: 2"
     type: uint32
-optionalProperties:
   title:
     metadata:
-      description: "Window title. If None, uses 'streamlib Display'"
+      description: "Window title. Default: 'streamlib Display'"
     type: string

@@ -164,7 +164,7 @@ pub async fn run(
         host: host.clone(),
         port,
         name: Some(runtime_name.clone()),
-        log_path: Some(log_path.clone()),
+        log_path: Some(log_path.to_string_lossy().into_owned()),
     };
     runtime.add_processor(ApiServerProcessor::node(config))?;
 

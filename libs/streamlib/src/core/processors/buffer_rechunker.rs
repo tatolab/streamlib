@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, RuntimeContext, StreamError};
-use crate::schemas::{Audioframe1ch, Audioframe2ch};
+use crate::_generated_::{Audioframe1Ch, Audioframe2Ch};
+use crate::core::{Result, RuntimeContext};
 
 // =============================================================================
 // Mono (1-channel) Buffer Rechunker
@@ -20,10 +20,11 @@ impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
         &mut self,
         _ctx: RuntimeContext,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.buffer = Vec::with_capacity(self.config.target_buffer_size * 2);
+        let target_size = self.config.target_buffer_size as usize;
+        self.buffer = Vec::with_capacity(target_size * 2);
         tracing::info!(
             "[BufferRechunker1ch] Initialized with target buffer size: {} samples",
-            self.config.target_buffer_size
+            target_size
         );
         std::future::ready(Ok(()))
     }
@@ -34,44 +35,41 @@ impl crate::core::ReactiveProcessor for BufferRechunker1chProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        if let Some(payload) = self.inputs.get("audio_in") {
-            let input_frame = Audioframe1ch::from_msgpack(payload.data())
-                .map_err(|e| StreamError::Runtime(format!("msgpack decode: {}", e)))?;
+        if !self.inputs.has_data("audio_in") {
+            return Ok(());
+        }
 
-            // Store sample rate from first frame
-            if self.sample_rate == 0 {
-                self.sample_rate = input_frame.sample_rate;
-            }
+        let input_frame: Audioframe1Ch = self.inputs.read("audio_in")?;
 
-            // Add samples to buffer
-            self.buffer.extend_from_slice(&input_frame.samples);
+        // Store sample rate from first frame
+        if self.sample_rate == 0 {
+            self.sample_rate = input_frame.sample_rate;
+        }
 
-            // Output chunks when we have enough samples
-            while self.buffer.len() >= self.config.target_buffer_size {
-                let chunk: Vec<f32> = self
-                    .buffer
-                    .drain(..self.config.target_buffer_size)
-                    .collect();
+        // Add samples to buffer
+        self.buffer.extend_from_slice(&input_frame.samples);
 
-                let output_frame = Audioframe1ch {
-                    samples: chunk,
-                    sample_rate: self.sample_rate,
-                    timestamp_ns: input_frame.timestamp_ns,
-                    frame_index: self.frame_counter,
-                };
+        let target_size = self.config.target_buffer_size as usize;
 
-                let bytes = output_frame
-                    .to_msgpack()
-                    .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
-                self.outputs.write("audio_out", &bytes)?;
-                self.frame_counter += 1;
+        // Output chunks when we have enough samples
+        while self.buffer.len() >= target_size {
+            let chunk: Vec<f32> = self.buffer.drain(..target_size).collect();
 
-                tracing::debug!(
-                    "[BufferRechunker1ch] Output frame {} with {} samples",
-                    self.frame_counter,
-                    self.config.target_buffer_size
-                );
-            }
+            let output_frame = Audioframe1Ch {
+                samples: chunk,
+                sample_rate: self.sample_rate,
+                timestamp_ns: input_frame.timestamp_ns.clone(),
+                frame_index: self.frame_counter.to_string(),
+            };
+
+            self.outputs.write("audio_out", &output_frame)?;
+            self.frame_counter += 1;
+
+            tracing::debug!(
+                "[BufferRechunker1ch] Output frame {} with {} samples",
+                self.frame_counter,
+                target_size
+            );
         }
 
         Ok(())
@@ -94,11 +92,12 @@ impl crate::core::ReactiveProcessor for BufferRechunker2chProcessor::Processor {
         &mut self,
         _ctx: RuntimeContext,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
+        let target_size = self.config.target_buffer_size as usize;
         // For stereo, buffer size is target * 2 (interleaved)
-        self.buffer = Vec::with_capacity(self.config.target_buffer_size * 4);
+        self.buffer = Vec::with_capacity(target_size * 4);
         tracing::info!(
             "[BufferRechunker2ch] Initialized with target buffer size: {} samples per channel",
-            self.config.target_buffer_size
+            target_size
         );
         std::future::ready(Ok(()))
     }
@@ -109,44 +108,42 @@ impl crate::core::ReactiveProcessor for BufferRechunker2chProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        if let Some(payload) = self.inputs.get("audio_in") {
-            let input_frame = Audioframe2ch::from_msgpack(payload.data())
-                .map_err(|e| StreamError::Runtime(format!("msgpack decode: {}", e)))?;
+        if !self.inputs.has_data("audio_in") {
+            return Ok(());
+        }
 
-            // Store sample rate from first frame
-            if self.sample_rate == 0 {
-                self.sample_rate = input_frame.sample_rate;
-            }
+        let input_frame: Audioframe2Ch = self.inputs.read("audio_in")?;
 
-            // Add samples to buffer
-            self.buffer.extend_from_slice(&input_frame.samples);
+        // Store sample rate from first frame
+        if self.sample_rate == 0 {
+            self.sample_rate = input_frame.sample_rate;
+        }
 
-            // For stereo, we need target_buffer_size * 2 samples (interleaved L,R,L,R,...)
-            let target_interleaved_size = self.config.target_buffer_size * 2;
+        // Add samples to buffer
+        self.buffer.extend_from_slice(&input_frame.samples);
 
-            // Output chunks when we have enough samples
-            while self.buffer.len() >= target_interleaved_size {
-                let chunk: Vec<f32> = self.buffer.drain(..target_interleaved_size).collect();
+        // For stereo, we need target_buffer_size * 2 samples (interleaved L,R,L,R,...)
+        let target_interleaved_size = (self.config.target_buffer_size as usize) * 2;
 
-                let output_frame = Audioframe2ch {
-                    samples: chunk,
-                    sample_rate: self.sample_rate,
-                    timestamp_ns: input_frame.timestamp_ns,
-                    frame_index: self.frame_counter,
-                };
+        // Output chunks when we have enough samples
+        while self.buffer.len() >= target_interleaved_size {
+            let chunk: Vec<f32> = self.buffer.drain(..target_interleaved_size).collect();
 
-                let bytes = output_frame
-                    .to_msgpack()
-                    .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
-                self.outputs.write("audio_out", &bytes)?;
-                self.frame_counter += 1;
+            let output_frame = Audioframe2Ch {
+                samples: chunk,
+                sample_rate: self.sample_rate,
+                timestamp_ns: input_frame.timestamp_ns.clone(),
+                frame_index: self.frame_counter.to_string(),
+            };
 
-                tracing::debug!(
-                    "[BufferRechunker2ch] Output frame {} with {} samples per channel",
-                    self.frame_counter,
-                    self.config.target_buffer_size
-                );
-            }
+            self.outputs.write("audio_out", &output_frame)?;
+            self.frame_counter += 1;
+
+            tracing::debug!(
+                "[BufferRechunker2ch] Output frame {} with {} samples per channel",
+                self.frame_counter,
+                self.config.target_buffer_size
+            );
         }
 
         Ok(())

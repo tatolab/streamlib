@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 
 
 /// Mixing strategy for combining signals
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Strategy {
 
     #[serde(rename = "Sum")]
+    #[default]
     Sum,
 
     #[serde(rename = "SumClipped")]
@@ -23,7 +24,7 @@ pub enum Strategy {
 
 
 /// Configuration for mixing two mono signals into stereo
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioMixerConfig {
 

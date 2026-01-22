@@ -247,11 +247,16 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         self.runtime_id = Some(runtime_id.clone());
 
         // Resolve log path (from config or derive from name)
-        let log_path = self.config.log_path.clone().unwrap_or_else(|| {
-            default_logs_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp/streamlib/logs"))
-                .join(format!("{}.log", runtime_name))
-        });
+        let log_path: PathBuf = self
+            .config
+            .log_path
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                default_logs_dir()
+                    .unwrap_or_else(|| PathBuf::from("/tmp/streamlib/logs"))
+                    .join(format!("{}.log", runtime_name))
+            });
 
         // Build OpenAPI router with documented routes
         let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())

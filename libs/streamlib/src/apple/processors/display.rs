@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::corevideo_ffi::IOSurfaceLookup;
 use crate::core::frames::VideoFrame;
-use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef, RhiTextureCache};
+use crate::core::rhi::{PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiTextureCache};
 use crate::core::{Result, RuntimeContext, StreamError};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
@@ -11,6 +10,7 @@ use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMa
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
+use crossbeam_channel::{Receiver, Sender};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
@@ -28,9 +28,9 @@ static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[crate::processor("src/apple/processors/display.yaml")]
 pub struct AppleDisplayProcessor {
-    window: Option<Retained<NSWindow>>,
-    #[allow(dead_code)]
-    metal_layer: Option<Retained<CAMetalLayer>>,
+    /// Window address stored as usize (NSWindow is !Send, but we leak it anyway)
+    window_addr: AtomicUsize,
+    /// Metal layer address stored as usize for sharing with render thread
     layer_addr: Arc<AtomicUsize>,
     gpu_context: Option<crate::core::GpuContext>,
     window_id: AppleWindowId,
@@ -46,6 +46,12 @@ pub struct AppleDisplayProcessor {
     running: Arc<AtomicBool>,
     /// Handle to render thread (for join on stop)
     render_thread: Option<JoinHandle<()>>,
+    /// Handle to poller thread (receives from inputs, sends to channel)
+    poller_thread: Option<JoinHandle<()>>,
+    /// Channel sender for passing frames from poller to render thread
+    frame_sender: Option<Sender<crate::_generated_::Videoframe>>,
+    /// Channel receiver for render thread to receive frames
+    frame_receiver: Option<Receiver<crate::_generated_::Videoframe>>,
 }
 
 impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
@@ -68,11 +74,17 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             // Initialize state for game loop rendering
             self.running = Arc::new(AtomicBool::new(false));
 
+            // Create bounded channel for passing frames from poller to render thread
+            // Capacity of 2 allows for one frame being rendered and one queued
+            let (sender, receiver) = crossbeam_channel::bounded(2);
+            self.frame_sender = Some(sender);
+            self.frame_receiver = Some(receiver);
+
             tracing::info!(
                 "Display {}: Game loop mode (vsync={}, drawable_count={})",
                 self.window_id.0,
-                self.config.vsync,
-                self.config.drawable_count
+                self.config.vsync.unwrap_or(true),
+                self.config.drawable_count.unwrap_or(2)
             );
 
             // Use shared Metal device from GpuContext
@@ -171,8 +183,9 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             self.window_id.0
         );
 
-        // Clone state needed for render thread
-        let inputs = self.inputs.clone();
+        // Move inputs to render thread (InputMailboxes is Send, subscriber stays with owner thread)
+        // After this, self.inputs is replaced with an empty default instance
+        let inputs = std::mem::take(&mut self.inputs);
         let layer_addr = Arc::clone(&self.layer_addr);
         let running = Arc::clone(&self.running);
         let window_id = self.window_id.0;
@@ -258,50 +271,35 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                     };
 
                     // Read IPC frame from inputs and convert to VideoFrame
-                    // Drain all pending frames, keep only the latest
-                    let mut latest_ipc: Option<crate::_generated_::Videoframe> = None;
-                    while let Ok(Some(ipc_frame)) = inputs.read::<crate::_generated_::Videoframe>("video") {
-                        latest_ipc = Some(ipc_frame);
-                    }
-
-                    let Some(ref ipc_frame) = latest_ipc else {
+                    // Check if data available, then read
+                    if !inputs.has_data("video") {
                         // No frame - sleep briefly and check again
                         // Don't call nextDrawable() as that blocks for vsync
                         std::thread::sleep(Duration::from_micros(500));
                         continue;
+                    }
+
+                    let ipc_frame: crate::_generated_::Videoframe = match inputs.read("video") {
+                        Ok(frame) => frame,
+                        Err(e) => {
+                            tracing::warn!("Display {}: Failed to read frame: {}", window_id, e);
+                            continue;
+                        }
                     };
 
-                    // Convert IPC frame to VideoFrame by looking up surface
-                    // Try surface store first (cross-process via broker), fall back to IOSurfaceLookup (same-process)
-                    let buffer: RhiPixelBuffer = match gpu_context.check_out_surface(&ipc_frame.surface_id) {
+                    // Convert IPC frame to VideoFrame by looking up surface via get_pixel_buffer
+                    // Uses local cache first, then broker lookup for cross-process sharing
+                    let pool_id = PixelBufferPoolId::from_str(&ipc_frame.surface_id);
+                    let buffer: RhiPixelBuffer = match gpu_context.get_pixel_buffer(&pool_id) {
                         Ok(buf) => buf,
-                        Err(_) => {
-                            // Surface store not available or surface not found, try raw IOSurface ID lookup
-                            let surface_id: u32 = match ipc_frame.surface_id.parse() {
-                                Ok(id) => id,
-                                Err(_) => {
-                                    tracing::warn!("Display {}: Invalid surface_id: {}", window_id, ipc_frame.surface_id);
-                                    continue;
-                                }
-                            };
-
-                            // Look up IOSurface by ID (same-process only)
-                            let iosurface = unsafe { IOSurfaceLookup(surface_id) };
-                            if iosurface.is_null() {
-                                tracing::warn!("Display {}: IOSurface {} not found", window_id, surface_id);
-                                continue;
-                            }
-
-                            // Create RhiPixelBufferRef from IOSurface
-                            let buffer_ref = match unsafe { RhiPixelBufferRef::from_iosurface_ref(iosurface) } {
-                                Ok(buf) => buf,
-                                Err(e) => {
-                                    tracing::warn!("Display {}: Failed to create buffer from IOSurface: {}", window_id, e);
-                                    continue;
-                                }
-                            };
-
-                            RhiPixelBuffer::new(buffer_ref)
+                        Err(e) => {
+                            tracing::warn!(
+                                "Display {}: Failed to get pixel buffer for '{}': {}",
+                                window_id,
+                                ipc_frame.surface_id,
+                                e
+                            );
+                            continue;
                         }
                     };
 
@@ -419,9 +417,19 @@ impl AppleDisplayProcessor::Processor {
 
     pub fn set_window_title(&mut self, title: &str) {
         self.window_title = title.to_string();
-        if let Some(window) = &self.window {
-            let title_string = NSString::from_str(title);
-            window.setTitle(&title_string);
+        let window_addr = self.window_addr.load(Ordering::Acquire);
+        if window_addr != 0 {
+            // SAFETY: Window was created on main thread and address stored atomically
+            // Title change must be dispatched to main thread
+            let title_owned = title.to_string();
+            use dispatch2::DispatchQueue;
+            DispatchQueue::main().exec_async(move || {
+                unsafe {
+                    let window = &*(window_addr as *const NSWindow);
+                    let title_string = NSString::from_str(&title_owned);
+                    window.setTitle(&title_string);
+                }
+            });
         }
     }
 
@@ -436,7 +444,7 @@ impl AppleDisplayProcessor::Processor {
     ) -> (metal::MTLOrigin, metal::MTLSize) {
         use metal::{MTLOrigin, MTLSize};
 
-        match self.config.scaling_mode {
+        match self.config.scaling_mode.clone().unwrap_or(ScalingMode::Letterbox) {
             ScalingMode::Stretch => {
                 // Stretch to fill entire window (ignore aspect ratio)
                 (
@@ -529,8 +537,8 @@ impl AppleDisplayProcessor::Processor {
         let metal_device = gpu_ctx.metal_device().clone_device();
         let window_id = self.window_id;
         let layer_addr = Arc::clone(&self.layer_addr);
-        let vsync = self.config.vsync;
-        let drawable_count = self.config.drawable_count;
+        let vsync = self.config.vsync.unwrap_or(true);
+        let drawable_count = self.config.drawable_count.unwrap_or(2);
 
         use dispatch2::DispatchQueue;
 

@@ -26,6 +26,9 @@ pub mod iceoryx2;
 /// Run `cargo xtask generate-schemas` to regenerate.
 pub mod _generated_;
 
+// Re-export commonly used generated config types
+pub use _generated_::ApiServerConfig;
+
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("path/to/schema.yaml")] - YAML-based processor definition
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
@@ -65,7 +68,6 @@ pub use core::{
     // TODO: Migrate to iceoryx2 API
     // CameraConfig,
     // CameraDevice,
-    ChannelConversionMode,
     ChordGeneratorProcessor,
     // TODO: Migrate to iceoryx2 API
     // ClapEffectConfig,
@@ -87,7 +89,6 @@ pub use core::{
     InputPortMarker,
     LfoWaveform,
     ManualProcessor,
-    MixingStrategy,
     Mp4Muxer,
     Mp4MuxerConfig,
     // TODO: Migrate to iceoryx2 API
@@ -152,18 +153,18 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 
-// TODO: Migrate to iceoryx2 API
-// #[cfg(any(target_os = "macos", target_os = "ios"))]
-// pub use apple::{
-//     AppleAudioCaptureProcessor as AudioCaptureProcessor,
-//     AppleAudioOutputProcessor as AudioOutputProcessor,
-//     AppleCameraProcessor as CameraProcessor,
-//     AppleDisplayProcessor as DisplayProcessor,
-//     AppleMp4WriterProcessor as Mp4WriterProcessor,
-//     MetalDevice,
-//     // VideoToolbox encoder (config types are in core::codec):
-//     VideoToolboxEncoder,
-// };
+// Apple processor re-exports (migrated to iceoryx2 API)
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use apple::{
+    // AppleAudioCaptureProcessor as AudioCaptureProcessor,
+    // AppleAudioOutputProcessor as AudioOutputProcessor,
+    AppleCameraProcessor as CameraProcessor,
+    AppleDisplayProcessor as DisplayProcessor,
+    // AppleMp4WriterProcessor as Mp4WriterProcessor,
+    // MetalDevice,
+    // VideoToolbox encoder (config types are in core::codec):
+    // VideoToolboxEncoder,
+};
 
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};

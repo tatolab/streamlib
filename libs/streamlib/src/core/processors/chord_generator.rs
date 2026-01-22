@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, RuntimeContext, StreamError};
-use crate::schemas::Audioframe2ch;
+use crate::core::{Result, RuntimeContext};
+use crate::_generated_::Audioframe2Ch;
 
 struct SineOscillator {
     phase: f64,
@@ -63,7 +63,7 @@ impl crate::core::ContinuousProcessor for ChordGeneratorProcessor::Processor {
         &mut self,
         _ctx: RuntimeContext,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.buffer_size = self.config.buffer_size;
+        self.buffer_size = self.config.buffer_size as usize;
         self.sample_rate = self.config.sample_rate;
         self.frame_counter = 0;
 
@@ -102,11 +102,11 @@ impl crate::core::ContinuousProcessor for ChordGeneratorProcessor::Processor {
         let counter = self.frame_counter;
         self.frame_counter += 1;
 
-        let chord_frame = Audioframe2ch {
+        let chord_frame = Audioframe2Ch {
             samples: stereo_samples,
             sample_rate: self.sample_rate,
-            timestamp_ns,
-            frame_index: counter,
+            timestamp_ns: timestamp_ns.to_string(),
+            frame_index: counter.to_string(),
         };
 
         if counter == 0 {
@@ -120,10 +120,7 @@ impl crate::core::ContinuousProcessor for ChordGeneratorProcessor::Processor {
             );
         }
 
-        let bytes = chord_frame
-            .to_msgpack()
-            .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
-        self.outputs.write("chord", &bytes)?;
+        self.outputs.write("chord", &chord_frame)?;
 
         Ok(())
     }

@@ -1,16 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, RuntimeContext, StreamError};
-use crate::schemas::{Audioframe1ch, Audioframe2ch};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-pub enum MixingStrategy {
-    Sum,
-    #[default]
-    SumNormalized,
-    SumClipped,
-}
+use crate::_generated_::com_tatolab_audio_mixer_config::Strategy;
+use crate::_generated_::{Audioframe1Ch, Audioframe2Ch};
+use crate::core::{Result, RuntimeContext};
 
 #[crate::processor("src/core/processors/audio_mixer.yaml")]
 pub struct AudioMixerProcessor {
@@ -43,26 +36,14 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
     fn process(&mut self) -> Result<()> {
         tracing::debug!("[AudioMixer] process() called");
 
-        let left_payload = match self.inputs.get("left") {
-            Some(p) => p,
-            None => {
-                tracing::debug!("[AudioMixer] Left input has no data");
-                return Ok(());
-            }
-        };
+        // Check both inputs have data
+        if !self.inputs.has_data("left") || !self.inputs.has_data("right") {
+            tracing::debug!("[AudioMixer] Waiting for both inputs");
+            return Ok(());
+        }
 
-        let right_payload = match self.inputs.get("right") {
-            Some(p) => p,
-            None => {
-                tracing::debug!("[AudioMixer] Right input has no data");
-                return Ok(());
-            }
-        };
-
-        let left_frame = Audioframe1ch::from_msgpack(left_payload.data())
-            .map_err(|e| StreamError::Runtime(format!("left msgpack decode: {}", e)))?;
-        let right_frame = Audioframe1ch::from_msgpack(right_payload.data())
-            .map_err(|e| StreamError::Runtime(format!("right msgpack decode: {}", e)))?;
+        let left_frame: Audioframe1Ch = self.inputs.read("left")?;
+        let right_frame: Audioframe1Ch = self.inputs.read("right")?;
 
         if self.sample_rate == 0 {
             self.sample_rate = left_frame.sample_rate;
@@ -108,7 +89,12 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             return Ok(());
         }
 
-        let timestamp_ns = left_frame.timestamp_ns.max(right_frame.timestamp_ns);
+        // Parse timestamp strings to compare (use lexicographic comparison for now)
+        let timestamp_ns = if left_frame.timestamp_ns > right_frame.timestamp_ns {
+            left_frame.timestamp_ns.clone()
+        } else {
+            right_frame.timestamp_ns.clone()
+        };
 
         // Both inputs are mono, interleave into stereo
         let mut stereo_samples = Vec::with_capacity(self.buffer_size * 2);
@@ -118,9 +104,9 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             let right_sample = right_frame.samples[i];
 
             let (final_left, final_right) = match self.config.strategy {
-                MixingStrategy::Sum => (left_sample, right_sample),
-                MixingStrategy::SumNormalized => (left_sample, right_sample),
-                MixingStrategy::SumClipped => {
+                Strategy::Sum => (left_sample, right_sample),
+                Strategy::SumNormalized => (left_sample, right_sample),
+                Strategy::SumClipped => {
                     (left_sample.clamp(-1.0, 1.0), right_sample.clamp(-1.0, 1.0))
                 }
             };
@@ -129,17 +115,14 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             stereo_samples.push(final_right);
         }
 
-        let output_frame = Audioframe2ch {
+        let output_frame = Audioframe2Ch {
             samples: stereo_samples,
             sample_rate: self.sample_rate,
             timestamp_ns,
-            frame_index: self.frame_counter,
+            frame_index: self.frame_counter.to_string(),
         };
 
-        let bytes = output_frame
-            .to_msgpack()
-            .map_err(|e| StreamError::Runtime(format!("msgpack encode: {}", e)))?;
-        self.outputs.write("audio", &bytes)?;
+        self.outputs.write("audio", &output_frame)?;
 
         tracing::debug!("[AudioMixer] Wrote mixed stereo frame");
         self.frame_counter += 1;

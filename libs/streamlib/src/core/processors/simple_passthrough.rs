@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::_generated_::Videoframe;
 use crate::core::Result;
 
 #[crate::processor("src/core/processors/simple_passthrough.yaml")]
@@ -11,8 +12,9 @@ impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
 
     fn start(&mut self) -> Result<()> {
         // Read from iceoryx2 input mailbox and write to output
-        if let Some(payload) = self.inputs.get("input") {
-            self.outputs.write("output", payload.data())?;
+        if self.inputs.has_data("input") {
+            let frame: Videoframe = self.inputs.read("input")?;
+            self.outputs.write("output", &frame)?;
         }
         Ok(())
     }

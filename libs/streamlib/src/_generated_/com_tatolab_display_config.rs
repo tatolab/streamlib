@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 
 
 
-/// How video content is scaled within the window
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// How video content is scaled within the window. Default: Letterbox
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum ScalingMode {
 
     #[serde(rename = "Crop")]
+    #[default]
     Crop,
 
     #[serde(rename = "Letterbox")]
@@ -23,29 +24,29 @@ pub enum ScalingMode {
 
 
 /// Configuration for video display window (macOS/iOS)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayConfig {
 
     /// Number of drawable buffers (2=double, 3=triple). Default: 2
     #[serde(rename = "drawable_count")]
-    pub drawable_count: u32,
+    pub drawable_count: Option<u32>,
 
     /// Window height in pixels
     #[serde(rename = "height")]
     pub height: u32,
 
-    /// How video content is scaled within the window
+    /// How video content is scaled within the window. Default: Letterbox
     #[serde(rename = "scaling_mode")]
-    pub scaling_mode: ScalingMode,
+    pub scaling_mode: Option<ScalingMode>,
 
-    /// Window title. If None, uses 'streamlib Display'
+    /// Window title. Default: 'streamlib Display'
     #[serde(rename = "title")]
     pub title: Option<String>,
 
     /// Enable vsync (synchronize to display refresh rate). Default: true
     #[serde(rename = "vsync")]
-    pub vsync: bool,
+    pub vsync: Option<bool>,
 
     /// Window width in pixels
     #[serde(rename = "width")]

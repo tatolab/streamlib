@@ -9,7 +9,14 @@
 use std::ffi::{c_void, CStr, CString};
 
 use crate::state::BrokerState;
-use crate::xpc_ffi::*;
+use crate::xpc_ffi::{
+    _NSConcreteMallocBlock, xpc_connection_cancel, xpc_connection_create_mach_service,
+    xpc_connection_resume, xpc_connection_send_message, xpc_connection_set_event_handler,
+    xpc_dictionary_copy_mach_send, xpc_dictionary_create_reply, xpc_dictionary_get_remote_connection,
+    xpc_dictionary_get_string, xpc_dictionary_set_mach_send, xpc_dictionary_set_string,
+    xpc_error_connection_interrupted, xpc_error_connection_invalid, xpc_is_dictionary, xpc_is_error,
+    xpc_object_t, xpc_release, xpc_connection_t, Block, BlockDescriptor, BLOCK_FLAGS_NEEDS_FREE,
+};
 
 /// XPC service for surface store operations.
 pub struct XpcSurfaceService {
@@ -142,8 +149,8 @@ unsafe fn create_connection_handler(context: *mut HandlerContext) -> *mut c_void
     };
 
     let block = Box::new(Block {
-        isa: &_NSConcreteStackBlock as *const _ as *const c_void,
-        flags: BLOCK_FLAGS_STACK,
+        isa: &_NSConcreteMallocBlock as *const _ as *const c_void,
+        flags: BLOCK_FLAGS_NEEDS_FREE,
         reserved: 0,
         invoke: connection_handler_trampoline as *const c_void,
         descriptor: &DESCRIPTOR,
@@ -188,8 +195,8 @@ unsafe fn create_message_handler(context: *mut HandlerContext) -> *mut c_void {
     };
 
     let block = Box::new(Block {
-        isa: &_NSConcreteStackBlock as *const _ as *const c_void,
-        flags: BLOCK_FLAGS_STACK,
+        isa: &_NSConcreteMallocBlock as *const _ as *const c_void,
+        flags: BLOCK_FLAGS_NEEDS_FREE,
         reserved: 0,
         invoke: message_handler_trampoline as *const c_void,
         descriptor: &DESCRIPTOR,
@@ -213,6 +220,11 @@ unsafe fn handle_message(context: &HandlerContext, message: xpc_object_t) {
     let op = CStr::from_ptr(op_ptr).to_string_lossy();
 
     match op.as_ref() {
+        // New API: client provides surface_id
+        "register" => handle_register(context, message),
+        "lookup" => handle_lookup(context, message),
+        "unregister" => handle_unregister(context, message),
+        // Legacy API: broker generates surface_id (deprecated)
         "check_in" => handle_check_in(context, message),
         "check_out" => handle_check_out(context, message),
         "release" => handle_release(context, message),
@@ -222,7 +234,180 @@ unsafe fn handle_message(context: &HandlerContext, message: xpc_object_t) {
     }
 }
 
-/// Handle a check_in request: register a surface and return its ID.
+/// Handle a register request: client provides surface_id and mach_port.
+unsafe fn handle_register(context: &HandlerContext, message: xpc_object_t) {
+    let runtime_id_key = CString::new("runtime_id").unwrap();
+    let port_key = CString::new("mach_port").unwrap();
+    let surface_id_key = CString::new("surface_id").unwrap();
+    let success_key = CString::new("success").unwrap();
+
+    // Get surface_id (required - client provides this)
+    let surface_id_ptr = xpc_dictionary_get_string(message, surface_id_key.as_ptr());
+    if surface_id_ptr.is_null() {
+        tracing::warn!("[Broker] XPC register: missing surface_id");
+        send_error_reply(message, "missing surface_id");
+        return;
+    }
+    let surface_id = CStr::from_ptr(surface_id_ptr).to_string_lossy();
+
+    // Get runtime_id
+    let runtime_id_ptr = xpc_dictionary_get_string(message, runtime_id_key.as_ptr());
+    let runtime_id = if !runtime_id_ptr.is_null() {
+        CStr::from_ptr(runtime_id_ptr)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        "unknown".to_string()
+    };
+
+    // Copy mach port from message
+    let mach_port = xpc_dictionary_copy_mach_send(message, port_key.as_ptr());
+
+    if mach_port == 0 {
+        tracing::warn!("[Broker] XPC register: invalid mach port");
+        send_error_reply(message, "invalid mach port");
+        return;
+    }
+
+    // Register the surface with client-provided ID
+    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port);
+
+    if success {
+        tracing::debug!(
+            "[Broker] XPC register: registered surface '{}' for runtime '{}' (port {})",
+            surface_id,
+            runtime_id,
+            mach_port
+        );
+    } else {
+        tracing::warn!(
+            "[Broker] XPC register: surface '{}' already exists",
+            surface_id
+        );
+    }
+
+    // Send reply with success status
+    let reply = xpc_dictionary_create_reply(message);
+    if !reply.is_null() {
+        let success_str = CString::new(if success { "true" } else { "false" }).unwrap();
+        xpc_dictionary_set_string(reply, success_key.as_ptr(), success_str.as_ptr());
+
+        let remote = xpc_dictionary_get_remote_connection(message);
+        if !remote.is_null() {
+            xpc_connection_send_message(remote, reply);
+        }
+        xpc_release(reply);
+    }
+}
+
+/// Handle a lookup request: return the mach port for a surface ID.
+unsafe fn handle_lookup(context: &HandlerContext, message: xpc_object_t) {
+    let surface_id_key = CString::new("surface_id").unwrap();
+    let port_key = CString::new("mach_port").unwrap();
+
+    // Get surface_id
+    let surface_id_ptr = xpc_dictionary_get_string(message, surface_id_key.as_ptr());
+    if surface_id_ptr.is_null() {
+        tracing::warn!("[Broker] XPC lookup: missing surface_id");
+        return;
+    }
+
+    let surface_id = CStr::from_ptr(surface_id_ptr).to_string_lossy();
+
+    // Look up the mach port
+    let mach_port = context.state.get_surface_mach_port(&surface_id);
+
+    let reply = xpc_dictionary_create_reply(message);
+    if reply.is_null() {
+        return;
+    }
+
+    match mach_port {
+        Some(port) => {
+            tracing::trace!(
+                "[Broker] XPC lookup: returning port {} for surface '{}'",
+                port,
+                surface_id
+            );
+            xpc_dictionary_set_mach_send(reply, port_key.as_ptr(), port);
+        }
+        None => {
+            tracing::warn!("[Broker] XPC lookup: surface '{}' not found", surface_id);
+            let error_key = CString::new("error").unwrap();
+            let error_value = CString::new("surface not found").unwrap();
+            xpc_dictionary_set_string(reply, error_key.as_ptr(), error_value.as_ptr());
+        }
+    }
+
+    let remote = xpc_dictionary_get_remote_connection(message);
+    if !remote.is_null() {
+        xpc_connection_send_message(remote, reply);
+    }
+    xpc_release(reply);
+}
+
+/// Handle an unregister request: remove a surface.
+unsafe fn handle_unregister(context: &HandlerContext, message: xpc_object_t) {
+    let surface_id_key = CString::new("surface_id").unwrap();
+    let runtime_id_key = CString::new("runtime_id").unwrap();
+
+    // Get surface_id
+    let surface_id_ptr = xpc_dictionary_get_string(message, surface_id_key.as_ptr());
+    if surface_id_ptr.is_null() {
+        tracing::warn!("[Broker] XPC unregister: missing surface_id");
+        return;
+    }
+
+    let surface_id = CStr::from_ptr(surface_id_ptr).to_string_lossy();
+
+    // Get runtime_id
+    let runtime_id_ptr = xpc_dictionary_get_string(message, runtime_id_key.as_ptr());
+    let runtime_id = if !runtime_id_ptr.is_null() {
+        CStr::from_ptr(runtime_id_ptr)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        "unknown".to_string()
+    };
+
+    // Release the surface
+    let released = context.state.release_surface(&surface_id, &runtime_id);
+
+    if released {
+        tracing::debug!(
+            "[Broker] XPC unregister: released surface '{}' for runtime '{}'",
+            surface_id,
+            runtime_id
+        );
+    } else {
+        tracing::trace!(
+            "[Broker] XPC unregister: surface '{}' not found or not owned by runtime '{}'",
+            surface_id,
+            runtime_id
+        );
+    }
+
+    // Unregister is fire-and-forget, no reply needed
+}
+
+/// Helper to send an error reply.
+unsafe fn send_error_reply(message: xpc_object_t, error_msg: &str) {
+    let reply = xpc_dictionary_create_reply(message);
+    if !reply.is_null() {
+        let error_key = CString::new("error").unwrap();
+        let error_value = CString::new(error_msg).unwrap();
+        xpc_dictionary_set_string(reply, error_key.as_ptr(), error_value.as_ptr());
+
+        let remote = xpc_dictionary_get_remote_connection(message);
+        if !remote.is_null() {
+            xpc_connection_send_message(remote, reply);
+        }
+        xpc_release(reply);
+    }
+}
+
+/// Handle a check_in request (LEGACY): broker generates surface_id.
+/// Deprecated - use "register" instead where client provides ID.
 unsafe fn handle_check_in(context: &HandlerContext, message: xpc_object_t) {
     let runtime_id_key = CString::new("runtime_id").unwrap();
     let port_key = CString::new("mach_port").unwrap();
@@ -238,36 +423,29 @@ unsafe fn handle_check_in(context: &HandlerContext, message: xpc_object_t) {
         "unknown".to_string()
     };
 
-    // Get mach port
-    let mach_port = xpc_dictionary_get_mach_send(message, port_key.as_ptr());
+    // Copy mach port from message
+    let mach_port = xpc_dictionary_copy_mach_send(message, port_key.as_ptr());
 
     if mach_port == 0 {
         tracing::warn!("[Broker] XPC check_in: invalid mach port");
-        // Send error reply
-        let reply = xpc_dictionary_create_reply(message);
-        if !reply.is_null() {
-            let error_key = CString::new("error").unwrap();
-            let error_value = CString::new("invalid mach port").unwrap();
-            xpc_dictionary_set_string(reply, error_key.as_ptr(), error_value.as_ptr());
-
-            let remote = xpc_dictionary_get_remote_connection(message);
-            if !remote.is_null() {
-                xpc_connection_send_message(remote, reply);
-            }
-            xpc_release(reply);
-        }
+        send_error_reply(message, "invalid mach port");
         return;
     }
 
-    // Register the surface
-    let surface_id = context.state.register_surface(&runtime_id, mach_port);
+    // Generate UUID on broker side (legacy behavior)
+    let surface_id = uuid::Uuid::new_v4().to_string();
 
-    tracing::debug!(
-        "[Broker] XPC check_in: registered surface '{}' for runtime '{}' (port {})",
-        surface_id,
-        runtime_id,
-        mach_port
-    );
+    // Register the surface
+    let success = context.state.register_surface(&surface_id, &runtime_id, mach_port);
+
+    if success {
+        tracing::debug!(
+            "[Broker] XPC check_in: registered surface '{}' for runtime '{}' (port {})",
+            surface_id,
+            runtime_id,
+            mach_port
+        );
+    }
 
     // Send reply with surface_id
     let reply = xpc_dictionary_create_reply(message);
