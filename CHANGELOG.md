@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/tatolab/streamlib/compare/v0.2.5...v0.3.0) (2026-01-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* Old LinkInput<T>/LinkOutput<T> API replaced with InputMailboxes/OutputWriter using iceoryx2 zero-copy shared memory.
+
+### Features
+
+* Channels Architecture for Multi-Platform Processors ([#127](https://github.com/tatolab/streamlib/issues/127)) ([a5e0c89](https://github.com/tatolab/streamlib/commit/a5e0c8966ebd04c4f1c29b6792a1f70157649434))
+
 ## [0.2.5](https://github.com/tatolab/streamlib/compare/v0.2.4...v0.2.5) (2026-01-17)
 
 
