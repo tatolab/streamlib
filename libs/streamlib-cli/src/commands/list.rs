@@ -4,9 +4,6 @@
 use anyhow::Result;
 use streamlib::PROCESSOR_REGISTRY;
 
-// Force linkage of streamlib-python to ensure Python processors are registered via inventory
-extern crate streamlib_python;
-
 /// List all registered processor types.
 pub fn processors() -> Result<()> {
     let descriptors = PROCESSOR_REGISTRY.list_registered();

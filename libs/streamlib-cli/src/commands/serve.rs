@@ -9,9 +9,6 @@ use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::plugin_loader::PluginLoader;
 
-// Force linkage of streamlib-python to ensure Python processors are registered via inventory
-extern crate streamlib_python;
-
 /// Docker-style adjectives for runtime name generation.
 const ADJECTIVES: &[&str] = &[
     "admiring",
@@ -167,7 +164,7 @@ pub async fn run(
         host: host.clone(),
         port,
         name: Some(runtime_name.clone()),
-        log_path: Some(log_path.clone()),
+        log_path: Some(log_path.to_string_lossy().into_owned()),
     };
     runtime.add_processor(ApiServerProcessor::node(config))?;
 

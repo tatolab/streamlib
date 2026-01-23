@@ -7,6 +7,7 @@ use std::sync::Arc;
 use super::{GpuContext, TimeContext};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
+use crate::iceoryx2::Iceoryx2Node;
 
 #[derive(Clone)]
 pub struct RuntimeContext {
@@ -23,6 +24,8 @@ pub struct RuntimeContext {
     runtime_ops: Arc<dyn RuntimeOperations>,
     /// Shared tokio runtime handle for async operations.
     tokio_handle: tokio::runtime::Handle,
+    /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
+    iceoryx2_node: Iceoryx2Node,
 }
 
 impl RuntimeContext {
@@ -32,6 +35,7 @@ impl RuntimeContext {
         runtime_id: Arc<RuntimeUniqueId>,
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
+        iceoryx2_node: Iceoryx2Node,
     ) -> Self {
         Self {
             gpu,
@@ -41,6 +45,7 @@ impl RuntimeContext {
             pause_gate: None,
             runtime_ops,
             tokio_handle,
+            iceoryx2_node,
         }
     }
 
@@ -102,6 +107,11 @@ impl RuntimeContext {
         &self.tokio_handle
     }
 
+    /// Get the iceoryx2 Node for creating Services, Publishers, and Subscribers.
+    pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
+        &self.iceoryx2_node
+    }
+
     /// Create a processor-specific context with a processor ID.
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
@@ -112,6 +122,7 @@ impl RuntimeContext {
             pause_gate: self.pause_gate.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
+            iceoryx2_node: self.iceoryx2_node.clone(),
         }
     }
 
@@ -125,6 +136,7 @@ impl RuntimeContext {
             pause_gate: Some(pause_gate),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
+            iceoryx2_node: self.iceoryx2_node.clone(),
         }
     }
 

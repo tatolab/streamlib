@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::pubsub::{topics, Event, EventListener, PUBSUB};
-use crate::core::schema_registry::SCHEMA_REGISTRY;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
 use crate::{
@@ -125,29 +124,6 @@ fn default_logs_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".streamlib").join("logs"))
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct ApiServerConfig {
-    pub host: String,
-    pub port: u16,
-    /// Runtime name for broker registration (auto-generated if None).
-    #[serde(default)]
-    pub name: Option<String>,
-    /// Log file path for broker registration (derived from name if None).
-    #[serde(default)]
-    pub log_path: Option<PathBuf>,
-}
-
-impl Default for ApiServerConfig {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 9000,
-            name: None,
-            log_path: None,
-        }
-    }
-}
-
 #[derive(Clone)]
 struct AppState {
     runtime_ctx: RuntimeContext,
@@ -186,9 +162,7 @@ struct IdResponse {
 
 // Note: RegistryResponse is now defined in crate::core::json_schema
 // and imported below for the get_registry handler.
-use crate::core::json_schema::{
-    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput,
-};
+use crate::core::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 
 #[derive(Serialize, utoipa::ToSchema)]
 struct ErrorResponse {
@@ -222,20 +196,12 @@ struct ApiDoc;
 // Processor Definition
 // ============================================================================
 
-#[crate::processor(
-    execution = Manual,
-    description = "Runtime api server for streamlib"
-)]
+#[crate::processor("src/core/processors/api_server.yaml")]
 pub struct ApiServerProcessor {
-    #[crate::config]
-    config: ApiServerConfig,
     runtime_ctx: Option<RuntimeContext>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Runtime ID for broker registration (from env or generated).
     runtime_id: Option<String>,
-    /// Resolved runtime name (from config or auto-generated).
     resolved_name: Option<String>,
-    /// Actual bound port (may differ from config if port was in use).
     actual_port: Option<u16>,
 }
 
@@ -281,11 +247,16 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         self.runtime_id = Some(runtime_id.clone());
 
         // Resolve log path (from config or derive from name)
-        let log_path = self.config.log_path.clone().unwrap_or_else(|| {
-            default_logs_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp/streamlib/logs"))
-                .join(format!("{}.log", runtime_name))
-        });
+        let log_path: PathBuf = self
+            .config
+            .log_path
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                default_logs_dir()
+                    .unwrap_or_else(|| PathBuf::from("/tmp/streamlib/logs"))
+                    .join(format!("{}.log", runtime_name))
+            });
 
         // Build OpenAPI router with documented routes
         let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -596,14 +567,10 @@ async fn get_registry() -> Json<RegistryResponse> {
         .into_iter()
         .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
-    let schemas: Vec<SchemaDescriptorOutput> = SCHEMA_REGISTRY
-        .list_descriptors()
-        .into_iter()
-        .map(|d| SchemaDescriptorOutput::from(&d))
-        .collect();
+    // Schema registry removed - iceoryx2 handles schemas via MessagePack
     Json(RegistryResponse {
         processors,
-        schemas,
+        schemas: vec![],
     })
 }
 

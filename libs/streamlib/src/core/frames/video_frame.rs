@@ -8,16 +8,17 @@ use crate::core::rhi::{PixelFormat, RhiPixelBuffer};
 /// VideoFrame wraps an `RhiPixelBuffer` which holds a reference to
 /// platform pixel data (CVPixelBuffer on macOS). To render the frame,
 /// create a texture view using `RhiTextureCache::create_view()`.
-#[crate::schema(content_hint = Video)]
+///
+/// Schema: `com.tatolab.videoframe@1.0.0`
 #[derive(Clone)]
 pub struct VideoFrame {
     /// The pixel buffer containing the frame data.
     buffer: RhiPixelBuffer,
 
-    #[crate::field(description = "Monotonic timestamp in nanoseconds")]
+    /// Monotonic timestamp in nanoseconds.
     pub timestamp_ns: i64,
 
-    #[crate::field(description = "Sequential frame number")]
+    /// Sequential frame number.
     pub frame_number: u64,
 }
 

@@ -1,0 +1,15 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+name: com.streamlib.test.mock_input_only_processor
+version: 1.0.0
+description: "Mock processor with only input ports for testing"
+execution: manual
+
+inputs:
+  - name: in1
+    schema: com.tatolab.videoframe@1.0.0
+    description: Test input port 1
+  - name: in2
+    schema: com.tatolab.videoframe@1.0.0
+    description: Test input port 2

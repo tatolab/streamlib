@@ -1,8 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{LinkOutput, Result, RuntimeContext, StreamError, VideoFrame};
+use crate::apple::corevideo_ffi::{
+    CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
+};
+use crate::apple::iosurface::create_metal_texture_from_iosurface;
+use crate::core::rhi::GpuDevice;
+use crate::core::rhi::{PixelFormat, RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
+use crate::iceoryx2::OutputWriter;
+use metal::foreign_types::ForeignTypeRef;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -12,48 +19,14 @@ use objc2_av_foundation::{
 };
 use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSString};
+use objc2_io_surface::IOSurface;
 use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Frame rate configuration for camera capture.
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ConfigDescriptor,
-)]
-pub struct FrameRateConfig {
-    /// Minimum frames per second (floor). Default: 30.
-    pub min_fps: f64,
-    /// Maximum frames per second (ceiling). Default: auto-detected from display refresh rate.
-    /// If None, uses the main display's refresh rate (60Hz, 120Hz ProMotion, etc.)
-    pub max_fps: Option<f64>,
-}
-
-impl Default for FrameRateConfig {
-    fn default() -> Self {
-        Self {
-            min_fps: 60.0, // Request 60fps minimum, will be clamped to camera's max if unsupported
-            max_fps: None, // Auto-detect from display
-        }
-    }
-}
-
-// Apple-specific configuration and device types
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default, crate::ConfigDescriptor,
-)]
-pub struct AppleCameraConfig {
-    pub device_id: Option<String>,
-    /// Frame rate configuration. If None, uses default (30fps min, display refresh rate max).
-    #[serde(default)]
-    pub frame_rate: Option<FrameRateConfig>,
-}
-
-impl From<()> for AppleCameraConfig {
-    fn from(_: ()) -> Self {
-        Self::default()
-    }
-}
+// Config type is generated from JTD schema
+pub use crate::_generated_::CameraConfig;
 
 #[derive(Debug, Clone)]
 pub struct AppleCameraDevice {
@@ -64,7 +37,6 @@ pub struct AppleCameraDevice {
 type CMSampleBufferRef = *mut c_void;
 
 #[link(name = "CoreMedia", kind = "framework")]
-#[allow(clashing_extern_declarations)]
 extern "C" {
     fn CMSampleBufferGetImageBuffer(sbuf: CMSampleBufferRef) -> *mut CVPixelBuffer;
 }
@@ -191,11 +163,26 @@ impl CaptureSessionInitState {
     }
 }
 
-/// Callback context for processing frames directly in AVFoundation callback
+/// Callback context for processing frames directly in AVFoundation callback.
+///
+/// # Safety
+/// The `output_writer` pointer must remain valid for the lifetime of this context.
+/// This is guaranteed by holding `_outputs_arc` which keeps the Arc alive.
 struct CameraCallbackContext {
-    video_output: LinkOutput<VideoFrame>,
+    output_writer: *const OutputWriter,
+    gpu_context: crate::core::GpuContext,
     frame_count: std::sync::atomic::AtomicU64,
+    /// Holds the Arc to keep the OutputWriter alive while the pointer is in use.
+    _outputs_arc: Arc<OutputWriter>,
+    /// Command queue for GPU blit operations.
+    command_queue: RhiCommandQueue,
+    /// GPU device for creating Metal textures from IOSurfaces.
+    device: Arc<GpuDevice>,
 }
+
+// SAFETY: OutputWriter is Sync, and the pointer is only dereferenced while valid
+unsafe impl Send for CameraCallbackContext {}
+unsafe impl Sync for CameraCallbackContext {}
 
 /// Global callback context - set by start(), used by AVFoundation callback
 static CAMERA_CALLBACK_CONTEXT: std::sync::OnceLock<Arc<CameraCallbackContext>> =
@@ -227,28 +214,80 @@ define_class!(
                 return;
             }
 
-            // Retain the CVPixelBuffer and wrap it in our RHI types
-            // RhiPixelBufferRef::from_cv_pixel_buffer calls CVPixelBufferRetain
-            let Some(buffer_ref) =
-                RhiPixelBufferRef::from_cv_pixel_buffer(pixel_buffer_ptr as *mut std::ffi::c_void)
-            else {
+            // Get IOSurface for cross-process sharing
+            let camera_iosurface =
+                CVPixelBufferGetIOSurface(pixel_buffer_ptr as *mut std::ffi::c_void);
+            if camera_iosurface.is_null() {
+                eprintln!("[Camera] CVPixelBuffer not backed by IOSurface");
                 return;
-            };
+            }
 
-            // Create RhiPixelBuffer with cached dimensions
-            let buffer = RhiPixelBuffer::new(buffer_ref);
+            // Get dimensions from CVPixelBuffer
+            let width = CVPixelBufferGetWidth(pixel_buffer_ptr as *mut _) as u32;
+            let height = CVPixelBufferGetHeight(pixel_buffer_ptr as *mut _) as u32;
 
-            let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
             let frame_num = ctx.frame_count.fetch_add(1, Ordering::Relaxed);
 
-            // Create VideoFrame directly from buffer (no texture blit needed!)
-            let frame = VideoFrame::from_buffer(buffer, timestamp_ns, frame_num);
+            // Acquire pooled buffer from GpuContext (pool is managed centrally)
+            let surface_id_str =
+                match ctx
+                    .gpu_context
+                    .acquire_pixel_buffer(width, height, PixelFormat::Bgra32)
+                {
+                    Ok((pool_id, pooled_buffer)) => {
+                        // GPU blit from camera IOSurface to pooled IOSurface
+                        match blit_iosurface_to_pooled_buffer(
+                            ctx,
+                            camera_iosurface,
+                            &pooled_buffer,
+                            width,
+                            height,
+                        ) {
+                            Ok(()) => {
+                                // Use the PixelBufferPoolId directly - no need to extract IOSurfaceID
+                                // pooled_buffer is dropped here, releasing it back to the pool
+                                pool_id.to_string()
+                            }
+                            Err(e) => {
+                                if frame_num == 0 {
+                                    eprintln!("[Camera] Blit failed: {}, falling back", e);
+                                }
+                                // Blit failed, fall back to direct forwarding
+                                forward_camera_iosurface_directly(ctx, camera_iosurface)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if frame_num == 0 {
+                            eprintln!("[Camera] Pool acquire failed: {}, falling back", e);
+                        }
+                        // Pool exhausted or error, fall back to direct forwarding
+                        forward_camera_iosurface_directly(ctx, camera_iosurface)
+                    }
+                };
 
-            // Write frame to output
-            ctx.video_output.write(frame);
+            let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
+
+            // Create IPC frame with surface_id as string
+            // The receiving process will use check_out_surface() or IOSurfaceLookup(id) to access the surface
+            let ipc_frame = crate::_generated_::Videoframe {
+                surface_id: surface_id_str,
+                width,
+                height,
+                timestamp_ns: timestamp_ns.to_string(),
+                frame_index: frame_num.to_string(),
+            };
+
+            // Write IPC frame to output via iceoryx2
+            // SAFETY: output_writer pointer is valid while callback context exists
+            let outputs = &*ctx.output_writer;
+            if let Err(e) = outputs.write("video", &ipc_frame) {
+                eprintln!("[Camera] Failed to write frame: {}", e);
+                return;
+            }
 
             if frame_num == 0 {
-                eprintln!("[Camera] AVFoundation: First frame processed (buffer-centric)");
+                eprintln!("[Camera] AVFoundation: First frame processed (pooled buffers)");
             } else if frame_num % 60 == 0 {
                 eprintln!("[Camera] AVFoundation: Frame #{}", frame_num);
             }
@@ -265,29 +304,118 @@ impl CameraDelegate {
     }
 }
 
-#[crate::processor(
-    name = "CameraProcessor",
-    execution = Manual,
-    description = "Captures video from macOS cameras using AVFoundation"
-)]
+/// GPU blit from camera IOSurface to pooled buffer's IOSurface.
+///
+/// This copies the camera frame data to a pooled buffer with a stable IOSurface ID,
+/// avoiding the creation of thousands of unique IOSurfaces over time.
+///
+/// # Safety
+/// - `camera_iosurface` must be a valid IOSurfaceRef
+/// - Called from AVFoundation callback context
+unsafe fn blit_iosurface_to_pooled_buffer(
+    ctx: &CameraCallbackContext,
+    camera_iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
+    pooled_buffer: &RhiPixelBuffer,
+    width: u32,
+    height: u32,
+) -> crate::core::Result<()> {
+    // Get destination IOSurface from pooled buffer
+    let dest_iosurface = pooled_buffer
+        .buffer_ref()
+        .iosurface_ref()
+        .ok_or_else(|| StreamError::GpuError("Pooled buffer not backed by IOSurface".into()))?;
+
+    // Cast IOSurfaceRef pointers to objc2 IOSurface references
+    let src_iosurface_ref = &*(camera_iosurface as *const IOSurface);
+    let dest_iosurface_ref = &*(dest_iosurface as *const IOSurface);
+
+    // Get Metal device for creating textures
+    let metal_device = ctx.device.as_metal_device().device();
+
+    // Create Metal textures from both IOSurfaces
+    let src_texture = create_metal_texture_from_iosurface(metal_device, src_iosurface_ref, 0)?;
+    let dest_texture = create_metal_texture_from_iosurface(metal_device, dest_iosurface_ref, 0)?;
+
+    // Create command buffer and blit encoder
+    let command_buffer = ctx.command_queue.metal_queue_ref().new_command_buffer();
+    let blit_encoder = command_buffer.new_blit_command_encoder();
+
+    // Set up copy parameters
+    let origin = metal::MTLOrigin { x: 0, y: 0, z: 0 };
+    let size = metal::MTLSize {
+        width: width as u64,
+        height: height as u64,
+        depth: 1,
+    };
+
+    // Convert objc2 Metal textures to metal crate references for blit API
+    let src_texture_ptr = &*src_texture as *const _ as *mut std::ffi::c_void;
+    let src_texture_ref = metal::TextureRef::from_ptr(src_texture_ptr as *mut _);
+
+    let dest_texture_ptr = &*dest_texture as *const _ as *mut std::ffi::c_void;
+    let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
+
+    // Perform the GPU blit
+    blit_encoder.copy_from_texture(
+        src_texture_ref,
+        0, // source slice
+        0, // source level
+        origin,
+        size,
+        dest_texture_ref,
+        0, // dest slice
+        0, // dest level
+        origin,
+    );
+
+    blit_encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    Ok(())
+}
+
+/// Fall back to direct IOSurface forwarding (old behavior).
+///
+/// Used when pool is not available or blit fails.
+unsafe fn forward_camera_iosurface_directly(
+    ctx: &CameraCallbackContext,
+    camera_iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
+) -> String {
+    match RhiPixelBufferRef::from_iosurface_ref(camera_iosurface) {
+        Ok(pixel_buffer_ref) => {
+            let pixel_buffer = RhiPixelBuffer::new(pixel_buffer_ref);
+            match ctx.gpu_context.check_in_surface(&pixel_buffer) {
+                Ok(id) => id,
+                Err(_) => {
+                    // Surface store not available, fall back to raw IOSurface ID
+                    IOSurfaceGetID(camera_iosurface).to_string()
+                }
+            }
+        }
+        Err(_) => {
+            // Failed to create pixel buffer, use raw IOSurface ID
+            IOSurfaceGetID(camera_iosurface).to_string()
+        }
+    }
+}
+
+#[crate::processor("src/apple/processors/camera.yaml")]
 pub struct AppleCameraProcessor {
-    #[crate::output(description = "Live video frames from the camera")]
-    video: LinkOutput<VideoFrame>,
-
-    #[crate::config]
-    config: AppleCameraConfig,
-
     camera_name: String,
     /// Async init state - None means init not started yet.
     capture_init_state: Option<Arc<CaptureSessionInitState>>,
+    /// GPU context for surface store access (set in setup, used in start).
+    gpu_context: Option<GpuContext>,
 }
 
 impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: RuntimeContext,
+        ctx: RuntimeContext,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
-        // No GPU context needed - camera outputs buffer-backed frames
+        // Store GPU context for surface store access in start()
+        self.gpu_context = Some(ctx.gpu.clone());
         tracing::info!("Camera: setup() complete");
         std::future::ready(Ok(()))
     }
@@ -309,10 +437,28 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
     fn start(&mut self) -> Result<()> {
         tracing::trace!("Camera: start() called - setting up callback-driven capture");
 
-        // Create callback context (no Metal/texture pool needed - buffer-centric!)
+        // Get GPU context (set during setup)
+        let gpu_context = self.gpu_context.clone().ok_or_else(|| {
+            StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
+        })?;
+
+        // Get command queue and device for GPU blit operations
+        let command_queue = gpu_context.command_queue().clone();
+        let device = gpu_context.device().clone();
+
+        // Create callback context with pointer to OutputWriter and GPU context
+        // SAFETY: The processor outlives the callback context (stop() clears it before drop)
+        // Clone the Arc to get a reference we can convert to a pointer
+        let outputs_arc: Arc<OutputWriter> = self.outputs.clone();
+        let output_writer_ptr = Arc::as_ptr(&outputs_arc);
         let callback_context = Arc::new(CameraCallbackContext {
-            video_output: self.video.clone(),
+            output_writer: output_writer_ptr,
+            gpu_context,
             frame_count: std::sync::atomic::AtomicU64::new(0),
+            // Keep the Arc alive to ensure the pointer remains valid
+            _outputs_arc: outputs_arc,
+            command_queue,
+            device,
         });
 
         // Store in global - callback will read from here
@@ -363,7 +509,7 @@ impl AppleCameraProcessor::Processor {
     /// Called via dispatch to main queue - MUST NOT block or use tracing.
     fn initialize_capture_session_on_main_thread(
         mtm: MainThreadMarker,
-        config: &AppleCameraConfig,
+        config: &CameraConfig,
         init_state: Arc<CaptureSessionInitState>,
     ) {
         // All errors are reported via init_state, not returned
@@ -383,7 +529,7 @@ impl AppleCameraProcessor::Processor {
     /// Internal init logic, returns Result for cleaner error handling.
     fn do_initialize_capture_session(
         mtm: MainThreadMarker,
-        config: &AppleCameraConfig,
+        config: &CameraConfig,
     ) -> Result<String> {
         let session = unsafe { AVCaptureSession::new() };
 
@@ -421,12 +567,9 @@ impl AppleCameraProcessor::Processor {
                 )));
             }
 
-            // Get frame rate settings from config
-            let frame_rate_config = config.frame_rate.clone().unwrap_or_default();
-            let requested_min_fps = frame_rate_config.min_fps;
-            let requested_max_fps = frame_rate_config
-                .max_fps
-                .unwrap_or_else(get_main_display_refresh_rate);
+            // Get frame rate settings from config (default: 60fps min, display refresh rate max)
+            let requested_min_fps = config.min_fps.unwrap_or(60.0);
+            let requested_max_fps = config.max_fps.unwrap_or_else(get_main_display_refresh_rate);
 
             // Query camera's supported frame rate range from active format
             let active_format = device.activeFormat();
@@ -537,6 +680,8 @@ impl AppleCameraProcessor::Processor {
         }
 
         let camera_name = unsafe { device.localizedName().to_string() };
+
+        // Pool creation is deferred to first frame callback where we have CVPixelBuffer dimensions
 
         unsafe {
             session.startRunning();

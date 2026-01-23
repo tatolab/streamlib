@@ -15,14 +15,14 @@ use super::RuntimeUniqueId;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::context::{GpuContext, RuntimeContext, TimeContext};
 use crate::core::graph::{
-    GraphNodeWithComponents, GraphState, LinkOutputToProcessorWriterAndReader, LinkUniqueId,
-    ProcessorPauseGateComponent, ProcessorUniqueId,
+    GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorPauseGateComponent,
+    ProcessorUniqueId,
 };
-use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
+use crate::iceoryx2::Iceoryx2Node;
 
 /// Storage variant for tokio runtime in StreamRuntime.
 ///
@@ -186,6 +186,11 @@ impl StreamRuntime {
     /// Takes `&Arc<Self>` to allow passing the runtime to processors via RuntimeContext.
     /// Processors can then call runtime operations directly without indirection.
     pub fn start(self: &Arc<Self>) -> Result<()> {
+        // Load .env file if present (development environment variables)
+        if let Ok(path) = dotenvy::dotenv() {
+            tracing::info!("[start] Loaded environment from {}", path.display());
+        }
+
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
@@ -201,8 +206,41 @@ impl StreamRuntime {
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
 
+        // Initialize SurfaceStore for cross-process GPU surface sharing (macOS only)
+        #[cfg(target_os = "macos")]
+        {
+            use crate::core::context::SurfaceStore;
+
+            if let Ok(xpc_service_name) = std::env::var("STREAMLIB_XPC_SERVICE_NAME") {
+                tracing::info!(
+                    "[start] Initializing SurfaceStore with XPC service '{}'...",
+                    xpc_service_name
+                );
+                let surface_store =
+                    SurfaceStore::new(xpc_service_name, self.runtime_id.to_string());
+                if let Err(e) = surface_store.connect() {
+                    tracing::warn!(
+                        "[start] SurfaceStore XPC connection failed (surface sharing disabled): {}",
+                        e
+                    );
+                } else {
+                    gpu.set_surface_store(surface_store);
+                    tracing::info!("[start] SurfaceStore initialized");
+                }
+            } else {
+                tracing::debug!(
+                    "[start] STREAMLIB_XPC_SERVICE_NAME not set, surface sharing disabled"
+                );
+            }
+        }
+
         // Create shared timing context - clock starts now
         let time = Arc::new(TimeContext::new());
+
+        // Create iceoryx2 Node for cross-process communication
+        tracing::info!("[start] Creating iceoryx2 Node...");
+        let iceoryx2_node = Iceoryx2Node::new()?;
+        tracing::info!("[start] iceoryx2 Node created");
 
         // Pass runtime directly to RuntimeContext. Processors call runtime operations
         // directly - this is safe because processor lifecycle methods (setup, process)
@@ -215,6 +253,7 @@ impl StreamRuntime {
             Arc::clone(&self.runtime_id),
             runtime_ops,
             self.tokio_runtime_variant.handle(),
+            iceoryx2_node,
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
@@ -271,6 +310,13 @@ impl StreamRuntime {
             tracing::debug!("[stop] Committing processor teardown");
             self.compiler.commit(&ctx)?;
             tracing::debug!("[stop] Processor teardown complete");
+
+            // Cleanup SurfaceStore (macOS only) - releases all surfaces and disconnects XPC
+            #[cfg(target_os = "macos")]
+            {
+                ctx.gpu.clear_surface_store();
+                tracing::debug!("[stop] SurfaceStore cleared");
+            }
         }
 
         // Clear runtime context - allows fresh context on next start().
@@ -363,16 +409,6 @@ impl StreamRuntime {
             // Update processor state
             if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
                 *state.0.lock() = ProcessorState::Running;
-            }
-
-            // Send a wake-up message to reactive processors so they can process
-            // any buffered data. Without this, a reactive processor could stay
-            // blocked if its upstream buffer was full during pause (no new
-            // InvokeProcessingNow messages would be sent since writes fail).
-            if let Some(channel) = node.get::<LinkOutputToProcessorWriterAndReader>() {
-                let _ = channel
-                    .writer
-                    .send(LinkOutputToProcessorMessage::InvokeProcessingNow);
             }
 
             // Publish event

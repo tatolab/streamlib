@@ -1,43 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{LinkInput, LinkOutput, Result, VideoFrame};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::_generated_::Videoframe;
+use crate::core::Result;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-#[serde(default)]
-pub struct SimplePassthroughConfig {
-    pub scale: f32,
-}
-
-impl Default for SimplePassthroughConfig {
-    fn default() -> Self {
-        Self { scale: 1.0 }
-    }
-}
-
-#[crate::processor(
-    execution = Manual,
-    description = "Passes video frames through unchanged (for testing)"
-)]
-pub struct SimplePassthroughProcessor {
-    #[crate::input(description = "Input video stream")]
-    input: LinkInput<VideoFrame>,
-
-    #[crate::output(description = "Output video stream")]
-    output: Arc<LinkOutput<VideoFrame>>,
-
-    #[crate::config]
-    config: SimplePassthroughConfig,
-}
+#[crate::processor("src/core/processors/simple_passthrough.yaml")]
+pub struct SimplePassthroughProcessor;
 
 impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
     // Uses default setup() and teardown() implementations from Processor trait
 
     fn start(&mut self) -> Result<()> {
-        if let Some(frame) = self.input.read() {
-            self.output.write(frame);
+        // Read from iceoryx2 input mailbox and write to output
+        if self.inputs.has_data("input") {
+            let frame: Videoframe = self.inputs.read("input")?;
+            self.outputs.write("output", &frame)?;
         }
         Ok(())
     }
@@ -50,22 +27,5 @@ impl SimplePassthroughProcessor::Processor {
 
     pub fn set_scale(&mut self, scale: f32) {
         self.config.scale = scale;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_config_defaults() {
-        let config = SimplePassthroughConfig::default();
-        assert_eq!(config.scale, 1.0);
-    }
-
-    #[test]
-    fn test_config_custom() {
-        let config = SimplePassthroughConfig { scale: 2.5 };
-        assert_eq!(config.scale, 2.5);
     }
 }

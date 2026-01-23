@@ -20,17 +20,19 @@ pub use inventory;
 pub use serde_json;
 
 pub mod core;
+pub mod iceoryx2;
+
+/// Generated types from JTD schemas.
+/// Run `cargo xtask generate-schemas` to regenerate.
+pub mod _generated_;
+
+// Re-export commonly used generated config types
+pub use _generated_::ApiServerConfig;
 
 // Re-export attribute macros for processor syntax:
-// - #[streamlib::processor(execution = Reactive)] - Main processor definition
-// - #[streamlib::input] - Input port marker
-// - #[streamlib::output] - Output port marker
-// - #[streamlib::config] - Config field marker
-// - #[streamlib::schema] - Schema definition for port message types
-// - #[streamlib::field] - Field customization within schema
-pub use streamlib_macros::{
-    config, field, input, output, processor, schema, ConfigDescriptor, DataFrameSchema,
-};
+// - #[streamlib::processor("path/to/schema.yaml")] - YAML-based processor definition
+// - #[derive(ConfigDescriptor)] - Config field metadata derive macro
+pub use streamlib_macros::{processor, ConfigDescriptor};
 
 pub use core::{
     are_synchronized,
@@ -40,50 +42,45 @@ pub use core::{
     input,
     media_clock::MediaClock,
     output,
-    primitive_array,
     timestamp_delta_ms,
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
-    ApiServerConfig,
     ApiServerProcessor,
-    AudioCaptureConfig,
-    AudioChannelConverterConfig,
+    // TODO: Migrate to iceoryx2 API
+    // AudioCaptureConfig,
     AudioChannelConverterProcessor,
     AudioCodec,
-    AudioDevice,
+    // TODO: Migrate to iceoryx2 API
+    // AudioDevice,
     AudioEncoderConfig,
     AudioEncoderOpus,
     AudioFrame,
-    AudioInputDevice,
-    AudioMixerConfig,
+    // TODO: Migrate to iceoryx2 API
+    // AudioInputDevice,
     AudioMixerProcessor,
-    AudioOutputConfig,
-    AudioResamplerConfig,
-    AudioResamplerProcessor,
-    BufferRechunkerConfig,
-    BufferRechunkerProcessor,
-    CameraConfig,
-    CameraDevice,
-    ChannelConversionMode,
-    ChordGeneratorConfig,
+    // TODO: Migrate to iceoryx2 API
+    // AudioOutputConfig,
+    AudioResampler1chProcessor,
+    AudioResampler2chProcessor,
+    BufferRechunker1chProcessor,
+    BufferRechunker2chProcessor,
+    // TODO: Migrate to iceoryx2 API
+    // CameraConfig,
+    // CameraDevice,
     ChordGeneratorProcessor,
-    ClapEffectConfig,
-    ClapEffectProcessor,
-    ClapPluginInfo,
-    ClapScanner,
-    CodeExamples,
-    ConfigDescriptor,
-    ConfigField,
+    // TODO: Migrate to iceoryx2 API
+    // ClapEffectConfig,
+    // ClapEffectProcessor,
+    // ClapPluginInfo,
+    // ClapScanner,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
-    DataFrame,
-    DisplayConfig,
+    // TODO: Migrate to iceoryx2 API
+    // DisplayConfig,
     EncodedAudioFrame,
     EncodedVideoFrame,
-    Field,
-    FieldType,
     GlContext,
     GlTextureBinding,
     GpuContext,
@@ -91,19 +88,11 @@ pub use core::{
     H264Profile,
     InputPortMarker,
     LfoWaveform,
-    LinkCapacity,
-    LinkInput,
-    LinkInputDataReader,
-    LinkInstance,
-    LinkOutput,
-    LinkOutputDataWriter,
-    LinkPortMessage,
-    LinkPortType,
     ManualProcessor,
-    MixingStrategy,
     Mp4Muxer,
     Mp4MuxerConfig,
-    Mp4WriterConfig,
+    // TODO: Migrate to iceoryx2 API
+    // Mp4WriterConfig,
     NativeTextureHandle,
     // Streaming utilities:
     OpusEncoder,
@@ -113,18 +102,13 @@ pub use core::{
     ParameterModulator,
     PluginInfo,
     PooledTextureHandle,
-    PortDescriptor,
     ProcessorDefinition,
-    ProcessorDescriptor,
     ProcessorSpec,
     ReactiveProcessor,
     ResamplingQuality,
     Result,
     RtpTimestampCalculator,
     RuntimeContext,
-    Schema,
-    SemanticVersion,
-    SerializationFormat,
     StreamError,
     StreamTexture,
     TextureDescriptor,
@@ -139,22 +123,11 @@ pub use core::{
     VideoEncoder,
     VideoEncoderConfig,
     VideoFrame,
-    WindowId,
+    // TODO: Migrate to iceoryx2 API
+    // WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
     FOURCC_H264,
-    PRIMITIVE_BOOL,
-    PRIMITIVE_F32,
-    PRIMITIVE_F64,
-    PRIMITIVE_I32,
-    PRIMITIVE_I64,
-    PRIMITIVE_U32,
-    PRIMITIVE_U64,
     PROCESSOR_REGISTRY,
-    SCHEMA_AUDIO_FRAME,
-    SCHEMA_BOUNDING_BOX,
-    SCHEMA_DATA_MESSAGE,
-    SCHEMA_OBJECT_DETECTIONS,
-    SCHEMA_VIDEO_FRAME,
 };
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -180,25 +153,27 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 
+// Apple processor re-exports (migrated to iceoryx2 API)
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    AppleAudioCaptureProcessor as AudioCaptureProcessor,
-    AppleAudioOutputProcessor as AudioOutputProcessor,
+    // AppleAudioCaptureProcessor as AudioCaptureProcessor,
+    // AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
-    AppleMp4WriterProcessor as Mp4WriterProcessor,
-    MetalDevice,
+    // AppleMp4WriterProcessor as Mp4WriterProcessor,
+    // MetalDevice,
     // VideoToolbox encoder (config types are in core::codec):
-    VideoToolboxEncoder,
+    // VideoToolboxEncoder,
 };
 
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
+// TODO: Migrate to iceoryx2 API
 // WebRTC WHIP/WHEP processors (cross-platform)
-pub use core::processors::{
-    WebRtcWhepConfig, WebRtcWhepProcessor, WebRtcWhipConfig, WebRtcWhipProcessor,
-};
+// pub use core::processors::{
+//     WebRtcWhepConfig, WebRtcWhepProcessor, WebRtcWhipConfig, WebRtcWhipProcessor,
+// };
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{

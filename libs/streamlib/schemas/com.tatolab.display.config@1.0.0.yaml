@@ -1,0 +1,39 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for Display config
+
+metadata:
+  name: com.tatolab.display.config
+  version: 1.0.0
+  description: "Configuration for video display window (macOS/iOS)"
+
+properties:
+  width:
+    metadata:
+      description: "Window width in pixels"
+    type: uint32
+  height:
+    metadata:
+      description: "Window height in pixels"
+    type: uint32
+optionalProperties:
+  scaling_mode:
+    metadata:
+      description: "How video content is scaled within the window. Default: Letterbox"
+    enum:
+      - Stretch
+      - Letterbox
+      - Crop
+  vsync:
+    metadata:
+      description: "Enable vsync (synchronize to display refresh rate). Default: true"
+    type: boolean
+  drawable_count:
+    metadata:
+      description: "Number of drawable buffers (2=double, 3=triple). Default: 2"
+    type: uint32
+  title:
+    metadata:
+      description: "Window title. Default: 'streamlib Display'"
+    type: string

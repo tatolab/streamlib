@@ -7,5 +7,6 @@ pub mod inspect;
 pub mod list;
 pub mod logs;
 pub mod runtimes;
+pub mod schema;
 pub mod serve;
 pub mod setup;

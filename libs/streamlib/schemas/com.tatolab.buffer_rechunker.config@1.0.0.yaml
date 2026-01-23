@@ -1,0 +1,15 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for BufferRechunker config
+
+metadata:
+  name: com.tatolab.buffer_rechunker.config
+  version: 1.0.0
+  description: "Configuration for rechunking audio buffers to fixed size"
+
+properties:
+  target_buffer_size:
+    metadata:
+      description: "Target buffer size in samples per channel"
+    type: uint32

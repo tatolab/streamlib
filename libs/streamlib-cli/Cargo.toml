@@ -18,8 +18,8 @@ path = "src/main.rs"
 # Core library (bundles all Rust processors)
 streamlib = { path = "../streamlib" }
 
-# Python bindings (bundles Python host processors)
-streamlib-python = { path = "../streamlib-python" }
+# Schema definition and codegen
+streamlib-schema = { path = "../streamlib-schema" }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive"] }
@@ -33,6 +33,7 @@ reqwest = { version = "0.12", features = ["json"] }
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 # Error handling
 anyhow.workspace = true

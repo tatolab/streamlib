@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::rhi::{
-    CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelFormat, RhiCommandQueue, RhiPixelBuffer,
-    RhiPixelBufferPool,
+    CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat,
+    RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool,
 };
-use crate::core::Result;
+use crate::core::{Result, StreamError};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Number of buffers to pre-allocate per pool.
+const POOL_PRE_ALLOCATE_COUNT: usize = 8;
+
+use super::surface_store::SurfaceStore;
 use super::texture_pool::{
     PooledTextureHandle, TexturePool, TexturePoolConfig, TexturePoolDescriptor,
 };
@@ -21,19 +25,59 @@ struct PixelBufferPoolKey {
     format: PixelFormat,
 }
 
+/// A single entry in the ring pool.
+struct PixelBufferRingEntry {
+    pool_id: PixelBufferPoolId,
+    buffer: RhiPixelBuffer,
+}
+
+/// Ring pool of permanently held pixel buffers for a given (width, height, format).
+///
+/// Buffers are pre-allocated at pool creation and held for the runtime's lifetime.
+/// `acquire()` cycles through buffers, skipping any currently in use.
+struct PixelBufferRingPool {
+    /// The underlying CVPixelBufferPool (used only for initial allocation).
+    /// Kept alive for ownership - buffers reference its backing storage.
+    #[allow(dead_code)]
+    pool: RhiPixelBufferPool,
+    /// Permanently held buffers.
+    buffers: Vec<PixelBufferRingEntry>,
+    /// Next index in the ring to try.
+    next_index: usize,
+}
+
 /// Shared pixel buffer pool manager.
+///
+/// Manages ring pools keyed by (width, height, format).
+/// Pre-allocates buffers on pool creation and registers them with the broker.
+/// Buffers are held permanently for the runtime's lifetime.
 struct PixelBufferPoolManager {
-    pools: Mutex<HashMap<PixelBufferPoolKey, RhiPixelBufferPool>>,
+    pools: Mutex<HashMap<PixelBufferPoolKey, PixelBufferRingPool>>,
+    /// Global cache for UUID -> RhiPixelBuffer lookups (includes buffers from all pools).
+    /// Used by consumers (e.g., display processor) to resolve UUIDs received via IPC.
+    buffer_cache: Mutex<HashMap<String, RhiPixelBuffer>>,
 }
 
 impl PixelBufferPoolManager {
     fn new() -> Self {
         Self {
             pools: Mutex::new(HashMap::new()),
+            buffer_cache: Mutex::new(HashMap::new()),
         }
     }
 
-    fn acquire(&self, width: u32, height: u32, format: PixelFormat) -> Result<RhiPixelBuffer> {
+    /// Acquire a buffer from the pool.
+    ///
+    /// If this is a new pool, pre-allocates POOL_PRE_ALLOCATE_COUNT buffers
+    /// and registers them with the broker (if surface_store is available).
+    /// Returns the next available buffer from the ring, skipping any in use.
+    fn acquire(
+        &self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        surface_store: Option<&SurfaceStore>,
+    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
         let key = PixelBufferPoolKey {
             width,
             height,
@@ -41,15 +85,8 @@ impl PixelBufferPoolManager {
         };
         let mut pools = self.pools.lock().unwrap();
 
-        let pool = if let Some(existing) = pools.get(&key) {
-            tracing::trace!(
-                "PixelBufferPoolManager: reusing cached pool for {}x{} {:?}",
-                width,
-                height,
-                format
-            );
-            existing
-        } else {
+        // Create new ring pool if needed
+        if let std::collections::hash_map::Entry::Vacant(entry) = pools.entry(key) {
             tracing::info!(
                 "PixelBufferPoolManager: creating new pool for {}x{} {:?}",
                 width,
@@ -57,12 +94,134 @@ impl PixelBufferPoolManager {
                 format
             );
             let desc = PixelBufferDescriptor::new(width, height, format);
-            let new_pool = RhiPixelBufferPool::new_with_descriptor(&desc)?;
-            pools.insert(key, new_pool);
-            pools.get(&key).unwrap()
-        };
+            let underlying_pool = RhiPixelBufferPool::new_with_descriptor(&desc)?;
 
-        pool.acquire()
+            // Pre-allocate all buffers at once (hold them simultaneously)
+            let mut buffers = Vec::with_capacity(POOL_PRE_ALLOCATE_COUNT);
+            let mut registered_count = 0;
+
+            tracing::info!(
+                "PixelBufferPoolManager: pre-allocating {} buffers for {}x{} {:?}",
+                POOL_PRE_ALLOCATE_COUNT,
+                width,
+                height,
+                format
+            );
+
+            for i in 0..POOL_PRE_ALLOCATE_COUNT {
+                match underlying_pool.acquire() {
+                    Ok((pool_id, buffer)) => {
+                        tracing::debug!(
+                            "PixelBufferPoolManager: pre-allocated buffer {} with id={}",
+                            i,
+                            pool_id
+                        );
+
+                        // Register with broker if available
+                        if let Some(store) = surface_store {
+                            if let Err(e) = store.register_buffer(pool_id.as_str(), &buffer) {
+                                tracing::warn!(
+                                    "PixelBufferPoolManager: failed to register buffer {}: {}",
+                                    pool_id,
+                                    e
+                                );
+                            } else {
+                                tracing::debug!(
+                                    "PixelBufferPoolManager: registered buffer {} with broker",
+                                    pool_id
+                                );
+                                registered_count += 1;
+                            }
+                        }
+
+                        // Add to global cache for UUID lookups
+                        self.buffer_cache
+                            .lock()
+                            .unwrap()
+                            .insert(pool_id.as_str().to_string(), buffer.clone());
+
+                        // Store permanently in ring pool
+                        buffers.push(PixelBufferRingEntry { pool_id, buffer });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "PixelBufferPoolManager: failed to pre-allocate buffer {}: {}",
+                            i,
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
+
+            tracing::info!(
+                "PixelBufferPoolManager: pre-allocated {} buffers, registered {} with broker",
+                buffers.len(),
+                registered_count
+            );
+
+            let ring_pool = PixelBufferRingPool {
+                pool: underlying_pool,
+                buffers,
+                next_index: 0,
+            };
+            entry.insert(ring_pool);
+        }
+
+        // Get the ring pool and find next available buffer
+        let ring_pool = pools.get_mut(&key).unwrap();
+        let buffer_count = ring_pool.buffers.len();
+
+        if buffer_count == 0 {
+            return Err(StreamError::Configuration(
+                "No buffers available in pool".into(),
+            ));
+        }
+
+        // Ring buffer: try each buffer starting from next_index, skip if in use
+        for _ in 0..buffer_count {
+            let idx = ring_pool.next_index % buffer_count;
+            ring_pool.next_index = (ring_pool.next_index + 1) % buffer_count;
+
+            let entry = &ring_pool.buffers[idx];
+
+            // Check if buffer is available (only our permanent references exist)
+            // RhiPixelBuffer wraps Arc<RhiPixelBufferRef>, so strong_count > 2 means in use
+            // (2 = one in ring pool buffers Vec + one in buffer_cache HashMap)
+            if Arc::strong_count(&entry.buffer.ref_) <= 2 {
+                tracing::trace!(
+                    "PixelBufferPoolManager: acquired buffer {} (idx {})",
+                    entry.pool_id,
+                    idx
+                );
+                return Ok((entry.pool_id.clone(), entry.buffer.clone()));
+            }
+        }
+
+        // All buffers in use - this shouldn't happen with 8 buffers in normal use
+        tracing::warn!(
+            "PixelBufferPoolManager: all {} buffers in use for {}x{} {:?}",
+            buffer_count,
+            width,
+            height,
+            format
+        );
+        Err(StreamError::Configuration(
+            "All pixel buffers are currently in use".into(),
+        ))
+    }
+
+    /// Get a buffer by its UUID from local cache.
+    fn get_from_cache(&self, pool_id: &str) -> Option<RhiPixelBuffer> {
+        self.buffer_cache.lock().unwrap().get(pool_id).cloned()
+    }
+
+    /// Add a buffer to the local cache.
+    fn cache_buffer(&self, pool_id: &str, buffer: RhiPixelBuffer) {
+        self.buffer_cache
+            .lock()
+            .unwrap()
+            .insert(pool_id.to_string(), buffer);
     }
 }
 
@@ -71,6 +230,9 @@ pub struct GpuContext {
     device: Arc<GpuDevice>,
     texture_pool: TexturePool,
     pixel_buffer_pool_manager: Arc<PixelBufferPoolManager>,
+    /// Surface store for cross-process GPU surface sharing (macOS only).
+    /// Set during runtime.start(), None before that.
+    surface_store: Arc<Mutex<Option<SurfaceStore>>>,
 }
 
 impl GpuContext {
@@ -82,6 +244,7 @@ impl GpuContext {
             device,
             texture_pool,
             pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
+            surface_store: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -93,21 +256,62 @@ impl GpuContext {
             device,
             texture_pool,
             pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
+            surface_store: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Acquire a pixel buffer from the shared pool.
     ///
-    /// Pools are cached by (width, height, format) - the first call creates the pool,
-    /// subsequent calls reuse it. This avoids repeated CVPixelBufferPoolCreate calls.
+    /// Pools are cached by (width, height, format) - the first call creates the pool
+    /// and pre-allocates buffers, subsequent calls reuse it. Returns (id, buffer) where
+    /// id can be used with `get_pixel_buffer()` to retrieve the same buffer.
+    ///
+    /// If SurfaceStore is initialized, pre-allocated buffers are registered with the broker.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<RhiPixelBuffer> {
+    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+        let surface_store = self.surface_store.lock().unwrap();
         self.pixel_buffer_pool_manager
-            .acquire(width, height, format)
+            .acquire(width, height, format, surface_store.as_ref())
+    }
+
+    /// Get a pixel buffer by its UUID.
+    ///
+    /// First checks local cache, then falls back to broker lookup for cross-process sharing.
+    /// Returns the buffer if found, or an error if not found anywhere.
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
+        // Check local cache first
+        if let Some(buffer) = self
+            .pixel_buffer_pool_manager
+            .get_from_cache(pool_id.as_str())
+        {
+            tracing::trace!("GpuContext::get_pixel_buffer: cache hit for '{}'", pool_id);
+            return Ok(buffer);
+        }
+
+        // Cache miss - try broker lookup
+        tracing::debug!(
+            "GpuContext::get_pixel_buffer: cache miss for '{}', trying broker",
+            pool_id
+        );
+
+        let surface_store = self.surface_store.lock().unwrap();
+        let store = surface_store.as_ref().ok_or_else(|| {
+            StreamError::Configuration(
+                "SurfaceStore not initialized. Call runtime.start() first.".into(),
+            )
+        })?;
+
+        let buffer = store.lookup_buffer(pool_id.as_str())?;
+
+        // Cache for future lookups
+        self.pixel_buffer_pool_manager
+            .cache_buffer(pool_id.as_str(), buffer.clone());
+
+        Ok(buffer)
     }
 
     /// Get a reference to the RHI GPU device.
@@ -189,6 +393,78 @@ impl GpuContext {
         let device_ptr = self.metal_device().device() as *const _ as *mut std::ffi::c_void;
         let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
         crate::core::rhi::RhiTextureCache::new_metal(metal_device_ref)
+    }
+
+    // =========================================================================
+    // Surface Store (Cross-Process GPU Surface Sharing)
+    // =========================================================================
+
+    /// Set the surface store for cross-process GPU surface sharing.
+    ///
+    /// Called internally during runtime.start() to enable check_in/check_out.
+    pub(crate) fn set_surface_store(&self, store: SurfaceStore) {
+        *self.surface_store.lock().unwrap() = Some(store);
+    }
+
+    /// Clear the surface store.
+    ///
+    /// Called internally during runtime.stop().
+    pub(crate) fn clear_surface_store(&self) {
+        *self.surface_store.lock().unwrap() = None;
+    }
+
+    /// Get the surface store, if initialized.
+    pub fn surface_store(&self) -> Option<SurfaceStore> {
+        self.surface_store.lock().unwrap().clone()
+    }
+
+    /// Check in a pixel buffer to the broker, returning a surface ID.
+    ///
+    /// The surface ID can be shared with other processes (e.g., Python subprocesses)
+    /// which can then call `check_out_surface` to get the same IOSurface.
+    ///
+    /// If this pixel buffer was already checked in, returns the existing ID.
+    #[cfg(target_os = "macos")]
+    pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+        let store = self.surface_store.lock().unwrap();
+        let store = store.as_ref().ok_or_else(|| {
+            crate::core::StreamError::Configuration(
+                "SurfaceStore not initialized. Call runtime.start() first.".into(),
+            )
+        })?;
+        store.check_in(pixel_buffer)
+    }
+
+    /// Check out a surface by ID, returning the pixel buffer.
+    ///
+    /// Returns from local cache if available, otherwise fetches from broker.
+    /// The first checkout for a given ID incurs XPC overhead (~100-200µs),
+    /// subsequent checkouts are cache hits (~10-50ns).
+    #[cfg(target_os = "macos")]
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+        let store = self.surface_store.lock().unwrap();
+        let store = store.as_ref().ok_or_else(|| {
+            crate::core::StreamError::Configuration(
+                "SurfaceStore not initialized. Call runtime.start() first.".into(),
+            )
+        })?;
+        store.check_out(surface_id)
+    }
+
+    /// Check in a pixel buffer (non-macOS stub).
+    #[cfg(not(target_os = "macos"))]
+    pub fn check_in_surface(&self, _pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+        Err(crate::core::StreamError::NotSupported(
+            "Surface store is only supported on macOS".into(),
+        ))
+    }
+
+    /// Check out a surface (non-macOS stub).
+    #[cfg(not(target_os = "macos"))]
+    pub fn check_out_surface(&self, _surface_id: &str) -> Result<RhiPixelBuffer> {
+        Err(crate::core::StreamError::NotSupported(
+            "Surface store is only supported on macOS".into(),
+        ))
     }
 }
 

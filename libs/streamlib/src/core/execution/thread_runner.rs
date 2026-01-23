@@ -12,7 +12,6 @@ use parking_lot::Mutex;
 
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorUniqueId;
-use crate::core::links::LinkOutputToProcessorMessage;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
 use crate::core::RuntimeContext;
 
@@ -24,7 +23,6 @@ pub fn run_processor_loop(
     id: ProcessorUniqueId,
     processor: Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: crossbeam_channel::Receiver<()>,
-    message_reader: crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
     state: Arc<Mutex<ProcessorState>>,
     pause_gate: Arc<AtomicBool>,
     exec_config: ExecutionConfig,
@@ -48,24 +46,11 @@ pub fn run_processor_loop(
             );
         }
         ProcessExecution::Reactive => {
-            run_reactive_mode(
-                &id,
-                &processor,
-                &shutdown_rx,
-                &message_reader,
-                &pause_gate,
-                &runtime_ctx,
-            );
+            // With iceoryx2, reactive mode polls mailboxes at a fixed interval
+            run_reactive_mode(&id, &processor, &shutdown_rx, &pause_gate, &runtime_ctx);
         }
         ProcessExecution::Manual => {
-            run_manual_mode(
-                &id,
-                &processor,
-                &shutdown_rx,
-                &message_reader,
-                &pause_gate,
-                &runtime_ctx,
-            );
+            run_manual_mode(&id, &processor, &shutdown_rx, &pause_gate, &runtime_ctx);
         }
     }
 
@@ -154,56 +139,60 @@ fn run_reactive_mode(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
 ) {
+    // With iceoryx2, reactive mode polls mailboxes at a fixed interval
+    // Processors read from InputMailboxes directly in their process() method
+    const REACTIVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_micros(100);
+
     let mut was_paused = false;
 
     loop {
-        crossbeam_channel::select! {
-            recv(shutdown_rx) -> _ => {
-                tracing::info!("[{}] Received shutdown signal", id);
-                break;
-            },
-            recv(message_reader) -> msg => {
-                if let Ok(message) = msg {
-                    if message == LinkOutputToProcessorMessage::StopProcessingNow {
-                        tracing::info!("[{}] Received StopProcessingNow message", id);
-                        break;
-                    }
+        if shutdown_rx.try_recv().is_ok() {
+            tracing::info!("[{}] Received shutdown signal", id);
+            break;
+        }
 
-                    let is_paused = pause_gate.load(Ordering::Acquire);
+        let is_paused = pause_gate.load(Ordering::Acquire);
 
-                    if is_paused && !was_paused {
-                        tracing::info!("[{}] Invoking on_pause()...", id);
-                        let mut guard = processor.lock();
-                        match runtime_ctx.tokio_handle().block_on(guard.__generated_on_pause()) {
-                            Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
-                            Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
-                        }
-                        was_paused = true;
-                    } else if !is_paused && was_paused {
-                        tracing::info!("[{}] Invoking on_resume()...", id);
-                        let mut guard = processor.lock();
-                        match runtime_ctx.tokio_handle().block_on(guard.__generated_on_resume()) {
-                            Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
-                            Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
-                        }
-                        was_paused = false;
-                    }
+        if is_paused && !was_paused {
+            tracing::info!("[{}] Invoking on_pause()...", id);
+            let mut guard = processor.lock();
+            match runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_pause())
+            {
+                Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
+            }
+            was_paused = true;
+        } else if !is_paused && was_paused {
+            tracing::info!("[{}] Invoking on_resume()...", id);
+            let mut guard = processor.lock();
+            match runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_resume())
+            {
+                Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
+            }
+            was_paused = false;
+        }
 
-                    if is_paused {
-                        continue;
-                    }
+        if is_paused {
+            std::thread::sleep(PAUSE_CHECK_INTERVAL);
+            continue;
+        }
 
-                    let mut guard = processor.lock();
-                    if let Err(e) = guard.process() {
-                        tracing::warn!("[{}] process() failed: {}", id, e);
-                    }
-                }
+        {
+            let mut guard = processor.lock();
+            if let Err(e) = guard.process() {
+                tracing::warn!("[{}] process() failed: {}", id, e);
             }
         }
+
+        std::thread::sleep(REACTIVE_POLL_INTERVAL);
     }
 }
 
@@ -211,7 +200,6 @@ fn run_manual_mode(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    message_reader: &crossbeam_channel::Receiver<LinkOutputToProcessorMessage>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
 ) {
@@ -234,40 +222,40 @@ fn run_manual_mode(
     let mut was_paused = false;
 
     loop {
-        crossbeam_channel::select! {
-            recv(shutdown_rx) -> _ => {
-                tracing::info!("[{}] Received shutdown signal", id);
-                break;
-            },
-            recv(message_reader) -> msg => {
-                if let Ok(LinkOutputToProcessorMessage::StopProcessingNow) = msg {
-                    tracing::info!("[{}] Received StopProcessingNow", id);
-                    break;
-                }
-            }
-            default(std::time::Duration::from_millis(100)) => {
-                // Periodic check for pause/resume state changes
-                let is_paused = pause_gate.load(Ordering::Acquire);
-
-                if is_paused && !was_paused {
-                    tracing::info!("[{}] Invoking on_pause()...", id);
-                    let mut guard = processor.lock();
-                    match runtime_ctx.tokio_handle().block_on(guard.__generated_on_pause()) {
-                        Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
-                        Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
-                    }
-                    was_paused = true;
-                } else if !is_paused && was_paused {
-                    tracing::info!("[{}] Invoking on_resume()...", id);
-                    let mut guard = processor.lock();
-                    match runtime_ctx.tokio_handle().block_on(guard.__generated_on_resume()) {
-                        Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
-                        Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
-                    }
-                    was_paused = false;
-                }
-            }
+        // Check for shutdown
+        if shutdown_rx.try_recv().is_ok() {
+            tracing::info!("[{}] Received shutdown signal", id);
+            break;
         }
+
+        // Periodic check for pause/resume state changes
+        let is_paused = pause_gate.load(Ordering::Acquire);
+
+        if is_paused && !was_paused {
+            tracing::info!("[{}] Invoking on_pause()...", id);
+            let mut guard = processor.lock();
+            match runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_pause())
+            {
+                Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
+            }
+            was_paused = true;
+        } else if !is_paused && was_paused {
+            tracing::info!("[{}] Invoking on_resume()...", id);
+            let mut guard = processor.lock();
+            match runtime_ctx
+                .tokio_handle()
+                .block_on(guard.__generated_on_resume())
+            {
+                Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
+            }
+            was_paused = false;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     // Call stop() - stops callbacks and waits for in-flight work

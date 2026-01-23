@@ -152,6 +152,12 @@ enum Commands {
         #[arg(long)]
         since: Option<String>,
     },
+
+    /// Schema management (sync, add, new, validate)
+    Schema {
+        #[command(subcommand)]
+        action: SchemaCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -199,6 +205,24 @@ enum BrokerCommands {
         #[arg(long)]
         runtime: Option<String>,
     },
+
+    /// List registered IOSurfaces (GPU surfaces for cross-process sharing)
+    Surfaces {
+        /// Filter by runtime ID
+        #[arg(long)]
+        runtime: Option<String>,
+    },
+
+    /// Snapshot an IOSurface to a PNG file
+    Snapshot {
+        /// Surface ID (UUID) to snapshot
+        #[arg(long)]
+        id: String,
+
+        /// Output file path for the PNG image
+        #[arg(long, short = 'o', default_value = "snapshot.png")]
+        output: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -217,6 +241,40 @@ enum RuntimesCommands {
     List,
     /// Remove dead runtimes from the broker
     Prune,
+}
+
+#[derive(Subcommand)]
+enum SchemaCommands {
+    /// Sync all schemas (fetch remote + generate code)
+    Sync {
+        /// Generate for specific language only (rust, python, typescript)
+        #[arg(long)]
+        lang: Option<String>,
+    },
+
+    /// Add a remote schema to streamlib.toml
+    Add {
+        /// Schema name (e.g., com.tatolab.videoframe@1.0.0)
+        schema: String,
+    },
+
+    /// Create a new local schema template
+    New {
+        /// Schema name (e.g., my-detection)
+        name: String,
+    },
+
+    /// Validate local schema files
+    Validate,
+
+    /// Validate a processor YAML schema file
+    ValidateProcessor {
+        /// Path to the processor YAML file
+        path: PathBuf,
+    },
+
+    /// List all configured schemas
+    List,
 }
 
 fn main() -> Result<()> {
@@ -316,6 +374,12 @@ async fn async_main(cli: Cli) -> Result<()> {
             BrokerCommands::Processors { runtime } => {
                 commands::broker::processors(runtime.as_deref()).await?
             }
+            BrokerCommands::Surfaces { runtime } => {
+                commands::broker::surfaces(runtime.as_deref()).await?
+            }
+            BrokerCommands::Snapshot { id, output } => {
+                commands::broker::snapshot(&id, &output).await?
+            }
         },
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
@@ -332,6 +396,16 @@ async fn async_main(cli: Cli) -> Result<()> {
         }) => {
             commands::logs::stream(&runtime, follow, lines, since.as_deref()).await?;
         }
+        Some(Commands::Schema { action }) => match action {
+            SchemaCommands::Sync { lang } => commands::schema::sync(lang.as_deref())?,
+            SchemaCommands::Add { schema } => commands::schema::add(&schema)?,
+            SchemaCommands::New { name } => commands::schema::new_schema(&name)?,
+            SchemaCommands::Validate => commands::schema::validate()?,
+            SchemaCommands::ValidateProcessor { path } => {
+                commands::schema::validate_processor(&path)?
+            }
+            SchemaCommands::List => commands::schema::list()?,
+        },
         None => {
             // No subcommand: show help
             Cli::parse_from(["streamlib", "--help"]);

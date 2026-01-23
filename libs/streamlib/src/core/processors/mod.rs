@@ -35,43 +35,49 @@ pub use processor_spec::ProcessorSpec;
 pub struct EmptyConfig;
 
 // Sources
-pub mod audio_capture;
-pub mod camera;
+// TODO: Migrate to iceoryx2 API
+// pub mod audio_capture;
+// pub mod camera;
 pub mod chord_generator;
 
 // Sinks
-pub mod audio_output;
-pub mod display;
-pub mod mp4_writer;
+// TODO: Migrate to iceoryx2 API
+// pub mod audio_output;
+// pub mod display;
+// pub mod mp4_writer;
 
 // Transformers
 pub mod audio_channel_converter;
 pub mod audio_mixer;
 pub mod audio_resampler;
 pub mod buffer_rechunker;
-pub mod clap_effect;
+// TODO: Migrate to iceoryx2 API
+// pub mod clap_effect;
 pub mod simple_passthrough;
 
 // WebRTC Streaming
-pub mod webrtc_whep;
-pub mod webrtc_whip;
+// TODO: Migrate to iceoryx2 API
+// pub mod webrtc_whep;
+// pub mod webrtc_whip;
 
-pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
-pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
-pub use chord_generator::{ChordGeneratorConfig, ChordGeneratorProcessor};
+// TODO: Migrate to iceoryx2 API
+// pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
+// pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
+pub use chord_generator::ChordGeneratorProcessor;
 
-pub use audio_output::{AudioDevice, AudioOutputConfig, AudioOutputProcessor};
-pub use display::{DisplayConfig, DisplayProcessor, WindowId};
-pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
+// TODO: Migrate to iceoryx2 API
+// pub use audio_output::{AudioDevice, AudioOutputConfig, AudioOutputProcessor};
+// pub use display::{DisplayConfig, DisplayProcessor, WindowId};
+// pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
 
 pub use api_server::*;
-pub use audio_channel_converter::{
-    AudioChannelConverterConfig, AudioChannelConverterProcessor, ChannelConversionMode,
-};
-pub use audio_mixer::{AudioMixerConfig, AudioMixerProcessor, MixingStrategy};
-pub use audio_resampler::{AudioResamplerConfig, AudioResamplerProcessor};
-pub use buffer_rechunker::{BufferRechunkerConfig, BufferRechunkerProcessor};
-pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
-pub use simple_passthrough::{SimplePassthroughConfig, SimplePassthroughProcessor};
-pub use webrtc_whep::{WebRtcWhepConfig, WebRtcWhepProcessor};
-pub use webrtc_whip::{WebRtcWhipConfig, WebRtcWhipProcessor};
+pub use audio_channel_converter::AudioChannelConverterProcessor;
+pub use audio_mixer::AudioMixerProcessor;
+pub use audio_resampler::{AudioResampler1chProcessor, AudioResampler2chProcessor};
+pub use buffer_rechunker::{BufferRechunker1chProcessor, BufferRechunker2chProcessor};
+// TODO: Migrate to iceoryx2 API
+// pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
+pub use simple_passthrough::SimplePassthroughProcessor;
+// TODO: Migrate to iceoryx2 API
+// pub use webrtc_whep::{WebRtcWhepConfig, WebRtcWhepProcessor};
+// pub use webrtc_whip::{WebRtcWhipConfig, WebRtcWhipProcessor};

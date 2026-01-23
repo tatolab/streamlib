@@ -1,0 +1,32 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# AudioFrame schema for iceoryx2 IPC communication.
+#
+# Audio samples are stored as interleaved f32 values (-1.0 to 1.0) serialized
+# as raw bytes. The sample count can be derived from: samples.len() / 4 / channels
+
+name: com.tatolab.audioframe
+version: 1.0.0
+description: "Audio frame with interleaved samples for IPC transfer"
+
+fields:
+  - name: samples
+    type: bytes
+    description: "Interleaved audio samples as little-endian f32 bytes"
+
+  - name: channels
+    type: uint8
+    description: "Number of audio channels (1-8)"
+
+  - name: sample_rate
+    type: uint32
+    description: "Sample rate in Hz (e.g., 44100, 48000)"
+
+  - name: timestamp_ns
+    type: int64
+    description: "Monotonic timestamp in nanoseconds"
+
+  - name: frame_number
+    type: uint64
+    description: "Sequential frame number"

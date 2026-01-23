@@ -1,0 +1,13 @@
+name: com.tatolab.chord_generator
+version: 1.0.0
+description: "Generates a C major chord (C4, E4, G4) pre-mixed into a stereo output"
+execution: continuous
+
+config:
+  name: config
+  schema: com.tatolab.chord_generator.config@1.0.0
+
+outputs:
+  - name: chord
+    schema: com.tatolab.audioframe.2ch@1.0.0
+    description: Stereo audio output with C major chord

@@ -10,6 +10,10 @@
 mod grpc_service;
 #[cfg(target_os = "macos")]
 mod state;
+#[cfg(target_os = "macos")]
+mod xpc_ffi;
+#[cfg(target_os = "macos")]
+mod xpc_service;
 
 /// Protocol buffer types for gRPC service.
 pub mod proto;
@@ -19,6 +23,8 @@ pub mod proto;
 pub use grpc_service::{BrokerGrpcService, PROTOCOL_VERSION};
 #[cfg(target_os = "macos")]
 pub use state::BrokerState;
+#[cfg(target_os = "macos")]
+pub use xpc_service::XpcSurfaceService;
 
 /// Default gRPC port for broker diagnostics.
 pub const GRPC_PORT: u16 = 50051;

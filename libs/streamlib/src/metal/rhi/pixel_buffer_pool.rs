@@ -3,6 +3,7 @@
 
 //! macOS RhiPixelBufferPool implementation using CVPixelBufferPool.
 
+use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::mpsc::channel;
 
@@ -17,17 +18,24 @@ use objc2_core_video::{
     kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, CVPixelBufferPool,
 };
 use objc2_foundation::NSThread;
+use parking_lot::RwLock;
 
 use super::COREVIDEO_INIT_LOCK;
-use crate::apple::corevideo_ffi::{kCVReturnSuccess, CVPixelBufferRef};
+use crate::apple::corevideo_ffi::{
+    kCVReturnSuccess, CVPixelBufferGetIOSurface, CVPixelBufferRef, IOSurfaceGetID,
+};
 use crate::core::rhi::{
-    PixelBufferDescriptor, PixelFormat, RhiPixelBuffer, RhiPixelBufferPool, RhiPixelBufferRef,
+    PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiPixelBufferPool,
+    RhiPixelBufferRef,
 };
 use crate::core::{Result, StreamError};
 
 /// macOS pixel buffer pool wrapping CVPixelBufferPool.
 pub struct PixelBufferPoolMacOS {
     pool: *mut CVPixelBufferPool,
+    /// Maps IOSurfaceID -> PixelBufferPoolId for recycled buffer tracking.
+    /// When CVPixelBufferPool returns a recycled buffer, we return the same UUID.
+    iosurface_to_pool_id: RwLock<HashMap<u32, PixelBufferPoolId>>,
 }
 
 impl PixelBufferPoolMacOS {
@@ -63,11 +71,17 @@ impl PixelBufferPoolMacOS {
             create_pool_on_main_thread(width, height, pixel_format)
         })?;
 
-        Ok(Self { pool: sendable.0 })
+        Ok(Self {
+            pool: sendable.0,
+            iosurface_to_pool_id: RwLock::new(HashMap::new()),
+        })
     }
 
     /// Acquire a buffer from the pool.
-    pub fn acquire(&self) -> Result<RhiPixelBuffer> {
+    ///
+    /// Returns (id, buffer) where id is a stable UUID for this physical buffer.
+    /// If CVPixelBufferPool returns a recycled buffer, the same UUID is returned.
+    pub fn acquire(&self) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
         tracing::trace!("PixelBufferPoolMacOS::acquire: requesting buffer");
         let mut pixel_buffer: CVPixelBufferRef = std::ptr::null_mut();
 
@@ -98,9 +112,50 @@ impl PixelBufferPoolMacOS {
             RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(pixel_buffer)
                 .ok_or_else(|| StreamError::GpuError("Null pixel buffer from pool".into()))?
         };
-        tracing::trace!("PixelBufferPoolMacOS::acquire: created RhiPixelBuffer");
 
-        Ok(RhiPixelBuffer::new(buffer_ref))
+        // Get IOSurfaceID to check if this is a recycled buffer
+        let iosurface = unsafe { CVPixelBufferGetIOSurface(pixel_buffer) };
+        let iosurface_id = if !iosurface.is_null() {
+            unsafe { IOSurfaceGetID(iosurface) }
+        } else {
+            0
+        };
+
+        // Check if we've seen this IOSurface before (recycled buffer)
+        // If yes, return the same UUID; if no, generate new UUID
+        let pool_id = if iosurface_id != 0 {
+            let read_guard = self.iosurface_to_pool_id.read();
+            if let Some(existing_id) = read_guard.get(&iosurface_id) {
+                tracing::trace!(
+                    "PixelBufferPoolMacOS::acquire: recycled buffer IOSurfaceID={} -> existing id={}",
+                    iosurface_id,
+                    existing_id
+                );
+                existing_id.clone()
+            } else {
+                drop(read_guard);
+                let new_id = PixelBufferPoolId::new();
+                self.iosurface_to_pool_id
+                    .write()
+                    .insert(iosurface_id, new_id.clone());
+                tracing::trace!(
+                    "PixelBufferPoolMacOS::acquire: new buffer IOSurfaceID={} -> new id={}",
+                    iosurface_id,
+                    new_id
+                );
+                new_id
+            }
+        } else {
+            // No IOSurface backing - generate new ID each time
+            let new_id = PixelBufferPoolId::new();
+            tracing::warn!(
+                "PixelBufferPoolMacOS::acquire: buffer has no IOSurface backing, new id={}",
+                new_id
+            );
+            new_id
+        };
+
+        Ok((pool_id, RhiPixelBuffer::new(buffer_ref)))
     }
 }
 
@@ -125,7 +180,9 @@ unsafe impl Sync for PixelBufferPoolMacOS {}
 
 impl RhiPixelBufferPool {
     /// Create a new pixel buffer pool (macOS).
-    pub fn new_with_descriptor(desc: &PixelBufferDescriptor) -> Result<Self> {
+    ///
+    /// This is crate-internal - processors must use `GpuContext::acquire_pixel_buffer()`.
+    pub(crate) fn new_with_descriptor(desc: &PixelBufferDescriptor) -> Result<Self> {
         Ok(Self {
             inner: PixelBufferPoolMacOS::new(desc)?,
         })

@@ -7,22 +7,20 @@
 ///
 /// This is the output of video encoders and input to muxers/network transmitters.
 /// Platform-agnostic representation that works with VideoToolbox, FFmpeg, etc.
-#[crate::schema(content_hint = Video)]
+///
+/// Schema: `com.tatolab.encodedvideoframe@1.0.0`
 #[derive(Clone)]
 pub struct EncodedVideoFrame {
     /// The encoded NAL units (H.264/H.265 bitstream data).
     pub data: Vec<u8>,
 
     /// Monotonic timestamp in nanoseconds.
-    #[crate::field(description = "Monotonic timestamp in nanoseconds")]
     pub timestamp_ns: i64,
 
     /// Whether this is a keyframe (I-frame).
-    #[crate::field(description = "Whether this is a keyframe (I-frame)")]
     pub is_keyframe: bool,
 
     /// Sequential frame number.
-    #[crate::field(description = "Sequential frame number")]
     pub frame_number: u64,
 }
 

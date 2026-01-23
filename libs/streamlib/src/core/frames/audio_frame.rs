@@ -46,30 +46,24 @@ pub struct AudioFrameSignal {
     position: usize,
 }
 
-#[crate::schema(content_hint = Audio)]
+/// Audio frame with interleaved samples.
+///
+/// Schema: `com.tatolab.audioframe@1.0.0`
 #[derive(Clone)]
 pub struct AudioFrame {
-    #[crate::field(
-        internal,
-        field_type = "Arc<Vec<f32>>",
-        description = "Interleaved audio samples (f32, -1.0 to 1.0)"
-    )]
+    /// Interleaved audio samples (f32, -1.0 to 1.0).
     pub samples: Arc<Vec<f32>>,
 
-    #[crate::field(
-        internal,
-        field_type = "AudioChannelCount",
-        description = "Number of audio channels (1-8)"
-    )]
+    /// Number of audio channels (1-8).
     pub channels: AudioChannelCount,
 
-    #[crate::field(description = "Monotonic timestamp in nanoseconds")]
+    /// Monotonic timestamp in nanoseconds.
     pub timestamp_ns: i64,
 
-    #[crate::field(description = "Sequential frame number")]
+    /// Sequential frame number.
     pub frame_number: u64,
 
-    #[crate::field(description = "Sample rate in Hz (e.g., 44100, 48000)")]
+    /// Sample rate in Hz (e.g., 44100, 48000).
     pub sample_rate: u32,
 }
 

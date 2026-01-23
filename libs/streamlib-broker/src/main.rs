@@ -12,6 +12,7 @@ use tracing::info;
 #[cfg(target_os = "macos")]
 use streamlib_broker::{
     proto::broker_service_server::BrokerServiceServer, BrokerGrpcService, BrokerState,
+    XpcSurfaceService,
 };
 
 #[derive(Parser)]
@@ -21,6 +22,10 @@ struct Cli {
     /// Port for the gRPC server
     #[arg(long, default_value_t = streamlib_broker::GRPC_PORT)]
     port: u16,
+
+    /// XPC service name for surface store (from STREAMLIB_XPC_SERVICE_NAME env var)
+    #[arg(long, env = "STREAMLIB_XPC_SERVICE_NAME")]
+    xpc_service_name: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -44,6 +49,28 @@ async fn main() {
 
     // Create shared state for diagnostics
     let state = BrokerState::new();
+
+    // Start XPC surface service if service name is provided
+    let _xpc_service = if let Some(ref xpc_service_name) = cli.xpc_service_name {
+        let mut xpc_service = XpcSurfaceService::new(state.clone(), xpc_service_name.clone());
+        match xpc_service.start() {
+            Ok(()) => {
+                info!(
+                    "[Broker] XPC surface service started on '{}'",
+                    xpc_service_name
+                );
+                Some(xpc_service)
+            }
+            Err(e) => {
+                tracing::error!("[Broker] Failed to start XPC surface service: {}", e);
+                // Continue without XPC service - gRPC still works
+                None
+            }
+        }
+    } else {
+        info!("[Broker] XPC surface service disabled (no STREAMLIB_XPC_SERVICE_NAME set)");
+        None
+    };
 
     // Start periodic cleanup thread (prunes dead runtimes every 30 seconds)
     let cleanup_state = state.clone();

@@ -1,0 +1,30 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for mono audio frames
+
+metadata:
+  name: com.tatolab.audioframe.1ch
+  version: 1.0.0
+  description: "Mono audio frame (1 channel)"
+  read_mode: read_next_in_order
+  buffer_size: 32
+
+properties:
+  samples:
+    metadata:
+      description: "Audio samples"
+    elements:
+      type: float32
+  sample_rate:
+    metadata:
+      description: "Sample rate in Hz"
+    type: uint32
+  timestamp_ns:
+    metadata:
+      description: "Monotonic timestamp in nanoseconds (int64 as string - parse to native int64)"
+    type: string
+  frame_index:
+    metadata:
+      description: "Sequential frame counter (uint64 as string - parse to native uint64)"
+    type: string

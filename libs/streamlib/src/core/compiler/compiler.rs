@@ -13,10 +13,9 @@ use crate::core::compiler::PendingOperation;
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, ProcessorReadyBarrierHandle,
-    ProcessorUniqueId,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkStateComponent,
+    ProcessorReadyBarrierHandle, ProcessorUniqueId,
 };
-use crate::core::links::DefaultLinkFactory;
 use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 
@@ -26,8 +25,6 @@ pub struct Compiler {
     graph: Arc<RwLock<Graph>>,
     // Transaction accumulates operations until commit
     transaction: Arc<Mutex<Vec<PendingOperation>>>,
-    // Factory for creating link instances (ring buffers)
-    link_factory: Arc<DefaultLinkFactory>,
 }
 
 impl Default for Compiler {
@@ -42,7 +39,6 @@ impl Compiler {
         Self {
             graph: Arc::new(RwLock::new(Graph::new())),
             transaction: Arc::new(Mutex::new(Vec::new())),
-            link_factory: Arc::new(DefaultLinkFactory),
         }
     }
 
@@ -77,12 +73,7 @@ impl Compiler {
         // via RuntimeContext::run_on_runtime_thread_blocking() in their setup() if required.
         // This avoids forcing all compilation to runtime thread when most processors
         // don't need it (only Apple framework processors like Camera, Display).
-        Self::compile(
-            Arc::clone(&self.graph),
-            Arc::clone(&self.link_factory),
-            operations,
-            runtime_ctx,
-        )
+        Self::compile(Arc::clone(&self.graph), operations, runtime_ctx)
     }
 
     // =========================================================================
@@ -93,13 +84,12 @@ impl Compiler {
     /// Calls compiler_ops::* for actual operations.
     fn compile(
         graph_arc: Arc<RwLock<Graph>>,
-        link_factory: Arc<DefaultLinkFactory>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
     ) -> Result<()> {
         use crate::core::graph::{
-            LinkInstanceComponent, PendingDeletionComponent, ProcessorInstanceComponent,
-            ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+            PendingDeletionComponent, ProcessorInstanceComponent, ShutdownChannelComponent,
+            StateComponent, ThreadHandleComponent,
         };
         use crate::core::processors::ProcessorState;
 
@@ -147,7 +137,8 @@ impl Compiler {
                     let link = graph.traversal().e(&id).first();
                     let exists = link.is_some();
                     let wired = link
-                        .map(|l| l.has::<LinkInstanceComponent>())
+                        .and_then(|l| l.get::<LinkStateComponent>())
+                        .map(|s| matches!(s.0, crate::core::graph::LinkState::Wired))
                         .unwrap_or(false);
                     let pending_deletion = link
                         .map(|l| l.has::<PendingDeletionComponent>())
@@ -225,9 +216,10 @@ impl Compiler {
                         }),
                     );
 
-                    tracing::info!("[UNWIRE] {}", link_id);
-                    if let Err(e) = super::compiler_ops::unwire_link(&mut graph, link_id) {
-                        tracing::warn!("Failed to unwire link {}: {}", link_id, e);
+                    tracing::info!("[CLOSE SERVICE] {}", link_id);
+                    if let Err(e) = super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
+                    {
+                        tracing::warn!("Failed to close service {}: {}", link_id, e);
                     }
 
                     PUBSUB.publish(
@@ -415,9 +407,9 @@ impl Compiler {
                     }),
                 );
 
-                tracing::info!("[{}] Wiring {}", CompilePhase::Wire, link_id);
+                tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
 
-                super::compiler_ops::wire_link(&mut graph, link_factory.as_ref(), link_id)?;
+                super::compiler_ops::open_iceoryx2_service(&mut graph, link_id, runtime_ctx)?;
 
                 PUBSUB.publish(
                     topics::RUNTIME_GLOBAL,

@@ -128,8 +128,8 @@ pub fn derive_config_descriptor(input: DeriveInput) -> Result<TokenStream> {
             Fields::Unit => {
                 // Unit struct - no fields
                 return Ok(quote! {
-                    impl ::streamlib::core::schema::ConfigDescriptor for #struct_name {
-                        fn config_fields() -> ::std::vec::Vec<::streamlib::core::schema::ConfigField> {
+                    impl ::streamlib::core::ConfigDescriptor for #struct_name {
+                        fn config_fields() -> ::std::vec::Vec<::streamlib::core::ConfigField> {
                             ::std::vec::Vec::new()
                         }
                     }
@@ -160,7 +160,7 @@ pub fn derive_config_descriptor(input: DeriveInput) -> Result<TokenStream> {
             let description = extract_doc_comments(&field.attrs);
 
             Some(quote! {
-                ::streamlib::core::schema::ConfigField {
+                ::streamlib::core::ConfigField {
                     name: #field_name.to_string(),
                     field_type: #field_type.to_string(),
                     required: #required,
@@ -172,8 +172,8 @@ pub fn derive_config_descriptor(input: DeriveInput) -> Result<TokenStream> {
 
     // Generate the implementation
     let expanded = quote! {
-        impl ::streamlib::core::schema::ConfigDescriptor for #struct_name {
-            fn config_fields() -> ::std::vec::Vec<::streamlib::core::schema::ConfigField> {
+        impl ::streamlib::core::ConfigDescriptor for #struct_name {
+            fn config_fields() -> ::std::vec::Vec<::streamlib::core::ConfigField> {
                 vec![
                     #(#field_descriptors),*
                 ]

@@ -1,0 +1,37 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# VideoFrame schema for iceoryx2 IPC communication.
+#
+# The surface_id field is a ticket/handle that can be exchanged with the
+# Surface Store broker for the actual GPU surface. This allows VideoFrame
+# to be serialized over IPC while keeping GPU buffers in shared memory.
+
+name: com.tatolab.videoframe
+version: 1.0.0
+description: "Video frame with GPU surface reference for IPC transfer"
+
+fields:
+  - name: surface_id
+    type: uint64
+    description: "Surface Store ticket ID for GPU buffer exchange"
+
+  - name: width
+    type: uint32
+    description: "Frame width in pixels"
+
+  - name: height
+    type: uint32
+    description: "Frame height in pixels"
+
+  - name: pixel_format
+    type: string
+    description: "Pixel format name (e.g., Bgra32, Nv12)"
+
+  - name: timestamp_ns
+    type: int64
+    description: "Monotonic timestamp in nanoseconds"
+
+  - name: frame_number
+    type: uint64
+    description: "Sequential frame number"

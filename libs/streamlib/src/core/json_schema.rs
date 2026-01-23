@@ -136,6 +136,16 @@ pub struct RegistryResponse {
     pub schemas: Vec<SchemaDescriptorOutput>,
 }
 
+/// Runtime environment for a processor.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProcessorRuntimeOutput {
+    #[default]
+    Rust,
+    Python,
+    TypeScript,
+}
+
 /// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
@@ -147,8 +157,15 @@ pub struct ProcessorDescriptorOutput {
     pub version: String,
     /// Repository URL.
     pub repository: String,
-    /// Configuration fields.
-    pub config: Vec<ConfigFieldOutput>,
+    /// Runtime environment.
+    #[serde(default)]
+    pub runtime: ProcessorRuntimeOutput,
+    /// Entrypoint for non-Rust runtimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Reference to config schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<String>,
     /// Input port descriptors.
     pub inputs: Vec<PortDescriptorOutput>,
     /// Output port descriptors.
@@ -338,14 +355,16 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
     }
 }
 
-impl From<&crate::core::schema::ProcessorDescriptor> for ProcessorDescriptorOutput {
-    fn from(desc: &crate::core::schema::ProcessorDescriptor) -> Self {
+impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
+    fn from(desc: &crate::core::ProcessorDescriptor) -> Self {
         Self {
             name: desc.name.clone(),
             description: desc.description.clone(),
             version: desc.version.clone(),
             repository: desc.repository.clone(),
-            config: desc.config.iter().map(ConfigFieldOutput::from).collect(),
+            runtime: ProcessorRuntimeOutput::from(&desc.runtime),
+            entrypoint: desc.entrypoint.clone(),
+            config_schema: desc.config_schema.clone(),
             inputs: desc.inputs.iter().map(PortDescriptorOutput::from).collect(),
             outputs: desc
                 .outputs
@@ -357,8 +376,18 @@ impl From<&crate::core::schema::ProcessorDescriptor> for ProcessorDescriptorOutp
     }
 }
 
-impl From<&crate::core::schema::ConfigField> for ConfigFieldOutput {
-    fn from(field: &crate::core::schema::ConfigField) -> Self {
+impl From<&crate::core::ProcessorRuntime> for ProcessorRuntimeOutput {
+    fn from(runtime: &crate::core::ProcessorRuntime) -> Self {
+        match runtime {
+            crate::core::ProcessorRuntime::Rust => ProcessorRuntimeOutput::Rust,
+            crate::core::ProcessorRuntime::Python => ProcessorRuntimeOutput::Python,
+            crate::core::ProcessorRuntime::TypeScript => ProcessorRuntimeOutput::TypeScript,
+        }
+    }
+}
+
+impl From<&crate::core::ConfigField> for ConfigFieldOutput {
+    fn from(field: &crate::core::ConfigField) -> Self {
         Self {
             name: field.name.clone(),
             field_type: field.field_type.clone(),
@@ -368,8 +397,8 @@ impl From<&crate::core::schema::ConfigField> for ConfigFieldOutput {
     }
 }
 
-impl From<&crate::core::schema::PortDescriptor> for PortDescriptorOutput {
-    fn from(port: &crate::core::schema::PortDescriptor) -> Self {
+impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
+    fn from(port: &crate::core::PortDescriptor) -> Self {
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
@@ -379,59 +408,12 @@ impl From<&crate::core::schema::PortDescriptor> for PortDescriptorOutput {
     }
 }
 
-impl From<&crate::core::schema::CodeExamples> for CodeExamplesOutput {
-    fn from(examples: &crate::core::schema::CodeExamples) -> Self {
+impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
+    fn from(examples: &crate::core::CodeExamples) -> Self {
         Self {
             rust: examples.rust.clone(),
             python: examples.python.clone(),
             typescript: examples.typescript.clone(),
-        }
-    }
-}
-
-impl From<&crate::core::schema_registry::SchemaDescriptor> for SchemaDescriptorOutput {
-    fn from(desc: &crate::core::schema_registry::SchemaDescriptor) -> Self {
-        Self {
-            name: desc.name.clone(),
-            version: SemanticVersionOutput::from(&desc.version),
-            fields: desc.fields.iter().map(SchemaFieldOutput::from).collect(),
-            read_behavior: LinkBufferReadModeOutput::from(desc.read_behavior),
-            default_capacity: desc.default_capacity,
-        }
-    }
-}
-
-impl From<&crate::core::schema::SemanticVersion> for SemanticVersionOutput {
-    fn from(version: &crate::core::schema::SemanticVersion) -> Self {
-        Self {
-            major: version.major,
-            minor: version.minor,
-            patch: version.patch,
-        }
-    }
-}
-
-impl From<&crate::core::schema::DataFrameSchemaField> for SchemaFieldOutput {
-    fn from(field: &crate::core::schema::DataFrameSchemaField) -> Self {
-        Self {
-            name: field.name.clone(),
-            description: field.description.clone(),
-            type_name: field.type_name.clone(),
-            shape: field.shape.clone(),
-            internal: field.internal,
-        }
-    }
-}
-
-impl From<crate::core::links::LinkBufferReadMode> for LinkBufferReadModeOutput {
-    fn from(mode: crate::core::links::LinkBufferReadMode) -> Self {
-        match mode {
-            crate::core::links::LinkBufferReadMode::SkipToLatest => {
-                LinkBufferReadModeOutput::SkipToLatest
-            }
-            crate::core::links::LinkBufferReadMode::ReadNextInOrder => {
-                LinkBufferReadModeOutput::ReadNextInOrder
-            }
         }
     }
 }

@@ -3,32 +3,39 @@
 
 //! Procedural macros for streamlib
 //!
-//! Attribute macros for defining processors:
+//! YAML-based processor definition macro:
 //!
-//! - `#[streamlib::processor]` - Main processor definition
-//! - `#[streamlib::input]` - Input port marker
-//! - `#[streamlib::output]` - Output port marker
-//! - `#[streamlib::config]` - Config field marker
+//! - `#[streamlib::processor("path/to/schema.yaml")]` - Main processor definition
 //!
 //! # Example
 //!
 //! ```ignore
 //! use streamlib::prelude::*;
 //!
-//! #[streamlib::processor(execution = Manual)]
-//! pub struct CameraProcessor {
-//!     #[streamlib::output]
-//!     video: LinkOutput<VideoFrame>,
-//!
-//!     #[streamlib::config]
-//!     config: CameraConfig,
-//! }
+//! #[streamlib::processor("schemas/processors/camera.yaml")]
+//! pub struct CameraProcessor;
 //!
 //! impl CameraProcessor::Processor {
 //!     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> { Ok(()) }
 //!     fn teardown(&mut self) -> Result<()> { Ok(()) }
 //!     fn process(&mut self) -> Result<()> { Ok(()) }
 //! }
+//! ```
+//!
+//! Where `schemas/processors/camera.yaml` contains:
+//!
+//! ```yaml
+//! name: com.tatolab.camera
+//! version: 1.0.0
+//! description: "Camera capture processor"
+//!
+//! config:
+//!   name: config
+//!   schema: com.tatolab.camera.config@1.0.0
+//!
+//! outputs:
+//!   - name: video
+//!     schema: com.tatolab.videoframe@1.0.0
 //! ```
 //!
 //! Generates:
@@ -48,135 +55,108 @@ mod analysis;
 mod attributes;
 mod codegen;
 mod config_descriptor;
-mod dataframe_schema;
-mod schema_macro;
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput, ItemStruct};
+use std::path::Path;
+use syn::{parse_macro_input, DeriveInput, ItemStruct, LitStr};
 
 /// Main processor attribute macro.
 ///
-/// Transforms a struct definition into a processor module containing:
+/// Transforms a struct definition into a processor module using a YAML schema.
+///
+/// # Usage
+///
+/// ```ignore
+/// #[streamlib::processor("schemas/processors/my_processor.yaml")]
+/// pub struct MyProcessor;
+/// ```
+///
+/// The YAML file defines:
+/// - Processor name and version
+/// - Description
+/// - Runtime (rust, python, typescript)
+/// - Config schema reference
+/// - Input/output port schemas
+///
+/// # Generated Code
+///
 /// - `Processor` struct with port fields
 /// - `InputLink` module with input port markers
 /// - `OutputLink` module with output port markers
 /// - All necessary trait implementations
-///
-/// # Attributes
-///
-/// ## Execution Mode (determines when `process()` is called)
-///
-/// - `execution = Continuous` - Runtime loops, calling process() repeatedly (for polling sources)
-/// - `execution = Reactive` - Called when upstream writes to any input port (default)
-/// - `execution = Manual` - Called once, then you control timing via callbacks/external systems
-///
-/// ### Execution Mode with Interval
-///
-/// - `execution = Continuous, execution_interval_ms = 100` - Sleep 100ms between process() calls
-///
-/// ## Other Attributes
-///
-/// - `description = "..."` - Processor description
-/// - `unsafe_send` - Generate `unsafe impl Send`
-///
-/// # Example
-///
-/// ```ignore
-/// #[streamlib::processor(execution = Reactive)]
-/// pub struct MyProcessor {
-///     #[streamlib::input]"
-///     audio_in: LinkInput<AudioFrame>,
-///
-///     #[streamlib::output]
-///     audio_out: LinkOutput<AudioFrame>,
-///
-///     #[streamlib::config]
-///     config: MyConfig,
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
-    let attr_tokens: proc_macro2::TokenStream = attr.into();
 
-    let analysis = match analysis::AnalysisResult::analyze(&item_struct, attr_tokens) {
-        Ok(result) => result,
+    // Parse YAML path from attribute
+    let yaml_path = match parse_yaml_path(attr) {
+        Ok(path) => path,
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let generated = codegen::generate_processor_module(&analysis);
+    // Load and parse the YAML schema
+    let schema = match load_processor_schema(&yaml_path, &item_struct) {
+        Ok(schema) => schema,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    // Generate code from the schema
+    let generated = codegen::generate_from_processor_schema(&item_struct, &schema);
 
     TokenStream::from(generated)
 }
 
-/// Input port marker attribute.
-///
-/// Marks a field as an input port. Used within `#[streamlib::processor]`.
-///
-/// # Attributes
-///
-/// - `description = "..."` - Port description
-/// - `name = "..."` - Custom port name (defaults to field name)
-#[proc_macro_attribute]
-pub fn input(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
+/// Parse the YAML path from the attribute arguments.
+fn parse_yaml_path(attr: TokenStream) -> syn::Result<String> {
+    let lit: LitStr = syn::parse(attr)?;
+    Ok(lit.value())
 }
 
-/// Output port marker attribute.
-///
-/// Marks a field as an output port. Used within `#[streamlib::processor]`.
-///
-/// # Attributes
-///
-/// - `description = "..."` - Port description
-/// - `name = "..."` - Custom port name (defaults to field name)
-#[proc_macro_attribute]
-pub fn output(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
-}
+/// Load and parse a processor schema from a YAML file.
+fn load_processor_schema(
+    yaml_path: &str,
+    item: &ItemStruct,
+) -> syn::Result<streamlib_schema::ProcessorSchema> {
+    // Get the manifest directory (where Cargo.toml is located)
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
+        syn::Error::new_spanned(
+            item,
+            "CARGO_MANIFEST_DIR not set. This macro must be used within a Cargo build.",
+        )
+    })?;
 
-/// Config field marker attribute.
-///
-/// Marks a field as a config field. Used within `#[streamlib::processor]`.
-#[proc_macro_attribute]
-pub fn config(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
-}
+    let full_path = Path::new(&manifest_dir).join(yaml_path);
 
-/// Derive macro for DataFrameSchema trait.
-///
-/// Generates a `DataFrameSchema` implementation for structs with primitive fields.
-///
-/// # Supported Types
-///
-/// - Scalars: `bool`, `i32`, `i64`, `u32`, `u64`, `f32`, `f64`
-/// - Fixed-size arrays: `[f32; 512]`, `[[f32; 4]; 4]`, etc.
-///
-/// # Attributes
-///
-/// - `#[schema(name = "...")]` - Custom schema name (defaults to struct name)
-///
-/// # Example
-///
-/// ```ignore
-/// use streamlib::DataFrameSchema;
-///
-/// #[derive(DataFrameSchema)]
-/// #[schema(name = "clip_embedding")]
-/// pub struct ClipEmbeddingSchema {
-///     pub embedding: [f32; 512],
-///     pub timestamp: i64,
-///     pub normalized: bool,
-/// }
-/// ```
-#[proc_macro_derive(DataFrameSchema, attributes(schema))]
-pub fn derive_dataframe_schema(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-
-    match dataframe_schema::derive_dataframe_schema(input) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
+    // Check if file exists
+    if !full_path.exists() {
+        return Err(syn::Error::new_spanned(
+            item,
+            format!(
+                "Processor schema file not found: {}\n\
+                 Expected at: {}",
+                yaml_path,
+                full_path.display()
+            ),
+        ));
     }
+
+    // Read and parse the YAML
+    let yaml_content = std::fs::read_to_string(&full_path).map_err(|e| {
+        syn::Error::new_spanned(
+            item,
+            format!(
+                "Failed to read processor schema file '{}': {}",
+                yaml_path, e
+            ),
+        )
+    })?;
+
+    streamlib_schema::parse_processor_yaml(&yaml_content).map_err(|e| {
+        syn::Error::new_spanned(
+            item,
+            format!("Failed to parse processor schema '{}': {}", yaml_path, e),
+        )
+    })
 }
 
 /// Derive macro for ConfigDescriptor trait.
@@ -213,74 +193,4 @@ pub fn derive_config_descriptor(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
-}
-
-/// Schema attribute macro for defining schema types.
-///
-/// Transforms a struct into a schema type that can be used with `LinkInput<T>` and `LinkOutput<T>`.
-///
-/// # Attributes
-///
-/// - `version = "1.0.0"` - Schema version (semver format, default: "1.0.0")
-/// - `read_behavior = "skip_to_latest"` - Buffer read mode (default: "skip_to_latest")
-///   - `"skip_to_latest"` - Skip to most recent value (video, data)
-///   - `"read_next_in_order"` - Read all values in order (audio)
-/// - `name = "..."` - Override schema name (default: struct name)
-///
-/// # Field Attributes
-///
-/// Use `#[streamlib::field(...)]` on fields:
-/// - `not_serializable` - Field cannot be serialized (e.g., GPU resources)
-/// - `skip` - Exclude field from schema metadata
-/// - `display = "..."` - UI display hint
-///
-/// # Example
-///
-/// ```ignore
-/// #[streamlib::schema(version = "1.0.0")]
-/// pub struct ImageEmbedding {
-///     pub embedding: [f32; 512],
-///     pub confidence: f32,
-///     pub timestamp_ns: i64,
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn schema(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item_struct = parse_macro_input!(item as ItemStruct);
-    let attr_tokens: proc_macro2::TokenStream = attr.into();
-
-    let attrs = match schema_macro::SchemaAttributes::parse_from_args(attr_tokens) {
-        Ok(attrs) => attrs,
-        Err(err) => return err.to_compile_error().into(),
-    };
-
-    let generated = schema_macro::generate_schema(attrs, item_struct);
-    TokenStream::from(generated)
-}
-
-/// Field attribute for schema field customization.
-///
-/// Use within `#[streamlib::schema]` structs to customize field behavior.
-///
-/// # Attributes
-///
-/// - `not_serializable` - Field cannot cross language boundary (GPU resources)
-/// - `skip` - Exclude field from schema metadata
-/// - `display = "..."` - UI display hint
-///
-/// # Example
-///
-/// ```ignore
-/// #[streamlib::schema]
-/// pub struct VideoFrame {
-///     #[streamlib::field(not_serializable)]
-///     pub texture: Arc<wgpu::Texture>,
-///
-///     #[streamlib::field(display = "timestamp")]
-///     pub timestamp_ns: i64,
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn field(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
 }
