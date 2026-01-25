@@ -39,7 +39,7 @@ pub use processors::{
     AppleCameraProcessor,
     // Sinks
     AppleDisplayProcessor,
-    // AppleMp4WriterProcessor,
+    AppleMp4WriterProcessor,
 };
 
 // Note: WebRTC types (WhipClient, WhepClient, etc.) are now in core::streaming

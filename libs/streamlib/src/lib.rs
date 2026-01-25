@@ -160,7 +160,7 @@ pub use apple::{
     // AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
-    // AppleMp4WriterProcessor as Mp4WriterProcessor,
+    AppleMp4WriterProcessor as Mp4WriterProcessor,
     // MetalDevice,
     // VideoToolbox encoder (config types are in core::codec):
     // VideoToolboxEncoder,

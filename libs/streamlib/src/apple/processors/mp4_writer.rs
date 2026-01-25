@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, GpuContext, LinkInput, Result, RuntimeContext,
-    StreamError, VideoFrame,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, GpuContext, Result, RuntimeContext, StreamError,
+    VideoFrame,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -16,7 +17,6 @@ use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{NSDictionary, NSNumber};
 use objc2_foundation::{NSString, NSURL};
 use objc2_io_surface::IOSurface;
-use std::path::PathBuf;
 use tracing::{debug, error, info, trace};
 
 // FFI bindings for CoreVideo functions
@@ -27,48 +27,8 @@ extern "C" {
     fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
 }
 
-/// Configuration for MP4 writer processor.
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ConfigDescriptor,
-)]
-pub struct AppleMp4WriterConfig {
-    pub output_path: PathBuf,
-    pub sync_tolerance_ms: Option<f64>,
-    pub video_codec: Option<String>,
-    pub video_bitrate: Option<u32>,
-    pub audio_codec: Option<String>,
-    pub audio_bitrate: Option<u32>,
-}
-
-impl Default for AppleMp4WriterConfig {
-    fn default() -> Self {
-        Self {
-            output_path: PathBuf::from("/tmp/output.mp4"),
-            sync_tolerance_ms: None,
-            video_codec: Some("avc1".to_string()), // H.264
-            video_bitrate: Some(5_000_000),        // 5 Mbps
-            audio_codec: Some("aac".to_string()),
-            audio_bitrate: Some(128_000), // 128 kbps
-        }
-    }
-}
-
-#[crate::processor(
-    name = "Mp4WriterProcessor",
-    execution = Reactive,
-    description = "Writes stereo audio and video to MP4 file with A/V synchronization",
-    unsafe_send
-)]
+#[crate::processor("src/apple/processors/mp4_writer.yaml")]
 pub struct AppleMp4WriterProcessor {
-    #[crate::input(description = "Stereo audio frames to write to MP4")]
-    audio: LinkInput<AudioFrame>,
-
-    #[crate::input(description = "Video frames to write to MP4")]
-    video: LinkInput<VideoFrame>,
-
-    #[crate::config]
-    config: AppleMp4WriterConfig,
-
     // RuntimeContext for main thread dispatch
     ctx: Option<crate::core::RuntimeContext>,
 
@@ -152,110 +112,91 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
     fn process(&mut self) -> Result<()> {
         debug!("=== MP4Writer process() called ===");
 
-        // Wait for both audio and video connections before initializing
+        // Wait for first video frame to initialize writer (need dimensions)
         if self.writer.is_none() {
-            let audio_connected = self.audio.is_connected();
-            let video_connected = self.video.is_connected();
-
-            debug!(
-                "Connections: audio={}, video={}",
-                audio_connected, video_connected
-            );
-
-            if !audio_connected || !video_connected {
-                debug!(
-                    "Waiting for both connections (audio={}, video={})",
-                    audio_connected, video_connected
-                );
-                return Ok(());
-            }
-
-            // Both connected, now wait for first video frame to get dimensions
-            if let Some(first_video) = self.video.peek() {
-                info!(
-                    "🎬 INITIALIZING AVAssetWriter with video dimensions: {}x{}",
-                    first_video.width(),
-                    first_video.height()
-                );
-
-                // Initialize writer
-                self.initialize_writer()?;
-
-                // Configure video input with dimensions from first frame
-                self.configure_video_input(first_video.width(), first_video.height())?;
-                info!(
-                    "✅ VIDEO INPUT CONFIGURED: {}x{}",
-                    first_video.width(),
-                    first_video.height()
-                );
-
-                // Configure audio input
-                self.configure_audio_input()?;
-                info!("✅ AUDIO INPUT CONFIGURED");
-
-                // Start the writing session (all inputs configured)
-                let writer = self.writer.as_ref().ok_or_else(|| {
-                    StreamError::Configuration("AVAssetWriter not initialized".into())
-                })?;
-
-                info!("🎬 STARTING AVAssetWriter session...");
-                let started = unsafe { writer.startWriting() };
-                if !started {
-                    self.writer_failed = true;
-                    let error_msg = unsafe {
-                        writer
-                            .error()
-                            .map(|e| e.localizedDescription().to_string())
-                            .unwrap_or_else(|| "Unknown error".to_string())
-                    };
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to start AVAssetWriter: {}",
-                        error_msg
-                    )));
-                }
-
-                // Get timestamps from both audio and video
-                let first_audio_ts = self.audio.peek().map(|a| a.timestamp_ns).unwrap_or(0);
-
-                // Video timestamp is already in nanoseconds
-                let first_video_ts = first_video.timestamp_ns;
-
-                // Use the FIRST VIDEO frame timestamp as the session start time
-                // This ensures audio and video start at the same point
-                // (we'll skip audio frames that came before the first video frame)
-                let session_start_ts = first_video_ts;
-
-                let start_time = unsafe { CMTime::new(0, 1_000_000_000) };
-                unsafe {
-                    writer.startSessionAtSourceTime(start_time);
-                }
-
-                // Set start_time_ns to the first video timestamp
-                self.start_time_ns = session_start_ts;
-                info!("✅ AVAssetWriter session started at time 0");
-                info!(
-                    "   Audio first frame: {}ns ({:.6}s)",
-                    first_audio_ts,
-                    first_audio_ts as f64 / 1_000_000_000.0
-                );
-                info!(
-                    "   Video first frame: {}ns ({:.6}s)",
-                    first_video_ts,
-                    first_video_ts as f64 / 1_000_000_000.0
-                );
-                info!(
-                    "   Session start:     {}ns ({:.6}s) [synced to first video frame]",
-                    session_start_ts,
-                    session_start_ts as f64 / 1_000_000_000.0
-                );
-            } else {
+            // Check if we have video data to read
+            if !self.inputs.has_data("video") {
                 debug!("Waiting for first video frame to get dimensions");
                 return Ok(());
             }
+
+            // Read and convert the first video frame to get dimensions
+            let first_video = self.read_video_frame()?;
+            info!(
+                "🎬 INITIALIZING AVAssetWriter with video dimensions: {}x{}",
+                first_video.width(),
+                first_video.height()
+            );
+
+            // Initialize writer
+            self.initialize_writer()?;
+
+            // Configure video input with dimensions from first frame
+            self.configure_video_input(first_video.width(), first_video.height())?;
+            info!(
+                "✅ VIDEO INPUT CONFIGURED: {}x{}",
+                first_video.width(),
+                first_video.height()
+            );
+
+            // Configure audio input
+            self.configure_audio_input()?;
+            info!("✅ AUDIO INPUT CONFIGURED");
+
+            // Start the writing session (all inputs configured)
+            let writer = self.writer.as_ref().ok_or_else(|| {
+                StreamError::Configuration("AVAssetWriter not initialized".into())
+            })?;
+
+            info!("🎬 STARTING AVAssetWriter session...");
+            let started = unsafe { writer.startWriting() };
+            if !started {
+                self.writer_failed = true;
+                let error_msg = unsafe {
+                    writer
+                        .error()
+                        .map(|e| e.localizedDescription().to_string())
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                };
+                return Err(StreamError::Configuration(format!(
+                    "Failed to start AVAssetWriter: {}",
+                    error_msg
+                )));
+            }
+
+            // Video timestamp is already in nanoseconds
+            let first_video_ts = first_video.timestamp_ns;
+
+            // Use the FIRST VIDEO frame timestamp as the session start time
+            // This ensures audio and video start at the same point
+            // (we'll skip audio frames that came before the first video frame)
+            let session_start_ts = first_video_ts;
+
+            let start_time = unsafe { CMTime::new(0, 1_000_000_000) };
+            unsafe {
+                writer.startSessionAtSourceTime(start_time);
+            }
+
+            // Set start_time_ns to the first video timestamp
+            self.start_time_ns = session_start_ts;
+            info!("✅ AVAssetWriter session started at time 0");
+            info!(
+                "   Video first frame: {}ns ({:.6}s)",
+                first_video_ts,
+                first_video_ts as f64 / 1_000_000_000.0
+            );
+            info!(
+                "   Session start:     {}ns ({:.6}s) [synced to first video frame]",
+                session_start_ts,
+                session_start_ts as f64 / 1_000_000_000.0
+            );
+
+            // Store the first video frame
+            self.last_video_frame = Some(first_video);
         }
 
         // Check if we have any audio frames to process
-        let has_audio = self.audio.peek().is_some();
+        let has_audio = self.inputs.has_data("audio");
         debug!("has_audio = {}", has_audio);
 
         if !has_audio {
@@ -264,7 +205,8 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
         }
 
         // Process every audio frame immediately
-        while let Some(audio) = self.audio.read() {
+        while self.inputs.has_data("audio") {
+            let audio = self.read_audio_frame()?;
             trace!(
                 "Processing audio frame: timestamp_ns={}, sample_count={}, channels={}",
                 audio.timestamp_ns,
@@ -273,7 +215,8 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             );
 
             // IMPORTANT: Check for new video frame for EACH audio frame
-            if let Some(video) = self.video.read() {
+            if self.inputs.has_data("video") {
+                let video = self.read_video_frame()?;
                 debug!(
                     "New video frame received: timestamp_ns={}, frame_number={}, size={}x{}",
                     video.timestamp_ns,
@@ -367,15 +310,60 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 }
 
 impl AppleMp4WriterProcessor::Processor {
+    /// Read and convert an IPC audio frame to native AudioFrame.
+    fn read_audio_frame(&self) -> Result<AudioFrame> {
+        use crate::core::AudioChannelCount;
+        use std::sync::Arc;
+
+        let ipc_audio: crate::_generated_::Audioframe2Ch = self.inputs.read("audio")?;
+
+        // Convert IPC Audioframe2Ch to native AudioFrame
+        let timestamp_ns: i64 = ipc_audio.timestamp_ns.parse().unwrap_or(0);
+        let frame_number: u64 = ipc_audio.frame_index.parse().unwrap_or(0);
+
+        // Audioframe2Ch has samples as Vec<f32> with interleaved stereo
+        Ok(AudioFrame {
+            samples: Arc::new(ipc_audio.samples),
+            channels: AudioChannelCount::Two, // 2ch schema = stereo
+            timestamp_ns,
+            frame_number,
+            sample_rate: ipc_audio.sample_rate,
+        })
+    }
+
+    /// Read and convert an IPC video frame to native VideoFrame.
+    fn read_video_frame(&self) -> Result<VideoFrame> {
+        let gpu_context = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+
+        let ipc_video: crate::_generated_::Videoframe = self.inputs.read("video")?;
+
+        // Convert IPC Videoframe to VideoFrame by looking up surface via get_pixel_buffer
+        let pool_id = PixelBufferPoolId::from_str(&ipc_video.surface_id);
+        let buffer: RhiPixelBuffer = gpu_context.get_pixel_buffer(&pool_id).map_err(|e| {
+            StreamError::Link(format!(
+                "Failed to get pixel buffer for '{}': {}",
+                ipc_video.surface_id, e
+            ))
+        })?;
+
+        let timestamp_ns: i64 = ipc_video.timestamp_ns.parse().unwrap_or(0);
+        let frame_index: u64 = ipc_video.frame_index.parse().unwrap_or(0);
+
+        Ok(VideoFrame::from_buffer(buffer, timestamp_ns, frame_index))
+    }
+
     fn initialize_writer(&mut self) -> Result<()> {
-        info!("Initializing MP4 writer for: {:?}", self.config.output_path);
+        info!("Initializing MP4 writer for: {}", self.config.output_path);
 
         let ctx = self
             .ctx
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
 
-        let path_str = self.config.output_path.to_string_lossy().to_string();
+        let path_str = self.config.output_path.clone();
         let video_codec = self
             .config
             .video_codec
@@ -1228,27 +1216,28 @@ impl AppleMp4WriterProcessor::Processor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::_generated_::Mp4WriterConfig;
 
     #[test]
     fn test_mp4_writer_config_default() {
-        let config = AppleMp4WriterConfig::default();
-        assert_eq!(config.output_path, PathBuf::from("/tmp/output.mp4"));
+        let config = Mp4WriterConfig::default();
+        // Generated config has no default for output_path (it's required)
+        assert_eq!(config.output_path, "");
         assert_eq!(config.sync_tolerance_ms, None);
-        assert_eq!(config.video_codec, Some("avc1".to_string()));
-        assert_eq!(config.video_bitrate, Some(5_000_000));
+        assert_eq!(config.video_codec, None);
+        assert_eq!(config.video_bitrate, None);
     }
 
     #[test]
     fn test_mp4_writer_config_custom() {
-        let config = AppleMp4WriterConfig {
-            output_path: PathBuf::from("/tmp/test.mp4"),
+        let config = Mp4WriterConfig {
+            output_path: "/tmp/test.mp4".to_string(),
             sync_tolerance_ms: Some(33.3),
             video_bitrate: Some(10_000_000),
             ..Default::default()
         };
 
-        assert_eq!(config.output_path, PathBuf::from("/tmp/test.mp4"));
+        assert_eq!(config.output_path, "/tmp/test.mp4");
         assert_eq!(config.sync_tolerance_ms, Some(33.3));
         assert_eq!(config.video_bitrate, Some(10_000_000));
     }

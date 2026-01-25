@@ -52,6 +52,18 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
         &custom_fields,
     );
 
+    // Generate unsafe Send impl if required (for !Send types like AVFoundation)
+    let unsafe_send_impl = if schema.runtime.options.unsafe_send {
+        quote! {
+            // SAFETY: This processor contains !Send types (e.g., AVFoundation objects)
+            // but is safe to send because these types are only accessed from a single
+            // thread after initialization. The processor lifecycle ensures thread safety.
+            unsafe impl Send for Processor {}
+        }
+    } else {
+        quote! {}
+    };
+
     // Auto-registration via inventory crate
     let inventory_submit = quote! {
         ::streamlib::inventory::submit! {
@@ -77,6 +89,8 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
             }
 
             #processor_struct
+
+            #unsafe_send_impl
 
             #input_link_module
 
