@@ -1,19 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::frames::AudioChannelCount;
-use crate::core::{AudioFrame, LinkOutput, Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContext, StreamError};
+use crate::iceoryx2::OutputWriter;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default, crate::ConfigDescriptor,
-)]
-pub struct AppleAudioCaptureConfig {
-    pub device_id: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 pub struct AppleAudioInputDevice {
@@ -24,21 +17,8 @@ pub struct AppleAudioInputDevice {
     pub is_default: bool,
 }
 
-#[crate::processor(
-    name = "AudioCaptureProcessor",
-    execution = Manual,
-    description = "Captures mono audio from macOS microphones in device-native format - driven by CoreAudio callback",
-    unsafe_send
-)]
+#[crate::processor("src/apple/processors/audio_capture.yaml")]
 pub struct AppleAudioCaptureProcessor {
-    #[crate::output(
-        description = "Captured mono audio frames in device-native sample rate and buffer size"
-    )]
-    audio: LinkOutput<AudioFrame>,
-
-    #[crate::config]
-    config: AppleAudioCaptureConfig,
-
     device_info: Option<AppleAudioInputDevice>,
     _device: Option<Device>,
     _stream: Option<Stream>,
@@ -171,7 +151,7 @@ impl AppleAudioCaptureProcessor::Processor {
             )));
         }
 
-        let audio_output_clone = self.audio.clone();
+        let outputs_clone: Arc<OutputWriter> = self.outputs.clone();
         let frame_counter_clone = self.frame_counter.clone();
         let is_capturing_clone = Arc::clone(&self.is_capturing);
         let sample_rate_clone = device_sample_rate;
@@ -195,31 +175,25 @@ impl AppleAudioCaptureProcessor::Processor {
                         return;
                     }
 
-                    tracing::debug!(
-                        "[AudioCapture Callback] Received {} mono samples",
-                        data.len()
-                    );
+                    // NOTE: Cannot use tracing here - this runs on cpal's audio callback thread
 
                     // Create mono audio frame directly (no conversion needed)
                     let frame_number = frame_counter_clone.fetch_add(1, Ordering::Relaxed);
                     let timestamp_ns =
                         crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
-                    let frame = AudioFrame::new(
-                        data.to_vec(),
-                        AudioChannelCount::One,
-                        timestamp_ns,
-                        frame_number,
-                        sample_rate_clone,
-                    );
+                    // Create IPC frame with mono audio data
+                    let ipc_frame = crate::_generated_::Audioframe1Ch {
+                        samples: data.to_vec(),
+                        sample_rate: sample_rate_clone,
+                        timestamp_ns: timestamp_ns.to_string(),
+                        frame_index: frame_number.to_string(),
+                    };
 
-                    audio_output_clone.write(frame);
-
-                    tracing::debug!(
-                        "[AudioCapture Callback] Wrote mono frame {} with {} samples",
-                        frame_number,
-                        data.len()
-                    );
+                    if let Err(e) = outputs_clone.write("audio", &ipc_frame) {
+                        // Cannot use tracing in callback - use eprintln for errors
+                        eprintln!("[AudioCapture] Failed to write frame: {}", e);
+                    }
                 },
                 move |err| {
                     tracing::error!("Audio capture error: {}", err);
@@ -305,6 +279,7 @@ impl AppleAudioCaptureProcessor::Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::_generated_::AudioCaptureConfig;
     use crate::core::GeneratedProcessor;
 
     #[test]
@@ -336,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_create_default_device() {
-        let config = AppleAudioCaptureConfig { device_id: None };
+        let config = AudioCaptureConfig { device_id: None };
 
         let result = AppleAudioCaptureProcessor::Processor::from_config(config);
 
@@ -355,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_capture_audio() {
-        let config = AppleAudioCaptureConfig::default();
+        let config = AudioCaptureConfig::default();
         let result = AppleAudioCaptureProcessor::Processor::from_config(config);
 
         if let Ok(mut processor) = result {

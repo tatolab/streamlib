@@ -1,14 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+pub mod audio_capture;
 pub mod camera;
 pub mod display;
 pub mod mp4_writer;
-// pub mod audio_capture;
 // pub mod audio_output;
 
+pub use audio_capture::AppleAudioCaptureProcessor;
 pub use camera::AppleCameraProcessor;
 pub use display::AppleDisplayProcessor;
 pub use mp4_writer::AppleMp4WriterProcessor;
-// pub use audio_capture::AppleAudioCaptureProcessor;
 // pub use audio_output::AppleAudioOutputProcessor;

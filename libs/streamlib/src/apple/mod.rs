@@ -33,9 +33,9 @@ pub use pixel_transfer::PixelTransferSession;
 
 // Sources and sinks migrated to iceoryx2 API
 pub use processors::{
-    // AppleAudioCaptureProcessor,
     // AppleAudioOutputProcessor,
     // Sources
+    AppleAudioCaptureProcessor,
     AppleCameraProcessor,
     // Sinks
     AppleDisplayProcessor,

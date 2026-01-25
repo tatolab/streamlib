@@ -5,6 +5,7 @@
 
 pub mod com_streamlib_api_server_config;
 pub mod com_streamlib_clap_effect_config;
+pub mod com_tatolab_audio_capture_config;
 pub mod com_tatolab_audio_channel_converter_config;
 pub mod com_tatolab_audio_mixer_config;
 pub mod com_tatolab_audio_resampler_config;
@@ -26,6 +27,7 @@ pub mod com_tatolab_videoframe;
 
 pub use com_streamlib_api_server_config::ApiServerConfig;
 pub use com_streamlib_clap_effect_config::EffectConfig;
+pub use com_tatolab_audio_capture_config::AudioCaptureConfig;
 pub use com_tatolab_audio_channel_converter_config::AudioChannelConverterConfig;
 pub use com_tatolab_audio_mixer_config::AudioMixerConfig;
 pub use com_tatolab_audio_resampler_config::AudioResamplerConfig;

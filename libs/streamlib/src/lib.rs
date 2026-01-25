@@ -156,7 +156,7 @@ pub(crate) mod apple;
 // Apple processor re-exports (migrated to iceoryx2 API)
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    // AppleAudioCaptureProcessor as AudioCaptureProcessor,
+    AppleAudioCaptureProcessor as AudioCaptureProcessor,
     // AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,

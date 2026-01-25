@@ -167,6 +167,8 @@ schemas = [
     "schemas/com.tatolab.camera.config@1.0.0.yaml",
     "schemas/com.tatolab.chord_generator.config@1.0.0.yaml",
     "schemas/com.tatolab.display.config@1.0.0.yaml",
+    "schemas/com.tatolab.mp4_writer.config@1.0.0.yaml",
+    "schemas/com.tatolab.audio_capture.config@1.0.0.yaml",
     "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
 ]
 
