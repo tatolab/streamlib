@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::frames::AudioChannelCount;
 use crate::core::{Result, StreamError};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -50,7 +49,7 @@ pub struct AudioResampler {
     inner: ResamplerInner,
     source_sample_rate: u32,
     target_sample_rate: u32,
-    channels: AudioChannelCount,
+    channels: u8,
     quality: ResamplingQuality,
 }
 
@@ -70,7 +69,7 @@ impl AudioResampler {
     pub fn new(
         source_rate: u32,
         target_rate: u32,
-        channels: AudioChannelCount,
+        channels: u8,
         chunk_size: usize,
         quality: ResamplingQuality,
     ) -> Result<Self> {
@@ -79,7 +78,7 @@ impl AudioResampler {
 
         // Create channel-specific resampler
         let inner = match channels {
-            AudioChannelCount::One => {
+            1 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -89,7 +88,7 @@ impl AudioResampler {
                     })?;
                 ResamplerInner::One(resampler)
             }
-            AudioChannelCount::Two => {
+            2 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 2)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -99,7 +98,7 @@ impl AudioResampler {
                     })?;
                 ResamplerInner::Two(resampler)
             }
-            AudioChannelCount::Three => {
+            3 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 3)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -109,7 +108,7 @@ impl AudioResampler {
                     })?;
                 ResamplerInner::Three(resampler)
             }
-            AudioChannelCount::Four => {
+            4 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 4)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -119,7 +118,7 @@ impl AudioResampler {
                     })?;
                 ResamplerInner::Four(resampler)
             }
-            AudioChannelCount::Five => {
+            5 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 5)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -129,7 +128,7 @@ impl AudioResampler {
                     })?;
                 ResamplerInner::Five(resampler)
             }
-            AudioChannelCount::Six => {
+            6 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 6)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -139,7 +138,7 @@ impl AudioResampler {
                     })?;
                 ResamplerInner::Six(resampler)
             }
-            AudioChannelCount::Seven => {
+            7 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 7)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -149,7 +148,7 @@ impl AudioResampler {
                     })?;
                 ResamplerInner::Seven(resampler)
             }
-            AudioChannelCount::Eight => {
+            8 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 8)
                     .map_err(|e| {
                         StreamError::Runtime(format!(
@@ -158,6 +157,12 @@ impl AudioResampler {
                         ))
                     })?;
                 ResamplerInner::Eight(resampler)
+            }
+            _ => {
+                return Err(StreamError::Configuration(format!(
+                    "Unsupported channel count: {}. Must be 1-8.",
+                    channels
+                )))
             }
         };
 
@@ -172,7 +177,7 @@ impl AudioResampler {
 
     /// Resample interleaved multi-channel audio.
     pub fn resample(&mut self, input: &[f32]) -> Result<Vec<f32>> {
-        let channels_usize = self.channels.as_usize();
+        let channels_usize = self.channels as usize;
         // Convert interleaved to planar (separate channels)
         let samples_per_channel = input.len() / channels_usize;
         let mut planar_input: Vec<Vec<f32>> =
@@ -219,7 +224,7 @@ impl AudioResampler {
         self.target_sample_rate
     }
 
-    pub fn channels(&self) -> AudioChannelCount {
+    pub fn channels(&self) -> u8 {
         self.channels
     }
 
@@ -243,7 +248,7 @@ impl StereoResampler {
         let inner = AudioResampler::new(
             source_rate,
             target_rate,
-            AudioChannelCount::Two,
+            2, // stereo
             chunk_size,
             quality,
         )?;
@@ -277,7 +282,7 @@ mod tests {
         let mut resampler = AudioResampler::new(
             48000,
             24000,
-            AudioChannelCount::One,
+            1, // mono
             960,
             ResamplingQuality::Medium,
         )
@@ -285,7 +290,7 @@ mod tests {
 
         assert_eq!(resampler.source_sample_rate(), 48000);
         assert_eq!(resampler.target_sample_rate(), 24000);
-        assert_eq!(resampler.channels(), AudioChannelCount::One);
+        assert_eq!(resampler.channels(), 1);
 
         // Create test input: 960 mono samples
         let input: Vec<f32> = (0..960).map(|i| (i as f32) / 960.0).collect();
@@ -307,13 +312,13 @@ mod tests {
         let mut resampler = AudioResampler::new(
             48000,
             24000,
-            AudioChannelCount::Two,
+            2, // stereo
             960,
             ResamplingQuality::Medium,
         )
         .expect("Failed to create stereo resampler");
 
-        assert_eq!(resampler.channels(), AudioChannelCount::Two);
+        assert_eq!(resampler.channels(), 2);
 
         // Create test input: 960 samples per channel = 1920 total samples (interleaved)
         let input: Vec<f32> = (0..1920)
@@ -340,13 +345,13 @@ mod tests {
         let mut resampler = AudioResampler::new(
             48000,
             24000,
-            AudioChannelCount::Four,
+            4, // quad
             960,
             ResamplingQuality::Medium,
         )
         .expect("Failed to create quad resampler");
 
-        assert_eq!(resampler.channels(), AudioChannelCount::Four);
+        assert_eq!(resampler.channels(), 4);
 
         // Create test input: 960 samples per channel = 3840 total samples (interleaved)
         let input: Vec<f32> = (0..3840).map(|i| (i % 4) as f32 / 4.0).collect();
@@ -371,13 +376,13 @@ mod tests {
         let mut resampler = AudioResampler::new(
             48000,
             24000,
-            AudioChannelCount::Six,
+            6, // 5.1 surround
             960,
             ResamplingQuality::Medium,
         )
         .expect("Failed to create 5.1 resampler");
 
-        assert_eq!(resampler.channels(), AudioChannelCount::Six);
+        assert_eq!(resampler.channels(), 6);
 
         // Create test input: 960 samples per channel = 5760 total samples (interleaved)
         let input: Vec<f32> = (0..5760).map(|i| (i % 6) as f32 / 6.0).collect();
@@ -402,13 +407,13 @@ mod tests {
         let mut resampler = AudioResampler::new(
             48000,
             24000,
-            AudioChannelCount::Eight,
+            8, // 7.1 surround
             960,
             ResamplingQuality::Medium,
         )
         .expect("Failed to create 7.1 resampler");
 
-        assert_eq!(resampler.channels(), AudioChannelCount::Eight);
+        assert_eq!(resampler.channels(), 8);
 
         // Create test input: 960 samples per channel = 7680 total samples (interleaved)
         let input: Vec<f32> = (0..7680).map(|i| (i % 8) as f32 / 8.0).collect();
@@ -433,7 +438,7 @@ mod tests {
         let mut resampler = AudioResampler::new(
             24000,
             48000,
-            AudioChannelCount::Two,
+            2, // stereo
             480,
             ResamplingQuality::Medium,
         )
@@ -460,14 +465,11 @@ mod tests {
 
     #[test]
     fn test_audio_resampler_invalid_channels() {
-        // Try to create resampler with unsupported channel count (9 channels, outside 1-8 range)
-        // Note: 3 and 5 channels are now supported, so we test with an actually unsupported count
-        // Since AudioChannelCount only goes up to 8, we can't directly test invalid counts
-        // through the API. This test now verifies that valid channel counts work.
+        // Test with valid channel counts (3 and 5 are supported)
         let result = AudioResampler::new(
             48000,
             24000,
-            AudioChannelCount::Three,
+            3, // 3 channels
             960,
             ResamplingQuality::Medium,
         );
@@ -476,11 +478,21 @@ mod tests {
         let result = AudioResampler::new(
             48000,
             24000,
-            AudioChannelCount::Five,
+            5, // 5 channels
             960,
             ResamplingQuality::Medium,
         );
         assert!(result.is_ok());
+
+        // Test with invalid channel count (9 channels, outside 1-8 range)
+        let result = AudioResampler::new(
+            48000,
+            24000,
+            9, // invalid
+            960,
+            ResamplingQuality::Medium,
+        );
+        assert!(result.is_err());
     }
 
     #[test]

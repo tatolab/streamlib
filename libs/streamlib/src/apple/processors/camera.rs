@@ -4,12 +4,9 @@
 use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
-use crate::apple::iosurface::create_metal_texture_from_iosurface;
-use crate::core::rhi::GpuDevice;
-use crate::core::rhi::{PixelFormat, RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
-use metal::foreign_types::ForeignTypeRef;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -19,7 +16,6 @@ use objc2_av_foundation::{
 };
 use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSString};
-use objc2_io_surface::IOSurface;
 use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -174,10 +170,6 @@ struct CameraCallbackContext {
     frame_count: std::sync::atomic::AtomicU64,
     /// Holds the Arc to keep the OutputWriter alive while the pointer is in use.
     _outputs_arc: Arc<OutputWriter>,
-    /// Command queue for GPU blit operations.
-    command_queue: RhiCommandQueue,
-    /// GPU device for creating Metal textures from IOSurfaces.
-    device: Arc<GpuDevice>,
 }
 
 // SAFETY: OutputWriter is Sync, and the pointer is only dereferenced while valid
@@ -319,60 +311,8 @@ unsafe fn blit_iosurface_to_pooled_buffer(
     width: u32,
     height: u32,
 ) -> crate::core::Result<()> {
-    // Get destination IOSurface from pooled buffer
-    let dest_iosurface = pooled_buffer
-        .buffer_ref()
-        .iosurface_ref()
-        .ok_or_else(|| StreamError::GpuError("Pooled buffer not backed by IOSurface".into()))?;
-
-    // Cast IOSurfaceRef pointers to objc2 IOSurface references
-    let src_iosurface_ref = &*(camera_iosurface as *const IOSurface);
-    let dest_iosurface_ref = &*(dest_iosurface as *const IOSurface);
-
-    // Get Metal device for creating textures
-    let metal_device = ctx.device.as_metal_device().device();
-
-    // Create Metal textures from both IOSurfaces
-    let src_texture = create_metal_texture_from_iosurface(metal_device, src_iosurface_ref, 0)?;
-    let dest_texture = create_metal_texture_from_iosurface(metal_device, dest_iosurface_ref, 0)?;
-
-    // Create command buffer and blit encoder
-    let command_buffer = ctx.command_queue.metal_queue_ref().new_command_buffer();
-    let blit_encoder = command_buffer.new_blit_command_encoder();
-
-    // Set up copy parameters
-    let origin = metal::MTLOrigin { x: 0, y: 0, z: 0 };
-    let size = metal::MTLSize {
-        width: width as u64,
-        height: height as u64,
-        depth: 1,
-    };
-
-    // Convert objc2 Metal textures to metal crate references for blit API
-    let src_texture_ptr = &*src_texture as *const _ as *mut std::ffi::c_void;
-    let src_texture_ref = metal::TextureRef::from_ptr(src_texture_ptr as *mut _);
-
-    let dest_texture_ptr = &*dest_texture as *const _ as *mut std::ffi::c_void;
-    let dest_texture_ref = metal::TextureRef::from_ptr(dest_texture_ptr as *mut _);
-
-    // Perform the GPU blit
-    blit_encoder.copy_from_texture(
-        src_texture_ref,
-        0, // source slice
-        0, // source level
-        origin,
-        size,
-        dest_texture_ref,
-        0, // dest slice
-        0, // dest level
-        origin,
-    );
-
-    blit_encoder.end_encoding();
-    command_buffer.commit();
-    command_buffer.wait_until_completed();
-
-    Ok(())
+    ctx.gpu_context
+        .blit_copy_iosurface(camera_iosurface, pooled_buffer, width, height)
 }
 
 /// Fall back to direct IOSurface forwarding (old behavior).
@@ -442,10 +382,6 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
             StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
         })?;
 
-        // Get command queue and device for GPU blit operations
-        let command_queue = gpu_context.command_queue().clone();
-        let device = gpu_context.device().clone();
-
         // Create callback context with pointer to OutputWriter and GPU context
         // SAFETY: The processor outlives the callback context (stop() clears it before drop)
         // Clone the Arc to get a reference we can convert to a pointer
@@ -457,8 +393,6 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
             frame_count: std::sync::atomic::AtomicU64::new(0),
             // Keep the Arc alive to ensure the pointer remains valid
             _outputs_arc: outputs_arc,
-            command_queue,
-            device,
         });
 
         // Store in global - callback will read from here

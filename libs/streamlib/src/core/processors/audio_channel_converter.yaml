@@ -9,10 +9,10 @@ config:
 
 inputs:
   - name: audio_in
-    schema: com.tatolab.audioframe.1ch@1.0.0
-    description: Mono audio input
+    schema: com.tatolab.audioframe@1.0.0
+    description: Audio input (validates channel count at runtime)
 
 outputs:
   - name: audio_out
-    schema: com.tatolab.audioframe.2ch@1.0.0
-    description: Stereo audio output
+    schema: com.tatolab.audioframe@1.0.0
+    description: Audio output with converted channel count

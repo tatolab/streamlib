@@ -55,16 +55,13 @@ pub use core::{
     // AudioDevice,
     AudioEncoderConfig,
     AudioEncoderOpus,
-    AudioFrame,
     // TODO: Migrate to iceoryx2 API
     // AudioInputDevice,
     AudioMixerProcessor,
     // TODO: Migrate to iceoryx2 API
     // AudioOutputConfig,
-    AudioResampler1chProcessor,
-    AudioResampler2chProcessor,
-    BufferRechunker1chProcessor,
-    BufferRechunker2chProcessor,
+    AudioResamplerProcessor,
+    BufferRechunkerProcessor,
     // TODO: Migrate to iceoryx2 API
     // CameraConfig,
     // CameraDevice,
@@ -157,7 +154,7 @@ pub(crate) mod apple;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
     AppleAudioCaptureProcessor as AudioCaptureProcessor,
-    // AppleAudioOutputProcessor as AudioOutputProcessor,
+    AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
@@ -169,11 +166,8 @@ pub use apple::{
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
-// TODO: Migrate to iceoryx2 API
 // WebRTC WHIP/WHEP processors (cross-platform)
-// pub use core::processors::{
-//     WebRtcWhepConfig, WebRtcWhepProcessor, WebRtcWhipConfig, WebRtcWhipProcessor,
-// };
+pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{

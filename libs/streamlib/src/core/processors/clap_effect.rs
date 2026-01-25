@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
-use crate::core::frames::AudioFrame;
 use crate::core::{Result, RuntimeContext};
+use crate::_generated_::Audioframe;
 
 use std::path::PathBuf;
 
@@ -79,7 +79,7 @@ impl ClapEffectProcessor::Processor {
             .deactivate()
     }
 
-    fn process_audio_through_clap(&mut self, input_frame: &AudioFrame) -> Result<AudioFrame> {
+    fn process_audio_through_clap(&mut self, input_frame: &Audioframe) -> Result<Audioframe> {
         use crate::core::StreamError;
 
         let host = self

@@ -183,8 +183,9 @@ impl AppleAudioCaptureProcessor::Processor {
                         crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
                     // Create IPC frame with mono audio data
-                    let ipc_frame = crate::_generated_::Audioframe1Ch {
+                    let ipc_frame = crate::_generated_::Audioframe {
                         samples: data.to_vec(),
+                        channels: 1, // Mono
                         sample_rate: sample_rate_clone,
                         timestamp_ns: timestamp_ns.to_string(),
                         frame_index: frame_number.to_string(),

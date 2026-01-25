@@ -8,7 +8,7 @@ pub use crate::core::{
     error::{Result, StreamError},
 
     // Frames
-    frames::{AudioFrame, VideoFrame},
+    frames::VideoFrame,
 
     // Graph
     graph::{LinkUniqueId, ProcessorUniqueId},
@@ -19,3 +19,6 @@ pub use crate::core::{
     // Runtime
     runtime::StreamRuntime,
 };
+
+// Re-export generated Audioframe
+pub use crate::_generated_::Audioframe;

@@ -56,9 +56,8 @@ pub mod buffer_rechunker;
 pub mod simple_passthrough;
 
 // WebRTC Streaming
-// TODO: Migrate to iceoryx2 API
-// pub mod webrtc_whep;
-// pub mod webrtc_whip;
+pub mod webrtc_whep;
+pub mod webrtc_whip;
 
 // TODO: Migrate to iceoryx2 API
 // pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
@@ -73,11 +72,10 @@ pub use chord_generator::ChordGeneratorProcessor;
 pub use api_server::*;
 pub use audio_channel_converter::AudioChannelConverterProcessor;
 pub use audio_mixer::AudioMixerProcessor;
-pub use audio_resampler::{AudioResampler1chProcessor, AudioResampler2chProcessor};
-pub use buffer_rechunker::{BufferRechunker1chProcessor, BufferRechunker2chProcessor};
+pub use audio_resampler::AudioResamplerProcessor;
+pub use buffer_rechunker::BufferRechunkerProcessor;
 // TODO: Migrate to iceoryx2 API
 // pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
-// TODO: Migrate to iceoryx2 API
-// pub use webrtc_whep::{WebRtcWhepConfig, WebRtcWhepProcessor};
-// pub use webrtc_whip::{WebRtcWhipConfig, WebRtcWhipProcessor};
+pub use webrtc_whep::WebRtcWhepProcessor;
+pub use webrtc_whip::WebRtcWhipProcessor;

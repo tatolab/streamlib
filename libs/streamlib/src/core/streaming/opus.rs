@@ -5,7 +5,8 @@
 //
 // Provides Opus encoding for real-time audio streaming.
 
-use crate::core::{AudioFrame, Result, StreamError};
+use crate::_generated_::Audioframe;
+use crate::core::{Result, StreamError};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -52,7 +53,7 @@ impl Default for AudioEncoderConfig {
 // ============================================================================
 
 pub trait AudioEncoderOpus: Send {
-    fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame>;
+    fn encode(&mut self, frame: &Audioframe) -> Result<EncodedAudioFrame>;
     fn config(&self) -> &AudioEncoderConfig;
     fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()>;
 }
@@ -64,7 +65,7 @@ pub trait AudioEncoderOpus: Send {
 /// Opus audio encoder for real-time WebRTC streaming.
 ///
 /// # Requirements
-/// - Input must be stereo (`AudioFrame`)
+/// - Input must be stereo (`Audioframe`)
 /// - Sample rate must be 48kHz
 /// - Frame size must be exactly 960 samples (20ms @ 48kHz)
 ///
@@ -144,7 +145,7 @@ impl OpusEncoder {
 }
 
 impl AudioEncoderOpus for OpusEncoder {
-    fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame> {
+    fn encode(&mut self, frame: &Audioframe) -> Result<EncodedAudioFrame> {
         // Validate sample rate
         if frame.sample_rate != 48000 {
             return Err(StreamError::Configuration(
@@ -157,7 +158,7 @@ impl AudioEncoderOpus for OpusEncoder {
 
         // Validate frame size (should be exactly 960 samples per channel for 20ms @ 48kHz)
         let expected_samples = self.frame_size; // 960
-        let actual_samples = frame.sample_count();
+        let actual_samples = frame.samples.len() / frame.channels as usize;
 
         if actual_samples != expected_samples {
             return Err(StreamError::Configuration(
@@ -168,7 +169,7 @@ impl AudioEncoderOpus for OpusEncoder {
             ));
         }
 
-        // Encode (opus expects interleaved f32, which is what AudioFrame uses)
+        // Encode (opus expects interleaved f32, which is what Audioframe uses)
         // Max packet size ~4KB is enough for worst case Opus output
         let encoded_data = self
             .encoder
@@ -182,9 +183,11 @@ impl AudioEncoderOpus for OpusEncoder {
             (actual_samples * 2 * 4) as f32 / encoded_data.len() as f32 // f32 = 4 bytes per sample
         );
 
+        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
+
         Ok(EncodedAudioFrame {
             data: encoded_data,
-            timestamp_ns: frame.timestamp_ns, // Preserve timestamp exactly
+            timestamp_ns, // Preserve timestamp exactly
             sample_count: actual_samples,
         })
     }

@@ -26,4 +26,8 @@ pub struct AudioChannelConverterConfig {
     /// Channel conversion mode
     #[serde(rename = "mode")]
     pub mode: Mode,
+
+    /// Number of output channels (default: 2)
+    #[serde(rename = "output_channels")]
+    pub output_channels: Option<u8>,
 }

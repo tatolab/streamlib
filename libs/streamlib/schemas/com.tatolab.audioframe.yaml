@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# JSON Type Definition (RFC 8927) schema for 5-channel audio frames
+# JSON Type Definition (RFC 8927) schema for audio frames (1-8 channels)
 
 metadata:
-  name: com.tatolab.audioframe.5ch
+  name: com.tatolab.audioframe
   version: 1.0.0
-  description: "5-channel audio frame (interleaved)"
+  description: "Audio frame with interleaved samples (1-8 channels)"
   read_mode: read_next_in_order
   buffer_size: 32
 
@@ -16,15 +16,19 @@ properties:
       description: "Interleaved audio samples"
     elements:
       type: float32
+  channels:
+    metadata:
+      description: "Number of audio channels (1-8)"
+    type: uint8
   sample_rate:
     metadata:
       description: "Sample rate in Hz"
     type: uint32
   timestamp_ns:
     metadata:
-      description: "Monotonic timestamp in nanoseconds (int64 as string - parse to native int64)"
+      description: "Monotonic timestamp in nanoseconds (int64 as string)"
     type: string
   frame_index:
     metadata:
-      description: "Sequential frame counter (uint64 as string - parse to native uint64)"
+      description: "Sequential frame counter (uint64 as string)"
     type: string

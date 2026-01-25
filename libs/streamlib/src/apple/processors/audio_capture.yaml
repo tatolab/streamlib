@@ -14,5 +14,5 @@ config:
 
 outputs:
   - name: audio
-    schema: com.tatolab.audioframe.1ch@1.0.0
+    schema: com.tatolab.audioframe@1.0.0
     description: Captured mono audio frames in device-native sample rate

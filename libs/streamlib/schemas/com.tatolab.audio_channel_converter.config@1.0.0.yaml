@@ -16,3 +16,8 @@ properties:
       - Duplicate
       - LeftOnly
       - RightOnly
+optionalProperties:
+  output_channels:
+    metadata:
+      description: "Number of output channels (default: 2)"
+    type: uint8

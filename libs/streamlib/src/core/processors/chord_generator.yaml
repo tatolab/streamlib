@@ -9,5 +9,5 @@ config:
 
 outputs:
   - name: chord
-    schema: com.tatolab.audioframe.2ch@1.0.0
-    description: Stereo audio output with C major chord
+    schema: com.tatolab.audioframe@1.0.0
+    description: Stereo audio output with C major chord (2 channels)

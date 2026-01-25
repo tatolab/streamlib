@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Audioframe2Ch;
+use crate::_generated_::Audioframe;
 use crate::core::{Result, RuntimeContext};
 
 struct SineOscillator {
@@ -102,8 +102,9 @@ impl crate::core::ContinuousProcessor for ChordGeneratorProcessor::Processor {
         let counter = self.frame_counter;
         self.frame_counter += 1;
 
-        let chord_frame = Audioframe2Ch {
+        let chord_frame = Audioframe {
             samples: stereo_samples,
+            channels: 2, // Stereo output
             sample_rate: self.sample_rate,
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: counter.to_string(),

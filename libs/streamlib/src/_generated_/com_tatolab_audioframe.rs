@@ -5,11 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Stereo audio frame (2 channels, interleaved)
+/// Audio frame with interleaved samples (1-8 channels)
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Audioframe2Ch {
-    /// Sequential frame counter (uint64 as string - parse to native uint64)
+pub struct Audioframe {
+    /// Number of audio channels (1-8)
+    #[serde(rename = "channels")]
+    pub channels: u8,
+
+    /// Sequential frame counter (uint64 as string)
     #[serde(rename = "frame_index")]
     pub frame_index: String,
 
@@ -17,11 +21,11 @@ pub struct Audioframe2Ch {
     #[serde(rename = "sample_rate")]
     pub sample_rate: u32,
 
-    /// Interleaved audio samples (L, R, L, R, ...)
+    /// Interleaved audio samples
     #[serde(rename = "samples")]
     pub samples: Vec<f32>,
 
-    /// Monotonic timestamp in nanoseconds (int64 as string - parse to native int64)
+    /// Monotonic timestamp in nanoseconds (int64 as string)
     #[serde(rename = "timestamp_ns")]
     pub timestamp_ns: String,
 }

@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::_generated_::Audioframe;
 use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, GpuContext, Result, RuntimeContext, StreamError,
-    VideoFrame,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContext, Result, RuntimeContext, StreamError, VideoFrame,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -206,12 +206,14 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
         // Process every audio frame immediately
         while self.inputs.has_data("audio") {
-            let audio = self.read_audio_frame()?;
+            let audio: Audioframe = self.inputs.read("audio")?;
+            let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
+            let sample_count = audio.samples.len() / audio.channels as usize;
             trace!(
                 "Processing audio frame: timestamp_ns={}, sample_count={}, channels={}",
-                audio.timestamp_ns,
-                audio.sample_count(),
-                audio.channels()
+                audio_timestamp_ns,
+                sample_count,
+                audio.channels
             );
 
             // IMPORTANT: Check for new video frame for EACH audio frame
@@ -229,11 +231,11 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
             // Use capture timestamp (same clock as video) and make it relative to start
             // This keeps audio and video on the same time base
-            let audio_relative_ns = audio.timestamp_ns - self.start_time_ns;
+            let audio_relative_ns = audio_timestamp_ns - self.start_time_ns;
 
             trace!(
                 "Audio timestamps: original={}ns, start={}ns, relative={}ns ({:.6}s)",
-                audio.timestamp_ns,
+                audio_timestamp_ns,
                 self.start_time_ns,
                 audio_relative_ns,
                 audio_relative_ns as f64 / 1_000_000_000.0
@@ -250,13 +252,13 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
             // Write audio frame independently
             let mut audio_to_write = audio.clone();
-            audio_to_write.timestamp_ns = audio_relative_ns;
+            audio_to_write.timestamp_ns = audio_relative_ns.to_string();
             trace!(
                 "Writing audio: timestamp={}ns ({:.6}s), samples={}, channels={}",
-                audio_to_write.timestamp_ns,
-                audio_to_write.timestamp_ns as f64 / 1_000_000_000.0,
-                audio_to_write.sample_count(),
-                audio_to_write.channels()
+                audio_relative_ns,
+                audio_relative_ns as f64 / 1_000_000_000.0,
+                sample_count,
+                audio.channels
             );
 
             self.write_audio_frame(&audio_to_write)?;
@@ -310,27 +312,6 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 }
 
 impl AppleMp4WriterProcessor::Processor {
-    /// Read and convert an IPC audio frame to native AudioFrame.
-    fn read_audio_frame(&self) -> Result<AudioFrame> {
-        use crate::core::AudioChannelCount;
-        use std::sync::Arc;
-
-        let ipc_audio: crate::_generated_::Audioframe2Ch = self.inputs.read("audio")?;
-
-        // Convert IPC Audioframe2Ch to native AudioFrame
-        let timestamp_ns: i64 = ipc_audio.timestamp_ns.parse().unwrap_or(0);
-        let frame_number: u64 = ipc_audio.frame_index.parse().unwrap_or(0);
-
-        // Audioframe2Ch has samples as Vec<f32> with interleaved stereo
-        Ok(AudioFrame {
-            samples: Arc::new(ipc_audio.samples),
-            channels: AudioChannelCount::Two, // 2ch schema = stereo
-            timestamp_ns,
-            frame_number,
-            sample_rate: ipc_audio.sample_rate,
-        })
-    }
-
     /// Read and convert an IPC video frame to native VideoFrame.
     fn read_video_frame(&self) -> Result<VideoFrame> {
         let gpu_context = self
@@ -754,7 +735,9 @@ impl AppleMp4WriterProcessor::Processor {
     }
 
     #[allow(dead_code)]
-    fn write_synced_frame(&mut self, audio: AudioFrame, video: VideoFrame) -> Result<()> {
+    fn write_synced_frame(&mut self, audio: Audioframe, video: VideoFrame) -> Result<()> {
+        let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
+
         // Initialize AVAssetWriter on first frame (lazy initialization)
         if self.writer.is_none() {
             self.initialize_writer()?;
@@ -798,19 +781,19 @@ impl AppleMp4WriterProcessor::Processor {
             }
 
             // Start session at source time (use audio timestamp as reference)
-            let start_time = unsafe { CMTime::new(audio.timestamp_ns, 1_000_000_000) };
+            let start_time = unsafe { CMTime::new(audio_timestamp_ns, 1_000_000_000) };
 
             unsafe {
                 writer.startSessionAtSourceTime(start_time);
             }
 
             // Set start time
-            self.start_time_ns = audio.timestamp_ns;
+            self.start_time_ns = audio_timestamp_ns;
             self.start_time_set = true;
 
             info!(
                 "AVAssetWriter session started at timestamp {}ns",
-                audio.timestamp_ns
+                audio_timestamp_ns
             );
         }
 
@@ -833,7 +816,7 @@ impl AppleMp4WriterProcessor::Processor {
         debug!(
             "Writing frames: video={:.3}s audio={:.3}s",
             video.timestamp_ns as f64 / 1_000_000_000.0,
-            audio.timestamp_ns as f64 / 1_000_000_000.0
+            audio_timestamp_ns as f64 / 1_000_000_000.0
         );
 
         self.write_video_frame(&video)?;
@@ -841,7 +824,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         self.last_video_frame = Some(video.clone());
         self.last_video_timestamp = video.timestamp_ns as f64 / 1_000_000_000.0;
-        self.last_audio_timestamp_ns = audio.timestamp_ns;
+        self.last_audio_timestamp_ns = audio_timestamp_ns;
         self.frames_written += 1;
 
         Ok(())
@@ -903,7 +886,7 @@ impl AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn write_audio_frame(&self, frame: &AudioFrame) -> Result<()> {
+    fn write_audio_frame(&self, frame: &Audioframe) -> Result<()> {
         let audio_input = self
             .audio_input
             .as_ref()
@@ -916,11 +899,11 @@ impl AppleMp4WriterProcessor::Processor {
             return Ok(());
         }
 
-        // AudioFrame stores samples as Vec<f32> with interleaved channels
+        // Audioframe stores samples as Vec<f32> with interleaved channels
         // We need to convert f32 → i16 PCM for LPCM format
         let total_samples = frame.samples.len();
-        let num_channels = frame.channels();
-        let num_samples_per_channel = frame.sample_count(); // This is samples.len() / CHANNELS
+        let num_channels = frame.channels as usize;
+        let num_samples_per_channel = total_samples / num_channels;
 
         info!("Writing audio frame: sample_rate={}, channels={}, total_samples={}, num_frames={}, duration_ms={:.2}",
             frame.sample_rate, num_channels, total_samples, num_samples_per_channel,
@@ -1001,7 +984,8 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Create timing info
         use objc2_core_media::CMTime;
-        let presentation_time = unsafe { CMTime::new(frame.timestamp_ns, 1_000_000_000) };
+        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
+        let presentation_time = unsafe { CMTime::new(timestamp_ns, 1_000_000_000) };
 
         let _duration = unsafe {
             CMTime::new(
@@ -1149,7 +1133,7 @@ impl AppleMp4WriterProcessor::Processor {
         };
 
         trace!("Appending audio to AVAssetWriter: timestamp={}ns ({:.6}s), samples={}, channels={}, rate={}Hz",
-            frame.timestamp_ns, frame.timestamp_ns as f64 / 1_000_000_000.0,
+            timestamp_ns, timestamp_ns as f64 / 1_000_000_000.0,
             num_samples_per_channel, num_channels, frame.sample_rate);
 
         // Append to audio input
@@ -1165,7 +1149,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         debug!(
             "Wrote audio frame: {} samples per channel at timestamp {}ns",
-            num_samples_per_channel, frame.timestamp_ns
+            num_samples_per_channel, timestamp_ns
         );
 
         // Keep data alive until sample buffer is appended
