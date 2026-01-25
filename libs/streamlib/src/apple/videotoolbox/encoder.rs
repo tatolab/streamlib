@@ -6,10 +6,11 @@
 // Hardware-accelerated H.264 encoding using Apple's VideoToolbox framework.
 // Supports GPU-accelerated texture conversion (wgpu → NV12) and real-time encoding.
 
+use crate::_generated_::Videoframe;
 use crate::apple::PixelTransferSession;
+use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer};
 use crate::core::{
     EncodedVideoFrame, GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig,
-    VideoFrame,
 };
 use objc2_core_video::CVPixelBuffer;
 use std::collections::VecDeque;
@@ -229,27 +230,37 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
-    /// Convert VideoFrame buffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
-    fn convert_buffer_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
+    /// Convert RhiPixelBuffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
+    fn convert_buffer_to_pixel_buffer(
+        &self,
+        buffer: &RhiPixelBuffer,
+    ) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
         let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
             StreamError::Configuration("PixelTransferSession not initialized".into())
         })?;
 
-        pixel_transfer.convert_buffer_to_nv12(frame.buffer())
+        pixel_transfer.convert_buffer_to_nv12(buffer)
     }
 
     /// Encode a video frame.
-    pub fn encode(&mut self, frame: &VideoFrame) -> Result<EncodedVideoFrame> {
+    pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<EncodedVideoFrame> {
         let session = self.compression_session.ok_or_else(|| {
             StreamError::Configuration("Compression session not initialized".into())
         })?;
 
-        // Step 1: Convert VideoFrame buffer to NV12 CVPixelBuffer
-        let pixel_buffer = self.convert_buffer_to_pixel_buffer(frame)?;
+        // Resolve buffer from surface_id
+        let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
+        let buffer = gpu.get_pixel_buffer(&pool_id)?;
+
+        // Parse timestamp from IPC frame
+        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
+
+        // Step 1: Convert buffer to NV12 CVPixelBuffer
+        let pixel_buffer = self.convert_buffer_to_pixel_buffer(&buffer)?;
 
         // Step 2: Create presentation timestamp
-        let presentation_time = ffi::CMTime::new(frame.timestamp_ns, 1_000_000_000);
+        let presentation_time = ffi::CMTime::new(timestamp_ns, 1_000_000_000);
         let duration = ffi::CMTime::invalid(); // Let VideoToolbox calculate duration
 
         // Step 3: Determine if we should force a keyframe
@@ -336,7 +347,7 @@ impl VideoToolboxEncoder {
             })?;
 
         // Step 7: Update frame metadata
-        encoded_frame.timestamp_ns = frame.timestamp_ns;
+        encoded_frame.timestamp_ns = timestamp_ns;
         encoded_frame.frame_number = self.frame_count;
 
         self.frame_count += 1;

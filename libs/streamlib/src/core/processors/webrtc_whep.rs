@@ -11,7 +11,6 @@
 
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::VideoDecoder;
-use crate::core::rhi::PixelFormat;
 use crate::core::streaming::{H264RtpDepacketizer, OpusDecoder, RtpSample, WhepClient, WhepConfig};
 use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
@@ -325,56 +324,18 @@ impl VideoDecodeState {
                 annex_b.extend_from_slice(&nal);
                 let nal_data = Bytes::from(annex_b);
 
-                match decoder.decode(&nal_data, timestamp_ns) {
-                    Ok(Some(decoded_frame)) => {
+                // Decoder returns Videoframe directly (handles buffer pooling internally)
+                match decoder.decode(&nal_data, timestamp_ns, &self.gpu_context) {
+                    Ok(Some(ipc_frame)) => {
                         self.frame_count += 1;
 
-                        // Acquire pooled buffer and blit decoded frame
-                        let width = decoded_frame.width();
-                        let height = decoded_frame.height();
-
-                        match self.gpu_context.acquire_pixel_buffer(
-                            width,
-                            height,
-                            PixelFormat::Bgra32,
-                        ) {
-                            Ok((pool_id, dest_buffer)) => {
-                                // Blit decoded frame to pooled buffer
-                                if let Err(e) = self
-                                    .gpu_context
-                                    .blit_copy(decoded_frame.buffer(), &dest_buffer)
-                                {
-                                    tracing::warn!(
-                                        "[WebRtcWhepProcessor] Blit failed: {}, skipping frame",
-                                        e
-                                    );
-                                    return None;
-                                }
-
-                                // Create IPC frame
-                                let ipc_frame = Videoframe {
-                                    surface_id: pool_id.to_string(),
-                                    width,
-                                    height,
-                                    timestamp_ns: timestamp_ns.to_string(),
-                                    frame_index: self.frame_count.to_string(),
-                                };
-
-                                if self.frame_count.is_multiple_of(30) {
-                                    tracing::info!(
-                                        "[WebRtcWhepProcessor] Decoded video frame #{}",
-                                        self.frame_count
-                                    );
-                                }
-                                return Some(ipc_frame);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "[WebRtcWhepProcessor] Failed to acquire pooled buffer: {}",
-                                    e
-                                );
-                            }
+                        if self.frame_count.is_multiple_of(30) {
+                            tracing::info!(
+                                "[WebRtcWhepProcessor] Decoded video frame #{}",
+                                self.frame_count
+                            );
                         }
+                        return Some(ipc_frame);
                     }
                     Ok(None) => {
                         // Decoder needs more data

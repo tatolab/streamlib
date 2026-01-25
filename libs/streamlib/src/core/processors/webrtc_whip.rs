@@ -10,15 +10,12 @@
 
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::{H264Profile, VideoCodec, VideoEncoder};
-use crate::core::rhi::PixelBufferPoolId;
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
     OpusEncoder, WhipClient, WhipConfig,
 };
 use crate::core::VideoEncoderConfig;
-use crate::core::{
-    media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError, VideoFrame,
-};
+use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError};
 
 // ============================================================================
 // PROCESSOR
@@ -181,29 +178,19 @@ impl WebRtcWhipProcessor::Processor {
             return Ok(());
         }
 
-        // Look up pixel buffer from surface_id
+        // Get GPU context for buffer resolution
         let gpu_context = self
             .gpu_context
             .as_ref()
             .ok_or_else(|| StreamError::Runtime("GpuContext not available".into()))?;
 
-        let pool_id = PixelBufferPoolId::from_str(ipc_frame.surface_id.as_str());
-        let buffer = gpu_context.get_pixel_buffer(&pool_id)?;
-
-        // Parse timestamp and frame index from IPC frame
-        let timestamp_ns: i64 = ipc_frame.timestamp_ns.parse().unwrap_or(0);
-        let frame_index: u64 = ipc_frame.frame_index.parse().unwrap_or(0);
-
-        // Create VideoFrame from the looked-up buffer
-        let video_frame = VideoFrame::from_buffer(buffer, timestamp_ns, frame_index);
-
-        // Encode and send
+        // Encode directly from IPC frame (encoder resolves buffer via GpuContext)
         let encoder = self
             .video_encoder
             .as_mut()
             .ok_or_else(|| StreamError::Configuration("Video encoder not initialized".into()))?;
 
-        let encoded = encoder.encode(&video_frame)?;
+        let encoded = encoder.encode(ipc_frame, gpu_context)?;
         let samples = convert_video_to_samples(&encoded, self.config.video.fps)?;
 
         let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();

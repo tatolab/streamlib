@@ -27,7 +27,7 @@ pub mod iceoryx2;
 pub mod _generated_;
 
 // Re-export commonly used generated config types
-pub use _generated_::ApiServerConfig;
+pub use _generated_::{ApiServerConfig, Videoframe};
 
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("path/to/schema.yaml")] - YAML-based processor definition
@@ -119,7 +119,6 @@ pub use core::{
     VideoDecoderConfig,
     VideoEncoder,
     VideoEncoderConfig,
-    VideoFrame,
     // TODO: Migrate to iceoryx2 API
     // WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,

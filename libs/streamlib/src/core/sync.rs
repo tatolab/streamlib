@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Audioframe;
-use crate::core::VideoFrame;
+use crate::_generated_::{Audioframe, Videoframe};
 
 pub const DEFAULT_SYNC_TOLERANCE_MS: f64 = 16.6;
 
@@ -26,16 +25,18 @@ pub fn are_synchronized(timestamp_a_ns: i64, timestamp_b_ns: i64, tolerance_ms: 
 }
 
 #[inline]
-pub fn video_audio_delta_ms(video: &VideoFrame, audio: &Audioframe) -> f64 {
+pub fn video_audio_delta_ms(video: &Videoframe, audio: &Audioframe) -> f64 {
+    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
     let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
-    timestamp_delta_ms(video.timestamp_ns, audio_timestamp_ns)
+    timestamp_delta_ms(video_timestamp_ns, audio_timestamp_ns)
 }
 
 #[inline]
-pub fn video_audio_synchronized(video: &VideoFrame, audio: &Audioframe) -> bool {
+pub fn video_audio_synchronized(video: &Videoframe, audio: &Audioframe) -> bool {
+    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
     let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
     are_synchronized(
-        video.timestamp_ns,
+        video_timestamp_ns,
         audio_timestamp_ns,
         DEFAULT_SYNC_TOLERANCE_MS,
     )
@@ -43,19 +44,21 @@ pub fn video_audio_synchronized(video: &VideoFrame, audio: &Audioframe) -> bool 
 
 #[inline]
 pub fn video_audio_synchronized_with_tolerance(
-    video: &VideoFrame,
+    video: &Videoframe,
     audio: &Audioframe,
     tolerance_ms: f64,
 ) -> bool {
+    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
     let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
-    are_synchronized(video.timestamp_ns, audio_timestamp_ns, tolerance_ms)
+    are_synchronized(video_timestamp_ns, audio_timestamp_ns, tolerance_ms)
 }
 
 /// Determine what action to take to maintain audio/video synchronization.
 #[inline]
-pub fn sync_action(video: &VideoFrame, audio: &Audioframe, tolerance_ms: f64) -> SyncAction {
+pub fn sync_action(video: &Videoframe, audio: &Audioframe, tolerance_ms: f64) -> SyncAction {
+    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
     let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
-    let drift_ns = video.timestamp_ns - audio_timestamp_ns;
+    let drift_ns = video_timestamp_ns - audio_timestamp_ns;
     let drift_ms = drift_ns as f64 / 1_000_000.0;
 
     if drift_ms.abs() <= tolerance_ms {
@@ -71,9 +74,10 @@ pub fn sync_action(video: &VideoFrame, audio: &Audioframe, tolerance_ms: f64) ->
 
 /// Calculate drift (ms) and whether streams are synchronized.
 #[inline]
-pub fn sync_statistics(video: &VideoFrame, audio: &Audioframe, tolerance_ms: f64) -> (f64, bool) {
+pub fn sync_statistics(video: &Videoframe, audio: &Audioframe, tolerance_ms: f64) -> (f64, bool) {
+    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
     let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
-    let drift_ns = video.timestamp_ns - audio_timestamp_ns;
+    let drift_ns = video_timestamp_ns - audio_timestamp_ns;
     let drift_ms = drift_ns as f64 / 1_000_000.0;
     let is_synced = drift_ms.abs() <= tolerance_ms;
     (drift_ms, is_synced)

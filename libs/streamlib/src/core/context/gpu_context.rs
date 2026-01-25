@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::_generated_::Videoframe;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
     RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool,
@@ -357,6 +358,12 @@ impl GpuContext {
             .cache_buffer(pool_id.as_str(), buffer.clone());
 
         Ok(buffer)
+    }
+
+    /// Resolve a Videoframe's buffer from its surface_id.
+    pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
+        let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
+        self.get_pixel_buffer(&pool_id)
     }
 
     /// Get a reference to the RHI GPU device.

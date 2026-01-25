@@ -8,7 +8,8 @@
 //! - Linux: FFmpeg (software or VAAPI/NVDEC)
 
 use super::VideoDecoderConfig;
-use crate::core::{Result, RuntimeContext, VideoFrame};
+use crate::_generated_::Videoframe;
+use crate::core::{GpuContext, Result, RuntimeContext};
 
 /// Platform-agnostic video decoder.
 ///
@@ -54,8 +55,9 @@ impl VideoDecoder {
         &mut self,
         nal_units_annex_b: &[u8],
         timestamp_ns: i64,
-    ) -> Result<Option<VideoFrame>> {
-        self.inner.decode(nal_units_annex_b, timestamp_ns)
+        gpu: &GpuContext,
+    ) -> Result<Option<Videoframe>> {
+        self.inner.decode(nal_units_annex_b, timestamp_ns, gpu)
     }
 }
 
@@ -78,8 +80,9 @@ impl VideoDecoder {
         &mut self,
         nal_units_annex_b: &[u8],
         timestamp_ns: i64,
-    ) -> Result<Option<VideoFrame>> {
-        self.inner.decode(nal_units_annex_b, timestamp_ns)
+        gpu: &GpuContext,
+    ) -> Result<Option<Videoframe>> {
+        self.inner.decode(nal_units_annex_b, timestamp_ns, gpu)
     }
 }
 
@@ -108,7 +111,8 @@ impl VideoDecoder {
         &mut self,
         _nal_units_annex_b: &[u8],
         _timestamp_ns: i64,
-    ) -> Result<Option<VideoFrame>> {
+        _gpu: &GpuContext,
+    ) -> Result<Option<Videoframe>> {
         Err(crate::core::StreamError::Configuration(
             "Video decoding not supported on this platform".into(),
         ))

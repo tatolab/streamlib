@@ -7,9 +7,6 @@ pub use crate::core::{
     // Errors
     error::{Result, StreamError},
 
-    // Frames
-    frames::VideoFrame,
-
     // Graph
     graph::{LinkUniqueId, ProcessorUniqueId},
 
@@ -20,5 +17,5 @@ pub use crate::core::{
     runtime::StreamRuntime,
 };
 
-// Re-export generated Audioframe
-pub use crate::_generated_::Audioframe;
+// Re-export generated IPC types
+pub use crate::_generated_::{Audioframe, Videoframe};

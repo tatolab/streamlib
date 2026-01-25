@@ -3,7 +3,13 @@
 
 //! Platform-agnostic video encoder wrapper.
 
-use crate::core::{EncodedVideoFrame, GpuContext, Result, RuntimeContext, VideoFrame};
+use crate::_generated_::Videoframe;
+#[cfg(not(any(
+    any(target_os = "macos", target_os = "ios"),
+    all(target_os = "linux", feature = "ffmpeg")
+)))]
+use crate::core::StreamError;
+use crate::core::{EncodedVideoFrame, GpuContext, Result, RuntimeContext};
 
 use super::VideoEncoderConfig;
 
@@ -72,14 +78,14 @@ impl VideoEncoder {
 
     /// Encode a video frame.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn encode(&mut self, frame: &VideoFrame) -> Result<EncodedVideoFrame> {
-        self.inner.encode(frame)
+    pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<EncodedVideoFrame> {
+        self.inner.encode(frame, gpu)
     }
 
     /// Encode a video frame.
     #[cfg(all(target_os = "linux", feature = "ffmpeg"))]
-    pub fn encode(&mut self, frame: &VideoFrame) -> Result<EncodedVideoFrame> {
-        self.inner.encode(frame)
+    pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<EncodedVideoFrame> {
+        self.inner.encode(frame, gpu)
     }
 
     /// Encode a video frame (unsupported platform).
@@ -87,7 +93,7 @@ impl VideoEncoder {
         any(target_os = "macos", target_os = "ios"),
         all(target_os = "linux", feature = "ffmpeg")
     )))]
-    pub fn encode(&mut self, _frame: &VideoFrame) -> Result<EncodedVideoFrame> {
+    pub fn encode(&mut self, _frame: &Videoframe, _gpu: &GpuContext) -> Result<EncodedVideoFrame> {
         Err(StreamError::Configuration(
             "Video encoding not supported on this platform".into(),
         ))
