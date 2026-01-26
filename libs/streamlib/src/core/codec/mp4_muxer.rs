@@ -8,7 +8,8 @@
 //! - Linux: FFmpeg libavformat
 
 use super::Mp4MuxerConfig;
-use crate::core::{EncodedAudioFrame, EncodedVideoFrame, Result, RuntimeContext};
+use crate::_generated_::Encodedvideoframe;
+use crate::core::{EncodedAudioFrame, Result, RuntimeContext};
 
 /// Platform-agnostic MP4 muxer.
 ///
@@ -39,7 +40,7 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded video frame.
-    pub fn write_video(&mut self, frame: &EncodedVideoFrame) -> Result<()> {
+    pub fn write_video(&mut self, frame: &Encodedvideoframe) -> Result<()> {
         self.inner.write_video(frame)
     }
 
@@ -64,7 +65,7 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded video frame.
-    pub fn write_video(&mut self, frame: &EncodedVideoFrame) -> Result<()> {
+    pub fn write_video(&mut self, frame: &Encodedvideoframe) -> Result<()> {
         self.inner.write_video(frame)
     }
 
@@ -93,7 +94,7 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded video frame (unsupported platform).
-    pub fn write_video(&mut self, _frame: &EncodedVideoFrame) -> Result<()> {
+    pub fn write_video(&mut self, _frame: &Encodedvideoframe) -> Result<()> {
         Err(crate::core::StreamError::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))

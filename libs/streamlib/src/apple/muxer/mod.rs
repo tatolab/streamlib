@@ -3,8 +3,9 @@
 
 //! Apple MP4 muxer using AVAssetWriter with passthrough video.
 
+use crate::_generated_::Encodedvideoframe;
 use crate::core::codec::Mp4MuxerConfig;
-use crate::core::{EncodedAudioFrame, EncodedVideoFrame, Result, RuntimeContext, StreamError};
+use crate::core::{EncodedAudioFrame, Result, RuntimeContext, StreamError};
 
 /// Apple MP4 muxer using AVAssetWriter.
 ///
@@ -32,7 +33,7 @@ impl AppleMp4Muxer {
     }
 
     /// Write an encoded video frame.
-    pub fn write_video(&mut self, _frame: &EncodedVideoFrame) -> Result<()> {
+    pub fn write_video(&mut self, _frame: &Encodedvideoframe) -> Result<()> {
         // TODO: Wrap encoded data in CMSampleBuffer
         // - Create CMBlockBuffer from frame.data
         // - Create CMSampleBuffer with format description

@@ -20,7 +20,7 @@
 //     ↓
 // VideoToolboxEncoder::encode()
 //     ↓
-// EncodedVideoFrame (Annex B format for H.264)
+// Encodedvideoframe (Annex B format for H.264)
 // ```
 //
 // ## Usage Example
@@ -49,7 +49,7 @@ mod ffi;
 pub mod format; // Public for SPS parsing utilities
 
 // Public API exports
-// Note: VideoCodec, H264Profile, VideoEncoderConfig, EncodedVideoFrame are in core::codec and core::frames
+// Note: VideoCodec, H264Profile, VideoEncoderConfig are in core::codec; Encodedvideoframe is in _generated_
 pub use decoder::VideoToolboxDecoder;
 pub use encoder::VideoToolboxEncoder;
 pub use format::parse_nal_units;

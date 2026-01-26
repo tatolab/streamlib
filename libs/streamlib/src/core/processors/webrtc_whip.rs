@@ -262,22 +262,22 @@ impl WebRtcWhipProcessor::Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::_generated_::Encodedvideoframe;
     use crate::apple::videotoolbox::parse_nal_units;
     use crate::core::streaming::EncodedAudioFrame;
-    use crate::core::EncodedVideoFrame;
     use std::time::Duration;
 
     #[test]
     fn test_convert_video_to_samples() {
-        let encoded = EncodedVideoFrame {
+        let encoded = Encodedvideoframe {
             data: vec![
                 0, 0, 0, 1, 0x67, 0x42, // SPS
                 0, 0, 0, 1, 0x68, 0x43, // PPS
                 0, 0, 0, 1, 0x65, 0xAA, // IDR
             ],
-            timestamp_ns: 1_000_000_000,
+            timestamp_ns: "1000000000".to_string(),
             is_keyframe: true,
-            frame_number: 0,
+            frame_number: "0".to_string(),
         };
 
         let samples = convert_video_to_samples(&encoded, 30).unwrap();

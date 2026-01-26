@@ -150,6 +150,7 @@ targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows
 schemas = [
     "schemas/com.tatolab.videoframe.yaml",
     "schemas/com.tatolab.audioframe.yaml",
+    "schemas/com.tatolab.encodedvideoframe.yaml",
     # Config schemas (JTD format)
     "schemas/com.streamlib.api_server.config@1.0.0.yaml",
     "schemas/com.streamlib.clap.effect.config@1.0.0.yaml",

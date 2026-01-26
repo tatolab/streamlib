@@ -11,7 +11,6 @@ pub mod error;
 pub mod execution;
 pub mod rhi;
 
-pub mod frames;
 pub mod graph;
 pub mod graph_file;
 pub mod json_schema;
@@ -38,7 +37,6 @@ pub use descriptors::*;
 pub use error::*;
 pub use rhi::{gl_constants, GlContext, GlTextureBinding, NativeTextureHandle, RhiBackend};
 
-pub use frames::*;
 pub use graph::*;
 pub use graph_file::*;
 pub use processors::*;
