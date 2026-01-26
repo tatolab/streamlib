@@ -13,7 +13,11 @@ use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
 use crate::core::compiler::{Compiler, PendingOperation};
-use crate::core::context::{GpuContext, RuntimeContext, TimeContext};
+#[cfg(not(target_os = "macos"))]
+use crate::core::context::SoftwareAudioClock;
+use crate::core::context::{
+    AudioClockConfig, GpuContext, RuntimeContext, SharedAudioClock, TimeContext,
+};
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorPauseGateComponent,
     ProcessorUniqueId,
@@ -242,6 +246,29 @@ impl StreamRuntime {
         let iceoryx2_node = Iceoryx2Node::new()?;
         tracing::info!("[start] iceoryx2 Node created");
 
+        // Create audio clock - platform-specific for best precision
+        let audio_clock_config = AudioClockConfig::default();
+        let audio_clock: SharedAudioClock = {
+            #[cfg(target_os = "macos")]
+            {
+                tracing::info!(
+                    "[start] Creating CoreAudioClock (GCD): {}Hz, {} samples/tick",
+                    audio_clock_config.sample_rate,
+                    audio_clock_config.buffer_size
+                );
+                Arc::new(crate::apple::CoreAudioClock::new(audio_clock_config))
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                tracing::info!(
+                    "[start] Creating SoftwareAudioClock: {}Hz, {} samples/tick",
+                    audio_clock_config.sample_rate,
+                    audio_clock_config.buffer_size
+                );
+                Arc::new(SoftwareAudioClock::new(audio_clock_config))
+            }
+        };
+
         // Pass runtime directly to RuntimeContext. Processors call runtime operations
         // directly - this is safe because processor lifecycle methods (setup, process)
         // run on their own threads with no locks held.
@@ -254,12 +281,17 @@ impl StreamRuntime {
             runtime_ops,
             self.tokio_runtime_variant.handle(),
             iceoryx2_node,
+            Arc::clone(&audio_clock),
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
         // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
         // RuntimeContext handles all platform-specific details internally.
         runtime_ctx.ensure_platform_ready()?;
+
+        // Start the audio clock
+        tracing::info!("[start] Starting audio clock");
+        audio_clock.start()?;
 
         // Set graph state to Running
         self.compiler.scope(|graph, _tx| {
@@ -310,6 +342,12 @@ impl StreamRuntime {
             tracing::debug!("[stop] Committing processor teardown");
             self.compiler.commit(&ctx)?;
             tracing::debug!("[stop] Processor teardown complete");
+
+            // Stop the audio clock
+            tracing::debug!("[stop] Stopping audio clock");
+            if let Err(e) = ctx.audio_clock().stop() {
+                tracing::warn!("[stop] Failed to stop audio clock: {}", e);
+            }
 
             // Cleanup SurfaceStore (macOS only) - releases all surfaces and disconnects XPC
             #[cfg(target_os = "macos")]

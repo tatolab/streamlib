@@ -174,8 +174,9 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
         );
 
         // Create ring buffer for passing frames from polling thread to audio callback
-        // Size of 64 frames provides ~1.3s of buffer at 48kHz with 1024-sample frames
-        let (producer, consumer) = RingBuffer::<Audioframe>::new(64);
+        // Size of 256 frames provides ~5s of buffer at 48kHz with 1024-sample frames
+        // Large buffer absorbs timing variance between producer and audio clock
+        let (producer, consumer) = RingBuffer::<Audioframe>::new(256);
 
         // Store consumer for the callback (producer will be moved to polling thread)
         let consumer = Arc::new(Mutex::new(consumer));
@@ -188,9 +189,6 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
 
         // Buffer for accumulating samples when device wants larger buffers than we provide
         let mut sample_buffer: Vec<f32> = Vec::new();
-
-        // Track first frame for logging
-        let mut first_frame_logged = false;
 
         // Build output stream configuration
         let stream_config = StreamConfig {
@@ -249,16 +247,6 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
                                 if let Some(ref mut state) = *resampler {
                                     match state.resample(&audio_frame.samples) {
                                         Ok(resampled) => {
-                                            if !first_frame_logged {
-                                                tracing::info!(
-                                                    "[AudioOutput Adaptive] First frame resampled: {} input samples -> {} output samples ({}Hz -> {}Hz)",
-                                                    audio_frame.samples.len(),
-                                                    resampled.len(),
-                                                    audio_frame.sample_rate,
-                                                    device_sample_rate
-                                                );
-                                                first_frame_logged = true;
-                                            }
                                             sample_buffer.extend_from_slice(&resampled);
                                         }
                                         Err(e) => {
@@ -276,13 +264,6 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
                                 }
                             } else {
                                 // Sample rates match - direct copy (no resampling needed)
-                                if !first_frame_logged {
-                                    tracing::info!(
-                                        "[AudioOutput Adaptive] Sample rates match ({}Hz) - no resampling needed",
-                                        audio_frame.sample_rate
-                                    );
-                                    first_frame_logged = true;
-                                }
                                 sample_buffer.extend_from_slice(&audio_frame.samples);
                             }
                         } else {

@@ -1,7 +1,8 @@
 name: com.tatolab.chord_generator
 version: 1.0.0
 description: "Generates a C major chord (C4, E4, G4) pre-mixed into a stereo output"
-execution: continuous
+execution:
+  type: Manual
 
 config:
   name: config
