@@ -88,16 +88,33 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
 
     fn process(&mut self) -> Result<()> {
         // Read video and audio from IPC inputs
-        let video_frame: Option<Videoframe> = if self.inputs.has_data("video") {
-            self.inputs.read("video").ok()
+        let has_video = self.inputs.has_data("video_in");
+        let video_frame: Option<Videoframe> = if has_video {
+            match self.inputs.read("video_in") {
+                Ok(frame) => Some(frame),
+                Err(e) => {
+                    tracing::warn!("[WebRTC] Failed to read video frame: {}", e);
+                    None
+                }
+            }
         } else {
             None
         };
-        let audio_frame: Option<Audioframe> = if self.inputs.has_data("audio") {
-            self.inputs.read("audio").ok()
+        let audio_frame: Option<Audioframe> = if self.inputs.has_data("audio_in") {
+            self.inputs.read("audio_in").ok()
         } else {
             None
         };
+
+        // Log what we received (debug level for visibility)
+        if has_video || video_frame.is_some() {
+            tracing::debug!(
+                "[WebRTC] process() - has_video={}, video_frame={}, audio={}",
+                has_video,
+                video_frame.is_some(),
+                audio_frame.is_some()
+            );
+        }
 
         // Start session on first frame
         if !self.session_started && (video_frame.is_some() || audio_frame.is_some()) {
@@ -190,8 +207,21 @@ impl WebRtcWhipProcessor::Processor {
             .as_mut()
             .ok_or_else(|| StreamError::Configuration("Video encoder not initialized".into()))?;
 
-        let encoded = encoder.encode(ipc_frame, gpu_context)?;
+        let encoded = match encoder.encode(ipc_frame, gpu_context) {
+            Ok(enc) => enc,
+            Err(e) => {
+                tracing::error!("[WebRTC] Video encode failed: {}", e);
+                return Err(e);
+            }
+        };
+
         let samples = convert_video_to_samples(&encoded, self.config.video.fps)?;
+        tracing::debug!(
+            "[WebRTC] Encoded video frame: {} NAL units, {} bytes, keyframe={}",
+            samples.len(),
+            encoded.data.len(),
+            encoded.is_keyframe
+        );
 
         let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
         let client = self.whip_client.as_mut().unwrap();

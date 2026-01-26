@@ -16,7 +16,7 @@ members = [
     # "examples/camera-audio-recorder", # Example: Record camera + audio to MP4 (uses camera, audio, mp4 writer)
     # "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
-    # "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
+    "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
     # "examples/whep-player",     # Example: WHEP (WebRTC egress) player (uses WebRTC WHEP)
     # "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization (uses CameraProcessor, etc.)
     # "examples/graph-json-export",         # Example: Graph data structure JSON export (uses custom processors with old syntax)
