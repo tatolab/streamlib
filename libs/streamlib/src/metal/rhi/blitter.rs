@@ -4,6 +4,7 @@
 //! Metal implementation of RhiBlitter with IOSurface texture caching.
 
 use crate::apple::iosurface::create_metal_texture_from_iosurface;
+use crate::apple::texture_pool_macos::get_iosurface_id;
 use crate::core::rhi::blitter::RhiBlitter;
 use crate::core::rhi::{RhiCommandQueue, RhiPixelBuffer};
 use crate::core::{Result, StreamError};
@@ -50,7 +51,8 @@ impl MetalBlitter {
         &self,
         iosurface: &IOSurface,
     ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>> {
-        let surface_id = iosurface.seed();
+        // Use IOSurface ID (stable identifier) not seed (modification counter)
+        let surface_id = get_iosurface_id(iosurface);
         let mut cache = self.texture_cache.lock().unwrap();
 
         if let Some(sendable) = cache.get(&surface_id) {

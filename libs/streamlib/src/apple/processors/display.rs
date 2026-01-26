@@ -368,6 +368,11 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
 
                         command_buffer.present_drawable(drawable_ref);
                         command_buffer.commit();
+
+                        // Wait for GPU to finish reading the source texture before releasing the buffer.
+                        // Without this, the camera can reacquire and overwrite the buffer while
+                        // the GPU is still reading from it, causing strobe/corruption artifacts.
+                        command_buffer.wait_until_completed();
                     }
                 }
 
