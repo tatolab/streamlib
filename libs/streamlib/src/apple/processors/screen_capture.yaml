@@ -1,0 +1,17 @@
+name: com.tatolab.screen_capture
+version: 1.0.0
+description: "Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)"
+execution: manual
+
+runtime:
+  options:
+    unsafe_send: true
+
+config:
+  name: config
+  schema: com.tatolab.screen_capture.config@1.0.0
+
+outputs:
+  - name: video
+    schema: com.tatolab.videoframe@1.0.0
+    description: Captured video frames from screen content

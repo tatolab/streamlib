@@ -71,6 +71,9 @@ pub struct AppleMp4WriterProcessor {
     #[allow(dead_code)] // Reserved for audio timestamp calculation
     total_audio_samples_written: u64,
 
+    // Video-only mode: when no audio input is connected
+    video_only_mode: bool,
+
     // GPU context for texture conversion
     gpu_context: Option<GpuContext>,
 
@@ -136,9 +139,17 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
                 first_video.width, first_video.height
             );
 
-            // Configure audio input
-            self.configure_audio_input()?;
-            info!("✅ AUDIO INPUT CONFIGURED");
+            // Check if audio is available - if not, we're in video-only mode
+            // We check multiple times with small delays to give audio a chance to arrive
+            let has_audio_data = self.inputs.has_data("audio");
+            if !has_audio_data {
+                info!("No audio input connected - running in VIDEO-ONLY mode");
+                self.video_only_mode = true;
+            } else {
+                // Configure audio input only if audio is connected
+                self.configure_audio_input()?;
+                info!("✅ AUDIO INPUT CONFIGURED");
+            }
 
             // Start the writing session (all inputs configured)
             let writer = self.writer.as_ref().ok_or_else(|| {
@@ -192,7 +203,42 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             self.last_video_frame = Some(first_video);
         }
 
-        // Check if we have any audio frames to process
+        // Video-only mode: process video frames directly without waiting for audio
+        if self.video_only_mode {
+            while self.inputs.has_data("video") {
+                let video = self.read_video_frame()?;
+                let frame_index: u64 = video.frame_index.parse().unwrap_or(0);
+
+                // Check if this is a new video frame (not already written)
+                let should_write = match self.last_written_video_frame_number {
+                    None => true,
+                    Some(last_num) => frame_index != last_num,
+                };
+
+                if should_write {
+                    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
+                    let video_relative_ns = video_timestamp_ns - self.start_time_ns;
+
+                    let mut video_to_write = video.clone();
+                    video_to_write.timestamp_ns = video_relative_ns.to_string();
+
+                    debug!(
+                        "Writing video (video-only): frame_index={}, relative_ts={:.6}s",
+                        frame_index,
+                        video_relative_ns as f64 / 1_000_000_000.0
+                    );
+
+                    self.write_video_frame(&video_to_write)?;
+                    self.last_written_video_frame_number = Some(frame_index);
+                    self.frames_written += 1;
+                }
+
+                self.last_video_frame = Some(video);
+            }
+            return Ok(());
+        }
+
+        // Audio+Video mode: process audio frames with paired video
         let has_audio = self.inputs.has_data("audio");
         debug!("has_audio = {}", has_audio);
 

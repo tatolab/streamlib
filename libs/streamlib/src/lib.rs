@@ -156,6 +156,7 @@ pub use apple::{
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
+    AppleScreenCaptureProcessor as ScreenCaptureProcessor,
     // MetalDevice,
     // VideoToolbox encoder (config types are in core::codec):
     // VideoToolboxEncoder,

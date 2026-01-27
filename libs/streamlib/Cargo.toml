@@ -108,6 +108,8 @@ objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
 objc2-core-graphics.workspace = true
+objc2-screen-capture-kit = "0.3.2"
+block2 = "0.6"
 libc.workspace = true
 
 # Apple-specific crates
@@ -166,6 +168,7 @@ schemas = [
     "schemas/com.tatolab.chord_generator.config@1.0.0.yaml",
     "schemas/com.tatolab.display.config@1.0.0.yaml",
     "schemas/com.tatolab.mp4_writer.config@1.0.0.yaml",
+    "schemas/com.tatolab.screen_capture.config@1.0.0.yaml",
     "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
 ]
 
@@ -176,6 +179,7 @@ processors = [
     "src/apple/processors/camera.yaml",
     "src/apple/processors/display.yaml",
     "src/apple/processors/mp4_writer.yaml",
+    "src/apple/processors/screen_capture.yaml",
     "src/core/processors/api_server.yaml",
     "src/core/processors/audio_channel_converter.yaml",
     "src/core/processors/audio_mixer.yaml",

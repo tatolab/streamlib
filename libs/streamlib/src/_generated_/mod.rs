@@ -19,6 +19,7 @@ pub mod com_tatolab_chord_generator_config;
 pub mod com_tatolab_display_config;
 pub mod com_tatolab_encodedvideoframe;
 pub mod com_tatolab_mp4_writer_config;
+pub mod com_tatolab_screen_capture_config;
 pub mod com_tatolab_simple_passthrough_config;
 pub mod com_tatolab_videoframe;
 
@@ -38,5 +39,6 @@ pub use com_tatolab_chord_generator_config::ChordGeneratorConfig;
 pub use com_tatolab_display_config::DisplayConfig;
 pub use com_tatolab_encodedvideoframe::Encodedvideoframe;
 pub use com_tatolab_mp4_writer_config::Mp4WriterConfig;
+pub use com_tatolab_screen_capture_config::ScreenCaptureConfig;
 pub use com_tatolab_simple_passthrough_config::SimplePassthroughConfig;
 pub use com_tatolab_videoframe::Videoframe;

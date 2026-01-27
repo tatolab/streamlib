@@ -6,9 +6,11 @@ pub mod audio_output;
 pub mod camera;
 pub mod display;
 pub mod mp4_writer;
+pub mod screen_capture;
 
 pub use audio_capture::AppleAudioCaptureProcessor;
 pub use audio_output::AppleAudioOutputProcessor;
 pub use camera::AppleCameraProcessor;
 pub use display::AppleDisplayProcessor;
 pub use mp4_writer::AppleMp4WriterProcessor;
+pub use screen_capture::AppleScreenCaptureProcessor;
