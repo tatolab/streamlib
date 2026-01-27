@@ -13,7 +13,7 @@ members = [
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)
-    # "examples/camera-audio-recorder", # Example: Record camera + audio to MP4 (uses camera, audio, mp4 writer)
+    "examples/camera-audio-recorder", # Example: Record camera + audio to MP4 (uses camera, audio, mp4 writer)
     # "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
