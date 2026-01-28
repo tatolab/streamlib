@@ -66,11 +66,9 @@ pub use core::{
     // CameraConfig,
     // CameraDevice,
     ChordGeneratorProcessor,
-    // TODO: Migrate to iceoryx2 API
-    // ClapEffectConfig,
-    // ClapEffectProcessor,
-    // ClapPluginInfo,
-    // ClapScanner,
+    ClapEffectProcessor,
+    ClapPluginInfo,
+    ClapScanner,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,

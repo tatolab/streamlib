@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::Audioframe;
-use crate::core::utils::audio_resample::{ResamplingQuality, StereoResampler};
+use crate::core::utils::ProcessorAudioConverterTargetFormat;
 use crate::core::{Result, RuntimeContext, StreamError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
@@ -31,6 +31,23 @@ impl SendableInputsPtr {
     }
 }
 
+/// Wrapper for ProcessorAudioConverter pointer that is Send.
+/// SAFETY: This is safe because we ensure the pointed-to data outlives
+/// any thread that uses this pointer, and only one thread accesses it.
+struct SendableAudioConverterPtr(*mut crate::core::utils::ProcessorAudioConverter);
+
+// SAFETY: Only one thread accesses it, and we join before drop
+unsafe impl Send for SendableAudioConverterPtr {}
+
+impl SendableAudioConverterPtr {
+    /// Get a mutable reference to the ProcessorAudioConverter.
+    /// SAFETY: Caller must ensure the pointed-to data is still valid
+    /// and no other thread is accessing it.
+    unsafe fn get_mut(&self) -> &mut crate::core::utils::ProcessorAudioConverter {
+        &mut *self.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppleAudioDevice {
     pub id: usize,
@@ -38,40 +55,6 @@ pub struct AppleAudioDevice {
     pub sample_rate: u32,
     pub channels: u32,
     pub is_default: bool,
-}
-
-/// Internal state for adaptive resampling (wraps shared StereoResampler)
-struct ResamplerState {
-    resampler: StereoResampler,
-}
-
-impl ResamplerState {
-    /// Create a new resampler for stereo audio (2 channels)
-    fn new(source_rate: u32, target_rate: u32, chunk_size: usize) -> Result<Self> {
-        tracing::info!(
-            "[AudioOutput Adaptive] Creating resampler: {}Hz → {}Hz (chunk_size={})",
-            source_rate,
-            target_rate,
-            chunk_size
-        );
-
-        // Use high-quality resampling for audio output (user-facing)
-        let resampler = StereoResampler::new(
-            source_rate,
-            target_rate,
-            chunk_size,
-            ResamplingQuality::High,
-        )?;
-
-        Ok(Self { resampler })
-    }
-
-    /// Resample stereo audio from source rate to target rate
-    /// Input: interleaved stereo [L,R,L,R,...]
-    /// Output: interleaved stereo [L,R,L,R,...] at target rate
-    fn resample(&mut self, input: &[f32]) -> Result<Vec<f32>> {
-        self.resampler.resample(input)
-    }
 }
 
 #[crate::processor("src/apple/processors/audio_output.yaml")]
@@ -84,7 +67,6 @@ pub struct AppleAudioOutputProcessor {
     sample_rate: u32,
     channels: u32,
     buffer_size: usize,
-    resampler_state: Arc<Mutex<Option<ResamplerState>>>,
     // Ring buffer for passing frames from input thread to audio callback
     // Producer is wrapped in Arc<Mutex> so it can be shared with the polling thread
     frame_producer: Arc<Mutex<Option<Producer<Audioframe>>>>,
@@ -182,9 +164,6 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
         let consumer = Arc::new(Mutex::new(consumer));
         let consumer_for_callback = Arc::clone(&consumer);
 
-        // Clone resampler state for the audio callback thread
-        let resampler_state = Arc::clone(&self.resampler_state);
-
         tracing::info!("AudioOutput: Setting up adaptive audio output with cpal");
 
         // Buffer for accumulating samples when device wants larger buffers than we provide
@@ -198,92 +177,31 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
         };
 
         // Build output stream with callback
+        // Frames arriving from the ring buffer are already converted (resampled + channel-matched)
+        // by the polling thread via self.audio, so the callback just copies samples.
         let stream = device
             .build_output_stream(
                 &stream_config,
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                    // Adaptive audio output: handle sample rate conversion on-the-fly
-                    // This ensures audio plays at correct speed regardless of device sample rate
-
-                    // Try to get frames from the ring buffer
                     let mut consumer_guard = consumer_for_callback.lock().unwrap();
 
                     while sample_buffer.len() < data.len() {
                         if let Ok(audio_frame) = consumer_guard.pop() {
-                            // Check if resampling is needed
-                            if audio_frame.sample_rate != device_sample_rate {
-                                // Sample rate mismatch - need to resample
-                                let mut resampler = resampler_state.lock().unwrap();
-
-                                // Lazy initialize resampler on first frame with mismatched rate
-                                if resampler.is_none() {
-                                    // Calculate chunk size based on audio frame size
-                                    let chunk_size = audio_frame.samples.len() / 2; // samples per channel
-
-                                    match ResamplerState::new(
-                                        audio_frame.sample_rate,
-                                        device_sample_rate,
-                                        chunk_size,
-                                    ) {
-                                        Ok(state) => {
-                                            tracing::info!(
-                                                "[AudioOutput Adaptive] Resampler initialized: {}Hz -> {}Hz",
-                                                audio_frame.sample_rate,
-                                                device_sample_rate
-                                            );
-                                            *resampler = Some(state);
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                "[AudioOutput Adaptive] Failed to create resampler: {}",
-                                                e
-                                            );
-                                            // Fall through to direct copy (will play at wrong speed)
-                                        }
-                                    }
-                                }
-
-                                // Resample if we have a resampler
-                                if let Some(ref mut state) = *resampler {
-                                    match state.resample(&audio_frame.samples) {
-                                        Ok(resampled) => {
-                                            sample_buffer.extend_from_slice(&resampled);
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                "[AudioOutput Adaptive] Resampling failed: {}",
-                                                e
-                                            );
-                                            // Fallback: use original samples (wrong speed)
-                                            sample_buffer.extend_from_slice(&audio_frame.samples);
-                                        }
-                                    }
-                                } else {
-                                    // No resampler available - use samples directly (wrong speed)
-                                    sample_buffer.extend_from_slice(&audio_frame.samples);
-                                }
-                            } else {
-                                // Sample rates match - direct copy (no resampling needed)
-                                sample_buffer.extend_from_slice(&audio_frame.samples);
-                            }
+                            sample_buffer.extend_from_slice(&audio_frame.samples);
                         } else {
-                            // No more frames available - break and use what we have
                             break;
                         }
                     }
 
                     if sample_buffer.len() >= data.len() {
-                        // We have enough data - copy and remove from buffer
                         data.copy_from_slice(&sample_buffer[..data.len()]);
                         sample_buffer.drain(..data.len());
                     } else if !sample_buffer.is_empty() {
-                        // We have some data but not enough - copy what we have and pad with silence
                         let copy_len = sample_buffer.len();
                         data[..copy_len].copy_from_slice(&sample_buffer);
                         data[copy_len..].fill(0.0);
                         sample_buffer.clear();
                     } else {
-                        // No data at all - output silence
                         data.fill(0.0);
                     }
                 },
@@ -292,7 +210,9 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
                 },
                 None,
             )
-            .map_err(|e| StreamError::Configuration(format!("Failed to build audio stream: {}", e)))?;
+            .map_err(|e| {
+                StreamError::Configuration(format!("Failed to build audio stream: {}", e))
+            })?;
 
         tracing::info!("AudioOutput: Starting cpal stream playback");
         stream
@@ -307,40 +227,58 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
             *producer_guard = Some(producer);
         }
 
-        // Start polling thread to read from inputs and push to ring buffer
+        // Start polling thread to read from inputs, convert, and push to ring buffer
         let stop_flag = Arc::clone(&self.stop_polling);
         stop_flag.store(false, Ordering::SeqCst);
 
-        // Get a raw pointer to inputs for the polling thread
-        // SAFETY: This is safe because:
+        // SAFETY for both raw pointers:
         // 1. The polling thread is stopped in teardown() before self is dropped
-        // 2. InputMailboxes is Send
-        // 3. We ensure exclusive access by only having one reader (the polling thread)
+        // 2. Only the polling thread accesses these after start() returns
+        // 3. In Manual mode, no other code touches self between start() and teardown()
         let inputs_ptr = SendableInputsPtr(&self.inputs as *const _);
+        let audio_ptr = SendableAudioConverterPtr(&mut self.audio as *mut _);
         let producer_clone = Arc::clone(&self.frame_producer);
         let stop_clone = Arc::clone(&stop_flag);
+        let target_sample_rate = device_sample_rate;
+        let target_channels = device_channels as u8;
 
         let polling_thread = thread::spawn(move || {
             tracing::info!("[AudioOutput] Polling thread started");
 
+            let target = ProcessorAudioConverterTargetFormat {
+                sample_rate: Some(target_sample_rate),
+                channels: Some(target_channels),
+                buffer_size: None,
+            };
+
             while !stop_clone.load(Ordering::SeqCst) {
-                // SAFETY: We have exclusive access and the thread stops before self drops
+                // SAFETY: Exclusive access guaranteed, thread joins before self drops
                 let inputs = unsafe { inputs_ptr.get() };
 
-                // Try to read a frame from inputs
                 if inputs.has_data("audio") {
                     if let Ok(frame) = inputs.read::<Audioframe>("audio") {
-                        // Push to ring buffer
-                        let mut producer_guard = producer_clone.lock().unwrap();
-                        if let Some(ref mut producer) = *producer_guard {
-                            if producer.push(frame).is_err() {
-                                // Ring buffer full - drop the frame (audio callback is too slow)
-                                tracing::warn!("[AudioOutput] Ring buffer full, dropping frame");
+                        // SAFETY: Exclusive mutable access, thread joins before self drops
+                        let audio = unsafe { audio_ptr.get_mut() };
+
+                        match audio.convert(&frame, &target) {
+                            Ok(converted_frames) => {
+                                let mut producer_guard = producer_clone.lock().unwrap();
+                                if let Some(ref mut producer) = *producer_guard {
+                                    for converted in converted_frames {
+                                        if producer.push(converted).is_err() {
+                                            tracing::warn!(
+                                                "[AudioOutput] Ring buffer full, dropping frame"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("[AudioOutput] Audio conversion failed: {}", e);
                             }
                         }
                     }
                 } else {
-                    // No data available - sleep briefly to avoid busy-waiting
                     thread::sleep(std::time::Duration::from_micros(500));
                 }
             }

@@ -1,7 +1,7 @@
 name: com.streamlib.clap.effect
 version: 1.0.0
 description: "CLAP audio plugin processor with parameter control and automation"
-execution: reactive
+execution: manual
 
 config:
   name: config

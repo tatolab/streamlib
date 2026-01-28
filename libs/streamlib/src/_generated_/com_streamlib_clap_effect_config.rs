@@ -24,8 +24,4 @@ pub struct EffectConfig {
     /// Path to the CLAP plugin file
     #[serde(rename = "plugin_path")]
     pub plugin_path: String,
-
-    /// Audio sample rate in Hz
-    #[serde(rename = "sample_rate")]
-    pub sample_rate: u32,
 }

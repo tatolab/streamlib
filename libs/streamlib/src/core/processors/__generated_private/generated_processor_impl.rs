@@ -72,6 +72,11 @@ pub trait DynGeneratedProcessor: Send + 'static {
     fn config_json(&self) -> serde_json::Value;
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    /// Returns the shared audio converter status Arc, if this processor has one.
+    fn get_audio_converter_status_arc(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::core::utils::ProcessorAudioConverterStatus>>>;
 }
 
 /// Blanket implementation of DynGeneratedProcessor for all GeneratedProcessor types.
@@ -149,5 +154,12 @@ where
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    fn get_audio_converter_status_arc(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::core::utils::ProcessorAudioConverterStatus>>>
+    {
+        <Self as GeneratedProcessor>::get_audio_converter_status_arc(self)
     }
 }

@@ -51,8 +51,7 @@ pub mod audio_channel_converter;
 pub mod audio_mixer;
 pub mod audio_resampler;
 pub mod buffer_rechunker;
-// TODO: Migrate to iceoryx2 API
-// pub mod clap_effect;
+pub mod clap_effect;
 pub mod simple_passthrough;
 
 // WebRTC Streaming
@@ -74,8 +73,7 @@ pub use audio_channel_converter::AudioChannelConverterProcessor;
 pub use audio_mixer::AudioMixerProcessor;
 pub use audio_resampler::AudioResamplerProcessor;
 pub use buffer_rechunker::BufferRechunkerProcessor;
-// TODO: Migrate to iceoryx2 API
-// pub use clap_effect::{ClapEffectConfig, ClapEffectProcessor, ClapPluginInfo, ClapScanner};
+pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
 pub use webrtc_whep::WebRtcWhepProcessor;
 pub use webrtc_whip::WebRtcWhipProcessor;
