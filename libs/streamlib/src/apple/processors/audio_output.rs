@@ -39,6 +39,7 @@ struct SendableAudioConverterPtr(*mut crate::core::utils::ProcessorAudioConverte
 // SAFETY: Only one thread accesses it, and we join before drop
 unsafe impl Send for SendableAudioConverterPtr {}
 
+#[allow(clippy::mut_from_ref)]
 impl SendableAudioConverterPtr {
     /// Get a mutable reference to the ProcessorAudioConverter.
     /// SAFETY: Caller must ensure the pointed-to data is still valid

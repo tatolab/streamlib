@@ -31,6 +31,7 @@ struct SendableAudioConverterPtr(*mut crate::core::utils::ProcessorAudioConverte
 // SAFETY: Only one thread accesses it, and we join before drop
 unsafe impl Send for SendableAudioConverterPtr {}
 
+#[allow(clippy::mut_from_ref)]
 impl SendableAudioConverterPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid
     /// and no other thread is accessing it.
@@ -47,6 +48,7 @@ struct SendableClapHostPtr(*mut Option<ClapPluginHost>);
 // SAFETY: Only one thread accesses it, and we join before drop
 unsafe impl Send for SendableClapHostPtr {}
 
+#[allow(clippy::mut_from_ref)]
 impl SendableClapHostPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid
     /// and no other thread is accessing it.

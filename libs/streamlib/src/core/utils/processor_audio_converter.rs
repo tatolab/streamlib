@@ -16,6 +16,7 @@ pub struct ProcessorAudioConverterTargetFormat {
 }
 
 /// Observable status of audio conversion operations.
+#[derive(Default)]
 pub struct ProcessorAudioConverterStatus {
     pub source_sample_rate: Option<u32>,
     pub source_channels: Option<u8>,
@@ -26,22 +27,6 @@ pub struct ProcessorAudioConverterStatus {
     pub is_resampling: bool,
     pub is_converting_channels: bool,
     pub is_rechunking: bool,
-}
-
-impl Default for ProcessorAudioConverterStatus {
-    fn default() -> Self {
-        Self {
-            source_sample_rate: None,
-            source_channels: None,
-            target_sample_rate: None,
-            target_channels: None,
-            target_buffer_size: None,
-            frames_converted: 0,
-            is_resampling: false,
-            is_converting_channels: false,
-            is_rechunking: false,
-        }
-    }
 }
 
 /// Per-processor audio format converter with lazy-initialized resampler and rechunker.
@@ -231,11 +216,8 @@ impl ProcessorAudioConverter {
                         timestamp_ns: resampled.timestamp_ns.clone(),
                         frame_index: resampled.frame_index.clone(),
                     };
-                    loop {
-                        match rechunker.process(&empty) {
-                            Some(f) => frames.push(f),
-                            None => break,
-                        }
+                    while let Some(f) = rechunker.process(&empty) {
+                        frames.push(f);
                     }
                 }
             }
