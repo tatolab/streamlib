@@ -111,6 +111,34 @@ impl OutputWriter {
         Ok(())
     }
 
+    /// Write raw bytes to the specified output port without serialization.
+    ///
+    /// The data is assumed to be pre-serialized (e.g., msgpack from a subprocess bridge).
+    pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
+        let publisher_guard = self.publisher.lock();
+        let publisher = publisher_guard.as_ref().ok_or_else(|| {
+            StreamError::Link("OutputWriter has no publisher configured".to_string())
+        })?;
+
+        let schemas = self.port_schemas.read();
+        let (schema, dest_port) = schemas
+            .get(port)
+            .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
+
+        let payload = FramePayload::new(dest_port, schema, timestamp_ns, data);
+
+        let sample = publisher
+            .loan_uninit()
+            .map_err(|e| StreamError::Link(format!("Failed to loan sample: {:?}", e)))?;
+
+        let sample = sample.write_payload(payload);
+        sample
+            .send()
+            .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
+
+        Ok(())
+    }
+
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
         self.port_schemas.read().contains_key(port)

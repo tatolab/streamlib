@@ -7,7 +7,7 @@
 //!   cargo xtask generate-schemas    Generate Rust structs from JTD schemas
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 mod generate_schemas;
@@ -20,17 +20,42 @@ struct Cli {
     command: Commands,
 }
 
+/// Target runtime language for schema code generation.
+#[derive(Debug, Clone, ValueEnum)]
+pub enum RuntimeTarget {
+    Rust,
+    Python,
+}
+
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate Rust structs from JTD schemas defined in Cargo.toml
-    GenerateSchemas,
+    /// Generate code from JTD schemas defined in Cargo.toml or pyproject.toml
+    GenerateSchemas {
+        /// Target language (default: rust)
+        #[arg(long, default_value = "rust")]
+        runtime: RuntimeTarget,
+
+        /// Output directory (default: libs/streamlib/src/_generated_/ for rust)
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Source file for schema list (default: libs/streamlib/Cargo.toml).
+        /// Supports Cargo.toml ([package.metadata.streamlib].schemas)
+        /// and pyproject.toml ([tool.streamlib].schemas).
+        #[arg(long)]
+        source: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::GenerateSchemas => generate_schemas::run()?,
+        Commands::GenerateSchemas {
+            runtime,
+            output,
+            source,
+        } => generate_schemas::run(runtime, output, source)?,
     }
 
     Ok(())

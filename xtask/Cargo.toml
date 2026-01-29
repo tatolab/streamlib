@@ -22,3 +22,6 @@ anyhow = "1.0"
 
 # Temp directory for jtd-codegen
 tempfile = "3.15"
+
+# Schema definition and code generation
+streamlib-schema = { path = "../libs/streamlib-schema" }

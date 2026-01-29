@@ -83,6 +83,7 @@ impl Default for SchemaName {
 /// It includes routing information (port_key), type information (schema_name),
 /// and the serialized frame data.
 #[derive(Clone, Copy, ZeroCopySend)]
+#[type_name("FramePayload")]
 #[repr(C)]
 pub struct FramePayload {
     pub port_key: PortKey,

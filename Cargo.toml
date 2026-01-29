@@ -27,6 +27,8 @@ members = [
     # "examples/camera-python-display",     # Example: Camera → Python → Display pipeline (temporarily disabled - depends on streamlib-python)
     # "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline (temporarily disabled - depends on streamlib-python)
     # "examples/camera-dylib-display/rust", # Plugin: Rust processors for camera-dylib-display
+    "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
+    "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
 ]
 
 [workspace.package]
