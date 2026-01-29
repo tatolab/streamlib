@@ -1,0 +1,64 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for WebRTC WHIP config
+
+metadata:
+  name: com.streamlib.webrtc_whip.config
+  version: 1.0.0
+  description: "Configuration for WebRTC WHIP streaming"
+
+properties:
+  whip:
+    metadata:
+      description: "WHIP endpoint configuration"
+    properties:
+      endpoint_url:
+        metadata:
+          description: "WHIP endpoint URL"
+        type: string
+      timeout_ms:
+        metadata:
+          description: "Connection timeout in milliseconds"
+        type: uint32
+    optionalProperties:
+      auth_token:
+        metadata:
+          description: "Optional bearer token for authentication"
+        type: string
+  video:
+    metadata:
+      description: "Video encoder configuration"
+    properties:
+      width:
+        metadata:
+          description: "Video width in pixels"
+        type: uint32
+      height:
+        metadata:
+          description: "Video height in pixels"
+        type: uint32
+      fps:
+        metadata:
+          description: "Frames per second"
+        type: uint32
+      bitrate_bps:
+        metadata:
+          description: "Target bitrate in bits per second"
+        type: uint32
+  audio:
+    metadata:
+      description: "Audio encoder configuration"
+    properties:
+      sample_rate:
+        metadata:
+          description: "Sample rate in Hz"
+        type: uint32
+      channels:
+        metadata:
+          description: "Number of audio channels"
+        type: uint32
+      bitrate_bps:
+        metadata:
+          description: "Target bitrate in bits per second"
+        type: uint32

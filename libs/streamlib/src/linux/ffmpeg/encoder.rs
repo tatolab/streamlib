@@ -3,9 +3,9 @@
 
 //! FFmpeg-based H.264 encoder for Linux.
 
+use crate::_generated_::Encodedvideoframe;
 use crate::core::{
-    EncodedVideoFrame, GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig,
-    VideoFrame,
+    GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig, VideoFrame,
 };
 
 /// FFmpeg-based hardware encoder.
@@ -33,12 +33,12 @@ impl FFmpegEncoder {
     }
 
     /// Encode a video frame.
-    pub fn encode(&mut self, _frame: &VideoFrame) -> Result<EncodedVideoFrame> {
+    pub fn encode(&mut self, _frame: &VideoFrame) -> Result<Encodedvideoframe> {
         // TODO: Implement encoding
         // - Convert VideoFrame to AVFrame
         // - Send frame to encoder
         // - Receive encoded packet
-        // - Convert to EncodedVideoFrame
+        // - Convert to Encodedvideoframe
         Err(StreamError::Configuration(
             "FFmpeg encoder not yet implemented".into(),
         ))

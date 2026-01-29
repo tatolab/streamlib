@@ -5,6 +5,7 @@
 
 use std::sync::Mutex;
 
+pub mod blitter;
 pub mod format_converter;
 pub mod gl_interop;
 mod metal_command_buffer;
@@ -16,6 +17,7 @@ pub mod pixel_buffer_ref;
 mod pixel_format;
 pub mod texture_cache;
 
+pub use blitter::MetalBlitter;
 pub use metal_command_buffer::MetalCommandBuffer;
 pub use metal_command_queue::MetalCommandQueue;
 pub use metal_device::MetalDevice;

@@ -1,0 +1,18 @@
+name: com.tatolab.audio_resampler
+version: 1.0.0
+description: "Resamples audio from source to target sample rate (preserves channel count)"
+execution: reactive
+
+config:
+  name: config
+  schema: com.tatolab.audio_resampler.config@1.0.0
+
+inputs:
+  - name: audio_in
+    schema: com.tatolab.audioframe@1.0.0
+    description: Audio input (any channel count)
+
+outputs:
+  - name: audio_out
+    schema: com.tatolab.audioframe@1.0.0
+    description: Resampled audio output (same channel count as input)

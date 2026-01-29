@@ -16,8 +16,9 @@
 // **Reference**: Encoder implementation (encoder.rs) - inverse operations
 
 use super::{ffi, format};
-use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{Result, RuntimeContext, StreamError, VideoDecoderConfig, VideoFrame};
+use crate::_generated_::Videoframe;
+use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoDecoderConfig};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -203,12 +204,13 @@ impl VideoToolboxDecoder {
         Ok(())
     }
 
-    /// Decode H.264 NAL units to VideoFrame.
+    /// Decode H.264 NAL units to Videoframe.
     pub fn decode(
         &mut self,
         nal_units_annex_b: &[u8],
         timestamp_ns: i64,
-    ) -> Result<Option<VideoFrame>> {
+        gpu: &GpuContext,
+    ) -> Result<Option<Videoframe>> {
         // Check if we have a decompression session
         let session = self.decompression_session.ok_or_else(|| {
             StreamError::Configuration(
@@ -355,8 +357,8 @@ impl VideoToolboxDecoder {
             }
         };
 
-        // Step 7: Convert CVPixelBuffer → wgpu::Texture
-        let video_frame = self.pixel_buffer_to_video_frame(decoded_frame)?;
+        // Step 7: Convert CVPixelBuffer → Videoframe (IPC type)
+        let video_frame = self.pixel_buffer_to_videoframe(decoded_frame, gpu)?;
 
         self.frame_count += 1;
 
@@ -371,8 +373,12 @@ impl VideoToolboxDecoder {
         Ok(Some(video_frame))
     }
 
-    /// Convert CVPixelBuffer (BGRA) to VideoFrame with RhiPixelBuffer
-    fn pixel_buffer_to_video_frame(&self, decoded_frame: DecodedFrame) -> Result<VideoFrame> {
+    /// Convert CVPixelBuffer (BGRA) to Videoframe (IPC type)
+    fn pixel_buffer_to_videoframe(
+        &self,
+        decoded_frame: DecodedFrame,
+        gpu: &GpuContext,
+    ) -> Result<Videoframe> {
         // Wrap CVPixelBuffer in RhiPixelBufferRef.
         // Use no_retain since the callback already retained the buffer.
         // When RhiPixelBufferRef is dropped, it will release the CVPixelBuffer.
@@ -383,24 +389,37 @@ impl VideoToolboxDecoder {
         }
         .ok_or_else(|| StreamError::GpuError("Decoded frame has null pixel buffer".into()))?;
 
-        let buffer = RhiPixelBuffer::new(buffer_ref);
+        let source_buffer = RhiPixelBuffer::new(buffer_ref);
 
         // Log resolution discovery on first frame or if resolution changes
-        if buffer.width != self.config.width || buffer.height != self.config.height {
+        if source_buffer.width != self.config.width || source_buffer.height != self.config.height {
             tracing::info!(
                 "[VideoToolbox Decoder] 🎥 Actual decoded resolution: {}x{} (config was {}x{})",
-                buffer.width,
-                buffer.height,
+                source_buffer.width,
+                source_buffer.height,
                 self.config.width,
                 self.config.height
             );
         }
 
-        Ok(VideoFrame::from_buffer(
-            buffer,
-            decoded_frame.timestamp_ns,
-            self.frame_count,
-        ))
+        // Acquire pooled buffer and blit decoded frame to it
+        let (pool_id, dest_buffer) = gpu.acquire_pixel_buffer(
+            source_buffer.width,
+            source_buffer.height,
+            PixelFormat::Bgra32,
+        )?;
+
+        // Blit decoded frame to pooled buffer
+        gpu.blit_copy(&source_buffer, &dest_buffer)?;
+
+        // Construct Videoframe IPC type
+        Ok(Videoframe {
+            surface_id: pool_id.to_string(),
+            width: source_buffer.width,
+            height: source_buffer.height,
+            timestamp_ns: decoded_frame.timestamp_ns.to_string(),
+            frame_index: self.frame_count.to_string(),
+        })
     }
 }
 

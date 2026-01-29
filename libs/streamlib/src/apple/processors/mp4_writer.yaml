@@ -1,0 +1,21 @@
+name: com.tatolab.mp4_writer
+version: 1.0.0
+description: "Writes stereo audio and video to MP4 file with A/V synchronization"
+execution: reactive
+
+runtime:
+  language: rust
+  options:
+    unsafe_send: true
+
+config:
+  name: config
+  schema: com.tatolab.mp4_writer.config@1.0.0
+
+inputs:
+  - name: audio
+    schema: com.tatolab.audioframe@1.0.0
+    description: Stereo audio frames to write to MP4
+  - name: video
+    schema: com.tatolab.videoframe@1.0.0
+    description: Video frames to write to MP4

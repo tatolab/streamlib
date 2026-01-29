@@ -10,14 +10,111 @@ use sha2::{Digest, Sha256};
 // Processor Schema Types
 // ============================================================================
 
-/// Runtime environment for a processor.
+/// Runtime language for a processor.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum ProcessorRuntime {
+pub enum ProcessorLanguage {
     #[default]
     Rust,
     Python,
     TypeScript,
+}
+
+/// Language-specific runtime options.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeOptions {
+    /// [Rust] Generate unsafe Send impl for !Send processors (AVFoundation, etc.)
+    #[serde(default)]
+    pub unsafe_send: bool,
+}
+
+/// Internal helper for deserializing RuntimeConfig from either string or object.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RuntimeConfigHelper {
+    /// Simple string form: `runtime: rust`
+    Simple(ProcessorLanguage),
+    /// Full object form: `runtime: { language: rust, options: { unsafe_send: true } }`
+    Full(RuntimeConfigFull),
+}
+
+/// Full runtime configuration object.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RuntimeConfigFull {
+    /// Language runtime (rust, python, typescript). Defaults to rust.
+    #[serde(default)]
+    pub language: ProcessorLanguage,
+
+    /// Language-specific options.
+    #[serde(default)]
+    pub options: RuntimeOptions,
+
+    /// Environment variables for subprocess runtimes.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+/// Runtime configuration for a processor.
+///
+/// Supports flexible YAML formats:
+/// - Simple string: `runtime: rust` (defaults to no options)
+/// - Object form: `runtime: { language: rust, options: { unsafe_send: true } }`
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeConfig {
+    /// Language runtime (rust, python, typescript). Defaults to rust.
+    pub language: ProcessorLanguage,
+
+    /// Language-specific options.
+    pub options: RuntimeOptions,
+
+    /// Environment variables for subprocess runtimes.
+    pub env: std::collections::HashMap<String, String>,
+}
+
+impl From<RuntimeConfigHelper> for RuntimeConfig {
+    fn from(helper: RuntimeConfigHelper) -> Self {
+        match helper {
+            RuntimeConfigHelper::Simple(language) => RuntimeConfig {
+                language,
+                options: RuntimeOptions::default(),
+                env: std::collections::HashMap::new(),
+            },
+            RuntimeConfigHelper::Full(full) => RuntimeConfig {
+                language: full.language,
+                options: full.options,
+                env: full.env,
+            },
+        }
+    }
+}
+
+impl Serialize for RuntimeConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // If only language is set with defaults, serialize as simple string
+        if self.options == RuntimeOptions::default() && self.env.is_empty() {
+            return self.language.serialize(serializer);
+        }
+
+        // Otherwise serialize as full object
+        let full = RuntimeConfigFull {
+            language: self.language.clone(),
+            options: self.options.clone(),
+            env: self.env.clone(),
+        };
+        full.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        RuntimeConfigHelper::deserialize(deserializer).map(RuntimeConfig::from)
+    }
 }
 
 /// Execution mode for a processor.
@@ -190,9 +287,9 @@ pub struct ProcessorSchema {
     #[serde(default)]
     pub description: Option<String>,
 
-    /// Runtime environment (rust, python, typescript).
+    /// Runtime configuration (language, options, env).
     #[serde(default)]
-    pub runtime: Option<ProcessorRuntime>,
+    pub runtime: RuntimeConfig,
 
     /// Entrypoint for non-Rust runtimes (e.g., "src.blur:BlurProcessor").
     #[serde(default)]

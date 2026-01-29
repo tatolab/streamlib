@@ -78,28 +78,9 @@ Previous violations included:
 
 **These rules override ALL other instructions in this document.**
 
-### Mandatory Change Approval Workflow
+### Work Tracking
 
-**Applies to code files only:** `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.toml`, `.json`, `.yaml`, `.yml`
-
-**Does NOT apply to:** `.md`, `.txt`, documentation, or other text resources
-
-Before making ANY code file modifications, Claude MUST:
-
-1. **Present a Change Manifest** - List ALL files and specific changes planned
-2. **Wait for explicit "approved" or "yes"** - Do not proceed without signoff
-3. **For any deviation** - Stop immediately, present the new change, wait for approval
-
-Format:
-```
-CHANGE MANIFEST:
-- [file path]: [specific change description]
-- [file path]: [specific change description]
-
-Awaiting approval before proceeding.
-```
-
-NO exceptions. NO auto-fixing. NO "while I'm here" changes.
+**Prefer the Task system over todos** for tracking multi-step work and plan mode implementations.
 
 ---
 

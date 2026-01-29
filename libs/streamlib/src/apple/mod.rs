@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 pub mod arkit;
+pub mod audio_clock;
 // TODO: Migrate to iceoryx2 API (depends on AudioDevice)
 // pub mod audio_utils;
 pub mod corevideo_ffi;
@@ -29,17 +30,19 @@ pub mod time;
 
 pub mod thread_priority;
 
+pub use audio_clock::CoreAudioClock;
 pub use pixel_transfer::PixelTransferSession;
 
 // Sources and sinks migrated to iceoryx2 API
 pub use processors::{
-    // AppleAudioCaptureProcessor,
-    // AppleAudioOutputProcessor,
     // Sources
-    AppleCameraProcessor,
+    AppleAudioCaptureProcessor,
     // Sinks
+    AppleAudioOutputProcessor,
+    AppleCameraProcessor,
     AppleDisplayProcessor,
-    // AppleMp4WriterProcessor,
+    AppleMp4WriterProcessor,
+    AppleScreenCaptureProcessor,
 };
 
 // Note: WebRTC types (WhipClient, WhepClient, etc.) are now in core::streaming

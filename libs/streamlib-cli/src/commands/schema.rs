@@ -405,8 +405,9 @@ pub fn validate_processor(path: &Path) -> Result<()> {
             if let Some(desc) = &schema.description {
                 println!("  Description: {}", desc);
             }
-            if let Some(runtime) = &schema.runtime {
-                println!("  Runtime:     {:?}", runtime);
+            println!("  Runtime:     {:?}", schema.runtime.language);
+            if schema.runtime.options.unsafe_send {
+                println!("  Options:     unsafe_send=true");
             }
             println!("  Execution:   {:?}", schema.execution);
             if let Some(config) = &schema.config {

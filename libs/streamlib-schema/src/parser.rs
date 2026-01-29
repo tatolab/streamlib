@@ -390,7 +390,7 @@ version: 1.0.0
         assert_eq!(schema.name, "com.example.passthrough");
         assert_eq!(schema.version, "1.0.0");
         assert!(schema.description.is_none());
-        assert!(schema.runtime.is_none());
+        assert_eq!(schema.runtime, crate::definition::RuntimeConfig::default());
         assert!(schema.entrypoint.is_none());
         assert!(schema.config.is_none());
         assert!(schema.inputs.is_empty());
@@ -427,8 +427,8 @@ outputs:
         assert_eq!(schema.version, "1.0.0");
         assert_eq!(schema.description, Some("Gaussian blur filter".to_string()));
         assert_eq!(
-            schema.runtime,
-            Some(crate::definition::ProcessorRuntime::Rust)
+            schema.runtime.language,
+            crate::definition::ProcessorLanguage::Rust
         );
         assert_eq!(
             schema.entrypoint,
@@ -471,8 +471,8 @@ outputs:
 
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(
-            schema.runtime,
-            Some(crate::definition::ProcessorRuntime::Python)
+            schema.runtime.language,
+            crate::definition::ProcessorLanguage::Python
         );
         assert_eq!(
             schema.entrypoint,

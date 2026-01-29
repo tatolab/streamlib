@@ -1,0 +1,55 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for ScreenCapture config
+
+metadata:
+  name: com.tatolab.screen_capture.config
+  version: 1.0.0
+  description: "Configuration for screen capture using ScreenCaptureKit (macOS 12.3+)"
+
+properties:
+  target_type:
+    metadata:
+      description: "What to capture: Display, Window, or Application"
+    enum:
+      - Display
+      - Window
+      - Application
+optionalProperties:
+  # Display mode fields
+  display_index:
+    metadata:
+      description: "Display index for Display mode (default: 0 for main display)"
+    type: uint32
+  # Window mode fields
+  window_title:
+    metadata:
+      description: "Window title substring for Window mode"
+    type: string
+  window_id:
+    metadata:
+      description: "Window ID for Window mode"
+    type: uint32
+  # Application mode fields
+  app_bundle_id:
+    metadata:
+      description: "Bundle identifier for Application mode (e.g., 'com.apple.Safari')"
+    type: string
+  app_display_index:
+    metadata:
+      description: "Display index for Application mode (default: 0)"
+    type: uint32
+  # Common fields
+  frame_rate:
+    metadata:
+      description: "Target frame rate in fps (default: 30.0)"
+    type: float64
+  show_cursor:
+    metadata:
+      description: "Whether to capture cursor (default: false)"
+    type: boolean
+  exclude_current_app:
+    metadata:
+      description: "Exclude current application from capture (default: true)"
+    type: boolean

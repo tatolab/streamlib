@@ -9,13 +9,13 @@ config:
 
 inputs:
   - name: left
-    schema: com.tatolab.audioframe.1ch@1.0.0
-    description: Left channel mono audio
+    schema: com.tatolab.audioframe@1.0.0
+    description: Left channel mono audio (validates 1 channel at runtime)
   - name: right
-    schema: com.tatolab.audioframe.1ch@1.0.0
-    description: Right channel mono audio
+    schema: com.tatolab.audioframe@1.0.0
+    description: Right channel mono audio (validates 1 channel at runtime)
 
 outputs:
   - name: audio
-    schema: com.tatolab.audioframe.2ch@1.0.0
-    description: Mixed stereo audio output
+    schema: com.tatolab.audioframe@1.0.0
+    description: Mixed stereo audio output (2 channels)

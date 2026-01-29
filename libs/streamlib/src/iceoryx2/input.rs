@@ -88,6 +88,11 @@ impl InputMailboxes {
         );
     }
 
+    /// Check if a subscriber has already been configured.
+    pub fn has_subscriber(&self) -> bool {
+        self.subscriber.get().is_some()
+    }
+
     /// Set the iceoryx2 Subscriber for receiving payloads.
     ///
     /// Note: This should only be called from the processor's execution thread.

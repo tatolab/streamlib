@@ -1,11 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::path::PathBuf;
-use streamlib::core::{
-    AudioCaptureConfig, AudioChannelConverterConfig, AudioResamplerConfig, CameraConfig,
-    ChannelConversionMode, Mp4WriterConfig, ResamplingQuality,
-};
+use streamlib::_generated_::com_tatolab_audio_channel_converter_config::Mode;
+use streamlib::_generated_::com_tatolab_audio_resampler_config::Quality;
 use streamlib::{
     input, output, request_audio_permission, request_camera_permission, AudioCaptureProcessor,
     AudioChannelConverterProcessor, AudioResamplerProcessor, CameraProcessor, Mp4WriterProcessor,
@@ -50,41 +47,42 @@ fn main() -> Result<()> {
     println!("📹 Output file: {}\n", output_path);
 
     println!("📷 Adding camera processor...");
-    let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {
-        device_id: Some("0x1424001bcf2284".to_string()), // Use default camera
+    let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
+        device_id: None, // Use default camera
         ..Default::default()
     }))?;
     println!("✓ Camera added (capturing video)\n");
 
     println!("🎤 Adding audio capture processor...");
     let audio_capture =
-        runtime.add_processor(AudioCaptureProcessor::Processor::node(AudioCaptureConfig {
+        runtime.add_processor(AudioCaptureProcessor::node(AudioCaptureProcessor::Config {
             device_id: None, // Use default microphone
         }))?;
     println!("✓ Audio capture added (mono @ 24kHz)\n");
 
     println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
-    let resampler = runtime.add_processor(AudioResamplerProcessor::Processor::node(
-        AudioResamplerConfig {
+    let resampler = runtime.add_processor(AudioResamplerProcessor::node(
+        AudioResamplerProcessor::Config {
             source_sample_rate: 24000,
             target_sample_rate: 48000,
-            quality: ResamplingQuality::High,
+            quality: Quality::High,
         },
     ))?;
     println!("✓ Resampler added\n");
 
     println!("🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor(
-        AudioChannelConverterProcessor::Processor::node(AudioChannelConverterConfig {
-            mode: ChannelConversionMode::Duplicate,
-        }),
-    )?;
+    let channel_converter = runtime.add_processor(AudioChannelConverterProcessor::node(
+        AudioChannelConverterProcessor::Config {
+            mode: Mode::Duplicate,
+            output_channels: None,
+        },
+    ))?;
     println!("✓ Channel converter added\n");
 
     println!("💾 Adding MP4 writer processor...");
     let mp4_writer =
-        runtime.add_processor(Mp4WriterProcessor::Processor::node(Mp4WriterConfig {
-            output_path: PathBuf::from(&output_path),
+        runtime.add_processor(Mp4WriterProcessor::node(Mp4WriterProcessor::Config {
+            output_path: output_path.clone(),      // String, not PathBuf
             sync_tolerance_ms: Some(16.6),         // ~1 frame at 60fps
             video_codec: Some("avc1".to_string()), // H.264
             video_bitrate: Some(5_000_000),        // 5 Mbps
@@ -133,6 +131,8 @@ fn main() -> Result<()> {
 
     // start() blocks on macOS standalone (runs NSApplication event loop)
     runtime.start()?;
+
+    runtime.wait_for_signal()?;
 
     println!("\n✅ Recording stopped");
     println!("✅ MP4 file finalized: {}", output_path);

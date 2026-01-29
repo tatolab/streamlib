@@ -125,22 +125,28 @@ fn open_iceoryx2_pubsub(
     link_id: &LinkUniqueId,
     runtime_ctx: &Arc<RuntimeContext>,
 ) -> Result<()> {
-    // Generate service name: "streamlib/{source_processor}/{dest_processor}"
-    let service_name = format!("streamlib/{}/{}", source_proc_id, dest_proc_id);
+    // Service name is destination-centric: all upstream processors publish to the same service
+    // This allows multiple inputs to a single processor to share one subscriber
+    let service_name = format!("streamlib/{}", dest_proc_id);
 
-    tracing::debug!("Creating iceoryx2 service '{}'", service_name);
+    tracing::debug!(
+        "Opening iceoryx2 service '{}' for connection {} -> {}",
+        service_name,
+        source_proc_id,
+        dest_proc_id
+    );
 
     // Create iceoryx2 Service, Publisher, and Subscriber using the Node
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let service = iceoryx2_node.open_or_create_service(&service_name)?;
 
-    // Create Publisher for source processor
+    // Create Publisher for source processor (each upstream gets its own publisher)
     let publisher = service.create_publisher()?;
-    tracing::debug!("Created iceoryx2 Publisher for service '{}'", service_name);
-
-    // Create Subscriber for destination processor
-    let subscriber = service.create_subscriber()?;
-    tracing::debug!("Created iceoryx2 Subscriber for service '{}'", service_name);
+    tracing::debug!(
+        "Created iceoryx2 Publisher for '{}' -> service '{}'",
+        source_proc_id,
+        service_name
+    );
 
     // Look up schema for the output port from the registry
     let output_schema = {
@@ -182,18 +188,33 @@ fn open_iceoryx2_pubsub(
         }
     }
 
-    // Configure destination InputMailboxes with port and set the Subscriber
+    // Configure destination InputMailboxes with port
+    // Only create subscriber if destination doesn't already have one (first connection wins)
     {
         let mut dest_guard = dest_processor.lock();
         if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
+            // Always add the port mapping
             // Default history of 1 - keeps only the most recent payload
             // Default read mode is SkipToLatest (optimal for video)
             input_mailboxes.add_port(dest_port, 1, Default::default());
-            input_mailboxes.set_subscriber(subscriber);
-            tracing::debug!(
-                "Configured InputMailboxes port '{}' with Subscriber",
-                dest_port
-            );
+
+            // Only set subscriber if this is the first connection to this destination
+            // All subsequent connections reuse the same subscriber
+            if !input_mailboxes.has_subscriber() {
+                let subscriber = service.create_subscriber()?;
+                input_mailboxes.set_subscriber(subscriber);
+                tracing::debug!(
+                    "Created iceoryx2 Subscriber for '{}' on service '{}'",
+                    dest_proc_id,
+                    service_name
+                );
+            } else {
+                tracing::debug!(
+                    "Reusing existing Subscriber for '{}' (adding port '{}')",
+                    dest_proc_id,
+                    dest_port
+                );
+            }
         }
     }
 

@@ -27,7 +27,7 @@ pub mod iceoryx2;
 pub mod _generated_;
 
 // Re-export commonly used generated config types
-pub use _generated_::ApiServerConfig;
+pub use _generated_::{ApiServerConfig, Encodedvideoframe, Videoframe};
 
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("path/to/schema.yaml")] - YAML-based processor definition
@@ -55,32 +55,26 @@ pub use core::{
     // AudioDevice,
     AudioEncoderConfig,
     AudioEncoderOpus,
-    AudioFrame,
     // TODO: Migrate to iceoryx2 API
     // AudioInputDevice,
     AudioMixerProcessor,
     // TODO: Migrate to iceoryx2 API
     // AudioOutputConfig,
-    AudioResampler1chProcessor,
-    AudioResampler2chProcessor,
-    BufferRechunker1chProcessor,
-    BufferRechunker2chProcessor,
+    AudioResamplerProcessor,
+    BufferRechunkerProcessor,
     // TODO: Migrate to iceoryx2 API
     // CameraConfig,
     // CameraDevice,
     ChordGeneratorProcessor,
-    // TODO: Migrate to iceoryx2 API
-    // ClapEffectConfig,
-    // ClapEffectProcessor,
-    // ClapPluginInfo,
-    // ClapScanner,
+    ClapEffectProcessor,
+    ClapPluginInfo,
+    ClapScanner,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
     // TODO: Migrate to iceoryx2 API
     // DisplayConfig,
     EncodedAudioFrame,
-    EncodedVideoFrame,
     GlContext,
     GlTextureBinding,
     GpuContext,
@@ -122,7 +116,6 @@ pub use core::{
     VideoDecoderConfig,
     VideoEncoder,
     VideoEncoderConfig,
-    VideoFrame,
     // TODO: Migrate to iceoryx2 API
     // WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
@@ -156,11 +149,12 @@ pub(crate) mod apple;
 // Apple processor re-exports (migrated to iceoryx2 API)
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    // AppleAudioCaptureProcessor as AudioCaptureProcessor,
-    // AppleAudioOutputProcessor as AudioOutputProcessor,
+    AppleAudioCaptureProcessor as AudioCaptureProcessor,
+    AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
-    // AppleMp4WriterProcessor as Mp4WriterProcessor,
+    AppleMp4WriterProcessor as Mp4WriterProcessor,
+    AppleScreenCaptureProcessor as ScreenCaptureProcessor,
     // MetalDevice,
     // VideoToolbox encoder (config types are in core::codec):
     // VideoToolboxEncoder,
@@ -169,11 +163,8 @@ pub use apple::{
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
-// TODO: Migrate to iceoryx2 API
 // WebRTC WHIP/WHEP processors (cross-platform)
-// pub use core::processors::{
-//     WebRtcWhepConfig, WebRtcWhepProcessor, WebRtcWhipConfig, WebRtcWhipProcessor,
-// };
+pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{

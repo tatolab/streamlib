@@ -1,0 +1,10 @@
+[package]
+name = "screen-recorder"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib" }
+tracing = "0.1"
+tracing-subscriber = "0.3"

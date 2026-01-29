@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::{GpuContext, TimeContext};
+use super::{GpuContext, SharedAudioClock, TimeContext};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
 use crate::iceoryx2::Iceoryx2Node;
@@ -26,6 +26,8 @@ pub struct RuntimeContext {
     tokio_handle: tokio::runtime::Handle,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     iceoryx2_node: Iceoryx2Node,
+    /// Audio clock for synchronized audio timing.
+    audio_clock: SharedAudioClock,
 }
 
 impl RuntimeContext {
@@ -36,6 +38,7 @@ impl RuntimeContext {
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
         iceoryx2_node: Iceoryx2Node,
+        audio_clock: SharedAudioClock,
     ) -> Self {
         Self {
             gpu,
@@ -46,6 +49,7 @@ impl RuntimeContext {
             runtime_ops,
             tokio_handle,
             iceoryx2_node,
+            audio_clock,
         }
     }
 
@@ -112,6 +116,15 @@ impl RuntimeContext {
         &self.iceoryx2_node
     }
 
+    /// Get the audio clock for synchronized audio timing.
+    ///
+    /// The audio clock provides timing callbacks for audio producers at
+    /// a consistent sample rate and buffer size. Use this in audio generators
+    /// to produce samples at the correct rate.
+    pub fn audio_clock(&self) -> &SharedAudioClock {
+        &self.audio_clock
+    }
+
     /// Create a processor-specific context with a processor ID.
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
@@ -123,6 +136,7 @@ impl RuntimeContext {
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
+            audio_clock: Arc::clone(&self.audio_clock),
         }
     }
 
@@ -137,6 +151,7 @@ impl RuntimeContext {
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
+            audio_clock: Arc::clone(&self.audio_clock),
         }
     }
 

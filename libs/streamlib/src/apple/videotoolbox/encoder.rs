@@ -6,11 +6,10 @@
 // Hardware-accelerated H.264 encoding using Apple's VideoToolbox framework.
 // Supports GPU-accelerated texture conversion (wgpu → NV12) and real-time encoding.
 
+use crate::_generated_::{Encodedvideoframe, Videoframe};
 use crate::apple::PixelTransferSession;
-use crate::core::{
-    EncodedVideoFrame, GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig,
-    VideoFrame,
-};
+use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer};
+use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig};
 use objc2_core_video::CVPixelBuffer;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -36,7 +35,7 @@ pub struct VideoToolboxEncoder {
     pixel_transfer: Option<PixelTransferSession>,
 
     // For storing encoded output from callback
-    encoded_frames: Arc<Mutex<VecDeque<EncodedVideoFrame>>>,
+    encoded_frames: Arc<Mutex<VecDeque<Encodedvideoframe>>>,
 
     // Callback context that needs to be freed in Drop
     callback_context: Option<*mut std::ffi::c_void>,
@@ -101,7 +100,7 @@ impl VideoToolboxEncoder {
                     if status != ffi::NO_ERR {
                         // Clean up callback context on error - reconstruct Arc to decrement ref count
                         let _ = Arc::from_raw(
-                            callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>,
+                            callback_context as *const Mutex<VecDeque<Encodedvideoframe>>,
                         );
                         return Err(StreamError::Runtime(format!(
                             "VTCompressionSessionCreate failed: {}",
@@ -229,27 +228,37 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
-    /// Convert VideoFrame buffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
-    fn convert_buffer_to_pixel_buffer(&self, frame: &VideoFrame) -> Result<*mut CVPixelBuffer> {
+    /// Convert RhiPixelBuffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
+    fn convert_buffer_to_pixel_buffer(
+        &self,
+        buffer: &RhiPixelBuffer,
+    ) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
         let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
             StreamError::Configuration("PixelTransferSession not initialized".into())
         })?;
 
-        pixel_transfer.convert_buffer_to_nv12(frame.buffer())
+        pixel_transfer.convert_buffer_to_nv12(buffer)
     }
 
     /// Encode a video frame.
-    pub fn encode(&mut self, frame: &VideoFrame) -> Result<EncodedVideoFrame> {
+    pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<Encodedvideoframe> {
         let session = self.compression_session.ok_or_else(|| {
             StreamError::Configuration("Compression session not initialized".into())
         })?;
 
-        // Step 1: Convert VideoFrame buffer to NV12 CVPixelBuffer
-        let pixel_buffer = self.convert_buffer_to_pixel_buffer(frame)?;
+        // Resolve buffer from surface_id
+        let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
+        let buffer = gpu.get_pixel_buffer(&pool_id)?;
+
+        // Parse timestamp from IPC frame
+        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
+
+        // Step 1: Convert buffer to NV12 CVPixelBuffer
+        let pixel_buffer = self.convert_buffer_to_pixel_buffer(&buffer)?;
 
         // Step 2: Create presentation timestamp
-        let presentation_time = ffi::CMTime::new(frame.timestamp_ns, 1_000_000_000);
+        let presentation_time = ffi::CMTime::new(timestamp_ns, 1_000_000_000);
         let duration = ffi::CMTime::invalid(); // Let VideoToolbox calculate duration
 
         // Step 3: Determine if we should force a keyframe
@@ -336,8 +345,8 @@ impl VideoToolboxEncoder {
             })?;
 
         // Step 7: Update frame metadata
-        encoded_frame.timestamp_ns = frame.timestamp_ns;
-        encoded_frame.frame_number = self.frame_count;
+        encoded_frame.timestamp_ns = timestamp_ns.to_string();
+        encoded_frame.frame_number = self.frame_count.to_string();
 
         self.frame_count += 1;
 
@@ -454,7 +463,7 @@ impl Drop for VideoToolboxEncoder {
             // Safe now because VTCompressionSessionCompleteFrames() ensured all callbacks finished
             // Reconstruct Arc to decrement ref count and potentially drop the Mutex
             if let Some(context) = self.callback_context {
-                let _ = Arc::from_raw(context as *const Mutex<VecDeque<EncodedVideoFrame>>);
+                let _ = Arc::from_raw(context as *const Mutex<VecDeque<Encodedvideoframe>>);
                 tracing::debug!("[VideoToolbox] Callback context freed");
             }
         }
@@ -492,7 +501,7 @@ extern "C" fn compression_output_callback(
     // 2. The Mutex won't be freed until Drop calls Arc::from_raw()
     // 3. Drop calls VTCompressionSessionCompleteFrames() first, ensuring no callbacks are running
     let encoded_frames = unsafe {
-        let ptr = output_callback_ref_con as *const Mutex<VecDeque<EncodedVideoFrame>>;
+        let ptr = output_callback_ref_con as *const Mutex<VecDeque<Encodedvideoframe>>;
         &*ptr // Directly deref the raw pointer
     };
 
@@ -569,11 +578,11 @@ extern "C" fn compression_output_callback(
             annex_b_data
         };
 
-        let encoded_frame = EncodedVideoFrame {
+        let encoded_frame = Encodedvideoframe {
             data: final_data,
-            timestamp_ns: 0, // Will be set by caller
+            timestamp_ns: String::new(), // Will be set by caller
             is_keyframe,
-            frame_number: 0, // Will be set by caller
+            frame_number: String::new(), // Will be set by caller
         };
 
         if let Ok(mut queue) = encoded_frames.lock() {

@@ -1,0 +1,15 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for audio output config
+
+metadata:
+  name: com.tatolab.audio_output.config
+  version: 1.0.0
+  description: "Configuration for audio output (macOS)"
+
+optionalProperties:
+  device_id:
+    metadata:
+      description: "Audio output device ID. If None, uses default device"
+    type: string

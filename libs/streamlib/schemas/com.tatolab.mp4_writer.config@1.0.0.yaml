@@ -1,0 +1,36 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for MP4 Writer config
+
+metadata:
+  name: com.tatolab.mp4_writer.config
+  version: 1.0.0
+  description: "Configuration for MP4 file writer processor"
+
+properties:
+  output_path:
+    metadata:
+      description: "Path to output MP4 file"
+    type: string
+optionalProperties:
+  sync_tolerance_ms:
+    metadata:
+      description: "A/V sync tolerance in milliseconds. Default: 33.3ms"
+    type: float64
+  video_codec:
+    metadata:
+      description: "Video codec identifier. Default: 'avc1' (H.264)"
+    type: string
+  video_bitrate:
+    metadata:
+      description: "Video bitrate in bits per second. Default: 5000000 (5 Mbps)"
+    type: uint32
+  audio_codec:
+    metadata:
+      description: "Audio codec identifier. Default: 'aac'"
+    type: string
+  audio_bitrate:
+    metadata:
+      description: "Audio bitrate in bits per second. Default: 128000 (128 kbps)"
+    type: uint32

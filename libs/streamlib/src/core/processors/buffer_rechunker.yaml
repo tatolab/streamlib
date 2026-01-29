@@ -1,0 +1,18 @@
+name: com.tatolab.buffer_rechunker
+version: 1.0.0
+description: "Rechunks variable-sized audio buffers into fixed-size chunks (preserves channel count)"
+execution: reactive
+
+config:
+  name: config
+  schema: com.tatolab.buffer_rechunker.config@1.0.0
+
+inputs:
+  - name: audio_in
+    schema: com.tatolab.audioframe@1.0.0
+    description: Variable-sized audio input (any channel count)
+
+outputs:
+  - name: audio_out
+    schema: com.tatolab.audioframe@1.0.0
+    description: Fixed-size audio output (same channel count as input)

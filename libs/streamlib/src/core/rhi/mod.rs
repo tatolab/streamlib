@@ -4,6 +4,7 @@
 //! Render Hardware Interface (RHI) - Platform-agnostic GPU abstraction.
 
 mod backend;
+pub mod blitter;
 mod command_buffer;
 mod command_queue;
 mod device;
@@ -19,6 +20,7 @@ mod texture;
 mod texture_cache;
 
 pub use backend::RhiBackend;
+pub use blitter::RhiBlitter;
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
 pub use device::GpuDevice;

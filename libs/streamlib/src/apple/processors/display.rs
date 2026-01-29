@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::frames::VideoFrame;
-use crate::core::rhi::{PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiTextureCache};
+use crate::core::rhi::{PixelFormat, RhiTextureCache};
 use crate::core::{Result, RuntimeContext, StreamError};
 use crossbeam_channel::{Receiver, Sender};
 use metal;
@@ -287,14 +286,12 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                         }
                     };
 
-                    // Convert IPC frame to VideoFrame by looking up surface via get_pixel_buffer
-                    // Uses local cache first, then broker lookup for cross-process sharing
-                    let pool_id = PixelBufferPoolId::from_str(&ipc_frame.surface_id);
-                    let buffer: RhiPixelBuffer = match gpu_context.get_pixel_buffer(&pool_id) {
+                    // Resolve buffer from surface_id using GpuContext
+                    let buffer = match gpu_context.resolve_videoframe_buffer(&ipc_frame) {
                         Ok(buf) => buf,
                         Err(e) => {
                             tracing::warn!(
-                                "Display {}: Failed to get pixel buffer for '{}': {}",
+                                "Display {}: Failed to resolve buffer for '{}': {}",
                                 window_id,
                                 ipc_frame.surface_id,
                                 e
@@ -303,22 +300,17 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                         }
                     };
 
-                    let timestamp_ns: i64 = ipc_frame.timestamp_ns.parse().unwrap_or(0);
-                    let frame_index: u64 = ipc_frame.frame_index.parse().unwrap_or(0);
-                    let frame = VideoFrame::from_buffer(buffer, timestamp_ns, frame_index);
-
                     // Now get drawable - this blocks for vsync when displaySyncEnabled=true
                     let Some(drawable) = metal_layer.nextDrawable() else {
                         continue;
                     };
 
-                    // Get Metal texture from frame buffer via texture cache
-                    let buffer = frame.buffer();
+                    // Get Metal texture from buffer via texture cache
                     let Some(ref cache) = texture_cache else {
                         tracing::warn!("Display {}: No texture cache available", window_id);
                         continue;
                     };
-                    let texture_view = match cache.create_view(buffer) {
+                    let texture_view = match cache.create_view(&buffer) {
                         Ok(view) => view,
                         Err(e) => {
                             tracing::warn!("Display {}: Failed to create texture view: {}", window_id, e);
@@ -376,6 +368,11 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
 
                         command_buffer.present_drawable(drawable_ref);
                         command_buffer.commit();
+
+                        // Wait for GPU to finish reading the source texture before releasing the buffer.
+                        // Without this, the camera can reacquire and overwrite the buffer while
+                        // the GPU is still reading from it, causing strobe/corruption artifacts.
+                        command_buffer.wait_until_completed();
                     }
                 }
 

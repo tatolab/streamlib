@@ -52,6 +52,18 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
         &custom_fields,
     );
 
+    // Generate unsafe Send impl if required (for !Send types like AVFoundation)
+    let unsafe_send_impl = if schema.runtime.options.unsafe_send {
+        quote! {
+            // SAFETY: This processor contains !Send types (e.g., AVFoundation objects)
+            // but is safe to send because these types are only accessed from a single
+            // thread after initialization. The processor lifecycle ensures thread safety.
+            unsafe impl Send for Processor {}
+        }
+    } else {
+        quote! {}
+    };
+
     // Auto-registration via inventory crate
     let inventory_submit = quote! {
         ::streamlib::inventory::submit! {
@@ -77,6 +89,8 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
             }
 
             #processor_struct
+
+            #unsafe_send_impl
 
             #input_link_module
 
@@ -204,6 +218,7 @@ fn generate_processor_struct_from_schema(
             #ipc_output_field
             #config_field
             #(#custom_field_defs)*
+            pub audio: ::streamlib::core::utils::ProcessorAudioConverter,
         }
     }
 }
@@ -408,6 +423,12 @@ fn generate_processor_impl_from_schema(
             #descriptor_impl
             #iceoryx2_accessors
 
+            fn get_audio_converter_status_arc(
+                &self,
+            ) -> Option<std::sync::Arc<std::sync::Mutex<::streamlib::core::utils::ProcessorAudioConverterStatus>>> {
+                Some(self.audio.status_arc())
+            }
+
             fn __generated_setup(&mut self, ctx: ::streamlib::core::RuntimeContext) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as #processor_trait>::setup(self, ctx)
             }
@@ -483,6 +504,7 @@ fn generate_from_config_from_schema(
                 #ipc_output_init
                 #config_init
                 #(#custom_field_inits)*
+                audio: ::streamlib::core::utils::ProcessorAudioConverter::new(),
             })
         }
     }

@@ -18,8 +18,9 @@ use clack_host::{
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 
 use super::scanner::ClapScanner;
+use crate::_generated_::Audioframe;
 use crate::core::clap::{ParameterInfo, PluginInfo};
-use crate::core::{AudioFrame, Result, StreamError};
+use crate::core::{Result, StreamError};
 
 use parking_lot::Mutex as ParkingLotMutex;
 use std::path::Path;
@@ -499,8 +500,8 @@ impl ClapPluginHost {
         Ok(())
     }
 
-    pub fn process_audio(&mut self, input: &AudioFrame) -> Result<AudioFrame> {
-        let num_samples = input.sample_count();
+    pub fn process_audio(&mut self, input: &Audioframe) -> Result<Audioframe> {
+        let num_samples = input.samples.len() / input.channels as usize;
 
         for i in 0..num_samples {
             let base_idx = i * 2; // 2 channels (stereo)
@@ -517,13 +518,13 @@ impl ClapPluginHost {
             output_samples.push(self.output_buffers[1][i]);
         }
 
-        Ok(AudioFrame::new(
-            output_samples,
-            input.channels,
-            input.timestamp_ns,
-            input.frame_number,
-            input.sample_rate,
-        ))
+        Ok(Audioframe {
+            samples: output_samples,
+            channels: input.channels,
+            timestamp_ns: input.timestamp_ns.clone(),
+            frame_index: input.frame_index.clone(),
+            sample_rate: input.sample_rate,
+        })
     }
 
     fn process_audio_channels_inplace(&mut self, num_samples: usize) -> Result<()> {

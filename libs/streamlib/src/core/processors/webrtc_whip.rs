@@ -8,51 +8,25 @@
 // - Opus audio encoding
 // - WHIP signaling and WebRTC session via WhipClient
 
-use crate::core::codec::VideoEncoder;
+use crate::_generated_::{Audioframe, Videoframe};
+use crate::core::codec::{H264Profile, VideoCodec, VideoEncoder};
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
     OpusEncoder, WhipClient, WhipConfig,
 };
 use crate::core::VideoEncoderConfig;
-use crate::core::{
-    media_clock::MediaClock, AudioFrame, GpuContext, LinkInput, Result, RuntimeContext,
-    StreamError, VideoFrame,
-};
-use serde::{Deserialize, Serialize};
-
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct WebRtcWhipConfig {
-    pub whip: WhipConfig,
-    pub video: VideoEncoderConfig,
-    pub audio: AudioEncoderConfig,
-}
+use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError};
 
 // ============================================================================
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor(
-    execution = Reactive,
-    description = "Streams video and audio via WebRTC WHIP"
-)]
+#[crate::processor("src/core/processors/webrtc_whip.yaml")]
 pub struct WebRtcWhipProcessor {
-    #[crate::input(description = "Input video frames to encode and stream")]
-    video_in: LinkInput<VideoFrame>,
-
-    #[crate::input(description = "Input audio frames to encode and stream")]
-    audio_in: LinkInput<AudioFrame>,
-
-    #[crate::config]
-    config: WebRtcWhipConfig,
-
     // RuntimeContext for tokio handle
     ctx: Option<RuntimeContext>,
 
-    // GPU context for video encoder
+    // GPU context for video encoder and buffer lookup
     gpu_context: Option<GpuContext>,
 
     // Session state
@@ -74,11 +48,24 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
         self.gpu_context = Some(ctx.gpu.clone());
         self.ctx = Some(ctx.clone());
 
-        // Initialize audio encoder
-        self.audio_encoder = Some(OpusEncoder::new(self.config.audio.clone())?);
+        // Convert generated config to AudioEncoderConfig
+        let audio_config = AudioEncoderConfig {
+            sample_rate: self.config.audio.sample_rate,
+            channels: self.config.audio.channels as u16,
+            bitrate_bps: self.config.audio.bitrate_bps,
+            frame_duration_ms: 20, // Standard Opus frame duration
+            complexity: 10,        // Maximum quality
+            vbr: true,             // Variable bitrate for better quality
+        };
+        self.audio_encoder = Some(OpusEncoder::new(audio_config)?);
 
-        // Create WHIP client
-        let whip_client = WhipClient::new(self.config.whip.clone())?;
+        // Convert generated config to WhipConfig
+        let whip_config = WhipConfig {
+            endpoint_url: self.config.whip.endpoint_url.clone(),
+            auth_token: self.config.whip.auth_token.clone(),
+            timeout_ms: self.config.whip.timeout_ms as u64,
+        };
+        let whip_client = WhipClient::new(whip_config)?;
         self.whip_client = Some(whip_client);
 
         tracing::info!("WebRtcWhipProcessor initialized (will connect on first frame)");
@@ -100,8 +87,34 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        let video_frame = self.video_in.read();
-        let audio_frame = self.audio_in.read();
+        // Read video and audio from IPC inputs
+        let has_video = self.inputs.has_data("video_in");
+        let video_frame: Option<Videoframe> = if has_video {
+            match self.inputs.read("video_in") {
+                Ok(frame) => Some(frame),
+                Err(e) => {
+                    tracing::warn!("[WebRTC] Failed to read video frame: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let audio_frame: Option<Audioframe> = if self.inputs.has_data("audio_in") {
+            self.inputs.read("audio_in").ok()
+        } else {
+            None
+        };
+
+        // Log what we received (debug level for visibility)
+        if has_video || video_frame.is_some() {
+            tracing::debug!(
+                "[WebRTC] process() - has_video={}, video_frame={}, audio={}",
+                has_video,
+                video_frame.is_some(),
+                audio_frame.is_some()
+            );
+        }
 
         // Start session on first frame
         if !self.session_started && (video_frame.is_some() || audio_frame.is_some()) {
@@ -111,8 +124,8 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
         }
 
         // Process video if available
-        if let Some(frame) = video_frame {
-            self.process_video_frame(&frame)?;
+        if let Some(ipc_frame) = video_frame {
+            self.process_video_ipc_frame(&ipc_frame)?;
         }
 
         // Process audio if available
@@ -145,11 +158,17 @@ impl WebRtcWhipProcessor::Processor {
                 .ctx
                 .as_ref()
                 .ok_or_else(|| StreamError::Runtime("RuntimeContext not available".into()))?;
-            self.video_encoder = Some(VideoEncoder::new(
-                self.config.video.clone(),
-                gpu_context,
-                ctx,
-            )?);
+            // Convert generated config to VideoEncoderConfig
+            let video_config = VideoEncoderConfig {
+                width: self.config.video.width,
+                height: self.config.video.height,
+                fps: self.config.video.fps,
+                bitrate_bps: self.config.video.bitrate_bps,
+                keyframe_interval_frames: 60, // Keyframe every 2 seconds at 30fps
+                codec: VideoCodec::H264(H264Profile::Baseline), // Baseline for WebRTC compatibility
+                low_latency: true,            // Real-time streaming mode
+            };
+            self.video_encoder = Some(VideoEncoder::new(video_config, gpu_context, ctx)?);
             tracing::info!("Video encoder initialized");
         }
 
@@ -170,18 +189,39 @@ impl WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    fn process_video_frame(&mut self, frame: &VideoFrame) -> Result<()> {
+    /// Process video frame received as IPC type (Videoframe).
+    fn process_video_ipc_frame(&mut self, ipc_frame: &Videoframe) -> Result<()> {
         if !self.session_started {
             return Ok(());
         }
 
+        // Get GPU context for buffer resolution
+        let gpu_context = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("GpuContext not available".into()))?;
+
+        // Encode directly from IPC frame (encoder resolves buffer via GpuContext)
         let encoder = self
             .video_encoder
             .as_mut()
             .ok_or_else(|| StreamError::Configuration("Video encoder not initialized".into()))?;
 
-        let encoded = encoder.encode(frame)?;
+        let encoded = match encoder.encode(ipc_frame, gpu_context) {
+            Ok(enc) => enc,
+            Err(e) => {
+                tracing::error!("[WebRTC] Video encode failed: {}", e);
+                return Err(e);
+            }
+        };
+
         let samples = convert_video_to_samples(&encoded, self.config.video.fps)?;
+        tracing::debug!(
+            "[WebRTC] Encoded video frame: {} NAL units, {} bytes, keyframe={}",
+            samples.len(),
+            encoded.data.len(),
+            encoded.is_keyframe
+        );
 
         let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
         let client = self.whip_client.as_mut().unwrap();
@@ -191,7 +231,7 @@ impl WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    fn process_audio_frame(&mut self, frame: &AudioFrame) -> Result<()> {
+    fn process_audio_frame(&mut self, frame: &Audioframe) -> Result<()> {
         if !self.session_started {
             return Ok(());
         }
@@ -252,22 +292,22 @@ impl WebRtcWhipProcessor::Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::_generated_::Encodedvideoframe;
     use crate::apple::videotoolbox::parse_nal_units;
     use crate::core::streaming::EncodedAudioFrame;
-    use crate::core::EncodedVideoFrame;
     use std::time::Duration;
 
     #[test]
     fn test_convert_video_to_samples() {
-        let encoded = EncodedVideoFrame {
+        let encoded = Encodedvideoframe {
             data: vec![
                 0, 0, 0, 1, 0x67, 0x42, // SPS
                 0, 0, 0, 1, 0x68, 0x43, // PPS
                 0, 0, 0, 1, 0x65, 0xAA, // IDR
             ],
-            timestamp_ns: 1_000_000_000,
+            timestamp_ns: "1000000000".to_string(),
             is_keyframe: true,
-            frame_number: 0,
+            frame_number: "0".to_string(),
         };
 
         let samples = convert_video_to_samples(&encoded, 30).unwrap();

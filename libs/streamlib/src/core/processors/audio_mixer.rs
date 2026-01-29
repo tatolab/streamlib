@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::com_tatolab_audio_mixer_config::Strategy;
-use crate::_generated_::{Audioframe1Ch, Audioframe2Ch};
-use crate::core::{Result, RuntimeContext};
+use crate::_generated_::Audioframe;
+use crate::core::{Result, RuntimeContext, StreamError};
 
 #[crate::processor("src/core/processors/audio_mixer.yaml")]
 pub struct AudioMixerProcessor {
@@ -42,8 +42,22 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             return Ok(());
         }
 
-        let left_frame: Audioframe1Ch = self.inputs.read("left")?;
-        let right_frame: Audioframe1Ch = self.inputs.read("right")?;
+        let left_frame: Audioframe = self.inputs.read("left")?;
+        let right_frame: Audioframe = self.inputs.read("right")?;
+
+        // Validate both inputs are mono (1 channel)
+        if left_frame.channels != 1 {
+            return Err(StreamError::Configuration(format!(
+                "AudioMixer expects mono left input (1 channel), got {} channels",
+                left_frame.channels
+            )));
+        }
+        if right_frame.channels != 1 {
+            return Err(StreamError::Configuration(format!(
+                "AudioMixer expects mono right input (1 channel), got {} channels",
+                right_frame.channels
+            )));
+        }
 
         if self.sample_rate == 0 {
             self.sample_rate = left_frame.sample_rate;
@@ -115,8 +129,9 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             stereo_samples.push(final_right);
         }
 
-        let output_frame = Audioframe2Ch {
+        let output_frame = Audioframe {
             samples: stereo_samples,
+            channels: 2, // Stereo output
             sample_rate: self.sample_rate,
             timestamp_ns,
             frame_index: self.frame_counter.to_string(),

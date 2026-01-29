@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, AudioFrame, GpuContext, LinkInput, Result, RuntimeContext,
-    StreamError, VideoFrame,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContext, Result, RuntimeContext, StreamError,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -16,7 +16,6 @@ use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{NSDictionary, NSNumber};
 use objc2_foundation::{NSString, NSURL};
 use objc2_io_surface::IOSurface;
-use std::path::PathBuf;
 use tracing::{debug, error, info, trace};
 
 // FFI bindings for CoreVideo functions
@@ -27,48 +26,8 @@ extern "C" {
     fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
 }
 
-/// Configuration for MP4 writer processor.
-#[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ConfigDescriptor,
-)]
-pub struct AppleMp4WriterConfig {
-    pub output_path: PathBuf,
-    pub sync_tolerance_ms: Option<f64>,
-    pub video_codec: Option<String>,
-    pub video_bitrate: Option<u32>,
-    pub audio_codec: Option<String>,
-    pub audio_bitrate: Option<u32>,
-}
-
-impl Default for AppleMp4WriterConfig {
-    fn default() -> Self {
-        Self {
-            output_path: PathBuf::from("/tmp/output.mp4"),
-            sync_tolerance_ms: None,
-            video_codec: Some("avc1".to_string()), // H.264
-            video_bitrate: Some(5_000_000),        // 5 Mbps
-            audio_codec: Some("aac".to_string()),
-            audio_bitrate: Some(128_000), // 128 kbps
-        }
-    }
-}
-
-#[crate::processor(
-    name = "Mp4WriterProcessor",
-    execution = Reactive,
-    description = "Writes stereo audio and video to MP4 file with A/V synchronization",
-    unsafe_send
-)]
+#[crate::processor("src/apple/processors/mp4_writer.yaml")]
 pub struct AppleMp4WriterProcessor {
-    #[crate::input(description = "Stereo audio frames to write to MP4")]
-    audio: LinkInput<AudioFrame>,
-
-    #[crate::input(description = "Video frames to write to MP4")]
-    video: LinkInput<VideoFrame>,
-
-    #[crate::config]
-    config: AppleMp4WriterConfig,
-
     // RuntimeContext for main thread dispatch
     ctx: Option<crate::core::RuntimeContext>,
 
@@ -79,7 +38,7 @@ pub struct AppleMp4WriterProcessor {
     pixel_buffer_adaptor: Option<Retained<AVAssetWriterInputPixelBufferAdaptor>>,
 
     // Runtime state
-    last_video_frame: Option<VideoFrame>,
+    last_video_frame: Option<Videoframe>,
     #[allow(dead_code)] // Reserved for A/V sync (future implementation)
     last_audio_timestamp_ns: i64,
     #[allow(dead_code)] // Reserved for A/V sync (future implementation)
@@ -96,7 +55,7 @@ pub struct AppleMp4WriterProcessor {
 
     // Latest frames for realtime streaming
     #[allow(dead_code)] // Reserved for realtime streaming mode
-    latest_video: Option<VideoFrame>,
+    latest_video: Option<Videoframe>,
 
     video_width: u32,
     video_height: u32,
@@ -111,6 +70,9 @@ pub struct AppleMp4WriterProcessor {
     // Track total audio samples written for timestamp calculation
     #[allow(dead_code)] // Reserved for audio timestamp calculation
     total_audio_samples_written: u64,
+
+    // Video-only mode: when no audio input is connected
+    video_only_mode: bool,
 
     // GPU context for texture conversion
     gpu_context: Option<GpuContext>,
@@ -152,110 +114,132 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
     fn process(&mut self) -> Result<()> {
         debug!("=== MP4Writer process() called ===");
 
-        // Wait for both audio and video connections before initializing
+        // Wait for first video frame to initialize writer (need dimensions)
         if self.writer.is_none() {
-            let audio_connected = self.audio.is_connected();
-            let video_connected = self.video.is_connected();
-
-            debug!(
-                "Connections: audio={}, video={}",
-                audio_connected, video_connected
-            );
-
-            if !audio_connected || !video_connected {
-                debug!(
-                    "Waiting for both connections (audio={}, video={})",
-                    audio_connected, video_connected
-                );
-                return Ok(());
-            }
-
-            // Both connected, now wait for first video frame to get dimensions
-            if let Some(first_video) = self.video.peek() {
-                info!(
-                    "🎬 INITIALIZING AVAssetWriter with video dimensions: {}x{}",
-                    first_video.width(),
-                    first_video.height()
-                );
-
-                // Initialize writer
-                self.initialize_writer()?;
-
-                // Configure video input with dimensions from first frame
-                self.configure_video_input(first_video.width(), first_video.height())?;
-                info!(
-                    "✅ VIDEO INPUT CONFIGURED: {}x{}",
-                    first_video.width(),
-                    first_video.height()
-                );
-
-                // Configure audio input
-                self.configure_audio_input()?;
-                info!("✅ AUDIO INPUT CONFIGURED");
-
-                // Start the writing session (all inputs configured)
-                let writer = self.writer.as_ref().ok_or_else(|| {
-                    StreamError::Configuration("AVAssetWriter not initialized".into())
-                })?;
-
-                info!("🎬 STARTING AVAssetWriter session...");
-                let started = unsafe { writer.startWriting() };
-                if !started {
-                    self.writer_failed = true;
-                    let error_msg = unsafe {
-                        writer
-                            .error()
-                            .map(|e| e.localizedDescription().to_string())
-                            .unwrap_or_else(|| "Unknown error".to_string())
-                    };
-                    return Err(StreamError::Configuration(format!(
-                        "Failed to start AVAssetWriter: {}",
-                        error_msg
-                    )));
-                }
-
-                // Get timestamps from both audio and video
-                let first_audio_ts = self.audio.peek().map(|a| a.timestamp_ns).unwrap_or(0);
-
-                // Video timestamp is already in nanoseconds
-                let first_video_ts = first_video.timestamp_ns;
-
-                // Use the FIRST VIDEO frame timestamp as the session start time
-                // This ensures audio and video start at the same point
-                // (we'll skip audio frames that came before the first video frame)
-                let session_start_ts = first_video_ts;
-
-                let start_time = unsafe { CMTime::new(0, 1_000_000_000) };
-                unsafe {
-                    writer.startSessionAtSourceTime(start_time);
-                }
-
-                // Set start_time_ns to the first video timestamp
-                self.start_time_ns = session_start_ts;
-                info!("✅ AVAssetWriter session started at time 0");
-                info!(
-                    "   Audio first frame: {}ns ({:.6}s)",
-                    first_audio_ts,
-                    first_audio_ts as f64 / 1_000_000_000.0
-                );
-                info!(
-                    "   Video first frame: {}ns ({:.6}s)",
-                    first_video_ts,
-                    first_video_ts as f64 / 1_000_000_000.0
-                );
-                info!(
-                    "   Session start:     {}ns ({:.6}s) [synced to first video frame]",
-                    session_start_ts,
-                    session_start_ts as f64 / 1_000_000_000.0
-                );
-            } else {
+            // Check if we have video data to read
+            if !self.inputs.has_data("video") {
                 debug!("Waiting for first video frame to get dimensions");
                 return Ok(());
             }
+
+            // Read the first video frame to get dimensions
+            let first_video = self.read_video_frame()?;
+            info!(
+                "🎬 INITIALIZING AVAssetWriter with video dimensions: {}x{}",
+                first_video.width, first_video.height
+            );
+
+            // Initialize writer
+            self.initialize_writer()?;
+
+            // Configure video input with dimensions from first frame
+            self.configure_video_input(first_video.width, first_video.height)?;
+            info!(
+                "✅ VIDEO INPUT CONFIGURED: {}x{}",
+                first_video.width, first_video.height
+            );
+
+            // Check if audio is available - if not, we're in video-only mode
+            // We check multiple times with small delays to give audio a chance to arrive
+            let has_audio_data = self.inputs.has_data("audio");
+            if !has_audio_data {
+                info!("No audio input connected - running in VIDEO-ONLY mode");
+                self.video_only_mode = true;
+            } else {
+                // Configure audio input only if audio is connected
+                self.configure_audio_input()?;
+                info!("✅ AUDIO INPUT CONFIGURED");
+            }
+
+            // Start the writing session (all inputs configured)
+            let writer = self.writer.as_ref().ok_or_else(|| {
+                StreamError::Configuration("AVAssetWriter not initialized".into())
+            })?;
+
+            info!("🎬 STARTING AVAssetWriter session...");
+            let started = unsafe { writer.startWriting() };
+            if !started {
+                self.writer_failed = true;
+                let error_msg = unsafe {
+                    writer
+                        .error()
+                        .map(|e| e.localizedDescription().to_string())
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                };
+                return Err(StreamError::Configuration(format!(
+                    "Failed to start AVAssetWriter: {}",
+                    error_msg
+                )));
+            }
+
+            // Parse video timestamp from string
+            let first_video_ts: i64 = first_video.timestamp_ns.parse().unwrap_or(0);
+
+            // Use the FIRST VIDEO frame timestamp as the session start time
+            // This ensures audio and video start at the same point
+            // (we'll skip audio frames that came before the first video frame)
+            let session_start_ts = first_video_ts;
+
+            let start_time = unsafe { CMTime::new(0, 1_000_000_000) };
+            unsafe {
+                writer.startSessionAtSourceTime(start_time);
+            }
+
+            // Set start_time_ns to the first video timestamp
+            self.start_time_ns = session_start_ts;
+            info!("✅ AVAssetWriter session started at time 0");
+            info!(
+                "   Video first frame: {}ns ({:.6}s)",
+                first_video_ts,
+                first_video_ts as f64 / 1_000_000_000.0
+            );
+            info!(
+                "   Session start:     {}ns ({:.6}s) [synced to first video frame]",
+                session_start_ts,
+                session_start_ts as f64 / 1_000_000_000.0
+            );
+
+            // Store the first video frame
+            self.last_video_frame = Some(first_video);
         }
 
-        // Check if we have any audio frames to process
-        let has_audio = self.audio.peek().is_some();
+        // Video-only mode: process video frames directly without waiting for audio
+        if self.video_only_mode {
+            while self.inputs.has_data("video") {
+                let video = self.read_video_frame()?;
+                let frame_index: u64 = video.frame_index.parse().unwrap_or(0);
+
+                // Check if this is a new video frame (not already written)
+                let should_write = match self.last_written_video_frame_number {
+                    None => true,
+                    Some(last_num) => frame_index != last_num,
+                };
+
+                if should_write {
+                    let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
+                    let video_relative_ns = video_timestamp_ns - self.start_time_ns;
+
+                    let mut video_to_write = video.clone();
+                    video_to_write.timestamp_ns = video_relative_ns.to_string();
+
+                    debug!(
+                        "Writing video (video-only): frame_index={}, relative_ts={:.6}s",
+                        frame_index,
+                        video_relative_ns as f64 / 1_000_000_000.0
+                    );
+
+                    self.write_video_frame(&video_to_write)?;
+                    self.last_written_video_frame_number = Some(frame_index);
+                    self.frames_written += 1;
+                }
+
+                self.last_video_frame = Some(video);
+            }
+            return Ok(());
+        }
+
+        // Audio+Video mode: process audio frames with paired video
+        let has_audio = self.inputs.has_data("audio");
         debug!("has_audio = {}", has_audio);
 
         if !has_audio {
@@ -264,33 +248,34 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
         }
 
         // Process every audio frame immediately
-        while let Some(audio) = self.audio.read() {
+        while self.inputs.has_data("audio") {
+            let audio: Audioframe = self.inputs.read("audio")?;
+            let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
+            let sample_count = audio.samples.len() / audio.channels as usize;
             trace!(
                 "Processing audio frame: timestamp_ns={}, sample_count={}, channels={}",
-                audio.timestamp_ns,
-                audio.sample_count(),
-                audio.channels()
+                audio_timestamp_ns,
+                sample_count,
+                audio.channels
             );
 
             // IMPORTANT: Check for new video frame for EACH audio frame
-            if let Some(video) = self.video.read() {
+            if self.inputs.has_data("video") {
+                let video = self.read_video_frame()?;
                 debug!(
-                    "New video frame received: timestamp_ns={}, frame_number={}, size={}x{}",
-                    video.timestamp_ns,
-                    video.frame_number,
-                    video.width(),
-                    video.height()
+                    "New video frame received: timestamp_ns={}, frame_index={}, size={}x{}",
+                    video.timestamp_ns, video.frame_index, video.width, video.height
                 );
                 self.last_video_frame = Some(video);
             }
 
             // Use capture timestamp (same clock as video) and make it relative to start
             // This keeps audio and video on the same time base
-            let audio_relative_ns = audio.timestamp_ns - self.start_time_ns;
+            let audio_relative_ns = audio_timestamp_ns - self.start_time_ns;
 
             trace!(
                 "Audio timestamps: original={}ns, start={}ns, relative={}ns ({:.6}s)",
-                audio.timestamp_ns,
+                audio_timestamp_ns,
                 self.start_time_ns,
                 audio_relative_ns,
                 audio_relative_ns as f64 / 1_000_000_000.0
@@ -307,13 +292,13 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
             // Write audio frame independently
             let mut audio_to_write = audio.clone();
-            audio_to_write.timestamp_ns = audio_relative_ns;
+            audio_to_write.timestamp_ns = audio_relative_ns.to_string();
             trace!(
                 "Writing audio: timestamp={}ns ({:.6}s), samples={}, channels={}",
-                audio_to_write.timestamp_ns,
-                audio_to_write.timestamp_ns as f64 / 1_000_000_000.0,
-                audio_to_write.sample_count(),
-                audio_to_write.channels()
+                audio_relative_ns,
+                audio_relative_ns as f64 / 1_000_000_000.0,
+                sample_count,
+                audio.channels
             );
 
             self.write_audio_frame(&audio_to_write)?;
@@ -321,27 +306,29 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             // Write video frame independently if available (only write each frame once)
             if let Some(last_video) = self.last_video_frame.clone() {
                 // Check if this is a new video frame (not already written)
+                let frame_index: u64 = last_video.frame_index.parse().unwrap_or(0);
                 let should_write = match self.last_written_video_frame_number {
-                    None => true,                                          // First video frame
-                    Some(last_num) => last_video.frame_number != last_num, // New frame
+                    None => true,                              // First video frame
+                    Some(last_num) => frame_index != last_num, // New frame
                 };
 
                 if should_write {
                     // Calculate relative timestamp from video frame
-                    // Both timestamps are now in nanoseconds
-                    let video_relative_ns = last_video.timestamp_ns - self.start_time_ns;
+                    // Parse timestamp from string and make relative
+                    let video_timestamp_ns: i64 = last_video.timestamp_ns.parse().unwrap_or(0);
+                    let video_relative_ns = video_timestamp_ns - self.start_time_ns;
                     let video_timestamp_s = video_relative_ns as f64 / 1_000_000_000.0;
 
                     let mut video_to_write = last_video.clone();
-                    video_to_write.timestamp_ns = video_relative_ns;
+                    video_to_write.timestamp_ns = video_relative_ns.to_string();
 
                     debug!(
-                        "Writing video: frame_number={}, relative_ts={:.6}s",
-                        video_to_write.frame_number, video_timestamp_s
+                        "Writing video: frame_index={}, relative_ts={:.6}s",
+                        video_to_write.frame_index, video_timestamp_s
                     );
 
                     self.write_video_frame(&video_to_write)?;
-                    self.last_written_video_frame_number = Some(last_video.frame_number);
+                    self.last_written_video_frame_number = Some(frame_index);
                 }
             }
         }
@@ -367,15 +354,21 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 }
 
 impl AppleMp4WriterProcessor::Processor {
+    /// Read a video frame from inputs (IPC Videoframe).
+    fn read_video_frame(&self) -> Result<Videoframe> {
+        let ipc_video: Videoframe = self.inputs.read("video")?;
+        Ok(ipc_video)
+    }
+
     fn initialize_writer(&mut self) -> Result<()> {
-        info!("Initializing MP4 writer for: {:?}", self.config.output_path);
+        info!("Initializing MP4 writer for: {}", self.config.output_path);
 
         let ctx = self
             .ctx
             .as_ref()
             .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
 
-        let path_str = self.config.output_path.to_string_lossy().to_string();
+        let path_str = self.config.output_path.clone();
         let video_codec = self
             .config
             .video_codec
@@ -766,7 +759,10 @@ impl AppleMp4WriterProcessor::Processor {
     }
 
     #[allow(dead_code)]
-    fn write_synced_frame(&mut self, audio: AudioFrame, video: VideoFrame) -> Result<()> {
+    fn write_synced_frame(&mut self, audio: Audioframe, video: Videoframe) -> Result<()> {
+        let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
+        let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
+
         // Initialize AVAssetWriter on first frame (lazy initialization)
         if self.writer.is_none() {
             self.initialize_writer()?;
@@ -774,7 +770,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Configure video input on first video frame
         if self.video_input.is_none() {
-            self.configure_video_input(video.width(), video.height())?;
+            self.configure_video_input(video.width, video.height)?;
         }
 
         // Configure audio input on first audio frame
@@ -810,19 +806,19 @@ impl AppleMp4WriterProcessor::Processor {
             }
 
             // Start session at source time (use audio timestamp as reference)
-            let start_time = unsafe { CMTime::new(audio.timestamp_ns, 1_000_000_000) };
+            let start_time = unsafe { CMTime::new(audio_timestamp_ns, 1_000_000_000) };
 
             unsafe {
                 writer.startSessionAtSourceTime(start_time);
             }
 
             // Set start time
-            self.start_time_ns = audio.timestamp_ns;
+            self.start_time_ns = audio_timestamp_ns;
             self.start_time_set = true;
 
             info!(
                 "AVAssetWriter session started at timestamp {}ns",
-                audio.timestamp_ns
+                audio_timestamp_ns
             );
         }
 
@@ -844,22 +840,22 @@ impl AppleMp4WriterProcessor::Processor {
         // No sync logic - just write every audio frame with paired video frame
         debug!(
             "Writing frames: video={:.3}s audio={:.3}s",
-            video.timestamp_ns as f64 / 1_000_000_000.0,
-            audio.timestamp_ns as f64 / 1_000_000_000.0
+            video_timestamp_ns as f64 / 1_000_000_000.0,
+            audio_timestamp_ns as f64 / 1_000_000_000.0
         );
 
         self.write_video_frame(&video)?;
         self.write_audio_frame(&audio)?;
 
         self.last_video_frame = Some(video.clone());
-        self.last_video_timestamp = video.timestamp_ns as f64 / 1_000_000_000.0;
-        self.last_audio_timestamp_ns = audio.timestamp_ns;
+        self.last_video_timestamp = video_timestamp_ns as f64 / 1_000_000_000.0;
+        self.last_audio_timestamp_ns = audio_timestamp_ns;
         self.frames_written += 1;
 
         Ok(())
     }
 
-    fn write_video_frame(&self, frame: &VideoFrame) -> Result<()> {
+    fn write_video_frame(&self, frame: &Videoframe) -> Result<()> {
         let pixel_buffer_adaptor = self.pixel_buffer_adaptor.as_ref().ok_or_else(|| {
             StreamError::Configuration("Pixel buffer adaptor not initialized".into())
         })?;
@@ -880,23 +876,30 @@ impl AppleMp4WriterProcessor::Processor {
             StreamError::Configuration("PixelTransferSession not initialized".into())
         })?;
 
+        let gpu_context = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+
+        // Resolve buffer from surface_id
+        let buffer = gpu_context.resolve_videoframe_buffer(frame)?;
+
         // Step 1: GPU-accelerated conversion to NV12 using VTPixelTransferSession
-        // This creates a new NV12 CVPixelBuffer from the buffer-backed VideoFrame
-        let nv12_pixel_buffer_ptr = pixel_transfer.convert_buffer_to_nv12(frame.buffer())?;
+        let nv12_pixel_buffer_ptr = pixel_transfer.convert_buffer_to_nv12(&buffer)?;
 
         // Wrap in Retained for automatic memory management
         let pixel_buffer = unsafe { objc2::rc::Retained::from_raw(nv12_pixel_buffer_ptr).unwrap() };
 
         // Step 2: Create CMTime for presentation timestamp
-        let timestamp_ns = frame.timestamp_ns;
+        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
         let presentation_time = unsafe { CMTime::new(timestamp_ns, 1_000_000_000) };
 
         trace!(
             "Appending video to AVAssetWriter: timestamp={:.6}s ({}ns), size={}x{}",
             timestamp_ns as f64 / 1_000_000_000.0,
             timestamp_ns,
-            frame.width(),
-            frame.height()
+            frame.width,
+            frame.height
         );
 
         // Step 3: Append pixel buffer to adaptor
@@ -915,7 +918,7 @@ impl AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn write_audio_frame(&self, frame: &AudioFrame) -> Result<()> {
+    fn write_audio_frame(&self, frame: &Audioframe) -> Result<()> {
         let audio_input = self
             .audio_input
             .as_ref()
@@ -928,11 +931,11 @@ impl AppleMp4WriterProcessor::Processor {
             return Ok(());
         }
 
-        // AudioFrame stores samples as Vec<f32> with interleaved channels
+        // Audioframe stores samples as Vec<f32> with interleaved channels
         // We need to convert f32 → i16 PCM for LPCM format
         let total_samples = frame.samples.len();
-        let num_channels = frame.channels();
-        let num_samples_per_channel = frame.sample_count(); // This is samples.len() / CHANNELS
+        let num_channels = frame.channels as usize;
+        let num_samples_per_channel = total_samples / num_channels;
 
         info!("Writing audio frame: sample_rate={}, channels={}, total_samples={}, num_frames={}, duration_ms={:.2}",
             frame.sample_rate, num_channels, total_samples, num_samples_per_channel,
@@ -1013,7 +1016,8 @@ impl AppleMp4WriterProcessor::Processor {
 
         // Create timing info
         use objc2_core_media::CMTime;
-        let presentation_time = unsafe { CMTime::new(frame.timestamp_ns, 1_000_000_000) };
+        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
+        let presentation_time = unsafe { CMTime::new(timestamp_ns, 1_000_000_000) };
 
         let _duration = unsafe {
             CMTime::new(
@@ -1161,7 +1165,7 @@ impl AppleMp4WriterProcessor::Processor {
         };
 
         trace!("Appending audio to AVAssetWriter: timestamp={}ns ({:.6}s), samples={}, channels={}, rate={}Hz",
-            frame.timestamp_ns, frame.timestamp_ns as f64 / 1_000_000_000.0,
+            timestamp_ns, timestamp_ns as f64 / 1_000_000_000.0,
             num_samples_per_channel, num_channels, frame.sample_rate);
 
         // Append to audio input
@@ -1177,7 +1181,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         debug!(
             "Wrote audio frame: {} samples per channel at timestamp {}ns",
-            num_samples_per_channel, frame.timestamp_ns
+            num_samples_per_channel, timestamp_ns
         );
 
         // Keep data alive until sample buffer is appended
@@ -1228,27 +1232,28 @@ impl AppleMp4WriterProcessor::Processor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::_generated_::Mp4WriterConfig;
 
     #[test]
     fn test_mp4_writer_config_default() {
-        let config = AppleMp4WriterConfig::default();
-        assert_eq!(config.output_path, PathBuf::from("/tmp/output.mp4"));
+        let config = Mp4WriterConfig::default();
+        // Generated config has no default for output_path (it's required)
+        assert_eq!(config.output_path, "");
         assert_eq!(config.sync_tolerance_ms, None);
-        assert_eq!(config.video_codec, Some("avc1".to_string()));
-        assert_eq!(config.video_bitrate, Some(5_000_000));
+        assert_eq!(config.video_codec, None);
+        assert_eq!(config.video_bitrate, None);
     }
 
     #[test]
     fn test_mp4_writer_config_custom() {
-        let config = AppleMp4WriterConfig {
-            output_path: PathBuf::from("/tmp/test.mp4"),
+        let config = Mp4WriterConfig {
+            output_path: "/tmp/test.mp4".to_string(),
             sync_tolerance_ms: Some(33.3),
             video_bitrate: Some(10_000_000),
             ..Default::default()
         };
 
-        assert_eq!(config.output_path, PathBuf::from("/tmp/test.mp4"));
+        assert_eq!(config.output_path, "/tmp/test.mp4");
         assert_eq!(config.sync_tolerance_ms, Some(33.3));
         assert_eq!(config.video_bitrate, Some(10_000_000));
     }

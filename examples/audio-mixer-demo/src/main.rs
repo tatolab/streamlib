@@ -6,7 +6,6 @@
 //! Demonstrates mixing multiple audio streams using AudioMixerProcessor.
 //! Creates three test tones at different frequencies and mixes them into a chord.
 
-use streamlib::core::{AudioOutputConfig, ChordGeneratorConfig};
 use streamlib::{
     input, output, AudioOutputProcessor, ChordGeneratorProcessor, Result, StreamRuntime,
 };
@@ -27,8 +26,13 @@ fn main() -> Result<()> {
     println!("🎹 Adding chord generator (C major chord)...");
     println!("   Generates stereo output with C4 + E4 + G4 pre-mixed");
 
-    let chord_gen = runtime.add_processor(ChordGeneratorProcessor::Processor::node(
-        ChordGeneratorConfig::default(),
+    let chord_gen = runtime.add_processor(ChordGeneratorProcessor::node(
+        ChordGeneratorProcessor::Config {
+            // sample_rate and buffer_size now come from AudioClock (48kHz, 512 samples)
+            sample_rate: 0, // Ignored - uses AudioClock
+            buffer_size: 0, // Ignored - uses AudioClock
+            amplitude: 0.3, // Moderate volume (3 tones will sum)
+        },
     ))?;
     println!("   ✅ C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)");
     println!("   ✅ Pre-mixed stereo output on port 'chord'");
@@ -37,7 +41,7 @@ fn main() -> Result<()> {
     // Step 3: Add speaker output
     println!("🔊 Adding speaker output...");
     let speaker =
-        runtime.add_processor(AudioOutputProcessor::Processor::node(AudioOutputConfig {
+        runtime.add_processor(AudioOutputProcessor::node(AudioOutputProcessor::Config {
             device_id: None, // Use default speaker
         }))?;
     println!("   Using default audio device\n");
@@ -60,10 +64,10 @@ fn main() -> Result<()> {
     println!("   • Chord Generator (3 tones pre-mixed: C4 + E4 + G4)");
     println!("     └─ Output 'chord' (stereo with all 3 tones mixed)");
     println!("   • ChordGen → Speaker (direct connection)\n");
-    println!("⏰ Clock Synchronization:");
-    println!("   • All 3 tones generated and mixed in single callback");
-    println!("   • Zero mixing overhead - pre-mixed stereo output");
-    println!("   • Demonstrates single-output source pattern\n");
+    println!("⏰ AudioClock Synchronization:");
+    println!("   • ChordGenerator syncs to runtime's AudioClock (48kHz, 512 samples/tick)");
+    println!("   • All 3 tones generated in AudioClock tick callbacks");
+    println!("   • AudioOutput resamples to device's native rate if needed\n");
     println!("📡 Event-driven architecture:");
     println!("   • No FPS parameter in runtime");
     println!("   • Hardware sources drive the clock");

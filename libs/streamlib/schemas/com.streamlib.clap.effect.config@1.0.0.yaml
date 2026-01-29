@@ -13,10 +13,6 @@ properties:
     metadata:
       description: "Path to the CLAP plugin file"
     type: string
-  sample_rate:
-    metadata:
-      description: "Audio sample rate in Hz"
-    type: uint32
   buffer_size:
     metadata:
       description: "Processing buffer size in samples"

@@ -9,44 +9,22 @@
 // - Opus audio decoding
 // - WHEP signaling and WebRTC session via WhepClient
 
+use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::VideoDecoder;
 use crate::core::streaming::{H264RtpDepacketizer, OpusDecoder, RtpSample, WhepClient, WhepConfig};
-use crate::core::{
-    media_clock::MediaClock, AudioFrame, LinkOutput, Result, RuntimeContext, StreamError,
-    VideoFrame,
-};
+use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError};
+use crate::iceoryx2::OutputWriter;
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::sync::Arc;
 use tokio::sync::mpsc;
-
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize, crate::ConfigDescriptor)]
-pub struct WebRtcWhepConfig {
-    pub whep: WhepConfig,
-}
 
 // ============================================================================
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor(
-    execution = Manual,
-    description = "Receives video and audio from WHEP endpoint (WebRTC egress)"
-)]
+#[crate::processor("src/core/processors/webrtc_whep.yaml")]
 pub struct WebRtcWhepProcessor {
-    #[crate::output(description = "Output video frames (decoded H.264)")]
-    video_out: LinkOutput<VideoFrame>,
-
-    #[crate::output(description = "Output audio frames (decoded Opus, stereo)")]
-    audio_out: LinkOutput<AudioFrame>,
-
-    #[crate::config]
-    config: WebRtcWhepConfig,
-
     // RuntimeContext for tokio handle
     ctx: Option<RuntimeContext>,
 
@@ -70,8 +48,15 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         self.ctx = Some(ctx);
 
         async move {
+            // Convert generated config to WhepConfig
+            let whep_config = WhepConfig {
+                endpoint_url: self.config.whep.endpoint_url.clone(),
+                auth_token: self.config.whep.auth_token.clone(),
+                timeout_ms: self.config.whep.timeout_ms as u64,
+            };
+
             // Create and connect WHEP client
-            let mut whep_client = WhepClient::new(self.config.whep.clone())?;
+            let mut whep_client = WhepClient::new(whep_config)?;
             whep_client.connect().await?;
 
             // Get audio configuration from SDP negotiation
@@ -144,9 +129,8 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
             .take_audio_rx()
             .ok_or_else(|| StreamError::Runtime("Audio receiver not available".into()))?;
 
-        // Clone output ports for the async task
-        let video_out = self.video_out.clone();
-        let audio_out = self.audio_out.clone();
+        // Clone output writer for the async task
+        let outputs = self.outputs.clone();
 
         // Take audio decoder (video decoder initialized lazily on SPS/PPS)
         let audio_decoder = self.audio_decoder.take();
@@ -158,15 +142,18 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         // Clone ctx for the async task (we need the handle to spawn, and ctx inside the task)
         let ctx_for_task = ctx.clone();
 
+        // Get GpuContext for buffer pooling in video decode
+        let gpu_context = ctx.gpu.clone();
+
         // Spawn the async receive loop
         ctx.tokio_handle().spawn(async move {
             run_receive_loop(
                 video_rx,
                 audio_rx,
-                video_out,
-                audio_out,
+                outputs,
                 audio_decoder,
                 ctx_for_task,
+                gpu_context,
                 shutdown_rx,
             )
             .await;
@@ -194,13 +181,13 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
 async fn run_receive_loop(
     mut video_rx: mpsc::Receiver<RtpSample>,
     mut audio_rx: mpsc::Receiver<RtpSample>,
-    video_out: LinkOutput<VideoFrame>,
-    audio_out: LinkOutput<AudioFrame>,
+    outputs: Arc<OutputWriter>,
     audio_decoder: Option<OpusDecoder>,
     ctx: RuntimeContext,
+    gpu_context: GpuContext,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let mut video_state = VideoDecodeState::new(ctx);
+    let mut video_state = VideoDecodeState::new(ctx, gpu_context);
     let mut audio_state = AudioDecodeState::new(audio_decoder);
 
     loop {
@@ -211,12 +198,16 @@ async fn run_receive_loop(
             }
             Some(sample) = video_rx.recv() => {
                 if let Some(frame) = video_state.process_sample(sample) {
-                    video_out.write(frame);
+                    if let Err(e) = outputs.write("video", &frame) {
+                        tracing::warn!("[WebRtcWhepProcessor] Failed to write video frame: {}", e);
+                    }
                 }
             }
             Some(sample) = audio_rx.recv() => {
                 if let Some(frame) = audio_state.process_sample(sample) {
-                    audio_out.write(frame);
+                    if let Err(e) = outputs.write("audio", &frame) {
+                        tracing::warn!("[WebRtcWhepProcessor] Failed to write audio frame: {}", e);
+                    }
                 }
             }
             else => {
@@ -235,6 +226,7 @@ async fn run_receive_loop(
 /// State for video decoding in the async task.
 struct VideoDecodeState {
     ctx: RuntimeContext,
+    gpu_context: GpuContext,
     decoder: Option<VideoDecoder>,
     h264_depacketizer: H264RtpDepacketizer,
     video_seq_counter: u16,
@@ -244,9 +236,10 @@ struct VideoDecodeState {
 }
 
 impl VideoDecodeState {
-    fn new(ctx: RuntimeContext) -> Self {
+    fn new(ctx: RuntimeContext, gpu_context: GpuContext) -> Self {
         Self {
             ctx,
+            gpu_context,
             decoder: None,
             h264_depacketizer: H264RtpDepacketizer::new(),
             video_seq_counter: 0,
@@ -256,7 +249,7 @@ impl VideoDecodeState {
         }
     }
 
-    fn process_sample(&mut self, sample: RtpSample) -> Option<VideoFrame> {
+    fn process_sample(&mut self, sample: RtpSample) -> Option<Videoframe> {
         // Depacketize RTP payload to NAL units
         let seq_num = self.video_seq_counter;
         self.video_seq_counter = self.video_seq_counter.wrapping_add(1);
@@ -283,7 +276,7 @@ impl VideoDecodeState {
         result_frame
     }
 
-    fn process_nal_unit(&mut self, nal: Bytes) -> Option<VideoFrame> {
+    fn process_nal_unit(&mut self, nal: Bytes) -> Option<Videoframe> {
         if nal.is_empty() {
             return None;
         }
@@ -331,8 +324,9 @@ impl VideoDecodeState {
                 annex_b.extend_from_slice(&nal);
                 let nal_data = Bytes::from(annex_b);
 
-                match decoder.decode(&nal_data, timestamp_ns) {
-                    Ok(Some(video_frame)) => {
+                // Decoder returns Videoframe directly (handles buffer pooling internally)
+                match decoder.decode(&nal_data, timestamp_ns, &self.gpu_context) {
+                    Ok(Some(ipc_frame)) => {
                         self.frame_count += 1;
 
                         if self.frame_count.is_multiple_of(30) {
@@ -341,7 +335,7 @@ impl VideoDecodeState {
                                 self.frame_count
                             );
                         }
-                        return Some(video_frame);
+                        return Some(ipc_frame);
                     }
                     Ok(None) => {
                         // Decoder needs more data
@@ -412,7 +406,7 @@ impl AudioDecodeState {
         }
     }
 
-    fn process_sample(&mut self, sample: RtpSample) -> Option<AudioFrame> {
+    fn process_sample(&mut self, sample: RtpSample) -> Option<Audioframe> {
         let decoder = self.decoder.as_mut()?;
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
 

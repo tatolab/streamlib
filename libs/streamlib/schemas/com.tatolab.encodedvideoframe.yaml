@@ -1,0 +1,30 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for encoded video frames
+
+metadata:
+  name: com.tatolab.encodedvideoframe
+  version: 1.0.0
+  description: "Encoded video frame with H.264/H.265 NAL unit data"
+  read_mode: skip_to_latest
+  buffer_size: 8
+
+properties:
+  data:
+    metadata:
+      description: "Encoded NAL units (H.264/H.265 bitstream data)"
+    elements:
+      type: uint8
+  timestamp_ns:
+    metadata:
+      description: "Monotonic timestamp in nanoseconds (int64 as string)"
+    type: string
+  is_keyframe:
+    metadata:
+      description: "Whether this is a keyframe (I-frame)"
+    type: boolean
+  frame_number:
+    metadata:
+      description: "Sequential frame number (uint64 as string)"
+    type: string

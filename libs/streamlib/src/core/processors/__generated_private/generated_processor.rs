@@ -134,4 +134,12 @@ pub trait GeneratedProcessor: Send + 'static {
             "stop() is only valid for Manual execution mode".into(),
         ))
     }
+
+    /// Returns the shared audio converter status Arc, if this processor has one.
+    fn get_audio_converter_status_arc(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::core::utils::ProcessorAudioConverterStatus>>>
+    {
+        None
+    }
 }

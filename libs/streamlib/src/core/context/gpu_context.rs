@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::_generated_::Videoframe;
 use crate::core::rhi::{
-    CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat,
+    CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
     RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool,
 };
 use crate::core::{Result, StreamError};
@@ -11,6 +12,33 @@ use std::sync::{Arc, Mutex};
 
 /// Number of buffers to pre-allocate per pool.
 const POOL_PRE_ALLOCATE_COUNT: usize = 8;
+
+/// No-op blitter for non-macOS platforms.
+#[cfg(not(target_os = "macos"))]
+struct NoOpBlitter;
+
+#[cfg(not(target_os = "macos"))]
+impl RhiBlitter for NoOpBlitter {
+    fn blit_copy(&self, _src: &RhiPixelBuffer, _dest: &RhiPixelBuffer) -> Result<()> {
+        Err(StreamError::NotSupported(
+            "Blitter not supported on this platform".into(),
+        ))
+    }
+
+    unsafe fn blit_copy_iosurface_raw(
+        &self,
+        _src: *const std::ffi::c_void,
+        _dest: &RhiPixelBuffer,
+        _width: u32,
+        _height: u32,
+    ) -> Result<()> {
+        Err(StreamError::NotSupported(
+            "Blitter not supported on this platform".into(),
+        ))
+    }
+
+    fn clear_cache(&self) {}
+}
 
 use super::surface_store::SurfaceStore;
 use super::texture_pool::{
@@ -233,6 +261,8 @@ pub struct GpuContext {
     /// Surface store for cross-process GPU surface sharing (macOS only).
     /// Set during runtime.start(), None before that.
     surface_store: Arc<Mutex<Option<SurfaceStore>>>,
+    /// GPU blitter for efficient buffer-to-buffer copies with texture caching.
+    blitter: Arc<dyn RhiBlitter>,
 }
 
 impl GpuContext {
@@ -240,11 +270,13 @@ impl GpuContext {
     pub fn new(device: GpuDevice) -> Self {
         let device = Arc::new(device);
         let texture_pool = TexturePool::new(Arc::clone(&device));
+        let blitter = Self::create_blitter(&device);
         Self {
             device,
             texture_pool,
             pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
             surface_store: Arc::new(Mutex::new(None)),
+            blitter,
         }
     }
 
@@ -252,12 +284,26 @@ impl GpuContext {
     pub fn with_texture_pool_config(device: GpuDevice, pool_config: TexturePoolConfig) -> Self {
         let device = Arc::new(device);
         let texture_pool = TexturePool::with_config(Arc::clone(&device), pool_config);
+        let blitter = Self::create_blitter(&device);
         Self {
             device,
             texture_pool,
             pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
             surface_store: Arc::new(Mutex::new(None)),
+            blitter,
         }
+    }
+
+    /// Create platform-specific blitter.
+    #[cfg(target_os = "macos")]
+    fn create_blitter(device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
+        let command_queue = device.command_queue().clone();
+        Arc::new(crate::metal::rhi::MetalBlitter::new(command_queue))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn create_blitter(_device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
+        Arc::new(NoOpBlitter)
     }
 
     /// Acquire a pixel buffer from the shared pool.
@@ -312,6 +358,12 @@ impl GpuContext {
             .cache_buffer(pool_id.as_str(), buffer.clone());
 
         Ok(buffer)
+    }
+
+    /// Resolve a Videoframe's buffer from its surface_id.
+    pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
+        let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
+        self.get_pixel_buffer(&pool_id)
     }
 
     /// Get a reference to the RHI GPU device.
@@ -393,6 +445,39 @@ impl GpuContext {
         let device_ptr = self.metal_device().device() as *const _ as *mut std::ffi::c_void;
         let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
         crate::core::rhi::RhiTextureCache::new_metal(metal_device_ref)
+    }
+
+    // =========================================================================
+    // GPU Blit Operations
+    // =========================================================================
+
+    /// Copy pixels between same-format, same-size buffers.
+    ///
+    /// Uses GPU blit with texture caching for efficient repeated copies.
+    pub fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+        self.blitter.blit_copy(src, dest)
+    }
+
+    /// Copy from raw IOSurface to a pixel buffer.
+    ///
+    /// # Safety
+    /// - `src` must be a valid IOSurfaceRef pointer
+    /// - The IOSurface must remain valid for the duration of the blit
+    #[cfg(target_os = "macos")]
+    pub unsafe fn blit_copy_iosurface(
+        &self,
+        src: crate::apple::corevideo_ffi::IOSurfaceRef,
+        dest: &RhiPixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        self.blitter
+            .blit_copy_iosurface_raw(src, dest, width, height)
+    }
+
+    /// Clear the blitter's texture cache to free GPU memory.
+    pub fn clear_blitter_cache(&self) {
+        self.blitter.clear_cache();
     }
 
     // =========================================================================
