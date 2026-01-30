@@ -47,6 +47,10 @@ pub(crate) struct SubprocessHostProcessor {
     processor_config: Option<serde_json::Value>,
     execution_config: ExecutionConfig,
     descriptor_name: String,
+
+    // Set true when bridge communication fails (broken pipe) to avoid
+    // spamming errors in the thread runner's tight poll loop.
+    subprocess_dead: bool,
 }
 
 // ============================================================================
@@ -241,12 +245,35 @@ impl crate::core::processors::DynGeneratedProcessor for SubprocessHostProcessor 
     }
 
     fn process(&mut self) -> Result<()> {
+        if self.subprocess_dead {
+            return Ok(());
+        }
+
         // Send "process" command to Python
-        self.bridge_send_json(&serde_json::json!({"cmd": "process"}))?;
+        if let Err(e) = self.bridge_send_json(&serde_json::json!({"cmd": "process"})) {
+            tracing::warn!(
+                "[{}] Subprocess pipe broken, marking dead: {}",
+                self.processor_id,
+                e
+            );
+            self.subprocess_dead = true;
+            return Ok(());
+        }
 
         // Handle RPCs from Python until "done"
         loop {
-            let msg = self.bridge_read_json()?;
+            let msg = match self.bridge_read_json() {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(
+                        "[{}] Subprocess pipe broken, marking dead: {}",
+                        self.processor_id,
+                        e
+                    );
+                    self.subprocess_dead = true;
+                    return Ok(());
+                }
+            };
             let rpc = msg.get("rpc").and_then(|v| v.as_str()).unwrap_or("");
 
             match rpc {
@@ -640,6 +667,7 @@ pub(crate) fn create_subprocess_host_constructor(
             processor_config: node.config.clone(),
             execution_config,
             descriptor_name: descriptor_clone.name.clone(),
+            subprocess_dead: false,
         }) as ProcessorInstance)
     })
 }

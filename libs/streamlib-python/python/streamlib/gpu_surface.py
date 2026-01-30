@@ -77,6 +77,11 @@ if sys.platform == "darwin":
                 strides=(self.bytes_per_row, 4, 1),
             )
 
+        @property
+        def iosurface_ref(self):
+            """Raw IOSurfaceRef pointer for CGL texture binding."""
+            return self._ref
+
         def release(self):
             """Release the surface reference."""
             if self._ref:

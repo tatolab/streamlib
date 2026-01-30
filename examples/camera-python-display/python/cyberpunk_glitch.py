@@ -3,6 +3,7 @@
 
 """Cyberpunk glitch post-processing effect using pure OpenGL shaders.
 
+Isolated subprocess processor using standalone CGL context.
 Full-screen glitch effect inspired by Cyberpunk 2077's "Relic Malfunction" visuals.
 Uses GLSL fragment shaders directly on GL textures for GPU-accelerated distortion.
 
@@ -12,17 +13,24 @@ Features:
 - Scanlines
 - Horizontal slice displacement
 - Intermittent triggering (not constant)
-- Zero-copy GPU texture binding (stable GL texture IDs)
+- Zero-copy GPU texture via IOSurface + CGL binding
 """
 
 import logging
 import math
+import random
 
+import numpy as np
 from OpenGL.GL import *
 
-from streamlib import processor, input, output
-
 logger = logging.getLogger(__name__)
+
+# VideoFrame msgpack array indices
+FRAME_INDEX = 0
+HEIGHT = 1
+SURFACE_ID = 2
+TIMESTAMP_NS = 3
+WIDTH = 4
 
 
 # =============================================================================
@@ -183,9 +191,6 @@ void main() {
 # Glitch State Tracking
 # =============================================================================
 
-import random
-
-
 class GlitchState:
     """Tracks glitch effect state and timing.
 
@@ -254,44 +259,49 @@ class GlitchState:
 
 
 # =============================================================================
-# Cyberpunk Glitch Processor
+# Cyberpunk Glitch Processor (Isolated Subprocess)
 # =============================================================================
 
-@processor(name="CyberpunkGlitch", description="Cyberpunk glitch post-processing effect")
 class CyberpunkGlitch:
     """Full-screen glitch effect using pure OpenGL shaders.
 
-    Bypasses Skia and runs GLSL fragment shaders directly on the GL textures
-    for maximum performance and flexibility.
+    Isolated subprocess processor with own CGL context.
+    Runs GLSL fragment shaders directly on GL textures backed by IOSurfaces.
     """
 
-    @input(schema="VideoFrame")
-    def video_in(self):
-        pass
-
-    @output(schema="VideoFrame")
-    def video_out(self):
-        pass
-
     def setup(self, ctx):
-        """Initialize processor state. GL resources created lazily in first process() call."""
+        """Initialize standalone CGL context and compile shaders."""
+        from streamlib.cgl_context import create_cgl_context, make_current
+
         self.frame_count = 0
         self.glitch_state = GlitchState()
-        self.gl_initialized = False
 
-        # Get GL context reference (but don't initialize GL resources yet)
-        self.gl_ctx = ctx.gpu._experimental_gl_context()
+        # Create standalone CGL context (own GPU context, not host's)
+        self.cgl_ctx = create_cgl_context()
+        make_current(self.cgl_ctx)
 
-        logger.info("Cyberpunk Glitch processor setup complete (GL init deferred)")
+        # Compile shaders
+        self._compile_shaders()
 
-    def _init_gl_resources(self):
-        """Initialize OpenGL resources. Called on first process() when GL state is ready."""
-        if self.gl_initialized:
-            return
+        # Create fullscreen quad VAO
+        self._create_quad_vao()
 
-        self.gl_ctx.make_current()
+        # Create FBO for rendering to output texture
+        self.fbo = glGenFramebuffers(1)
 
-        # Helper to compile a shader using raw GL calls (avoids PyOpenGL validation)
+        # Create reusable GL textures for input and output IOSurface binding
+        self.input_tex_id = glGenTextures(1)
+        self.output_tex_id = glGenTextures(1)
+
+        # Track current dimensions for lazy output buffer allocation
+        self._current_width = 0
+        self._current_height = 0
+        self._fbo_validated = False
+
+        logger.info("Cyberpunk Glitch: Standalone CGL context + shaders initialized")
+
+    def _compile_shaders(self):
+        """Compile and link GLSL shader programs."""
         def compile_shader(source: str, shader_type) -> int:
             shader = glCreateShader(shader_type)
             glShaderSource(shader, source)
@@ -302,7 +312,6 @@ class CyberpunkGlitch:
                 raise RuntimeError(f"Shader compilation failed: {error}")
             return shader
 
-        # Helper to link a program
         def link_program(vertex_shader, fragment_shader) -> int:
             program = glCreateProgram()
             glAttachShader(program, vertex_shader)
@@ -314,22 +323,17 @@ class CyberpunkGlitch:
                 raise RuntimeError(f"Program linking failed: {error}")
             return program
 
-        # Compile shaders
-        try:
-            vertex_shader = compile_shader(VERTEX_SHADER, GL_VERTEX_SHADER)
-            glitch_frag = compile_shader(GLITCH_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-            passthrough_frag = compile_shader(PASSTHROUGH_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+        vertex_shader = compile_shader(VERTEX_SHADER, GL_VERTEX_SHADER)
+        glitch_frag = compile_shader(GLITCH_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+        passthrough_frag = compile_shader(PASSTHROUGH_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
 
-            self.glitch_program = link_program(vertex_shader, glitch_frag)
-            self.passthrough_program = link_program(vertex_shader, passthrough_frag)
+        self.glitch_program = link_program(vertex_shader, glitch_frag)
+        self.passthrough_program = link_program(vertex_shader, passthrough_frag)
 
-            # Clean up shader objects (they're linked into programs now)
-            glDeleteShader(vertex_shader)
-            glDeleteShader(glitch_frag)
-            glDeleteShader(passthrough_frag)
-        except Exception as e:
-            logger.error(f"Shader compilation failed: {e}")
-            raise RuntimeError(f"Failed to compile shaders: {e}")
+        # Clean up shader objects (they're linked into programs now)
+        glDeleteShader(vertex_shader)
+        glDeleteShader(glitch_frag)
+        glDeleteShader(passthrough_frag)
 
         # Get uniform locations for glitch shader
         glUseProgram(self.glitch_program)
@@ -349,9 +353,10 @@ class CyberpunkGlitch:
             'resolution': glGetUniformLocation(self.passthrough_program, 'resolution'),
         }
 
-        # Create fullscreen quad VAO
-        import numpy as np
+        glUseProgram(0)
 
+    def _create_quad_vao(self):
+        """Create fullscreen quad VAO."""
         self.vao = glGenVertexArrays(1)
         self.vbo = glGenBuffers(1)
 
@@ -374,40 +379,23 @@ class CyberpunkGlitch:
         glVertexAttribPointer(position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
 
         glBindVertexArray(0)
-        glUseProgram(0)
-
-        # Create FBO for rendering to output texture
-        self.fbo = glGenFramebuffers(1)
-
-        # Create reusable texture bindings - these have STABLE texture IDs
-        # Only needed when glitch is active (not created in true passthrough mode)
-        self.input_binding = self.gl_ctx.create_texture_binding()
-        self.output_binding = self.gl_ctx.create_texture_binding()
-
-        # Lazy init for output buffer
-        self._gpu_ctx = None  # Set in first process() call
-        self.output_buffer = None
-        self._current_width = 0
-        self._current_height = 0
-        self._fbo_validated = False  # Only validate FBO on resize, not every frame
-
-        self.gl_initialized = True
-        logger.info("Cyberpunk Glitch: OpenGL resources initialized")
 
     def process(self, ctx):
         """Apply glitch effect using OpenGL shaders."""
-        frame = ctx.input("video_in").get()
+        frame = ctx.inputs.read("video_in")
         if frame is None:
             return
 
-        # Initialize GL resources on first frame (deferred from setup)
-        self._init_gl_resources()
+        from streamlib.cgl_context import make_current, bind_iosurface_to_texture, flush, GL_TEXTURE_RECTANGLE
+        import time as time_mod
 
-        # Get pixel buffer from frame (buffer-centric API)
-        input_buffer = frame["pixel_buffer"]
-        width = input_buffer.width
-        height = input_buffer.height
-        elapsed = ctx.time.elapsed_secs
+        w = frame[WIDTH]
+        h = frame[HEIGHT]
+
+        # Use monotonic time for elapsed calculation
+        if not hasattr(self, '_start_time'):
+            self._start_time = time_mod.monotonic()
+        elapsed = time_mod.monotonic() - self._start_time
 
         # Update glitch state
         glitch_active = self.glitch_state.update(elapsed)
@@ -415,55 +403,54 @@ class CyberpunkGlitch:
         # TRUE PASSTHROUGH: When not glitching, just forward the input frame directly
         # No GPU work, no texture copies - zero overhead
         if not glitch_active:
-            ctx.output("video_out").set(frame)
+            ctx.outputs.write("video_out", frame)
             self.frame_count += 1
             return
 
-        # Make GL context current
-        self.gl_ctx.make_current()
+        make_current(self.cgl_ctx)
 
-        # Store GPU context reference for lazy buffer allocation
-        if self._gpu_ctx is None:
-            self._gpu_ctx = ctx.gpu
+        # Resolve input surface → IOSurface handle → bind as GL texture
+        input_handle = ctx.gpu.resolve_surface(frame[SURFACE_ID])
+        bind_iosurface_to_texture(
+            self.cgl_ctx, self.input_tex_id,
+            input_handle.iosurface_ref, w, h
+        )
 
-        # Update input binding (fast rebind, no new GL texture)
-        self.input_binding.update(input_buffer)
-        input_gl_id = self.input_binding.id
-        gl_target = self.input_binding.target  # GL_TEXTURE_RECTANGLE for IOSurface
+        # Acquire output surface → bind as GL texture
+        out_surface_id, output_handle = ctx.gpu.acquire_surface(width=w, height=h, format="bgra")
+        bind_iosurface_to_texture(
+            self.cgl_ctx, self.output_tex_id,
+            output_handle.iosurface_ref, w, h
+        )
 
-        # Ensure output buffer exists (lazy init on first use or resize)
-        if self.output_buffer is None or self._current_width != width or self._current_height != height:
-            # Convert PixelFormat enum to string (acquire_pixel_buffer expects string)
-            format_str = str(input_buffer.format).split('.')[-1].lower()
-            self.output_buffer = self._gpu_ctx.acquire_pixel_buffer(width, height, format_str)
-            self._current_width = width
-            self._current_height = height
-            self._fbo_validated = False  # Re-validate FBO on resize
-
-        # Update output binding (fast rebind, no new GL texture)
-        self.output_binding.update(self.output_buffer)
-        output_gl_id = self.output_binding.id
+        # Validate FBO on dimension change
+        if self._current_width != w or self._current_height != h:
+            self._current_width = w
+            self._current_height = h
+            self._fbo_validated = False
 
         # Bind FBO with output texture as color attachment
         glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, gl_target, output_gl_id, 0)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE, self.output_tex_id, 0)
 
-        # Check FBO status only on first use or after resize (expensive GPU query)
+        # Check FBO status only on first use or after resize
         if not self._fbo_validated:
             status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
             if status != GL_FRAMEBUFFER_COMPLETE:
                 logger.warning(f"Framebuffer incomplete: {status}")
-                ctx.output("video_out").set(frame)
+                input_handle.release()
+                output_handle.release()
+                ctx.outputs.write("video_out", frame)
                 return
             self._fbo_validated = True
 
         # Set viewport
-        glViewport(0, 0, width, height)
+        glViewport(0, 0, w, h)
 
-        # Apply glitch shader (we only reach here when glitch is active)
+        # Apply glitch shader
         glUseProgram(self.glitch_program)
         glUniform1i(self.glitch_uniforms['inputTexture'], 0)
-        glUniform2f(self.glitch_uniforms['resolution'], float(width), float(height))
+        glUniform2f(self.glitch_uniforms['resolution'], float(w), float(h))
         glUniform1f(self.glitch_uniforms['time'], elapsed)
         glUniform1f(self.glitch_uniforms['intensity'], self.glitch_state.intensity)
         glUniform1f(self.glitch_uniforms['seed'], self.glitch_state.seed)
@@ -471,7 +458,7 @@ class CyberpunkGlitch:
 
         # Bind input texture
         glActiveTexture(GL_TEXTURE0)
-        glBindTexture(gl_target, input_gl_id)
+        glBindTexture(GL_TEXTURE_RECTANGLE, self.input_tex_id)
 
         # Draw fullscreen quad
         glBindVertexArray(self.vao)
@@ -479,19 +466,21 @@ class CyberpunkGlitch:
         glBindVertexArray(0)
 
         # Cleanup
-        glBindTexture(gl_target, 0)
+        glBindTexture(GL_TEXTURE_RECTANGLE, 0)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         glUseProgram(0)
 
         # Flush GL commands
-        self.gl_ctx.flush()
+        flush()
 
-        # Output with pixel buffer
-        ctx.output("video_out").set({
-            "pixel_buffer": self.output_buffer,
-            "timestamp_ns": frame["timestamp_ns"],
-            "frame_number": frame["frame_number"],
-        })
+        # Release IOSurface references
+        input_handle.release()
+        output_handle.release()
+
+        # Output frame with new surface_id
+        out_frame = list(frame)  # copy input frame
+        out_frame[SURFACE_ID] = out_surface_id
+        ctx.outputs.write("video_out", out_frame)
 
         self.frame_count += 1
         if self.frame_count % 120 == 0:
@@ -499,17 +488,22 @@ class CyberpunkGlitch:
 
     def teardown(self, ctx):
         """Cleanup OpenGL resources."""
-        self.gl_ctx.make_current()
+        from streamlib.cgl_context import make_current, destroy_cgl_context
 
-        if hasattr(self, 'vao'):
-            glDeleteVertexArrays(1, [self.vao])
-        if hasattr(self, 'vbo'):
-            glDeleteBuffers(1, [self.vbo])
-        if hasattr(self, 'fbo'):
-            glDeleteFramebuffers(1, [self.fbo])
-        if hasattr(self, 'glitch_program'):
-            glDeleteProgram(self.glitch_program)
-        if hasattr(self, 'passthrough_program'):
-            glDeleteProgram(self.passthrough_program)
+        if hasattr(self, 'cgl_ctx'):
+            make_current(self.cgl_ctx)
+
+            if hasattr(self, 'vao'):
+                glDeleteVertexArrays(1, [self.vao])
+            if hasattr(self, 'vbo'):
+                glDeleteBuffers(1, [self.vbo])
+            if hasattr(self, 'fbo'):
+                glDeleteFramebuffers(1, [self.fbo])
+            if hasattr(self, 'glitch_program'):
+                glDeleteProgram(self.glitch_program)
+            if hasattr(self, 'passthrough_program'):
+                glDeleteProgram(self.passthrough_program)
+
+            destroy_cgl_context(self.cgl_ctx)
 
         logger.info(f"Cyberpunk Glitch processor shutdown ({self.frame_count} frames)")

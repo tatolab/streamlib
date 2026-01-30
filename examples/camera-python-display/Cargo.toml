@@ -11,17 +11,14 @@ publish = false
 
 [features]
 default = []
-backend-vulkan = ["streamlib/backend-vulkan", "streamlib-python/backend-vulkan"]
+backend-vulkan = ["streamlib/backend-vulkan"]
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib" }
-streamlib-python = { path = "../../libs/streamlib-python" }
 tracing = { workspace = true }
-tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-parking_lot = "0.12"
 
 # Vision framework for person segmentation (macOS only)
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -217,12 +217,11 @@ fn open_iceoryx2_pubsub(
         output_schema
     );
 
-    // Configure source OutputWriter with port mapping and set the Publisher
+    // Configure source OutputWriter with port mapping and publisher
     {
         let source_guard = source_processor.lock();
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
-            output_writer.add_port(source_port, &output_schema, dest_port);
-            output_writer.set_publisher(publisher);
+            output_writer.add_connection(source_port, &output_schema, dest_port, publisher);
             tracing::debug!(
                 "Configured OutputWriter port '{}' -> '{}' with Publisher",
                 source_port,
@@ -422,8 +421,7 @@ fn open_iceoryx2_rust_to_subprocess(
     {
         let source_guard = source_processor.lock();
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
-            output_writer.add_port(source_port, &output_schema, dest_port);
-            output_writer.set_publisher(publisher);
+            output_writer.add_connection(source_port, &output_schema, dest_port, publisher);
             tracing::debug!(
                 "Configured OutputWriter port '{}' -> '{}' with Publisher (dest is subprocess)",
                 source_port,

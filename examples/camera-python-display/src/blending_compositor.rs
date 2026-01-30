@@ -14,14 +14,11 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-use streamlib::core::rhi::{
-    PixelBufferDescriptor, PixelFormat, RhiPixelBufferPool, RhiTextureCache, RhiTextureView,
-};
-use streamlib::core::{
-    GpuContext, LinkInput, LinkOutput, Result, RuntimeContext, StreamError, VideoFrame,
-};
+use streamlib::core::rhi::{PixelFormat, RhiTextureCache, RhiTextureView};
+use streamlib::core::{GpuContext, Result, RuntimeContext, StreamError};
+use streamlib::Videoframe;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, streamlib::ConfigDescriptor)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlendingCompositorConfig {
     /// Default output width (used until video arrives)
     pub width: u32,
@@ -29,6 +26,8 @@ pub struct BlendingCompositorConfig {
     pub height: u32,
     /// Duration of PiP slide-in animation in seconds
     pub pip_slide_duration: f32,
+    /// Delay in seconds after first camera frame before PiP slides in
+    pub pip_slide_delay: f32,
 }
 
 impl Default for BlendingCompositorConfig {
@@ -37,6 +36,7 @@ impl Default for BlendingCompositorConfig {
             width: 1920,
             height: 1080,
             pip_slide_duration: 0.5, // 500ms slide-in
+            pip_slide_delay: 2.5,    // 2.5s after camera starts
         }
     }
 }
@@ -55,29 +55,8 @@ struct BlendingUniforms {
     _padding3: f32,
 }
 
-#[streamlib::processor(
-    name = "BlendingCompositor",
-    execution = Reactive,
-    description = "Multi-layer alpha blending compositor with PiP support",
-    unsafe_send
-)]
+#[streamlib::processor("src/blending_compositor.yaml")]
 pub struct BlendingCompositorProcessor {
-    #[streamlib::input(description = "Video frames (base layer)")]
-    video_in: LinkInput<VideoFrame>,
-
-    #[streamlib::input(description = "Lower third overlay (RGBA with transparency)")]
-    lower_third_in: LinkInput<VideoFrame>,
-
-    #[streamlib::input(description = "Watermark overlay (RGBA with transparency)")]
-    watermark_in: LinkInput<VideoFrame>,
-
-    #[streamlib::input(description = "PiP overlay (avatar character with transparent background)")]
-    pip_in: LinkInput<VideoFrame>,
-
-    #[streamlib::output(description = "Composited video frames")]
-    video_out: LinkOutput<VideoFrame>,
-
-    #[streamlib::config]
     config: BlendingCompositorConfig,
 
     gpu_context: Option<GpuContext>,
@@ -90,9 +69,6 @@ pub struct BlendingCompositorProcessor {
 
     // RHI resources
     texture_cache: Option<RhiTextureCache>,
-    output_buffers: [Option<streamlib::core::rhi::RhiPixelBuffer>; 3],
-    output_index: usize,
-    output_dimensions: Option<(u32, u32)>,
 
     // Cached texture views
     cached_video_view: Option<RhiTextureView>,
@@ -104,6 +80,8 @@ pub struct BlendingCompositorProcessor {
     // PiP animation state
     pip_ready: bool,
     pip_animation_start: Option<Instant>,
+    first_video_time: Option<Instant>,
+    pip_placeholder_texture: Option<metal::Texture>,
 
     // Debug timing
     last_frame_time: Option<Instant>,
@@ -182,6 +160,22 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
                 )),
             ];
 
+            // Create 1x1 transparent placeholder texture for PiP
+            // Allows the PiP frame (border, title bar) to slide in before avatar frames arrive
+            let pip_placeholder_desc = metal::TextureDescriptor::new();
+            pip_placeholder_desc.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+            pip_placeholder_desc.set_width(1);
+            pip_placeholder_desc.set_height(1);
+            pip_placeholder_desc.set_usage(metal::MTLTextureUsage::ShaderRead);
+            let pip_placeholder = metal_device_ref.new_texture(&pip_placeholder_desc);
+            let zero_data: [u8; 4] = [0, 0, 0, 0];
+            pip_placeholder.replace_region(
+                metal::MTLRegion::new_2d(0, 0, 1, 1),
+                0,
+                zero_data.as_ptr() as *const std::ffi::c_void,
+                4,
+            );
+
             self.render_pipeline = Some(render_pipeline);
             self.render_pass_desc = Some(render_pass_desc_ref.to_owned());
             self.sampler = Some(sampler);
@@ -189,6 +183,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             self.uniforms_index = 0;
             self.pip_ready = false;
             self.pip_animation_start = None;
+            self.pip_placeholder_texture = Some(pip_placeholder);
 
             tracing::info!(
                 "BlendingCompositor: Initialized ({}x{} default, PiP slide: {}s)",
@@ -238,41 +233,58 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         let texture_cache = self.texture_cache.as_ref().unwrap();
 
         // Update cached textures from new input frames
-        if let Some(video_frame) = self.video_in.read() {
-            self.cached_video_view = Some(texture_cache.create_view(video_frame.buffer())?);
-            self.cached_video_dimensions = Some((video_frame.width(), video_frame.height()));
+        if self.inputs.has_data("video_in") {
+            let video_frame: Videoframe = self.inputs.read("video_in")?;
+            let buffer = gpu_ctx.resolve_videoframe_buffer(&video_frame)?;
+            self.cached_video_view = Some(texture_cache.create_view(&buffer)?);
+            self.cached_video_dimensions = Some((video_frame.width, video_frame.height));
+
+            // Record when camera first starts flowing
+            if self.first_video_time.is_none() {
+                self.first_video_time = Some(Instant::now());
+                tracing::info!(
+                    "BlendingCompositor: First camera frame received, PiP slide-in in {:.1}s",
+                    self.config.pip_slide_delay
+                );
+            }
         }
 
-        if let Some(lower_third_frame) = self.lower_third_in.read() {
-            self.cached_lower_third_view =
-                Some(texture_cache.create_view(lower_third_frame.buffer())?);
+        if self.inputs.has_data("lower_third_in") {
+            let lower_third_frame: Videoframe = self.inputs.read("lower_third_in")?;
+            let buffer = gpu_ctx.resolve_videoframe_buffer(&lower_third_frame)?;
+            self.cached_lower_third_view = Some(texture_cache.create_view(&buffer)?);
         }
 
-        if let Some(watermark_frame) = self.watermark_in.read() {
-            self.cached_watermark_view = Some(texture_cache.create_view(watermark_frame.buffer())?);
+        if self.inputs.has_data("watermark_in") {
+            let watermark_frame: Videoframe = self.inputs.read("watermark_in")?;
+            let buffer = gpu_ctx.resolve_videoframe_buffer(&watermark_frame)?;
+            self.cached_watermark_view = Some(texture_cache.create_view(&buffer)?);
         }
 
-        // Check for PiP frames and "pip_ready" signal
-        if let Some(pip_frame) = self.pip_in.read() {
-            self.cached_pip_view = Some(texture_cache.create_view(pip_frame.buffer())?);
+        // Check for PiP frames
+        if self.inputs.has_data("pip_in") {
+            let pip_frame: Videoframe = self.inputs.read("pip_in")?;
+            let buffer = gpu_ctx.resolve_videoframe_buffer(&pip_frame)?;
+            self.cached_pip_view = Some(texture_cache.create_view(&buffer)?);
+        }
 
-            // Check if avatar processor signaled ready (first pose detected)
-            // The pip_ready flag is passed as metadata in the frame
-            // For now, we trigger animation on first PiP frame with content
-            if !self.pip_ready {
-                // Start animation when first PiP frame arrives
-                self.pip_ready = true;
-                self.pip_animation_start = Some(Instant::now());
-                tracing::info!("BlendingCompositor: PiP ready - starting slide-in animation!");
+        // Trigger PiP slide-in after delay from first camera frame
+        if !self.pip_ready {
+            if let Some(first_video) = self.first_video_time {
+                if first_video.elapsed().as_secs_f32() >= self.config.pip_slide_delay {
+                    self.pip_ready = true;
+                    self.pip_animation_start = Some(Instant::now());
+                    tracing::info!("BlendingCompositor: PiP slide-in animation starting!");
+                }
             }
         }
 
         // Calculate PiP animation progress
         let pip_slide_progress = if let Some(start_time) = self.pip_animation_start {
             let elapsed = start_time.elapsed().as_secs_f32();
-            let progress = (elapsed / self.config.pip_slide_duration).min(1.0);
+            let progress: f32 = (elapsed / self.config.pip_slide_duration).min(1.0);
             // Ease-out cubic: 1 - (1-t)^3
-            1.0 - (1.0 - progress).powi(3)
+            1.0_f32 - (1.0_f32 - progress).powi(3)
         } else {
             0.0
         };
@@ -282,26 +294,11 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             .cached_video_dimensions
             .unwrap_or((self.config.width, self.config.height));
 
-        // Output buffer ring
-        if self.output_dimensions != Some((width, height)) {
-            let output_desc = PixelBufferDescriptor::new(width, height, PixelFormat::Bgra32);
-            let pool = RhiPixelBufferPool::new_with_descriptor(&output_desc)?;
-            self.output_buffers = [
-                Some(pool.acquire()?),
-                Some(pool.acquire()?),
-                Some(pool.acquire()?),
-            ];
-            self.output_dimensions = Some((width, height));
-            self.output_index = 0;
-        }
-
-        self.output_index = (self.output_index + 1) % 3;
-        let output_buffer = self.output_buffers[self.output_index]
-            .as_ref()
-            .unwrap()
-            .clone();
+        // Acquire output buffer from GpuContext pool
+        let (output_pool_id, output_buffer) =
+            gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Bgra32)?;
         let output_view = texture_cache.create_view(&output_buffer)?;
-        let output_metal = output_view.as_metal_texture();
+        let output_metal: &metal::TextureRef = output_view.as_metal_texture();
 
         // Update render pass
         let render_pass_desc = self.render_pass_desc.as_ref().unwrap();
@@ -321,7 +318,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         let has_video = self.cached_video_view.is_some();
         let has_lower_third = self.cached_lower_third_view.is_some();
         let has_watermark = self.cached_watermark_view.is_some();
-        let has_pip = self.cached_pip_view.is_some() && self.pip_ready;
+        let has_pip = self.pip_ready;
 
         if let Some(ref video_view) = self.cached_video_view {
             render_enc.set_fragment_texture(0, Some(video_view.as_metal_texture()));
@@ -334,6 +331,11 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         }
         if let Some(ref pip_view) = self.cached_pip_view {
             render_enc.set_fragment_texture(3, Some(pip_view.as_metal_texture()));
+        } else if has_pip {
+            if let Some(ref placeholder) = self.pip_placeholder_texture {
+                let tex_ref: &metal::TextureRef = placeholder;
+                render_enc.set_fragment_texture(3, Some(tex_ref));
+            }
         }
 
         render_enc.set_fragment_sampler_state(0, Some(self.sampler.as_ref().unwrap()));
@@ -360,11 +362,18 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         render_enc.end_encoding();
 
         command_buffer.commit();
+        command_buffer.wait_until_completed();
 
         // Output frame
         let timestamp_ns = (frame_count as i64) * 16_666_667;
-        let output_frame = VideoFrame::from_buffer(output_buffer, timestamp_ns, frame_count);
-        self.video_out.write(output_frame);
+        let output_frame = Videoframe {
+            surface_id: output_pool_id.to_string(),
+            width,
+            height,
+            timestamp_ns: timestamp_ns.to_string(),
+            frame_index: frame_count.to_string(),
+        };
+        self.outputs.write("video_out", &output_frame)?;
 
         self.frame_count.fetch_add(1, Ordering::Relaxed);
 

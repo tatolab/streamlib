@@ -11,7 +11,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Number of buffers to pre-allocate per pool.
-const POOL_PRE_ALLOCATE_COUNT: usize = 8;
+const POOL_PRE_ALLOCATE_COUNT: usize = 24;
+
+/// Maximum number of buffers per pool (expansion limit).
+const POOL_MAX_BUFFER_COUNT: usize = 64;
 
 /// No-op blitter for non-macOS platforms.
 #[cfg(not(target_os = "macos"))]
@@ -226,13 +229,80 @@ impl PixelBufferPoolManager {
             }
         }
 
-        // All buffers in use - this shouldn't happen with 8 buffers in normal use
-        tracing::warn!(
-            "PixelBufferPoolManager: all {} buffers in use for {}x{} {:?}",
+        // All buffers in use - try to expand the pool up to POOL_MAX_BUFFER_COUNT
+        if buffer_count < POOL_MAX_BUFFER_COUNT {
+            let expand_count = (POOL_MAX_BUFFER_COUNT - buffer_count).min(4);
+            tracing::warn!(
+                "PixelBufferPoolManager: all {} buffers in use for {}x{} {:?}, expanding by {}",
+                buffer_count,
+                width,
+                height,
+                format,
+                expand_count
+            );
+
+            let surface_store_guard = self.buffer_cache.lock().unwrap();
+            drop(surface_store_guard);
+
+            let mut newly_added = 0;
+            for _ in 0..expand_count {
+                match ring_pool.pool.acquire() {
+                    Ok((pool_id, buffer)) => {
+                        // Register with broker if available
+                        if let Some(store) = surface_store {
+                            if let Err(e) = store.register_buffer(pool_id.as_str(), &buffer) {
+                                tracing::warn!(
+                                    "PixelBufferPoolManager: failed to register expanded buffer {}: {}",
+                                    pool_id,
+                                    e
+                                );
+                            }
+                        }
+
+                        // Add to global cache
+                        self.buffer_cache
+                            .lock()
+                            .unwrap()
+                            .insert(pool_id.as_str().to_string(), buffer.clone());
+
+                        ring_pool
+                            .buffers
+                            .push(PixelBufferRingEntry { pool_id, buffer });
+                        newly_added += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "PixelBufferPoolManager: failed to allocate expansion buffer: {}",
+                            e
+                        );
+                        break;
+                    }
+                }
+            }
+
+            if newly_added > 0 {
+                tracing::info!(
+                    "PixelBufferPoolManager: expanded pool to {} buffers for {}x{} {:?}",
+                    ring_pool.buffers.len(),
+                    width,
+                    height,
+                    format
+                );
+
+                // Return the first newly added buffer (it's definitely not in use)
+                let idx = ring_pool.buffers.len() - newly_added;
+                let entry = &ring_pool.buffers[idx];
+                return Ok((entry.pool_id.clone(), entry.buffer.clone()));
+            }
+        }
+
+        tracing::error!(
+            "PixelBufferPoolManager: all {} buffers in use for {}x{} {:?} (max {})",
             buffer_count,
             width,
             height,
-            format
+            format,
+            POOL_MAX_BUFFER_COUNT
         );
         Err(StreamError::Configuration(
             "All pixel buffers are currently in use".into(),

@@ -1,0 +1,11 @@
+name: com.tatolab.cyberpunk_lower_third
+version: 1.0.0
+description: "Cyberpunk animated lower third overlay — continuous RGBA generator"
+runtime: python
+execution:
+  type: continuous
+  interval_ms: 16
+entrypoint: "cyberpunk_lower_third:CyberpunkLowerThird"
+outputs:
+  - name: video_out
+    schema: com.tatolab.videoframe@1.0.0

@@ -3,7 +3,8 @@
 
 """Cyberpunk-style lower third overlay processor - CONTINUOUS RGBA GENERATOR.
 
-This processor generates lower third overlay frames independently,
+Isolated subprocess processor using standalone CGL context.
+Generates lower third overlay frames independently,
 outputting transparent RGBA textures for compositing by the BlendingCompositor.
 
 Features:
@@ -13,17 +14,17 @@ Features:
 - Channel logo section (like "N54 NEWS")
 - Cyan accent details and tech lines
 - Runs at 60fps (16ms interval) continuous mode
-- Zero-copy GPU texture binding (stable GL texture IDs)
+- Zero-copy GPU texture via IOSurface + CGL binding
 - Outputs transparent RGBA (alpha=0 background for layer compositing)
 - Static elements cached as Skia Picture after slide-in completes
 """
 
 import logging
 import math
+import time
 
 import skia
-
-from streamlib import processor, output, PixelFormat
+from OpenGL.GL import glGenTextures
 
 logger = logging.getLogger(__name__)
 
@@ -523,36 +524,21 @@ def draw_lower_third_full(
 # Cyberpunk Lower Third Processor (GENERATOR - outputs transparent RGBA)
 # =============================================================================
 
-@processor(
-    name="CyberpunkLowerThird",
-    description="Cyberpunk-style lower third RGBA overlay generator",
-    execution="Continuous",
-)
 class CyberpunkLowerThird:
     """Generates animated lower third overlay as transparent RGBA texture.
 
-    This is a GENERATOR processor - it outputs standalone RGBA textures
-    with transparent backgrounds for compositing by BlendingCompositor.
-
-    Features:
-    - Slide-in animation with back easing (overshoot)
-    - Cyberpunk 2077 yellow HUD style
-    - Angular chamfered corners
-    - Channel logo section
-    - Dark text on yellow background
-    - Zero-copy GPU rendering via Skia + IOSurface
-    - Transparent background (alpha=0) for layer compositing
-    - Static elements cached as Skia Picture after slide-in completes
+    Isolated subprocess processor with own CGL context.
+    Outputs standalone RGBA textures with transparent backgrounds
+    for compositing by BlendingCompositor.
     """
 
-    @output(schema="VideoFrame")
-    def video_out(self):
-        pass
-
     def setup(self, ctx):
-        """Initialize Skia and load fonts."""
+        """Initialize standalone CGL context and Skia."""
+        from streamlib.cgl_context import create_cgl_context, make_current
+
         self.frame_count = 0
         self.frame_number = 0
+        self._start_time = time.monotonic()
 
         # Configuration
         self.headline = "NIGHT CITY NEWS"
@@ -563,46 +549,20 @@ class CyberpunkLowerThird:
         self.width = DEFAULT_WIDTH
         self.height = DEFAULT_HEIGHT
 
-        # Get GL context
-        self.gl_ctx = ctx.gpu._experimental_gl_context()
-        self.gl_ctx.make_current()
+        # Create standalone CGL context (own GPU context, not host's)
+        self.cgl_ctx = create_cgl_context()
+        make_current(self.cgl_ctx)
 
-        # Create Skia GPU context
+        # Create Skia GPU context on our CGL context
         self.skia_ctx = skia.GrDirectContext.MakeGL()
         if self.skia_ctx is None:
             raise RuntimeError("Failed to create Skia GL context")
 
-        # Create output texture binding (stable GL texture ID)
-        self.output_binding = self.gl_ctx.create_texture_binding()
+        # Create persistent GL texture for output
+        self.output_tex_id = glGenTextures(1)
 
-        # Create output pixel buffer for RGBA output
-        self._gpu_ctx = ctx.gpu
-        self.output_pixel_buffer = self._gpu_ctx.acquire_pixel_buffer(
-            self.width, self.height, PixelFormat.BGRA32
-        )
-
-        # Update output binding to point to the output buffer
-        self.output_binding.update(self.output_pixel_buffer)
-
-        # Create Skia surface from output binding's stable texture ID
-        output_gl_info = skia.GrGLTextureInfo(
-            self.output_binding.target, self.output_binding.id, GL_RGBA8
-        )
-        output_backend = skia.GrBackendTexture(
-            self.width, self.height, skia.GrMipmapped.kNo, output_gl_info
-        )
-        self.output_skia_surface = skia.Surface.MakeFromBackendTexture(
-            self.skia_ctx,
-            output_backend,
-            skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
-            0,
-            skia.ColorType.kBGRA_8888_ColorType,
-            None,
-            None,
-        )
-
-        if self.output_skia_surface is None:
-            raise RuntimeError("Failed to create Skia surface from pixel buffer")
+        # Skia surface (created on first process when we have a bound texture)
+        self.output_skia_surface = None
 
         # Load Bitter font (Cyberpunk style)
         self.typeface = skia.Typeface.MakeFromName("Bitter", skia.FontStyle.Bold())
@@ -625,8 +585,43 @@ class CyberpunkLowerThird:
 
     def process(self, ctx):
         """Generate lower third overlay frame with transparent background."""
-        # Ensure GL context is current
-        self.gl_ctx.make_current()
+        from streamlib.cgl_context import make_current, bind_iosurface_to_texture, flush
+
+        make_current(self.cgl_ctx)
+
+        # Acquire output surface from Rust pool
+        surface_id, handle = ctx.gpu.acquire_surface(
+            width=self.width, height=self.height, format="bgra"
+        )
+
+        # Bind IOSurface as GL texture (zero-copy)
+        bind_iosurface_to_texture(
+            self.cgl_ctx, self.output_tex_id,
+            handle.iosurface_ref, self.width, self.height
+        )
+
+        # Create Skia surface from GL texture (recreate each frame since texture backing changes)
+        from streamlib.cgl_context import GL_TEXTURE_RECTANGLE
+        output_gl_info = skia.GrGLTextureInfo(
+            GL_TEXTURE_RECTANGLE, self.output_tex_id, GL_RGBA8
+        )
+        output_backend = skia.GrBackendTexture(
+            self.width, self.height, skia.GrMipmapped.kNo, output_gl_info
+        )
+        self.output_skia_surface = skia.Surface.MakeFromBackendTexture(
+            self.skia_ctx,
+            output_backend,
+            skia.GrSurfaceOrigin.kTopLeft_GrSurfaceOrigin,
+            0,
+            skia.ColorType.kBGRA_8888_ColorType,
+            None,
+            None,
+        )
+
+        if self.output_skia_surface is None:
+            handle.release()
+            logger.error("Failed to create Skia surface from IOSurface texture")
+            return
 
         # Get canvas from output surface
         canvas = self.output_skia_surface.getCanvas()
@@ -634,7 +629,7 @@ class CyberpunkLowerThird:
         # Clear to fully transparent (alpha=0) for layer compositing
         canvas.clear(skia.Color(0, 0, 0, 0))
 
-        elapsed = ctx.time.elapsed_secs
+        elapsed = time.monotonic() - self._start_time
 
         # Two-phase rendering:
         # 1. During slide-in (first 0.6s): draw everything each frame
@@ -680,15 +675,21 @@ class CyberpunkLowerThird:
 
         # Flush Skia and GL
         self.output_skia_surface.flushAndSubmit()
-        self.gl_ctx.flush()
+        flush()
 
-        # Output overlay frame
+        # Release IOSurface reference
+        handle.release()
+
+        # Output VideoFrame msgpack array
         timestamp_ns = int(elapsed * 1_000_000_000)
-        ctx.output("video_out").set({
-            "pixel_buffer": self.output_pixel_buffer,
-            "timestamp_ns": timestamp_ns,
-            "frame_number": self.frame_number,
-        })
+        frame = [
+            str(self.frame_number),   # index 0: frame_index
+            self.height,              # index 1: height
+            surface_id,               # index 2: surface_id (UUID from acquire)
+            str(timestamp_ns),        # index 3: timestamp_ns
+            self.width,               # index 4: width
+        ]
+        ctx.outputs.write("video_out", frame)
 
         self.frame_count += 1
         self.frame_number += 1
@@ -704,6 +705,9 @@ class CyberpunkLowerThird:
     def teardown(self, ctx):
         """Cleanup."""
         self.static_picture = None  # Release picture before context
-        if self.skia_ctx:
+        if hasattr(self, 'skia_ctx') and self.skia_ctx:
             self.skia_ctx.abandonContext()
+        if hasattr(self, 'cgl_ctx'):
+            from streamlib.cgl_context import destroy_cgl_context
+            destroy_cgl_context(self.cgl_ctx)
         logger.info(f"Cyberpunk Lower Third shutdown ({self.frame_count} frames)")
