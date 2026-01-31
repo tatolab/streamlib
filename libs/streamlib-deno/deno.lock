@@ -1,0 +1,17 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:@msgpack/msgpack@3.0.0-beta2": "3.0.0-beta2"
+  },
+  "npm": {
+    "@msgpack/msgpack@3.0.0-beta2": {
+      "integrity": "sha512-y+l1PNV0XDyY8sM3YtuMLK5vE3/hkfId+Do8pLo/OPxfxuFAUwcGz3oiiUuV46/aBpwTzZ+mRWVMtlSKbradhw==",
+      "deprecated": true
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "npm:@msgpack/msgpack@3.0.0-beta2"
+    ]
+  }
+}

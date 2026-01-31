@@ -28,8 +28,8 @@ streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
 # Procedural macros
 streamlib-macros = { path = "../streamlib-macros" }
 
-# Schema definition and parsing (for Python processor registration)
-streamlib-schema = { path = "../streamlib-schema" }
+# Shared iceoryx2 payload types (for cross-process IPC)
+streamlib-ipc-types = { path = "../streamlib-ipc-types" }
 
 # Core dependencies (always included)
 thiserror.workspace = true

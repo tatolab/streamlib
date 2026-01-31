@@ -4,7 +4,7 @@
 //! Build tasks for StreamLib development.
 //!
 //! Usage:
-//!   cargo xtask generate-schemas    Generate Rust structs from JTD schemas
+//!   cargo xtask generate-schemas --runtime rust --project-file libs/streamlib/Cargo.toml --output libs/streamlib/src/_generated_
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -25,25 +25,32 @@ struct Cli {
 pub enum RuntimeTarget {
     Rust,
     Python,
+    Typescript,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate code from JTD schemas defined in Cargo.toml or pyproject.toml
+    /// Generate code from JTD schemas using jtd-codegen
     GenerateSchemas {
         /// Target language (default: rust)
         #[arg(long, default_value = "rust")]
         runtime: RuntimeTarget,
 
-        /// Output directory (default: libs/streamlib/src/_generated_/ for rust)
+        /// Output directory (required)
         #[arg(long)]
-        output: Option<PathBuf>,
+        output: PathBuf,
 
-        /// Source file for schema list (default: libs/streamlib/Cargo.toml).
-        /// Supports Cargo.toml ([package.metadata.streamlib].schemas)
-        /// and pyproject.toml ([tool.streamlib].schemas).
-        #[arg(long)]
-        source: Option<PathBuf>,
+        /// Read schema list from a project file (Cargo.toml or pyproject.toml)
+        #[arg(long, group = "input")]
+        project_file: Option<PathBuf>,
+
+        /// Process a single schema file
+        #[arg(long, group = "input")]
+        schema_file: Option<PathBuf>,
+
+        /// Process all .yaml files in a directory
+        #[arg(long, group = "input")]
+        schema_dir: Option<PathBuf>,
     },
 }
 
@@ -54,8 +61,10 @@ fn main() -> Result<()> {
         Commands::GenerateSchemas {
             runtime,
             output,
-            source,
-        } => generate_schemas::run(runtime, output, source)?,
+            project_file,
+            schema_file,
+            schema_dir,
+        } => generate_schemas::run(runtime, output, project_file, schema_file, schema_dir)?,
     }
 
     Ok(())

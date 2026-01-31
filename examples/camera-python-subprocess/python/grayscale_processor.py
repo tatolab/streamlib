@@ -9,19 +9,12 @@ class GrayscaleProcessor:
         print("[GrayscaleProcessor] setup")
 
     def process(self, ctx):
-        # Videoframe msgpack array field order (from Rust struct declaration):
-        #   [0] frame_index (str), [1] height (u32), [2] surface_id (str),
-        #   [3] timestamp_ns (str), [4] width (u32)
-        SURFACE_ID = 2
-        HEIGHT = 1
-        WIDTH = 4
-
         frame = ctx.inputs.read("video_in")
         if frame is None:
             return
 
         # Resolve input surface → zero-copy IOSurface handle
-        input_surface = ctx.gpu.resolve_surface(frame[SURFACE_ID])
+        input_surface = ctx.gpu.resolve_surface(frame["surface_id"])
         input_surface.lock(read_only=True)
         input_pixels = input_surface.as_numpy()  # numpy VIEW, no copy
 
@@ -54,7 +47,7 @@ class GrayscaleProcessor:
         output_surface.release()
 
         # Forward frame with new surface_id pointing to processed output
-        frame[SURFACE_ID] = new_surface_id
+        frame["surface_id"] = new_surface_id
         ctx.outputs.write("video_out", frame)
 
     def teardown(self, ctx):

@@ -18,8 +18,8 @@ path = "src/main.rs"
 # Core library (bundles all Rust processors)
 streamlib = { path = "../streamlib" }
 
-# Schema definition and codegen
-streamlib-schema = { path = "../streamlib-schema" }
+# Schema types (processor YAML parsing)
+streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive"] }

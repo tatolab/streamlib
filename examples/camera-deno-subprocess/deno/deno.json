@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "@msgpack/msgpack": "npm:@msgpack/msgpack@3.0.0-beta2"
+  },
+  "streamlib": {
+    "processors": ["processor.yaml"]
+  }
+}

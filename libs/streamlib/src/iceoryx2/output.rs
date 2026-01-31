@@ -77,7 +77,7 @@ impl OutputWriter {
         value: &T,
         timestamp_ns: i64,
     ) -> Result<()> {
-        let data = rmp_serde::to_vec(value)
+        let data = rmp_serde::to_vec_named(value)
             .map_err(|e| StreamError::Link(format!("Failed to serialize frame: {}", e)))?;
 
         let connections = self.connections.lock();

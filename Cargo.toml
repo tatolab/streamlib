@@ -9,7 +9,8 @@ members = [
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
     # "libs/streamlib-python",    # Python bindings via PyO3 (temporarily disabled - host processors obsolete with multi-runtime architecture)
-    "libs/streamlib-schema",    # Schema definition, parsing, and code generation
+    "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
+    "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)
@@ -28,6 +29,7 @@ members = [
     # "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline (temporarily disabled - depends on streamlib-python)
     # "examples/camera-dylib-display/rust", # Plugin: Rust processors for camera-dylib-display
     "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
+    "examples/camera-deno-subprocess",   # Example: Camera → Deno subprocess → Display pipeline
     "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
 ]
 

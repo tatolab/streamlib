@@ -13,9 +13,7 @@
 use crate::analysis::AnalysisResult;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-#[allow(unused_imports)]
-use streamlib_codegen_shared::ProcessExecution;
-use streamlib_schema::ProcessorSchema;
+use streamlib_codegen_shared::ProcessorSchema;
 use syn::ItemStruct;
 
 // ============================================================================
@@ -278,7 +276,7 @@ fn generate_processor_impl_from_schema(
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
-    use streamlib_schema::ProcessExecution;
+    use streamlib_codegen_shared::ProcessorSchemaExecution;
 
     let processor_name = &schema.name;
     let description = schema.description.as_deref().unwrap_or("Processor");
@@ -293,7 +291,7 @@ fn generate_processor_impl_from_schema(
         start_impl,
         stop_impl,
     ) = match &schema.execution {
-        ProcessExecution::Reactive => (
+        ProcessorSchemaExecution::Reactive => (
             quote! { ::streamlib::core::ProcessExecution::Reactive },
             "Reactive",
             quote! { ::streamlib::core::ReactiveProcessor },
@@ -311,7 +309,7 @@ fn generate_processor_impl_from_schema(
                 ))
             },
         ),
-        ProcessExecution::Manual => (
+        ProcessorSchemaExecution::Manual => (
             quote! { ::streamlib::core::ProcessExecution::Manual },
             "Manual",
             quote! { ::streamlib::core::ManualProcessor },
@@ -327,7 +325,7 @@ fn generate_processor_impl_from_schema(
                 <Self as ::streamlib::core::ManualProcessor>::stop(self)
             },
         ),
-        ProcessExecution::Continuous { interval_ms } => {
+        ProcessorSchemaExecution::Continuous { interval_ms } => {
             let interval = *interval_ms;
             (
                 quote! { ::streamlib::core::ProcessExecution::Continuous { interval_ms: #interval } },
