@@ -596,9 +596,9 @@ fn resolve_deno_sdk_path() -> Result<PathBuf> {
     // Dev mode: SDK lives at libs/streamlib-deno/ relative to workspace root
     let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../libs/streamlib-deno");
     if dev_path.exists() {
-        return Ok(dev_path.canonicalize().map_err(|e| {
-            StreamError::Runtime(format!("Failed to canonicalize SDK path: {}", e))
-        })?);
+        return dev_path
+            .canonicalize()
+            .map_err(|e| StreamError::Runtime(format!("Failed to canonicalize SDK path: {}", e)));
     }
 
     Err(StreamError::Runtime(

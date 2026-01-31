@@ -357,7 +357,7 @@ pub unsafe extern "C" fn sldn_output_write(
         None => return -1,
     };
 
-    let state = match ctx.publishers.get(&port_name.to_string()) {
+    let state = match ctx.publishers.get(port_name) {
         Some(s) => s,
         None => {
             eprintln!(
