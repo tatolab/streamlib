@@ -182,6 +182,154 @@ impl StreamRuntime {
     }
 
     // =========================================================================
+    // Python Project Registration
+    // =========================================================================
+
+    /// Register all Python processors defined in a project's pyproject.toml.
+    ///
+    /// Reads `[tool.streamlib].processors` array from the pyproject.toml,
+    /// loads each YAML, and registers via `register_dynamic()` with a
+    /// [`SubprocessHostProcessor`] constructor.
+    pub fn register_python_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
+        use crate::core::compiler::compiler_ops::create_subprocess_host_constructor;
+        use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
+        use crate::core::execution::{ExecutionConfig, ProcessExecution};
+        use crate::core::ProcessorDescriptor;
+
+        let project_path = project_path.as_ref();
+        let pyproject_path = project_path.join("pyproject.toml");
+
+        tracing::info!(
+            "Registering Python processors from: {}",
+            pyproject_path.display()
+        );
+
+        let pyproject_content = std::fs::read_to_string(&pyproject_path).map_err(|e| {
+            StreamError::Configuration(format!(
+                "Failed to read {}: {}",
+                pyproject_path.display(),
+                e
+            ))
+        })?;
+
+        // Parse [tool.streamlib].processors
+        let pyproject: toml::Value = toml::from_str(&pyproject_content).map_err(|e| {
+            StreamError::Configuration(format!(
+                "Failed to parse {}: {}",
+                pyproject_path.display(),
+                e
+            ))
+        })?;
+
+        let processor_paths: Vec<String> = pyproject
+            .get("tool")
+            .and_then(|t| t.get("streamlib"))
+            .and_then(|s| s.get("processors"))
+            .and_then(|p| p.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if processor_paths.is_empty() {
+            tracing::warn!(
+                "No processors found in [tool.streamlib].processors in {}",
+                pyproject_path.display()
+            );
+            return Ok(());
+        }
+
+        for yaml_rel_path in &processor_paths {
+            let yaml_path = project_path.join(yaml_rel_path);
+
+            let proc_schema =
+                streamlib_schema::parse_processor_yaml_file(&yaml_path).map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "Failed to parse processor YAML {}: {}",
+                        yaml_path.display(),
+                        e
+                    ))
+                })?;
+
+            // Convert ProcessorSchema → ProcessorDescriptor
+            let runtime = match proc_schema.runtime.language {
+                streamlib_schema::ProcessorLanguage::Python => ProcessorRuntime::Python,
+                streamlib_schema::ProcessorLanguage::TypeScript => ProcessorRuntime::TypeScript,
+                streamlib_schema::ProcessorLanguage::Rust => ProcessorRuntime::Rust,
+            };
+
+            let inputs: Vec<PortDescriptor> = proc_schema
+                .inputs
+                .iter()
+                .map(|p| {
+                    PortDescriptor::new(
+                        &p.name,
+                        p.description.as_deref().unwrap_or(""),
+                        &p.schema,
+                        true,
+                    )
+                })
+                .collect();
+
+            let outputs: Vec<PortDescriptor> = proc_schema
+                .outputs
+                .iter()
+                .map(|p| {
+                    PortDescriptor::new(
+                        &p.name,
+                        p.description.as_deref().unwrap_or(""),
+                        &p.schema,
+                        true,
+                    )
+                })
+                .collect();
+
+            let mut descriptor = ProcessorDescriptor::new(
+                &proc_schema.name,
+                proc_schema.description.as_deref().unwrap_or(""),
+            )
+            .with_version(&proc_schema.version)
+            .with_runtime(runtime);
+
+            if let Some(entrypoint) = &proc_schema.entrypoint {
+                descriptor = descriptor.with_entrypoint(entrypoint);
+            }
+
+            descriptor.inputs = inputs;
+            descriptor.outputs = outputs;
+
+            // Convert schema execution mode to runtime ExecutionConfig
+            let execution = match &proc_schema.execution {
+                streamlib_schema::ProcessExecution::Reactive => ProcessExecution::Reactive,
+                streamlib_schema::ProcessExecution::Manual => ProcessExecution::Manual,
+                streamlib_schema::ProcessExecution::Continuous { interval_ms } => {
+                    ProcessExecution::Continuous {
+                        interval_ms: *interval_ms,
+                    }
+                }
+            };
+            let execution_config = ExecutionConfig::new(execution);
+
+            // Create constructor that builds SubprocessHostProcessor with real
+            // InputMailboxes/OutputWriter (wired by compiler like Rust processors)
+            let constructor = create_subprocess_host_constructor(&descriptor, execution_config);
+
+            crate::core::processors::PROCESSOR_REGISTRY
+                .register_dynamic(descriptor, constructor)?;
+
+            tracing::info!(
+                "Registered Python processor '{}' from {}",
+                proc_schema.name,
+                yaml_rel_path
+            );
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
     // Lifecycle
     // =========================================================================
 

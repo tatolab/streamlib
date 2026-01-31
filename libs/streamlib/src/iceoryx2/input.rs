@@ -147,6 +147,29 @@ impl InputMailboxes {
             .map_err(|e| StreamError::Link(format!("Failed to deserialize frame: {}", e)))
     }
 
+    /// Read raw bytes and timestamp from the given port without deserialization.
+    ///
+    /// Uses the port's read mode (same as [`read`]). Returns `Ok(Some((data, timestamp_ns)))`
+    /// if data is available, `Ok(None)` if the mailbox is empty.
+    pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        self.receive_pending();
+
+        let port_config = self
+            .ports
+            .get(port)
+            .ok_or_else(|| StreamError::Link(format!("Unknown input port: {}", port)))?;
+
+        let payload = match port_config.read_mode {
+            ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
+            ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
+        };
+
+        match payload {
+            Some(p) => Ok(Some((p.data().to_vec(), p.timestamp_ns))),
+            None => Ok(None),
+        }
+    }
+
     /// Check if a port has any payloads available.
     ///
     /// This first receives any pending data from the iceoryx2 Subscriber.

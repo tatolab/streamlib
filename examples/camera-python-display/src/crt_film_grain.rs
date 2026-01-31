@@ -12,13 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-use streamlib::core::rhi::{
-    PixelBufferDescriptor, PixelFormat, RhiPixelBufferPool, RhiTextureCache,
-};
-use streamlib::core::{
-    GpuContext, LinkInput, LinkOutput, Result, RuntimeContext, StreamError, VideoFrame,
-};
+use std::time::Instant;
+use streamlib::core::rhi::{PixelFormat, RhiTextureCache};
+use streamlib::core::{GpuContext, Result, RuntimeContext, StreamError};
+use streamlib::Videoframe;
 
 /// Uniform buffer for CRT + Film Grain shader.
 #[repr(C)]
@@ -33,7 +30,7 @@ struct CrtFilmGrainUniforms {
     brightness: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, streamlib::ConfigDescriptor)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CrtFilmGrainConfig {
     /// CRT barrel distortion amount (0.0 = flat, 1.0 = heavy curve).
     pub crt_curve: f32,
@@ -66,20 +63,8 @@ impl Default for CrtFilmGrainConfig {
     }
 }
 
-#[streamlib::processor(
-    name = "CrtFilmGrain",
-    execution = Reactive,
-    description = "CRT display + 80s film grain effect",
-    unsafe_send
-)]
+#[streamlib::processor("src/crt_film_grain.yaml")]
 pub struct CrtFilmGrainProcessor {
-    #[streamlib::input(description = "Video frames to process")]
-    video_in: LinkInput<VideoFrame>,
-
-    #[streamlib::output(description = "Processed video frames")]
-    video_out: LinkOutput<VideoFrame>,
-
-    #[streamlib::config]
     config: CrtFilmGrainConfig,
 
     gpu_context: Option<GpuContext>,
@@ -94,10 +79,6 @@ pub struct CrtFilmGrainProcessor {
 
     // RHI resources
     texture_cache: Option<RhiTextureCache>,
-    /// Ring buffer of output pixel buffers to avoid CPU-GPU sync.
-    output_buffers: [Option<streamlib::core::rhi::RhiPixelBuffer>; 3],
-    output_index: usize,
-    output_dimensions: Option<(u32, u32)>,
 }
 
 impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
@@ -200,15 +181,12 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        // Use wait_read with 50ms timeout for sync point behavior
-        let Some(frame) = self.video_in.wait_read(Duration::from_millis(50)) else {
+        if !self.inputs.has_data("video_in") {
             return Ok(());
-        };
-
-        let width = frame.width();
-        let height = frame.height();
-        let timestamp_ns = frame.timestamp_ns;
-        let frame_number = frame.frame_number;
+        }
+        let frame: Videoframe = self.inputs.read("video_in")?;
+        let width = frame.width;
+        let height = frame.height;
 
         let elapsed = self
             .start_time
@@ -226,32 +204,17 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
         }
         let texture_cache = self.texture_cache.as_ref().unwrap();
 
-        let input_view = texture_cache.create_view(frame.buffer())?;
-        let input_metal = input_view.as_metal_texture();
+        let input_buffer = gpu_ctx.resolve_videoframe_buffer(&frame)?;
+        let input_view = texture_cache.create_view(&input_buffer)?;
+        let input_metal: &metal::TextureRef = input_view.as_metal_texture();
 
         let command_queue = gpu_ctx.command_queue().metal_queue_ref();
 
-        // Acquire output buffer from ring
-        if self.output_dimensions != Some((width, height)) {
-            let output_desc = PixelBufferDescriptor::new(width, height, PixelFormat::Bgra32);
-            let pool = RhiPixelBufferPool::new_with_descriptor(&output_desc)?;
-            self.output_buffers = [
-                Some(pool.acquire()?),
-                Some(pool.acquire()?),
-                Some(pool.acquire()?),
-            ];
-            self.output_dimensions = Some((width, height));
-            self.output_index = 0;
-        }
-
-        // Rotate to next output buffer
-        self.output_index = (self.output_index + 1) % 3;
-        let output_buffer = self.output_buffers[self.output_index]
-            .as_ref()
-            .unwrap()
-            .clone();
+        // Acquire output buffer from GpuContext pool
+        let (output_pool_id, output_buffer) =
+            gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Bgra32)?;
         let output_view = texture_cache.create_view(&output_buffer)?;
-        let output_metal = output_view.as_metal_texture();
+        let output_metal: &metal::TextureRef = output_view.as_metal_texture();
 
         // Update render pass attachment
         let render_pass_desc = self.render_pass_desc.as_ref().unwrap();
@@ -292,11 +255,17 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
         render_enc.end_encoding();
 
         command_buffer.commit();
-        // No wait_until_completed() - ring buffer handles sync
+        command_buffer.wait_until_completed();
 
         // Output frame
-        let output_frame = VideoFrame::from_buffer(output_buffer, timestamp_ns, frame_number);
-        self.video_out.write(output_frame);
+        let output_frame = Videoframe {
+            surface_id: output_pool_id.to_string(),
+            width,
+            height,
+            timestamp_ns: frame.timestamp_ns.clone(),
+            frame_index: frame.frame_index.clone(),
+        };
+        self.outputs.write("video_out", &output_frame)?;
 
         self.frame_count.fetch_add(1, Ordering::Relaxed);
         Ok(())

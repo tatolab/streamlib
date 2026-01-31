@@ -1,0 +1,12 @@
+name: com.tatolab.cyberpunk_glitch
+version: 1.0.0
+description: "Glitch post-processing — RGB separation, scanlines, slice displacement"
+runtime: python
+execution: reactive
+entrypoint: "cyberpunk_glitch:CyberpunkGlitch"
+inputs:
+  - name: video_in
+    schema: com.tatolab.videoframe@1.0.0
+outputs:
+  - name: video_out
+    schema: com.tatolab.videoframe@1.0.0

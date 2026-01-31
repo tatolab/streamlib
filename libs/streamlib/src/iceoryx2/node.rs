@@ -45,6 +45,7 @@ impl Iceoryx2Node {
         let service = node
             .service_builder(&service_name)
             .publish_subscribe::<FramePayload>()
+            .max_publishers(16)
             .open_or_create()
             .map_err(|e| StreamError::Runtime(format!("Failed to open/create service: {:?}", e)))?;
 

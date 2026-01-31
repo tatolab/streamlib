@@ -28,6 +28,9 @@ streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
 # Procedural macros
 streamlib-macros = { path = "../streamlib-macros" }
 
+# Schema definition and parsing (for Python processor registration)
+streamlib-schema = { path = "../streamlib-schema" }
+
 # Core dependencies (always included)
 thiserror.workspace = true
 anyhow.workspace = true

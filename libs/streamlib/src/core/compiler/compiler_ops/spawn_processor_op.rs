@@ -7,14 +7,15 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
 use crate::core::context::RuntimeContext;
+use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, ProcessorAudioConverterComponent, ProcessorInstanceComponent,
     ProcessorPauseGateComponent, ProcessorReadyBarrierComponent, ProcessorUniqueId,
-    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+    ShutdownChannelComponent, StateComponent, SubprocessHandleComponent, ThreadHandleComponent,
 };
-use crate::core::processors::{ProcessorInstanceFactory, ProcessorState};
+use crate::core::processors::{ProcessorInstanceFactory, ProcessorState, PROCESSOR_REGISTRY};
 
 /// Spawn a processor thread.
 ///
@@ -33,30 +34,38 @@ pub(crate) fn spawn_processor(
 ) -> Result<()> {
     let processor_id = processor_id.as_ref();
 
-    // Check if already has a thread (already running)
+    // Check if already has a thread or subprocess (already running)
     {
         let graph = graph_arc.read();
-        let has_thread = graph
+        let already_running = graph
             .traversal()
             .v(processor_id)
             .first()
-            .map(|n| n.has::<ThreadHandleComponent>())
+            .map(|n| n.has::<ThreadHandleComponent>() || n.has::<SubprocessHandleComponent>())
             .unwrap_or(false);
-        if has_thread {
+        if already_running {
             return Ok(());
         }
     }
 
-    // Extract scheduling strategy and barrier before spawning
-    let (strategy, barrier_component, proc_id_clone) = {
+    // Check processor runtime to determine dispatch path
+    let runtime = {
+        let graph = graph_arc.read();
+        let proc_type = graph
+            .traversal()
+            .v(processor_id)
+            .first()
+            .map(|n| n.processor_type().to_string())
+            .unwrap_or_default();
+        PROCESSOR_REGISTRY
+            .descriptor(&proc_type)
+            .map(|d| d.runtime.clone())
+            .unwrap_or(ProcessorRuntime::Rust)
+    };
+
+    // Extract barrier before spawning (needed for both paths)
+    let (barrier_component, proc_id_clone) = {
         let mut graph = graph_arc.write();
-        let node = graph.traversal().v(processor_id).first().ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
-        })?;
-
-        let strategy = scheduling_strategy_for_processor(node);
-
-        // Extract barrier component from node
         let node_mut = graph
             .traversal_mut()
             .v(processor_id)
@@ -74,25 +83,82 @@ pub(crate) fn spawn_processor(
                 ))
             })?;
 
-        (strategy, barrier, ProcessorUniqueId::from(processor_id))
+        (barrier, ProcessorUniqueId::from(processor_id))
     };
 
-    tracing::info!(
-        "[{}] Spawning with strategy: {}",
-        processor_id,
-        strategy.description()
-    );
+    match runtime {
+        ProcessorRuntime::Rust => {
+            // Extract scheduling strategy for Rust processors
+            let strategy = {
+                let graph = graph_arc.read();
+                let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
+                    StreamError::ProcessorNotFound(format!(
+                        "Processor '{}' not found",
+                        proc_id_clone
+                    ))
+                })?;
+                scheduling_strategy_for_processor(node)
+            };
 
-    match strategy {
-        SchedulingStrategy::DedicatedThread { priority, name: _ } => {
-            spawn_dedicated_thread(
-                graph_arc,
-                factory,
-                runtime_ctx,
-                proc_id_clone,
-                priority,
-                barrier_component,
-            )?;
+            tracing::info!(
+                "[{}] Spawning Rust processor with strategy: {}",
+                processor_id,
+                strategy.description()
+            );
+
+            match strategy {
+                SchedulingStrategy::DedicatedThread { priority, name: _ } => {
+                    spawn_dedicated_thread(
+                        graph_arc,
+                        factory,
+                        runtime_ctx,
+                        proc_id_clone,
+                        priority,
+                        barrier_component,
+                    )?;
+                }
+            }
+        }
+        ProcessorRuntime::Python => {
+            // Python processors are hosted by SubprocessHostProcessor (a Rust processor
+            // that bridges to a Python subprocess via pipes). They use the same
+            // dedicated thread path as Rust processors since they have real
+            // InputMailboxes/OutputWriter wired by the compiler.
+            let strategy = {
+                let graph = graph_arc.read();
+                let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
+                    StreamError::ProcessorNotFound(format!(
+                        "Processor '{}' not found",
+                        proc_id_clone
+                    ))
+                })?;
+                scheduling_strategy_for_processor(node)
+            };
+
+            tracing::info!(
+                "[{}] Spawning Python subprocess host with strategy: {}",
+                processor_id,
+                strategy.description()
+            );
+
+            match strategy {
+                SchedulingStrategy::DedicatedThread { priority, name: _ } => {
+                    spawn_dedicated_thread(
+                        graph_arc,
+                        factory,
+                        runtime_ctx,
+                        proc_id_clone,
+                        priority,
+                        barrier_component,
+                    )?;
+                }
+            }
+        }
+        ProcessorRuntime::TypeScript => {
+            return Err(StreamError::Configuration(format!(
+                "TypeScript runtime not yet supported for processor '{}'",
+                processor_id
+            )));
         }
     }
 

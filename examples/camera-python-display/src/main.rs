@@ -13,6 +13,8 @@
 //! - Rust CRT + Film Grain effect (80s Blade Runner look)
 //! - Python glitch effect (RGB separation, scanlines, slice displacement)
 //!
+//! All Python processors run as isolated subprocesses with their own CGL contexts.
+//!
 //! Pipeline Architecture:
 //! ```
 //!   Camera ──┬──→ BlendingCompositor ──→ CRT/Film ──→ Glitch ──→ Display
@@ -39,15 +41,15 @@ mod crt_film_grain;
 use std::path::PathBuf;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{
-    ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor, Result, StreamRuntime,
+    ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor, ProcessorSpec, Result,
+    StreamRuntime,
 };
-use streamlib_python::{PythonContinuousHostProcessor, PythonProcessorConfig};
 
-use blending_compositor::{BlendingCompositorConfig, BlendingCompositorProcessor};
-use crt_film_grain::{CrtFilmGrainConfig, CrtFilmGrainProcessor};
+use blending_compositor::BlendingCompositorProcessor;
+use crt_film_grain::CrtFilmGrainProcessor;
 
 fn main() -> Result<()> {
-    // Initialize tracing subscriber FIRST
+    // Initialize tracing subscriber
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -60,13 +62,14 @@ fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 
-    // THEN initialize LogTracer to forward Python logging (via pyo3-log) to tracing
-    tracing_log::LogTracer::init().expect("Failed to initialize LogTracer");
-
     println!("=== Cyberpunk Pipeline (Breaking News PiP) ===\n");
 
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
+
+    // Register all Python processor descriptors from pyproject.toml
+    runtime.register_python_project(&project_path)?;
+    println!("✓ Registered Python processors from pyproject.toml\n");
 
     // =========================================================================
     // Camera Source
@@ -79,14 +82,18 @@ fn main() -> Result<()> {
     }))?;
     println!("✓ Camera added: {}\n", camera);
 
+    // =========================================================================
+    // Python Subprocess Processors
+    // =========================================================================
+
     // Avatar Character (MediaPipe pose detection + stylized character)
-    println!("🐍 Adding Python avatar character (MediaPipe pose + stylized character)...");
-    let avatar =
-        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
-            project_path: project_path.clone(),
-            class_name: "AvatarCharacter".to_string(),
-            entry_point: Some("avatar_character.py".to_string()),
-        }))?;
+    println!(
+        "🐍 Adding Python avatar character (subprocess, MediaPipe pose + stylized character)..."
+    );
+    let avatar = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.avatar_character",
+        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+    ))?;
     println!("✓ Avatar character processor added: {}\n", avatar);
 
     // =========================================================================
@@ -94,35 +101,29 @@ fn main() -> Result<()> {
     // =========================================================================
 
     println!("🎨 Adding blending compositor (parallel layer blending)...");
-    let blending = runtime.add_processor(BlendingCompositorProcessor::node(
-        BlendingCompositorConfig::default(),
-    ))?;
+    let blending = runtime.add_processor(BlendingCompositorProcessor::node(Default::default()))?;
     println!("✓ Blending compositor added: {}\n", blending);
 
     // =========================================================================
     // PARALLEL: Lower Third (continuous RGBA generator)
     // =========================================================================
 
-    println!("🐍 Adding Python lower third GENERATOR (parallel, 16ms)...");
-    let lower_third =
-        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
-            project_path: project_path.clone(),
-            class_name: "CyberpunkLowerThird".to_string(),
-            entry_point: Some("cyberpunk_lower_third.py".to_string()),
-        }))?;
+    println!("🐍 Adding Python lower third GENERATOR (subprocess, 16ms)...");
+    let lower_third = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.cyberpunk_lower_third",
+        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+    ))?;
     println!("✓ Lower third generator added: {}\n", lower_third);
 
     // =========================================================================
     // PARALLEL: Watermark (continuous RGBA generator)
     // =========================================================================
 
-    println!("🐍 Adding Python watermark GENERATOR (parallel, 16ms)...");
-    let watermark =
-        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
-            project_path: project_path.clone(),
-            class_name: "CyberpunkWatermark".to_string(),
-            entry_point: Some("cyberpunk_watermark.py".to_string()),
-        }))?;
+    println!("🐍 Adding Python watermark GENERATOR (subprocess, 16ms)...");
+    let watermark = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.cyberpunk_watermark",
+        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+    ))?;
     println!("✓ Watermark generator added: {}\n", watermark);
 
     // =========================================================================
@@ -130,21 +131,18 @@ fn main() -> Result<()> {
     // =========================================================================
 
     println!("📺 Adding CRT + Film Grain processor (80s Blade Runner look)...");
-    let crt_film_grain =
-        runtime.add_processor(CrtFilmGrainProcessor::node(CrtFilmGrainConfig::default()))?;
+    let crt_film_grain = runtime.add_processor(CrtFilmGrainProcessor::node(Default::default()))?;
     println!("✓ CRT + Film Grain processor added: {}\n", crt_film_grain);
 
     // =========================================================================
     // Glitch Effect
     // =========================================================================
 
-    println!("🐍 Adding Python glitch processor (RGB separation, scanlines)...");
-    let glitch =
-        runtime.add_processor(PythonContinuousHostProcessor::node(PythonProcessorConfig {
-            project_path,
-            class_name: "CyberpunkGlitch".to_string(),
-            entry_point: Some("cyberpunk_glitch.py".to_string()),
-        }))?;
+    println!("🐍 Adding Python glitch processor (subprocess, RGB separation, scanlines)...");
+    let glitch = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.cyberpunk_glitch",
+        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+    ))?;
     println!("✓ Glitch processor added: {}\n", glitch);
 
     // =========================================================================
@@ -157,7 +155,7 @@ fn main() -> Result<()> {
         height: 1080,
         title: Some("Cyberpunk Pipeline (Parallel)".to_string()),
         scaling_mode: Default::default(),
-        vsync: false, // Uncapped - run as fast as possible
+        vsync: Some(false), // Uncapped - run as fast as possible
         ..Default::default()
     }))?;
     println!("✓ Display added: {}\n", display);

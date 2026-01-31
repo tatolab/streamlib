@@ -252,6 +252,67 @@ impl ProcessorInstanceFactory {
         Ok(())
     }
 
+    /// Register a processor descriptor without a constructor.
+    ///
+    /// Used for subprocess processors (Python, TypeScript) where no Rust-side
+    /// `ProcessorInstance` is created. The graph needs the descriptor and port info
+    /// for validation and wiring, but `create()` will return an error if called.
+    pub fn register_descriptor_only(&self, descriptor: ProcessorDescriptor) -> Result<()> {
+        let type_name = descriptor.name.clone();
+
+        if self.descriptors.read().contains_key(&type_name) {
+            return Err(StreamError::Configuration(format!(
+                "Processor '{}' already registered",
+                type_name
+            )));
+        }
+
+        let inputs: Vec<PortInfo> = descriptor
+            .inputs
+            .iter()
+            .map(|p| PortInfo {
+                name: p.name.clone(),
+                data_type: p.schema.clone(),
+                port_kind: Default::default(),
+            })
+            .collect();
+
+        let outputs: Vec<PortInfo> = descriptor
+            .outputs
+            .iter()
+            .map(|p| PortInfo {
+                name: p.name.clone(),
+                data_type: p.schema.clone(),
+                port_kind: Default::default(),
+            })
+            .collect();
+
+        self.port_info
+            .write()
+            .insert(type_name.clone(), (inputs, outputs));
+
+        self.descriptors
+            .write()
+            .insert(type_name.clone(), descriptor);
+
+        // No constructor registered - create() will fail with ProcessorNotFound,
+        // which is correct since subprocess processors are never instantiated in Rust.
+
+        tracing::info!(
+            "[register_descriptor_only] subprocess processor type registered '{}'",
+            type_name
+        );
+
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
+                processor_type: type_name,
+            }),
+        );
+
+        Ok(())
+    }
+
     pub fn can_create(&self, processor_type: &str) -> bool {
         self.constructors.read().contains_key(processor_type)
     }
@@ -274,6 +335,11 @@ impl ProcessorInstanceFactory {
 
     pub fn is_registered(&self, processor_type: &str) -> bool {
         self.constructors.read().contains_key(processor_type)
+    }
+
+    /// Get the descriptor for a processor type, if registered.
+    pub fn descriptor(&self, processor_type: &str) -> Option<ProcessorDescriptor> {
+        self.descriptors.read().get(processor_type).cloned()
     }
 
     /// List all registered processor types with their full descriptors.

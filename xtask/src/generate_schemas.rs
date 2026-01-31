@@ -1,15 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Generate Rust structs from JTD schemas using jtd-codegen.
+//! Generate code from JTD schemas using jtd-codegen (Rust) or streamlib-schema (Python).
 //!
 //! Reads schema paths from `libs/streamlib/Cargo.toml` [package.metadata.streamlib]
-//! and generates Rust code in `libs/streamlib/src/_generated_/`.
+//! or from a `pyproject.toml` [tool.streamlib] section.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::RuntimeTarget;
 
 /// Cargo.toml structure for reading metadata.
 #[derive(Deserialize)]
@@ -33,6 +36,24 @@ struct StreamlibMetadata {
     schemas: Vec<String>,
 }
 
+/// pyproject.toml structure for reading [tool.streamlib] metadata.
+#[derive(Deserialize)]
+struct PyProjectToml {
+    tool: Option<PyProjectTool>,
+}
+
+#[derive(Deserialize)]
+struct PyProjectTool {
+    streamlib: Option<PyProjectStreamlib>,
+}
+
+#[derive(Deserialize)]
+struct PyProjectStreamlib {
+    /// Data type schemas (YAML format)
+    #[serde(default)]
+    schemas: Vec<String>,
+}
+
 /// Minimal JTD schema structure for extracting metadata.
 #[derive(Debug, Deserialize)]
 struct JtdSchema {
@@ -44,7 +65,71 @@ struct JtdMetadata {
     name: String,
 }
 
-pub fn run() -> Result<()> {
+pub fn run(runtime: RuntimeTarget, output: Option<PathBuf>, source: Option<PathBuf>) -> Result<()> {
+    let workspace_root = crate::workspace_root()?;
+
+    match runtime {
+        RuntimeTarget::Rust => run_rust_codegen(&workspace_root, output, source),
+        RuntimeTarget::Python => run_python_codegen(&workspace_root, output, source),
+    }
+}
+
+/// Read schema paths from a source file (Cargo.toml or pyproject.toml).
+///
+/// Returns (base_dir, schema_paths) where base_dir is the directory containing
+/// the source file (schema paths are relative to it).
+fn read_schema_paths(
+    workspace_root: &Path,
+    source: Option<PathBuf>,
+) -> Result<(PathBuf, Vec<String>)> {
+    let source_path = source.unwrap_or_else(|| workspace_root.join("libs/streamlib/Cargo.toml"));
+
+    let source_filename = source_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+
+    let base_dir = source_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| workspace_root.to_path_buf());
+
+    println!("Reading schemas from: {}", source_path.display());
+
+    let content = fs::read_to_string(&source_path)
+        .with_context(|| format!("Failed to read {}", source_path.display()))?;
+
+    let schemas = if source_filename == "pyproject.toml" {
+        let pyproject: PyProjectToml =
+            toml::from_str(&content).context("Failed to parse pyproject.toml")?;
+        pyproject
+            .tool
+            .and_then(|t| t.streamlib)
+            .map(|s| s.schemas)
+            .unwrap_or_default()
+    } else {
+        let cargo_toml: CargoToml =
+            toml::from_str(&content).context("Failed to parse Cargo.toml")?;
+        cargo_toml
+            .package
+            .metadata
+            .and_then(|m| m.streamlib)
+            .map(|s| s.schemas)
+            .unwrap_or_default()
+    };
+
+    Ok((base_dir, schemas))
+}
+
+// =============================================================================
+// Rust codegen (existing behavior)
+// =============================================================================
+
+fn run_rust_codegen(
+    workspace_root: &Path,
+    output: Option<PathBuf>,
+    source: Option<PathBuf>,
+) -> Result<()> {
     // Verify jtd-codegen is available
     let jtd_check = Command::new("jtd-codegen").arg("--version").output();
 
@@ -52,35 +137,19 @@ pub fn run() -> Result<()> {
         anyhow::bail!("jtd-codegen not found. Install with: cargo install jtd-codegen");
     }
 
-    let workspace_root = crate::workspace_root()?;
-    let streamlib_dir = workspace_root.join("libs/streamlib");
-    let cargo_toml_path = streamlib_dir.join("Cargo.toml");
-
-    println!("Reading schemas from: {}", cargo_toml_path.display());
-
-    // Read and parse Cargo.toml
-    let cargo_toml_content =
-        fs::read_to_string(&cargo_toml_path).context("Failed to read libs/streamlib/Cargo.toml")?;
-    let cargo_toml: CargoToml =
-        toml::from_str(&cargo_toml_content).context("Failed to parse Cargo.toml")?;
-
-    let schemas = cargo_toml
-        .package
-        .metadata
-        .and_then(|m| m.streamlib)
-        .map(|s| s.schemas)
-        .unwrap_or_default();
+    let (base_dir, schemas) = read_schema_paths(workspace_root, source)?;
 
     if schemas.is_empty() {
-        println!("No schemas found in [package.metadata.streamlib]");
+        println!("No schemas found");
         return Ok(());
     }
 
     println!("Found {} schemas", schemas.len());
 
     // Create output directory
-    let output_dir = streamlib_dir.join("src/_generated_");
-    fs::create_dir_all(&output_dir).context("Failed to create _generated_ directory")?;
+    let output_dir =
+        output.unwrap_or_else(|| workspace_root.join("libs/streamlib/src/_generated_"));
+    fs::create_dir_all(&output_dir).context("Failed to create output directory")?;
 
     // Create temp directory for JSON conversion
     let temp_dir = tempfile::tempdir().context("Failed to create temp directory")?;
@@ -89,7 +158,7 @@ pub fn run() -> Result<()> {
     let mut modules = Vec::new(); // (module_name, struct_name)
 
     for schema_path in &schemas {
-        let full_path = streamlib_dir.join(schema_path);
+        let full_path = base_dir.join(schema_path);
         println!("  Processing: {}", schema_path);
 
         // Read YAML and extract metadata
@@ -155,13 +224,148 @@ pub fn run() -> Result<()> {
     fs::write(&mod_path, mod_rs).context("Failed to write mod.rs")?;
 
     println!(
-        "Generated {} modules in {}",
+        "Generated {} Rust modules in {}",
         modules.len(),
         output_dir.display()
     );
 
     Ok(())
 }
+
+// =============================================================================
+// Python codegen
+// =============================================================================
+
+fn run_python_codegen(
+    workspace_root: &Path,
+    output: Option<PathBuf>,
+    source: Option<PathBuf>,
+) -> Result<()> {
+    // Resolve schema YAML files.
+    // When --source is provided, read schema list from that file.
+    // Otherwise, scan libs/streamlib-schema/schemas/*.yaml for core data type schemas.
+    let schema_files: Vec<PathBuf> = if let Some(ref source_path) = source {
+        let (base_dir, schema_list) = read_schema_paths(workspace_root, Some(source_path.clone()))?;
+        schema_list.iter().map(|p| base_dir.join(p)).collect()
+    } else {
+        // Default: scan streamlib-schema/schemas/ for core data type schemas
+        let schemas_dir = workspace_root.join("libs/streamlib-schema/schemas");
+        println!("Reading schemas from: {}", schemas_dir.display());
+        let mut files: Vec<PathBuf> = Vec::new();
+        for entry in fs::read_dir(&schemas_dir)
+            .with_context(|| format!("Failed to read {}", schemas_dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+                files.push(path);
+            }
+        }
+        files.sort();
+        files
+    };
+
+    if schema_files.is_empty() {
+        println!("No schemas found");
+        return Ok(());
+    }
+
+    println!("Found {} schemas", schema_files.len());
+
+    // Clean and recreate output directory to remove stale files
+    let output_dir = output
+        .unwrap_or_else(|| workspace_root.join("libs/streamlib-python/python/streamlib/schemas"));
+    if output_dir.exists() {
+        fs::remove_dir_all(&output_dir).context("Failed to clean output directory")?;
+    }
+    fs::create_dir_all(&output_dir).context("Failed to create output directory")?;
+
+    // Parse all schemas using streamlib-schema
+    let mut parsed_schemas = Vec::new();
+
+    for full_path in &schema_files {
+        println!("  Processing: {}", full_path.display());
+
+        let schema = streamlib_schema::parse_yaml_file(full_path)
+            .with_context(|| format!("Failed to parse schema {}", full_path.display()))?;
+
+        parsed_schemas.push(schema);
+    }
+
+    // Generate Python files for each schema.
+    // Use schema_name_to_struct_name() for correct class names (matches Rust _generated_).
+    // The codegen library uses rust_struct_name() which returns "Config" for all config schemas.
+    // We post-process to rename to the correct name (e.g., "CameraConfig").
+    let mut modules: Vec<(String, String)> = Vec::new(); // (module_name, class_name)
+
+    for schema in &parsed_schemas {
+        let module_name = schema_name_to_module_name(&schema.name);
+        let correct_class_name = schema_name_to_struct_name(&schema.name);
+        let codegen_class_name = schema.rust_struct_name();
+
+        let mut python_code = streamlib_schema::codegen::generate_python(schema)
+            .with_context(|| format!("Failed to generate Python for {}", schema.full_name()))?;
+
+        // Rename class if the codegen name differs from the correct name
+        if codegen_class_name != correct_class_name {
+            python_code = python_code.replace(
+                &format!("class {}:", codegen_class_name),
+                &format!("class {}:", correct_class_name),
+            );
+            python_code = python_code.replace(
+                &format!("-> \"{}\":", codegen_class_name),
+                &format!("-> \"{}\":", correct_class_name),
+            );
+            // Also rename nested class prefixes (e.g., "ConfigWhip" -> "WebrtcWhipConfigWhip")
+            // Nested classes use the parent class name as prefix
+            for field in &schema.fields {
+                if matches!(field.field_type, streamlib_schema::definition::FieldType::Complex(ref s) if s.eq_ignore_ascii_case("object"))
+                {
+                    let old_nested =
+                        format!("{}{}", codegen_class_name, to_pascal_case(&field.name));
+                    let new_nested =
+                        format!("{}{}", correct_class_name, to_pascal_case(&field.name));
+                    if old_nested != new_nested {
+                        python_code = python_code.replace(&old_nested, &new_nested);
+                    }
+                }
+            }
+        }
+
+        let output_path = output_dir.join(format!("{}.py", module_name));
+        fs::write(&output_path, &python_code)
+            .with_context(|| format!("Failed to write {}", output_path.display()))?;
+
+        println!("    → {}.py (class {})", module_name, correct_class_name);
+        modules.push((module_name, correct_class_name));
+    }
+
+    // Generate __init__.py with correct class names
+    let mut init_py = String::from("# Generated by streamlib schema sync\n# DO NOT EDIT\n\n");
+    for (module_name, class_name) in &modules {
+        init_py.push_str(&format!("from .{} import {}\n", module_name, class_name));
+    }
+    init_py.push_str("\n__all__ = [\n");
+    for (_, class_name) in &modules {
+        init_py.push_str(&format!("    \"{}\",\n", class_name));
+    }
+    init_py.push_str("]\n");
+
+    let init_path = output_dir.join("__init__.py");
+    fs::write(&init_path, &init_py).context("Failed to write __init__.py")?;
+
+    println!(
+        "Generated {} Python modules in {}",
+        modules.len(),
+        output_dir.display()
+    );
+
+    Ok(())
+}
+
+// =============================================================================
+// Rust post-processing (unchanged)
+// =============================================================================
 
 /// Post-process jtd-codegen output to add derives, make fields pub, etc.
 fn post_process_generated_code(code: &str, _struct_name: &str) -> Result<String> {
@@ -237,6 +441,10 @@ fn post_process_generated_code(code: &str, _struct_name: &str) -> Result<String>
 
     Ok(result)
 }
+
+// =============================================================================
+// Name conversion helpers
+// =============================================================================
 
 /// Convert schema name to struct name (PascalCase).
 /// e.g., "com.tatolab.audioframe.1ch" -> "Audioframe1Ch"
