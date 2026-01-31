@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/tatolab/streamlib/compare/v0.3.0...v0.3.1) (2026-01-31)
+
+
+### Features
+
+* Python subprocess processors with iceoryx2 IPC ([#130](https://github.com/tatolab/streamlib/issues/130)) ([f4664fc](https://github.com/tatolab/streamlib/commit/f4664fcc4b44b84074b068ef4093b785d3eeabb7))
+
 ## [0.3.0](https://github.com/tatolab/streamlib/compare/v0.2.5...v0.3.0) (2026-01-23)
 
 
