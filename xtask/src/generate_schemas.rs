@@ -456,7 +456,7 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
         if line.starts_with("pub struct ") {
             let name = line
                 .trim_start_matches("pub struct ")
-                .split(|c: char| c == ' ' || c == '{')
+                .split([' ', '{'])
                 .next()
                 .unwrap_or("");
             if !name.is_empty() {
@@ -542,20 +542,19 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
         if next_is_struct && line.starts_with("pub struct ") {
             let full_name = line
                 .trim_start_matches("pub struct ")
-                .split(|c: char| c == ' ' || c == '{')
+                .split([' ', '{'])
                 .next()
                 .unwrap_or("");
 
             // Try to strip root struct name prefix from sub-structs
             let mut short_name = full_name.to_string();
             // Only rename if this is NOT the root struct (i.e., the expected name)
-            if full_name != expected_struct_name {
-                if full_name.starts_with(expected_struct_name)
-                    && full_name.len() > expected_struct_name.len()
-                {
-                    short_name = full_name[expected_struct_name.len()..].to_string();
-                    enum_renames.push((full_name.to_string(), short_name.clone()));
-                }
+            if full_name != expected_struct_name
+                && full_name.starts_with(expected_struct_name)
+                && full_name.len() > expected_struct_name.len()
+            {
+                short_name = full_name[expected_struct_name.len()..].to_string();
+                enum_renames.push((full_name.to_string(), short_name.clone()));
             }
 
             result.push_str("#[serde(deny_unknown_fields)]\n");
@@ -574,7 +573,7 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
 
             let full_name = line
                 .trim_start_matches("pub enum ")
-                .split(|c: char| c == ' ' || c == '{')
+                .split([' ', '{'])
                 .next()
                 .unwrap_or("");
 
