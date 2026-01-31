@@ -38,8 +38,11 @@ export interface OutputPorts {
  * GPU context for zero-copy surface access (macOS IOSurface).
  */
 export interface GpuContext {
-  /** Resolve an IOSurface by its ID. */
-  resolveSurface(iosurfaceId: number): GpuSurface;
+  /** Resolve a broker pool_id to a GPU surface handle. */
+  resolveSurface(poolId: string): GpuSurface;
+
+  /** Create a new IOSurface, register with broker, return [poolId, surface]. */
+  createSurface(width: number, height: number, format: string): { poolId: string; surface: GpuSurface };
 }
 
 /**

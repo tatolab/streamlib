@@ -418,6 +418,8 @@ mod gpu_surface {
     #[link(name = "IOSurface", kind = "framework")]
     extern "C" {
         fn IOSurfaceLookup(csid: IOSurfaceID) -> IOSurfaceRef;
+        fn IOSurfaceCreate(properties: CFDictionaryRef) -> IOSurfaceRef;
+        fn IOSurfaceGetID(buffer: IOSurfaceRef) -> IOSurfaceID;
         fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
         fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
         fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
@@ -428,9 +430,61 @@ mod gpu_surface {
         fn IOSurfaceDecrementUseCount(buffer: IOSurfaceRef);
     }
 
+    type CFDictionaryRef = *const c_void;
+    type CFStringRef = *const c_void;
+    type CFNumberRef = *const c_void;
+    type CFAllocatorRef = *const c_void;
+    type CFIndex = isize;
+    type CFNumberType = i32;
+    const K_CF_NUMBER_INT_TYPE: CFNumberType = 9; // kCFNumberIntType
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFAllocatorDefault: CFAllocatorRef;
+
+        fn CFStringCreateWithCString(
+            alloc: CFAllocatorRef,
+            c_str: *const u8,
+            encoding: u32,
+        ) -> CFStringRef;
+        fn CFNumberCreate(
+            alloc: CFAllocatorRef,
+            the_type: CFNumberType,
+            value_ptr: *const c_void,
+        ) -> CFNumberRef;
+        fn CFDictionaryCreate(
+            alloc: CFAllocatorRef,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: CFIndex,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> CFDictionaryRef;
+        fn CFRelease(cf: *const c_void);
+
+        static kCFTypeDictionaryKeyCallBacks: c_void;
+        static kCFTypeDictionaryValueCallBacks: c_void;
+    }
+
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x08000100;
+
+    /// Create a CFString from a null-terminated C string literal.
+    unsafe fn cf_string(s: &[u8]) -> CFStringRef {
+        CFStringCreateWithCString(kCFAllocatorDefault, s.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+    }
+
+    /// Create a CFNumber from an i32 value.
+    unsafe fn cf_number_i32(val: i32) -> CFNumberRef {
+        CFNumberCreate(
+            kCFAllocatorDefault,
+            K_CF_NUMBER_INT_TYPE,
+            &val as *const i32 as *const c_void,
+        )
+    }
+
     /// Opaque handle to an IOSurface.
     pub struct SurfaceHandle {
-        surface_ref: IOSurfaceRef,
+        pub(crate) surface_ref: IOSurfaceRef,
         pub surface_id: u32,
         pub width: u32,
         pub height: u32,
@@ -545,6 +599,91 @@ mod gpu_surface {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn sldn_gpu_surface_create(
+        width: u32,
+        height: u32,
+        bytes_per_element: u32,
+    ) -> *mut SurfaceHandle {
+        let bytes_per_row = width * bytes_per_element;
+        let alloc_size = bytes_per_row * height;
+
+        // IOSurface property keys (null-terminated C string literals)
+        let k_width = cf_string(b"IOSurfaceWidth\0");
+        let k_height = cf_string(b"IOSurfaceHeight\0");
+        let k_bytes_per_element = cf_string(b"IOSurfaceBytesPerElement\0");
+        let k_bytes_per_row = cf_string(b"IOSurfaceBytesPerRow\0");
+        let k_alloc_size = cf_string(b"IOSurfaceAllocSize\0");
+        let k_pixel_format = cf_string(b"IOSurfacePixelFormat\0");
+
+        // BGRA pixel format: 'BGRA' = 0x42475241
+        let pixel_format: i32 = 0x42475241u32 as i32;
+
+        let v_width = cf_number_i32(width as i32);
+        let v_height = cf_number_i32(height as i32);
+        let v_bpe = cf_number_i32(bytes_per_element as i32);
+        let v_bpr = cf_number_i32(bytes_per_row as i32);
+        let v_alloc = cf_number_i32(alloc_size as i32);
+        let v_pixel_format = cf_number_i32(pixel_format);
+
+        let keys: [*const c_void; 6] = [
+            k_width,
+            k_height,
+            k_bytes_per_element,
+            k_bytes_per_row,
+            k_alloc_size,
+            k_pixel_format,
+        ];
+        let values: [*const c_void; 6] = [v_width, v_height, v_bpe, v_bpr, v_alloc, v_pixel_format];
+
+        let properties = CFDictionaryCreate(
+            kCFAllocatorDefault,
+            keys.as_ptr(),
+            values.as_ptr(),
+            6,
+            &kCFTypeDictionaryKeyCallBacks as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const c_void,
+        );
+
+        let surface_ref = IOSurfaceCreate(properties);
+
+        // Release CF objects
+        CFRelease(properties);
+        for k in &keys {
+            CFRelease(*k);
+        }
+        for v in &values {
+            CFRelease(*v);
+        }
+
+        if surface_ref.is_null() {
+            eprintln!(
+                "[sldn] IOSurfaceCreate failed: {}x{} bpe={}",
+                width, height, bytes_per_element
+            );
+            return std::ptr::null_mut();
+        }
+
+        let surface_id = IOSurfaceGetID(surface_ref);
+
+        let handle = SurfaceHandle {
+            surface_ref,
+            surface_id,
+            width,
+            height,
+            bytes_per_row,
+            base_address: std::ptr::null_mut(),
+            is_locked: false,
+        };
+
+        Box::into_raw(Box::new(handle))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_gpu_surface_get_id(handle: *const SurfaceHandle) -> u32 {
+        handle.as_ref().map(|h| h.surface_id).unwrap_or(0)
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn sldn_gpu_surface_release(handle: *mut SurfaceHandle) {
         if !handle.is_null() {
             let h = Box::from_raw(handle);
@@ -602,7 +741,441 @@ mod gpu_surface {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn sldn_gpu_surface_create(
+        _width: u32,
+        _height: u32,
+        _bytes_per_element: u32,
+    ) -> *mut std::ffi::c_void {
+        eprintln!("[sldn] GPU surface creation not supported on this platform");
+        std::ptr::null_mut()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_gpu_surface_get_id(_handle: *const std::ffi::c_void) -> u32 {
+        0
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn sldn_gpu_surface_release(_handle: *mut std::ffi::c_void) {}
+}
+
+// ============================================================================
+// C ABI — Broker XPC client (macOS surface resolution)
+// ============================================================================
+
+#[cfg(target_os = "macos")]
+mod broker_client {
+    use std::ffi::{c_char, c_void, CStr, CString};
+
+    use super::gpu_surface::SurfaceHandle;
+
+    type XpcObjectT = *mut c_void;
+    type XpcConnectionT = *mut c_void;
+    type MachPortT = u32;
+    type IOSurfaceRef = *const c_void;
+    type IOSurfaceID = u32;
+
+    #[link(name = "System", kind = "dylib")]
+    extern "C" {
+        fn xpc_connection_create_mach_service(
+            name: *const c_char,
+            target_queue: *mut c_void,
+            flags: u64,
+        ) -> XpcConnectionT;
+        fn xpc_connection_set_event_handler(connection: XpcConnectionT, handler: *mut c_void);
+        fn xpc_connection_resume(connection: XpcConnectionT);
+        fn xpc_connection_cancel(connection: XpcConnectionT);
+        fn xpc_connection_send_message_with_reply_sync(
+            connection: XpcConnectionT,
+            message: XpcObjectT,
+        ) -> XpcObjectT;
+        fn xpc_dictionary_create(
+            keys: *const *const c_char,
+            values: *const XpcObjectT,
+            count: usize,
+        ) -> XpcObjectT;
+        fn xpc_dictionary_set_string(dict: XpcObjectT, key: *const c_char, value: *const c_char);
+        fn xpc_dictionary_set_mach_send(dict: XpcObjectT, key: *const c_char, port: MachPortT);
+        fn xpc_dictionary_get_string(dict: XpcObjectT, key: *const c_char) -> *const c_char;
+        fn xpc_dictionary_copy_mach_send(dict: XpcObjectT, key: *const c_char) -> MachPortT;
+        fn xpc_release(object: XpcObjectT);
+        fn xpc_get_type(object: XpcObjectT) -> *const c_void;
+        static _xpc_type_error: c_void;
+    }
+
+    #[link(name = "IOSurface", kind = "framework")]
+    extern "C" {
+        fn IOSurfaceLookupFromMachPort(port: MachPortT) -> IOSurfaceRef;
+        fn IOSurfaceCreateMachPort(buffer: IOSurfaceRef) -> MachPortT;
+        fn IOSurfaceGetID(buffer: IOSurfaceRef) -> IOSurfaceID;
+        fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
+        fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
+        fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
+        fn IOSurfaceIncrementUseCount(buffer: IOSurfaceRef);
+    }
+
+    #[link(name = "System")]
+    extern "C" {
+        fn mach_port_deallocate(task: MachPortT, name: MachPortT) -> i32;
+        fn mach_task_self() -> MachPortT;
+    }
+
+    // Minimal Obj-C block for XPC event handler (no-op, we use sync send/reply)
+    #[repr(C)]
+    struct Block {
+        isa: *const c_void,
+        flags: i32,
+        reserved: i32,
+        invoke: *const c_void,
+        descriptor: *const BlockDescriptor,
+    }
+
+    #[repr(C)]
+    struct BlockDescriptor {
+        reserved: u64,
+        size: u64,
+    }
+
+    extern "C" {
+        static _NSConcreteMallocBlock: c_void;
+    }
+
+    const BLOCK_FLAGS_NEEDS_FREE: i32 = 1 << 24;
+
+    fn xpc_is_error(object: XpcObjectT) -> bool {
+        if object.is_null() {
+            return false;
+        }
+        unsafe { std::ptr::eq(xpc_get_type(object), &_xpc_type_error as *const _) }
+    }
+
+    /// Opaque handle to a broker XPC connection.
+    pub struct BrokerHandle {
+        connection: XpcConnectionT,
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_connect(
+        xpc_service_name: *const c_char,
+    ) -> *mut BrokerHandle {
+        if xpc_service_name.is_null() {
+            eprintln!("[sldn] broker_connect: null service name");
+            return std::ptr::null_mut();
+        }
+
+        let connection =
+            xpc_connection_create_mach_service(xpc_service_name, std::ptr::null_mut(), 0);
+
+        if connection.is_null() {
+            let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
+            eprintln!(
+                "[sldn] broker_connect: failed to create XPC connection to '{}'",
+                name
+            );
+            return std::ptr::null_mut();
+        }
+
+        // Set minimal event handler (required before resume)
+        extern "C" fn event_handler_trampoline(_block: *mut Block, _event: XpcObjectT) {}
+
+        static DESCRIPTOR: BlockDescriptor = BlockDescriptor {
+            reserved: 0,
+            size: std::mem::size_of::<Block>() as u64,
+        };
+
+        let block = Box::new(Block {
+            isa: unsafe { &_NSConcreteMallocBlock as *const _ },
+            flags: BLOCK_FLAGS_NEEDS_FREE,
+            reserved: 0,
+            invoke: event_handler_trampoline as *const c_void,
+            descriptor: &DESCRIPTOR,
+        });
+        let block_ptr = Box::into_raw(block) as *mut c_void;
+
+        xpc_connection_set_event_handler(connection, block_ptr);
+        xpc_connection_resume(connection);
+
+        let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
+        eprintln!("[sldn] broker_connect: connected to '{}'", name);
+
+        Box::into_raw(Box::new(BrokerHandle { connection }))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_disconnect(broker: *mut BrokerHandle) {
+        if !broker.is_null() {
+            let handle = Box::from_raw(broker);
+            xpc_connection_cancel(handle.connection);
+        }
+    }
+
+    /// Resolve a broker pool_id to an IOSurface handle via XPC lookup.
+    ///
+    /// Returns a SurfaceHandle pointer (same type as sldn_gpu_surface_lookup).
+    /// Results are cached — repeated lookups for the same pool_id are fast.
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_resolve_surface(
+        broker: *mut BrokerHandle,
+        pool_id: *const c_char,
+    ) -> *mut SurfaceHandle {
+        let broker = match broker.as_mut() {
+            Some(b) => b,
+            None => {
+                eprintln!("[sldn] broker_resolve_surface: null broker handle");
+                return std::ptr::null_mut();
+            }
+        };
+
+        let pool_id_str = match c_str_to_str(pool_id) {
+            Some(s) => s,
+            None => {
+                eprintln!("[sldn] broker_resolve_surface: null pool_id");
+                return std::ptr::null_mut();
+            }
+        };
+
+        // XPC lookup to broker
+        let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
+        if request.is_null() {
+            eprintln!("[sldn] broker_resolve_surface: failed to create XPC request");
+            return std::ptr::null_mut();
+        }
+
+        let op_key = CString::new("op").unwrap();
+        let op_value = CString::new("lookup").unwrap();
+        xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
+
+        let sid_key = CString::new("surface_id").unwrap();
+        let sid_value = CString::new(pool_id_str).unwrap();
+        xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
+
+        let reply = xpc_connection_send_message_with_reply_sync(broker.connection, request);
+        xpc_release(request);
+
+        if reply.is_null() || xpc_is_error(reply) {
+            if !reply.is_null() {
+                xpc_release(reply);
+            }
+            eprintln!(
+                "[sldn] broker_resolve_surface: XPC lookup failed for '{}'",
+                pool_id_str
+            );
+            return std::ptr::null_mut();
+        }
+
+        // Check for error message in reply
+        let error_key = CString::new("error").unwrap();
+        let error_ptr = xpc_dictionary_get_string(reply, error_key.as_ptr());
+        if !error_ptr.is_null() {
+            let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
+            eprintln!(
+                "[sldn] broker_resolve_surface: broker error for '{}': {}",
+                pool_id_str, error_msg
+            );
+            xpc_release(reply);
+            return std::ptr::null_mut();
+        }
+
+        // Extract mach port
+        let port_key = CString::new("mach_port").unwrap();
+        let mach_port = xpc_dictionary_copy_mach_send(reply, port_key.as_ptr());
+        xpc_release(reply);
+
+        if mach_port == 0 {
+            eprintln!(
+                "[sldn] broker_resolve_surface: invalid mach port for '{}'",
+                pool_id_str
+            );
+            return std::ptr::null_mut();
+        }
+
+        // Import IOSurface from mach port
+        let surface_ref = IOSurfaceLookupFromMachPort(mach_port);
+
+        // Deallocate our copy of the mach port (IOSurface is retained by the lookup)
+        let task = mach_task_self();
+        mach_port_deallocate(task, mach_port);
+
+        if surface_ref.is_null() {
+            eprintln!(
+                "[sldn] broker_resolve_surface: IOSurfaceLookupFromMachPort failed for '{}'",
+                pool_id_str
+            );
+            return std::ptr::null_mut();
+        }
+
+        IOSurfaceIncrementUseCount(surface_ref);
+
+        let surface_id = IOSurfaceGetID(surface_ref);
+        let width = IOSurfaceGetWidth(surface_ref) as u32;
+        let height = IOSurfaceGetHeight(surface_ref) as u32;
+        let bytes_per_row = IOSurfaceGetBytesPerRow(surface_ref) as u32;
+
+        Box::into_raw(Box::new(SurfaceHandle {
+            surface_ref,
+            surface_id,
+            width,
+            height,
+            bytes_per_row,
+            base_address: std::ptr::null_mut(),
+            is_locked: false,
+        }))
+    }
+
+    /// Create a new IOSurface, register it with the broker, and return a handle.
+    ///
+    /// `out_pool_id` receives the broker-assigned pool UUID as a null-terminated C string.
+    /// `pool_id_buf_len` is the size of the out_pool_id buffer.
+    ///
+    /// Returns a SurfaceHandle pointer, or null on failure.
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_acquire_surface(
+        broker: *mut BrokerHandle,
+        width: u32,
+        height: u32,
+        bytes_per_element: u32,
+        out_pool_id: *mut c_char,
+        pool_id_buf_len: u32,
+    ) -> *mut SurfaceHandle {
+        let broker = match broker.as_mut() {
+            Some(b) => b,
+            None => {
+                eprintln!("[sldn] broker_acquire_surface: null broker handle");
+                return std::ptr::null_mut();
+            }
+        };
+
+        // Create the IOSurface via the existing function
+        let surface_handle_ptr =
+            super::gpu_surface::sldn_gpu_surface_create(width, height, bytes_per_element);
+        if surface_handle_ptr.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let surface_handle = &*surface_handle_ptr;
+
+        // Create mach port for the IOSurface
+        let mach_port = IOSurfaceCreateMachPort(surface_handle.surface_ref);
+        if mach_port == 0 {
+            eprintln!("[sldn] broker_acquire_surface: IOSurfaceCreateMachPort failed");
+            let _ = Box::from_raw(surface_handle_ptr);
+            return std::ptr::null_mut();
+        }
+
+        // Generate a pool UUID
+        // Use IOSurface ID + timestamp for uniqueness (simple, no uuid crate needed)
+        let surface_id = IOSurfaceGetID(surface_handle.surface_ref);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pool_id = format!("deno-{}-{}", surface_id, ts);
+
+        // Register with broker via XPC
+        let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
+        if request.is_null() {
+            eprintln!("[sldn] broker_acquire_surface: failed to create XPC request");
+            let task = mach_task_self();
+            mach_port_deallocate(task, mach_port);
+            let _ = Box::from_raw(surface_handle_ptr);
+            return std::ptr::null_mut();
+        }
+
+        let op_key = CString::new("op").unwrap();
+        let op_value = CString::new("register").unwrap();
+        xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
+
+        let sid_key = CString::new("surface_id").unwrap();
+        let sid_value = CString::new(pool_id.as_str()).unwrap();
+        xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
+
+        let rid_key = CString::new("runtime_id").unwrap();
+        let rid_value = CString::new("deno-subprocess").unwrap();
+        xpc_dictionary_set_string(request, rid_key.as_ptr(), rid_value.as_ptr());
+
+        let port_key = CString::new("mach_port").unwrap();
+        xpc_dictionary_set_mach_send(request, port_key.as_ptr(), mach_port);
+
+        let reply = xpc_connection_send_message_with_reply_sync(broker.connection, request);
+        xpc_release(request);
+
+        // Deallocate our copy of the mach port
+        let task = mach_task_self();
+        mach_port_deallocate(task, mach_port);
+
+        if reply.is_null() || xpc_is_error(reply) {
+            if !reply.is_null() {
+                xpc_release(reply);
+            }
+            eprintln!("[sldn] broker_acquire_surface: XPC register failed");
+            let _ = Box::from_raw(surface_handle_ptr);
+            return std::ptr::null_mut();
+        }
+
+        // Check for error in reply
+        let error_key = CString::new("error").unwrap();
+        let error_ptr = xpc_dictionary_get_string(reply, error_key.as_ptr());
+        if !error_ptr.is_null() {
+            let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
+            eprintln!("[sldn] broker_acquire_surface: broker error: {}", error_msg);
+            xpc_release(reply);
+            let _ = Box::from_raw(surface_handle_ptr);
+            return std::ptr::null_mut();
+        }
+
+        xpc_release(reply);
+
+        // Copy pool_id to output buffer
+        if !out_pool_id.is_null() && pool_id_buf_len > 0 {
+            let bytes = pool_id.as_bytes();
+            let copy_len = bytes.len().min((pool_id_buf_len - 1) as usize);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_pool_id as *mut u8, copy_len);
+            *out_pool_id.add(copy_len) = 0; // null terminate
+        }
+
+        surface_handle_ptr
+    }
+
+    unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
+        if ptr.is_null() {
+            return None;
+        }
+        CStr::from_ptr(ptr).to_str().ok()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod broker_client {
+    use std::ffi::{c_char, c_void};
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_connect(_xpc_service_name: *const c_char) -> *mut c_void {
+        eprintln!("[sldn] Broker operations not supported on this platform");
+        std::ptr::null_mut()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_disconnect(_broker: *mut c_void) {}
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_resolve_surface(
+        _broker: *mut c_void,
+        _pool_id: *const c_char,
+    ) -> *mut c_void {
+        std::ptr::null_mut()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn sldn_broker_acquire_surface(
+        _broker: *mut c_void,
+        _width: u32,
+        _height: u32,
+        _bytes_per_element: u32,
+        _out_pool_id: *mut c_char,
+        _pool_id_buf_len: u32,
+    ) -> *mut c_void {
+        std::ptr::null_mut()
+    }
 }
 
 // ============================================================================

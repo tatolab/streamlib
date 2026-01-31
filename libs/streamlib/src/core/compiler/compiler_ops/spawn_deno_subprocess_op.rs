@@ -128,6 +128,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 .arg("--allow-env")
                 .arg("--allow-net")
                 .arg("--no-prompt")
+                .arg("--unstable-webgpu")
                 .arg(runner_path.to_str().unwrap_or(""))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

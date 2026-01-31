@@ -76,9 +76,35 @@ const symbols = {
     parameters: ["pointer"] as const,
     result: "u32" as const,
   },
+  sldn_gpu_surface_create: {
+    parameters: ["u32", "u32", "u32"] as const,
+    result: "pointer" as const,
+  },
+  sldn_gpu_surface_get_id: {
+    parameters: ["pointer"] as const,
+    result: "u32" as const,
+  },
   sldn_gpu_surface_release: {
     parameters: ["pointer"] as const,
     result: "void" as const,
+  },
+
+  // Broker XPC client
+  sldn_broker_connect: {
+    parameters: ["buffer"] as const,
+    result: "pointer" as const,
+  },
+  sldn_broker_disconnect: {
+    parameters: ["pointer"] as const,
+    result: "void" as const,
+  },
+  sldn_broker_resolve_surface: {
+    parameters: ["pointer", "buffer"] as const,
+    result: "pointer" as const,
+  },
+  sldn_broker_acquire_surface: {
+    parameters: ["pointer", "u32", "u32", "u32", "pointer", "u32"] as const,
+    result: "pointer" as const,
   },
 } as const;
 

@@ -1,12 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → Deno Grayscale → Display Pipeline Example
+//! Camera → Deno Halftone → Display Pipeline Example
 //!
-//! Demonstrates zero-copy pixel processing via a Deno/TypeScript subprocess.
-//! The TypeScript processor accesses camera pixels through IOSurface shared memory
-//! via FFI (no pixel data through pipes), converts to grayscale, and writes
-//! results to a new IOSurface.
+//! Demonstrates GPU-accelerated pixel processing via a Deno/TypeScript subprocess
+//! using WebGPU compute shaders (TypeGPU). The TypeScript processor accesses camera
+//! pixels through IOSurface shared memory via FFI, applies a halftone dot pattern
+//! effect on the GPU, and writes results to a new IOSurface.
 //!
 //! ## Prerequisites
 //!
@@ -47,8 +47,8 @@ fn main() -> Result<()> {
         ..Default::default()
     }))?;
 
-    let grayscale = runtime.add_processor(ProcessorSpec::new(
-        "com.tatolab.grayscale-ts",
+    let halftone = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.halftone-ts",
         serde_json::json!({
             "project_path": project_path.to_str().unwrap()
         }),
@@ -57,17 +57,17 @@ fn main() -> Result<()> {
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: 1920,
         height: 1080,
-        title: Some("Camera → Deno Grayscale → Display".to_string()),
+        title: Some("Camera → TypeGPU Halftone → Display".to_string()),
         ..Default::default()
     }))?;
 
-    // 3. Connect: Camera → Deno Grayscale → Display
+    // 3. Connect: Camera → Deno Halftone → Display
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
-        InputLinkPortRef::new(&grayscale, "video_in"),
+        InputLinkPortRef::new(&halftone, "video_in"),
     )?;
     runtime.connect(
-        OutputLinkPortRef::new(&grayscale, "video_out"),
+        OutputLinkPortRef::new(&halftone, "video_out"),
         InputLinkPortRef::new(&display, "video"),
     )?;
 

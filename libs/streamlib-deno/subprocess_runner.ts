@@ -102,6 +102,21 @@ async function main(): Promise<void> {
     Deno.exit(1);
   }
 
+  // Connect to broker for surface resolution (if XPC service name is set)
+  const xpcServiceName = Deno.env.get("STREAMLIB_XPC_SERVICE_NAME") ?? "";
+  let brokerPtr: Deno.PointerObject | null = null;
+  if (xpcServiceName) {
+    const serviceNameBuf = cString(xpcServiceName);
+    brokerPtr = lib.symbols.sldn_broker_connect(serviceNameBuf);
+    if (brokerPtr === null) {
+      console.error(`[subprocess_runner:${processorId}] Warning: broker connect failed for '${xpcServiceName}'`);
+    } else {
+      console.error(`[subprocess_runner:${processorId}] Connected to broker '${xpcServiceName}'`);
+    }
+  } else {
+    console.error(`[subprocess_runner:${processorId}] No STREAMLIB_XPC_SERVICE_NAME set, broker resolution disabled`);
+  }
+
   let processor: ProcessorLifecycle | null = null;
   let ctx: NativeProcessorContext | null = null;
   let running = false;
@@ -184,8 +199,8 @@ async function main(): Promise<void> {
               processor = ProcessorClass as ProcessorLifecycle;
             }
 
-            // Create context
-            ctx = new NativeProcessorContext(lib, ctxPtr, config);
+            // Create context (with broker for surface resolution)
+            ctx = new NativeProcessorContext(lib, ctxPtr, config, brokerPtr);
 
             // Call setup
             if (processor.setup) {

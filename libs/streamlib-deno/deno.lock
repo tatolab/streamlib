@@ -1,12 +1,26 @@
 {
   "version": "5",
   "specifiers": {
-    "npm:@msgpack/msgpack@3.0.0-beta2": "3.0.0-beta2"
+    "npm:@msgpack/msgpack@3.0.0-beta2": "3.0.0-beta2",
+    "npm:typegpu@0.8.2": "0.8.2"
   },
   "npm": {
     "@msgpack/msgpack@3.0.0-beta2": {
       "integrity": "sha512-y+l1PNV0XDyY8sM3YtuMLK5vE3/hkfId+Do8pLo/OPxfxuFAUwcGz3oiiUuV46/aBpwTzZ+mRWVMtlSKbradhw==",
       "deprecated": true
+    },
+    "tinyest@0.1.2": {
+      "integrity": "sha512-aHRmouyowIq1P5jrTF+YK6pGX+WuvFtSCLbqk91yHnU3SWQRIcNIamZLM5XF6lLqB13AWz0PGPXRff2QGDsxIg=="
+    },
+    "typed-binary@4.3.2": {
+      "integrity": "sha512-HT3pIBM2njCZUmeczDaQUUErGiM6GXFCqMsHegE12HCoBtvHCkfR10JJni0TeGOTnLilTd6YFyj+YhflqQDrDQ=="
+    },
+    "typegpu@0.8.2": {
+      "integrity": "sha512-wkMJWhJE0pSkw2G/FesjqjbtHkREyOKu1Zmyj19xfmaX5+65YFwgfQNKSK8CxqN4kJkP7JFelLDJTSYY536TYg==",
+      "dependencies": [
+        "tinyest",
+        "typed-binary"
+      ]
     }
   },
   "workspace": {

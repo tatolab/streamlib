@@ -34,13 +34,14 @@ export class NativeProcessorContext implements ProcessorContext {
     lib: NativeLib,
     ctxPtr: Deno.PointerObject,
     config: Record<string, unknown>,
+    brokerPtr: Deno.PointerObject | null = null,
   ) {
     this.lib = lib;
     this.ctxPtr = ctxPtr;
     this.config = config;
     this.inputs = new NativeInputPorts(lib, ctxPtr);
     this.outputs = new NativeOutputPorts(lib, ctxPtr);
-    this.gpu = new NativeGpuContext(lib);
+    this.gpu = new NativeGpuContext(lib, brokerPtr);
   }
 
   get timeNs(): bigint {
@@ -137,21 +138,66 @@ class NativeOutputPorts implements OutputPorts {
 }
 
 /**
- * GPU context for IOSurface access via FFI.
+ * GPU context for IOSurface access via FFI, with broker XPC resolution.
  */
 class NativeGpuContext implements GpuContext {
   private lib: NativeLib;
+  private brokerPtr: Deno.PointerObject | null;
 
-  constructor(lib: NativeLib) {
+  constructor(lib: NativeLib, brokerPtr: Deno.PointerObject | null) {
     this.lib = lib;
+    this.brokerPtr = brokerPtr;
   }
 
-  resolveSurface(iosurfaceId: number): GpuSurface {
+  resolveSurface(poolId: string): GpuSurface {
+    if (this.brokerPtr) {
+      // Broker-backed resolution: pool_id → XPC lookup → IOSurface
+      const poolIdBuf = cString(poolId);
+      const handlePtr = this.lib.symbols.sldn_broker_resolve_surface(this.brokerPtr, poolIdBuf);
+      if (handlePtr === null) {
+        throw new Error(`Broker failed to resolve surface: ${poolId}`);
+      }
+      const surfaceId = this.lib.symbols.sldn_gpu_surface_get_id(handlePtr);
+      return new NativeGpuSurface(this.lib, handlePtr, surfaceId);
+    }
+
+    // Fallback: treat poolId as a numeric IOSurface ID (no broker)
+    const iosurfaceId = parseInt(poolId, 10);
     const handlePtr = this.lib.symbols.sldn_gpu_surface_lookup(iosurfaceId);
     if (handlePtr === null) {
-      throw new Error(`IOSurface not found: ${iosurfaceId}`);
+      throw new Error(`IOSurface not found: ${poolId}`);
     }
     return new NativeGpuSurface(this.lib, handlePtr, iosurfaceId);
+  }
+
+  createSurface(width: number, height: number, _format: string): { poolId: string; surface: GpuSurface } {
+    const bytesPerElement = 4; // BGRA
+
+    if (this.brokerPtr) {
+      // Broker-backed: create IOSurface + register with broker
+      const poolIdBuf = new Uint8Array(256);
+      const poolIdBufPtr = Deno.UnsafePointer.of(poolIdBuf);
+      const handlePtr = this.lib.symbols.sldn_broker_acquire_surface(
+        this.brokerPtr, width, height, bytesPerElement, poolIdBufPtr!, 256,
+      );
+      if (handlePtr === null) {
+        throw new Error(`Broker failed to acquire surface: ${width}x${height}`);
+      }
+      // Read pool_id from output buffer (null-terminated C string)
+      const nullIdx = poolIdBuf.indexOf(0);
+      const poolId = new TextDecoder().decode(poolIdBuf.subarray(0, nullIdx === -1 ? poolIdBuf.length : nullIdx));
+      const surfaceId = this.lib.symbols.sldn_gpu_surface_get_id(handlePtr);
+      return { poolId, surface: new NativeGpuSurface(this.lib, handlePtr, surfaceId) };
+    }
+
+    // Fallback: create IOSurface without broker registration
+    const handlePtr = this.lib.symbols.sldn_gpu_surface_create(width, height, bytesPerElement);
+    if (handlePtr === null) {
+      throw new Error(`Failed to create IOSurface: ${width}x${height}`);
+    }
+    const surfaceId = this.lib.symbols.sldn_gpu_surface_get_id(handlePtr);
+    const poolId = String(surfaceId);
+    return { poolId, surface: new NativeGpuSurface(this.lib, handlePtr, surfaceId) };
   }
 }
 
