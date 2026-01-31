@@ -1,6 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+// FFI cdylib — all public functions are unsafe extern "C" called from Deno via dlopen.
+#![allow(clippy::missing_safety_doc)]
+
 //! FFI cdylib for Deno subprocess processors to access iceoryx2 directly.
 //!
 //! Provides C ABI functions prefixed with `sldn_` that Deno loads via `Deno.dlopen()`.
@@ -65,10 +68,7 @@ pub unsafe extern "C" fn sldn_context_create(
     let id = if processor_id.is_null() {
         "unknown"
     } else {
-        match CStr::from_ptr(processor_id).to_str() {
-            Ok(s) => s,
-            Err(_) => "unknown",
-        }
+        CStr::from_ptr(processor_id).to_str().unwrap_or("unknown")
     };
 
     match DenoNativeContext::new(id) {
