@@ -15,12 +15,14 @@ use std::path::PathBuf;
 /// ~/.streamlib/
 /// ├── config.toml                    # Future: system-wide settings
 /// ├── cache/
-/// │   └── uv/                        # Shared PyPI cache (UV_CACHE_DIR)
+/// │   ├── uv/                        # Shared PyPI cache (UV_CACHE_DIR)
+/// │   └── venvs/                     # Hash-keyed Python venvs
+/// │       └── {sha256_hex}/          # Venv keyed by hash of pyproject.toml + project_path
 /// └── runtimes/
 ///     └── {runtime_id}/
 ///         └── processors/
 ///             └── {processor_id}/
-///                 ├── venv/          # Isolated Python venv
+///                 ├── venv/          # Isolated Python venv (legacy)
 ///                 └── data/          # Processor-specific storage
 /// ```
 pub fn get_streamlib_home() -> PathBuf {
@@ -50,6 +52,7 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
     // Create standard subdirectories
     std::fs::create_dir_all(home.join("cache/wheels"))?;
     std::fs::create_dir_all(home.join("cache/uv"))?;
+    std::fs::create_dir_all(home.join("cache/venvs"))?;
     std::fs::create_dir_all(home.join("runtimes"))?;
 
     Ok(home)
@@ -58,6 +61,11 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
 /// Get the path to the uv cache directory.
 pub fn get_uv_cache_dir() -> PathBuf {
     get_streamlib_home().join("cache/uv")
+}
+
+/// Get the path to a hash-keyed cached venv directory.
+pub fn get_cached_venv_dir(hash: &str) -> PathBuf {
+    get_streamlib_home().join("cache/venvs").join(hash)
 }
 
 /// Get the path to a runtime's directory.
