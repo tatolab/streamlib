@@ -209,7 +209,6 @@ direnv allow
 ```
 
 This sets up:
-- PyO3 Python paths for building Python processor support
 - StreamLib broker service (runs in background via launchd)
 - Development environment variables
 

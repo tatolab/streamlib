@@ -8,7 +8,6 @@ members = [
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
-    # "libs/streamlib-python",    # Python bindings via PyO3 (temporarily disabled - host processors obsolete with multi-runtime architecture)
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
@@ -26,7 +25,7 @@ members = [
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
-    # "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline (temporarily disabled - depends on streamlib-python)
+    # "examples/camera-dylib-display",      # Example: Camera → Dylib plugins → Display pipeline (disabled - uses old PyO3 host processor approach)
     # "examples/camera-dylib-display/rust", # Plugin: Rust processors for camera-dylib-display
     "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
     "examples/camera-deno-subprocess",   # Example: Camera → Deno subprocess → Display pipeline

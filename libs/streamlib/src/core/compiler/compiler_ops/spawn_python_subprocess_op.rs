@@ -99,9 +99,8 @@ impl crate::core::processors::DynGeneratedProcessor for SubprocessHostProcessor 
             let python_path = python_path_parts.join(if cfg!(unix) { ":" } else { ";" });
 
             // Spawn subprocess with piped stdin/stdout.
-            // Remove PYTHONHOME — .cargo/config.toml sets it for PyO3 builds,
-            // but the venv's python uses pyvenv.cfg. An inherited PYTHONHOME
-            // would override that and break module resolution.
+            // Remove PYTHONHOME — the venv's python uses pyvenv.cfg, and an
+            // inherited PYTHONHOME would override that and break module resolution.
             let mut child = Command::new(&python_executable)
                 .arg("-m")
                 .arg("streamlib.subprocess_runner")
@@ -757,46 +756,6 @@ fn ensure_processor_venv(
                 stderr
             );
         }
-    }
-
-    // Install streamlib wheel if available
-    let wheels_dir = crate::core::streamlib_home::get_wheels_cache_dir();
-    let wheel_path = wheels_dir.join("streamlib_python.whl");
-    if wheel_path.exists() {
-        tracing::info!(
-            "[{}] Installing streamlib wheel from {}",
-            processor_id,
-            wheel_path.display()
-        );
-
-        let venv_python_str = venv_python.to_string_lossy().to_string();
-        let wheel_path_str = wheel_path.to_string_lossy().to_string();
-
-        let output = run_uv(
-            &[
-                "pip",
-                "install",
-                &wheel_path_str,
-                "--python",
-                &venv_python_str,
-            ],
-            &uv_cache_dir,
-        )?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!(
-                "[{}] Failed to install streamlib wheel (continuing): {}",
-                processor_id,
-                stderr
-            );
-        }
-    } else {
-        tracing::debug!(
-            "[{}] No streamlib wheel found at {}, skipping wheel install",
-            processor_id,
-            wheel_path.display()
-        );
     }
 
     Ok(venv_python.to_string_lossy().to_string())
