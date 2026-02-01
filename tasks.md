@@ -13,12 +13,9 @@ Remaining examples to enable, ordered by priority (unique/untested components fi
 | 5 | `simple-pipeline` | None (redundant) | ⬚ TODO |
 | 6 | `graph-json-export` | None (old syntax rewrite) | ⬚ TODO |
 
-## Blocked (Python bindings)
+## Blocked
 
-These require `streamlib-python` to be re-enabled first:
-
-- `camera-python-display`
-- `camera-dylib-display`
+- `camera-dylib-display` — uses old PyO3 `PythonContinuousHostProcessor` (needs rewrite to subprocess architecture)
 
 ## Completed
 

@@ -8,11 +8,10 @@ use crate::Result;
 
 /// Hook called synchronously when a StreamRuntime is created.
 ///
-/// External crates (e.g., streamlib-python, streamlib-typescript) register
-/// implementations via `inventory::submit!`. The runtime calls all registered
-/// hooks during `StreamRuntime::new()`.
+/// External crates register implementations via `inventory::submit!`.
+/// The runtime calls all registered hooks during `StreamRuntime::new()`.
 ///
-/// Use for: building language wheels, warming caches, verifying toolchains.
+/// Use for: warming caches, verifying toolchains.
 ///
 /// # Example
 ///

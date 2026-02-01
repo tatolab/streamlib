@@ -15,9 +15,7 @@ use std::path::PathBuf;
 /// ~/.streamlib/
 /// ├── config.toml                    # Future: system-wide settings
 /// ├── cache/
-/// │   ├── uv/                        # Shared PyPI cache (UV_CACHE_DIR)
-/// │   └── wheels/
-/// │       └── streamlib_python.whl   # Pre-built wheel
+/// │   └── uv/                        # Shared PyPI cache (UV_CACHE_DIR)
 /// └── runtimes/
 ///     └── {runtime_id}/
 ///         └── processors/
@@ -55,11 +53,6 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(home.join("runtimes"))?;
 
     Ok(home)
-}
-
-/// Get the path to the wheels cache directory.
-pub fn get_wheels_cache_dir() -> PathBuf {
-    get_streamlib_home().join("cache/wheels")
 }
 
 /// Get the path to the uv cache directory.
