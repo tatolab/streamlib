@@ -140,21 +140,10 @@ def schema(name: Optional[str] = None):
                     }
                 )
 
-        # Try to create Rust-backed schema
-        rust_schema = None
-        try:
-            from streamlib._native import create_schema
-
-            rust_schema = create_schema(schema_name, fields)
-        except ImportError:
-            # Native module not available (e.g., during pure Python testing)
-            pass
-
         # Store metadata on class
         cls.__streamlib_schema__ = {
             "name": schema_name,
             "fields": fields,
-            "rust_schema": rust_schema,
         }
 
         return cls

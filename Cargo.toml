@@ -8,7 +8,6 @@ members = [
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
-    # "libs/streamlib-python",    # Python bindings via PyO3 (temporarily disabled - host processors obsolete with multi-runtime architecture)
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet

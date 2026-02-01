@@ -84,11 +84,6 @@ STREAMLIB_HOME=${STREAMLIB_HOME}
 STREAMLIB_BROKER_PORT=${BROKER_PORT}
 STREAMLIB_XPC_SERVICE_NAME=${SERVICE_NAME}
 STREAMLIB_DEV_MODE=1
-
-# PyO3 Configuration (required for Python processor support)
-# Adjust these paths for your Python installation
-PYO3_PYTHON=/opt/homebrew/bin/python3.12
-PYTHONHOME=/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12
 EOF
 
     success "Generated .env (auto-loaded by runtime)"
