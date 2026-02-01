@@ -9,7 +9,7 @@
  * whose radius is proportional to the luminance of the center pixel.
  */
 
-import tgpu from "npm:typegpu@0.8.2";
+import tgpu, { type TgpuRoot } from "npm:typegpu@0.8.2";
 import * as d from "npm:typegpu@0.8.2/data";
 import type { ReactiveProcessor, ProcessorContext, GpuSurface } from "../../../libs/streamlib-deno/mod.ts";
 import type { Videoframe } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
@@ -72,15 +72,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 `;
 
+const halftoneBindGroupLayout = tgpu.bindGroupLayout({
+  inputPixels: { storage: d.arrayOf(d.u32), access: "readonly" },
+  outputPixels: { storage: d.arrayOf(d.u32), access: "mutable" },
+  params: { uniform: d.vec2u },
+});
+
 interface GpuResources {
+  root: TgpuRoot;
   device: GPUDevice;
   pipeline: GPUComputePipeline;
-  bindGroupLayout: GPUBindGroupLayout;
-  inputBuffer: GPUBuffer;
-  outputBuffer: GPUBuffer;
-  paramsBuffer: GPUBuffer;
+  // Buffers are dynamically sized (dimensions unknown until first frame),
+  // so we store them untyped and rely on TypeGPU's runtime validation.
+  // deno-lint-ignore no-explicit-any
+  inputBuffer: any;
+  // deno-lint-ignore no-explicit-any
+  outputBuffer: any;
+  // deno-lint-ignore no-explicit-any
+  paramsBuffer: any;
   readbackBuffer: GPUBuffer;
-  bindGroup: GPUBindGroup;
   pixelCount: number;
   width: number;
   height: number;
@@ -100,16 +110,24 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     const device = root.device;
     console.error("[HalftoneProcessor] WebGPU device acquired via TypeGPU");
 
-    // Pipeline will be created on first frame when we know dimensions
+    // Create pipeline once (WGSL is dimension-independent)
+    const shaderModule = device.createShaderModule({ code: HALFTONE_WGSL });
+    const pipeline = device.createComputePipeline({
+      layout: device.createPipelineLayout({
+        bindGroupLayouts: [root.unwrap(halftoneBindGroupLayout)],
+      }),
+      compute: { module: shaderModule, entryPoint: "main" },
+    });
+
+    // Buffers will be created on first frame when we know dimensions
     this.gpu = {
+      root,
       device,
-      pipeline: null!,
-      bindGroupLayout: null!,
-      inputBuffer: null!,
-      outputBuffer: null!,
-      paramsBuffer: null!,
+      pipeline,
+      inputBuffer: null,
+      outputBuffer: null,
+      paramsBuffer: null,
       readbackBuffer: null!,
-      bindGroup: null!,
       pixelCount: 0,
       width: 0,
       height: 0,
@@ -119,11 +137,13 @@ export default class HalftoneProcessor implements ReactiveProcessor {
   private initGpuResources(width: number, height: number): void {
     if (!this.gpu) return;
 
-    const device = this.gpu.device;
+    const root = this.gpu.root;
     const pixelCount = width * height;
-    const bufferSize = pixelCount * 4; // u32 per pixel
 
-    // Destroy old buffers if resizing
+    const device = this.gpu.device;
+    const bufferSize = pixelCount * 4;
+
+    // Destroy old TypeGPU buffers if resizing
     if (this.gpu.inputBuffer) {
       this.gpu.inputBuffer.destroy();
       this.gpu.outputBuffer.destroy();
@@ -131,58 +151,24 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       this.gpu.readbackBuffer.destroy();
     }
 
-    // Create shader module + pipeline (only once, or on first call)
-    if (!this.gpu.pipeline) {
-      const shaderModule = device.createShaderModule({ code: HALFTONE_WGSL });
+    // TypeGPU typed buffers — no manual size/usage flags
+    this.gpu.inputBuffer = root
+      .createBuffer(d.arrayOf(d.u32, pixelCount))
+      .$usage("storage");
 
-      this.gpu.bindGroupLayout = device.createBindGroupLayout({
-        entries: [
-          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-          { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
-          { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
-        ],
-      });
+    this.gpu.outputBuffer = root
+      .createBuffer(d.arrayOf(d.u32, pixelCount))
+      .$usage("storage");
 
-      this.gpu.pipeline = device.createComputePipeline({
-        layout: device.createPipelineLayout({
-          bindGroupLayouts: [this.gpu.bindGroupLayout],
-        }),
-        compute: { module: shaderModule, entryPoint: "main" },
-      });
-    }
+    this.gpu.paramsBuffer = root
+      .createBuffer(d.vec2u, d.vec2u(width, height))
+      .$usage("uniform");
 
-    this.gpu.inputBuffer = device.createBuffer({
-      size: bufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-
-    this.gpu.outputBuffer = device.createBuffer({
-      size: bufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-    });
-
-    this.gpu.paramsBuffer = device.createBuffer({
-      size: 8, // vec2<u32> = 8 bytes
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
+    // Raw readback buffer for fast GPU→CPU transfer (avoids TypeGPU serialization)
     this.gpu.readbackBuffer = device.createBuffer({
       size: bufferSize,
       usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
     });
-
-    this.gpu.bindGroup = device.createBindGroup({
-      layout: this.gpu.bindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.gpu.inputBuffer } },
-        { binding: 1, resource: { buffer: this.gpu.outputBuffer } },
-        { binding: 2, resource: { buffer: this.gpu.paramsBuffer } },
-      ],
-    });
-
-    // Write params (width, height)
-    const params = new Uint32Array([width, height]);
-    device.queue.writeBuffer(this.gpu.paramsBuffer, 0, params);
 
     this.gpu.pixelCount = pixelCount;
     this.gpu.width = width;
@@ -214,6 +200,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       this.outputPoolId = poolId;
     }
 
+    const root = this.gpu.root;
     const device = this.gpu.device;
     const pixelCount = this.gpu.pixelCount;
 
@@ -236,27 +223,33 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     inputSurface.unlock(true);
     inputSurface.release();
 
-    // --- Upload to GPU ---
-    device.queue.writeBuffer(this.gpu.inputBuffer, 0, packedInput);
+    // --- Upload to GPU (raw writeBuffer for zero-copy typed array transfer) ---
+    device.queue.writeBuffer(root.unwrap(this.gpu.inputBuffer) as unknown as GPUBuffer, 0, packedInput);
 
     // --- Dispatch compute shader ---
     const workgroupCount = Math.ceil(pixelCount / 256);
+    const bindGroup = root.createBindGroup(halftoneBindGroupLayout, {
+      inputPixels: this.gpu.inputBuffer,
+      outputPixels: this.gpu.outputBuffer,
+      params: this.gpu.paramsBuffer,
+    });
+
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
     pass.setPipeline(this.gpu.pipeline);
-    pass.setBindGroup(0, this.gpu.bindGroup);
+    pass.setBindGroup(0, root.unwrap(bindGroup));
     pass.dispatchWorkgroups(workgroupCount);
     pass.end();
 
-    // Copy output to readback buffer
+    // Copy output to readback buffer for fast GPU→CPU transfer
     encoder.copyBufferToBuffer(
-      this.gpu.outputBuffer, 0,
+      root.unwrap(this.gpu.outputBuffer) as unknown as GPUBuffer, 0,
       this.gpu.readbackBuffer, 0,
       pixelCount * 4,
     );
     device.queue.submit([encoder.finish()]);
 
-    // --- Read back results ---
+    // --- Read back results (raw mapAsync for zero-copy) ---
     await this.gpu.readbackBuffer.mapAsync(GPUMapMode.READ);
     const outputData = new Uint32Array(this.gpu.readbackBuffer.getMappedRange().slice(0));
     this.gpu.readbackBuffer.unmap();
@@ -295,6 +288,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       if (this.gpu.outputBuffer) this.gpu.outputBuffer.destroy();
       if (this.gpu.paramsBuffer) this.gpu.paramsBuffer.destroy();
       if (this.gpu.readbackBuffer) this.gpu.readbackBuffer.destroy();
+      this.gpu.root.destroy();
       this.gpu = null;
     }
     if (this.outputSurface) {
