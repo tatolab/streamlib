@@ -13,7 +13,8 @@ pub struct CameraConfig {
     #[serde(rename = "device_id")]
     pub device_id: Option<String>,
 
-    /// Maximum frames per second (ceiling). If None, uses main display refresh rate
+    /// Maximum frames per second (ceiling). If None, uses main display refresh
+    /// rate
     #[serde(rename = "max_fps")]
     pub max_fps: Option<f64>,
 

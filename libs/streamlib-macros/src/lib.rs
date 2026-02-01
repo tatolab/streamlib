@@ -116,7 +116,7 @@ fn parse_yaml_path(attr: TokenStream) -> syn::Result<String> {
 fn load_processor_schema(
     yaml_path: &str,
     item: &ItemStruct,
-) -> syn::Result<streamlib_schema::ProcessorSchema> {
+) -> syn::Result<streamlib_codegen_shared::ProcessorSchema> {
     // Get the manifest directory (where Cargo.toml is located)
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
         syn::Error::new_spanned(
@@ -151,7 +151,7 @@ fn load_processor_schema(
         )
     })?;
 
-    streamlib_schema::parse_processor_yaml(&yaml_content).map_err(|e| {
+    streamlib_codegen_shared::parse_processor_yaml(&yaml_content).map_err(|e| {
         syn::Error::new_spanned(
             item,
             format!("Failed to parse processor schema '{}': {}", yaml_path, e),

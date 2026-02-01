@@ -25,12 +25,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# VideoFrame msgpack array indices
-FRAME_INDEX = 0
-HEIGHT = 1
-SURFACE_ID = 2
-TIMESTAMP_NS = 3
-WIDTH = 4
 
 # Delay heavy imports to avoid GIL deadlock during parallel module loading
 moderngl = None
@@ -262,8 +256,8 @@ class AvatarCharacter:
 
         make_current(self.cgl_ctx)
 
-        w = frame[WIDTH]
-        h = frame[HEIGHT]
+        w = frame["width"]
+        h = frame["height"]
 
         # Initialize renderer on first frame or resize
         if self._current_dims != (w, h):
@@ -289,7 +283,7 @@ class AvatarCharacter:
                 )
 
         # Resolve input surface → bind as GL texture for readback
-        input_handle = ctx.gpu.resolve_surface(frame[SURFACE_ID])
+        input_handle = ctx.gpu.resolve_surface(frame["surface_id"])
         bind_iosurface_to_texture(
             self.cgl_ctx, self.input_tex_id,
             input_handle.iosurface_ref, w, h
@@ -372,8 +366,8 @@ class AvatarCharacter:
         # Only output frames after the delay has passed
         # This triggers the slide-in animation in the compositor when first frame arrives
         if self._is_ready:
-            out_frame = list(frame)
-            out_frame[SURFACE_ID] = out_surface_id
+            out_frame = dict(frame)
+            out_frame["surface_id"] = out_surface_id
             ctx.outputs.write("video_out", out_frame)
 
         self.frame_count += 1

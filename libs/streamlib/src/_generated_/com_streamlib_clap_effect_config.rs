@@ -13,6 +13,10 @@ pub struct EffectConfig {
     #[serde(rename = "buffer_size")]
     pub buffer_size: u32,
 
+    /// Path to the CLAP plugin file
+    #[serde(rename = "plugin_path")]
+    pub plugin_path: String,
+
     /// Index of the plugin to load (if multiple in file)
     #[serde(rename = "plugin_index")]
     pub plugin_index: Option<u32>,
@@ -20,8 +24,4 @@ pub struct EffectConfig {
     /// Name of the plugin to load (if multiple in file)
     #[serde(rename = "plugin_name")]
     pub plugin_name: Option<String>,
-
-    /// Path to the CLAP plugin file
-    #[serde(rename = "plugin_path")]
-    pub plugin_path: String,
 }

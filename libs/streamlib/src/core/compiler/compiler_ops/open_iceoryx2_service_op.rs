@@ -18,13 +18,36 @@ use crate::core::graph::{
 use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
 use crate::core::ProcessorUniqueId;
 
+use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
+
 /// Check if a processor is a subprocess (Python, TypeScript, etc.)
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
-    graph
+    // Check for SubprocessHandleComponent (legacy path)
+    let has_component = graph
         .traversal_mut()
         .v(proc_id)
         .first()
         .map(|n| n.has::<SubprocessHandleComponent>())
+        .unwrap_or(false);
+    if has_component {
+        return true;
+    }
+
+    // Check if TypeScript runtime (Deno FFI manages own iceoryx2)
+    let proc_type = graph
+        .traversal_mut()
+        .v(proc_id)
+        .first()
+        .map(|n| n.processor_type().to_string())
+        .unwrap_or_default();
+    PROCESSOR_REGISTRY
+        .descriptor(&proc_type)
+        .map(|d| {
+            matches!(
+                d.runtime,
+                crate::core::descriptors::ProcessorRuntime::TypeScript
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -69,7 +92,15 @@ pub fn open_iceoryx2_service(
     if source_is_subprocess && dest_is_subprocess {
         // Both are subprocesses - just create the service and mark as wired.
         // Both subprocesses handle their own pub/sub connections.
-        open_iceoryx2_subprocess_to_subprocess(graph, &dest_proc_id, link_id, runtime_ctx)
+        open_iceoryx2_subprocess_to_subprocess(
+            graph,
+            &source_proc_id,
+            &dest_proc_id,
+            &source_port,
+            &dest_port,
+            link_id,
+            runtime_ctx,
+        )
     } else if source_is_subprocess {
         // Source is subprocess, dest is Rust - only configure dest side
         let dest_processor = get_single_processor(graph, &dest_proc_id)?;
@@ -277,9 +308,13 @@ fn open_iceoryx2_pubsub(
 }
 
 /// Both source and dest are subprocesses - create the iceoryx2 service but no Rust-side wiring.
+#[allow(clippy::too_many_arguments)]
 fn open_iceoryx2_subprocess_to_subprocess(
     graph: &mut Graph,
+    source_proc_id: &ProcessorUniqueId,
     dest_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+    dest_port: &str,
     link_id: &LinkUniqueId,
     runtime_ctx: &Arc<RuntimeContext>,
 ) -> Result<()> {
@@ -293,6 +328,57 @@ fn open_iceoryx2_subprocess_to_subprocess(
     // Ensure the service exists (both subprocesses will open it independently)
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let _service = iceoryx2_node.open_or_create_service(&service_name)?;
+
+    // Store output wiring info on the source subprocess
+    {
+        let output_schema = {
+            let source_proc_type = graph
+                .traversal_mut()
+                .v(source_proc_id)
+                .first()
+                .map(|node| node.processor_type().to_string())
+                .unwrap_or_default();
+
+            PROCESSOR_REGISTRY
+                .port_info(&source_proc_type)
+                .and_then(|(_, outputs)| {
+                    outputs
+                        .iter()
+                        .find(|p| p.name == source_port)
+                        .map(|p| p.data_type.clone())
+                })
+                .unwrap_or_default()
+        };
+
+        let source_proc_arc = get_single_processor(graph, source_proc_id)?;
+        let mut source_guard = source_proc_arc.lock();
+        if let Some(deno_host) = source_guard
+            .as_any_mut()
+            .downcast_mut::<DenoSubprocessHostProcessor>()
+        {
+            deno_host.output_port_wiring.push(serde_json::json!({
+                "name": source_port,
+                "dest_port": dest_port,
+                "dest_service_name": service_name,
+                "schema_name": output_schema,
+            }));
+        }
+    }
+
+    // Store input wiring info on the dest subprocess
+    {
+        let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
+        let mut dest_guard = dest_proc_arc.lock();
+        if let Some(deno_host) = dest_guard
+            .as_any_mut()
+            .downcast_mut::<DenoSubprocessHostProcessor>()
+        {
+            deno_host.input_port_wiring.push(serde_json::json!({
+                "name": dest_port,
+                "service_name": service_name,
+            }));
+        }
+    }
 
     // Set link state to Wired
     let link = graph
@@ -317,7 +403,7 @@ fn open_iceoryx2_subprocess_to_rust(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     source_proc_id: &ProcessorUniqueId,
     dest_proc_id: &ProcessorUniqueId,
-    _source_port: &str,
+    source_port: &str,
     dest_port: &str,
     link_id: &LinkUniqueId,
     runtime_ctx: &Arc<RuntimeContext>,
@@ -335,6 +421,46 @@ fn open_iceoryx2_subprocess_to_rust(
     let service = iceoryx2_node.open_or_create_service(&service_name)?;
 
     // Source is subprocess - it creates its own publisher. No Rust-side source wiring.
+    // Store output wiring info on the subprocess processor so it can publish via FFI.
+    {
+        // Look up schema for the output port from the registry
+        let output_schema = {
+            let source_proc_type = graph
+                .traversal_mut()
+                .v(source_proc_id)
+                .first()
+                .map(|node| node.processor_type().to_string())
+                .unwrap_or_default();
+
+            PROCESSOR_REGISTRY
+                .port_info(&source_proc_type)
+                .and_then(|(_, outputs)| {
+                    outputs
+                        .iter()
+                        .find(|p| p.name == source_port)
+                        .map(|p| p.data_type.clone())
+                })
+                .unwrap_or_default()
+        };
+
+        let source_proc_arc = get_single_processor(graph, source_proc_id)?;
+        let mut source_guard = source_proc_arc.lock();
+        if let Some(deno_host) = source_guard
+            .as_any_mut()
+            .downcast_mut::<DenoSubprocessHostProcessor>()
+        {
+            deno_host.output_port_wiring.push(serde_json::json!({
+                "name": source_port,
+                "dest_port": dest_port,
+                "dest_service_name": service_name,
+                "schema_name": output_schema,
+            }));
+            tracing::debug!(
+                "Stored output wiring on Deno processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
+                source_proc_id, source_port, dest_port, service_name, output_schema
+            );
+        }
+    }
 
     // Configure destination InputMailboxes with port (Rust side)
     {
@@ -431,6 +557,26 @@ fn open_iceoryx2_rust_to_subprocess(
     }
 
     // Dest is subprocess - it creates its own subscriber. No Rust-side dest wiring.
+    // Store input wiring info on the subprocess processor so it can subscribe via FFI.
+    {
+        let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
+        let mut dest_guard = dest_proc_arc.lock();
+        if let Some(deno_host) = dest_guard
+            .as_any_mut()
+            .downcast_mut::<DenoSubprocessHostProcessor>()
+        {
+            deno_host.input_port_wiring.push(serde_json::json!({
+                "name": dest_port,
+                "service_name": service_name,
+            }));
+            tracing::debug!(
+                "Stored input wiring on Deno processor '{}': port='{}', service='{}'",
+                dest_proc_id,
+                dest_port,
+                service_name
+            );
+        }
+    }
 
     // Set link state to Wired
     let link = graph

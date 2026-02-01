@@ -1,0 +1,11 @@
+{
+  "name": "@tatolab/streamlib-deno",
+  "version": "0.3.0",
+  "exports": "./mod.ts",
+  "imports": {
+    "@msgpack/msgpack": "npm:@msgpack/msgpack@3.0.0-beta2"
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}

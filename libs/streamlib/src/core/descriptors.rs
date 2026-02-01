@@ -12,6 +12,7 @@ pub enum ProcessorRuntime {
     #[default]
     Rust,
     Python,
+    #[serde(alias = "deno")]
     TypeScript,
 }
 

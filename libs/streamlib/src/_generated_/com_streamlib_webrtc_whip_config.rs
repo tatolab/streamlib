@@ -43,6 +43,23 @@ pub struct Video {
     pub width: u32,
 }
 
+/// WHIP endpoint configuration
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Whip {
+    /// WHIP endpoint URL
+    #[serde(rename = "endpoint_url")]
+    pub endpoint_url: String,
+
+    /// Connection timeout in milliseconds
+    #[serde(rename = "timeout_ms")]
+    pub timeout_ms: u32,
+
+    /// Optional bearer token for authentication
+    #[serde(rename = "auth_token")]
+    pub auth_token: Option<String>,
+}
+
 /// Configuration for WebRTC WHIP streaming
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,21 +75,4 @@ pub struct WebrtcWhipConfig {
     /// WHIP endpoint configuration
     #[serde(rename = "whip")]
     pub whip: Whip,
-}
-
-/// WHIP endpoint configuration
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Whip {
-    /// Optional bearer token for authentication
-    #[serde(rename = "auth_token")]
-    pub auth_token: Option<String>,
-
-    /// WHIP endpoint URL
-    #[serde(rename = "endpoint_url")]
-    pub endpoint_url: String,
-
-    /// Connection timeout in milliseconds
-    #[serde(rename = "timeout_ms")]
-    pub timeout_ms: u32,
 }

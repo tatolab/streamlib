@@ -67,7 +67,7 @@ fn main() {
         .expect("Failed to create subscriber");
 
     // Build test payload
-    let test_data = rmp_serde::to_vec(&serde_json::json!({"hello": "world", "count": 42}))
+    let test_data = rmp_serde::to_vec_named(&serde_json::json!({"hello": "world", "count": 42}))
         .expect("Failed to serialize test data");
 
     let payload = FramePayload::new("test_port", "test_schema", 12345, &test_data);

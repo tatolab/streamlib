@@ -23,6 +23,10 @@ pub enum TargetType {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScreenCaptureConfig {
+    /// What to capture: Display, Window, or Application
+    #[serde(rename = "target_type")]
+    pub target_type: TargetType,
+
     /// Bundle identifier for Application mode (e.g., 'com.apple.Safari')
     #[serde(rename = "app_bundle_id")]
     pub app_bundle_id: Option<String>,
@@ -46,10 +50,6 @@ pub struct ScreenCaptureConfig {
     /// Whether to capture cursor (default: false)
     #[serde(rename = "show_cursor")]
     pub show_cursor: Option<bool>,
-
-    /// What to capture: Display, Window, or Application
-    #[serde(rename = "target_type")]
-    pub target_type: TargetType,
 
     /// Window ID for Window mode
     #[serde(rename = "window_id")]
