@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/tatolab/streamlib/compare/v0.3.1...v0.3.2) (2026-02-01)
+
+
+### Features
+
+* Deno/TypeScript subprocess processors with jtd-codegen unification ([#133](https://github.com/tatolab/streamlib/issues/133)) ([dcab28f](https://github.com/tatolab/streamlib/commit/dcab28fc31f6f2a7d03287fa148137e82850c5fa))
+
 ## [0.3.1](https://github.com/tatolab/streamlib/compare/v0.3.0...v0.3.1) (2026-01-31)
 
 
