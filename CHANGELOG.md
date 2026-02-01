@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/tatolab/streamlib/compare/v0.3.2...v0.3.3) (2026-02-01)
+
+
+### Features
+
+* hash-based venv caching for Python subprocess processors ([#131](https://github.com/tatolab/streamlib/issues/131)) ([#138](https://github.com/tatolab/streamlib/issues/138)) ([85d0d7a](https://github.com/tatolab/streamlib/commit/85d0d7a545f18bbd289abd594bb5297ba8a8f015))
+
 ## [0.3.2](https://github.com/tatolab/streamlib/compare/v0.3.1...v0.3.2) (2026-02-01)
 
 
