@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mp4WriterConfig {
+    /// Path to output MP4 file
+    #[serde(rename = "output_path")]
+    pub output_path: String,
+
     /// Audio bitrate in bits per second. Default: 128000 (128 kbps)
     #[serde(rename = "audio_bitrate")]
     pub audio_bitrate: Option<u32>,
@@ -16,10 +20,6 @@ pub struct Mp4WriterConfig {
     /// Audio codec identifier. Default: 'aac'
     #[serde(rename = "audio_codec")]
     pub audio_codec: Option<String>,
-
-    /// Path to output MP4 file
-    #[serde(rename = "output_path")]
-    pub output_path: String,
 
     /// A/V sync tolerance in milliseconds. Default: 33.3ms
     #[serde(rename = "sync_tolerance_ms")]

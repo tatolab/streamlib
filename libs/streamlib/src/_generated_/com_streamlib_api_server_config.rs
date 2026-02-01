@@ -13,6 +13,10 @@ pub struct ApiServerConfig {
     #[serde(rename = "host")]
     pub host: String,
 
+    /// Port number to listen on
+    #[serde(rename = "port")]
+    pub port: u16,
+
     /// Log file path for broker registration
     #[serde(rename = "log_path")]
     pub log_path: Option<String>,
@@ -20,8 +24,4 @@ pub struct ApiServerConfig {
     /// Runtime name for broker registration (auto-generated if not provided)
     #[serde(rename = "name")]
     pub name: Option<String>,
-
-    /// Port number to listen on
-    #[serde(rename = "port")]
-    pub port: u16,
 }

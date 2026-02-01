@@ -155,10 +155,39 @@ pub(crate) fn spawn_processor(
             }
         }
         ProcessorRuntime::TypeScript => {
-            return Err(StreamError::Configuration(format!(
-                "TypeScript runtime not yet supported for processor '{}'",
-                processor_id
-            )));
+            // TypeScript/Deno processors are hosted by DenoSubprocessHostProcessor
+            // (a Rust processor that manages a Deno subprocess lifecycle).
+            // The Deno subprocess manages its own iceoryx2 I/O via FFI, so the
+            // Rust host has no InputMailboxes/OutputWriter and runs in Manual mode.
+            let strategy = {
+                let graph = graph_arc.read();
+                let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
+                    StreamError::ProcessorNotFound(format!(
+                        "Processor '{}' not found",
+                        proc_id_clone
+                    ))
+                })?;
+                scheduling_strategy_for_processor(node)
+            };
+
+            tracing::info!(
+                "[{}] Spawning Deno subprocess host with strategy: {}",
+                processor_id,
+                strategy.description()
+            );
+
+            match strategy {
+                SchedulingStrategy::DedicatedThread { priority, name: _ } => {
+                    spawn_dedicated_thread(
+                        graph_arc,
+                        factory,
+                        runtime_ctx,
+                        proc_id_clone,
+                        priority,
+                        barrier_component,
+                    )?;
+                }
+            }
         }
     }
 

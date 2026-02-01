@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-ipc-types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Shared iceoryx2 payload types for StreamLib IPC"
+
+[dependencies]
+iceoryx2 = "0.8.1"

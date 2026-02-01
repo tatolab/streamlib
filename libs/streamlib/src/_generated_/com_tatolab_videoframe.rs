@@ -21,7 +21,8 @@ pub struct Videoframe {
     #[serde(rename = "surface_id")]
     pub surface_id: String,
 
-    /// Monotonic timestamp in nanoseconds (int64 as string - parse to native int64)
+    /// Monotonic timestamp in nanoseconds (int64 as string - parse to native
+    /// int64)
     #[serde(rename = "timestamp_ns")]
     pub timestamp_ns: String,
 

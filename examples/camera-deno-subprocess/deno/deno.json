@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "@msgpack/msgpack": "npm:@msgpack/msgpack@3.0.0-beta2",
+    "typegpu": "npm:typegpu@0.8.2",
+    "typegpu/data": "npm:typegpu@0.8.2/data"
+  },
+  "streamlib": {
+    "processors": ["processor.yaml", "halftone_processor.yaml"]
+  }
+}

@@ -25,13 +25,6 @@ from OpenGL.GL import *
 
 logger = logging.getLogger(__name__)
 
-# VideoFrame msgpack array indices
-FRAME_INDEX = 0
-HEIGHT = 1
-SURFACE_ID = 2
-TIMESTAMP_NS = 3
-WIDTH = 4
-
 
 # =============================================================================
 # GLSL Shaders
@@ -389,8 +382,8 @@ class CyberpunkGlitch:
         from streamlib.cgl_context import make_current, bind_iosurface_to_texture, flush, GL_TEXTURE_RECTANGLE
         import time as time_mod
 
-        w = frame[WIDTH]
-        h = frame[HEIGHT]
+        w = frame["width"]
+        h = frame["height"]
 
         # Use monotonic time for elapsed calculation
         if not hasattr(self, '_start_time'):
@@ -410,7 +403,7 @@ class CyberpunkGlitch:
         make_current(self.cgl_ctx)
 
         # Resolve input surface → IOSurface handle → bind as GL texture
-        input_handle = ctx.gpu.resolve_surface(frame[SURFACE_ID])
+        input_handle = ctx.gpu.resolve_surface(frame["surface_id"])
         bind_iosurface_to_texture(
             self.cgl_ctx, self.input_tex_id,
             input_handle.iosurface_ref, w, h
@@ -478,8 +471,8 @@ class CyberpunkGlitch:
         output_handle.release()
 
         # Output frame with new surface_id
-        out_frame = list(frame)  # copy input frame
-        out_frame[SURFACE_ID] = out_surface_id
+        out_frame = dict(frame)  # copy input frame
+        out_frame["surface_id"] = out_surface_id
         ctx.outputs.write("video_out", out_frame)
 
         self.frame_count += 1

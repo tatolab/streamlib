@@ -244,8 +244,8 @@ impl StreamRuntime {
         for yaml_rel_path in &processor_paths {
             let yaml_path = project_path.join(yaml_rel_path);
 
-            let proc_schema =
-                streamlib_schema::parse_processor_yaml_file(&yaml_path).map_err(|e| {
+            let proc_schema = streamlib_codegen_shared::parse_processor_yaml_file(&yaml_path)
+                .map_err(|e| {
                     StreamError::Configuration(format!(
                         "Failed to parse processor YAML {}: {}",
                         yaml_path.display(),
@@ -255,9 +255,11 @@ impl StreamRuntime {
 
             // Convert ProcessorSchema → ProcessorDescriptor
             let runtime = match proc_schema.runtime.language {
-                streamlib_schema::ProcessorLanguage::Python => ProcessorRuntime::Python,
-                streamlib_schema::ProcessorLanguage::TypeScript => ProcessorRuntime::TypeScript,
-                streamlib_schema::ProcessorLanguage::Rust => ProcessorRuntime::Rust,
+                streamlib_codegen_shared::ProcessorLanguage::Python => ProcessorRuntime::Python,
+                streamlib_codegen_shared::ProcessorLanguage::TypeScript => {
+                    ProcessorRuntime::TypeScript
+                }
+                streamlib_codegen_shared::ProcessorLanguage::Rust => ProcessorRuntime::Rust,
             };
 
             let inputs: Vec<PortDescriptor> = proc_schema
@@ -302,9 +304,13 @@ impl StreamRuntime {
 
             // Convert schema execution mode to runtime ExecutionConfig
             let execution = match &proc_schema.execution {
-                streamlib_schema::ProcessExecution::Reactive => ProcessExecution::Reactive,
-                streamlib_schema::ProcessExecution::Manual => ProcessExecution::Manual,
-                streamlib_schema::ProcessExecution::Continuous { interval_ms } => {
+                streamlib_codegen_shared::ProcessorSchemaExecution::Reactive => {
+                    ProcessExecution::Reactive
+                }
+                streamlib_codegen_shared::ProcessorSchemaExecution::Manual => {
+                    ProcessExecution::Manual
+                }
+                streamlib_codegen_shared::ProcessorSchemaExecution::Continuous { interval_ms } => {
                     ProcessExecution::Continuous {
                         interval_ms: *interval_ms,
                     }
@@ -321,6 +327,164 @@ impl StreamRuntime {
 
             tracing::info!(
                 "Registered Python processor '{}' from {}",
+                proc_schema.name,
+                yaml_rel_path
+            );
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Deno Project Registration
+    // =========================================================================
+
+    /// Register all TypeScript/Deno processors defined in a project's deno.json.
+    ///
+    /// Reads `streamlib.processors` array from the deno.json, loads each
+    /// processor YAML, and registers via `register_dynamic()` with a
+    /// [`DenoSubprocessHostProcessor`] constructor.
+    pub fn register_deno_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
+        use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
+        use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
+        use crate::core::execution::{ExecutionConfig, ProcessExecution};
+        use crate::core::ProcessorDescriptor;
+
+        let project_path = project_path.as_ref();
+        let deno_json_path = project_path.join("deno.json");
+
+        tracing::info!(
+            "Registering Deno processors from: {}",
+            deno_json_path.display()
+        );
+
+        let deno_json_content = std::fs::read_to_string(&deno_json_path).map_err(|e| {
+            StreamError::Configuration(format!(
+                "Failed to read {}: {}",
+                deno_json_path.display(),
+                e
+            ))
+        })?;
+
+        // Parse deno.json as JSON
+        let deno_json: serde_json::Value =
+            serde_json::from_str(&deno_json_content).map_err(|e| {
+                StreamError::Configuration(format!(
+                    "Failed to parse {}: {}",
+                    deno_json_path.display(),
+                    e
+                ))
+            })?;
+
+        // Read streamlib.processors array
+        let processor_paths: Vec<String> = deno_json
+            .get("streamlib")
+            .and_then(|s| s.get("processors"))
+            .and_then(|p| p.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if processor_paths.is_empty() {
+            tracing::warn!(
+                "No processors found in streamlib.processors in {}",
+                deno_json_path.display()
+            );
+            return Ok(());
+        }
+
+        for yaml_rel_path in &processor_paths {
+            let yaml_path = project_path.join(yaml_rel_path);
+
+            let proc_schema = streamlib_codegen_shared::parse_processor_yaml_file(&yaml_path)
+                .map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "Failed to parse processor YAML {}: {}",
+                        yaml_path.display(),
+                        e
+                    ))
+                })?;
+
+            // Convert ProcessorSchema → ProcessorDescriptor
+            let runtime = match proc_schema.runtime.language {
+                streamlib_codegen_shared::ProcessorLanguage::Python => ProcessorRuntime::Python,
+                streamlib_codegen_shared::ProcessorLanguage::TypeScript => {
+                    ProcessorRuntime::TypeScript
+                }
+                streamlib_codegen_shared::ProcessorLanguage::Rust => ProcessorRuntime::Rust,
+            };
+
+            let inputs: Vec<PortDescriptor> = proc_schema
+                .inputs
+                .iter()
+                .map(|p| {
+                    PortDescriptor::new(
+                        &p.name,
+                        p.description.as_deref().unwrap_or(""),
+                        &p.schema,
+                        true,
+                    )
+                })
+                .collect();
+
+            let outputs: Vec<PortDescriptor> = proc_schema
+                .outputs
+                .iter()
+                .map(|p| {
+                    PortDescriptor::new(
+                        &p.name,
+                        p.description.as_deref().unwrap_or(""),
+                        &p.schema,
+                        true,
+                    )
+                })
+                .collect();
+
+            let mut descriptor = ProcessorDescriptor::new(
+                &proc_schema.name,
+                proc_schema.description.as_deref().unwrap_or(""),
+            )
+            .with_version(&proc_schema.version)
+            .with_runtime(runtime);
+
+            if let Some(entrypoint) = &proc_schema.entrypoint {
+                descriptor = descriptor.with_entrypoint(entrypoint);
+            }
+
+            descriptor.inputs = inputs;
+            descriptor.outputs = outputs;
+
+            // Convert schema execution mode to runtime ExecutionConfig.
+            // Store the original execution mode — the Deno subprocess will use it
+            // internally, while the Rust host always runs in Manual mode.
+            let execution = match &proc_schema.execution {
+                streamlib_codegen_shared::ProcessorSchemaExecution::Reactive => {
+                    ProcessExecution::Reactive
+                }
+                streamlib_codegen_shared::ProcessorSchemaExecution::Manual => {
+                    ProcessExecution::Manual
+                }
+                streamlib_codegen_shared::ProcessorSchemaExecution::Continuous { interval_ms } => {
+                    ProcessExecution::Continuous {
+                        interval_ms: *interval_ms,
+                    }
+                }
+            };
+            let execution_config = ExecutionConfig::new(execution);
+
+            // Create constructor that builds DenoSubprocessHostProcessor
+            // (no InputMailboxes/OutputWriter — Deno uses FFI for iceoryx2)
+            let constructor =
+                create_deno_subprocess_host_constructor(&descriptor, execution_config);
+
+            crate::core::processors::PROCESSOR_REGISTRY
+                .register_dynamic(descriptor, constructor)?;
+
+            tracing::info!(
+                "Registered Deno processor '{}' from {}",
                 proc_schema.name,
                 yaml_rel_path
             );
