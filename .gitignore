@@ -73,3 +73,5 @@ examples/camera-python-display/assets/
 .streamlib/
 .envrc
 .cargo/config.toml
+
+plan.md
