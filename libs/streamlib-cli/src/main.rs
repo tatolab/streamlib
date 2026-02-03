@@ -56,6 +56,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Package processors into a distributable .slpkg bundle
+    Pack {
+        /// Path to package directory (default: current directory)
+        #[arg(value_name = "PACKAGE_DIR")]
+        package_dir: Option<PathBuf>,
+
+        /// Output file path (default: {name}-{version}.slpkg in package dir)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// Run the StreamLib runtime
     Run {
         /// Pipeline graph file to load (JSON)
@@ -295,6 +306,13 @@ async fn async_main(cli: Cli) -> Result<()> {
     }
 
     match cli.command {
+        Some(Commands::Pack {
+            package_dir,
+            output,
+        }) => {
+            let dir = package_dir.unwrap_or_else(|| std::env::current_dir().unwrap());
+            commands::pack::pack(&dir, output.as_deref())?;
+        }
         Some(Commands::Run {
             graph_file,
             name,
