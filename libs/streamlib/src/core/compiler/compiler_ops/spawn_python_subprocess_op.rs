@@ -726,10 +726,28 @@ pub(crate) fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> 
     #[cfg(windows)]
     let venv_python = venv_dir.join("Scripts").join("python.exe");
 
-    // Cache hit — venv already exists and has a python binary
+    // Fast path (no lock) — venv already exists and has a python binary
     if venv_python.exists() {
         tracing::debug!(
             "[{}] Cache hit: reusing venv at {} (hash={})",
+            processor_id,
+            venv_dir.display(),
+            &hash_hex[..12]
+        );
+        return Ok(venv_python.to_string_lossy().to_string());
+    }
+
+    // Serialize venv creation — multiple processors sharing the same pyproject.toml
+    // produce the same hash and would otherwise race to create the same venv.
+    static VENV_CREATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _lock = VENV_CREATION_LOCK
+        .lock()
+        .map_err(|e| StreamError::Runtime(format!("Venv creation lock poisoned: {}", e)))?;
+
+    // Re-check after acquiring lock — another thread may have created it
+    if venv_python.exists() {
+        tracing::debug!(
+            "[{}] Cache hit (after lock): reusing venv at {} (hash={})",
             processor_id,
             venv_dir.display(),
             &hash_hex[..12]
