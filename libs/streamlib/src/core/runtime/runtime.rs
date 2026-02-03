@@ -185,14 +185,18 @@ impl StreamRuntime {
     // Package Loading
     // =========================================================================
 
-    /// Load a processor package from a directory containing `streamlib.toml`.
+    /// Load a processor package from a directory containing `streamlib.yaml`.
     ///
-    /// Reads `[[processors]]` entries from the manifest and registers each
+    /// Reads `processors` entries from the manifest and registers each
     /// with the global processor registry, dispatching to the appropriate
     /// subprocess host constructor based on the `runtime` field.
+    ///
+    /// For Python packages, eagerly creates the venv and installs dependencies
+    /// once during loading, so processors don't race to create it at spawn time.
     pub fn load_package(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
         use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
         use crate::core::compiler::compiler_ops::create_subprocess_host_constructor;
+        use crate::core::compiler::compiler_ops::ensure_processor_venv;
         use crate::core::config::ProjectConfig;
         use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
         use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -206,11 +210,29 @@ impl StreamRuntime {
 
         if config.processors.is_empty() {
             tracing::warn!(
-                "No [[processors]] found in {} in {}",
+                "No processors found in {} in {}",
                 ProjectConfig::FILE_NAME,
                 project_path.display()
             );
             return Ok(());
+        }
+
+        // Eagerly create venv for Python packages so processors don't race at spawn time
+        let has_python_processors = config.processors.iter().any(|p| {
+            matches!(
+                p.runtime.language,
+                streamlib_codegen_shared::ProcessorLanguage::Python
+            )
+        });
+
+        if has_python_processors {
+            let package_label = config
+                .package
+                .as_ref()
+                .map(|p| p.name.as_str())
+                .unwrap_or("unknown");
+            tracing::info!("Pre-creating Python venv for package '{}'", package_label);
+            ensure_processor_venv(package_label, project_path)?;
         }
 
         let mut registered_count = 0usize;
