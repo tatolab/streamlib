@@ -37,9 +37,8 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("deno");
 
-    // 1. Register Deno processors from the project's deno.json
-    //    Reads streamlib.processors, loads each YAML, registers descriptors
-    runtime.register_deno_project(&project_path)?;
+    // 1. Load processor package from streamlib.toml
+    runtime.load_package(&project_path)?;
 
     // 2. Add processors
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {

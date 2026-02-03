@@ -67,9 +67,9 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
-    // Register all Python processor descriptors from pyproject.toml
-    runtime.register_python_project(&project_path)?;
-    println!("✓ Registered Python processors from pyproject.toml\n");
+    // Load processor package from streamlib.toml
+    runtime.load_package(&project_path)?;
+    println!("✓ Loaded processor package from streamlib.toml\n");
 
     // =========================================================================
     // Camera Source

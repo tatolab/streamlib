@@ -19,8 +19,3 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["."]
 
-[tool.streamlib]
-schemas = []
-processors = [
-    "processor.yaml",
-]
