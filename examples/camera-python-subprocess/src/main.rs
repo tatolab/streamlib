@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
-    // 1. Load processor package from streamlib.toml
+    // 1. Load processor package from streamlib.yaml
     runtime.load_package(&project_path)?;
 
     // 2. Add processors

@@ -1,0 +1,31 @@
+package:
+  name: camera-deno-subprocess
+  version: "0.1.0"
+  description: "TypeScript/Deno video processors using subprocess architecture"
+
+processors:
+  - name: com.tatolab.grayscale-ts
+    version: "1.0.0"
+    description: "Grayscale processor — TypeScript/Deno"
+    runtime: deno
+    execution: reactive
+    entrypoint: "grayscale_processor.ts:default"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
+    outputs:
+      - name: video_out
+        schema: com.tatolab.videoframe@1.0.0
+
+  - name: com.tatolab.halftone-ts
+    version: "1.0.0"
+    description: "Halftone dot pattern via TypeGPU/WebGPU compute shader"
+    runtime: deno
+    execution: reactive
+    entrypoint: "halftone_processor.ts:default"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
+    outputs:
+      - name: video_out
+        schema: com.tatolab.videoframe@1.0.0

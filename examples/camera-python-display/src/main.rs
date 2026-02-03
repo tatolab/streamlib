@@ -67,9 +67,9 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
-    // Load processor package from streamlib.toml
+    // Load processor package from streamlib.yaml
     runtime.load_package(&project_path)?;
-    println!("✓ Loaded processor package from streamlib.toml\n");
+    println!("✓ Loaded processor package from streamlib.yaml\n");
 
     // =========================================================================
     // Camera Source

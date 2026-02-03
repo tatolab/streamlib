@@ -1,14 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Project-level configuration via `streamlib.toml`.
+//! Project-level configuration via `streamlib.yaml`.
 
 use crate::core::{Result, StreamError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Package-level metadata from `[package]` in `streamlib.toml`.
+/// Package-level metadata from `streamlib.yaml`.
 #[derive(Debug, Deserialize)]
 pub struct PackageMetadata {
     pub name: String,
@@ -17,7 +17,7 @@ pub struct PackageMetadata {
     pub description: Option<String>,
 }
 
-/// Project configuration from `streamlib.toml`.
+/// Project configuration from `streamlib.yaml`.
 #[derive(Debug, Default, Deserialize)]
 pub struct ProjectConfig {
     /// Package metadata.
@@ -35,7 +35,7 @@ pub struct ProjectConfig {
 
 impl ProjectConfig {
     /// Configuration file name.
-    pub const FILE_NAME: &'static str = "streamlib.toml";
+    pub const FILE_NAME: &'static str = "streamlib.yaml";
 
     /// Load project configuration from a directory. Returns error if file is
     /// missing or cannot be parsed.
@@ -46,7 +46,7 @@ impl ProjectConfig {
             StreamError::Configuration(format!("Failed to read {}: {}", config_path.display(), e))
         })?;
 
-        let config: Self = toml::from_str(&content).map_err(|e| {
+        let config: Self = serde_yaml::from_str(&content).map_err(|e| {
             StreamError::Configuration(format!("Failed to parse {}: {}", config_path.display(), e))
         })?;
 
@@ -69,7 +69,7 @@ impl ProjectConfig {
         }
 
         match std::fs::read_to_string(&config_path) {
-            Ok(content) => match toml::from_str(&content) {
+            Ok(content) => match serde_yaml::from_str(&content) {
                 Ok(config) => {
                     tracing::info!("Loaded project config from {}", config_path.display());
                     config
@@ -123,11 +123,17 @@ mod tests {
     #[test]
     fn test_load_with_env() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("streamlib.toml");
+        let config_path = dir.path().join("streamlib.yaml");
         let mut file = std::fs::File::create(&config_path).unwrap();
-        writeln!(file, "[env]").unwrap();
-        writeln!(file, "STREAMLIB_RHI_BACKEND = \"opengl\"").unwrap();
-        writeln!(file, "MY_CUSTOM_VAR = \"value\"").unwrap();
+        write!(
+            file,
+            r#"
+env:
+  STREAMLIB_RHI_BACKEND: opengl
+  MY_CUSTOM_VAR: value
+"#
+        )
+        .unwrap();
 
         let config = ProjectConfig::load(dir.path()).unwrap();
         assert_eq!(
@@ -140,8 +146,9 @@ mod tests {
     #[test]
     fn test_load_empty_file() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("streamlib.toml");
-        std::fs::File::create(&config_path).unwrap();
+        let config_path = dir.path().join("streamlib.yaml");
+        // serde_yaml parses empty content as None, so write empty mapping
+        std::fs::write(&config_path, "{}").unwrap();
 
         let config = ProjectConfig::load(dir.path()).unwrap();
         assert!(config.env.is_empty());
@@ -150,34 +157,32 @@ mod tests {
     #[test]
     fn test_load_with_processors() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("streamlib.toml");
+        let config_path = dir.path().join("streamlib.yaml");
         let mut file = std::fs::File::create(&config_path).unwrap();
-        writeln!(
+        write!(
             file,
             r#"
-[package]
-name = "test-package"
-version = "0.1.0"
-description = "Test package"
+package:
+  name: test-package
+  version: "0.1.0"
+  description: Test package
 
-[env]
-MY_VAR = "value"
+env:
+  MY_VAR: value
 
-[[processors]]
-name = "com.test.grayscale"
-version = "1.0.0"
-description = "Grayscale processor"
-runtime = "python"
-execution = "reactive"
-entrypoint = "grayscale_processor:GrayscaleProcessor"
-
-[[processors.inputs]]
-name = "video_in"
-schema = "com.tatolab.videoframe@1.0.0"
-
-[[processors.outputs]]
-name = "video_out"
-schema = "com.tatolab.videoframe@1.0.0"
+processors:
+  - name: com.test.grayscale
+    version: "1.0.0"
+    description: Grayscale processor
+    runtime: python
+    execution: reactive
+    entrypoint: "grayscale_processor:GrayscaleProcessor"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
+    outputs:
+      - name: video_out
+        schema: com.tatolab.videoframe@1.0.0
 "#
         )
         .unwrap();
