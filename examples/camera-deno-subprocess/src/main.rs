@@ -38,7 +38,7 @@ fn main() -> Result<()> {
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("deno");
 
     // 1. Load processor package from streamlib.yaml
-    runtime.load_package(&project_path)?;
+    runtime.load_project(&project_path)?;
 
     // 2. Add processors
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
@@ -48,9 +48,7 @@ fn main() -> Result<()> {
 
     let halftone = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.halftone-ts",
-        serde_json::json!({
-            "project_path": project_path.to_str().unwrap()
-        }),
+        serde_json::json!({}),
     ))?;
 
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {

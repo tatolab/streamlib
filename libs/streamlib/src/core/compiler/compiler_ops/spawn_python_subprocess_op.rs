@@ -629,12 +629,14 @@ impl SubprocessHostProcessor {
 /// The constructor creates a [`SubprocessHostProcessor`] with real [`InputMailboxes`]
 /// and [`OutputWriter`], wired by the compiler like any Rust processor.
 /// The Python subprocess is spawned during setup, not construction.
-pub(crate) fn create_subprocess_host_constructor(
+pub(crate) fn create_python_subprocess_host_constructor(
     descriptor: &ProcessorDescriptor,
     execution_config: ExecutionConfig,
+    project_path: PathBuf,
 ) -> DynamicProcessorConstructorFn {
     let descriptor_clone = descriptor.clone();
     let entrypoint = descriptor.entrypoint.clone().unwrap_or_default();
+    let project_path_str = project_path.to_string_lossy().to_string();
 
     Box::new(move |node: &ProcessorNode| {
         let mut inputs = InputMailboxes::new();
@@ -642,14 +644,6 @@ pub(crate) fn create_subprocess_host_constructor(
             inputs.add_port(&input.name, 1, Default::default());
         }
         let outputs = Arc::new(OutputWriter::new());
-
-        let project_path = node
-            .config
-            .as_ref()
-            .and_then(|c| c.get("project_path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
 
         Ok(Box::new(SubprocessHostProcessor {
             inputs,
@@ -659,7 +653,7 @@ pub(crate) fn create_subprocess_host_constructor(
             stdout_reader: None,
             runtime_context: None,
             entrypoint: entrypoint.clone(),
-            project_path,
+            project_path: project_path_str.clone(),
             processor_id: node.id.to_string(),
             processor_config: node.config.clone(),
             execution_config,

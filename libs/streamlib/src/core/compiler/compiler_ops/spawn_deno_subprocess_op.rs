@@ -515,26 +515,20 @@ impl DenoSubprocessHostProcessor {
 pub(crate) fn create_deno_subprocess_host_constructor(
     descriptor: &ProcessorDescriptor,
     execution_config: ExecutionConfig,
+    project_path: std::path::PathBuf,
 ) -> DynamicProcessorConstructorFn {
     let descriptor_clone = descriptor.clone();
     let entrypoint = descriptor.entrypoint.clone().unwrap_or_default();
+    let project_path_str = project_path.to_string_lossy().to_string();
 
     Box::new(move |node: &ProcessorNode| {
-        let project_path = node
-            .config
-            .as_ref()
-            .and_then(|c| c.get("project_path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
         Ok(Box::new(DenoSubprocessHostProcessor {
             child: None,
             stdin_writer: None,
             stdout_reader: None,
             runtime_context: None,
             entrypoint: entrypoint.clone(),
-            project_path,
+            project_path: project_path_str.clone(),
             processor_id: node.id.to_string(),
             processor_config: node.config.clone(),
             execution_config,
