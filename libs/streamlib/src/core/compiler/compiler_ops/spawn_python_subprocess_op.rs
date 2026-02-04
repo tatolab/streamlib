@@ -675,7 +675,7 @@ pub(crate) fn create_python_subprocess_host_constructor(
 /// On cache hit (python binary exists), returns immediately with zero `uv` calls.
 /// On cache miss, creates venv and installs deps. On install failure, removes the
 /// venv directory and returns an error.
-pub(crate) fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<String> {
+pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
 
     let uv_cache_dir = crate::core::streamlib_home::get_uv_cache_dir();

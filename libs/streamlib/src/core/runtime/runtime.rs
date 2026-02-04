@@ -950,7 +950,7 @@ impl StreamRuntime {
 /// Extract a .slpkg ZIP archive to the package cache.
 /// Cache key is {name}-{version} from the embedded streamlib.yaml.
 /// Always overwrites on load.
-fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path::PathBuf> {
+pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path::PathBuf> {
     use crate::core::config::ProjectConfig;
 
     let slpkg_bytes = std::fs::read(slpkg_path).map_err(|e| {

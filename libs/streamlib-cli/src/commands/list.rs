@@ -40,17 +40,3 @@ pub fn processors() -> Result<()> {
 
     Ok(())
 }
-
-/// List all available schemas.
-pub fn schemas() -> Result<()> {
-    // For now, list the built-in frame type schemas
-    println!("Built-in schemas:\n");
-    println!("  VideoFrame");
-    println!("    GPU texture with metadata for video processing\n");
-    println!("  AudioFrame");
-    println!("    Fixed-size audio buffer with streaming metadata\n");
-    println!("  DataFrame");
-    println!("    Generic binary data with custom schema\n");
-
-    Ok(())
-}

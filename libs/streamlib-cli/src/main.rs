@@ -164,10 +164,16 @@ enum Commands {
         since: Option<String>,
     },
 
-    /// Schema management (validate processor schemas)
-    Schema {
+    /// Schema management
+    Schemas {
         #[command(subcommand)]
-        action: SchemaCommands,
+        action: SchemasCommands,
+    },
+
+    /// Manage installed packages
+    Pkg {
+        #[command(subcommand)]
+        action: PkgCommands,
     },
 }
 
@@ -175,9 +181,6 @@ enum Commands {
 enum ListCommands {
     /// List all available processor types
     Processors,
-
-    /// List all available schemas
-    Schemas,
 }
 
 #[cfg(target_os = "macos")]
@@ -255,11 +258,34 @@ enum RuntimesCommands {
 }
 
 #[derive(Subcommand)]
-enum SchemaCommands {
+enum SchemasCommands {
+    /// List all known schemas from the processor registry
+    List,
+    /// Show the YAML definition of a schema
+    Get {
+        /// Schema name (e.g. com.tatolab.videoframe)
+        name: String,
+    },
     /// Validate a processor YAML schema file
     ValidateProcessor {
         /// Path to the processor YAML file
         path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum PkgCommands {
+    /// Install a .slpkg package (local path or URL)
+    Install {
+        /// Path to .slpkg file or HTTP URL
+        source: String,
+    },
+    /// List installed packages
+    List,
+    /// Remove an installed package
+    Remove {
+        /// Package name to remove
+        name: String,
     },
 }
 
@@ -341,7 +367,6 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         Some(Commands::List { what }) => match what {
             ListCommands::Processors => commands::list::processors()?,
-            ListCommands::Schemas => commands::list::schemas()?,
         },
         Some(Commands::Inspect { url }) => {
             commands::inspect::run(&url).await?;
@@ -389,10 +414,17 @@ async fn async_main(cli: Cli) -> Result<()> {
         }) => {
             commands::logs::stream(&runtime, follow, lines, since.as_deref()).await?;
         }
-        Some(Commands::Schema { action }) => match action {
-            SchemaCommands::ValidateProcessor { path } => {
+        Some(Commands::Schemas { action }) => match action {
+            SchemasCommands::List => commands::schema::list()?,
+            SchemasCommands::Get { name } => commands::schema::get(&name)?,
+            SchemasCommands::ValidateProcessor { path } => {
                 commands::schema::validate_processor(&path)?
             }
+        },
+        Some(Commands::Pkg { action }) => match action {
+            PkgCommands::Install { source } => commands::pkg::install(&source).await?,
+            PkgCommands::List => commands::pkg::list()?,
+            PkgCommands::Remove { name } => commands::pkg::remove(&name)?,
         },
         None => {
             // No subcommand: show help

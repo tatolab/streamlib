@@ -14,7 +14,7 @@ mod compile_phase;
 mod compile_result;
 #[allow(clippy::module_inception)]
 mod compiler;
-pub(crate) mod compiler_ops;
+pub mod compiler_ops;
 mod compiler_transaction;
 mod link_config_change;
 mod pending_operation;
