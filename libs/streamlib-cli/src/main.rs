@@ -180,7 +180,15 @@ enum Commands {
 #[derive(Subcommand)]
 enum ListCommands {
     /// List all available processor types
-    Processors,
+    Processors {
+        /// Runtime name or ID (queries broker for endpoint)
+        #[arg(long = "runtime", short = 'r')]
+        runtime: Option<String>,
+
+        /// URL of the runtime API server (alternative to --runtime)
+        #[arg(long)]
+        url: Option<String>,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -259,8 +267,16 @@ enum RuntimesCommands {
 
 #[derive(Subcommand)]
 enum SchemasCommands {
-    /// List all known schemas from the processor registry
-    List,
+    /// List all known schemas from a running runtime
+    List {
+        /// Runtime name or ID (queries broker for endpoint)
+        #[arg(long = "runtime", short = 'r')]
+        runtime: Option<String>,
+
+        /// URL of the runtime API server (alternative to --runtime)
+        #[arg(long)]
+        url: Option<String>,
+    },
     /// Show the YAML definition of a schema
     Get {
         /// Schema name (e.g. com.tatolab.videoframe)
@@ -366,7 +382,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             .await?;
         }
         Some(Commands::List { what }) => match what {
-            ListCommands::Processors => commands::list::processors()?,
+            ListCommands::Processors { runtime, url } => {
+                commands::list::processors(runtime.as_deref(), url.as_deref()).await?
+            }
         },
         Some(Commands::Inspect { url }) => {
             commands::inspect::run(&url).await?;
@@ -415,7 +433,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             commands::logs::stream(&runtime, follow, lines, since.as_deref()).await?;
         }
         Some(Commands::Schemas { action }) => match action {
-            SchemasCommands::List => commands::schema::list()?,
+            SchemasCommands::List { runtime, url } => {
+                commands::schema::list(runtime.as_deref(), url.as_deref()).await?
+            }
             SchemasCommands::Get { name } => commands::schema::get(&name)?,
             SchemasCommands::ValidateProcessor { path } => {
                 commands::schema::validate_processor(&path)?

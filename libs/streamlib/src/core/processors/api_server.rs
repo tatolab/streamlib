@@ -162,7 +162,9 @@ struct IdResponse {
 
 // Note: RegistryResponse is now defined in crate::core::json_schema
 // and imported below for the get_registry handler.
-use crate::core::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
+use crate::core::json_schema::{
+    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput, SemanticVersionOutput,
+};
 
 #[derive(Serialize, utoipa::ToSchema)]
 struct ErrorResponse {
@@ -567,10 +569,26 @@ async fn get_registry() -> Json<RegistryResponse> {
         .into_iter()
         .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
-    // Schema registry removed - iceoryx2 handles schemas via MessagePack
+
+    let schemas: Vec<SchemaDescriptorOutput> = PROCESSOR_REGISTRY
+        .known_schemas()
+        .into_iter()
+        .map(|name| SchemaDescriptorOutput {
+            name,
+            version: SemanticVersionOutput {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            fields: vec![],
+            read_behavior: Default::default(),
+            default_capacity: 0,
+        })
+        .collect();
+
     Json(RegistryResponse {
         processors,
-        schemas: vec![],
+        schemas,
     })
 }
 
