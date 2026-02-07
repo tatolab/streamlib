@@ -269,6 +269,11 @@ enum PkgCommands {
         /// Path to .slpkg file or HTTP URL
         source: String,
     },
+    /// Inspect a .slpkg package (show manifest without installing)
+    Inspect {
+        /// Path to .slpkg file
+        path: PathBuf,
+    },
     /// List installed packages
     List,
     /// Remove an installed package
@@ -377,6 +382,7 @@ async fn async_main(cli: Cli) -> Result<()> {
         },
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Install { source } => commands::pkg::install(&source).await?,
+            PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List => commands::pkg::list()?,
             PkgCommands::Remove { name } => commands::pkg::remove(&name)?,
         },

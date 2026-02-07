@@ -105,6 +105,83 @@ pub async fn install(source: &str) -> Result<()> {
     Ok(())
 }
 
+/// Inspect a .slpkg package without installing it.
+pub fn inspect(path: &std::path::Path) -> Result<()> {
+    if !path.exists() {
+        anyhow::bail!("File not found: {}", path.display());
+    }
+
+    let file =
+        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .with_context(|| format!("Failed to read ZIP archive: {}", path.display()))?;
+
+    // Find and read streamlib.yaml from the archive
+    let yaml_content = {
+        let mut entry = archive
+            .by_name("streamlib.yaml")
+            .with_context(|| "Package missing streamlib.yaml")?;
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut buf)?;
+        buf
+    };
+
+    let config: streamlib::core::config::ProjectConfig =
+        serde_yaml::from_str(&yaml_content).with_context(|| "Failed to parse streamlib.yaml")?;
+
+    let package = config
+        .package
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Package missing [package] section"))?;
+
+    println!("Package: {} v{}", package.name, package.version);
+    if let Some(desc) = &package.description {
+        println!("Description: {}", desc);
+    }
+    if let Some(sv) = &package.streamlib_version {
+        println!("Requires: streamlib {}", sv);
+    }
+
+    if !config.processors.is_empty() {
+        println!();
+        println!("Processors ({}):", config.processors.len());
+        for proc in &config.processors {
+            println!("  {} v{}", proc.name, proc.version);
+            if let Some(desc) = &proc.description {
+                println!("    {}", desc);
+            }
+            println!("    Runtime:   {:?}", proc.runtime.language);
+            println!("    Execution: {:?}", proc.execution);
+            if !proc.inputs.is_empty() {
+                println!("    Inputs:");
+                for input in &proc.inputs {
+                    println!("      - {} ({})", input.name, input.schema);
+                }
+            }
+            if !proc.outputs.is_empty() {
+                println!("    Outputs:");
+                for output in &proc.outputs {
+                    println!("      - {} ({})", output.name, output.schema);
+                }
+            }
+            if let Some(config_ref) = &proc.config {
+                println!("    Config:    {} ({})", config_ref.name, config_ref.schema);
+            }
+        }
+    }
+
+    // List files in archive
+    println!();
+    println!("Files ({}):", archive.len());
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(i) {
+            println!("  {}", entry.name());
+        }
+    }
+
+    Ok(())
+}
+
 /// List installed packages.
 pub fn list() -> Result<()> {
     let manifest = InstalledPackageManifest::load()
