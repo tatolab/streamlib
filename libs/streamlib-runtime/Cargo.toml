@@ -1,0 +1,53 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-runtime"
+description = "StreamLib runtime binary — hosts processors, API server, and broker registration"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "streamlib-runtime"
+path = "src/main.rs"
+
+[dependencies]
+# Core library (bundles all Rust processors)
+streamlib = { path = "../streamlib" }
+
+# Dynamic plugin loading
+libloading = "0.8"
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
+
+# Broker client (for version info / gRPC registration is via streamlib)
+streamlib-broker = { path = "../streamlib-broker" }
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime
+tokio.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Home directory detection
+dirs = "6.0"
+
+# Random name generation for runtimes
+fastrand = "2.0"
+
+# Runtime ID generation
+cuid2 = "0.1"
+
+# Error handling
+anyhow.workspace = true
+
+# Daemonization (Unix-only)
+[target.'cfg(unix)'.dependencies]
+daemonize = "0.5"

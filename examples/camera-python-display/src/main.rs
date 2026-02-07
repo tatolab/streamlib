@@ -67,9 +67,9 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
-    // Register all Python processor descriptors from pyproject.toml
-    runtime.register_python_project(&project_path)?;
-    println!("✓ Registered Python processors from pyproject.toml\n");
+    // Load processor package from streamlib.yaml
+    runtime.load_project(&project_path)?;
+    println!("✓ Loaded processor package from streamlib.yaml\n");
 
     // =========================================================================
     // Camera Source
@@ -92,7 +92,7 @@ fn main() -> Result<()> {
     );
     let avatar = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.avatar_character",
-        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+        serde_json::json!({}),
     ))?;
     println!("✓ Avatar character processor added: {}\n", avatar);
 
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
     println!("🐍 Adding Python lower third GENERATOR (subprocess, 16ms)...");
     let lower_third = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.cyberpunk_lower_third",
-        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+        serde_json::json!({}),
     ))?;
     println!("✓ Lower third generator added: {}\n", lower_third);
 
@@ -122,7 +122,7 @@ fn main() -> Result<()> {
     println!("🐍 Adding Python watermark GENERATOR (subprocess, 16ms)...");
     let watermark = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.cyberpunk_watermark",
-        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+        serde_json::json!({}),
     ))?;
     println!("✓ Watermark generator added: {}\n", watermark);
 
@@ -141,7 +141,7 @@ fn main() -> Result<()> {
     println!("🐍 Adding Python glitch processor (subprocess, RGB separation, scanlines)...");
     let glitch = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.cyberpunk_glitch",
-        serde_json::json!({ "project_path": project_path.to_str().unwrap() }),
+        serde_json::json!({}),
     ))?;
     println!("✓ Glitch processor added: {}\n", glitch);
 

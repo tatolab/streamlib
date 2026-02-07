@@ -5,6 +5,7 @@ members = [
     "libs/streamlib",           # All-in-one: core, apple (feature-gated)
     "libs/streamlib-broker",    # Broker service for cross-process coordination (macOS)
     "libs/streamlib-cli",       # Command-line interface for StreamLib runtime
+    "libs/streamlib-runtime",   # Standalone runtime binary (spawned by CLI)
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins

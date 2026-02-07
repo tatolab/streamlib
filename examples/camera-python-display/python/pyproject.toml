@@ -25,11 +25,3 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["."]
 
-[tool.streamlib]
-schemas = []
-processors = [
-    "avatar_character.yaml",
-    "cyberpunk_lower_third.yaml",
-    "cyberpunk_watermark.yaml",
-    "cyberpunk_glitch.yaml",
-]

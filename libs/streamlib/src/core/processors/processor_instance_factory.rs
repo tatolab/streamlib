@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use parking_lot::RwLock;
@@ -50,6 +50,7 @@ pub struct ProcessorInstanceFactory {
     constructors: RwLock<HashMap<String, private::ConstructorFn>>,
     port_info: RwLock<HashMap<String, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<String, ProcessorDescriptor>>,
+    schemas: RwLock<HashSet<String>>,
 }
 
 /// Global processor registry for runtime lookups.
@@ -75,6 +76,7 @@ impl ProcessorInstanceFactory {
             constructors: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
+            schemas: RwLock::new(HashSet::new()),
         }
     }
 
@@ -135,7 +137,14 @@ impl ProcessorInstanceFactory {
 
         self.port_info
             .write()
-            .insert(type_name.clone(), (inputs, outputs));
+            .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
+
+        {
+            let mut schemas = self.schemas.write();
+            for port in inputs.iter().chain(outputs.iter()) {
+                schemas.insert(port.data_type.clone());
+            }
+        }
 
         self.descriptors
             .write()
@@ -227,7 +236,14 @@ impl ProcessorInstanceFactory {
 
         self.port_info
             .write()
-            .insert(type_name.clone(), (inputs, outputs));
+            .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
+
+        {
+            let mut schemas = self.schemas.write();
+            for port in inputs.iter().chain(outputs.iter()) {
+                schemas.insert(port.data_type.clone());
+            }
+        }
 
         self.descriptors
             .write()
@@ -289,7 +305,14 @@ impl ProcessorInstanceFactory {
 
         self.port_info
             .write()
-            .insert(type_name.clone(), (inputs, outputs));
+            .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
+
+        {
+            let mut schemas = self.schemas.write();
+            for port in inputs.iter().chain(outputs.iter()) {
+                schemas.insert(port.data_type.clone());
+            }
+        }
 
         self.descriptors
             .write()
@@ -345,5 +368,17 @@ impl ProcessorInstanceFactory {
     /// List all registered processor types with their full descriptors.
     pub fn list_registered(&self) -> Vec<ProcessorDescriptor> {
         self.descriptors.read().values().cloned().collect()
+    }
+
+    /// All known schema strings from registered processor ports, sorted.
+    pub fn known_schemas(&self) -> Vec<String> {
+        let mut schemas: Vec<String> = self.schemas.read().iter().cloned().collect();
+        schemas.sort();
+        schemas
+    }
+
+    /// Check if a schema string is known from any registered processor port.
+    pub fn is_schema_known(&self, schema: &str) -> bool {
+        self.schemas.read().contains(schema)
     }
 }

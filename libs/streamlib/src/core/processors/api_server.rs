@@ -162,7 +162,9 @@ struct IdResponse {
 
 // Note: RegistryResponse is now defined in crate::core::json_schema
 // and imported below for the get_registry handler.
-use crate::core::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
+use crate::core::json_schema::{
+    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput, SemanticVersionOutput,
+};
 
 #[derive(Serialize, utoipa::ToSchema)]
 struct ErrorResponse {
@@ -187,6 +189,7 @@ struct ErrorResponse {
         (name = "processors", description = "Processor lifecycle management"),
         (name = "connections", description = "Connection management between processors"),
         (name = "registry", description = "Processor and schema registry"),
+        (name = "schemas", description = "Schema definitions"),
         (name = "events", description = "Real-time event streaming via WebSocket")
     )
 )]
@@ -267,6 +270,8 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
             .routes(routes!(create_connection))
             .routes(routes!(delete_connection))
             .routes(routes!(get_registry))
+            .routes(routes!(list_schema_definitions))
+            .routes(routes!(get_schema_definition))
             .split_for_parts();
 
         let state = AppState {
@@ -567,11 +572,64 @@ async fn get_registry() -> Json<RegistryResponse> {
         .into_iter()
         .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
-    // Schema registry removed - iceoryx2 handles schemas via MessagePack
+
+    let schemas: Vec<SchemaDescriptorOutput> = PROCESSOR_REGISTRY
+        .known_schemas()
+        .into_iter()
+        .map(|name| SchemaDescriptorOutput {
+            name,
+            version: SemanticVersionOutput {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            fields: vec![],
+            read_behavior: Default::default(),
+            default_capacity: 0,
+        })
+        .collect();
+
     Json(RegistryResponse {
         processors,
-        schemas: vec![],
+        schemas,
     })
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/schemas",
+    tag = "schemas",
+    responses(
+        (status = 200, description = "List of schema names that have embedded definitions", body = Vec<String>)
+    )
+)]
+async fn list_schema_definitions() -> Json<Vec<String>> {
+    Json(
+        crate::core::embedded_schemas::list_embedded_schema_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/schemas/{name}",
+    tag = "schemas",
+    params(
+        ("name" = String, Path, description = "Schema name (e.g. com.tatolab.videoframe)")
+    ),
+    responses(
+        (status = 200, description = "YAML schema definition", body = String),
+        (status = 404, description = "Schema not found")
+    )
+)]
+async fn get_schema_definition(
+    Path(name): Path<String>,
+) -> std::result::Result<String, axum::http::StatusCode> {
+    crate::core::embedded_schemas::get_embedded_schema_definition(&name)
+        .map(|def| def.to_string())
+        .ok_or(axum::http::StatusCode::NOT_FOUND)
 }
 
 async fn get_openapi_spec(State(state): State<AppState>) -> Json<utoipa::openapi::OpenApi> {

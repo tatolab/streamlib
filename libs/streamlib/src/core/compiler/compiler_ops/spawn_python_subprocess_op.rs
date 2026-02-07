@@ -629,12 +629,14 @@ impl SubprocessHostProcessor {
 /// The constructor creates a [`SubprocessHostProcessor`] with real [`InputMailboxes`]
 /// and [`OutputWriter`], wired by the compiler like any Rust processor.
 /// The Python subprocess is spawned during setup, not construction.
-pub(crate) fn create_subprocess_host_constructor(
+pub(crate) fn create_python_subprocess_host_constructor(
     descriptor: &ProcessorDescriptor,
     execution_config: ExecutionConfig,
+    project_path: PathBuf,
 ) -> DynamicProcessorConstructorFn {
     let descriptor_clone = descriptor.clone();
     let entrypoint = descriptor.entrypoint.clone().unwrap_or_default();
+    let project_path_str = project_path.to_string_lossy().to_string();
 
     Box::new(move |node: &ProcessorNode| {
         let mut inputs = InputMailboxes::new();
@@ -642,14 +644,6 @@ pub(crate) fn create_subprocess_host_constructor(
             inputs.add_port(&input.name, 1, Default::default());
         }
         let outputs = Arc::new(OutputWriter::new());
-
-        let project_path = node
-            .config
-            .as_ref()
-            .and_then(|c| c.get("project_path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
 
         Ok(Box::new(SubprocessHostProcessor {
             inputs,
@@ -659,7 +653,7 @@ pub(crate) fn create_subprocess_host_constructor(
             stdout_reader: None,
             runtime_context: None,
             entrypoint: entrypoint.clone(),
-            project_path,
+            project_path: project_path_str.clone(),
             processor_id: node.id.to_string(),
             processor_config: node.config.clone(),
             execution_config,
@@ -681,7 +675,7 @@ pub(crate) fn create_subprocess_host_constructor(
 /// On cache hit (python binary exists), returns immediately with zero `uv` calls.
 /// On cache miss, creates venv and installs deps. On install failure, removes the
 /// venv directory and returns an error.
-fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<String> {
+pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
 
     let uv_cache_dir = crate::core::streamlib_home::get_uv_cache_dir();
@@ -726,10 +720,28 @@ fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<Stri
     #[cfg(windows)]
     let venv_python = venv_dir.join("Scripts").join("python.exe");
 
-    // Cache hit — venv already exists and has a python binary
+    // Fast path (no lock) — venv already exists and has a python binary
     if venv_python.exists() {
         tracing::debug!(
             "[{}] Cache hit: reusing venv at {} (hash={})",
+            processor_id,
+            venv_dir.display(),
+            &hash_hex[..12]
+        );
+        return Ok(venv_python.to_string_lossy().to_string());
+    }
+
+    // Serialize venv creation — multiple processors sharing the same pyproject.toml
+    // produce the same hash and would otherwise race to create the same venv.
+    static VENV_CREATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _lock = VENV_CREATION_LOCK
+        .lock()
+        .map_err(|e| StreamError::Runtime(format!("Venv creation lock poisoned: {}", e)))?;
+
+    // Re-check after acquiring lock — another thread may have created it
+    if venv_python.exists() {
+        tracing::debug!(
+            "[{}] Cache hit (after lock): reusing venv at {} (hash={})",
             processor_id,
             venv_dir.display(),
             &hash_hex[..12]

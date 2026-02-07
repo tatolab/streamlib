@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
 use streamlib_broker::proto::{
     GetHealthRequest, GetVersionRequest, ListConnectionsRequest, ListProcessorsRequest,
-    ListRuntimesRequest, ListSurfacesRequest, SnapshotSurfaceRequest,
+    ListSurfacesRequest, SnapshotSurfaceRequest,
 };
 use streamlib_broker::GRPC_PORT;
 
@@ -364,38 +364,6 @@ pub async fn status() -> Result<()> {
     println!("  Version:    {}", version.version);
     println!("  Git Commit: {}", version.git_commit);
     println!("  Build Date: {}", version.build_date);
-
-    Ok(())
-}
-
-/// List registered runtimes.
-pub async fn runtimes() -> Result<()> {
-    let endpoint = broker_endpoint();
-    let mut client = BrokerServiceClient::connect(endpoint)
-        .await
-        .context("Failed to connect to broker. Is the broker running?")?;
-
-    let response = client
-        .list_runtimes(ListRuntimesRequest {})
-        .await
-        .context("Failed to list runtimes")?
-        .into_inner();
-
-    if response.runtimes.is_empty() {
-        println!("No runtimes registered.");
-        return Ok(());
-    }
-
-    println!("Registered Runtimes ({}):", response.runtimes.len());
-    println!("─────────────────────────────────────────────────────────");
-
-    for runtime in &response.runtimes {
-        println!("  Runtime: {}", runtime.runtime_id);
-        println!("    Processors:  {}", runtime.processor_count);
-        println!("    Connections: {}", runtime.connection_count);
-        println!("    Age:         {}ms", runtime.registered_at_unix_ms);
-        println!();
-    }
 
     Ok(())
 }

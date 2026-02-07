@@ -20,6 +20,7 @@ htmlcov/
 # Output files
 output/
 *.mp4
+*.slpkg
 output.log
 
 # IDE

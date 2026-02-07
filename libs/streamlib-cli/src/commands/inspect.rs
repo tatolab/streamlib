@@ -4,10 +4,9 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-use streamlib::core::json_schema::GraphResponse;
 use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
 use streamlib_broker::proto::get_runtime_endpoint_request::Query;
-use streamlib_broker::proto::GetRuntimeEndpointRequest;
+use streamlib_broker::proto::{GetRuntimeEndpointRequest, ListRuntimesRequest};
 use streamlib_broker::GRPC_PORT;
 
 #[derive(Debug, Deserialize)]
@@ -27,8 +26,34 @@ struct SchemaInfo {
     name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GraphResponse {
+    nodes: Vec<GraphNode>,
+    links: Vec<GraphLink>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphNode {
+    id: String,
+    #[serde(rename = "type")]
+    processor_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphLink {
+    source: GraphPortRef,
+    target: GraphPortRef,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphPortRef {
+    processor_id: String,
+    port_name: String,
+}
+
 /// Inspect a running runtime by querying its API.
-pub async fn run(url: &str) -> Result<()> {
+pub async fn run(runtime: Option<&str>, url: Option<&str>) -> Result<()> {
+    let url = resolve_url(runtime, url).await?;
     let client = reqwest::Client::new();
 
     // Check health first
@@ -110,36 +135,85 @@ async fn resolve_runtime_url(runtime: &str) -> Result<String> {
     Ok(format!("http://{}", response.api_endpoint))
 }
 
+/// Resolve runtime URL via broker. Auto-selects if exactly one runtime is registered.
+async fn resolve_url(runtime: Option<&str>, url: Option<&str>) -> Result<String> {
+    match (runtime, url) {
+        (Some(r), _) => resolve_runtime_url(r).await,
+        (None, Some(u)) => Ok(u.to_string()),
+        (None, None) => {
+            let endpoint = broker_endpoint();
+            let mut client = BrokerServiceClient::connect(endpoint)
+                .await
+                .context("Failed to connect to broker. Is the broker running?")?;
+
+            let response = client
+                .list_runtimes(ListRuntimesRequest {})
+                .await
+                .context("Failed to list runtimes from broker")?
+                .into_inner();
+
+            match response.runtimes.len() {
+                0 => bail!("No runtimes registered. Start one with 'streamlib run'."),
+                1 => Ok(format!("http://{}", response.runtimes[0].api_endpoint)),
+                n => {
+                    let names: Vec<&str> = response
+                        .runtimes
+                        .iter()
+                        .map(|r| {
+                            if r.name.is_empty() {
+                                r.runtime_id.as_str()
+                            } else {
+                                r.name.as_str()
+                            }
+                        })
+                        .collect();
+                    bail!(
+                        "{} runtimes registered. Specify one with --runtime:\n  {}",
+                        n,
+                        names.join("\n  ")
+                    )
+                }
+            }
+        }
+    }
+}
+
 /// Get and display the graph from a running runtime.
 pub async fn graph(runtime: Option<&str>, url: Option<&str>, format: &str) -> Result<()> {
-    // Resolve URL: prefer --runtime over --url, default to localhost:9000
-    let resolved_url = match (runtime, url) {
-        (Some(r), _) => resolve_runtime_url(r).await?,
-        (None, Some(u)) => u.to_string(),
-        (None, None) => "http://127.0.0.1:9000".to_string(),
-    };
+    let resolved_url = resolve_url(runtime, url).await?;
 
     let client = reqwest::Client::new();
 
     let graph_url = format!("{}/api/graph", resolved_url);
-    let graph: GraphResponse = client
-        .get(&graph_url)
-        .send()
-        .await
-        .context("Failed to connect to runtime")?
-        .json()
-        .await
-        .context("Failed to parse graph response")?;
 
     match format {
         "json" => {
-            println!("{}", serde_json::to_string_pretty(&graph)?);
-        }
-        "dot" => {
-            print_graph_as_dot(&graph);
+            // Echo the full JSON response verbatim
+            let raw: serde_json::Value = client
+                .get(&graph_url)
+                .send()
+                .await
+                .context("Failed to connect to runtime")?
+                .json()
+                .await
+                .context("Failed to parse graph response")?;
+            println!("{}", serde_json::to_string_pretty(&raw)?);
         }
         _ => {
-            print_graph_pretty(&graph);
+            let graph: GraphResponse = client
+                .get(&graph_url)
+                .send()
+                .await
+                .context("Failed to connect to runtime")?
+                .json()
+                .await
+                .context("Failed to parse graph response")?;
+
+            if format == "dot" {
+                print_graph_as_dot(&graph);
+            } else {
+                print_graph_pretty(&graph);
+            }
         }
     }
 

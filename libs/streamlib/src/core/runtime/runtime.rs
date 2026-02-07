@@ -182,84 +182,109 @@ impl StreamRuntime {
     }
 
     // =========================================================================
-    // Python Project Registration
+    // Package Loading
     // =========================================================================
 
-    /// Register all Python processors defined in a project's pyproject.toml.
+    /// Load processors from a .slpkg package file.
+    pub fn load_package(&self, slpkg_path: impl AsRef<std::path::Path>) -> Result<()> {
+        let slpkg_path = slpkg_path.as_ref();
+        tracing::info!("Loading package from: {}", slpkg_path.display());
+
+        let project_path = extract_slpkg_to_cache(slpkg_path)?;
+        self.load_project(&project_path)
+    }
+
+    /// Load processors from a project directory containing `streamlib.yaml`.
     ///
-    /// Reads `[tool.streamlib].processors` array from the pyproject.toml,
-    /// loads each YAML, and registers via `register_dynamic()` with a
-    /// [`SubprocessHostProcessor`] constructor.
-    pub fn register_python_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
-        use crate::core::compiler::compiler_ops::create_subprocess_host_constructor;
+    /// Reads `processors` entries from the manifest and registers each
+    /// with the global processor registry, dispatching to the appropriate
+    /// subprocess host constructor based on the `runtime` field.
+    ///
+    /// For Python packages, eagerly creates the venv and installs dependencies
+    /// once during loading, so processors don't race to create it at spawn time.
+    #[allow(clippy::only_used_in_recursion)]
+    pub fn load_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
+        use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
+        use crate::core::compiler::compiler_ops::create_python_subprocess_host_constructor;
+        use crate::core::compiler::compiler_ops::ensure_processor_venv;
+        use crate::core::config::ProjectConfig;
         use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
         use crate::core::execution::{ExecutionConfig, ProcessExecution};
         use crate::core::ProcessorDescriptor;
 
         let project_path = project_path.as_ref();
-        let pyproject_path = project_path.join("pyproject.toml");
 
-        tracing::info!(
-            "Registering Python processors from: {}",
-            pyproject_path.display()
-        );
+        tracing::info!("Loading project from: {}", project_path.display());
 
-        let pyproject_content = std::fs::read_to_string(&pyproject_path).map_err(|e| {
-            StreamError::Configuration(format!(
-                "Failed to read {}: {}",
-                pyproject_path.display(),
-                e
-            ))
-        })?;
+        let config = ProjectConfig::load(project_path)?;
 
-        // Parse [tool.streamlib].processors
-        let pyproject: toml::Value = toml::from_str(&pyproject_content).map_err(|e| {
-            StreamError::Configuration(format!(
-                "Failed to parse {}: {}",
-                pyproject_path.display(),
-                e
-            ))
-        })?;
+        config.check_streamlib_version_compatibility()?;
 
-        let processor_paths: Vec<String> = pyproject
-            .get("tool")
-            .and_then(|t| t.get("streamlib"))
-            .and_then(|s| s.get("processors"))
-            .and_then(|p| p.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Load dependency packages first (schemas/processors they export)
+        if !config.dependencies.is_empty() {
+            use crate::core::config::InstalledPackageManifest;
 
-        if processor_paths.is_empty() {
+            let manifest = InstalledPackageManifest::load()?;
+            for dep_name in &config.dependencies {
+                let entry = manifest.find_by_name(dep_name).ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Dependency '{}' is not installed. Install it with: streamlib pkg install <path.slpkg>",
+                        dep_name
+                    ))
+                })?;
+                let dep_path =
+                    crate::core::streamlib_home::get_cached_package_dir(&entry.cache_dir);
+                tracing::info!(
+                    "Loading dependency '{}' from {}",
+                    dep_name,
+                    dep_path.display()
+                );
+                self.load_project(&dep_path)?;
+            }
+        }
+
+        if config.processors.is_empty() {
             tracing::warn!(
-                "No processors found in [tool.streamlib].processors in {}",
-                pyproject_path.display()
+                "No processors found in {} in {}",
+                ProjectConfig::FILE_NAME,
+                project_path.display()
             );
             return Ok(());
         }
 
-        for yaml_rel_path in &processor_paths {
-            let yaml_path = project_path.join(yaml_rel_path);
+        // Eagerly create venv for Python packages so processors don't race at spawn time
+        let has_python_processors = config.processors.iter().any(|p| {
+            matches!(
+                p.runtime.language,
+                streamlib_codegen_shared::ProcessorLanguage::Python
+            )
+        });
 
-            let proc_schema = streamlib_codegen_shared::parse_processor_yaml_file(&yaml_path)
-                .map_err(|e| {
-                    StreamError::Configuration(format!(
-                        "Failed to parse processor YAML {}: {}",
-                        yaml_path.display(),
-                        e
-                    ))
-                })?;
+        if has_python_processors {
+            let package_label = config
+                .package
+                .as_ref()
+                .map(|p| p.name.as_str())
+                .unwrap_or("unknown");
+            tracing::info!("Pre-creating Python venv for package '{}'", package_label);
+            ensure_processor_venv(package_label, project_path)?;
+        }
 
-            // Convert ProcessorSchema → ProcessorDescriptor
+        let mut registered_count = 0usize;
+
+        for proc_schema in &config.processors {
+            // Map runtime language to ProcessorRuntime
             let runtime = match proc_schema.runtime.language {
                 streamlib_codegen_shared::ProcessorLanguage::Python => ProcessorRuntime::Python,
                 streamlib_codegen_shared::ProcessorLanguage::TypeScript => {
                     ProcessorRuntime::TypeScript
                 }
-                streamlib_codegen_shared::ProcessorLanguage::Rust => ProcessorRuntime::Rust,
+                streamlib_codegen_shared::ProcessorLanguage::Rust => {
+                    return Err(StreamError::Configuration(format!(
+                        "Processor '{}' has runtime 'rust' — use #[streamlib::processor()] macro instead",
+                        proc_schema.name
+                    )));
+                }
             };
 
             let inputs: Vec<PortDescriptor> = proc_schema
@@ -293,10 +318,14 @@ impl StreamRuntime {
                 proc_schema.description.as_deref().unwrap_or(""),
             )
             .with_version(&proc_schema.version)
-            .with_runtime(runtime);
+            .with_runtime(runtime.clone());
 
             if let Some(entrypoint) = &proc_schema.entrypoint {
                 descriptor = descriptor.with_entrypoint(entrypoint);
+            }
+
+            if let Some(config) = &proc_schema.config {
+                descriptor = descriptor.with_config_schema(&config.schema);
             }
 
             descriptor.inputs = inputs;
@@ -318,177 +347,38 @@ impl StreamRuntime {
             };
             let execution_config = ExecutionConfig::new(execution);
 
-            // Create constructor that builds SubprocessHostProcessor with real
-            // InputMailboxes/OutputWriter (wired by compiler like Rust processors)
-            let constructor = create_subprocess_host_constructor(&descriptor, execution_config);
+            // Create constructor based on runtime language
+            let constructor = match runtime {
+                ProcessorRuntime::Python => create_python_subprocess_host_constructor(
+                    &descriptor,
+                    execution_config,
+                    project_path.to_path_buf(),
+                ),
+                ProcessorRuntime::TypeScript => create_deno_subprocess_host_constructor(
+                    &descriptor,
+                    execution_config,
+                    project_path.to_path_buf(),
+                ),
+                _ => unreachable!(),
+            };
 
             crate::core::processors::PROCESSOR_REGISTRY
                 .register_dynamic(descriptor, constructor)?;
 
             tracing::info!(
-                "Registered Python processor '{}' from {}",
+                "Registered processor '{}' ({:?})",
                 proc_schema.name,
-                yaml_rel_path
+                runtime
             );
+
+            registered_count += 1;
         }
-
-        Ok(())
-    }
-
-    // =========================================================================
-    // Deno Project Registration
-    // =========================================================================
-
-    /// Register all TypeScript/Deno processors defined in a project's deno.json.
-    ///
-    /// Reads `streamlib.processors` array from the deno.json, loads each
-    /// processor YAML, and registers via `register_dynamic()` with a
-    /// [`DenoSubprocessHostProcessor`] constructor.
-    pub fn register_deno_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
-        use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
-        use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
-        use crate::core::execution::{ExecutionConfig, ProcessExecution};
-        use crate::core::ProcessorDescriptor;
-
-        let project_path = project_path.as_ref();
-        let deno_json_path = project_path.join("deno.json");
 
         tracing::info!(
-            "Registering Deno processors from: {}",
-            deno_json_path.display()
+            "Loaded {} processor(s) from {}",
+            registered_count,
+            project_path.display()
         );
-
-        let deno_json_content = std::fs::read_to_string(&deno_json_path).map_err(|e| {
-            StreamError::Configuration(format!(
-                "Failed to read {}: {}",
-                deno_json_path.display(),
-                e
-            ))
-        })?;
-
-        // Parse deno.json as JSON
-        let deno_json: serde_json::Value =
-            serde_json::from_str(&deno_json_content).map_err(|e| {
-                StreamError::Configuration(format!(
-                    "Failed to parse {}: {}",
-                    deno_json_path.display(),
-                    e
-                ))
-            })?;
-
-        // Read streamlib.processors array
-        let processor_paths: Vec<String> = deno_json
-            .get("streamlib")
-            .and_then(|s| s.get("processors"))
-            .and_then(|p| p.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if processor_paths.is_empty() {
-            tracing::warn!(
-                "No processors found in streamlib.processors in {}",
-                deno_json_path.display()
-            );
-            return Ok(());
-        }
-
-        for yaml_rel_path in &processor_paths {
-            let yaml_path = project_path.join(yaml_rel_path);
-
-            let proc_schema = streamlib_codegen_shared::parse_processor_yaml_file(&yaml_path)
-                .map_err(|e| {
-                    StreamError::Configuration(format!(
-                        "Failed to parse processor YAML {}: {}",
-                        yaml_path.display(),
-                        e
-                    ))
-                })?;
-
-            // Convert ProcessorSchema → ProcessorDescriptor
-            let runtime = match proc_schema.runtime.language {
-                streamlib_codegen_shared::ProcessorLanguage::Python => ProcessorRuntime::Python,
-                streamlib_codegen_shared::ProcessorLanguage::TypeScript => {
-                    ProcessorRuntime::TypeScript
-                }
-                streamlib_codegen_shared::ProcessorLanguage::Rust => ProcessorRuntime::Rust,
-            };
-
-            let inputs: Vec<PortDescriptor> = proc_schema
-                .inputs
-                .iter()
-                .map(|p| {
-                    PortDescriptor::new(
-                        &p.name,
-                        p.description.as_deref().unwrap_or(""),
-                        &p.schema,
-                        true,
-                    )
-                })
-                .collect();
-
-            let outputs: Vec<PortDescriptor> = proc_schema
-                .outputs
-                .iter()
-                .map(|p| {
-                    PortDescriptor::new(
-                        &p.name,
-                        p.description.as_deref().unwrap_or(""),
-                        &p.schema,
-                        true,
-                    )
-                })
-                .collect();
-
-            let mut descriptor = ProcessorDescriptor::new(
-                &proc_schema.name,
-                proc_schema.description.as_deref().unwrap_or(""),
-            )
-            .with_version(&proc_schema.version)
-            .with_runtime(runtime);
-
-            if let Some(entrypoint) = &proc_schema.entrypoint {
-                descriptor = descriptor.with_entrypoint(entrypoint);
-            }
-
-            descriptor.inputs = inputs;
-            descriptor.outputs = outputs;
-
-            // Convert schema execution mode to runtime ExecutionConfig.
-            // Store the original execution mode — the Deno subprocess will use it
-            // internally, while the Rust host always runs in Manual mode.
-            let execution = match &proc_schema.execution {
-                streamlib_codegen_shared::ProcessorSchemaExecution::Reactive => {
-                    ProcessExecution::Reactive
-                }
-                streamlib_codegen_shared::ProcessorSchemaExecution::Manual => {
-                    ProcessExecution::Manual
-                }
-                streamlib_codegen_shared::ProcessorSchemaExecution::Continuous { interval_ms } => {
-                    ProcessExecution::Continuous {
-                        interval_ms: *interval_ms,
-                    }
-                }
-            };
-            let execution_config = ExecutionConfig::new(execution);
-
-            // Create constructor that builds DenoSubprocessHostProcessor
-            // (no InputMailboxes/OutputWriter — Deno uses FFI for iceoryx2)
-            let constructor =
-                create_deno_subprocess_host_constructor(&descriptor, execution_config);
-
-            crate::core::processors::PROCESSOR_REGISTRY
-                .register_dynamic(descriptor, constructor)?;
-
-            tracing::info!(
-                "Registered Deno processor '{}' from {}",
-                proc_schema.name,
-                yaml_rel_path
-            );
-        }
 
         Ok(())
     }
@@ -1085,6 +975,100 @@ impl StreamRuntime {
 
         self.load_graph_file(&def)
     }
+}
+
+/// Extract a .slpkg ZIP archive to the package cache.
+/// Cache key is {name}-{version} from the embedded streamlib.yaml.
+/// Always overwrites on load.
+pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path::PathBuf> {
+    use crate::core::config::ProjectConfig;
+
+    let slpkg_bytes = std::fs::read(slpkg_path).map_err(|e| {
+        StreamError::Configuration(format!("Failed to read {}: {}", slpkg_path.display(), e))
+    })?;
+
+    let cursor = std::io::Cursor::new(&slpkg_bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| StreamError::Configuration(format!("Failed to open .slpkg archive: {}", e)))?;
+
+    // Read streamlib.yaml from archive to get name + version
+    let manifest_yaml = {
+        let mut manifest_file = archive.by_name(ProjectConfig::FILE_NAME).map_err(|e| {
+            StreamError::Configuration(format!(
+                ".slpkg archive missing {}: {}",
+                ProjectConfig::FILE_NAME,
+                e
+            ))
+        })?;
+        let mut contents = String::new();
+        std::io::Read::read_to_string(&mut manifest_file, &mut contents)
+            .map_err(|e| StreamError::Configuration(format!("Failed to read manifest: {}", e)))?;
+        contents
+    };
+
+    let config: ProjectConfig = serde_yaml::from_str(&manifest_yaml)
+        .map_err(|e| StreamError::Configuration(format!("Failed to parse manifest: {}", e)))?;
+
+    let package = config.package.as_ref().ok_or_else(|| {
+        StreamError::Configuration("streamlib.yaml missing [package] section".to_string())
+    })?;
+
+    let cache_key = format!("{}-{}", package.name, package.version);
+    let cache_dir = crate::core::streamlib_home::get_cached_package_dir(&cache_key);
+
+    // Always overwrite
+    if cache_dir.exists() {
+        std::fs::remove_dir_all(&cache_dir)
+            .map_err(|e| StreamError::Configuration(format!("Failed to clear cache dir: {}", e)))?;
+    }
+
+    tracing::info!(
+        "Extracting {} to {}",
+        slpkg_path.display(),
+        cache_dir.display()
+    );
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| StreamError::Configuration(format!("Failed to create cache dir: {}", e)))?;
+
+    // Re-open archive (cursor consumed by manifest read)
+    let cursor = std::io::Cursor::new(&slpkg_bytes);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
+        StreamError::Configuration(format!("Failed to re-open .slpkg archive: {}", e))
+    })?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| {
+            StreamError::Configuration(format!("Failed to read archive entry: {}", e))
+        })?;
+
+        let file_name = file.name().to_string();
+
+        // Security: reject path traversal
+        if file_name.contains("..") || file_name.starts_with('/') {
+            return Err(StreamError::Configuration(format!(
+                "Invalid path in .slpkg archive: {}",
+                file_name
+            )));
+        }
+
+        let output_path = cache_dir.join(&file_name);
+
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                StreamError::Configuration(format!("Failed to create directory: {}", e))
+            })?;
+        }
+
+        let mut output_file = std::fs::File::create(&output_path).map_err(|e| {
+            StreamError::Configuration(format!("Failed to create {}: {}", output_path.display(), e))
+        })?;
+
+        std::io::copy(&mut file, &mut output_file).map_err(|e| {
+            StreamError::Configuration(format!("Failed to extract {}: {}", file_name, e))
+        })?;
+    }
+
+    Ok(cache_dir)
 }
 
 #[cfg(test)]

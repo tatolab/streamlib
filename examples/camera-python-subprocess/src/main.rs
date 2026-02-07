@@ -3,10 +3,17 @@
 
 //! Camera → Python Grayscale → Display Pipeline Example
 //!
-//! Demonstrates zero-copy pixel processing via a Python subprocess.
+//! Demonstrates loading processors from a `.slpkg` package bundle.
 //! The Python processor accesses camera pixels through IOSurface shared memory
 //! (no pixel data through pipes), converts to grayscale using numpy, and writes
 //! results to a new IOSurface.
+//!
+//! ## Prerequisites
+//!
+//! Build the `.slpkg` package first:
+//! ```bash
+//! cargo run -p streamlib-cli -- pack examples/camera-python-subprocess/python
+//! ```
 //!
 //! ## Usage
 //!
@@ -30,11 +37,11 @@ fn main() -> Result<()> {
         .init();
 
     let runtime = StreamRuntime::new()?;
-    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
-    // 1. Register Python processors from the project's pyproject.toml
-    //    Reads [tool.streamlib].processors, loads each YAML, registers descriptors
-    runtime.register_python_project(&project_path)?;
+    // 1. Load processors from .slpkg package bundle
+    let slpkg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("python/camera-python-subprocess-0.1.0.slpkg");
+    runtime.load_package(&slpkg_path)?;
 
     // 2. Add processors
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
@@ -44,9 +51,7 @@ fn main() -> Result<()> {
 
     let grayscale = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.grayscale",
-        serde_json::json!({
-            "project_path": project_path.to_str().unwrap()
-        }),
+        serde_json::json!({}),
     ))?;
 
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {

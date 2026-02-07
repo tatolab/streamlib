@@ -141,9 +141,21 @@ impl BrokerState {
         self.inner.runtimes.read().get(runtime_id).cloned()
     }
 
-    /// Unregister a runtime.
+    /// Unregister a runtime and release its surfaces.
     pub fn unregister_runtime(&self, runtime_id: &str) {
         self.inner.runtimes.write().remove(runtime_id);
+
+        #[cfg(target_os = "macos")]
+        {
+            let released = self.release_surfaces_for_runtime(runtime_id);
+            if released > 0 {
+                tracing::info!(
+                    "Released {} surface(s) for unregistered runtime {}",
+                    released,
+                    runtime_id
+                );
+            }
+        }
     }
 
     /// Get all registered runtimes.
@@ -267,15 +279,49 @@ impl BrokerState {
     /// Returns the names of pruned runtimes.
     pub fn prune_dead_runtimes(&self) -> Vec<String> {
         let mut pruned = Vec::new();
-        let mut runtimes = self.inner.runtimes.write();
+        let mut pruned_ids = Vec::new();
 
-        runtimes.retain(|_id, metadata| {
-            let alive = is_process_alive(metadata.pid);
-            if !alive {
-                pruned.push(metadata.name.clone());
+        {
+            let mut runtimes = self.inner.runtimes.write();
+            runtimes.retain(|_id, metadata| {
+                let alive = is_process_alive(metadata.pid);
+                if !alive {
+                    pruned.push(metadata.name.clone());
+                    pruned_ids.push(metadata.runtime_id.clone());
+                }
+                alive
+            });
+        }
+
+        // Release surfaces for pruned runtimes (after dropping runtimes lock)
+        #[cfg(target_os = "macos")]
+        for runtime_id in &pruned_ids {
+            let released = self.release_surfaces_for_runtime(runtime_id);
+            if released > 0 {
+                tracing::info!(
+                    "Released {} surface(s) for pruned runtime {}",
+                    released,
+                    runtime_id
+                );
             }
-            alive
-        });
+        }
+
+        // Also clean up orphaned surfaces whose runtime_id doesn't match
+        // any currently registered runtime (e.g. from runtimes that were
+        // removed in a previous prune or unregister before surface cleanup
+        // was added).
+        #[cfg(target_os = "macos")]
+        {
+            let registered_ids: std::collections::HashSet<String> =
+                self.inner.runtimes.read().keys().cloned().collect();
+            let mut surfaces = self.inner.surfaces.write();
+            let before = surfaces.len();
+            surfaces.retain(|_, metadata| registered_ids.contains(&metadata.runtime_id));
+            let orphaned = before - surfaces.len();
+            if orphaned > 0 {
+                tracing::info!("Released {} orphaned surface(s)", orphaned);
+            }
+        }
 
         pruned
     }

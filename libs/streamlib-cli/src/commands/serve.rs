@@ -2,120 +2,77 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::path::PathBuf;
+use std::process::Command;
 
-use anyhow::Result;
-use streamlib::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
-use tracing_appender::non_blocking::WorkerGuard;
+use anyhow::{bail, Context, Result};
 
-use crate::plugin_loader::PluginLoader;
+/// Locate the `streamlib-runtime` binary.
+///
+/// Search order:
+/// 1. `STREAMLIB_RUNTIME_BIN` env var
+/// 2. Same directory as the current executable
+/// 3. `~/.streamlib/bin/streamlib-runtime`
+/// 4. `streamlib-runtime` in PATH
+fn find_runtime_binary() -> Result<PathBuf> {
+    // 1. Env var override (used in dev mode)
+    if let Ok(path) = std::env::var("STREAMLIB_RUNTIME_BIN") {
+        let p = PathBuf::from(&path);
+        if p.exists() {
+            return Ok(p);
+        }
+        // Env var set but file doesn't exist — warn but continue searching
+        tracing::warn!(
+            "STREAMLIB_RUNTIME_BIN={} does not exist, searching other locations",
+            path
+        );
+    }
 
-/// Docker-style adjectives for runtime name generation.
-const ADJECTIVES: &[&str] = &[
-    "admiring",
-    "brave",
-    "clever",
-    "dazzling",
-    "eager",
-    "fancy",
-    "graceful",
-    "happy",
-    "inspiring",
-    "jolly",
-    "keen",
-    "lively",
-    "merry",
-    "noble",
-    "optimistic",
-    "peaceful",
-    "quirky",
-    "radiant",
-    "serene",
-    "trusting",
-    "upbeat",
-    "vibrant",
-    "witty",
-    "xenial",
-    "youthful",
-    "zealous",
-];
+    // 2. Same directory as the current executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("streamlib-runtime");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
 
-/// Docker-style nouns for runtime name generation.
-const NOUNS: &[&str] = &[
-    "albatross",
-    "beaver",
-    "cheetah",
-    "dolphin",
-    "eagle",
-    "falcon",
-    "gazelle",
-    "hawk",
-    "ibis",
-    "jaguar",
-    "koala",
-    "leopard",
-    "meerkat",
-    "nightingale",
-    "otter",
-    "panther",
-    "quail",
-    "raven",
-    "sparrow",
-    "tiger",
-    "urchin",
-    "viper",
-    "walrus",
-    "xerus",
-    "yak",
-    "zebra",
-];
+    // 3. ~/.streamlib/bin/streamlib-runtime
+    if let Some(home) = dirs::home_dir() {
+        let candidate = home
+            .join(".streamlib")
+            .join("bin")
+            .join("streamlib-runtime");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
 
-/// Generate a Docker-style random name (adjective-noun).
-pub fn generate_runtime_name() -> String {
-    let adj = ADJECTIVES[fastrand::usize(..ADJECTIVES.len())];
-    let noun = NOUNS[fastrand::usize(..NOUNS.len())];
-    format!("{}-{}", adj, noun)
+    // 4. Search PATH
+    if let Ok(output) = Command::new("which").arg("streamlib-runtime").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+
+    bail!(
+        "Could not find 'streamlib-runtime' binary.\n\
+         \n\
+         Searched:\n\
+         1. STREAMLIB_RUNTIME_BIN env var\n\
+         2. Same directory as this executable\n\
+         3. ~/.streamlib/bin/streamlib-runtime\n\
+         4. PATH\n\
+         \n\
+         Install with: cargo install --path libs/streamlib-runtime"
+    )
 }
 
-/// Get the streamlib logs directory (~/.streamlib/logs).
-fn get_logs_dir() -> Result<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    Ok(home.join(".streamlib").join("logs"))
-}
-
-/// Set up file-based logging and return the guard (must be kept alive).
-/// When `daemon` is true, only logs to file (no stdout).
-fn setup_file_logging(runtime_name: &str, daemon: bool) -> Result<WorkerGuard> {
-    use tracing_subscriber::prelude::*;
-
-    let logs_dir = get_logs_dir()?;
-    std::fs::create_dir_all(&logs_dir)?;
-
-    let file_appender =
-        tracing_appender::rolling::never(&logs_dir, format!("{}.log", runtime_name));
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info".parse().unwrap());
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_ansi(false);
-
-    // Optional stdout layer - None in daemon mode
-    let stdout_layer = (!daemon).then(tracing_subscriber::fmt::layer);
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(stdout_layer)
-        .with(file_layer)
-        .init();
-
-    Ok(guard)
-}
-
-/// Start a StreamLib runtime.
-pub async fn run(
+/// Spawn a `streamlib-runtime` process.
+pub fn run(
     host: String,
     port: u16,
     graph_file: Option<PathBuf>,
@@ -124,70 +81,120 @@ pub async fn run(
     name: Option<String>,
     daemon: bool,
 ) -> Result<()> {
-    // Generate or use provided runtime name
-    let runtime_name = name.unwrap_or_else(generate_runtime_name);
+    let runtime_bin = find_runtime_binary()?;
 
-    let log_path = get_logs_dir()?.join(format!("{}.log", runtime_name));
+    let mut cmd = Command::new(&runtime_bin);
 
-    // Set runtime ID env var BEFORE creating runtime
-    // StreamRuntime::new() reads STREAMLIB_RUNTIME_ID from env
-    let runtime_id = format!("R{}", cuid2::create_id());
-    std::env::set_var("STREAMLIB_RUNTIME_ID", &runtime_id);
+    // Forward arguments
+    cmd.arg("--host").arg(&host);
+    cmd.arg("--port").arg(port.to_string());
 
-    // Set up file-based logging (daemon mode skips stdout)
-    let _log_guard = setup_file_logging(&runtime_name, daemon)?;
-
-    tracing::info!("Starting runtime: {} ({})", runtime_name, runtime_id);
-    tracing::info!("Log file: {}", log_path.display());
-
-    // Load plugins BEFORE creating runtime (registers processors in global registry)
-    let mut loader = PluginLoader::new();
-
-    // Load individual plugins
-    for plugin_path in &plugins {
-        println!("Loading plugin: {}", plugin_path.display());
-        let count = loader.load_plugin(plugin_path)?;
-        println!("  Registered {} processor(s)", count);
+    if let Some(ref n) = name {
+        cmd.arg("--name").arg(n);
     }
 
-    // Load all plugins from directory
-    if let Some(ref dir) = plugin_dir {
-        println!("Loading plugins from: {}", dir.display());
-        let count = loader.load_plugin_dir(dir)?;
-        println!("  Registered {} processor(s) total", count);
-    }
-
-    let runtime = StreamRuntime::new()?;
-
-    // Add API server with name and log_path for broker registration
-    let config = ApiServerConfig {
-        host: host.clone(),
-        port,
-        name: Some(runtime_name.clone()),
-        log_path: Some(log_path.to_string_lossy().into_owned()),
-    };
-    runtime.add_processor(ApiServerProcessor::node(config))?;
-
-    // Load graph file if provided
     if let Some(ref path) = graph_file {
-        println!("Loading pipeline: {}", path.display());
-        runtime.load_graph_file_path(path)?;
+        cmd.arg("--graph-file").arg(path);
     }
 
-    runtime.start()?;
-
-    if graph_file.is_none() {
-        println!("Empty graph ready - use API to add processors");
+    for plugin in &plugins {
+        cmd.arg("--plugin").arg(plugin);
     }
 
-    if !daemon {
-        println!("Press Ctrl+C to stop");
+    if let Some(ref dir) = plugin_dir {
+        cmd.arg("--plugin-dir").arg(dir);
     }
 
-    runtime.wait_for_signal()?;
+    if daemon {
+        cmd.arg("--daemon");
+    }
 
-    // Keep loader alive until runtime stops (libraries must remain loaded)
-    drop(loader);
+    // Forward relevant env vars to child process
+    for var in &[
+        "STREAMLIB_HOME",
+        "STREAMLIB_BROKER_PORT",
+        "STREAMLIB_XPC_SERVICE_NAME",
+        "STREAMLIB_DEV_MODE",
+        "RUST_LOG",
+    ] {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+
+    if daemon {
+        // Daemon mode: spawn detached and poll /health for readiness
+        let mut child = cmd
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .with_context(|| {
+                format!("Failed to spawn runtime binary: {}", runtime_bin.display())
+            })?;
+
+        // Poll /health endpoint for readiness.
+        // The runtime binary daemonizes by forking — the parent exits with
+        // code 0 while the child continues.  So an exit code of 0 from our
+        // spawned process is expected and means the daemon forked successfully.
+        let health_url = format!("http://{}:{}/health", host, port);
+        let mut ready = false;
+
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            // Check if child exited early
+            if let Some(status) = child.try_wait()? {
+                if !status.success() {
+                    bail!("Runtime process exited immediately with status: {}", status);
+                }
+                // Exit code 0 is expected (daemonize parent exits after fork).
+                // Continue polling health to confirm the daemon child started.
+            }
+
+            // Try health check
+            if let Ok(output) = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", &health_url])
+                .output()
+            {
+                let code = String::from_utf8_lossy(&output.stdout);
+                if code.trim() == "200" {
+                    ready = true;
+                    break;
+                }
+            }
+        }
+
+        if ready {
+            let display_name = name.unwrap_or_else(|| "runtime".to_string());
+            println!("runtime/{} started (pid {})", display_name, child.id());
+            println!("  API: http://{}:{}", host, port);
+            println!();
+            println!("Next steps:");
+            println!("  streamlib logs -r {} -f", display_name);
+            println!("  streamlib runtimes list");
+        } else {
+            println!(
+                "Runtime spawned (pid {}) but health check not responding after 15s",
+                child.id()
+            );
+            println!("  Check: http://{}:{}/health", host, port);
+        }
+    } else {
+        // Foreground mode: inherit stdio and wait for exit
+        let status = cmd
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .with_context(|| {
+                format!("Failed to spawn runtime binary: {}", runtime_bin.display())
+            })?;
+
+        if !status.success() {
+            bail!("Runtime process exited with status: {}", status);
+        }
+    }
 
     Ok(())
 }

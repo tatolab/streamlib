@@ -53,6 +53,7 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(home.join("cache/wheels"))?;
     std::fs::create_dir_all(home.join("cache/uv"))?;
     std::fs::create_dir_all(home.join("cache/venvs"))?;
+    std::fs::create_dir_all(home.join("cache/packages"))?;
     std::fs::create_dir_all(home.join("runtimes"))?;
 
     Ok(home)
@@ -66,6 +67,11 @@ pub fn get_uv_cache_dir() -> PathBuf {
 /// Get the path to a hash-keyed cached venv directory.
 pub fn get_cached_venv_dir(hash: &str) -> PathBuf {
     get_streamlib_home().join("cache/venvs").join(hash)
+}
+
+/// Get the path to a cached extracted package directory.
+pub fn get_cached_package_dir(cache_key: &str) -> PathBuf {
+    get_streamlib_home().join("cache/packages").join(cache_key)
 }
 
 /// Get the path to a runtime's directory.

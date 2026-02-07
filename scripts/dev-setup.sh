@@ -83,6 +83,7 @@ generate_dotenv() {
 STREAMLIB_HOME=${STREAMLIB_HOME}
 STREAMLIB_BROKER_PORT=${BROKER_PORT}
 STREAMLIB_XPC_SERVICE_NAME=${SERVICE_NAME}
+STREAMLIB_RUNTIME_BIN=${STREAMLIB_HOME}/bin/streamlib-runtime
 STREAMLIB_DEV_MODE=1
 EOF
 
@@ -149,6 +150,25 @@ exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --
 EOF
     chmod 755 "$bin_dir/streamlib-broker"
     success "Created broker proxy: $bin_dir/streamlib-broker"
+
+    # Runtime binary proxy script (spawned by CLI's `streamlib run`)
+    cat > "$bin_dir/streamlib-runtime" << EOF
+#!/usr/bin/env bash
+# StreamLib Runtime proxy - calls cargo run for dev mode
+set -euo pipefail
+
+export PATH="${cargo_bin}:\$PATH"
+SOURCE_ROOT="${REPO_ROOT}"
+
+export STREAMLIB_HOME="${STREAMLIB_HOME}"
+export STREAMLIB_BROKER_PORT="${BROKER_PORT}"
+export STREAMLIB_XPC_SERVICE_NAME="${SERVICE_NAME}"
+export STREAMLIB_DEV_MODE=1
+
+exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-runtime --quiet -- "\$@"
+EOF
+    chmod 755 "$bin_dir/streamlib-runtime"
+    success "Created runtime proxy: $bin_dir/streamlib-runtime"
 }
 
 # Generate and install launchd plist

@@ -7,6 +7,7 @@ pub mod compiler;
 pub mod config;
 pub mod context;
 pub mod descriptors;
+pub mod embedded_schemas;
 pub mod error;
 pub mod execution;
 pub mod rhi;
