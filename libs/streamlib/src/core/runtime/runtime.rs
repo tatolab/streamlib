@@ -298,6 +298,10 @@ impl StreamRuntime {
                 descriptor = descriptor.with_entrypoint(entrypoint);
             }
 
+            if let Some(config) = &proc_schema.config {
+                descriptor = descriptor.with_config_schema(&config.schema);
+            }
+
             descriptor.inputs = inputs;
             descriptor.outputs = outputs;
 
