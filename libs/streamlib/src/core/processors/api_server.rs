@@ -189,6 +189,7 @@ struct ErrorResponse {
         (name = "processors", description = "Processor lifecycle management"),
         (name = "connections", description = "Connection management between processors"),
         (name = "registry", description = "Processor and schema registry"),
+        (name = "schemas", description = "Schema definitions"),
         (name = "events", description = "Real-time event streaming via WebSocket")
     )
 )]
@@ -269,6 +270,8 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
             .routes(routes!(create_connection))
             .routes(routes!(delete_connection))
             .routes(routes!(get_registry))
+            .routes(routes!(list_schema_definitions))
+            .routes(routes!(get_schema_definition))
             .split_for_parts();
 
         let state = AppState {
@@ -590,6 +593,43 @@ async fn get_registry() -> Json<RegistryResponse> {
         processors,
         schemas,
     })
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/schemas",
+    tag = "schemas",
+    responses(
+        (status = 200, description = "List of schema names that have embedded definitions", body = Vec<String>)
+    )
+)]
+async fn list_schema_definitions() -> Json<Vec<String>> {
+    Json(
+        crate::core::embedded_schemas::list_embedded_schema_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/schemas/{name}",
+    tag = "schemas",
+    params(
+        ("name" = String, Path, description = "Schema name (e.g. com.tatolab.videoframe)")
+    ),
+    responses(
+        (status = 200, description = "YAML schema definition", body = String),
+        (status = 404, description = "Schema not found")
+    )
+)]
+async fn get_schema_definition(
+    Path(name): Path<String>,
+) -> std::result::Result<String, axum::http::StatusCode> {
+    crate::core::embedded_schemas::get_embedded_schema_definition(&name)
+        .map(|def| def.to_string())
+        .ok_or(axum::http::StatusCode::NOT_FOUND)
 }
 
 async fn get_openapi_spec(State(state): State<AppState>) -> Json<utoipa::openapi::OpenApi> {

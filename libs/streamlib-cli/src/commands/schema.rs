@@ -4,118 +4,153 @@
 //! Schema management commands.
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
 use std::path::Path;
 use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
 use streamlib_broker::proto::get_runtime_endpoint_request::Query;
-use streamlib_broker::proto::GetRuntimeEndpointRequest;
+use streamlib_broker::proto::{GetRuntimeEndpointRequest, ListRuntimesRequest};
 use streamlib_broker::GRPC_PORT;
 use streamlib_codegen_shared::parse_processor_yaml_file;
 
-#[derive(Debug, Deserialize)]
-struct RegistryResponse {
-    processors: Vec<ProcessorInfo>,
-    #[serde(default)]
-    schemas: Vec<SchemaInfo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProcessorInfo {
-    name: String,
-    #[serde(default)]
-    inputs: Vec<PortInfo>,
-    #[serde(default)]
-    outputs: Vec<PortInfo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PortInfo {
-    #[allow(dead_code)]
-    name: String,
-    schema: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct SchemaInfo {
-    name: String,
-}
-
-/// List all known schemas by querying a running runtime.
+/// List all schemas by querying running runtimes via broker.
 pub async fn list(runtime: Option<&str>, url: Option<&str>) -> Result<()> {
-    let resolved_url = resolve_url(runtime, url).await?;
-
     let client = reqwest::Client::new();
-    let registry_url = format!("{}/api/registry", resolved_url);
-    let registry: RegistryResponse = client
-        .get(&registry_url)
-        .send()
-        .await
-        .context("Failed to connect to runtime. Is a runtime running?")?
-        .json()
-        .await
-        .context("Failed to parse registry response")?;
 
-    if registry.schemas.is_empty() {
-        println!("No schemas found in the runtime registry.");
+    // Collect (runtime_display_name, api_url) pairs
+    let runtimes: Vec<(String, String)> = match (runtime, url) {
+        (Some(r), _) => {
+            let resolved = resolve_runtime_url(r).await?;
+            vec![(r.to_string(), resolved)]
+        }
+        (None, Some(u)) => vec![("direct".to_string(), u.to_string())],
+        (None, None) => {
+            let endpoint = broker_endpoint();
+            let mut broker = BrokerServiceClient::connect(endpoint)
+                .await
+                .context("Failed to connect to broker. Is the broker running?")?;
+            let response = broker
+                .list_runtimes(ListRuntimesRequest {})
+                .await
+                .context("Failed to list runtimes from broker")?
+                .into_inner();
+
+            if response.runtimes.is_empty() {
+                bail!("No runtimes registered. Start one with 'streamlib run'.");
+            }
+
+            response
+                .runtimes
+                .into_iter()
+                .map(|r| {
+                    let display = if r.name.is_empty() {
+                        r.runtime_id.clone()
+                    } else {
+                        r.name.clone()
+                    };
+                    (display, format!("http://{}", r.api_endpoint))
+                })
+                .collect()
+        }
+    };
+
+    // Gather schemas from each runtime
+    let mut rows: Vec<(String, String, String)> = Vec::new(); // (NAME, TYPE, RUNTIME)
+
+    for (runtime_name, api_url) in &runtimes {
+        let schemas_url = format!("{}/api/schemas", api_url);
+        let schema_names: Vec<String> = match client.get(&schemas_url).send().await {
+            Ok(resp) => resp.json().await.unwrap_or_default(),
+            Err(_) => {
+                eprintln!("Warning: failed to query schemas from {}", runtime_name);
+                continue;
+            }
+        };
+
+        for name in schema_names {
+            let schema_type = if name.contains(".config@") {
+                "config"
+            } else {
+                "data"
+            };
+            rows.push((name, schema_type.to_string(), runtime_name.clone()));
+        }
+    }
+
+    rows.sort();
+    rows.dedup();
+
+    if rows.is_empty() {
+        println!("No schemas found.");
         return Ok(());
     }
 
-    // Build a map: schema -> list of (processor_name, direction)
-    let mut schema_usage: std::collections::BTreeMap<String, Vec<(String, &str)>> =
-        std::collections::BTreeMap::new();
+    // Compute column widths
+    let name_width = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
+    let type_width = rows.iter().map(|r| r.1.len()).max().unwrap_or(4).max(4);
+    let runtime_width = rows.iter().map(|r| r.2.len()).max().unwrap_or(7).max(7);
 
-    for processor in &registry.processors {
-        for input in &processor.inputs {
-            schema_usage
-                .entry(input.schema.clone())
-                .or_default()
-                .push((processor.name.clone(), "input"));
-        }
-        for output in &processor.outputs {
-            schema_usage
-                .entry(output.schema.clone())
-                .or_default()
-                .push((processor.name.clone(), "output"));
-        }
-    }
+    // Print kubectl-style table
+    println!(
+        "{:<name_w$}  {:<type_w$}  {:<rt_w$}",
+        "NAME",
+        "TYPE",
+        "RUNTIME",
+        name_w = name_width,
+        type_w = type_width,
+        rt_w = runtime_width,
+    );
 
-    println!("Known schemas ({}):\n", registry.schemas.len());
-
-    for schema in &registry.schemas {
-        let has_definition =
-            streamlib::core::embedded_schemas::get_embedded_schema_definition(&schema.name)
-                .is_some();
-        let def_marker = if has_definition { " [definition]" } else { "" };
-        println!("  {}{}", schema.name, def_marker);
-
-        if let Some(usages) = schema_usage.get(&schema.name) {
-            for (processor, direction) in usages {
-                println!("    {} ({})", processor, direction);
-            }
-        }
-        println!();
+    for (name, schema_type, runtime_name) in &rows {
+        println!(
+            "{:<name_w$}  {:<type_w$}  {:<rt_w$}",
+            name,
+            schema_type,
+            runtime_name,
+            name_w = name_width,
+            type_w = type_width,
+            rt_w = runtime_width,
+        );
     }
 
     Ok(())
 }
 
-/// Show the YAML definition of a schema.
-pub fn get(name: &str) -> Result<()> {
-    match streamlib::core::embedded_schemas::get_embedded_schema_definition(name) {
-        Some(definition) => {
-            println!("{}", definition);
-        }
-        None => {
-            println!("No definition found for schema '{}'.", name);
+/// Show the YAML definition of a schema by querying a running runtime.
+pub async fn describe(name: &str, runtime: Option<&str>, url: Option<&str>) -> Result<()> {
+    let resolved_url = resolve_url(runtime, url).await?;
+    let client = reqwest::Client::new();
 
-            // Show available schemas
-            let available = streamlib::core::embedded_schemas::list_embedded_schema_names();
+    let schema_url = format!("{}/api/schemas/{}", resolved_url, name);
+    let response = client
+        .get(&schema_url)
+        .send()
+        .await
+        .context("Failed to connect to runtime. Is a runtime running?")?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        println!("No definition found for schema '{}'.", name);
+
+        // List available definitions from the runtime
+        let list_url = format!("{}/api/schemas", resolved_url);
+        let available: Vec<String> = client
+            .get(&list_url)
+            .send()
+            .await
+            .context("Failed to connect to runtime.")?
+            .json()
+            .await
+            .unwrap_or_default();
+
+        if !available.is_empty() {
             println!("\nAvailable schema definitions:");
             for s in &available {
                 println!("  {}", s);
             }
         }
+    } else {
+        let definition = response.text().await?;
+        println!("{}", definition);
     }
+
     Ok(())
 }
 
@@ -200,6 +235,40 @@ async fn resolve_url(runtime: Option<&str>, url: Option<&str>) -> Result<String>
     match (runtime, url) {
         (Some(r), _) => resolve_runtime_url(r).await,
         (None, Some(u)) => Ok(u.to_string()),
-        (None, None) => Ok("http://127.0.0.1:9000".to_string()),
+        (None, None) => {
+            let endpoint = broker_endpoint();
+            let mut client = BrokerServiceClient::connect(endpoint)
+                .await
+                .context("Failed to connect to broker. Is the broker running?")?;
+
+            let response = client
+                .list_runtimes(ListRuntimesRequest {})
+                .await
+                .context("Failed to list runtimes from broker")?
+                .into_inner();
+
+            match response.runtimes.len() {
+                0 => bail!("No runtimes registered. Start one with 'streamlib run'."),
+                1 => Ok(format!("http://{}", response.runtimes[0].api_endpoint)),
+                n => {
+                    let names: Vec<&str> = response
+                        .runtimes
+                        .iter()
+                        .map(|r| {
+                            if r.name.is_empty() {
+                                r.runtime_id.as_str()
+                            } else {
+                                r.name.as_str()
+                            }
+                        })
+                        .collect();
+                    bail!(
+                        "{} runtimes registered. Specify one with --runtime:\n  {}",
+                        n,
+                        names.join("\n  ")
+                    )
+                }
+            }
+        }
     }
 }

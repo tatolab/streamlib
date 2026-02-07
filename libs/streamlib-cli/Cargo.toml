@@ -39,23 +39,15 @@ toml.workspace = true
 # Error handling
 anyhow.workspace = true
 
+# Load .env files for development environment
+dotenvy = "0.15"
+
 # Logging
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
-
-# Random name generation for runtimes
-fastrand = "2.0"
-
-# Runtime ID generation
-cuid2 = "0.1"
 
 # Timestamp parsing for log filtering
 chrono = "0.4"
-
-# Dynamic plugin loading
-libloading = "0.8"
-streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
 
 # gRPC client for broker diagnostics
 tonic = "0.12"
@@ -71,7 +63,3 @@ libc.workspace = true
 
 # ZIP archive creation
 zip = "2.2"
-
-# Daemonization (Unix-only)
-[target.'cfg(unix)'.dependencies]
-daemonize = "0.5"

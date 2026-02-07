@@ -4,7 +4,6 @@
 #[cfg(target_os = "macos")]
 pub mod broker;
 pub mod inspect;
-pub mod list;
 pub mod logs;
 pub mod pack;
 pub mod pkg;
