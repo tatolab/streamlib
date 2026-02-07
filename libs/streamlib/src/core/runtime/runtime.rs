@@ -219,6 +219,29 @@ impl StreamRuntime {
 
         config.check_streamlib_version_compatibility()?;
 
+        // Load dependency packages first (schemas/processors they export)
+        if !config.dependencies.is_empty() {
+            use crate::core::config::InstalledPackageManifest;
+
+            let manifest = InstalledPackageManifest::load()?;
+            for dep_name in &config.dependencies {
+                let entry = manifest.find_by_name(dep_name).ok_or_else(|| {
+                    StreamError::Configuration(format!(
+                        "Dependency '{}' is not installed. Install it with: streamlib pkg install <path.slpkg>",
+                        dep_name
+                    ))
+                })?;
+                let dep_path =
+                    crate::core::streamlib_home::get_cached_package_dir(&entry.cache_dir);
+                tracing::info!(
+                    "Loading dependency '{}' from {}",
+                    dep_name,
+                    dep_path.display()
+                );
+                self.load_project(&dep_path)?;
+            }
+        }
+
         if config.processors.is_empty() {
             tracing::warn!(
                 "No processors found in {} in {}",

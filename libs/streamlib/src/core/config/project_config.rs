@@ -34,6 +34,11 @@ pub struct ProjectConfig {
     /// Inline processor definitions.
     #[serde(default)]
     pub processors: Vec<streamlib_codegen_shared::ProcessorSchema>,
+
+    /// Package dependencies (installed package names whose processors/schemas
+    /// must be loaded before this package).
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 impl ProjectConfig {
