@@ -202,6 +202,7 @@ impl StreamRuntime {
     ///
     /// For Python packages, eagerly creates the venv and installs dependencies
     /// once during loading, so processors don't race to create it at spawn time.
+    #[allow(clippy::only_used_in_recursion)]
     pub fn load_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
         use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
         use crate::core::compiler::compiler_ops::create_python_subprocess_host_constructor;
