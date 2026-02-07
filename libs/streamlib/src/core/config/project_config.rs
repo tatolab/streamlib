@@ -15,6 +15,9 @@ pub struct PackageMetadata {
     pub version: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// Minimum compatible StreamLib version (e.g. ">=0.3.0").
+    #[serde(default)]
+    pub streamlib_version: Option<String>,
 }
 
 /// Project configuration from `streamlib.yaml`.
@@ -98,6 +101,65 @@ impl ProjectConfig {
     pub fn env_vars(&self) -> &HashMap<String, String> {
         &self.env
     }
+
+    /// Check if this package is compatible with the running StreamLib version.
+    /// Returns an error if `streamlib_version` is set and the constraint is not
+    /// satisfied.
+    pub fn check_streamlib_version_compatibility(&self) -> Result<()> {
+        let constraint = match self
+            .package
+            .as_ref()
+            .and_then(|p| p.streamlib_version.as_deref())
+        {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        let runtime_version = env!("CARGO_PKG_VERSION");
+
+        // Parse ">=X.Y.Z" constraint
+        let min_version = constraint
+            .strip_prefix(">=")
+            .ok_or_else(|| {
+                StreamError::Configuration(format!(
+                    "Unsupported streamlib_version constraint '{}' (only >=X.Y.Z is supported)",
+                    constraint
+                ))
+            })?
+            .trim();
+
+        if compare_semver(runtime_version, min_version) < 0 {
+            return Err(StreamError::Configuration(format!(
+                "Package requires streamlib {} but running version is {}",
+                constraint, runtime_version
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+/// Compare two semver strings. Returns -1, 0, or 1.
+fn compare_semver(a: &str, b: &str) -> i32 {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let va = parse(a);
+    let vb = parse(b);
+    let len = va.len().max(vb.len());
+    for i in 0..len {
+        let pa = va.get(i).copied().unwrap_or(0);
+        let pb = vb.get(i).copied().unwrap_or(0);
+        if pa < pb {
+            return -1;
+        }
+        if pa > pb {
+            return 1;
+        }
+    }
+    0
 }
 
 #[cfg(test)]

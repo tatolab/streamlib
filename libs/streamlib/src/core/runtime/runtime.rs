@@ -217,6 +217,8 @@ impl StreamRuntime {
 
         let config = ProjectConfig::load(project_path)?;
 
+        config.check_streamlib_version_compatibility()?;
+
         if config.processors.is_empty() {
             tracing::warn!(
                 "No processors found in {} in {}",
