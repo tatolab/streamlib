@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/tatolab/streamlib/compare/v0.3.3...v0.3.4) (2026-02-07)
+
+
+### Features
+
+* Schema registry, pkg CLI, schemas CLI ([#136](https://github.com/tatolab/streamlib/issues/136) Phase 4) ([#141](https://github.com/tatolab/streamlib/issues/141)) ([d4ab458](https://github.com/tatolab/streamlib/commit/d4ab458734f20bbe63d8b57590df8d9877f7eab1))
+
 ## [0.3.3](https://github.com/tatolab/streamlib/compare/v0.3.2...v0.3.3) (2026-02-01)
 
 
