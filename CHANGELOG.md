@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/tatolab/streamlib/compare/v0.3.4...v0.3.5) (2026-02-10)
+
+
+### Features
+
+* Rust dylib plugin loading + camera-rust-plugin example ([#148](https://github.com/tatolab/streamlib/issues/148)) ([e09a4f3](https://github.com/tatolab/streamlib/commit/e09a4f3f86c8f6dde40780bf0b28ee2456413061))
+
 ## [0.3.4](https://github.com/tatolab/streamlib/compare/v0.3.3...v0.3.4) (2026-02-07)
 
 
