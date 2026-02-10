@@ -89,6 +89,45 @@ pub fn pack(package_dir: &Path, output: Option<&Path>) -> Result<()> {
         }
     }
 
+    // Collect dylib files for Rust runtime processors
+    let has_rust_processors = config.processors.iter().any(|p| {
+        matches!(
+            p.runtime.language,
+            streamlib_codegen_shared::ProcessorLanguage::Rust
+        )
+    });
+    if has_rust_processors {
+        let lib_dir = package_dir.join("lib");
+        let dylib_ext = if cfg!(target_os = "macos") {
+            "dylib"
+        } else if cfg!(target_os = "windows") {
+            "dll"
+        } else {
+            "so"
+        };
+
+        if lib_dir.is_dir() {
+            for entry in std::fs::read_dir(&lib_dir)
+                .with_context(|| format!("Failed to read lib/ directory: {}", lib_dir.display()))?
+            {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == dylib_ext) {
+                    let filename = path
+                        .file_name()
+                        .expect("dylib path must have filename")
+                        .to_string_lossy();
+                    files_to_bundle.push((format!("lib/{}", filename), path));
+                }
+            }
+        } else {
+            anyhow::bail!(
+                "Rust runtime processors declared but no lib/ directory found at {}",
+                lib_dir.display()
+            );
+        }
+    }
+
     // 4. Create ZIP archive
     let file = File::create(&output_path)
         .with_context(|| format!("Failed to create {}", output_path.display()))?;

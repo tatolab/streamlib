@@ -28,6 +28,8 @@ members = [
     "examples/camera-python-display",     # Example: Camera → Python → Display pipeline
     "examples/camera-python-subprocess",  # Example: Camera → Python subprocess → Display pipeline
     "examples/camera-deno-subprocess",   # Example: Camera → Deno subprocess → Display pipeline
+    "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
+    "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example
     "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
 ]
 

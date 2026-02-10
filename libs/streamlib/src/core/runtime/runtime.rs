@@ -28,6 +28,28 @@ use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeE
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
 use crate::iceoryx2::Iceoryx2Node;
 
+/// Keeps loaded dylib plugin libraries alive for the process lifetime.
+///
+/// When a Rust dylib plugin is loaded via `load_project()`, the `Library` handle
+/// must remain alive so that the registered processor vtables stay valid.
+static LOADED_PLUGIN_LIBRARIES: std::sync::LazyLock<parking_lot::Mutex<Vec<libloading::Library>>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(Vec::new()));
+
+/// ABI version for plugin compatibility checks.
+///
+/// Must match `streamlib_plugin_abi::STREAMLIB_ABI_VERSION`. Duplicated here to
+/// avoid a cyclic dependency (streamlib-plugin-abi depends on streamlib).
+const PLUGIN_ABI_VERSION: u32 = 1;
+
+/// Plugin declaration exported by dynamic libraries.
+///
+/// Must match the layout of `streamlib_plugin_abi::PluginDeclaration`.
+#[repr(C)]
+struct PluginDeclaration {
+    abi_version: u32,
+    register: extern "C" fn(&'static crate::core::processors::ProcessorInstanceFactory),
+}
+
 /// Storage variant for tokio runtime in StreamRuntime.
 ///
 /// Enables StreamRuntime to work both standalone (owning its runtime) and
@@ -271,6 +293,7 @@ impl StreamRuntime {
         }
 
         let mut registered_count = 0usize;
+        let mut rust_dylib_loaded = false;
 
         for proc_schema in &config.processors {
             // Map runtime language to ProcessorRuntime
@@ -280,10 +303,108 @@ impl StreamRuntime {
                     ProcessorRuntime::TypeScript
                 }
                 streamlib_codegen_shared::ProcessorLanguage::Rust => {
-                    return Err(StreamError::Configuration(format!(
-                        "Processor '{}' has runtime 'rust' — use #[streamlib::processor()] macro instead",
-                        proc_schema.name
-                    )));
+                    // Rust dylib plugins self-register via export_plugin! macro.
+                    // Load the dylib once per project (all Rust processors in the
+                    // same YAML share one dylib), then validate each processor
+                    // was actually registered.
+                    if !rust_dylib_loaded {
+                        let lib_dir = project_path.join("lib");
+                        let dylib_ext = if cfg!(target_os = "macos") {
+                            "dylib"
+                        } else if cfg!(target_os = "windows") {
+                            "dll"
+                        } else {
+                            "so"
+                        };
+
+                        let dylib_path = std::fs::read_dir(&lib_dir)
+                            .map_err(|e| {
+                                StreamError::Configuration(format!(
+                                    "Failed to read lib/ directory at {}: {}",
+                                    lib_dir.display(),
+                                    e
+                                ))
+                            })?
+                            .filter_map(|entry| entry.ok())
+                            .map(|entry| entry.path())
+                            .find(|path| path.extension().is_some_and(|ext| ext == dylib_ext))
+                            .ok_or_else(|| {
+                                StreamError::Configuration(format!(
+                                    "No .{} file found in {}",
+                                    dylib_ext,
+                                    lib_dir.display()
+                                ))
+                            })?;
+
+                        tracing::info!("Loading Rust dylib plugin: {}", dylib_path.display());
+
+                        // Safety: Loading a dynamic library is inherently unsafe.
+                        // The dylib must be a valid StreamLib plugin built with
+                        // a compatible streamlib-plugin-abi version.
+                        let lib = unsafe {
+                            libloading::Library::new(&dylib_path).map_err(|e| {
+                                StreamError::Configuration(format!(
+                                    "Failed to load dylib {}: {}",
+                                    dylib_path.display(),
+                                    e
+                                ))
+                            })?
+                        };
+
+                        let decl: &PluginDeclaration = unsafe {
+                            let symbol = lib
+                                .get::<*const PluginDeclaration>(b"STREAMLIB_PLUGIN\0")
+                                .map_err(|e| {
+                                    StreamError::Configuration(format!(
+                                        "Plugin '{}' missing STREAMLIB_PLUGIN symbol. \
+                                         Ensure the plugin uses the export_plugin! macro: {}",
+                                        dylib_path.display(),
+                                        e
+                                    ))
+                                })?;
+                            &**symbol
+                        };
+
+                        if decl.abi_version != PLUGIN_ABI_VERSION {
+                            return Err(StreamError::Configuration(format!(
+                                "ABI version mismatch for '{}': plugin has v{}, \
+                                 runtime expects v{}. Rebuild the plugin with a \
+                                 compatible streamlib-plugin-abi version.",
+                                dylib_path.display(),
+                                decl.abi_version,
+                                PLUGIN_ABI_VERSION
+                            )));
+                        }
+
+                        (decl.register)(&crate::core::processors::PROCESSOR_REGISTRY);
+
+                        // Keep the library alive for the process lifetime
+                        LOADED_PLUGIN_LIBRARIES.lock().push(lib);
+
+                        rust_dylib_loaded = true;
+                        tracing::info!(
+                            "Rust dylib plugin loaded and registered: {}",
+                            dylib_path.display()
+                        );
+                    }
+
+                    // Validate the processor was registered by the dylib
+                    let registered = crate::core::processors::PROCESSOR_REGISTRY
+                        .list_registered()
+                        .iter()
+                        .any(|desc| desc.name == proc_schema.name);
+                    if !registered {
+                        return Err(StreamError::Configuration(format!(
+                            "Processor '{}' declared in streamlib.yaml but not \
+                             registered by the dylib. Ensure export_plugin!() \
+                             includes this processor.",
+                            proc_schema.name
+                        )));
+                    }
+
+                    tracing::info!("Validated Rust dylib processor '{}'", proc_schema.name);
+                    registered_count += 1;
+                    continue;
                 }
             };
 

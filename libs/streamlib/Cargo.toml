@@ -55,6 +55,7 @@ cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
 uuid = { version = "1.11", features = ["v4"] }  # UUID generation for PixelBufferPoolId
 dirs = "6.0"   # Cross-platform home directory resolution
 zip = "2.2"    # ZIP archive extraction for .slpkg packages
+libloading = "0.8"  # Dynamic library loading for Rust dylib plugins
 sha2.workspace = true  # SHA-256 hashing for venv cache keys
 dotenvy = "0.15"  # Load .env files for development environment
 

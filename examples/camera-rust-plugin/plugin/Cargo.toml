@@ -1,0 +1,16 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "grayscale-plugin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+streamlib = { path = "../../../libs/streamlib" }
+streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi" }
+tracing = "0.1"
