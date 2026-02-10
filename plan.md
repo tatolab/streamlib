@@ -29,7 +29,7 @@
 
 ## Task List
 
-- [ ] **#150** — Unify processor schema into `streamlib.yaml`. Currently Rust dylib plugins need both `schemas/processors/*.yaml` (for the `#[streamlib::processor()]` macro at compile time) and `streamlib.yaml` (for `load_project()` at runtime) with duplicated content. Update the macro to accept a processor name instead of a file path — `#[streamlib::processor("com.tatolab.grayscale_rust")]` — and look it up in `CARGO_MANIFEST_DIR/streamlib.yaml`. Detection: if the argument ends in `.yaml`, treat as file path (current behavior for built-in processors); otherwise treat as processor name lookup. Eliminates the `schemas/` directory for plugin crates and makes Rust plugins consistent with Python/TypeScript (single `streamlib.yaml` source of truth).
+- [ ] **#150** — Unify processor schema into `streamlib.yaml`. The macro argument is always a processor name — `#[streamlib::processor("com.tatolab.camera")]` — looked up in `CARGO_MANIFEST_DIR/streamlib.yaml`. No file path support. All standalone YAML files consolidated into per-crate `streamlib.yaml` files. Eliminates `schemas/` directories and makes all Rust processors consistent with Python/TypeScript (single `streamlib.yaml` source of truth).
 
 - [ ] **#135** — streamlib-python-native FFI cdylib. Copy the `streamlib-deno-native` pattern to create `streamlib-python-native`. Gives Python subprocess processors direct iceoryx2 shared memory access via FFI, eliminating 6 pipe round-trips per frame (stdin/stdout JSON → direct shared memory read/write).
 

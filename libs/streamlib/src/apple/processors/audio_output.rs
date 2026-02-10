@@ -58,7 +58,7 @@ pub struct AppleAudioDevice {
     pub is_default: bool,
 }
 
-#[crate::processor("src/apple/processors/audio_output.yaml")]
+#[crate::processor("com.tatolab.audio_output")]
 pub struct AppleAudioOutputProcessor {
     device_id: Option<usize>,
     device_name: String,

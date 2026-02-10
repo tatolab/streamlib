@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("src/core/processors/webrtc_whep.yaml")]
+#[crate::processor("com.streamlib.webrtc_whep")]
 pub struct WebRtcWhepProcessor {
     // RuntimeContext for tokio handle
     ctx: Option<RuntimeContext>,

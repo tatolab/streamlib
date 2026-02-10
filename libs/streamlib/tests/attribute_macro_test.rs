@@ -10,7 +10,7 @@ use streamlib::core::GeneratedProcessor;
 use streamlib::core::{EmptyConfig, Result, RuntimeContext};
 
 // Define a simple processor using YAML schema
-#[streamlib::processor("schemas/processors/test/test_processor.yaml")]
+#[streamlib::processor("com.streamlib.test.processor")]
 pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
@@ -94,7 +94,7 @@ pub struct MyConfig {
     pub threshold: f32,
 }
 
-#[streamlib::processor("schemas/processors/test/configured_processor.yaml")]
+#[streamlib::processor("com.streamlib.test.configured_processor")]
 pub struct ConfiguredProcessor;
 
 impl streamlib::ContinuousProcessor for ConfiguredProcessor::Processor {

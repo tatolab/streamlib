@@ -20,7 +20,7 @@ use crate::core::JsonSerializableComponent;
 // =============================================================================
 
 /// Mock processor for testing graph operations.
-#[crate::processor("schemas/processors/test/mock_processor.yaml")]
+#[crate::processor("com.streamlib.test.mock_processor")]
 struct MockProcessor;
 
 impl crate::core::ManualProcessor for MockProcessor::Processor {
@@ -41,7 +41,7 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 }
 
 /// Processor with only output ports.
-#[crate::processor("schemas/processors/test/mock_output_only_processor.yaml")]
+#[crate::processor("com.streamlib.test.mock_output_only_processor")]
 struct MockOutputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
@@ -62,7 +62,7 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 }
 
 /// Processor with only input ports.
-#[crate::processor("schemas/processors/test/mock_input_only_processor.yaml")]
+#[crate::processor("com.streamlib.test.mock_input_only_processor")]
 struct MockInputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {

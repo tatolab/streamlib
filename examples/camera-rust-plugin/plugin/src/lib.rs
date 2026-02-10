@@ -18,7 +18,7 @@ extern "C" {
     fn CVPixelBufferGetBytesPerRow(pixel_buffer: *mut c_void) -> usize;
 }
 
-#[streamlib::processor("schemas/processors/grayscale.yaml")]
+#[streamlib::processor("com.tatolab.grayscale_rust")]
 pub struct GrayscaleProcessor {
     gpu_context: Option<GpuContext>,
     running: Arc<AtomicBool>,

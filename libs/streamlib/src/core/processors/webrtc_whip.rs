@@ -21,7 +21,7 @@ use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, S
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("src/core/processors/webrtc_whip.yaml")]
+#[crate::processor("com.streamlib.webrtc_whip")]
 pub struct WebRtcWhipProcessor {
     // RuntimeContext for tokio handle
     ctx: Option<RuntimeContext>,
