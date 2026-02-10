@@ -1,8 +1,0 @@
-name: com.streamlib.api_server
-version: 1.0.0
-description: "Runtime api server for streamlib"
-execution: manual
-
-config:
-  name: config
-  schema: com.streamlib.api_server.config@1.0.0

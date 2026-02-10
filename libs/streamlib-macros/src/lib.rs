@@ -5,51 +5,10 @@
 //!
 //! YAML-based processor definition macro:
 //!
-//! - `#[streamlib::processor("path/to/schema.yaml")]` - Main processor definition
+//! - `#[streamlib::processor("com.tatolab.camera")]` - Processor definition by name lookup
 //!
-//! # Example
-//!
-//! ```ignore
-//! use streamlib::prelude::*;
-//!
-//! #[streamlib::processor("schemas/processors/camera.yaml")]
-//! pub struct CameraProcessor;
-//!
-//! impl CameraProcessor::Processor {
-//!     fn setup(&mut self, _ctx: &RuntimeContext) -> Result<()> { Ok(()) }
-//!     fn teardown(&mut self) -> Result<()> { Ok(()) }
-//!     fn process(&mut self) -> Result<()> { Ok(()) }
-//! }
-//! ```
-//!
-//! Where `schemas/processors/camera.yaml` contains:
-//!
-//! ```yaml
-//! name: com.tatolab.camera
-//! version: 1.0.0
-//! description: "Camera capture processor"
-//!
-//! config:
-//!   name: config
-//!   schema: com.tatolab.camera.config@1.0.0
-//!
-//! outputs:
-//!   - name: video
-//!     schema: com.tatolab.videoframe@1.0.0
-//! ```
-//!
-//! Generates:
-//!
-//! ```ignore
-//! pub mod CameraProcessor {
-//!     pub struct Processor { ... }
-//!
-//!     pub mod InputLink {}
-//!     pub mod OutputLink {
-//!         pub struct video;
-//!     }
-//! }
-//! ```
+//! The macro reads `CARGO_MANIFEST_DIR/streamlib.yaml` and finds the processor entry
+//! matching the given name.
 
 mod analysis;
 mod attributes;
@@ -58,44 +17,28 @@ mod config_descriptor;
 
 use proc_macro::TokenStream;
 use std::path::Path;
+use streamlib_codegen_shared::ProjectConfigMinimal;
 use syn::{parse_macro_input, DeriveInput, ItemStruct, LitStr};
 
 /// Main processor attribute macro.
 ///
-/// Transforms a struct definition into a processor module using a YAML schema.
+/// Transforms a struct definition into a processor module by looking up a processor
+/// name in `streamlib.yaml`.
 ///
-/// # Usage
-///
-/// ```ignore
-/// #[streamlib::processor("schemas/processors/my_processor.yaml")]
-/// pub struct MyProcessor;
-/// ```
-///
-/// The YAML file defines:
-/// - Processor name and version
-/// - Description
-/// - Runtime (rust, python, typescript)
-/// - Config schema reference
-/// - Input/output port schemas
-///
-/// # Generated Code
-///
-/// - `Processor` struct with port fields
-/// - `InputLink` module with input port markers
-/// - `OutputLink` module with output port markers
-/// - All necessary trait implementations
+/// The macro reads `CARGO_MANIFEST_DIR/streamlib.yaml` and finds the processor entry
+/// matching the given name.
 #[proc_macro_attribute]
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
 
-    // Parse YAML path from attribute
-    let yaml_path = match parse_yaml_path(attr) {
-        Ok(path) => path,
+    // Parse processor name from attribute
+    let processor_name = match parse_processor_name(attr) {
+        Ok(name) => name,
         Err(err) => return err.to_compile_error().into(),
     };
 
     // Load and parse the YAML schema
-    let schema = match load_processor_schema(&yaml_path, &item_struct) {
+    let schema = match load_processor_schema(&processor_name, &item_struct) {
         Ok(schema) => schema,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -106,18 +49,17 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(generated)
 }
 
-/// Parse the YAML path from the attribute arguments.
-fn parse_yaml_path(attr: TokenStream) -> syn::Result<String> {
+/// Parse the processor name from the attribute arguments.
+fn parse_processor_name(attr: TokenStream) -> syn::Result<String> {
     let lit: LitStr = syn::parse(attr)?;
     Ok(lit.value())
 }
 
-/// Load and parse a processor schema from a YAML file.
+/// Load a processor schema by name from `streamlib.yaml`.
 fn load_processor_schema(
-    yaml_path: &str,
+    processor_name: &str,
     item: &ItemStruct,
 ) -> syn::Result<streamlib_codegen_shared::ProcessorSchema> {
-    // Get the manifest directory (where Cargo.toml is located)
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
         syn::Error::new_spanned(
             item,
@@ -125,38 +67,49 @@ fn load_processor_schema(
         )
     })?;
 
-    let full_path = Path::new(&manifest_dir).join(yaml_path);
+    let config_path = Path::new(&manifest_dir).join("streamlib.yaml");
 
-    // Check if file exists
-    if !full_path.exists() {
+    if !config_path.exists() {
         return Err(syn::Error::new_spanned(
             item,
             format!(
-                "Processor schema file not found: {}\n\
-                 Expected at: {}",
-                yaml_path,
-                full_path.display()
+                "streamlib.yaml not found at {}\n\
+                 The #[streamlib::processor(\"name\")] macro requires a streamlib.yaml\n\
+                 next to Cargo.toml with processor definitions.",
+                config_path.display()
             ),
         ));
     }
 
-    // Read and parse the YAML
-    let yaml_content = std::fs::read_to_string(&full_path).map_err(|e| {
-        syn::Error::new_spanned(
-            item,
-            format!(
-                "Failed to read processor schema file '{}': {}",
-                yaml_path, e
-            ),
-        )
+    let yaml_content = std::fs::read_to_string(&config_path).map_err(|e| {
+        syn::Error::new_spanned(item, format!("Failed to read streamlib.yaml: {}", e))
     })?;
 
-    streamlib_codegen_shared::parse_processor_yaml(&yaml_content).map_err(|e| {
-        syn::Error::new_spanned(
-            item,
-            format!("Failed to parse processor schema '{}': {}", yaml_path, e),
-        )
-    })
+    let config: ProjectConfigMinimal = serde_yaml::from_str(&yaml_content).map_err(|e| {
+        syn::Error::new_spanned(item, format!("Failed to parse streamlib.yaml: {}", e))
+    })?;
+
+    let available_names: Vec<String> = config.processors.iter().map(|p| p.name.clone()).collect();
+
+    config
+        .processors
+        .into_iter()
+        .find(|p| p.name == processor_name)
+        .ok_or_else(|| {
+            let mut msg = format!(
+                "Processor '{}' not found in streamlib.yaml\n\
+                 Expected at: {}",
+                processor_name,
+                config_path.display()
+            );
+            if !available_names.is_empty() {
+                msg.push_str("\n  Available processors:");
+                for name in &available_names {
+                    msg.push_str(&format!("\n    - {}", name));
+                }
+            }
+            syn::Error::new_spanned(item, msg)
+        })
 }
 
 /// Derive macro for ConfigDescriptor trait.

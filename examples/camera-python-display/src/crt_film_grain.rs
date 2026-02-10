@@ -63,7 +63,7 @@ impl Default for CrtFilmGrainConfig {
     }
 }
 
-#[streamlib::processor("src/crt_film_grain.yaml")]
+#[streamlib::processor("com.tatolab.crt_film_grain")]
 pub struct CrtFilmGrainProcessor {
     config: CrtFilmGrainConfig,
 

@@ -340,7 +340,7 @@ unsafe fn forward_camera_iosurface_directly(
     }
 }
 
-#[crate::processor("src/apple/processors/camera.yaml")]
+#[crate::processor("com.tatolab.camera")]
 pub struct AppleCameraProcessor {
     camera_name: String,
     /// Async init state - None means init not started yet.

@@ -55,7 +55,7 @@ struct BlendingUniforms {
     _padding3: f32,
 }
 
-#[streamlib::processor("src/blending_compositor.yaml")]
+#[streamlib::processor("com.tatolab.blending_compositor")]
 pub struct BlendingCompositorProcessor {
     config: BlendingCompositorConfig,
 

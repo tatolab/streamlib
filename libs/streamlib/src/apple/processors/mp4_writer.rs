@@ -26,7 +26,7 @@ extern "C" {
     fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
 }
 
-#[crate::processor("src/apple/processors/mp4_writer.yaml")]
+#[crate::processor("com.tatolab.mp4_writer")]
 pub struct AppleMp4WriterProcessor {
     // RuntimeContext for main thread dispatch
     ctx: Option<crate::core::RuntimeContext>,

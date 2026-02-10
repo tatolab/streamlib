@@ -57,7 +57,7 @@ impl SendableClapHostPtr {
     }
 }
 
-#[crate::processor("src/core/processors/clap_effect.yaml")]
+#[crate::processor("com.streamlib.clap.effect")]
 pub struct ClapEffectProcessor {
     host: Option<ClapPluginHost>,
     buffer_size: usize,

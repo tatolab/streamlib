@@ -23,3 +23,10 @@ pub use processor_schema::{
     RuntimeConfig, RuntimeOptions,
 };
 pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_file};
+
+/// Minimal project config for parsing only the `processors` field from `streamlib.yaml`.
+#[derive(serde::Deserialize)]
+pub struct ProjectConfigMinimal {
+    #[serde(default)]
+    pub processors: Vec<ProcessorSchema>,
+}
