@@ -14,13 +14,13 @@
   │  Phase 4: Schema registry, pkg CLI, cross-package dependencies ✅
   │
   ▼
-Delete camera-dylib-display + Rust dylib via manifest (#143)
+Delete camera-dylib-display + Rust dylib via manifest (#143) ✅
   │
   │  (enables Rust processor plugins to use the same packaging
   │   as Python/TypeScript — streamlib.yaml + .slpkg)
   │
   ▼
-camera-rust-plugin example
+camera-rust-plugin example ✅
   │
   │  (simple Camera → Rust dylib processor → Display pipeline,
   │   equivalent of camera-python-subprocess but for Rust plugins)
@@ -59,7 +59,7 @@ camera-rust-plugin example
 
 - [x] **Delete `camera-dylib-display`** — Remove the disabled example from `examples/camera-dylib-display/` (including `rust/` subdirectory and `python/` subdirectory). It uses the old PyO3 in-process Python hosting that was replaced by subprocess architecture. Currently commented out in workspace `Cargo.toml`. Clean removal, no replacement needed at this step. *(PR #146)*
 
-- [ ] **Rust dylib loading via `streamlib.yaml`** — Pull forward from #143. Currently `load_project()` rejects `runtime: rust` with an error. Change it to load a compiled dylib from the package's `lib/` directory using the existing `PluginLoader` infrastructure.
+- [x] **Rust dylib loading via `streamlib.yaml`** — Pull forward from #143. Currently `load_project()` rejects `runtime: rust` with an error. Change it to load a compiled dylib from the package's `lib/` directory using the existing `PluginLoader` infrastructure.
 
   **What exists already:**
   - `streamlib-plugin-abi` crate: `PluginDeclaration` struct, `export_plugin!` macro, ABI version check
@@ -96,7 +96,7 @@ camera-rust-plugin example
      ```
   5. The processor names in `streamlib.yaml` must match the names in `#[streamlib::processor(name = "...")]` inside the dylib — the YAML is declarative metadata, the dylib handles actual registration via `export_plugin!`.
 
-- [ ] **Create `camera-rust-plugin` example** — Simple equivalent of `camera-python-subprocess` but with a Rust processor loaded as a dylib. Demonstrates the full packaging flow: compile plugin → `streamlib pack` → `streamlib run --plugin` or `load_package()`.
+- [x] **Create `camera-rust-plugin` example** — Simple equivalent of `camera-python-subprocess` but with a Rust processor loaded as a dylib. Demonstrates the full packaging flow: compile plugin → `streamlib pack` → `streamlib run --plugin` or `load_package()`.
 
   **Structure:**
   ```

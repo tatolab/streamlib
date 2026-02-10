@@ -1,0 +1,3 @@
+lib/*.dylib
+lib/*.so
+lib/*.dll
