@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6](https://github.com/tatolab/streamlib/compare/v0.3.5...v0.3.6) (2026-02-10)
+
+
+### Features
+
+* unify processor schema into streamlib.yaml ([#150](https://github.com/tatolab/streamlib/issues/150)) ([#151](https://github.com/tatolab/streamlib/issues/151)) ([36f89d4](https://github.com/tatolab/streamlib/commit/36f89d4c77830068fe5f91aa2958b0f8d8af1c04))
+
 ## [0.3.5](https://github.com/tatolab/streamlib/compare/v0.3.4...v0.3.5) (2026-02-10)
 
 
