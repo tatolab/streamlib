@@ -225,9 +225,10 @@ class NativeGpuSurfaceHandle:
     IOSurface ctypes — the cdylib owns the surface lifecycle.
     """
 
-    def __init__(self, lib, handle_ptr):
+    def __init__(self, lib, handle_ptr, pooled=False):
         self._lib = lib
         self._handle_ptr = handle_ptr
+        self._pooled = pooled
         self.width = lib.slpn_gpu_surface_width(handle_ptr)
         self.height = lib.slpn_gpu_surface_height(handle_ptr)
         self.bytes_per_row = lib.slpn_gpu_surface_bytes_per_row(handle_ptr)
@@ -276,6 +277,8 @@ class NativeGpuSurfaceHandle:
 
     def release(self):
         """Release the C-side surface handle."""
+        if self._pooled:
+            return
         if self._handle_ptr:
             self._lib.slpn_gpu_surface_release(self._handle_ptr)
             self._handle_ptr = None
@@ -287,10 +290,15 @@ class NativeGpuSurfaceHandle:
 class NativeGpu:
     """GPU context for IOSurface access via FFI, with broker XPC resolution."""
 
+    SURFACE_POOL_SIZE = 3
+
     def __init__(self, lib, broker_ptr):
         self._lib = lib
         self._broker_ptr = broker_ptr
-        self._prev_acquired_pool_id = None
+        self._output_pool = []  # list of (pool_id, handle_ptr)
+        self._output_pool_index = 0
+        self._output_pool_width = 0
+        self._output_pool_height = 0
 
     def resolve_surface(self, surface_id):
         """Resolve a broker surface_id UUID to a GPU surface handle."""
@@ -311,37 +319,72 @@ class NativeGpu:
         return NativeGpuSurfaceHandle(self._lib, handle_ptr)
 
     def acquire_surface(self, width, height, format="bgra"):
-        """Acquire a new pixel buffer via broker."""
+        """Acquire a pixel buffer from the pool (triple-buffered, round-robin)."""
         import ctypes
 
         bytes_per_element = 4  # BGRA
 
-        # Unregister previous frame's surface from broker to prevent registry leak
-        if self._broker_ptr and self._prev_acquired_pool_id is not None:
-            self._lib.slpn_broker_unregister_surface(
-                self._broker_ptr,
-                self._prev_acquired_pool_id.encode("utf-8"),
-            )
+        # If dimensions changed, release old pool and create new one
+        if (self._output_pool
+                and (width != self._output_pool_width or height != self._output_pool_height)):
+            self.release_pool()
 
-        if self._broker_ptr:
-            pool_id_buf = (ctypes.c_char * 256)()
-            handle_ptr = self._lib.slpn_broker_acquire_surface(
-                self._broker_ptr,
-                width, height, bytes_per_element,
-                pool_id_buf, 256,
-            )
-            if not handle_ptr:
-                raise RuntimeError(f"Broker failed to acquire surface: {width}x{height}")
-            pool_id = pool_id_buf.value.decode("utf-8")
-            self._prev_acquired_pool_id = pool_id
-            return pool_id, NativeGpuSurfaceHandle(self._lib, handle_ptr)
+        # First call (or after dimension change): pre-allocate pool
+        if not self._output_pool:
+            if self._broker_ptr:
+                for _ in range(self.SURFACE_POOL_SIZE):
+                    pool_id_buf = (ctypes.c_char * 256)()
+                    handle_ptr = self._lib.slpn_broker_acquire_surface(
+                        self._broker_ptr,
+                        width, height, bytes_per_element,
+                        pool_id_buf, 256,
+                    )
+                    if not handle_ptr:
+                        raise RuntimeError(
+                            f"Broker failed to acquire surface: {width}x{height}"
+                        )
+                    pool_id = pool_id_buf.value.decode("utf-8")
+                    self._output_pool.append((pool_id, handle_ptr))
+            else:
+                for _ in range(self.SURFACE_POOL_SIZE):
+                    handle_ptr = self._lib.slpn_gpu_surface_create(
+                        width, height, bytes_per_element
+                    )
+                    if not handle_ptr:
+                        raise RuntimeError(
+                            f"Failed to create IOSurface: {width}x{height}"
+                        )
+                    surface_id = self._lib.slpn_gpu_surface_get_id(handle_ptr)
+                    self._output_pool.append((str(surface_id), handle_ptr))
 
-        # Fallback: create IOSurface without broker
-        handle_ptr = self._lib.slpn_gpu_surface_create(width, height, bytes_per_element)
-        if not handle_ptr:
-            raise RuntimeError(f"Failed to create IOSurface: {width}x{height}")
-        surface_id = self._lib.slpn_gpu_surface_get_id(handle_ptr)
-        return str(surface_id), NativeGpuSurfaceHandle(self._lib, handle_ptr)
+            self._output_pool_width = width
+            self._output_pool_height = height
+            self._output_pool_index = 0
+
+        # Round-robin: return next surface from pool
+        pool_id, handle_ptr = self._output_pool[self._output_pool_index]
+        self._output_pool_index = (
+            (self._output_pool_index + 1) % len(self._output_pool)
+        )
+        return pool_id, NativeGpuSurfaceHandle(self._lib, handle_ptr, pooled=True)
+
+    def release_pool(self):
+        """Release all pooled surfaces."""
+        for pool_id, handle_ptr in self._output_pool:
+            if handle_ptr:
+                self._lib.slpn_gpu_surface_release(handle_ptr)
+            if self._broker_ptr:
+                self._lib.slpn_broker_unregister_surface(
+                    self._broker_ptr,
+                    pool_id.encode("utf-8"),
+                )
+        self._output_pool = []
+        self._output_pool_index = 0
+        self._output_pool_width = 0
+        self._output_pool_height = 0
+
+    def __del__(self):
+        self.release_pool()
 
 
 class NativeProcessorContext:
