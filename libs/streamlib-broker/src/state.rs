@@ -309,17 +309,21 @@ impl BrokerState {
         // Also clean up orphaned surfaces whose runtime_id doesn't match
         // any currently registered runtime (e.g. from runtimes that were
         // removed in a previous prune or unregister before surface cleanup
-        // was added).
+        // was added). Skip when no runtimes are registered — standalone
+        // pipelines (without api_server) register surfaces via XPC but never
+        // register the runtime via gRPC, so an empty set would remove everything.
         #[cfg(target_os = "macos")]
         {
             let registered_ids: std::collections::HashSet<String> =
                 self.inner.runtimes.read().keys().cloned().collect();
-            let mut surfaces = self.inner.surfaces.write();
-            let before = surfaces.len();
-            surfaces.retain(|_, metadata| registered_ids.contains(&metadata.runtime_id));
-            let orphaned = before - surfaces.len();
-            if orphaned > 0 {
-                tracing::info!("Released {} orphaned surface(s)", orphaned);
+            if !registered_ids.is_empty() {
+                let mut surfaces = self.inner.surfaces.write();
+                let before = surfaces.len();
+                surfaces.retain(|_, metadata| registered_ids.contains(&metadata.runtime_id));
+                let orphaned = before - surfaces.len();
+                if orphaned > 0 {
+                    tracing::info!("Released {} orphaned surface(s)", orphaned);
+                }
             }
         }
 

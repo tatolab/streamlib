@@ -227,8 +227,9 @@ impl StreamRuntime {
     #[allow(clippy::only_used_in_recursion)]
     pub fn load_project(&self, project_path: impl AsRef<std::path::Path>) -> Result<()> {
         use crate::core::compiler::compiler_ops::create_deno_subprocess_host_constructor;
-        use crate::core::compiler::compiler_ops::create_python_subprocess_host_constructor;
+        use crate::core::compiler::compiler_ops::create_python_native_subprocess_host_constructor;
         use crate::core::compiler::compiler_ops::ensure_processor_venv;
+        use crate::core::compiler::compiler_ops::resolve_python_native_lib_path;
         use crate::core::config::ProjectConfig;
         use crate::core::descriptors::{PortDescriptor, ProcessorRuntime};
         use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -468,13 +469,19 @@ impl StreamRuntime {
             };
             let execution_config = ExecutionConfig::new(execution);
 
-            // Create constructor based on runtime language
+            // Create constructor based on runtime language.
+            // Python and TypeScript subprocesses both use native FFI for direct
+            // iceoryx2 access — no pipe bridge for data I/O.
             let constructor = match runtime {
-                ProcessorRuntime::Python => create_python_subprocess_host_constructor(
-                    &descriptor,
-                    execution_config,
-                    project_path.to_path_buf(),
-                ),
+                ProcessorRuntime::Python => {
+                    let native_lib_path = resolve_python_native_lib_path()?;
+                    create_python_native_subprocess_host_constructor(
+                        &descriptor,
+                        execution_config,
+                        project_path.to_path_buf(),
+                        native_lib_path,
+                    )
+                }
                 ProcessorRuntime::TypeScript => create_deno_subprocess_host_constructor(
                     &descriptor,
                     execution_config,

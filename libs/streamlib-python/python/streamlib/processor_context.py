@@ -1,20 +1,19 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Subprocess processor context — bridge protocol over stdin/stdout pipes.
+"""Subprocess processor context — native FFI to iceoryx2 + lifecycle protocol.
 
 Provides the `ctx` object passed to Python processor methods:
   - ctx.inputs.read("port_name") -> deserialized msgpack data or None
-  - ctx.outputs.write("port_name", data) -> serializes and sends via bridge
+  - ctx.outputs.write("port_name", data) -> serializes and sends via iceoryx2
   - ctx.time -> monotonic clock (nanoseconds)
   - ctx.config -> processor config dict
 
-All I/O goes through the Rust SubprocessHostProcessor via RPC over pipes.
-No iceoryx2 usage on the Python side.
+Data I/O uses direct FFI to libstreamlib_python_native via ctypes.
+Lifecycle commands (setup/run/stop/teardown) use length-prefixed JSON over pipes.
 
-Protocol:
+Protocol (lifecycle only):
   All messages are length-prefixed: [4 bytes u32 BE length][JSON bytes]
-  Binary data follows JSON headers when data_len > 0.
 """
 
 import json
@@ -25,7 +24,7 @@ import msgpack
 
 
 # ============================================================================
-# Bridge protocol I/O
+# Lifecycle protocol I/O (length-prefixed JSON over stdin/stdout)
 # ============================================================================
 
 
@@ -49,150 +48,312 @@ def bridge_send_message(stdout, msg):
     stdout.flush()
 
 
-def bridge_read_binary(stdin, length):
-    """Read raw binary data of a specific length from stdin."""
-    data = stdin.read(length)
-    if len(data) < length:
-        raise EOFError("stdin closed mid-binary")
-    return data
-
-
-def bridge_send_binary(stdout, data):
-    """Send raw binary data to stdout."""
-    stdout.write(data)
-    stdout.flush()
-
-
 # ============================================================================
-# RPC proxy classes
+# Native FFI library loading
 # ============================================================================
 
 
-class BridgeInputs:
-    """RPC proxy for reading input ports via the Rust bridge."""
+MAX_PAYLOAD_SIZE = 32768
 
-    def __init__(self, stdin, stdout):
-        self._stdin = stdin
-        self._stdout = stdout
+
+def load_native_lib(lib_path):
+    """Load the streamlib-python-native cdylib and configure ctypes signatures."""
+    import ctypes
+
+    lib = ctypes.CDLL(lib_path)
+
+    # Context lifecycle
+    lib.slpn_context_create.argtypes = [ctypes.c_char_p]
+    lib.slpn_context_create.restype = ctypes.c_void_p
+    lib.slpn_context_destroy.argtypes = [ctypes.c_void_p]
+    lib.slpn_context_destroy.restype = None
+    lib.slpn_context_time_ns.argtypes = [ctypes.c_void_p]
+    lib.slpn_context_time_ns.restype = ctypes.c_int64
+
+    # Input
+    lib.slpn_input_subscribe.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_input_subscribe.restype = ctypes.c_int32
+    lib.slpn_input_poll.argtypes = [ctypes.c_void_p]
+    lib.slpn_input_poll.restype = ctypes.c_int32
+    lib.slpn_input_read.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p,
+        ctypes.c_void_p, ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_int64),
+    ]
+    lib.slpn_input_read.restype = ctypes.c_int32
+
+    # Output
+    lib.slpn_output_publish.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_char_p, ctypes.c_char_p,
+    ]
+    lib.slpn_output_publish.restype = ctypes.c_int32
+    lib.slpn_output_write.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p,
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64,
+    ]
+    lib.slpn_output_write.restype = ctypes.c_int32
+
+    # GPU Surface
+    lib.slpn_gpu_surface_lookup.argtypes = [ctypes.c_uint32]
+    lib.slpn_gpu_surface_lookup.restype = ctypes.c_void_p
+    lib.slpn_gpu_surface_lock.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+    lib.slpn_gpu_surface_lock.restype = ctypes.c_int32
+    lib.slpn_gpu_surface_unlock.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+    lib.slpn_gpu_surface_unlock.restype = ctypes.c_int32
+    lib.slpn_gpu_surface_base_address.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_base_address.restype = ctypes.c_void_p
+    lib.slpn_gpu_surface_width.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_width.restype = ctypes.c_uint32
+    lib.slpn_gpu_surface_height.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_height.restype = ctypes.c_uint32
+    lib.slpn_gpu_surface_bytes_per_row.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_bytes_per_row.restype = ctypes.c_uint32
+    lib.slpn_gpu_surface_create.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+    lib.slpn_gpu_surface_create.restype = ctypes.c_void_p
+    lib.slpn_gpu_surface_get_id.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_get_id.restype = ctypes.c_uint32
+    lib.slpn_gpu_surface_release.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_release.restype = None
+    lib.slpn_gpu_surface_iosurface_ref.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_iosurface_ref.restype = ctypes.c_void_p
+
+    # Broker
+    lib.slpn_broker_connect.argtypes = [ctypes.c_char_p]
+    lib.slpn_broker_connect.restype = ctypes.c_void_p
+    lib.slpn_broker_disconnect.argtypes = [ctypes.c_void_p]
+    lib.slpn_broker_disconnect.restype = None
+    lib.slpn_broker_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_broker_resolve_surface.restype = ctypes.c_void_p
+    lib.slpn_broker_acquire_surface.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+        ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
+    ]
+    lib.slpn_broker_acquire_surface.restype = ctypes.c_void_p
+    lib.slpn_broker_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_broker_unregister_surface.restype = None
+
+    return lib
+
+
+# ============================================================================
+# Native FFI context classes
+# ============================================================================
+
+
+class NativeInputs:
+    """Input ports backed by iceoryx2 subscribers via FFI."""
+
+    def __init__(self, lib, ctx_ptr):
+        import ctypes
+
+        self._lib = lib
+        self._ctx_ptr = ctx_ptr
+        self._read_buf = (ctypes.c_uint8 * MAX_PAYLOAD_SIZE)()
+        self._out_len = ctypes.c_uint32(0)
+        self._out_ts = ctypes.c_int64(0)
 
     def read(self, port_name):
-        """Read latest data from a port. Returns deserialized msgpack data or None.
+        """Read latest data from a port. Returns deserialized msgpack data or None."""
+        import ctypes
 
-        Sends a read RPC to Rust, which reads from the real InputMailboxes.
-        """
-        bridge_send_message(self._stdout, {"rpc": "read", "port": port_name})
-        response = bridge_read_message(self._stdin)
-        data_len = response.get("data_len", 0)
-        if data_len == 0:
+        result = self._lib.slpn_input_read(
+            self._ctx_ptr,
+            port_name.encode("utf-8"),
+            ctypes.cast(self._read_buf, ctypes.c_void_p),
+            MAX_PAYLOAD_SIZE,
+            ctypes.byref(self._out_len),
+            ctypes.byref(self._out_ts),
+        )
+        if result != 0 or self._out_len.value == 0:
             return None
-        raw_data = bridge_read_binary(self._stdin, data_len)
-        return msgpack.unpackb(raw_data, raw=False)
+        data_len = self._out_len.value
+        raw = bytes(self._read_buf[:data_len])
+        return msgpack.unpackb(raw, raw=False)
 
     def read_with_timestamp(self, port_name):
         """Read latest data and timestamp. Returns (data, timestamp_ns) or (None, None)."""
-        bridge_send_message(self._stdout, {"rpc": "read", "port": port_name})
-        response = bridge_read_message(self._stdin)
-        data_len = response.get("data_len", 0)
-        if data_len == 0:
+        import ctypes
+
+        result = self._lib.slpn_input_read(
+            self._ctx_ptr,
+            port_name.encode("utf-8"),
+            ctypes.cast(self._read_buf, ctypes.c_void_p),
+            MAX_PAYLOAD_SIZE,
+            ctypes.byref(self._out_len),
+            ctypes.byref(self._out_ts),
+        )
+        if result != 0 or self._out_len.value == 0:
             return None, None
-        timestamp_ns = response.get("ts", 0)
-        raw_data = bridge_read_binary(self._stdin, data_len)
-        return msgpack.unpackb(raw_data, raw=False), timestamp_ns
+        data_len = self._out_len.value
+        raw = bytes(self._read_buf[:data_len])
+        return msgpack.unpackb(raw, raw=False), self._out_ts.value
 
 
-class BridgeOutputs:
-    """RPC proxy for writing output ports via the Rust bridge."""
+class NativeOutputs:
+    """Output ports backed by iceoryx2 publishers via FFI."""
 
-    def __init__(self, stdin, stdout):
-        self._stdin = stdin
-        self._stdout = stdout
+    def __init__(self, lib, ctx_ptr):
+        self._lib = lib
+        self._ctx_ptr = ctx_ptr
 
     def write(self, port_name, data, timestamp_ns=None):
-        """Write data to a port. Serializes via msgpack and sends via bridge.
+        """Write data to a port. Serializes via msgpack and sends via FFI."""
+        import ctypes
 
-        Sends a write RPC to Rust, which writes to the real OutputWriter.
-        """
         if timestamp_ns is None:
-            timestamp_ns = time.monotonic_ns()
+            timestamp_ns = self._lib.slpn_context_time_ns(self._ctx_ptr)
 
         packed = msgpack.packb(data, use_bin_type=True)
+        data_buf = (ctypes.c_uint8 * len(packed))(*packed)
 
-        bridge_send_message(self._stdout, {
-            "rpc": "write",
-            "port": port_name,
-            "ts": timestamp_ns,
-            "data_len": len(packed),
-        })
-        bridge_send_binary(self._stdout, packed)
-
-        # Read acknowledgment from Rust
-        response = bridge_read_message(self._stdin)
-        if not response.get("ok", False):
-            error = response.get("error", "unknown")
-            raise RuntimeError(f"Write to port '{port_name}' failed: {error}")
+        result = self._lib.slpn_output_write(
+            self._ctx_ptr,
+            port_name.encode("utf-8"),
+            ctypes.cast(data_buf, ctypes.c_void_p),
+            len(packed),
+            timestamp_ns,
+        )
+        if result != 0:
+            raise RuntimeError(f"Failed to write to port '{port_name}'")
 
 
-class BridgeGpu:
-    """RPC proxy for GPU surface operations via the Rust bridge."""
+class NativeGpuSurfaceHandle:
+    """GPU surface handle backed by the C-side SurfaceHandle* via FFI.
 
-    def __init__(self, stdin, stdout):
-        self._stdin = stdin
-        self._stdout = stdout
+    Delegates all operations to the cdylib. Does NOT use Python-side
+    IOSurface ctypes — the cdylib owns the surface lifecycle.
+    """
+
+    def __init__(self, lib, handle_ptr):
+        self._lib = lib
+        self._handle_ptr = handle_ptr
+        self.width = lib.slpn_gpu_surface_width(handle_ptr)
+        self.height = lib.slpn_gpu_surface_height(handle_ptr)
+        self.bytes_per_row = lib.slpn_gpu_surface_bytes_per_row(handle_ptr)
+
+    def lock(self, read_only=True):
+        """Lock surface for CPU access."""
+        result = self._lib.slpn_gpu_surface_lock(
+            self._handle_ptr, 1 if read_only else 0
+        )
+        if result != 0:
+            raise RuntimeError("Failed to lock IOSurface")
+
+    def unlock(self, read_only=True):
+        """Unlock surface after CPU access."""
+        self._lib.slpn_gpu_surface_unlock(
+            self._handle_ptr, 1 if read_only else 0
+        )
+
+    def as_numpy(self):
+        """Create numpy array VIEW into locked surface memory (zero-copy)."""
+        import ctypes
+        import numpy as np
+
+        base = self._lib.slpn_gpu_surface_base_address(self._handle_ptr)
+        if not base:
+            raise RuntimeError("IOSurface base address is null (not locked?)")
+        buf = (ctypes.c_uint8 * (self.bytes_per_row * self.height)).from_address(base)
+        return np.ndarray(
+            shape=(self.height, self.width, 4),
+            dtype=np.uint8,
+            buffer=buf,
+            strides=(self.bytes_per_row, 4, 1),
+        )
+
+    @property
+    def iosurface_id(self):
+        """IOSurface ID for this surface."""
+        return self._lib.slpn_gpu_surface_get_id(self._handle_ptr)
+
+    @property
+    def iosurface_ref(self):
+        """Raw IOSurfaceRef pointer for CGL texture binding."""
+        import ctypes
+        ref = self._lib.slpn_gpu_surface_iosurface_ref(self._handle_ptr)
+        return ctypes.c_void_p(ref)
+
+    def release(self):
+        """Release the C-side surface handle."""
+        if self._handle_ptr:
+            self._lib.slpn_gpu_surface_release(self._handle_ptr)
+            self._handle_ptr = None
+
+    def __del__(self):
+        self.release()
+
+
+class NativeGpu:
+    """GPU context for IOSurface access via FFI, with broker XPC resolution."""
+
+    def __init__(self, lib, broker_ptr):
+        self._lib = lib
+        self._broker_ptr = broker_ptr
+        self._prev_acquired_pool_id = None
 
     def resolve_surface(self, surface_id):
-        """Resolve a broker surface_id UUID to a GPU surface handle.
+        """Resolve a broker surface_id UUID to a GPU surface handle."""
+        if self._broker_ptr:
+            handle_ptr = self._lib.slpn_broker_resolve_surface(
+                self._broker_ptr,
+                surface_id.encode("utf-8"),
+            )
+            if not handle_ptr:
+                raise RuntimeError(f"Broker failed to resolve surface: {surface_id}")
+            return NativeGpuSurfaceHandle(self._lib, handle_ptr)
 
-        Returns GpuSurfaceHandle with .lock(), .unlock(), .as_numpy().
-        Raises RuntimeError on unsupported platforms.
-        """
-        from .gpu_surface import GpuSurfaceHandle
-
-        bridge_send_message(self._stdout, {
-            "rpc": "resolve_surface",
-            "surface_id": surface_id,
-        })
-        response = bridge_read_message(self._stdin)
-        if "error" in response:
-            raise RuntimeError(f"resolve_surface failed: {response['error']}")
-        iosurface_id = response["iosurface_id"]
-        return GpuSurfaceHandle(iosurface_id)
+        # Fallback: treat surface_id as numeric IOSurface ID
+        iosurface_id = int(surface_id)
+        handle_ptr = self._lib.slpn_gpu_surface_lookup(iosurface_id)
+        if not handle_ptr:
+            raise RuntimeError(f"IOSurface not found: {surface_id}")
+        return NativeGpuSurfaceHandle(self._lib, handle_ptr)
 
     def acquire_surface(self, width, height, format="bgra"):
-        """Acquire a new pixel buffer from the Rust-managed pool.
+        """Acquire a new pixel buffer via broker."""
+        import ctypes
 
-        Returns (surface_id_for_metadata, GpuSurfaceHandle_for_pixel_access).
-        Raises RuntimeError on unsupported platforms.
-        """
-        from .gpu_surface import GpuSurfaceHandle
+        bytes_per_element = 4  # BGRA
 
-        bridge_send_message(self._stdout, {
-            "rpc": "acquire_surface",
-            "width": width,
-            "height": height,
-            "format": format,
-        })
-        response = bridge_read_message(self._stdin)
-        if "error" in response:
-            raise RuntimeError(f"acquire_surface failed: {response['error']}")
-        broker_uuid = response["surface_id"]
-        iosurface_id = response["iosurface_id"]
-        handle = GpuSurfaceHandle(iosurface_id)
-        return broker_uuid, handle
+        # Unregister previous frame's surface from broker to prevent registry leak
+        if self._broker_ptr and self._prev_acquired_pool_id is not None:
+            self._lib.slpn_broker_unregister_surface(
+                self._broker_ptr,
+                self._prev_acquired_pool_id.encode("utf-8"),
+            )
+
+        if self._broker_ptr:
+            pool_id_buf = (ctypes.c_char * 256)()
+            handle_ptr = self._lib.slpn_broker_acquire_surface(
+                self._broker_ptr,
+                width, height, bytes_per_element,
+                pool_id_buf, 256,
+            )
+            if not handle_ptr:
+                raise RuntimeError(f"Broker failed to acquire surface: {width}x{height}")
+            pool_id = pool_id_buf.value.decode("utf-8")
+            self._prev_acquired_pool_id = pool_id
+            return pool_id, NativeGpuSurfaceHandle(self._lib, handle_ptr)
+
+        # Fallback: create IOSurface without broker
+        handle_ptr = self._lib.slpn_gpu_surface_create(width, height, bytes_per_element)
+        if not handle_ptr:
+            raise RuntimeError(f"Failed to create IOSurface: {width}x{height}")
+        surface_id = self._lib.slpn_gpu_surface_get_id(handle_ptr)
+        return str(surface_id), NativeGpuSurfaceHandle(self._lib, handle_ptr)
 
 
-# ============================================================================
-# Processor context
-# ============================================================================
+class NativeProcessorContext:
+    """Context using direct FFI to iceoryx2."""
 
-
-class SubprocessProcessorContext:
-    """Context object passed to Python subprocess processors."""
-
-    def __init__(self, config, inputs, outputs, gpu):
+    def __init__(self, lib, ctx_ptr, config, broker_ptr=None):
+        self._lib = lib
+        self._ctx_ptr = ctx_ptr
         self._config = config or {}
-        self.inputs = inputs
-        self.outputs = outputs
-        self.gpu = gpu
+        self.inputs = NativeInputs(lib, ctx_ptr)
+        self.outputs = NativeOutputs(lib, ctx_ptr)
+        self.gpu = NativeGpu(lib, broker_ptr)
 
     @property
     def config(self):
@@ -202,4 +363,4 @@ class SubprocessProcessorContext:
     @property
     def time(self):
         """Current monotonic time in nanoseconds."""
-        return time.monotonic_ns()
+        return self._lib.slpn_context_time_ns(self._ctx_ptr)
