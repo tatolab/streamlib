@@ -872,16 +872,24 @@ mod broker_client {
     /// Opaque handle to a broker XPC connection.
     pub struct BrokerHandle {
         connection: XpcConnectionT,
+        runtime_id: String,
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn slpn_broker_connect(
         xpc_service_name: *const c_char,
+        runtime_id: *const c_char,
     ) -> *mut BrokerHandle {
         if xpc_service_name.is_null() {
             eprintln!("[slpn] broker_connect: null service name");
             return std::ptr::null_mut();
         }
+
+        let rid = if runtime_id.is_null() {
+            "python-subprocess".to_string()
+        } else {
+            CStr::from_ptr(runtime_id).to_string_lossy().into_owned()
+        };
 
         let connection =
             xpc_connection_create_mach_service(xpc_service_name, std::ptr::null_mut(), 0);
@@ -916,9 +924,15 @@ mod broker_client {
         xpc_connection_resume(connection);
 
         let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
-        eprintln!("[slpn] broker_connect: connected to '{}'", name);
+        eprintln!(
+            "[slpn] broker_connect: connected to '{}' with runtime_id='{}'",
+            name, rid
+        );
 
-        Box::into_raw(Box::new(BrokerHandle { connection }))
+        Box::into_raw(Box::new(BrokerHandle {
+            connection,
+            runtime_id: rid,
+        }))
     }
 
     #[no_mangle]
@@ -1101,7 +1115,7 @@ mod broker_client {
         xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
 
         let rid_key = CString::new("runtime_id").unwrap();
-        let rid_value = CString::new("python-subprocess").unwrap();
+        let rid_value = CString::new(broker.runtime_id.as_str()).unwrap();
         xpc_dictionary_set_string(request, rid_key.as_ptr(), rid_value.as_ptr());
 
         let port_key = CString::new("mach_port").unwrap();
@@ -1177,7 +1191,7 @@ mod broker_client {
         xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
 
         let rid_key = CString::new("runtime_id").unwrap();
-        let rid_value = CString::new("python-subprocess").unwrap();
+        let rid_value = CString::new(broker.runtime_id.as_str()).unwrap();
         xpc_dictionary_set_string(request, rid_key.as_ptr(), rid_value.as_ptr());
 
         // Fire and forget — broker unregister doesn't send a reply
@@ -1198,7 +1212,10 @@ mod broker_client {
     use std::ffi::{c_char, c_void};
 
     #[no_mangle]
-    pub unsafe extern "C" fn slpn_broker_connect(_xpc_service_name: *const c_char) -> *mut c_void {
+    pub unsafe extern "C" fn slpn_broker_connect(
+        _xpc_service_name: *const c_char,
+        _runtime_id: *const c_char,
+    ) -> *mut c_void {
         eprintln!("[slpn] Broker operations not supported on this platform");
         std::ptr::null_mut()
     }

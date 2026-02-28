@@ -281,6 +281,27 @@ impl BrokerState {
         let mut pruned = Vec::new();
         let mut pruned_ids = Vec::new();
 
+        // Log current state before pruning
+        {
+            let runtimes = self.inner.runtimes.read();
+            let surface_count = self.inner.surfaces.read().len();
+            tracing::debug!(
+                "[Broker] prune_dead_runtimes: {} registered runtime(s), {} surface(s)",
+                runtimes.len(),
+                surface_count
+            );
+            for (id, meta) in runtimes.iter() {
+                let alive = is_process_alive(meta.pid);
+                tracing::debug!(
+                    "[Broker]   runtime '{}' (name='{}', pid={}, alive={})",
+                    id,
+                    meta.name,
+                    meta.pid,
+                    alive
+                );
+            }
+        }
+
         {
             let mut runtimes = self.inner.runtimes.write();
             runtimes.retain(|_id, metadata| {
@@ -316,13 +337,34 @@ impl BrokerState {
         {
             let registered_ids: std::collections::HashSet<String> =
                 self.inner.runtimes.read().keys().cloned().collect();
+            tracing::debug!(
+                "[Broker] orphan cleanup: registered_ids = {:?}",
+                registered_ids
+            );
             if !registered_ids.is_empty() {
                 let mut surfaces = self.inner.surfaces.write();
                 let before = surfaces.len();
+                // Log runtime_ids of surfaces about to be checked
+                let mut runtime_id_counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for (_, metadata) in surfaces.iter() {
+                    *runtime_id_counts
+                        .entry(metadata.runtime_id.clone())
+                        .or_insert(0) += 1;
+                }
+                tracing::debug!(
+                    "[Broker] orphan cleanup: surface runtime_id distribution: {:?}",
+                    runtime_id_counts
+                );
                 surfaces.retain(|_, metadata| registered_ids.contains(&metadata.runtime_id));
                 let orphaned = before - surfaces.len();
                 if orphaned > 0 {
-                    tracing::info!("Released {} orphaned surface(s)", orphaned);
+                    tracing::info!(
+                        "[Broker] Released {} orphaned surface(s) (before={}, after={})",
+                        orphaned,
+                        before,
+                        surfaces.len()
+                    );
                 }
             }
         }

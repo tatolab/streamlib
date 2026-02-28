@@ -244,9 +244,9 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
             .unwrap_or_else(generate_runtime_name);
         self.resolved_name = Some(runtime_name.clone());
 
-        // Get runtime ID from env (set by CLI) or generate one
-        let runtime_id = std::env::var("STREAMLIB_RUNTIME_ID")
-            .unwrap_or_else(|_| format!("R{}", cuid2::create_id()));
+        // Use the runtime's own ID so that gRPC registration matches
+        // the runtime_id used by SurfaceStore for XPC surface registration.
+        let runtime_id = ctx.runtime_id().to_string();
         self.runtime_id = Some(runtime_id.clone());
 
         // Resolve log path (from config or derive from name)

@@ -95,6 +95,10 @@ if sys.platform == "darwin":
     _gl_lib.glFlush.argtypes = []
     _gl_lib.glFlush.restype = None
 
+    # glFinish() — blocks until all GL commands complete on GPU
+    _gl_lib.glFinish.argtypes = []
+    _gl_lib.glFinish.restype = None
+
     # =========================================================================
     # Public API
     # =========================================================================
@@ -163,8 +167,13 @@ if sys.platform == "darwin":
             raise RuntimeError(f"CGLTexImageIOSurface2D failed with error {err}")
 
     def flush():
-        """Flush all pending GL commands."""
-        _gl_lib.glFlush()
+        """Flush and wait for all pending GL commands to complete.
+
+        Uses glFinish() to ensure IOSurface content is fully rendered before
+        the frame is sent via IPC. Required because pooled surfaces are reused
+        and consumers may read them immediately on cache hit.
+        """
+        _gl_lib.glFinish()
 
     def destroy_cgl_context(cgl_ctx):
         """Destroy a CGL context."""

@@ -351,7 +351,12 @@ unsafe fn handle_lookup(context: &HandlerContext, message: xpc_object_t) {
             xpc_dictionary_set_mach_send(reply, port_key.as_ptr(), port);
         }
         None => {
-            tracing::warn!("[Broker] XPC lookup: surface '{}' not found", surface_id);
+            let surface_count = context.state.surface_count();
+            tracing::warn!(
+                "[Broker] XPC lookup: surface '{}' not found (broker has {} surface(s))",
+                surface_id,
+                surface_count
+            );
             let error_key = CString::new("error").unwrap();
             let error_value = CString::new("surface not found").unwrap();
             xpc_dictionary_set_string(reply, error_key.as_ptr(), error_value.as_ptr());

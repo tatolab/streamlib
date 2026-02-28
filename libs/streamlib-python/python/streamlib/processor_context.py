@@ -119,7 +119,7 @@ def load_native_lib(lib_path):
     lib.slpn_gpu_surface_iosurface_ref.restype = ctypes.c_void_p
 
     # Broker
-    lib.slpn_broker_connect.argtypes = [ctypes.c_char_p]
+    lib.slpn_broker_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     lib.slpn_broker_connect.restype = ctypes.c_void_p
     lib.slpn_broker_disconnect.argtypes = [ctypes.c_void_p]
     lib.slpn_broker_disconnect.restype = None

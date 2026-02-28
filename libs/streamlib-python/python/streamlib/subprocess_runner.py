@@ -97,11 +97,15 @@ def _setup_native_context(msg, native_lib_path, processor_id):
     # Connect to broker for surface resolution (if XPC service name is set)
     broker_ptr = None
     xpc_service_name = os.environ.get("STREAMLIB_XPC_SERVICE_NAME", "")
+    runtime_id = os.environ.get("STREAMLIB_RUNTIME_ID", "")
     if xpc_service_name:
-        broker_ptr = lib.slpn_broker_connect(xpc_service_name.encode("utf-8"))
+        runtime_id_arg = runtime_id.encode("utf-8") if runtime_id else None
+        broker_ptr = lib.slpn_broker_connect(
+            xpc_service_name.encode("utf-8"), runtime_id_arg
+        )
         if broker_ptr:
             print(
-                f"[streamlib:{processor_id}] Connected to broker '{xpc_service_name}'",
+                f"[streamlib:{processor_id}] Connected to broker '{xpc_service_name}' with runtime_id='{runtime_id}'",
                 file=sys.stderr,
             )
         else:
