@@ -16,6 +16,9 @@ const POOL_PRE_ALLOCATE_COUNT: usize = 24;
 /// Maximum number of buffers per pool (expansion limit).
 const POOL_MAX_BUFFER_COUNT: usize = 64;
 
+/// Maximum number of entries in the buffer_cache before eviction.
+const MAX_BUFFER_CACHE_SIZE: usize = 512;
+
 /// No-op blitter for non-macOS platforms.
 #[cfg(not(target_os = "macos"))]
 struct NoOpBlitter;
@@ -316,10 +319,16 @@ impl PixelBufferPoolManager {
 
     /// Add a buffer to the local cache.
     fn cache_buffer(&self, pool_id: &str, buffer: RhiPixelBuffer) {
-        self.buffer_cache
-            .lock()
-            .unwrap()
-            .insert(pool_id.to_string(), buffer);
+        let mut cache = self.buffer_cache.lock().unwrap();
+        cache.insert(pool_id.to_string(), buffer);
+        if cache.len() > MAX_BUFFER_CACHE_SIZE {
+            tracing::warn!(
+                "PixelBufferPoolManager: buffer_cache exceeded {} entries ({}), clearing",
+                MAX_BUFFER_CACHE_SIZE,
+                cache.len()
+            );
+            cache.clear();
+        }
     }
 }
 

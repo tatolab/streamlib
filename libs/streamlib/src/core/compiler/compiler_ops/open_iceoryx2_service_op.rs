@@ -19,6 +19,7 @@ use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
 use crate::core::ProcessorUniqueId;
 
 use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
+use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
 
 /// Check if a processor is a subprocess (Python, TypeScript, etc.)
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
@@ -33,22 +34,45 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
         return true;
     }
 
-    // Check if TypeScript runtime (Deno FFI manages own iceoryx2)
+    // Check if TypeScript or Python-native runtime (FFI manages own iceoryx2)
     let proc_type = graph
         .traversal_mut()
         .v(proc_id)
         .first()
         .map(|n| n.processor_type().to_string())
         .unwrap_or_default();
-    PROCESSOR_REGISTRY
-        .descriptor(&proc_type)
-        .map(|d| {
-            matches!(
-                d.runtime,
-                crate::core::descriptors::ProcessorRuntime::TypeScript
-            )
+
+    // Check runtime type from descriptor
+    if let Some(descriptor) = PROCESSOR_REGISTRY.descriptor(&proc_type) {
+        if matches!(
+            descriptor.runtime,
+            crate::core::descriptors::ProcessorRuntime::TypeScript
+        ) {
+            return true;
+        }
+    }
+
+    // Check if this is a Python native host (by downcasting the processor instance)
+    if let Some(proc_arc) = graph
+        .traversal_mut()
+        .v(proc_id)
+        .first_mut()
+        .and_then(|node| {
+            node.get::<ProcessorInstanceComponent>()
+                .map(|i| i.0.clone())
         })
-        .unwrap_or(false)
+    {
+        let mut guard = proc_arc.lock();
+        if guard
+            .as_any_mut()
+            .downcast_mut::<PythonNativeSubprocessHostProcessor>()
+            .is_some()
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Open an iceoryx2 service for a connection in the graph.
@@ -362,6 +386,18 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 "dest_service_name": service_name,
                 "schema_name": output_schema,
             }));
+        } else if let Some(python_native_host) = source_guard
+            .as_any_mut()
+            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
+        ) {
+            python_native_host
+                .output_port_wiring
+                .push(serde_json::json!({
+                    "name": source_port,
+                    "dest_port": dest_port,
+                    "dest_service_name": service_name,
+                    "schema_name": output_schema,
+                }));
         }
     }
 
@@ -376,7 +412,19 @@ fn open_iceoryx2_subprocess_to_subprocess(
             deno_host.input_port_wiring.push(serde_json::json!({
                 "name": dest_port,
                 "service_name": service_name,
+                "read_mode": "skip_to_latest",
             }));
+        } else if let Some(python_native_host) = dest_guard
+            .as_any_mut()
+            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
+        ) {
+            python_native_host
+                .input_port_wiring
+                .push(serde_json::json!({
+                    "name": dest_port,
+                    "service_name": service_name,
+                    "read_mode": "skip_to_latest",
+                }));
         }
     }
 
@@ -457,6 +505,22 @@ fn open_iceoryx2_subprocess_to_rust(
             }));
             tracing::debug!(
                 "Stored output wiring on Deno processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
+                source_proc_id, source_port, dest_port, service_name, output_schema
+            );
+        } else if let Some(python_native_host) = source_guard
+            .as_any_mut()
+            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
+        ) {
+            python_native_host
+                .output_port_wiring
+                .push(serde_json::json!({
+                    "name": source_port,
+                    "dest_port": dest_port,
+                    "dest_service_name": service_name,
+                    "schema_name": output_schema,
+                }));
+            tracing::debug!(
+                "Stored output wiring on Python native processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
                 source_proc_id, source_port, dest_port, service_name, output_schema
             );
         }
@@ -568,9 +632,27 @@ fn open_iceoryx2_rust_to_subprocess(
             deno_host.input_port_wiring.push(serde_json::json!({
                 "name": dest_port,
                 "service_name": service_name,
+                "read_mode": "skip_to_latest",
             }));
             tracing::debug!(
                 "Stored input wiring on Deno processor '{}': port='{}', service='{}'",
+                dest_proc_id,
+                dest_port,
+                service_name
+            );
+        } else if let Some(python_native_host) = dest_guard
+            .as_any_mut()
+            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
+        ) {
+            python_native_host
+                .input_port_wiring
+                .push(serde_json::json!({
+                    "name": dest_port,
+                    "service_name": service_name,
+                    "read_mode": "skip_to_latest",
+                }));
+            tracing::debug!(
+                "Stored input wiring on Python native processor '{}': port='{}', service='{}'",
                 dest_proc_id,
                 dest_port,
                 service_name

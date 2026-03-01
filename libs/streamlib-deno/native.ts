@@ -36,6 +36,10 @@ const symbols = {
     parameters: ["pointer", "buffer", "pointer", "u32", "pointer", "pointer"] as const,
     result: "i32" as const,
   },
+  sldn_input_set_read_mode: {
+    parameters: ["pointer", "buffer", "i32"] as const,
+    result: "i32" as const,
+  },
 
   // Output
   sldn_output_publish: {

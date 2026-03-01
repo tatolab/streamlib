@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// FFI cdylib — all public functions are unsafe extern "C" called from Deno via dlopen.
+// FFI cdylib — all public functions are unsafe extern "C" called from Python via ctypes.
 #![allow(clippy::missing_safety_doc)]
 
-//! FFI cdylib for Deno subprocess processors to access iceoryx2 directly.
+//! FFI cdylib for Python subprocess processors to access iceoryx2 directly.
 //!
-//! Provides C ABI functions prefixed with `sldn_` that Deno loads via `Deno.dlopen()`.
-//! This allows TypeScript processors to read/write iceoryx2 shared memory without
+//! Provides C ABI functions prefixed with `slpn_` that Python loads via `ctypes.CDLL()`.
+//! This allows Python processors to read/write iceoryx2 shared memory without
 //! going through Rust host pipes (zero-copy data plane).
 
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ const READ_MODE_SKIP_TO_LATEST: i32 = 0;
 const READ_MODE_READ_NEXT_IN_ORDER: i32 = 1;
 
 /// Per-processor native context holding iceoryx2 node and port state.
-pub struct DenoNativeContext {
+pub struct PythonNativeContext {
     processor_id: String,
     node: Node<ipc::Service>,
     subscribers: HashMap<String, SubscriberState>,
@@ -49,7 +49,7 @@ struct PublisherState {
     dest_port: String,
 }
 
-impl DenoNativeContext {
+impl PythonNativeContext {
     fn new(processor_id: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let node = NodeBuilder::new().create::<ipc::Service>()?;
         Ok(Self {
@@ -66,23 +66,23 @@ impl DenoNativeContext {
 // C ABI — Context lifecycle
 // ============================================================================
 
-/// Create a new native context for a Deno processor.
+/// Create a new native context for a Python processor.
 ///
-/// Returns an opaque pointer. Caller must call `sldn_context_destroy` when done.
+/// Returns an opaque pointer. Caller must call `slpn_context_destroy` when done.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_context_create(
+pub unsafe extern "C" fn slpn_context_create(
     processor_id: *const c_char,
-) -> *mut DenoNativeContext {
+) -> *mut PythonNativeContext {
     let id = if processor_id.is_null() {
         "unknown"
     } else {
         CStr::from_ptr(processor_id).to_str().unwrap_or("unknown")
     };
 
-    match DenoNativeContext::new(id) {
+    match PythonNativeContext::new(id) {
         Ok(ctx) => Box::into_raw(Box::new(ctx)),
         Err(e) => {
-            eprintln!("[sldn] Failed to create context: {}", e);
+            eprintln!("[slpn] Failed to create context: {}", e);
             std::ptr::null_mut()
         }
     }
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn sldn_context_create(
 
 /// Destroy a native context, releasing all iceoryx2 resources.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_context_destroy(ctx: *mut DenoNativeContext) {
+pub unsafe extern "C" fn slpn_context_destroy(ctx: *mut PythonNativeContext) {
     if !ctx.is_null() {
         let _ = Box::from_raw(ctx);
     }
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn sldn_context_destroy(ctx: *mut DenoNativeContext) {
 
 /// Get current monotonic time in nanoseconds.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_context_time_ns(_ctx: *const DenoNativeContext) -> i64 {
+pub unsafe extern "C" fn slpn_context_time_ns(_ctx: *const PythonNativeContext) -> i64 {
     let duration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
@@ -113,8 +113,8 @@ pub unsafe extern "C" fn sldn_context_time_ns(_ctx: *const DenoNativeContext) ->
 ///
 /// Returns 0 on success, -1 on failure.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_input_subscribe(
-    ctx: *mut DenoNativeContext,
+pub unsafe extern "C" fn slpn_input_subscribe(
+    ctx: *mut PythonNativeContext,
     service_name: *const c_char,
 ) -> i32 {
     let ctx = match ctx.as_mut() {
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         Ok(n) => n,
         Err(e) => {
             eprintln!(
-                "[sldn:{}] Invalid service name '{}': {}",
+                "[slpn:{}] Invalid service name '{}': {}",
                 ctx.processor_id, service_name, e
             );
             return -1;
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "[sldn:{}] Failed to open service '{}': {}",
+                "[slpn:{}] Failed to open service '{}': {}",
                 ctx.processor_id, service_name, e
             );
             return -1;
@@ -159,7 +159,7 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "[sldn:{}] Failed to create subscriber for '{}': {}",
+                "[slpn:{}] Failed to create subscriber for '{}': {}",
                 ctx.processor_id, service_name, e
             );
             return -1;
@@ -184,8 +184,8 @@ pub unsafe extern "C" fn sldn_input_subscribe(
 ///
 /// Returns 0 on success, -1 on error.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_input_set_read_mode(
-    ctx: *mut DenoNativeContext,
+pub unsafe extern "C" fn slpn_input_set_read_mode(
+    ctx: *mut PythonNativeContext,
     port_name: *const c_char,
     mode: i32,
 ) -> i32 {
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn sldn_input_set_read_mode(
 ///
 /// Returns 1 if any data was received, 0 if none, -1 on error.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_input_poll(ctx: *mut DenoNativeContext) -> i32 {
+pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
     let ctx = match ctx.as_mut() {
         Some(c) => c,
         None => return -1,
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn sldn_input_poll(ctx: *mut DenoNativeContext) -> i32 {
 
 /// Read data from a specific port.
 ///
-/// Uses the port's read mode (set via `sldn_input_set_read_mode`):
+/// Uses the port's read mode (set via `slpn_input_set_read_mode`):
 /// - SkipToLatest (default): Drains buffer, returns only the newest payload.
 /// - ReadNextInOrder: Returns oldest payload in FIFO order.
 ///
@@ -244,8 +244,8 @@ pub unsafe extern "C" fn sldn_input_poll(ctx: *mut DenoNativeContext) -> i32 {
 /// `out_len` receives the actual data length.
 /// `out_ts` receives the timestamp in nanoseconds.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_input_read(
-    ctx: *mut DenoNativeContext,
+pub unsafe extern "C" fn slpn_input_read(
+    ctx: *mut PythonNativeContext,
     port_name: *const c_char,
     out_buf: *mut u8,
     buf_len: u32,
@@ -315,8 +315,8 @@ pub unsafe extern "C" fn sldn_input_read(
 /// `dest_port` is the destination processor's input port name, used in FramePayload routing.
 /// Returns 0 on success, -1 on failure.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_output_publish(
-    ctx: *mut DenoNativeContext,
+pub unsafe extern "C" fn slpn_output_publish(
+    ctx: *mut PythonNativeContext,
     service_name: *const c_char,
     port_name: *const c_char,
     dest_port: *const c_char,
@@ -347,7 +347,7 @@ pub unsafe extern "C" fn sldn_output_publish(
         Ok(n) => n,
         Err(e) => {
             eprintln!(
-                "[sldn:{}] Invalid service name '{}': {}",
+                "[slpn:{}] Invalid service name '{}': {}",
                 ctx.processor_id, service_name, e
             );
             return -1;
@@ -365,7 +365,7 @@ pub unsafe extern "C" fn sldn_output_publish(
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "[sldn:{}] Failed to open service '{}': {}",
+                "[slpn:{}] Failed to open service '{}': {}",
                 ctx.processor_id, service_name, e
             );
             return -1;
@@ -376,7 +376,7 @@ pub unsafe extern "C" fn sldn_output_publish(
         Ok(p) => p,
         Err(e) => {
             eprintln!(
-                "[sldn:{}] Failed to create publisher for '{}': {}",
+                "[slpn:{}] Failed to create publisher for '{}': {}",
                 ctx.processor_id, service_name, e
             );
             return -1;
@@ -399,8 +399,8 @@ pub unsafe extern "C" fn sldn_output_publish(
 ///
 /// Returns 0 on success, -1 on failure.
 #[no_mangle]
-pub unsafe extern "C" fn sldn_output_write(
-    ctx: *mut DenoNativeContext,
+pub unsafe extern "C" fn slpn_output_write(
+    ctx: *mut PythonNativeContext,
     port_name: *const c_char,
     data: *const u8,
     data_len: u32,
@@ -419,7 +419,7 @@ pub unsafe extern "C" fn sldn_output_write(
         Some(s) => s,
         None => {
             eprintln!(
-                "[sldn:{}] No publisher for port '{}'",
+                "[slpn:{}] No publisher for port '{}'",
                 ctx.processor_id, port_name
             );
             return -1;
@@ -436,7 +436,7 @@ pub unsafe extern "C" fn sldn_output_write(
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "[sldn:{}] Failed to loan sample for port '{}': {}",
+                "[slpn:{}] Failed to loan sample for port '{}': {}",
                 ctx.processor_id, port_name, e
             );
             return -1;
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn sldn_output_write(
 
     if let Err(e) = sample.send() {
         eprintln!(
-            "[sldn:{}] Failed to send sample for port '{}': {}",
+            "[slpn:{}] Failed to send sample for port '{}': {}",
             ctx.processor_id, port_name, e
         );
         return -1;
@@ -552,10 +552,10 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_lookup(iosurface_id: u32) -> *mut SurfaceHandle {
+    pub unsafe extern "C" fn slpn_gpu_surface_lookup(iosurface_id: u32) -> *mut SurfaceHandle {
         let surface_ref = IOSurfaceLookup(iosurface_id);
         if surface_ref.is_null() {
-            eprintln!("[sldn] IOSurface not found: {}", iosurface_id);
+            eprintln!("[slpn] IOSurface not found: {}", iosurface_id);
             return std::ptr::null_mut();
         }
 
@@ -575,7 +575,7 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_lock(
+    pub unsafe extern "C" fn slpn_gpu_surface_lock(
         handle: *mut SurfaceHandle,
         read_only: i32,
     ) -> i32 {
@@ -593,7 +593,7 @@ mod gpu_surface {
         let result = IOSurfaceLock(handle.surface_ref, options, std::ptr::null_mut());
         if result != 0 {
             eprintln!(
-                "[sldn] IOSurface lock failed: surface={}, result={}",
+                "[slpn] IOSurface lock failed: surface={}, result={}",
                 handle.surface_id, result
             );
             return -1;
@@ -605,7 +605,7 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_unlock(
+    pub unsafe extern "C" fn slpn_gpu_surface_unlock(
         handle: *mut SurfaceHandle,
         read_only: i32,
     ) -> i32 {
@@ -632,7 +632,7 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_base_address(
+    pub unsafe extern "C" fn slpn_gpu_surface_base_address(
         handle: *const SurfaceHandle,
     ) -> *mut u8 {
         match handle.as_ref() {
@@ -642,22 +642,33 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_width(handle: *const SurfaceHandle) -> u32 {
+    pub unsafe extern "C" fn slpn_gpu_surface_width(handle: *const SurfaceHandle) -> u32 {
         handle.as_ref().map(|h| h.width).unwrap_or(0)
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_height(handle: *const SurfaceHandle) -> u32 {
+    pub unsafe extern "C" fn slpn_gpu_surface_height(handle: *const SurfaceHandle) -> u32 {
         handle.as_ref().map(|h| h.height).unwrap_or(0)
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_bytes_per_row(handle: *const SurfaceHandle) -> u32 {
+    pub unsafe extern "C" fn slpn_gpu_surface_bytes_per_row(handle: *const SurfaceHandle) -> u32 {
         handle.as_ref().map(|h| h.bytes_per_row).unwrap_or(0)
     }
 
+    /// Get the raw IOSurfaceRef pointer for CGL texture binding.
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_create(
+    pub unsafe extern "C" fn slpn_gpu_surface_iosurface_ref(
+        handle: *const SurfaceHandle,
+    ) -> *const std::ffi::c_void {
+        match handle.as_ref() {
+            Some(h) => h.surface_ref,
+            None => std::ptr::null(),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn slpn_gpu_surface_create(
         width: u32,
         height: u32,
         bytes_per_element: u32,
@@ -715,7 +726,7 @@ mod gpu_surface {
 
         if surface_ref.is_null() {
             eprintln!(
-                "[sldn] IOSurfaceCreate failed: {}x{} bpe={}",
+                "[slpn] IOSurfaceCreate failed: {}x{} bpe={}",
                 width, height, bytes_per_element
             );
             return std::ptr::null_mut();
@@ -737,15 +748,16 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_get_id(handle: *const SurfaceHandle) -> u32 {
+    pub unsafe extern "C" fn slpn_gpu_surface_get_id(handle: *const SurfaceHandle) -> u32 {
         handle.as_ref().map(|h| h.surface_id).unwrap_or(0)
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_release(handle: *mut SurfaceHandle) {
+    pub unsafe extern "C" fn slpn_gpu_surface_release(handle: *mut SurfaceHandle) {
         if !handle.is_null() {
             let h = Box::from_raw(handle);
             IOSurfaceDecrementUseCount(h.surface_ref);
+            CFRelease(h.surface_ref);
         }
     }
 }
@@ -753,13 +765,13 @@ mod gpu_surface {
 #[cfg(not(target_os = "macos"))]
 mod gpu_surface {
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_lookup(_iosurface_id: u32) -> *mut std::ffi::c_void {
-        eprintln!("[sldn] GPU surface operations not supported on this platform");
+    pub unsafe extern "C" fn slpn_gpu_surface_lookup(_iosurface_id: u32) -> *mut std::ffi::c_void {
+        eprintln!("[slpn] GPU surface operations not supported on this platform");
         std::ptr::null_mut()
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_lock(
+    pub unsafe extern "C" fn slpn_gpu_surface_lock(
         _handle: *mut std::ffi::c_void,
         _read_only: i32,
     ) -> i32 {
@@ -767,7 +779,7 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_unlock(
+    pub unsafe extern "C" fn slpn_gpu_surface_unlock(
         _handle: *mut std::ffi::c_void,
         _read_only: i32,
     ) -> i32 {
@@ -775,46 +787,53 @@ mod gpu_surface {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_base_address(
+    pub unsafe extern "C" fn slpn_gpu_surface_base_address(
         _handle: *const std::ffi::c_void,
     ) -> *mut u8 {
         std::ptr::null_mut()
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_width(_handle: *const std::ffi::c_void) -> u32 {
+    pub unsafe extern "C" fn slpn_gpu_surface_width(_handle: *const std::ffi::c_void) -> u32 {
         0
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_height(_handle: *const std::ffi::c_void) -> u32 {
+    pub unsafe extern "C" fn slpn_gpu_surface_height(_handle: *const std::ffi::c_void) -> u32 {
         0
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_bytes_per_row(
+    pub unsafe extern "C" fn slpn_gpu_surface_bytes_per_row(
         _handle: *const std::ffi::c_void,
     ) -> u32 {
         0
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_create(
+    pub unsafe extern "C" fn slpn_gpu_surface_create(
         _width: u32,
         _height: u32,
         _bytes_per_element: u32,
     ) -> *mut std::ffi::c_void {
-        eprintln!("[sldn] GPU surface creation not supported on this platform");
+        eprintln!("[slpn] GPU surface creation not supported on this platform");
         std::ptr::null_mut()
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_get_id(_handle: *const std::ffi::c_void) -> u32 {
+    pub unsafe extern "C" fn slpn_gpu_surface_get_id(_handle: *const std::ffi::c_void) -> u32 {
         0
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_gpu_surface_release(_handle: *mut std::ffi::c_void) {}
+    pub unsafe extern "C" fn slpn_gpu_surface_iosurface_ref(
+        _handle: *const std::ffi::c_void,
+    ) -> *const std::ffi::c_void {
+        std::ptr::null()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn slpn_gpu_surface_release(_handle: *mut std::ffi::c_void) {}
 }
 
 // ============================================================================
@@ -844,6 +863,7 @@ mod broker_client {
         fn xpc_connection_set_event_handler(connection: XpcConnectionT, handler: *mut c_void);
         fn xpc_connection_resume(connection: XpcConnectionT);
         fn xpc_connection_cancel(connection: XpcConnectionT);
+        fn xpc_connection_send_message(connection: XpcConnectionT, message: XpcObjectT);
         fn xpc_connection_send_message_with_reply_sync(
             connection: XpcConnectionT,
             message: XpcObjectT,
@@ -926,17 +946,25 @@ mod broker_client {
     /// Opaque handle to a broker XPC connection.
     pub struct BrokerHandle {
         connection: XpcConnectionT,
+        runtime_id: String,
         resolve_cache: HashMap<String, CachedSurface>,
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_connect(
+    pub unsafe extern "C" fn slpn_broker_connect(
         xpc_service_name: *const c_char,
+        runtime_id: *const c_char,
     ) -> *mut BrokerHandle {
         if xpc_service_name.is_null() {
-            eprintln!("[sldn] broker_connect: null service name");
+            eprintln!("[slpn] broker_connect: null service name");
             return std::ptr::null_mut();
         }
+
+        let rid = if runtime_id.is_null() {
+            "python-subprocess".to_string()
+        } else {
+            CStr::from_ptr(runtime_id).to_string_lossy().into_owned()
+        };
 
         let connection =
             xpc_connection_create_mach_service(xpc_service_name, std::ptr::null_mut(), 0);
@@ -944,7 +972,7 @@ mod broker_client {
         if connection.is_null() {
             let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
             eprintln!(
-                "[sldn] broker_connect: failed to create XPC connection to '{}'",
+                "[slpn] broker_connect: failed to create XPC connection to '{}'",
                 name
             );
             return std::ptr::null_mut();
@@ -971,16 +999,20 @@ mod broker_client {
         xpc_connection_resume(connection);
 
         let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
-        eprintln!("[sldn] broker_connect: connected to '{}'", name);
+        eprintln!(
+            "[slpn] broker_connect: connected to '{}' with runtime_id='{}'",
+            name, rid
+        );
 
         Box::into_raw(Box::new(BrokerHandle {
             connection,
+            runtime_id: rid,
             resolve_cache: HashMap::new(),
         }))
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_disconnect(broker: *mut BrokerHandle) {
+    pub unsafe extern "C" fn slpn_broker_disconnect(broker: *mut BrokerHandle) {
         if !broker.is_null() {
             let handle = Box::from_raw(broker);
             for cached in handle.resolve_cache.values() {
@@ -992,18 +1024,15 @@ mod broker_client {
     }
 
     /// Resolve a broker pool_id to an IOSurface handle via XPC lookup.
-    ///
-    /// Returns a SurfaceHandle pointer (same type as sldn_gpu_surface_lookup).
-    /// Results are cached — repeated lookups for the same pool_id are fast.
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_resolve_surface(
+    pub unsafe extern "C" fn slpn_broker_resolve_surface(
         broker: *mut BrokerHandle,
         pool_id: *const c_char,
     ) -> *mut SurfaceHandle {
         let broker = match broker.as_mut() {
             Some(b) => b,
             None => {
-                eprintln!("[sldn] broker_resolve_surface: null broker handle");
+                eprintln!("[slpn] broker_resolve_surface: null broker handle");
                 return std::ptr::null_mut();
             }
         };
@@ -1011,7 +1040,7 @@ mod broker_client {
         let pool_id_str = match c_str_to_str(pool_id) {
             Some(s) => s,
             None => {
-                eprintln!("[sldn] broker_resolve_surface: null pool_id");
+                eprintln!("[slpn] broker_resolve_surface: null pool_id");
                 return std::ptr::null_mut();
             }
         };
@@ -1034,7 +1063,7 @@ mod broker_client {
         // Cache miss — XPC lookup to broker
         let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
         if request.is_null() {
-            eprintln!("[sldn] broker_resolve_surface: failed to create XPC request");
+            eprintln!("[slpn] broker_resolve_surface: failed to create XPC request");
             return std::ptr::null_mut();
         }
 
@@ -1054,7 +1083,7 @@ mod broker_client {
                 xpc_release(reply);
             }
             eprintln!(
-                "[sldn] broker_resolve_surface: XPC lookup failed for '{}'",
+                "[slpn] broker_resolve_surface: XPC lookup failed for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1066,7 +1095,7 @@ mod broker_client {
         if !error_ptr.is_null() {
             let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
             eprintln!(
-                "[sldn] broker_resolve_surface: broker error for '{}': {}",
+                "[slpn] broker_resolve_surface: broker error for '{}': {}",
                 pool_id_str, error_msg
             );
             xpc_release(reply);
@@ -1080,7 +1109,7 @@ mod broker_client {
 
         if mach_port == 0 {
             eprintln!(
-                "[sldn] broker_resolve_surface: invalid mach port for '{}'",
+                "[slpn] broker_resolve_surface: invalid mach port for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1095,7 +1124,7 @@ mod broker_client {
 
         if surface_ref.is_null() {
             eprintln!(
-                "[sldn] broker_resolve_surface: IOSurfaceLookupFromMachPort failed for '{}'",
+                "[slpn] broker_resolve_surface: IOSurfaceLookupFromMachPort failed for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1144,13 +1173,8 @@ mod broker_client {
     }
 
     /// Create a new IOSurface, register it with the broker, and return a handle.
-    ///
-    /// `out_pool_id` receives the broker-assigned pool UUID as a null-terminated C string.
-    /// `pool_id_buf_len` is the size of the out_pool_id buffer.
-    ///
-    /// Returns a SurfaceHandle pointer, or null on failure.
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_acquire_surface(
+    pub unsafe extern "C" fn slpn_broker_acquire_surface(
         broker: *mut BrokerHandle,
         width: u32,
         height: u32,
@@ -1161,14 +1185,14 @@ mod broker_client {
         let broker = match broker.as_mut() {
             Some(b) => b,
             None => {
-                eprintln!("[sldn] broker_acquire_surface: null broker handle");
+                eprintln!("[slpn] broker_acquire_surface: null broker handle");
                 return std::ptr::null_mut();
             }
         };
 
         // Create the IOSurface via the existing function
         let surface_handle_ptr =
-            super::gpu_surface::sldn_gpu_surface_create(width, height, bytes_per_element);
+            super::gpu_surface::slpn_gpu_surface_create(width, height, bytes_per_element);
         if surface_handle_ptr.is_null() {
             return std::ptr::null_mut();
         }
@@ -1178,24 +1202,23 @@ mod broker_client {
         // Create mach port for the IOSurface
         let mach_port = IOSurfaceCreateMachPort(surface_handle.surface_ref);
         if mach_port == 0 {
-            eprintln!("[sldn] broker_acquire_surface: IOSurfaceCreateMachPort failed");
+            eprintln!("[slpn] broker_acquire_surface: IOSurfaceCreateMachPort failed");
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
         }
 
         // Generate a pool UUID
-        // Use IOSurface ID + timestamp for uniqueness (simple, no uuid crate needed)
         let surface_id = IOSurfaceGetID(surface_handle.surface_ref);
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let pool_id = format!("deno-{}-{}", surface_id, ts);
+        let pool_id = format!("python-{}-{}", surface_id, ts);
 
         // Register with broker via XPC
         let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
         if request.is_null() {
-            eprintln!("[sldn] broker_acquire_surface: failed to create XPC request");
+            eprintln!("[slpn] broker_acquire_surface: failed to create XPC request");
             let task = mach_task_self();
             mach_port_deallocate(task, mach_port);
             let _ = Box::from_raw(surface_handle_ptr);
@@ -1211,7 +1234,7 @@ mod broker_client {
         xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
 
         let rid_key = CString::new("runtime_id").unwrap();
-        let rid_value = CString::new("deno-subprocess").unwrap();
+        let rid_value = CString::new(broker.runtime_id.as_str()).unwrap();
         xpc_dictionary_set_string(request, rid_key.as_ptr(), rid_value.as_ptr());
 
         let port_key = CString::new("mach_port").unwrap();
@@ -1228,7 +1251,7 @@ mod broker_client {
             if !reply.is_null() {
                 xpc_release(reply);
             }
-            eprintln!("[sldn] broker_acquire_surface: XPC register failed");
+            eprintln!("[slpn] broker_acquire_surface: XPC register failed");
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
         }
@@ -1238,7 +1261,7 @@ mod broker_client {
         let error_ptr = xpc_dictionary_get_string(reply, error_key.as_ptr());
         if !error_ptr.is_null() {
             let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
-            eprintln!("[sldn] broker_acquire_surface: broker error: {}", error_msg);
+            eprintln!("[slpn] broker_acquire_surface: broker error: {}", error_msg);
             xpc_release(reply);
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
@@ -1257,6 +1280,44 @@ mod broker_client {
         surface_handle_ptr
     }
 
+    /// Unregister a surface from the broker (fire-and-forget).
+    #[no_mangle]
+    pub unsafe extern "C" fn slpn_broker_unregister_surface(
+        broker: *mut BrokerHandle,
+        pool_id: *const c_char,
+    ) {
+        let broker = match broker.as_mut() {
+            Some(b) => b,
+            None => return,
+        };
+
+        let pool_id_str = match c_str_to_str(pool_id) {
+            Some(s) => s,
+            None => return,
+        };
+
+        let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
+        if request.is_null() {
+            return;
+        }
+
+        let op_key = CString::new("op").unwrap();
+        let op_value = CString::new("unregister").unwrap();
+        xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
+
+        let sid_key = CString::new("surface_id").unwrap();
+        let sid_value = CString::new(pool_id_str).unwrap();
+        xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
+
+        let rid_key = CString::new("runtime_id").unwrap();
+        let rid_value = CString::new(broker.runtime_id.as_str()).unwrap();
+        xpc_dictionary_set_string(request, rid_key.as_ptr(), rid_value.as_ptr());
+
+        // Fire and forget — broker unregister doesn't send a reply
+        xpc_connection_send_message(broker.connection, request);
+        xpc_release(request);
+    }
+
     unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
         if ptr.is_null() {
             return None;
@@ -1270,16 +1331,19 @@ mod broker_client {
     use std::ffi::{c_char, c_void};
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_connect(_xpc_service_name: *const c_char) -> *mut c_void {
-        eprintln!("[sldn] Broker operations not supported on this platform");
+    pub unsafe extern "C" fn slpn_broker_connect(
+        _xpc_service_name: *const c_char,
+        _runtime_id: *const c_char,
+    ) -> *mut c_void {
+        eprintln!("[slpn] Broker operations not supported on this platform");
         std::ptr::null_mut()
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_disconnect(_broker: *mut c_void) {}
+    pub unsafe extern "C" fn slpn_broker_disconnect(_broker: *mut c_void) {}
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_resolve_surface(
+    pub unsafe extern "C" fn slpn_broker_resolve_surface(
         _broker: *mut c_void,
         _pool_id: *const c_char,
     ) -> *mut c_void {
@@ -1287,7 +1351,7 @@ mod broker_client {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn sldn_broker_acquire_surface(
+    pub unsafe extern "C" fn slpn_broker_acquire_surface(
         _broker: *mut c_void,
         _width: u32,
         _height: u32,
@@ -1296,6 +1360,13 @@ mod broker_client {
         _pool_id_buf_len: u32,
     ) -> *mut c_void {
         std::ptr::null_mut()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn slpn_broker_unregister_surface(
+        _broker: *mut c_void,
+        _pool_id: *const c_char,
+    ) {
     }
 }
 

@@ -221,7 +221,10 @@ define_class!(
             let frame_num = ctx.frame_count.fetch_add(1, Ordering::Relaxed);
 
             // Acquire pooled buffer from GpuContext (pool is managed centrally)
-            let surface_id_str =
+            // _pooled_buffer_hold keeps the Arc refcount elevated until after the
+            // iceoryx2 write, preventing the pool from reacquiring and overwriting
+            // the buffer before downstream consumers resolve the surface_id.
+            let (surface_id_str, _pooled_buffer_hold) =
                 match ctx
                     .gpu_context
                     .acquire_pixel_buffer(width, height, PixelFormat::Bgra32)
@@ -235,17 +238,16 @@ define_class!(
                             width,
                             height,
                         ) {
-                            Ok(()) => {
-                                // Use the PixelBufferPoolId directly - no need to extract IOSurfaceID
-                                // pooled_buffer is dropped here, releasing it back to the pool
-                                pool_id.to_string()
-                            }
+                            Ok(()) => (pool_id.to_string(), Some(pooled_buffer)),
                             Err(e) => {
                                 if frame_num == 0 {
                                     eprintln!("[Camera] Blit failed: {}, falling back", e);
                                 }
                                 // Blit failed, fall back to direct forwarding
-                                forward_camera_iosurface_directly(ctx, camera_iosurface)
+                                (
+                                    forward_camera_iosurface_directly(ctx, camera_iosurface),
+                                    None,
+                                )
                             }
                         }
                     }
@@ -254,7 +256,10 @@ define_class!(
                             eprintln!("[Camera] Pool acquire failed: {}, falling back", e);
                         }
                         // Pool exhausted or error, fall back to direct forwarding
-                        forward_camera_iosurface_directly(ctx, camera_iosurface)
+                        (
+                            forward_camera_iosurface_directly(ctx, camera_iosurface),
+                            None,
+                        )
                     }
                 };
 
@@ -277,6 +282,7 @@ define_class!(
                 eprintln!("[Camera] Failed to write frame: {}", e);
                 return;
             }
+            // _pooled_buffer_hold is dropped here after the write completes
 
             if frame_num == 0 {
                 eprintln!("[Camera] AVFoundation: First frame processed (pooled buffers)");
@@ -510,9 +516,11 @@ impl AppleCameraProcessor::Processor {
             let frame_rate_ranges: Retained<NSArray<AnyObject>> =
                 msg_send![&active_format, videoSupportedFrameRateRanges];
 
-            // Find the maximum supported fps from all ranges
-            let mut camera_max_fps: f64 = 30.0; // Default fallback
+            // Collect supported ranges; detect discrete cameras (every range has min == max)
+            let mut camera_max_fps: f64 = 30.0;
             let mut camera_min_fps: f64 = 1.0;
+            let mut discrete_rates: Vec<f64> = Vec::new();
+            let mut is_discrete = true;
             for i in 0..frame_rate_ranges.count() {
                 let range = frame_rate_ranges.objectAtIndex(i);
                 let range_max: f64 = msg_send![&range, maxFrameRate];
@@ -523,17 +531,36 @@ impl AppleCameraProcessor::Processor {
                 if range_min < camera_min_fps || i == 0 {
                     camera_min_fps = range_min;
                 }
+                if (range_max - range_min).abs() < 0.01 {
+                    discrete_rates.push(range_max);
+                } else {
+                    is_discrete = false;
+                }
             }
 
-            // Clamp requested fps to camera's supported range
-            let min_fps = requested_min_fps.max(camera_min_fps).min(camera_max_fps);
-            let max_fps = requested_max_fps.max(camera_min_fps).min(camera_max_fps);
+            // Select target fps
+            let (min_fps, max_fps) = if is_discrete && !discrete_rates.is_empty() {
+                // Snap to the highest discrete rate <= requested_min_fps, or highest available
+                discrete_rates.sort_by(|a, b| b.partial_cmp(a).unwrap());
+                let target = discrete_rates
+                    .iter()
+                    .copied()
+                    .find(|&r| r <= requested_min_fps)
+                    .unwrap_or(discrete_rates[0]);
+                (target, target)
+            } else {
+                // Continuous range camera: clamp to supported range
+                let min = requested_min_fps.max(camera_min_fps).min(camera_max_fps);
+                let max = requested_max_fps.max(camera_min_fps).min(camera_max_fps);
+                (min, max)
+            };
 
             eprintln!(
-                "[Camera] Frame rate: requested {:.0}-{:.0} fps, camera supports {:.0}-{:.0} fps, using {:.0}-{:.0} fps",
+                "[Camera] Frame rate: requested {:.0}-{:.0} fps, camera supports {:.0}-{:.0} fps, using {:.0}-{:.0} fps{}",
                 requested_min_fps, requested_max_fps,
                 camera_min_fps, camera_max_fps,
-                min_fps, max_fps
+                min_fps, max_fps,
+                if is_discrete { " (discrete)" } else { "" }
             );
 
             // Min frame duration = max fps (shorter duration = more frames)
@@ -541,9 +568,13 @@ impl AppleCameraProcessor::Processor {
             let min_duration = CMTime::from_fps(max_fps);
             let max_duration = CMTime::from_fps(min_fps);
 
-            // Set frame duration range on device
+            // Set frame duration range on device.
+            // Skip setActiveVideoMaxFrameDuration when durations are equal (discrete cameras)
+            // to avoid NSInvalidArgumentException on cameras that don't support ranges.
             let _: () = msg_send![&device, setActiveVideoMinFrameDuration: min_duration];
-            let _: () = msg_send![&device, setActiveVideoMaxFrameDuration: max_duration];
+            if (max_fps - min_fps).abs() > 0.01 {
+                let _: () = msg_send![&device, setActiveVideoMaxFrameDuration: max_duration];
+            }
 
             device.unlockForConfiguration();
         }

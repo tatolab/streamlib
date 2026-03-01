@@ -131,15 +131,16 @@ async function main(): Promise<void> {
         case "setup": {
           const config = (msg.config as Record<string, unknown>) ?? {};
           const ports = (msg.ports as {
-            inputs?: { name: string; service_name: string }[];
+            inputs?: { name: string; service_name: string; read_mode?: string }[];
             outputs?: { name: string; dest_port: string; dest_service_name: string; schema_name: string }[];
           }) ?? { inputs: [], outputs: [] };
 
           // Subscribe to input iceoryx2 services
           const inputPorts = ports.inputs ?? [];
           for (const input of inputPorts) {
+            const readMode = input.read_mode ?? "skip_to_latest";
             console.error(
-              `[subprocess_runner:${processorId}] Subscribing to input: port='${input.name}', service='${input.service_name}'`,
+              `[subprocess_runner:${processorId}] Subscribing to input: port='${input.name}', service='${input.service_name}', read_mode='${readMode}'`,
             );
             const result = lib.symbols.sldn_input_subscribe(
               ctxPtr,
@@ -150,6 +151,9 @@ async function main(): Promise<void> {
                 `[subprocess_runner:${processorId}] Failed to subscribe to '${input.service_name}'`,
               );
             }
+            // Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
+            const modeInt = readMode === "skip_to_latest" ? 0 : 1;
+            lib.symbols.sldn_input_set_read_mode(ctxPtr, cString(input.name), modeInt);
           }
 
           // Create publishers for output iceoryx2 services

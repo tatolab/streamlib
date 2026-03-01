@@ -10,6 +10,7 @@ members = [
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
+    "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)

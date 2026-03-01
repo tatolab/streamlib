@@ -155,7 +155,7 @@ fn main() -> Result<()> {
         height: 1080,
         title: Some("Cyberpunk Pipeline (Parallel)".to_string()),
         scaling_mode: Default::default(),
-        vsync: Some(false), // Uncapped - run as fast as possible
+        vsync: Some(true),
         ..Default::default()
     }))?;
     println!("✓ Display added: {}\n", display);
@@ -241,7 +241,7 @@ fn main() -> Result<()> {
 
     println!("▶️  Starting pipeline...");
     println!("   Architecture (Breaking News PiP):");
-    println!("     Camera ──┬──→ BlendingCompositor ──→ CRT/Film ──→ Glitch ──→ Display");
+    println!("     Camera ──┬──→ BlendingCompositor ──→ CRT/FilmGrain ──→ Glitch ──→ Display");
     println!("              │         ↑  ↑  ↑");
     println!("              │         │  │  └── Watermark");
     println!("              │         │  └───── LowerThird");
