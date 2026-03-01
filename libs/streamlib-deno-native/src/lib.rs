@@ -22,12 +22,19 @@ use streamlib_ipc_types::FramePayload;
 // Context
 // ============================================================================
 
+/// How frames should be read from an input port's buffer.
+/// Mirrors the Rust-side `ReadMode` enum in `streamlib::iceoryx2::read_mode`.
+const READ_MODE_SKIP_TO_LATEST: i32 = 0;
+const READ_MODE_READ_NEXT_IN_ORDER: i32 = 1;
+
 /// Per-processor native context holding iceoryx2 node and port state.
 pub struct DenoNativeContext {
     processor_id: String,
     node: Node<ipc::Service>,
     subscribers: HashMap<String, SubscriberState>,
     publishers: HashMap<String, PublisherState>,
+    /// Per-port read mode (port_name → READ_MODE_*). Default is SkipToLatest.
+    port_read_modes: HashMap<String, i32>,
 }
 
 struct SubscriberState {
@@ -50,6 +57,7 @@ impl DenoNativeContext {
             node,
             subscribers: HashMap::new(),
             publishers: HashMap::new(),
+            port_read_modes: HashMap::new(),
         })
     }
 }
@@ -133,6 +141,8 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         .node
         .service_builder(&service_name_iox)
         .publish_subscribe::<FramePayload>()
+        .max_publishers(16)
+        .subscriber_max_buffer_size(16)
         .open_or_create()
     {
         Ok(s) => s,
@@ -145,7 +155,7 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         }
     };
 
-    let subscriber = match service.subscriber_builder().create() {
+    let subscriber = match service.subscriber_builder().buffer_size(16).create() {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
@@ -164,6 +174,31 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         },
     );
 
+    0
+}
+
+/// Set the read mode for a specific input port.
+///
+/// `mode`: 0 = SkipToLatest (drain buffer, return newest — optimal for video),
+///         1 = ReadNextInOrder (FIFO — required for audio).
+///
+/// Returns 0 on success, -1 on error.
+#[no_mangle]
+pub unsafe extern "C" fn sldn_input_set_read_mode(
+    ctx: *mut DenoNativeContext,
+    port_name: *const c_char,
+    mode: i32,
+) -> i32 {
+    let ctx = match ctx.as_mut() {
+        Some(c) => c,
+        None => return -1,
+    };
+    let port_name = match c_str_to_str(port_name) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    ctx.port_read_modes.insert(port_name.to_string(), mode);
     0
 }
 
@@ -200,7 +235,10 @@ pub unsafe extern "C" fn sldn_input_poll(ctx: *mut DenoNativeContext) -> i32 {
 
 /// Read data from a specific port.
 ///
-/// Copies the oldest pending payload into the provided buffer.
+/// Uses the port's read mode (set via `sldn_input_set_read_mode`):
+/// - SkipToLatest (default): Drains buffer, returns only the newest payload.
+/// - ReadNextInOrder: Returns oldest payload in FIFO order.
+///
 /// Returns 0 on success, 1 if no data available, -1 on error.
 ///
 /// `out_len` receives the actual data length.
@@ -223,23 +261,41 @@ pub unsafe extern "C" fn sldn_input_read(
         None => return -1,
     };
 
+    let read_mode = ctx
+        .port_read_modes
+        .get(port_name)
+        .copied()
+        .unwrap_or(READ_MODE_SKIP_TO_LATEST);
+
     // Search all subscribers for pending data on this port
     for (_service_name, state) in ctx.subscribers.iter_mut() {
         if let Some(queue) = state.pending.get_mut(port_name) {
-            if let Some((data, ts)) = queue.first() {
-                let copy_len = data.len().min(buf_len as usize);
-                if !out_buf.is_null() && copy_len > 0 {
-                    std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len);
-                }
-                if !out_len.is_null() {
-                    *out_len = data.len() as u32;
-                }
-                if !out_ts.is_null() {
-                    *out_ts = *ts;
-                }
-                queue.remove(0);
-                return 0;
+            if queue.is_empty() {
+                continue;
             }
+
+            let (data, ts) = if read_mode == READ_MODE_READ_NEXT_IN_ORDER {
+                // FIFO: return oldest
+                queue.remove(0)
+            } else {
+                // SkipToLatest: drain buffer, return newest
+                let last = queue.len() - 1;
+                let item = queue.swap_remove(last);
+                queue.clear();
+                item
+            };
+
+            let copy_len = data.len().min(buf_len as usize);
+            if !out_buf.is_null() && copy_len > 0 {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len);
+            }
+            if !out_len.is_null() {
+                *out_len = data.len() as u32;
+            }
+            if !out_ts.is_null() {
+                *out_ts = ts;
+            }
+            return 0;
         }
     }
 
@@ -302,6 +358,8 @@ pub unsafe extern "C" fn sldn_output_publish(
         .node
         .service_builder(&service_name_iox)
         .publish_subscribe::<FramePayload>()
+        .max_publishers(16)
+        .subscriber_max_buffer_size(16)
         .open_or_create()
     {
         Ok(s) => s,
@@ -765,6 +823,7 @@ mod gpu_surface {
 
 #[cfg(target_os = "macos")]
 mod broker_client {
+    use std::collections::HashMap;
     use std::ffi::{c_char, c_void, CStr, CString};
 
     use super::gpu_surface::SurfaceHandle;
@@ -812,6 +871,13 @@ mod broker_client {
         fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
         fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
         fn IOSurfaceIncrementUseCount(buffer: IOSurfaceRef);
+        fn IOSurfaceDecrementUseCount(buffer: IOSurfaceRef);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRetain(cf: *const c_void) -> *const c_void;
+        fn CFRelease(cf: *const c_void);
     }
 
     #[link(name = "System")]
@@ -849,9 +915,18 @@ mod broker_client {
         unsafe { std::ptr::eq(xpc_get_type(object), &_xpc_type_error as *const _) }
     }
 
+    struct CachedSurface {
+        surface_ref: IOSurfaceRef,
+        surface_id: u32,
+        width: u32,
+        height: u32,
+        bytes_per_row: u32,
+    }
+
     /// Opaque handle to a broker XPC connection.
     pub struct BrokerHandle {
         connection: XpcConnectionT,
+        resolve_cache: HashMap<String, CachedSurface>,
     }
 
     #[no_mangle]
@@ -898,13 +973,20 @@ mod broker_client {
         let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
         eprintln!("[sldn] broker_connect: connected to '{}'", name);
 
-        Box::into_raw(Box::new(BrokerHandle { connection }))
+        Box::into_raw(Box::new(BrokerHandle {
+            connection,
+            resolve_cache: HashMap::new(),
+        }))
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn sldn_broker_disconnect(broker: *mut BrokerHandle) {
         if !broker.is_null() {
             let handle = Box::from_raw(broker);
+            for cached in handle.resolve_cache.values() {
+                IOSurfaceDecrementUseCount(cached.surface_ref);
+                CFRelease(cached.surface_ref);
+            }
             xpc_connection_cancel(handle.connection);
         }
     }
@@ -934,7 +1016,22 @@ mod broker_client {
             }
         };
 
-        // XPC lookup to broker
+        // Check resolve cache
+        if let Some(cached) = broker.resolve_cache.get(pool_id_str) {
+            CFRetain(cached.surface_ref);
+            IOSurfaceIncrementUseCount(cached.surface_ref);
+            return Box::into_raw(Box::new(SurfaceHandle {
+                surface_ref: cached.surface_ref,
+                surface_id: cached.surface_id,
+                width: cached.width,
+                height: cached.height,
+                bytes_per_row: cached.bytes_per_row,
+                base_address: std::ptr::null_mut(),
+                is_locked: false,
+            }));
+        }
+
+        // Cache miss — XPC lookup to broker
         let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
         if request.is_null() {
             eprintln!("[sldn] broker_resolve_surface: failed to create XPC request");
@@ -1004,12 +1101,36 @@ mod broker_client {
             return std::ptr::null_mut();
         }
 
+        // Increment use count for cache entry
         IOSurfaceIncrementUseCount(surface_ref);
 
         let surface_id = IOSurfaceGetID(surface_ref);
         let width = IOSurfaceGetWidth(surface_ref) as u32;
         let height = IOSurfaceGetHeight(surface_ref) as u32;
         let bytes_per_row = IOSurfaceGetBytesPerRow(surface_ref) as u32;
+
+        // Evict entire cache if it exceeds 128 entries
+        if broker.resolve_cache.len() >= 128 {
+            for (_key, cached) in broker.resolve_cache.drain() {
+                IOSurfaceDecrementUseCount(cached.surface_ref);
+                CFRelease(cached.surface_ref);
+            }
+        }
+
+        broker.resolve_cache.insert(
+            pool_id_str.to_string(),
+            CachedSurface {
+                surface_ref,
+                surface_id,
+                width,
+                height,
+                bytes_per_row,
+            },
+        );
+
+        // Retain + increment use count for returned handle
+        CFRetain(surface_ref);
+        IOSurfaceIncrementUseCount(surface_ref);
 
         Box::into_raw(Box::new(SurfaceHandle {
             surface_ref,
