@@ -81,6 +81,8 @@ def load_native_lib(lib_path):
         ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_int64),
     ]
     lib.slpn_input_read.restype = ctypes.c_int32
+    lib.slpn_input_set_read_mode.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int32]
+    lib.slpn_input_set_read_mode.restype = ctypes.c_int32
 
     # Output
     lib.slpn_output_publish.argtypes = [

@@ -46,6 +46,7 @@ impl Iceoryx2Node {
             .service_builder(&service_name)
             .publish_subscribe::<FramePayload>()
             .max_publishers(16)
+            .subscriber_max_buffer_size(16)
             .open_or_create()
             .map_err(|e| StreamError::Runtime(format!("Failed to open/create service: {:?}", e)))?;
 
@@ -79,6 +80,7 @@ impl Iceoryx2Service {
     ) -> Result<iceoryx2::port::subscriber::Subscriber<ipc::Service, FramePayload, ()>> {
         self.inner
             .subscriber_builder()
+            .buffer_size(16)
             .create()
             .map_err(|e| StreamError::Runtime(format!("Failed to create subscriber: {:?}", e)))
     }

@@ -221,7 +221,10 @@ define_class!(
             let frame_num = ctx.frame_count.fetch_add(1, Ordering::Relaxed);
 
             // Acquire pooled buffer from GpuContext (pool is managed centrally)
-            let surface_id_str =
+            // _pooled_buffer_hold keeps the Arc refcount elevated until after the
+            // iceoryx2 write, preventing the pool from reacquiring and overwriting
+            // the buffer before downstream consumers resolve the surface_id.
+            let (surface_id_str, _pooled_buffer_hold) =
                 match ctx
                     .gpu_context
                     .acquire_pixel_buffer(width, height, PixelFormat::Bgra32)
@@ -235,17 +238,16 @@ define_class!(
                             width,
                             height,
                         ) {
-                            Ok(()) => {
-                                // Use the PixelBufferPoolId directly - no need to extract IOSurfaceID
-                                // pooled_buffer is dropped here, releasing it back to the pool
-                                pool_id.to_string()
-                            }
+                            Ok(()) => (pool_id.to_string(), Some(pooled_buffer)),
                             Err(e) => {
                                 if frame_num == 0 {
                                     eprintln!("[Camera] Blit failed: {}, falling back", e);
                                 }
                                 // Blit failed, fall back to direct forwarding
-                                forward_camera_iosurface_directly(ctx, camera_iosurface)
+                                (
+                                    forward_camera_iosurface_directly(ctx, camera_iosurface),
+                                    None,
+                                )
                             }
                         }
                     }
@@ -254,7 +256,10 @@ define_class!(
                             eprintln!("[Camera] Pool acquire failed: {}, falling back", e);
                         }
                         // Pool exhausted or error, fall back to direct forwarding
-                        forward_camera_iosurface_directly(ctx, camera_iosurface)
+                        (
+                            forward_camera_iosurface_directly(ctx, camera_iosurface),
+                            None,
+                        )
                     }
                 };
 
@@ -277,6 +282,7 @@ define_class!(
                 eprintln!("[Camera] Failed to write frame: {}", e);
                 return;
             }
+            // _pooled_buffer_hold is dropped here after the write completes
 
             if frame_num == 0 {
                 eprintln!("[Camera] AVFoundation: First frame processed (pooled buffers)");

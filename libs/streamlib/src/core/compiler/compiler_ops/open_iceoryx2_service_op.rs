@@ -412,6 +412,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
             deno_host.input_port_wiring.push(serde_json::json!({
                 "name": dest_port,
                 "service_name": service_name,
+                "read_mode": "skip_to_latest",
             }));
         } else if let Some(python_native_host) = dest_guard
             .as_any_mut()
@@ -422,6 +423,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 .push(serde_json::json!({
                     "name": dest_port,
                     "service_name": service_name,
+                    "read_mode": "skip_to_latest",
                 }));
         }
     }
@@ -630,6 +632,7 @@ fn open_iceoryx2_rust_to_subprocess(
             deno_host.input_port_wiring.push(serde_json::json!({
                 "name": dest_port,
                 "service_name": service_name,
+                "read_mode": "skip_to_latest",
             }));
             tracing::debug!(
                 "Stored input wiring on Deno processor '{}': port='{}', service='{}'",
@@ -646,6 +649,7 @@ fn open_iceoryx2_rust_to_subprocess(
                 .push(serde_json::json!({
                     "name": dest_port,
                     "service_name": service_name,
+                    "read_mode": "skip_to_latest",
                 }));
             tracing::debug!(
                 "Stored input wiring on Python native processor '{}': port='{}', service='{}'",

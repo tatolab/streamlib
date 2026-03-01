@@ -60,8 +60,9 @@ def _setup_native_context(msg, native_lib_path, processor_id):
     for inp in ports.get("inputs", []):
         port_name = inp["name"]
         service_name = inp["service_name"]
+        read_mode = inp.get("read_mode", "skip_to_latest")
         print(
-            f"[streamlib:{processor_id}] Subscribing to input: port='{port_name}', service='{service_name}'",
+            f"[streamlib:{processor_id}] Subscribing to input: port='{port_name}', service='{service_name}', read_mode='{read_mode}'",
             file=sys.stderr,
         )
         result = lib.slpn_input_subscribe(ctx_ptr, service_name.encode("utf-8"))
@@ -70,6 +71,9 @@ def _setup_native_context(msg, native_lib_path, processor_id):
                 f"[streamlib:{processor_id}] Failed to subscribe to '{service_name}'",
                 file=sys.stderr,
             )
+        # Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
+        mode_int = 0 if read_mode == "skip_to_latest" else 1
+        lib.slpn_input_set_read_mode(ctx_ptr, port_name.encode("utf-8"), mode_int)
 
     # Create publishers for output iceoryx2 services
     for out in ports.get("outputs", []):

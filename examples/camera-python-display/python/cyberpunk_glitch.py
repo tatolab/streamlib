@@ -382,23 +382,24 @@ class CyberpunkGlitch:
         from streamlib.cgl_context import make_current, bind_iosurface_to_texture, flush, GL_TEXTURE_RECTANGLE
         import time as time_mod
 
+        # Frame limiter: cap at 60fps to match display vsync.
+        # With 3 pool surfaces at 250+fps, surfaces recycle every ~12ms
+        # which is faster than the 16.7ms display refresh.
+        now = time_mod.monotonic()
+        if hasattr(self, '_last_output_time'):
+            if now - self._last_output_time < 1.0 / 60.0:
+                return
+
         w = frame["width"]
         h = frame["height"]
 
         # Use monotonic time for elapsed calculation
         if not hasattr(self, '_start_time'):
-            self._start_time = time_mod.monotonic()
-        elapsed = time_mod.monotonic() - self._start_time
+            self._start_time = now
+        elapsed = now - self._start_time
 
         # Update glitch state
         glitch_active = self.glitch_state.update(elapsed)
-
-        # TRUE PASSTHROUGH: When not glitching, just forward the input frame directly
-        # No GPU work, no texture copies - zero overhead
-        if not glitch_active:
-            ctx.outputs.write("video_out", frame)
-            self.frame_count += 1
-            return
 
         make_current(self.cgl_ctx)
 
@@ -440,14 +441,20 @@ class CyberpunkGlitch:
         # Set viewport
         glViewport(0, 0, w, h)
 
-        # Apply glitch shader
+        # Always use glitch program — intensity=0 triggers early-return passthrough
+        # in the shader (line 84). This avoids potential GL attribute location
+        # mismatch between the glitch and passthrough programs (VAO was bound
+        # to the glitch program's 'position' attribute location).
         glUseProgram(self.glitch_program)
         glUniform1i(self.glitch_uniforms['inputTexture'], 0)
         glUniform2f(self.glitch_uniforms['resolution'], float(w), float(h))
-        glUniform1f(self.glitch_uniforms['time'], elapsed)
-        glUniform1f(self.glitch_uniforms['intensity'], self.glitch_state.intensity)
-        glUniform1f(self.glitch_uniforms['seed'], self.glitch_state.seed)
-        glUniform1f(self.glitch_uniforms['isDramatic'], 1.0 if self.glitch_state.is_dramatic else 0.0)
+        if glitch_active:
+            glUniform1f(self.glitch_uniforms['time'], elapsed)
+            glUniform1f(self.glitch_uniforms['intensity'], self.glitch_state.intensity)
+            glUniform1f(self.glitch_uniforms['seed'], self.glitch_state.seed)
+            glUniform1f(self.glitch_uniforms['isDramatic'], 1.0 if self.glitch_state.is_dramatic else 0.0)
+        else:
+            glUniform1f(self.glitch_uniforms['intensity'], 0.0)
 
         # Bind input texture
         glActiveTexture(GL_TEXTURE0)
@@ -474,6 +481,7 @@ class CyberpunkGlitch:
         out_frame = dict(frame)  # copy input frame
         out_frame["surface_id"] = out_surface_id
         ctx.outputs.write("video_out", out_frame)
+        self._last_output_time = time_mod.monotonic()
 
         self.frame_count += 1
         if self.frame_count % 120 == 0:
