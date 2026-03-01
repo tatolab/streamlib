@@ -1015,7 +1015,7 @@ mod broker_client {
     pub unsafe extern "C" fn slpn_broker_disconnect(broker: *mut BrokerHandle) {
         if !broker.is_null() {
             let handle = Box::from_raw(broker);
-            for (_pool_id, cached) in &handle.resolve_cache {
+            for cached in handle.resolve_cache.values() {
                 IOSurfaceDecrementUseCount(cached.surface_ref);
                 CFRelease(cached.surface_ref);
             }
