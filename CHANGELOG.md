@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.7](https://github.com/tatolab/streamlib/compare/v0.3.6...v0.3.7) (2026-03-01)
+
+
+### Features
+
+* Python native FFI subprocess + overlay flickering fixes ([#155](https://github.com/tatolab/streamlib/issues/155)) ([077f98f](https://github.com/tatolab/streamlib/commit/077f98f662453d76c32081e60bd73ee7ee87b4cb))
+
 ## [0.3.6](https://github.com/tatolab/streamlib/compare/v0.3.5...v0.3.6) (2026-02-10)
 
 
