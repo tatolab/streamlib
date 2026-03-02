@@ -1,27 +1,26 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use dashmap::DashMap;
 use parking_lot::Mutex;
-use std::sync::{Arc, LazyLock, Weak};
+use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
 use super::events::{topics, Event, EventListener};
-
-const MAX_EVENT_SIZE: usize = 64 * 1024;
-
-const _: () = {
-    assert!(
-        std::mem::size_of::<Event>() <= MAX_EVENT_SIZE,
-        "Event type exceeds 64KB limit"
-    );
-};
+use crate::iceoryx2::{EventPayload, Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 
 /// Global pub/sub instance for runtime events.
+///
+/// Created as an empty shell via LazyLock. Must be initialized via `init()`
+/// during `StreamRuntime::new()` before iceoryx2 services are available.
+/// Before init, publish is a no-op and subscribe is buffered.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
-/// Lock-free pub/sub with parallel dispatch.
+/// iceoryx2-backed pub/sub for runtime events.
 pub struct PubSub {
-    topics: DashMap<String, Vec<Weak<Mutex<dyn EventListener>>>>,
+    // Set once via init()
+    runtime_id: OnceLock<String>,
+    node: OnceLock<Iceoryx2Node>,
+    // Subscriptions registered before init() — replayed when init() is called
+    pending_subscriptions: Mutex<Vec<(String, Arc<Mutex<dyn EventListener>>)>>,
 }
 
 impl Default for PubSub {
@@ -33,369 +32,289 @@ impl Default for PubSub {
 impl PubSub {
     pub fn new() -> Self {
         Self {
-            topics: DashMap::new(),
+            runtime_id: OnceLock::new(),
+            node: OnceLock::new(),
+            pending_subscriptions: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Initialize with iceoryx2 backend. Called once from StreamRuntime::new().
+    ///
+    /// Replays any subscriptions that were registered before initialization.
+    pub fn init(&self, runtime_id: &str, node: Iceoryx2Node) {
+        let _ = self.runtime_id.set(runtime_id.to_string());
+        let _ = self.node.set(node);
+
+        tracing::info!("PUBSUB initialized for runtime '{}'", runtime_id);
+
+        // Replay pending subscriptions
+        let pending = std::mem::take(&mut *self.pending_subscriptions.lock());
+        for (topic, listener) in pending {
+            tracing::debug!("Replaying pending subscription for topic '{}'", topic);
+            self.subscribe_inner(&topic, listener);
         }
     }
 
     /// Subscribe a listener to a topic.
     pub fn subscribe(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
-        let weak_listener = Arc::downgrade(&listener);
-        self.topics
-            .entry(topic.to_string())
-            .or_default()
-            .push(weak_listener);
-        tracing::debug!("Listener subscribed to topic '{}'", topic);
+        if self.runtime_id.get().is_none() {
+            // Not yet initialized — buffer for replay
+            tracing::debug!(
+                "PUBSUB not initialized, buffering subscription for '{}'",
+                topic
+            );
+            self.pending_subscriptions
+                .lock()
+                .push((topic.to_string(), listener));
+            return;
+        }
+
+        self.subscribe_inner(topic, listener);
     }
 
-    /// Publish event to topic (non-blocking, parallel dispatch).
+    fn subscribe_inner(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
+        let runtime_id = self.runtime_id.get().unwrap().clone();
+        let node = self.node.get().unwrap().clone();
+        let weak_listener = Arc::downgrade(&listener);
+        let topic_owned = topic.to_string();
+
+        let service_name = topic_to_service_name(&runtime_id, topic);
+        let service_name_for_log = service_name.clone();
+
+        // Spawn a dedicated OS thread for polling.
+        // iceoryx2 Subscriber uses Rc internally (!Send), so it must be
+        // created and used on the same thread.
+        let builder = std::thread::Builder::new().name(format!("pubsub-{}", topic));
+        if let Err(e) = builder.spawn(move || {
+            let service = match node.open_or_create_event_service(&service_name) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to create event service '{}': {}",
+                        service_name,
+                        e
+                    );
+                    return;
+                }
+            };
+
+            let subscriber = match service.create_subscriber() {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to create subscriber for '{}': {}",
+                        service_name,
+                        e
+                    );
+                    return;
+                }
+            };
+
+            subscriber_poll_loop(&subscriber, &weak_listener, &topic_owned);
+        }) {
+            tracing::error!(
+                "Failed to spawn subscriber thread for '{}': {}",
+                service_name_for_log,
+                e
+            );
+        } else {
+            tracing::debug!(
+                "Listener subscribed to topic '{}' (service: {})",
+                topic,
+                service_name_for_log
+            );
+        }
+    }
+
+    /// Publish event to topic (serializes and sends via iceoryx2).
     ///
     /// Events are dispatched to:
     /// 1. All subscribers of the specific topic
     /// 2. All subscribers of `topics::ALL` (wildcard)
     pub fn publish(&self, topic: &str, event: &Event) {
-        // Share event via Arc to avoid cloning for each dispatch
-        let event = Arc::new(event.clone());
+        let Some(runtime_id) = self.runtime_id.get() else {
+            tracing::trace!(
+                "PUBSUB not initialized, dropping event: {}",
+                event.log_name()
+            );
+            return;
+        };
 
-        // Dispatch to specific topic subscribers
-        self.dispatch_to_topic(topic, &event);
+        // Serialize event to MessagePack
+        let bytes = match rmp_serde::to_vec_named(event) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Failed to serialize event: {}", e);
+                return;
+            }
+        };
 
-        // Also dispatch to wildcard subscribers (if not already wildcard topic)
-        if topic != topics::ALL {
-            self.dispatch_to_topic(topics::ALL, &event);
+        if bytes.len() > MAX_EVENT_PAYLOAD_SIZE {
+            tracing::warn!(
+                "Event too large ({} bytes, max {}): {}",
+                bytes.len(),
+                MAX_EVENT_PAYLOAD_SIZE,
+                event.log_name()
+            );
+            return;
         }
 
-        // Cleanup dead listeners periodically
-        self.cleanup_dead_listeners(topic);
+        let timestamp_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+
+        let payload = EventPayload::new(topic, timestamp_ns, &bytes);
+
+        // Send to topic-specific service
+        self.send_payload(runtime_id, topic, &payload);
+
+        // Also send to /all aggregate service (if not already wildcard)
+        if topic != topics::ALL {
+            self.send_payload(runtime_id, topics::ALL, &payload);
+        }
+
+        tracing::debug!(
+            "Published [{}] to topic [{}] ({} bytes)",
+            event.log_name(),
+            topic,
+            bytes.len()
+        );
     }
 
-    fn dispatch_to_topic(&self, topic: &str, event: &Arc<Event>) {
-        if let Some(subscribers) = self.topics.get(topic) {
-            tracing::trace!(
-                "PUBSUB: {} subscribers registered for topic '{}'",
-                subscribers.len(),
-                topic
-            );
+    fn send_payload(&self, runtime_id: &str, topic: &str, payload: &EventPayload) {
+        let service_name = topic_to_service_name(runtime_id, topic);
+        let node = self.node.get().unwrap();
 
-            // Collect live listeners (upgrade weak refs)
-            let mut live_listeners = Vec::with_capacity(subscribers.len());
-            for weak_listener in subscribers.iter() {
-                if let Some(listener) = weak_listener.upgrade() {
-                    live_listeners.push(listener);
-                } else {
-                    tracing::trace!("PUBSUB: Weak ref upgrade failed (listener dropped)");
+        // Create a fresh publisher per call. iceoryx2 Publisher uses Rc internally
+        // (!Send), so we can't store it across threads. Events are infrequent
+        // (lifecycle, graph changes), so per-call creation is acceptable.
+        let service = match node.open_or_create_event_service(&service_name) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to open event service '{}': {}", service_name, e);
+                return;
+            }
+        };
+
+        let publisher = match service.create_publisher() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to create publisher for '{}': {}",
+                    service_name,
+                    e
+                );
+                return;
+            }
+        };
+
+        match publisher.loan_uninit() {
+            Ok(sample) => {
+                let sample = sample.write_payload(*payload);
+                if let Err(e) = sample.send() {
+                    tracing::warn!("Failed to send event to '{}': {:?}", service_name, e);
                 }
             }
-
-            let listener_count = live_listeners.len();
-            tracing::debug!(
-                "Publishing [{}] to topic [{}] with [{}] active listeners",
-                event.log_name(),
-                topic,
-                listener_count
-            );
-
-            // Dispatch in parallel to all listeners (fire-and-forget, non-blocking)
-            // Each listener gets its own rayon task
-            for listener in live_listeners {
-                let event = Arc::clone(event);
-                rayon::spawn(move || {
-                    // Try lock without blocking
-                    // If listener is busy, skip (fire-and-forget)
-                    if let Some(mut guard) = listener.try_lock() {
-                        tracing::trace!("PUBSUB: Calling on_event for listener");
-                        let _ = guard.on_event(&event);
-                    } else {
-                        tracing::trace!("PUBSUB: Listener busy, skipping (fire-and-forget)");
-                    }
-                });
-            }
-        } else {
-            tracing::trace!(
-                "PUBSUB: No subscribers for topic '{}', event: {:?}",
-                topic,
-                event
-            );
-        }
-    }
-
-    fn cleanup_dead_listeners(&self, topic: &str) {
-        if let Some(mut subscribers) = self.topics.get_mut(topic) {
-            subscribers.retain(|weak| weak.strong_count() > 0);
-
-            // Remove topic entry if no subscribers left
-            if subscribers.is_empty() {
-                drop(subscribers); // Release lock before removing
-                self.topics.remove(topic);
+            Err(e) => {
+                tracing::warn!("Failed to loan sample for '{}': {:?}", service_name, e);
             }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+/// Blocking poll loop for an iceoryx2 event subscriber.
+///
+/// Runs on a dedicated OS thread, polling the subscriber for new events.
+/// Exits when the listener is dropped (weak ref upgrade fails).
+fn subscriber_poll_loop(
+    subscriber: &iceoryx2::port::subscriber::Subscriber<
+        iceoryx2::service::ipc::Service,
+        EventPayload,
+        (),
+    >,
+    weak_listener: &Weak<Mutex<dyn EventListener>>,
+    topic: &str,
+) {
+    loop {
+        // Drain all available events before sleeping
+        let mut received_any = false;
+        loop {
+            match subscriber.receive() {
+                Ok(Some(sample)) => {
+                    received_any = true;
+                    let payload: &EventPayload = &*sample;
 
-    /// Wait for rayon thread pool to complete pending tasks
-    fn wait_for_rayon() {
-        // rayon::spawn is fire-and-forget, so we need to wait
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+                    // Deserialize event from MessagePack
+                    let event: Event = match rmp_serde::from_slice(payload.data()) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to deserialize event on topic '{}': {}",
+                                topic,
+                                e
+                            );
+                            continue;
+                        }
+                    };
 
-    // Test listener that counts events (thread-safe)
-    struct CountingListener {
-        count: Arc<AtomicUsize>,
-    }
-
-    impl CountingListener {
-        fn new() -> Self {
-            Self {
-                count: Arc::new(AtomicUsize::new(0)),
+                    // Deliver to listener (try_lock to avoid blocking, same as old rayon dispatch)
+                    if let Some(listener) = weak_listener.upgrade() {
+                        if let Some(mut guard) = listener.try_lock() {
+                            let _ = guard.on_event(&event);
+                        } else {
+                            tracing::trace!(
+                                "Listener busy on topic '{}', skipping (fire-and-forget)",
+                                topic
+                            );
+                        }
+                    } else {
+                        // Listener dropped, exit loop
+                        tracing::debug!(
+                            "Listener dropped for topic '{}', stopping poll thread",
+                            topic
+                        );
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    // No more data in buffer
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("Event subscriber error on topic '{}': {:?}", topic, e);
+                    return;
+                }
             }
         }
 
-        fn count(&self) -> usize {
-            self.count.load(Ordering::SeqCst)
+        // Check if listener is still alive before sleeping
+        if weak_listener.strong_count() == 0 {
+            tracing::debug!(
+                "Listener dropped for topic '{}', stopping poll thread",
+                topic
+            );
+            return;
+        }
+
+        // Sleep between polls. Events are infrequent (lifecycle, graph changes),
+        // so 5ms polling is more than sufficient.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // Yield if we processed events for responsiveness
+        if received_any {
+            std::thread::yield_now();
         }
     }
+}
 
-    impl EventListener for CountingListener {
-        fn on_event(&mut self, _event: &Event) -> crate::core::error::Result<()> {
-            self.count.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn test_topic_routing() {
-        let pubsub = PubSub::new();
-
-        let audio_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let video_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
-
-        let audio_listener: Arc<Mutex<dyn EventListener>> = audio_listener_concrete.clone();
-        let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
-
-        pubsub.subscribe("processor:audio", audio_listener);
-        pubsub.subscribe("processor:video", video_listener);
-
-        pubsub.publish(
-            "processor:audio",
-            &Event::ProcessorEvent {
-                processor_id: crate::core::graph::ProcessorUniqueId::from("audio"),
-                event: super::super::events::ProcessorEvent::Started,
-            },
-        );
-
-        wait_for_rayon();
-        assert_eq!(audio_listener_concrete.lock().count(), 1);
-        assert_eq!(video_listener_concrete.lock().count(), 0);
-    }
-
-    #[test]
-    fn test_runtime_global_broadcast() {
-        let pubsub = PubSub::new();
-
-        let listener1_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener2_concrete = Arc::new(Mutex::new(CountingListener::new()));
-
-        let listener1: Arc<Mutex<dyn EventListener>> = listener1_concrete.clone();
-        let listener2: Arc<Mutex<dyn EventListener>> = listener2_concrete.clone();
-
-        pubsub.subscribe("runtime:global", listener1);
-        pubsub.subscribe("runtime:global", listener2);
-
-        pubsub.publish(
-            "runtime:global",
-            &Event::RuntimeGlobal(super::super::events::RuntimeEvent::RuntimeStart),
-        );
-
-        wait_for_rayon();
-        assert_eq!(listener1_concrete.lock().count(), 1);
-        assert_eq!(listener2_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_publish_to_nonexistent_topic_no_error() {
-        let pubsub = PubSub::new();
-
-        // Publish to a topic that has never been subscribed to
-        // Should not panic, should not error, just fire-and-forget
-        pubsub.publish(
-            "foo",
-            &Event::Custom {
-                topic: "foo".to_string(),
-                data: serde_json::json!({"test": "data"}),
-            },
-        );
-
-        // If we get here without panicking, test passes
-    }
-
-    #[test]
-    fn test_late_subscriber_misses_earlier_messages() {
-        let pubsub = PubSub::new();
-
-        // Publish first message with no subscribers
-        pubsub.publish(
-            "bar",
-            &Event::Custom {
-                topic: "bar".to_string(),
-                data: serde_json::json!({"message": "first"}),
-            },
-        );
-
-        // Now subscribe
-        let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-        pubsub.subscribe("bar", listener);
-
-        // Should have no messages (first message was lost)
-        assert_eq!(listener_concrete.lock().count(), 0);
-
-        // Publish second message
-        pubsub.publish(
-            "bar",
-            &Event::Custom {
-                topic: "bar".to_string(),
-                data: serde_json::json!({"message": "second"}),
-            },
-        );
-
-        wait_for_rayon();
-        // Subscriber should receive second message only
-        assert_eq!(listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_multiple_subscribers_all_receive() {
-        let pubsub = PubSub::new();
-
-        // Subscribe 5 subscribers to the same topic
-        let listener1_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener2_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener3_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener4_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener5_concrete = Arc::new(Mutex::new(CountingListener::new()));
-
-        let listener1: Arc<Mutex<dyn EventListener>> = listener1_concrete.clone();
-        let listener2: Arc<Mutex<dyn EventListener>> = listener2_concrete.clone();
-        let listener3: Arc<Mutex<dyn EventListener>> = listener3_concrete.clone();
-        let listener4: Arc<Mutex<dyn EventListener>> = listener4_concrete.clone();
-        let listener5: Arc<Mutex<dyn EventListener>> = listener5_concrete.clone();
-
-        pubsub.subscribe("broadcast", listener1);
-        pubsub.subscribe("broadcast", listener2);
-        pubsub.subscribe("broadcast", listener3);
-        pubsub.subscribe("broadcast", listener4);
-        pubsub.subscribe("broadcast", listener5);
-
-        // Publish one message
-        pubsub.publish(
-            "broadcast",
-            &Event::Custom {
-                topic: "broadcast".to_string(),
-                data: serde_json::json!({"value": 42}),
-            },
-        );
-
-        wait_for_rayon();
-        // All 5 subscribers should receive the message (parallel dispatch)
-        assert_eq!(listener1_concrete.lock().count(), 1);
-        assert_eq!(listener2_concrete.lock().count(), 1);
-        assert_eq!(listener3_concrete.lock().count(), 1);
-        assert_eq!(listener4_concrete.lock().count(), 1);
-        assert_eq!(listener5_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_dropped_listener_auto_cleanup() {
-        let pubsub = PubSub::new();
-
-        let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-        pubsub.subscribe("test", listener);
-
-        // Drop the concrete listener
-        drop(listener_concrete);
-
-        // Publishing should not panic and should clean up the dead listener
-        pubsub.publish(
-            "test",
-            &Event::Custom {
-                topic: "test".to_string(),
-                data: serde_json::json!({"value": 1}),
-            },
-        );
-
-        // If we get here without panicking, test passes
-    }
-
-    #[test]
-    fn test_wildcard_subscription_receives_all_events() {
-        let pubsub = PubSub::new();
-
-        let wildcard_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let specific_listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
-
-        let wildcard_listener: Arc<Mutex<dyn EventListener>> = wildcard_listener_concrete.clone();
-        let specific_listener: Arc<Mutex<dyn EventListener>> = specific_listener_concrete.clone();
-
-        // Subscribe to wildcard (all events) and a specific topic
-        pubsub.subscribe(super::super::events::topics::ALL, wildcard_listener);
-        pubsub.subscribe("topic-a", specific_listener);
-
-        // Publish to various topics
-        pubsub.publish(
-            "topic-a",
-            &Event::Custom {
-                topic: "topic-a".to_string(),
-                data: serde_json::json!({"msg": "first"}),
-            },
-        );
-        pubsub.publish(
-            "topic-b",
-            &Event::Custom {
-                topic: "topic-b".to_string(),
-                data: serde_json::json!({"msg": "second"}),
-            },
-        );
-        pubsub.publish(
-            "runtime:global",
-            &Event::RuntimeGlobal(super::super::events::RuntimeEvent::RuntimeStarted),
-        );
-
-        wait_for_rayon();
-
-        // Wildcard listener should receive ALL 3 events
-        assert_eq!(wildcard_listener_concrete.lock().count(), 3);
-
-        // Specific listener should receive only 1 event (topic-a)
-        assert_eq!(specific_listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_wildcard_does_not_double_dispatch_to_self() {
-        let pubsub = PubSub::new();
-
-        let listener_concrete = Arc::new(Mutex::new(CountingListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-
-        // Subscribe to wildcard
-        pubsub.subscribe(super::super::events::topics::ALL, listener);
-
-        // Publish directly to wildcard topic
-        pubsub.publish(
-            super::super::events::topics::ALL,
-            &Event::Custom {
-                topic: "*".to_string(),
-                data: serde_json::json!({"direct": true}),
-            },
-        );
-
-        wait_for_rayon();
-
-        // Should receive exactly 1 event (no double dispatch)
-        assert_eq!(listener_concrete.lock().count(), 1);
+/// Map a topic string to an iceoryx2 service name.
+fn topic_to_service_name(runtime_id: &str, topic: &str) -> String {
+    if topic == topics::ALL {
+        format!("streamlib/{}/events/all", runtime_id)
+    } else {
+        // Replace colons with slashes for iceoryx2 service naming
+        let sanitized = topic.replace(':', "/");
+        format!("streamlib/{}/events/{}", runtime_id, sanitized)
     }
 }

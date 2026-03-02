@@ -9,7 +9,7 @@ use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::FramePayload;
+use super::{EventPayload, FramePayload};
 use crate::core::error::{Result, StreamError};
 
 /// Thread-safe wrapper for iceoryx2 Node.
@@ -31,6 +31,31 @@ impl Iceoryx2Node {
         Ok(Self {
             inner: Arc::new(Mutex::new(node)),
         })
+    }
+
+    /// Open or create a publish-subscribe service for EventPayload.
+    ///
+    /// The service name should follow the format: "streamlib/{runtime_id}/events/{topic}"
+    pub fn open_or_create_event_service(
+        &self,
+        service_name: &str,
+    ) -> Result<Iceoryx2EventService> {
+        let node = self.inner.lock();
+        let service_name: ServiceName = service_name.try_into().map_err(|e| {
+            StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+        })?;
+
+        let service = node
+            .service_builder(&service_name)
+            .publish_subscribe::<EventPayload>()
+            .max_publishers(16)
+            .subscriber_max_buffer_size(64)
+            .open_or_create()
+            .map_err(|e| {
+                StreamError::Runtime(format!("Failed to open/create event service: {:?}", e))
+            })?;
+
+        Ok(Iceoryx2EventService { inner: service })
     }
 
     /// Open or create a publish-subscribe service for FramePayload.
@@ -83,5 +108,41 @@ impl Iceoryx2Service {
             .buffer_size(16)
             .create()
             .map_err(|e| StreamError::Runtime(format!("Failed to create subscriber: {:?}", e)))
+    }
+}
+
+/// Handle to an iceoryx2 publish-subscribe service for events.
+pub struct Iceoryx2EventService {
+    inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
+        ipc::Service,
+        EventPayload,
+        (),
+    >,
+}
+
+impl Iceoryx2EventService {
+    /// Create a publisher for this event service.
+    pub fn create_publisher(
+        &self,
+    ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, EventPayload, ()>> {
+        self.inner
+            .publisher_builder()
+            .create()
+            .map_err(|e| {
+                StreamError::Runtime(format!("Failed to create event publisher: {:?}", e))
+            })
+    }
+
+    /// Create a subscriber for this event service.
+    pub fn create_subscriber(
+        &self,
+    ) -> Result<iceoryx2::port::subscriber::Subscriber<ipc::Service, EventPayload, ()>> {
+        self.inner
+            .subscriber_builder()
+            .buffer_size(64)
+            .create()
+            .map_err(|e| {
+                StreamError::Runtime(format!("Failed to create event subscriber: {:?}", e))
+            })
     }
 }

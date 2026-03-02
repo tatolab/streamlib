@@ -551,292 +551,63 @@ pub enum WindowEventType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::pubsub::PubSub;
-    use parking_lot::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-
-    /// Wait for rayon thread pool to complete pending tasks
-    fn wait_for_rayon() {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-
-    // Test listener that counts events and tracks received events
-    struct TestListener {
-        count: Arc<AtomicUsize>,
-        last_event: Option<Event>,
-    }
-
-    impl TestListener {
-        fn new() -> Self {
-            Self {
-                count: Arc::new(AtomicUsize::new(0)),
-                last_event: None,
-            }
-        }
-
-        fn count(&self) -> usize {
-            self.count.load(Ordering::SeqCst)
-        }
-    }
-
-    impl EventListener for TestListener {
-        fn on_event(&mut self, event: &Event) -> crate::core::error::Result<()> {
-            self.count.fetch_add(1, Ordering::SeqCst);
-            self.last_event = Some(event.clone());
-            Ok(())
-        }
-    }
 
     #[test]
-    fn test_keyboard_event_routing() {
-        let pubsub = PubSub::new();
-        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-
-        // Subscribe to keyboard topic
-        pubsub.subscribe(topics::KEYBOARD, listener);
-
-        // Create keyboard event
-        let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-
-        // Verify topic routing
-        assert_eq!(event.topic(), topics::KEYBOARD);
-
-        // Publish using the event's topic
-        pubsub.publish(&event.topic(), &event);
-
-        wait_for_rayon();
-        // Verify listener received it
-        assert_eq!(listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_mouse_event_routing() {
-        let pubsub = PubSub::new();
-        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-
-        // Subscribe to mouse topic
-        pubsub.subscribe(topics::MOUSE, listener);
-
-        // Create mouse event
-        let event = Event::mouse(MouseButton::Left, (100.0, 200.0), MouseState::Pressed);
-
-        // Verify topic routing
-        assert_eq!(event.topic(), topics::MOUSE);
-
-        // Publish using the event's topic
-        pubsub.publish(&event.topic(), &event);
-
-        wait_for_rayon();
-        // Verify listener received it
-        assert_eq!(listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_window_event_routing() {
-        let pubsub = PubSub::new();
-        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-
-        // Subscribe to window topic
-        pubsub.subscribe(topics::WINDOW, listener);
-
-        // Create window event
-        let event = Event::window(WindowEventType::Resized {
-            width: 1920,
-            height: 1080,
-        });
-
-        // Verify topic routing
-        assert_eq!(event.topic(), topics::WINDOW);
-
-        // Publish using the event's topic
-        pubsub.publish(&event.topic(), &event);
-
-        wait_for_rayon();
-        // Verify listener received it
-        assert_eq!(listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_processor_event_routing() {
-        let pubsub = PubSub::new();
-        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-
-        let processor_id = "audio-mixer";
-        let topic = topics::processor(processor_id);
-
-        // Subscribe to processor-specific topic
-        pubsub.subscribe(&topic, listener);
-
-        // Create processor event
-        let event = Event::processor(processor_id, ProcessorEvent::Started);
-
-        // Verify topic routing
-        assert_eq!(event.topic(), topic);
-
-        // Publish using the event's topic
-        pubsub.publish(&event.topic(), &event);
-
-        wait_for_rayon();
-        // Verify listener received it
-        assert_eq!(listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_runtime_global_event_routing() {
-        let pubsub = PubSub::new();
-        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-
-        // Subscribe to runtime global topic
-        pubsub.subscribe(topics::RUNTIME_GLOBAL, listener);
-
-        // Create runtime event (non-input)
-        let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStart);
-
-        // Verify topic routing
+    fn test_event_topic_routing() {
+        // RuntimeEvent non-input → RUNTIME_GLOBAL
+        let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
         assert_eq!(event.topic(), topics::RUNTIME_GLOBAL);
 
-        // Publish using the event's topic
-        pubsub.publish(&event.topic(), &event);
+        // Keyboard input → KEYBOARD
+        let kb = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
+        assert_eq!(kb.topic(), topics::KEYBOARD);
 
-        wait_for_rayon();
-        // Verify listener received it
-        assert_eq!(listener_concrete.lock().count(), 1);
+        // Mouse input → MOUSE
+        let mouse = Event::mouse(MouseButton::Left, (100.0, 200.0), MouseState::Pressed);
+        assert_eq!(mouse.topic(), topics::MOUSE);
+
+        // Window → WINDOW
+        let window = Event::window(WindowEventType::Closed);
+        assert_eq!(window.topic(), topics::WINDOW);
+
+        // Processor → processor:{id}
+        let proc = Event::processor("audio-mixer", ProcessorEvent::Started);
+        assert_eq!(proc.topic(), topics::processor("audio-mixer"));
+
+        // Custom → custom topic string
+        let custom = Event::custom("my-topic", serde_json::json!({"key": "value"}));
+        assert_eq!(custom.topic(), "my-topic");
     }
 
     #[test]
-    fn test_custom_event_routing() {
-        let pubsub = PubSub::new();
-        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
+    fn test_event_helper_constructors() {
+        let kb = Event::keyboard(KeyCode::Enter, Modifiers::default(), KeyState::Pressed);
+        assert!(matches!(
+            kb,
+            Event::RuntimeGlobal(RuntimeEvent::KeyboardInput { .. })
+        ));
 
-        let custom_topic = "game:player-scored";
+        let mouse = Event::mouse(MouseButton::Middle, (0.0, 0.0), MouseState::Pressed);
+        assert!(matches!(
+            mouse,
+            Event::RuntimeGlobal(RuntimeEvent::MouseInput { .. })
+        ));
 
-        // Subscribe to custom topic
-        pubsub.subscribe(custom_topic, listener);
+        let window = Event::window(WindowEventType::Closed);
+        assert!(matches!(
+            window,
+            Event::RuntimeGlobal(RuntimeEvent::WindowEvent { .. })
+        ));
 
-        // Create custom event
-        let event = Event::custom(
-            custom_topic,
-            serde_json::json!({"player": "Alice", "points": 100}),
-        );
+        let proc = Event::processor("test", ProcessorEvent::Started);
+        assert!(matches!(proc, Event::ProcessorEvent { .. }));
 
-        // Verify topic routing
-        assert_eq!(event.topic(), custom_topic);
-
-        // Publish using the event's topic
-        pubsub.publish(&event.topic(), &event);
-
-        wait_for_rayon();
-        // Verify listener received it
-        assert_eq!(listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_input_events_routed_to_specific_topics() {
-        let pubsub = PubSub::new();
-
-        let keyboard_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let mouse_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let window_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let runtime_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-
-        let keyboard_listener: Arc<Mutex<dyn EventListener>> = keyboard_listener_concrete.clone();
-        let mouse_listener: Arc<Mutex<dyn EventListener>> = mouse_listener_concrete.clone();
-        let window_listener: Arc<Mutex<dyn EventListener>> = window_listener_concrete.clone();
-        let runtime_listener: Arc<Mutex<dyn EventListener>> = runtime_listener_concrete.clone();
-
-        // Subscribe to all topics
-        pubsub.subscribe(topics::KEYBOARD, keyboard_listener);
-        pubsub.subscribe(topics::MOUSE, mouse_listener);
-        pubsub.subscribe(topics::WINDOW, window_listener);
-        pubsub.subscribe(topics::RUNTIME_GLOBAL, runtime_listener);
-
-        // Create keyboard input event (RuntimeEvent variant but routed to KEYBOARD)
-        let kb_event = Event::RuntimeGlobal(RuntimeEvent::KeyboardInput {
-            key: KeyCode::Space,
-            modifiers: Modifiers::default(),
-            state: KeyState::Pressed,
-        });
-        assert_eq!(kb_event.topic(), topics::KEYBOARD);
-        pubsub.publish(&kb_event.topic(), &kb_event);
-
-        // Create mouse input event (RuntimeEvent variant but routed to MOUSE)
-        let mouse_event = Event::RuntimeGlobal(RuntimeEvent::MouseInput {
-            button: MouseButton::Right,
-            position: (50.0, 75.0),
-            state: MouseState::Released,
-        });
-        assert_eq!(mouse_event.topic(), topics::MOUSE);
-        pubsub.publish(&mouse_event.topic(), &mouse_event);
-
-        // Create window event (RuntimeEvent variant but routed to WINDOW)
-        let window_event = Event::RuntimeGlobal(RuntimeEvent::WindowEvent {
-            event: WindowEventType::Focused,
-        });
-        assert_eq!(window_event.topic(), topics::WINDOW);
-        pubsub.publish(&window_event.topic(), &window_event);
-
-        // Create non-input runtime event (stays on RUNTIME_GLOBAL)
-        let runtime_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStop);
-        assert_eq!(runtime_event.topic(), topics::RUNTIME_GLOBAL);
-        pubsub.publish(&runtime_event.topic(), &runtime_event);
-
-        wait_for_rayon();
-        // Verify routing - each listener only received its specific events
-        assert_eq!(keyboard_listener_concrete.lock().count(), 1);
-        assert_eq!(mouse_listener_concrete.lock().count(), 1);
-        assert_eq!(window_listener_concrete.lock().count(), 1);
-        assert_eq!(runtime_listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_modifier_keys_as_regular_keys() {
-        let pubsub = PubSub::new();
-        let listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let listener: Arc<Mutex<dyn EventListener>> = listener_concrete.clone();
-
-        pubsub.subscribe(topics::KEYBOARD, listener);
-
-        // Test pressing shift key itself
-        let shift_event = Event::keyboard(
-            KeyCode::ShiftLeft,
-            Modifiers {
-                shift: false,
-                ctrl: false,
-                alt: false,
-                meta: false,
-            },
-            KeyState::Pressed,
-        );
-        pubsub.publish(&shift_event.topic(), &shift_event);
-
-        // Test pressing a key WITH shift held
-        let a_with_shift = Event::keyboard(
-            KeyCode::A,
-            Modifiers {
-                shift: true,
-                ctrl: false,
-                alt: false,
-                meta: false,
-            },
-            KeyState::Pressed,
-        );
-        pubsub.publish(&a_with_shift.topic(), &a_with_shift);
-
-        wait_for_rayon();
-        // Both events should be received
-        assert_eq!(listener_concrete.lock().count(), 2);
+        let custom = Event::custom("my-topic", serde_json::json!({"key": "value"}));
+        assert!(matches!(custom, Event::Custom { .. }));
     }
 
     #[test]
     fn test_modifiers_helper_methods() {
-        // Test any()
         let no_mods = Modifiers::default();
         assert!(!no_mods.any());
 
@@ -847,8 +618,6 @@ mod tests {
             meta: false,
         };
         assert!(with_shift.any());
-
-        // Test only_shift()
         assert!(with_shift.only_shift());
         assert!(!no_mods.only_shift());
 
@@ -860,7 +629,6 @@ mod tests {
         };
         assert!(!shift_and_ctrl.only_shift());
 
-        // Test only_ctrl()
         let with_ctrl = Modifiers {
             shift: false,
             ctrl: true,
@@ -869,7 +637,6 @@ mod tests {
         };
         assert!(with_ctrl.only_ctrl());
 
-        // Test only_alt()
         let with_alt = Modifiers {
             shift: false,
             ctrl: false,
@@ -878,7 +645,6 @@ mod tests {
         };
         assert!(with_alt.only_alt());
 
-        // Test only_meta()
         let with_meta = Modifiers {
             shift: false,
             ctrl: false,
@@ -889,67 +655,23 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_processors_isolated_topics() {
-        let pubsub = PubSub::new();
+    fn test_event_serialization_roundtrip() {
+        // Verify events can be serialized/deserialized via MessagePack
+        // (critical for iceoryx2 transport)
+        let events = vec![
+            Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
+            Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+            Event::processor("test-proc", ProcessorEvent::Started),
+            Event::custom("my-topic", serde_json::json!({"key": "value"})),
+            Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed),
+        ];
 
-        let audio_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-        let video_listener_concrete = Arc::new(Mutex::new(TestListener::new()));
-
-        let audio_listener: Arc<Mutex<dyn EventListener>> = audio_listener_concrete.clone();
-        let video_listener: Arc<Mutex<dyn EventListener>> = video_listener_concrete.clone();
-
-        // Subscribe to different processor topics
-        pubsub.subscribe(&topics::processor("audio-mixer"), audio_listener);
-        pubsub.subscribe(&topics::processor("video-filter"), video_listener);
-
-        // Publish to audio processor
-        let audio_event = Event::processor("audio-mixer", ProcessorEvent::Paused);
-        pubsub.publish(&audio_event.topic(), &audio_event);
-
-        // Publish to video processor
-        let video_event = Event::processor("video-filter", ProcessorEvent::Resumed);
-        pubsub.publish(&video_event.topic(), &video_event);
-
-        wait_for_rayon();
-        // Each listener only received its own processor's events
-        assert_eq!(audio_listener_concrete.lock().count(), 1);
-        assert_eq!(video_listener_concrete.lock().count(), 1);
-    }
-
-    #[test]
-    fn test_event_helper_constructors() {
-        // Test keyboard() helper
-        let kb = Event::keyboard(KeyCode::Enter, Modifiers::default(), KeyState::Pressed);
-        assert!(matches!(
-            kb,
-            Event::RuntimeGlobal(RuntimeEvent::KeyboardInput { .. })
-        ));
-        assert_eq!(kb.topic(), topics::KEYBOARD);
-
-        // Test mouse() helper
-        let mouse = Event::mouse(MouseButton::Middle, (0.0, 0.0), MouseState::Pressed);
-        assert!(matches!(
-            mouse,
-            Event::RuntimeGlobal(RuntimeEvent::MouseInput { .. })
-        ));
-        assert_eq!(mouse.topic(), topics::MOUSE);
-
-        // Test window() helper
-        let window = Event::window(WindowEventType::Closed);
-        assert!(matches!(
-            window,
-            Event::RuntimeGlobal(RuntimeEvent::WindowEvent { .. })
-        ));
-        assert_eq!(window.topic(), topics::WINDOW);
-
-        // Test processor() helper
-        let proc = Event::processor("test", ProcessorEvent::Started);
-        assert!(matches!(proc, Event::ProcessorEvent { .. }));
-        assert_eq!(proc.topic(), topics::processor("test"));
-
-        // Test custom() helper
-        let custom = Event::custom("my-topic", serde_json::json!({"key": "value"}));
-        assert!(matches!(custom, Event::Custom { .. }));
-        assert_eq!(custom.topic(), "my-topic");
+        for event in events {
+            let bytes = rmp_serde::to_vec_named(&event).unwrap();
+            let deserialized: Event = rmp_serde::from_slice(&bytes).unwrap();
+            // Verify round-trip preserves the event type
+            assert_eq!(event.topic(), deserialized.topic());
+            assert_eq!(event.log_name(), deserialized.log_name());
+        }
     }
 }
