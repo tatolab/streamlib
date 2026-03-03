@@ -36,10 +36,7 @@ impl Iceoryx2Node {
     /// Open or create a publish-subscribe service for EventPayload.
     ///
     /// The service name should follow the format: "streamlib/{runtime_id}/events/{topic}"
-    pub fn open_or_create_event_service(
-        &self,
-        service_name: &str,
-    ) -> Result<Iceoryx2EventService> {
+    pub fn open_or_create_event_service(&self, service_name: &str) -> Result<Iceoryx2EventService> {
         let node = self.inner.lock();
         let service_name: ServiceName = service_name.try_into().map_err(|e| {
             StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
@@ -128,9 +125,7 @@ impl Iceoryx2EventService {
         self.inner
             .publisher_builder()
             .create()
-            .map_err(|e| {
-                StreamError::Runtime(format!("Failed to create event publisher: {:?}", e))
-            })
+            .map_err(|e| StreamError::Runtime(format!("Failed to create event publisher: {:?}", e)))
     }
 
     /// Create a subscriber for this event service.

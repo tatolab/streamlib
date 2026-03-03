@@ -314,4 +314,4 @@ processors:
     execution: continuous
     config:
       name: config
-      schema: MyConfig
+      schema: com.streamlib.test.configured_processor.config@1.0.0

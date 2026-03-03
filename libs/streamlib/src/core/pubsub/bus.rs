@@ -2,10 +2,26 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use parking_lot::Mutex;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
 use super::events::{topics, Event, EventListener};
-use crate::iceoryx2::{EventPayload, Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
+use crate::iceoryx2::{EventPayload, Iceoryx2EventService, Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
+
+type EventPublisher =
+    iceoryx2::port::publisher::Publisher<iceoryx2::service::ipc::Service, EventPayload, ()>;
+
+thread_local! {
+    /// Per-thread cache of iceoryx2 publishers keyed by service name.
+    ///
+    /// iceoryx2 Publisher uses Rc internally (!Send), so it cannot be stored
+    /// in shared state. thread_local satisfies the !Send constraint while
+    /// keeping publishers alive so sent samples remain in shared memory
+    /// for subscribers to receive.
+    static PUBLISHER_CACHE: RefCell<HashMap<String, (Iceoryx2EventService, EventPublisher)>> =
+        RefCell::new(HashMap::new());
+}
 
 /// Global pub/sub instance for runtime events.
 ///
@@ -89,11 +105,7 @@ impl PubSub {
             let service = match node.open_or_create_event_service(&service_name) {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to create event service '{}': {}",
-                        service_name,
-                        e
-                    );
+                    tracing::error!("Failed to create event service '{}': {}", service_name, e);
                     return;
                 }
             };
@@ -101,11 +113,7 @@ impl PubSub {
             let subscriber = match service.create_subscriber() {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to create subscriber for '{}': {}",
-                        service_name,
-                        e
-                    );
+                    tracing::error!("Failed to create subscriber for '{}': {}", service_name, e);
                     return;
                 }
             };
@@ -186,40 +194,45 @@ impl PubSub {
         let service_name = topic_to_service_name(runtime_id, topic);
         let node = self.node.get().unwrap();
 
-        // Create a fresh publisher per call. iceoryx2 Publisher uses Rc internally
-        // (!Send), so we can't store it across threads. Events are infrequent
-        // (lifecycle, graph changes), so per-call creation is acceptable.
-        let service = match node.open_or_create_event_service(&service_name) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("Failed to open event service '{}': {}", service_name, e);
-                return;
-            }
-        };
+        PUBLISHER_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
 
-        let publisher = match service.create_publisher() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to create publisher for '{}': {}",
-                    service_name,
-                    e
-                );
-                return;
-            }
-        };
+            // Get or create a cached publisher for this service name.
+            // Publishers must stay alive so sent samples remain in shared memory.
+            if !cache.contains_key(&service_name) {
+                let service = match node.open_or_create_event_service(&service_name) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("Failed to open event service '{}': {}", service_name, e);
+                        return;
+                    }
+                };
 
-        match publisher.loan_uninit() {
-            Ok(sample) => {
-                let sample = sample.write_payload(*payload);
-                if let Err(e) = sample.send() {
-                    tracing::warn!("Failed to send event to '{}': {:?}", service_name, e);
+                let publisher = match service.create_publisher() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("Failed to create publisher for '{}': {}", service_name, e);
+                        return;
+                    }
+                };
+
+                cache.insert(service_name.clone(), (service, publisher));
+            }
+
+            let (_, publisher) = cache.get(&service_name).unwrap();
+
+            match publisher.loan_uninit() {
+                Ok(sample) => {
+                    let sample = sample.write_payload(*payload);
+                    if let Err(e) = sample.send() {
+                        tracing::warn!("Failed to send event to '{}': {:?}", service_name, e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to loan sample for '{}': {:?}", service_name, e);
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to loan sample for '{}': {:?}", service_name, e);
-            }
-        }
+        });
     }
 }
 
