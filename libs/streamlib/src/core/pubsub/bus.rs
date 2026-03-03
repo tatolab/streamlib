@@ -256,7 +256,7 @@ fn subscriber_poll_loop(
             match subscriber.receive() {
                 Ok(Some(sample)) => {
                     received_any = true;
-                    let payload: &EventPayload = &*sample;
+                    let payload: &EventPayload = &sample;
 
                     // Deserialize event from MessagePack
                     let event: Event = match rmp_serde::from_slice(payload.data()) {
