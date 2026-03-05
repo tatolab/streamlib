@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/tatolab/streamlib/compare/v0.3.7...v0.3.8) (2026-03-05)
+
+
+### Bug Fixes
+
+* PubSub publisher lifetime bug + comprehensive test suite ([#157](https://github.com/tatolab/streamlib/issues/157)) ([bf33f17](https://github.com/tatolab/streamlib/commit/bf33f17db6f4089638acabf1adafea4a2fdce8f0))
+
 ## [0.3.7](https://github.com/tatolab/streamlib/compare/v0.3.6...v0.3.7) (2026-03-01)
 
 
