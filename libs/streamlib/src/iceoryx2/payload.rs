@@ -7,5 +7,6 @@
 //! `streamlib-deno-native` share the same wire-compatible types.
 
 pub use streamlib_ipc_types::{
-    FramePayload, PortKey, SchemaName, MAX_PAYLOAD_SIZE, MAX_SCHEMA_NAME_SIZE,
+    EventPayload, FramePayload, PortKey, SchemaName, TopicKey, MAX_EVENT_PAYLOAD_SIZE,
+    MAX_PAYLOAD_SIZE, MAX_SCHEMA_NAME_SIZE, MAX_TOPIC_KEY_SIZE,
 };

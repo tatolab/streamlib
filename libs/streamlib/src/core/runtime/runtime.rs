@@ -102,6 +102,9 @@ pub struct StreamRuntime {
     /// Listener for graph changes that triggers compilation.
     /// Stored to keep subscription alive for runtime lifetime.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
+    /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
+    /// Created in new() so PUBSUB can initialize before start().
+    pub(crate) iceoryx2_node: Iceoryx2Node,
 }
 
 impl StreamRuntime {
@@ -140,6 +143,16 @@ impl StreamRuntime {
         let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors()?;
         tracing::debug!("Registered {} processors from inventory", result.count);
 
+        // Create iceoryx2 Node early so PUBSUB can initialize before start().
+        // The node is cloned into RuntimeContext during start().
+        tracing::info!("[new] Creating iceoryx2 Node...");
+        let iceoryx2_node = Iceoryx2Node::new()?;
+        tracing::info!("[new] iceoryx2 Node created");
+
+        // Initialize global PUBSUB with iceoryx2 backend.
+        // Must happen before any subscribe() calls (GraphChangeListener below).
+        PUBSUB.init(&runtime_id, iceoryx2_node.clone());
+
         // Create Arc-wrapped components
         let compiler = Arc::new(Compiler::new());
         let runtime_context = Arc::new(Mutex::new(None));
@@ -163,6 +176,7 @@ impl StreamRuntime {
             runtime_context,
             status,
             _graph_change_listener: listener,
+            iceoryx2_node,
         }))
     }
 
@@ -571,10 +585,8 @@ impl StreamRuntime {
         // Create shared timing context - clock starts now
         let time = Arc::new(TimeContext::new());
 
-        // Create iceoryx2 Node for cross-process communication
-        tracing::info!("[start] Creating iceoryx2 Node...");
-        let iceoryx2_node = Iceoryx2Node::new()?;
-        tracing::info!("[start] iceoryx2 Node created");
+        // Clone iceoryx2 Node (created in new() for early PUBSUB initialization)
+        let iceoryx2_node = self.iceoryx2_node.clone();
 
         // Create audio clock - platform-specific for best precision
         let audio_clock_config = AudioClockConfig::default();

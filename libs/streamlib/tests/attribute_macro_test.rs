@@ -90,8 +90,14 @@ fn test_processor_instantiation() {
     serde::Deserialize,
     streamlib::ConfigDescriptor,
 )]
-pub struct MyConfig {
+pub struct ConfiguredProcessorConfig {
     pub threshold: f32,
+}
+
+// The processor macro generates `crate::_generated_::ConfiguredProcessorConfig`.
+// In integration tests, `crate` refers to this test binary, so we need a bridge module.
+mod _generated_ {
+    pub use super::ConfiguredProcessorConfig;
 }
 
 #[streamlib::processor("com.streamlib.test.configured_processor")]
@@ -118,7 +124,7 @@ impl streamlib::ContinuousProcessor for ConfiguredProcessor::Processor {
 
 #[test]
 fn test_config_field_access() {
-    let config = MyConfig { threshold: 0.5 };
+    let config = ConfiguredProcessorConfig { threshold: 0.5 };
     let processor = ConfiguredProcessor::Processor::from_config(config).unwrap();
 
     // Config should be stored
@@ -127,11 +133,11 @@ fn test_config_field_access() {
 
 #[test]
 fn test_config_update() {
-    let config = MyConfig { threshold: 0.5 };
+    let config = ConfiguredProcessorConfig { threshold: 0.5 };
     let mut processor = ConfiguredProcessor::Processor::from_config(config).unwrap();
 
     // Update config
-    let new_config = MyConfig { threshold: 0.8 };
+    let new_config = ConfiguredProcessorConfig { threshold: 0.8 };
     processor.update_config(new_config).unwrap();
 
     assert_eq!(processor.config.threshold, 0.8);

@@ -12,7 +12,10 @@ mod read_mode;
 
 pub use input::InputMailboxes;
 pub use mailbox::PortMailbox;
-pub use node::{Iceoryx2Node, Iceoryx2Service};
+pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2Service};
 pub use output::OutputWriter;
-pub use payload::{FramePayload, PortKey, SchemaName, MAX_PAYLOAD_SIZE, MAX_SCHEMA_NAME_SIZE};
+pub use payload::{
+    EventPayload, FramePayload, PortKey, SchemaName, TopicKey, MAX_EVENT_PAYLOAD_SIZE,
+    MAX_PAYLOAD_SIZE, MAX_SCHEMA_NAME_SIZE, MAX_TOPIC_KEY_SIZE,
+};
 pub use read_mode::ReadMode;
