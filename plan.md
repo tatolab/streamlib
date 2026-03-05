@@ -33,7 +33,7 @@
 
 - [x] **#135** — streamlib-python-native FFI cdylib. Copy the `streamlib-deno-native` pattern to create `streamlib-python-native`. Gives Python subprocess processors direct iceoryx2 shared memory access via FFI, eliminating 6 pipe round-trips per frame (stdin/stdout JSON → direct shared memory read/write). *(PR #155)*
 
-- [ ] **#144** — Replace custom pubsub bus (`core/pubsub/`) with iceoryx2 Pub/Sub. See detailed implementation plan below.
+- [x] **#144** — Replace custom pubsub bus (`core/pubsub/`) with iceoryx2 Pub/Sub. See detailed implementation plan below. *(PR #144, plus follow-up fixes in 5d24443 and b69ef5d)*
 
 ---
 
@@ -216,7 +216,19 @@ Subscribers now need a tokio handle for the polling task. `RuntimeContext` provi
 
 **Total**: ~15 files modified/rewritten
 
-- [ ] **#143 (remaining)** — Advanced `.slpkg` features not yet implemented: JTD codegen integration in `streamlib pack`, `streamlib.lock` with file checksums, custom `schemas/` section in `ProjectConfig`, `package.namespace` field, URL loading in `runtime.load_package()`. Lower priority polish — pick items as needed.
+- [ ] **#143 (remaining)** — Advanced `.slpkg` features not yet implemented. The core goal is making `streamlib.yaml` a **fully self-describing, language-agnostic package manifest** so that third-party tools and package managers can determine everything about a StreamLib package from one file, without parsing `Cargo.toml`, `pyproject.toml`, or `deno.json`.
+
+  **Sub-tasks:**
+
+  1. **Move JTD schema references into `streamlib.yaml`** — Currently, JTD schema-to-file mappings live in `Cargo.toml` (`[package.metadata.streamlib].schemas`) and `pyproject.toml` (`[tool.streamlib].schemas`). Add a top-level `schemas` section to `streamlib.yaml` so all schema references are in one place. Update `xtask generate-schemas` to read from `streamlib.yaml` instead of language-specific project files.
+
+  2. **JTD codegen integration in `streamlib pack`** — The pack command should run codegen (or bundle pre-generated types) so that `.slpkg` packages are self-contained with typed bindings for all supported languages.
+
+  3. **`streamlib.lock` with file checksums** — Lock file generation for reproducible builds and integrity verification of packaged artifacts.
+
+  4. **`package.namespace` field** — Add namespace support to `PackageMetadata` for scoped package naming (e.g., `@tatolab/my-processor`).
+
+  5. **URL loading in `runtime.load_package()`** — The CLI (`streamlib pkg install`) already supports HTTP URLs, but the runtime API (`StreamRuntime::load_package()`) only accepts file paths. Expose URL loading at the API level.
 
 ## Issues
 
