@@ -80,7 +80,25 @@ impl Drop for TelemetryGuard {
 /// are sent to the broker via gRPC. The broker is the single SQLite writer.
 /// When `broker_endpoint` is None, spans and logs are written to SQLite directly
 /// (used by the broker itself).
+///
+/// Safe to call multiple times — only the first call initializes the tracing
+/// subscriber. Subsequent calls return a no-op guard (the original guard
+/// keeps the pipeline alive).
 pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard> {
+    static INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    if INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        // Already initialized — return a dummy guard.
+        // The original guard (held by whoever called first) keeps providers alive.
+        let dummy_tracer = SdkTracerProvider::builder().build();
+        let dummy_logger = SdkLoggerProvider::builder().build();
+        return Ok(TelemetryGuard {
+            _tracer_provider: dummy_tracer,
+            _logger_provider: dummy_logger,
+            _file_log_guard: None,
+        });
+    }
+
     let use_broker = {
         #[cfg(feature = "broker")]
         {

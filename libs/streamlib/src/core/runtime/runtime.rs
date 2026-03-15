@@ -105,10 +105,33 @@ pub struct StreamRuntime {
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     /// Created in new() so PUBSUB can initialize before start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
+    /// Telemetry guard — keeps the OTel pipeline alive for the runtime's lifetime.
+    _telemetry_guard: streamlib_telemetry::TelemetryGuard,
 }
 
 impl StreamRuntime {
     pub fn new() -> Result<Arc<Self>> {
+        // Initialize unified telemetry pipeline (broker-as-collector).
+        // Safe to call multiple times — only the first call sets up the subscriber.
+        let broker_endpoint = {
+            let port = std::env::var("STREAMLIB_BROKER_PORT")
+                .ok()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(streamlib_broker::GRPC_PORT);
+            format!("http://127.0.0.1:{}", port)
+        };
+        let _telemetry_guard =
+            streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
+                service_name: "streamlib-runtime".into(),
+                resource_attributes: vec![("process.pid".into(), std::process::id().to_string())],
+                file_log_path: None,
+                stdout_logging: true,
+                otlp_endpoint: std::env::var("STREAMLIB_OTLP_ENDPOINT").ok(),
+                sqlite_database_path: None,
+                broker_endpoint: Some(broker_endpoint),
+            })
+            .map_err(|e| StreamError::Runtime(format!("Failed to initialize telemetry: {}", e)))?;
+
         // Generate or retrieve runtime ID (checks STREAMLIB_RUNTIME_ID env var)
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
         tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
@@ -177,6 +200,7 @@ impl StreamRuntime {
             status,
             _graph_change_listener: listener,
             iceoryx2_node,
+            _telemetry_guard,
         }))
     }
 
