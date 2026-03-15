@@ -1,12 +1,13 @@
-# StreamLib — Optional Jaeger dashboard for trace visualization
+# StreamLib — Example: Jaeger for local trace visualization
+#
+# This is a convenience for quick local testing. StreamLib works with ANY
+# OTLP-compatible backend (Grafana Tempo, Datadog, Honeycomb, etc.) —
+# just set STREAMLIB_OTLP_ENDPOINT on the broker.
 #
 # Usage:
 #   docker compose -f docker-compose.jaeger.yml up -d
-#   STREAMLIB_OTLP_ENDPOINT=http://localhost:4317 cargo run -p streamlib-runtime
+#   STREAMLIB_OTLP_ENDPOINT=http://localhost:4317 ./.streamlib/bin/streamlib-broker
 #   open http://localhost:16686
-#
-# Requires: streamlib-telemetry built with the "otlp" feature
-#   cargo build -p streamlib-runtime --features streamlib-telemetry/otlp
 
 services:
   jaeger:
