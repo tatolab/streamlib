@@ -20,7 +20,9 @@ use crate::proto::{
 use crate::state::BrokerState;
 
 use streamlib_telemetry::proto::telemetry_ingest_service_server::TelemetryIngestService;
-use streamlib_telemetry::proto::{IngestTelemetryRequest, IngestTelemetryResponse};
+use streamlib_telemetry::proto::{
+    IngestTelemetryRequest, IngestTelemetryResponse, TelemetrySpanRecord,
+};
 use streamlib_telemetry::sqlite_telemetry_database::SqliteTelemetryDatabase;
 
 /// Current protocol version. Bump when gRPC API changes.
@@ -30,14 +32,20 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub struct BrokerGrpcService {
     state: BrokerState,
     telemetry_database: Arc<SqliteTelemetryDatabase>,
+    otlp_span_exporter: Option<tokio::sync::Mutex<opentelemetry_otlp::SpanExporter>>,
 }
 
 impl BrokerGrpcService {
     /// Create a new gRPC service with shared state and telemetry database.
-    pub fn new(state: BrokerState, telemetry_database: Arc<SqliteTelemetryDatabase>) -> Self {
+    pub fn new(
+        state: BrokerState,
+        telemetry_database: Arc<SqliteTelemetryDatabase>,
+        otlp_span_exporter: Option<opentelemetry_otlp::SpanExporter>,
+    ) -> Self {
         Self {
             state,
             telemetry_database,
+            otlp_span_exporter: otlp_span_exporter.map(tokio::sync::Mutex::new),
         }
     }
 }
@@ -586,11 +594,110 @@ impl TelemetryIngestService for BrokerGrpcService {
             }
         }
 
+        // Forward spans to OTLP if configured
+        if accepted_spans > 0 {
+            if let Some(ref exporter_mutex) = self.otlp_span_exporter {
+                let span_data = convert_proto_spans_to_span_data(&req.spans);
+                if !span_data.is_empty() {
+                    let exporter = exporter_mutex.lock().await;
+                    if let Err(e) =
+                        opentelemetry_sdk::trace::SpanExporter::export(&*exporter, span_data).await
+                    {
+                        tracing::warn!("OTLP span forward failed: {:?}", e);
+                    }
+                }
+            }
+        }
+
         Ok(Response::new(IngestTelemetryResponse {
             accepted_spans,
             accepted_logs,
         }))
     }
+}
+
+/// Convert proto span records to OTel SDK SpanData for OTLP export.
+fn convert_proto_spans_to_span_data(
+    spans: &[TelemetrySpanRecord],
+) -> Vec<opentelemetry_sdk::trace::SpanData> {
+    use opentelemetry::trace::{
+        SpanContext, SpanId, SpanKind, Status, TraceFlags, TraceId, TraceState,
+    };
+    use opentelemetry::InstrumentationScope;
+    use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanLinks};
+
+    spans
+        .iter()
+        .filter_map(|span| {
+            let trace_id = TraceId::from_hex(&span.trace_id).ok()?;
+            let span_id = SpanId::from_hex(&span.span_id).ok()?;
+            let parent = if span.parent_span_id.is_empty() {
+                SpanId::INVALID
+            } else {
+                SpanId::from_hex(&span.parent_span_id).ok()?
+            };
+
+            let span_context = SpanContext::new(
+                trace_id,
+                span_id,
+                TraceFlags::SAMPLED,
+                false,
+                TraceState::NONE,
+            );
+
+            let start_time = std::time::UNIX_EPOCH
+                + std::time::Duration::from_nanos(span.start_time_unix_ns as u64);
+            let end_time = std::time::UNIX_EPOCH
+                + std::time::Duration::from_nanos(span.end_time_unix_ns as u64);
+
+            let span_kind = match span.span_kind.as_str() {
+                "Server" => SpanKind::Server,
+                "Client" => SpanKind::Client,
+                "Producer" => SpanKind::Producer,
+                "Consumer" => SpanKind::Consumer,
+                _ => SpanKind::Internal,
+            };
+
+            let status = match span.status_code.as_str() {
+                "Ok" => Status::Ok,
+                "Error" => Status::Error {
+                    description: span.status_message.clone().into(),
+                },
+                _ => Status::Unset,
+            };
+
+            let attributes: Vec<opentelemetry::KeyValue> = if span.attributes_json.is_empty() {
+                vec![]
+            } else {
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                    &span.attributes_json,
+                )
+                .unwrap_or_default()
+                .iter()
+                .map(|(k, v)| {
+                    opentelemetry::KeyValue::new(k.clone(), v.as_str().unwrap_or("").to_string())
+                })
+                .collect()
+            };
+
+            Some(SpanData {
+                span_context,
+                parent_span_id: parent,
+                parent_span_is_remote: false,
+                span_kind,
+                name: span.operation_name.clone().into(),
+                start_time,
+                end_time,
+                attributes,
+                dropped_attributes_count: 0,
+                events: SpanEvents::default(),
+                links: SpanLinks::default(),
+                status,
+                instrumentation_scope: InstrumentationScope::builder(span.service_name.clone())
+                    .build(),
+            })
+        })
+        .collect()
 }
 
 /// Encode RGBA pixel data as PNG.

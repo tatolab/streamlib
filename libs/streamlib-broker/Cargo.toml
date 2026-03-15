@@ -37,6 +37,14 @@ tracing.workspace = true
 streamlib-telemetry = { workspace = true, features = ["broker"] }
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 
+# OTLP export for forwarding ingested telemetry
+opentelemetry = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["trace"] }
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic", "trace"] }
+
+# Serialization
+serde_json.workspace = true
+
 # Error handling
 anyhow.workspace = true
 thiserror.workspace = true

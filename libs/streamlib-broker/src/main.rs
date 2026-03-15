@@ -136,10 +136,29 @@ async fn start_grpc_server(
     telemetry_database: Arc<SqliteTelemetryDatabase>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use opentelemetry_otlp::WithExportConfig;
     use tonic::transport::Server;
 
     let addr = format!("127.0.0.1:{}", port).parse()?;
-    let service = Arc::new(BrokerGrpcService::new(state, telemetry_database));
+
+    // Create OTLP span exporter if endpoint is configured
+    let otlp_span_exporter = if let Ok(endpoint) = std::env::var("STREAMLIB_OTLP_ENDPOINT") {
+        info!("[Broker] OTLP forwarding enabled → {}", endpoint);
+        Some(
+            opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint(&endpoint)
+                .build()?,
+        )
+    } else {
+        None
+    };
+
+    let service = Arc::new(BrokerGrpcService::new(
+        state,
+        telemetry_database,
+        otlp_span_exporter,
+    ));
 
     info!(
         "[Broker] Starting gRPC server on {} (BrokerService + TelemetryIngestService)",
