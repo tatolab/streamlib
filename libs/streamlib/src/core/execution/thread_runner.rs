@@ -19,6 +19,7 @@ use crate::core::RuntimeContext;
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Run the processor thread main loop based on execution mode.
+#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, state, pause_gate, exec_config, runtime_ctx), fields(processor_id = %id))]
 pub fn run_processor_loop(
     id: ProcessorUniqueId,
     processor: Arc<Mutex<ProcessorInstance>>,

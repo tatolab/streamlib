@@ -533,6 +533,7 @@ impl StreamRuntime {
     ///
     /// Takes `&Arc<Self>` to allow passing the runtime to processors via RuntimeContext.
     /// Processors can then call runtime operations directly without indirection.
+    #[tracing::instrument(name = "runtime.start", skip_all)]
     pub fn start(self: &Arc<Self>) -> Result<()> {
         // Load .env file if present (development environment variables)
         if let Ok(path) = dotenvy::dotenv() {
@@ -659,6 +660,7 @@ impl StreamRuntime {
     }
 
     /// Stop the runtime.
+    #[tracing::instrument(name = "runtime.stop", skip_all)]
     pub fn stop(&self) -> Result<()> {
         tracing::info!("[stop] Beginning graceful shutdown");
         *self.status.lock() = RuntimeStatus::Stopping;
