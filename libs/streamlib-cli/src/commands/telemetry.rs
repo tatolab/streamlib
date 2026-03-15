@@ -13,6 +13,7 @@ pub async fn logs(
     since: Option<&str>,
     lines: usize,
     severity: Option<i32>,
+    follow: bool,
 ) -> Result<()> {
     let db_path =
         streamlib_telemetry::sqlite_telemetry_database::default_telemetry_database_path()?;
@@ -27,63 +28,136 @@ pub async fn logs(
         rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to open telemetry database")?;
 
-    let mut query = String::from(
-        "SELECT timestamp_unix_ns, severity_text, service_name, body, trace_id, attributes_json
-         FROM logs WHERE 1=1",
-    );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    // Build base WHERE clause (reused for initial query and follow polling)
+    let mut where_clauses = Vec::new();
+    let mut base_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
     if let Some(svc) = service {
-        query.push_str(" AND service_name LIKE ?");
-        params.push(Box::new(format!("%{}%", svc)));
+        where_clauses.push("service_name LIKE ?");
+        base_params.push(Box::new(format!("%{}%", svc)));
     }
 
     if let Some(since_str) = since {
         let duration = parse_duration(since_str)?;
         let cutoff_ns = cutoff_timestamp_ns(duration);
-        query.push_str(" AND timestamp_unix_ns > ?");
-        params.push(Box::new(cutoff_ns));
+        where_clauses.push("timestamp_unix_ns > ?");
+        base_params.push(Box::new(cutoff_ns));
     }
 
     if let Some(sev) = severity {
-        query.push_str(" AND severity_number >= ?");
-        params.push(Box::new(sev));
+        where_clauses.push("severity_number >= ?");
+        base_params.push(Box::new(sev));
     }
 
-    query.push_str(&format!(" ORDER BY timestamp_unix_ns DESC LIMIT {}", lines));
+    let where_sql = if where_clauses.is_empty() {
+        "1=1".to_string()
+    } else {
+        where_clauses.join(" AND ")
+    };
 
-    let mut stmt = conn.prepare(&query)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    let rows = stmt.query_map(param_refs.as_slice(), |row| {
-        let timestamp_ns: i64 = row.get(0)?;
-        let severity: Option<String> = row.get(1)?;
-        let service: String = row.get(2)?;
-        let body: Option<String> = row.get(3)?;
-        let trace_id: Option<String> = row.get(4)?;
-        let attrs: Option<String> = row.get(5)?;
-        Ok((timestamp_ns, severity, service, body, trace_id, attrs))
-    })?;
+    // Initial query — show last N lines
+    let initial_query = format!(
+        "SELECT timestamp_unix_ns, severity_text, service_name, body, trace_id, attributes_json
+         FROM logs WHERE {} ORDER BY timestamp_unix_ns DESC LIMIT {}",
+        where_sql, lines
+    );
 
-    let mut results: Vec<_> = rows.filter_map(|r| r.ok()).collect();
-    results.reverse(); // Show oldest first (natural reading order)
+    let mut last_seen_ns: i64 = 0;
 
-    if results.is_empty() {
-        println!("No log entries found.");
+    {
+        let mut stmt = conn.prepare(&initial_query)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            base_params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            let timestamp_ns: i64 = row.get(0)?;
+            let severity: Option<String> = row.get(1)?;
+            let service: String = row.get(2)?;
+            let body: Option<String> = row.get(3)?;
+            let trace_id: Option<String> = row.get(4)?;
+            Ok((timestamp_ns, severity, service, body, trace_id))
+        })?;
+
+        let mut results: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+        results.reverse();
+
+        if results.is_empty() && !follow {
+            println!("No log entries found.");
+            return Ok(());
+        }
+
+        for (timestamp_ns, severity, service, body, trace_id) in &results {
+            print_log_line(
+                *timestamp_ns,
+                severity.as_deref(),
+                service,
+                body.as_deref(),
+                trace_id.as_deref(),
+            );
+            if *timestamp_ns > last_seen_ns {
+                last_seen_ns = *timestamp_ns;
+            }
+        }
+    }
+
+    if !follow {
         return Ok(());
     }
 
-    for (timestamp_ns, severity, service, body, trace_id, _attrs) in &results {
-        let ts = format_timestamp_ns(*timestamp_ns);
-        let sev = severity.as_deref().unwrap_or("???");
-        let msg = body.as_deref().unwrap_or("");
-        let trace = trace_id
-            .as_ref()
-            .map(|t| format!(" [{}]", &t[..8.min(t.len())]))
-            .unwrap_or_default();
-        println!("{} {:>5} {} {}{}", ts, sev, service, msg, trace);
-    }
+    // Follow mode — poll for new entries every second
+    let poll_query = format!(
+        "SELECT timestamp_unix_ns, severity_text, service_name, body, trace_id, attributes_json
+         FROM logs WHERE {} AND timestamp_unix_ns > ? ORDER BY timestamp_unix_ns ASC",
+        where_sql
+    );
 
-    Ok(())
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        let mut stmt = conn.prepare(&poll_query)?;
+        let mut poll_params: Vec<&dyn rusqlite::types::ToSql> =
+            base_params.iter().map(|p| p.as_ref()).collect();
+        poll_params.push(&last_seen_ns);
+
+        let rows = stmt.query_map(poll_params.as_slice(), |row| {
+            let timestamp_ns: i64 = row.get(0)?;
+            let severity: Option<String> = row.get(1)?;
+            let service: String = row.get(2)?;
+            let body: Option<String> = row.get(3)?;
+            let trace_id: Option<String> = row.get(4)?;
+            Ok((timestamp_ns, severity, service, body, trace_id))
+        })?;
+
+        for row in rows {
+            let (timestamp_ns, severity, service, body, trace_id) = row?;
+            print_log_line(
+                timestamp_ns,
+                severity.as_deref(),
+                &service,
+                body.as_deref(),
+                trace_id.as_deref(),
+            );
+            if timestamp_ns > last_seen_ns {
+                last_seen_ns = timestamp_ns;
+            }
+        }
+    }
+}
+
+fn print_log_line(
+    timestamp_ns: i64,
+    severity: Option<&str>,
+    service: &str,
+    body: Option<&str>,
+    trace_id: Option<&str>,
+) {
+    let ts = format_timestamp_ns(timestamp_ns);
+    let sev = severity.unwrap_or("???");
+    let msg = body.unwrap_or("");
+    let trace = trace_id
+        .filter(|t| !t.is_empty())
+        .map(|t| format!(" [{}]", &t[..8.min(t.len())]))
+        .unwrap_or_default();
+    println!("{} {:>5} {} {}{}", ts, sev, service, msg, trace);
 }
 
 /// Query spans/traces from the telemetry SQLite database.
@@ -375,13 +449,19 @@ pub async fn export(endpoint: &str, since: Option<&str>, service: Option<&str>) 
     println!("Found {} span(s) to export.", span_batch.len());
 
     if !span_batch.is_empty() {
-        let span_exporter = opentelemetry_otlp::SpanExporter::builder()
+        let mut span_exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
             .with_endpoint(endpoint)
             .build()
             .context("Failed to create OTLP span exporter")?;
 
+        // Set service.name resource so Jaeger/Tempo identifies the service
         use opentelemetry_sdk::trace::SpanExporter;
+        let resource = opentelemetry_sdk::Resource::builder()
+            .with_service_name("streamlib-runtime")
+            .build();
+        span_exporter.set_resource(&resource);
+
         span_exporter
             .export(span_batch)
             .await

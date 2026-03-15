@@ -33,6 +33,48 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Query logs from all runtimes (unified telemetry)
+    Logs {
+        /// Filter by runtime or service name
+        #[arg(long = "runtime", short = 'r')]
+        runtime: Option<String>,
+
+        /// Show logs since duration (e.g., "5m", "1h", "30s")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Number of lines to show (default: 100)
+        #[arg(short = 'n', long, default_value = "100")]
+        lines: usize,
+
+        /// Minimum severity (5=DEBUG, 9=INFO, 13=WARN, 17=ERROR)
+        #[arg(long)]
+        severity: Option<i32>,
+
+        /// Follow log output (like tail -f)
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
+
+    /// Query spans/traces from all runtimes (unified telemetry)
+    Spans {
+        /// Filter by runtime or service name
+        #[arg(long = "runtime", short = 'r')]
+        runtime: Option<String>,
+
+        /// Show spans since duration (e.g., "5m", "1h")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Number of spans to show (default: 50)
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+
+        /// Filter by status (Ok, Error, Unset)
+        #[arg(long)]
+        status: Option<String>,
+    },
+
     /// Run the StreamLib runtime
     Run {
         /// Pipeline graph file to load (JSON)
@@ -308,6 +350,10 @@ enum TelemetryCommands {
         /// Minimum severity (1=TRACE, 5=DEBUG, 9=INFO, 13=WARN, 17=ERROR)
         #[arg(long)]
         severity: Option<i32>,
+
+        /// Follow log output (like tail -f)
+        #[arg(short = 'f', long)]
+        follow: bool,
     },
     /// Query spans/traces from the telemetry database
     Spans {
@@ -374,6 +420,36 @@ async fn async_main(cli: Cli) -> Result<()> {
         })?;
 
     match cli.command {
+        Some(Commands::Logs {
+            runtime,
+            since,
+            lines,
+            severity,
+            follow,
+        }) => {
+            commands::telemetry::logs(
+                runtime.as_deref(),
+                since.as_deref(),
+                lines,
+                severity,
+                follow,
+            )
+            .await?
+        }
+        Some(Commands::Spans {
+            runtime,
+            since,
+            lines,
+            status,
+        }) => {
+            commands::telemetry::spans(
+                runtime.as_deref(),
+                since.as_deref(),
+                lines,
+                status.as_deref(),
+            )
+            .await?
+        }
         Some(Commands::Pack {
             package_dir,
             output,
@@ -462,9 +538,16 @@ async fn async_main(cli: Cli) -> Result<()> {
                 since,
                 lines,
                 severity,
+                follow,
             } => {
-                commands::telemetry::logs(service.as_deref(), since.as_deref(), lines, severity)
-                    .await?
+                commands::telemetry::logs(
+                    service.as_deref(),
+                    since.as_deref(),
+                    lines,
+                    severity,
+                    follow,
+                )
+                .await?
             }
             TelemetryCommands::Spans {
                 service,

@@ -130,6 +130,9 @@ impl StreamRuntime {
         // Load .env file (dev-setup.sh generates this with STREAMLIB_BROKER_PORT, etc.)
         let _ = dotenvy::dotenv();
 
+        // Generate runtime ID first — used as service_name for telemetry.
+        let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
+
         // Initialize unified telemetry pipeline (broker-as-collector).
         // Must happen after Tokio runtime exists — gRPC exporters capture the handle.
         // Safe to call multiple times — only the first call sets up the subscriber.
@@ -144,8 +147,11 @@ impl StreamRuntime {
         };
         let _telemetry_guard =
             streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
-                service_name: "streamlib-runtime".into(),
-                resource_attributes: vec![("process.pid".into(), std::process::id().to_string())],
+                service_name: format!("runtime:{}", runtime_id),
+                resource_attributes: vec![
+                    ("runtime.id".into(), runtime_id.to_string()),
+                    ("process.pid".into(), std::process::id().to_string()),
+                ],
                 file_log_path: None,
                 stdout_logging: true,
                 otlp_endpoint: std::env::var("STREAMLIB_OTLP_ENDPOINT").ok(),
@@ -154,9 +160,6 @@ impl StreamRuntime {
             })
             .map_err(|e| StreamError::Runtime(format!("Failed to initialize telemetry: {}", e)))?;
         drop(_enter_guard);
-
-        // Generate or retrieve runtime ID (checks STREAMLIB_RUNTIME_ID env var)
-        let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
         tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
