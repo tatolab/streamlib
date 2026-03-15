@@ -111,8 +111,27 @@ pub struct StreamRuntime {
 
 impl StreamRuntime {
     pub fn new() -> Result<Arc<Self>> {
+        // Auto-detect tokio context FIRST — telemetry exporters need a Tokio handle.
+        // If inside tokio runtime: use current handle (external handle mode)
+        // If outside tokio runtime: create owned runtime
+        let tokio_runtime_variant = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => TokioRuntimeVariant::ExternalTokioHandle(handle),
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| {
+                        StreamError::Runtime(format!("Failed to create tokio runtime: {}", e))
+                    })?;
+                TokioRuntimeVariant::OwnedTokioRuntime(rt)
+            }
+        };
+
         // Initialize unified telemetry pipeline (broker-as-collector).
+        // Must happen after Tokio runtime exists — gRPC exporters capture the handle.
         // Safe to call multiple times — only the first call sets up the subscriber.
+        let tokio_handle = tokio_runtime_variant.handle();
+        let _enter_guard = tokio_handle.enter();
         let broker_endpoint = {
             let port = std::env::var("STREAMLIB_BROKER_PORT")
                 .ok()
@@ -131,6 +150,7 @@ impl StreamRuntime {
                 broker_endpoint: Some(broker_endpoint),
             })
             .map_err(|e| StreamError::Runtime(format!("Failed to initialize telemetry: {}", e)))?;
+        drop(_enter_guard);
 
         // Generate or retrieve runtime ID (checks STREAMLIB_RUNTIME_ID env var)
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
@@ -140,26 +160,6 @@ impl StreamRuntime {
         let streamlib_home = crate::core::get_streamlib_home();
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::run_init_hooks(&streamlib_home)?;
-
-        // Auto-detect tokio context (issue #92)
-        // If inside tokio runtime: use current handle (external handle mode)
-        // If outside tokio runtime: create owned runtime
-        let tokio_runtime_variant = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tracing::debug!("Detected existing tokio runtime, using external handle mode");
-                TokioRuntimeVariant::ExternalTokioHandle(handle)
-            }
-            Err(_) => {
-                // Create tokio runtime with default thread count (one per CPU core)
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| {
-                        StreamError::Runtime(format!("Failed to create tokio runtime: {}", e))
-                    })?;
-                TokioRuntimeVariant::OwnedTokioRuntime(rt)
-            }
-        };
 
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
