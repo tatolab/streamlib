@@ -14,7 +14,7 @@ use libloading::Library;
 use streamlib::core::processors::PROCESSOR_REGISTRY;
 use streamlib::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
 use streamlib_plugin_abi::{PluginDeclaration, STREAMLIB_ABI_VERSION};
-use tracing_appender::non_blocking::WorkerGuard;
+use streamlib_telemetry::{TelemetryConfig, TelemetryGuard};
 
 // ---------------------------------------------------------------------------
 // CLI arguments
@@ -131,32 +131,34 @@ fn get_logs_dir() -> Result<PathBuf> {
     Ok(home.join(".streamlib").join("logs"))
 }
 
-fn setup_file_logging(runtime_name: &str, daemon: bool) -> Result<WorkerGuard> {
-    use tracing_subscriber::prelude::*;
+fn setup_telemetry(
+    runtime_name: &str,
+    runtime_id: &str,
+    log_path: &Path,
+    daemon: bool,
+) -> Result<TelemetryGuard> {
+    // Resolve broker endpoint from STREAMLIB_BROKER_PORT (same env var used for registration)
+    let broker_endpoint = {
+        let port = std::env::var("STREAMLIB_BROKER_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(streamlib_broker::GRPC_PORT);
+        Some(format!("http://127.0.0.1:{}", port))
+    };
 
-    let logs_dir = get_logs_dir()?;
-    std::fs::create_dir_all(&logs_dir)?;
-
-    let file_appender =
-        tracing_appender::rolling::never(&logs_dir, format!("{}.log", runtime_name));
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info".parse().unwrap());
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_ansi(false);
-
-    let stdout_layer = (!daemon).then(tracing_subscriber::fmt::layer);
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(stdout_layer)
-        .with(file_layer)
-        .init();
-
-    Ok(guard)
+    streamlib_telemetry::init_telemetry(TelemetryConfig {
+        service_name: "streamlib-runtime".into(),
+        resource_attributes: vec![
+            ("runtime.id".into(), runtime_id.to_string()),
+            ("runtime.name".into(), runtime_name.to_string()),
+            ("process.pid".into(), std::process::id().to_string()),
+        ],
+        file_log_path: Some(log_path.to_path_buf()),
+        stdout_logging: !daemon,
+        otlp_endpoint: std::env::var("STREAMLIB_OTLP_ENDPOINT").ok(),
+        sqlite_database_path: None,
+        broker_endpoint,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -325,8 +327,8 @@ async fn run(args: Args) -> Result<()> {
     let runtime_id = format!("R{}", cuid2::create_id());
     std::env::set_var("STREAMLIB_RUNTIME_ID", &runtime_id);
 
-    // Set up file-based logging (daemon mode skips stdout)
-    let _log_guard = setup_file_logging(&runtime_name, args.daemon)?;
+    // Set up telemetry (OTel traces + logs → SQLite, optional OTLP, file + stdout)
+    let _telemetry_guard = setup_telemetry(&runtime_name, &runtime_id, &log_path, args.daemon)?;
 
     tracing::info!("Starting runtime: {} ({})", runtime_name, runtime_id);
     tracing::info!("Log file: {}", log_path.display());

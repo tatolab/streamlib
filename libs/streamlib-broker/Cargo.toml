@@ -32,9 +32,10 @@ tokio.workspace = true
 # State management
 parking_lot = "0.12"
 
-# Logging
+# Logging / Telemetry
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+streamlib-telemetry = { workspace = true, features = ["broker"] }
+rusqlite = { version = "0.38.0", features = ["bundled"] }
 
 # Error handling
 anyhow.workspace = true

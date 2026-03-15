@@ -42,9 +42,10 @@ anyhow.workspace = true
 # Load .env files for development environment
 dotenvy = "0.15"
 
-# Logging
+# Logging / Telemetry
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+streamlib-telemetry.workspace = true
+rusqlite = { version = "0.38.0", features = ["bundled"] }
 
 # Timestamp parsing for log filtering
 chrono = "0.4"

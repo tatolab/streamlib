@@ -1,0 +1,19 @@
+# StreamLib — Optional Jaeger dashboard for trace visualization
+#
+# Usage:
+#   docker compose -f docker-compose.jaeger.yml up -d
+#   STREAMLIB_OTLP_ENDPOINT=http://localhost:4317 cargo run -p streamlib-runtime
+#   open http://localhost:16686
+#
+# Requires: streamlib-telemetry built with the "otlp" feature
+#   cargo build -p streamlib-runtime --features streamlib-telemetry/otlp
+
+services:
+  jaeger:
+    image: jaegertracing/jaeger:2
+    ports:
+      - "4317:4317"    # OTLP gRPC receiver
+      - "4318:4318"    # OTLP HTTP receiver
+      - "16686:16686"  # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
