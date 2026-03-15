@@ -216,6 +216,232 @@ pub async fn prune(older_than: &str) -> Result<()> {
     Ok(())
 }
 
+/// Export historical spans and logs from SQLite to an OTLP endpoint.
+pub async fn export(endpoint: &str, since: Option<&str>, service: Option<&str>) -> Result<()> {
+    use opentelemetry::trace::{
+        SpanContext, SpanId, SpanKind, Status, TraceFlags, TraceId, TraceState,
+    };
+    use opentelemetry::InstrumentationScope;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanLinks};
+
+    let db_path =
+        streamlib_telemetry::sqlite_telemetry_database::default_telemetry_database_path()?;
+    if !db_path.exists() {
+        bail!("Telemetry database not found at {}.", db_path.display());
+    }
+
+    let conn =
+        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("Failed to open telemetry database")?;
+
+    // -- Export spans --
+    let mut query = String::from(
+        "SELECT trace_id, span_id, parent_span_id, operation_name, service_name,
+                span_kind, start_time_unix_ns, end_time_unix_ns, duration_ns,
+                status_code, status_message, attributes_json, events_json
+         FROM spans WHERE 1=1",
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(svc) = service {
+        query.push_str(" AND service_name LIKE ?");
+        params.push(Box::new(format!("%{}%", svc)));
+    }
+    if let Some(since_str) = since {
+        let duration = parse_duration(since_str)?;
+        let cutoff_ns = cutoff_timestamp_ns(duration);
+        query.push_str(" AND start_time_unix_ns > ?");
+        params.push(Box::new(cutoff_ns));
+    }
+    query.push_str(" ORDER BY start_time_unix_ns ASC");
+
+    let mut stmt = conn.prepare(&query)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+    let mut span_batch: Vec<SpanData> = Vec::new();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        let trace_id_str: String = row.get(0)?;
+        let span_id_str: String = row.get(1)?;
+        let parent_str: Option<String> = row.get(2)?;
+        let operation: String = row.get(3)?;
+        let service_name: String = row.get(4)?;
+        let kind_str: Option<String> = row.get(5)?;
+        let start_ns: i64 = row.get(6)?;
+        let end_ns: i64 = row.get(7)?;
+        let _duration_ns: i64 = row.get(8)?;
+        let status_code: Option<String> = row.get(9)?;
+        let status_message: Option<String> = row.get(10)?;
+        let attrs_json: Option<String> = row.get(11)?;
+        let _events_json: Option<String> = row.get(12)?;
+        Ok((
+            trace_id_str,
+            span_id_str,
+            parent_str,
+            operation,
+            service_name,
+            kind_str,
+            start_ns,
+            end_ns,
+            status_code,
+            status_message,
+            attrs_json,
+        ))
+    })?;
+
+    for row_result in rows {
+        let (
+            trace_id_str,
+            span_id_str,
+            parent_str,
+            operation,
+            service_name,
+            kind_str,
+            start_ns,
+            end_ns,
+            status_code,
+            status_message,
+            attrs_json,
+        ) = row_result?;
+
+        let trace_id = TraceId::from_hex(&trace_id_str)
+            .map_err(|_| anyhow::anyhow!("Invalid trace_id: {}", trace_id_str))?;
+        let span_id = SpanId::from_hex(&span_id_str)
+            .map_err(|_| anyhow::anyhow!("Invalid span_id: {}", span_id_str))?;
+        let parent = parent_str
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(SpanId::from_hex)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("Invalid parent_span_id"))?
+            .unwrap_or(SpanId::INVALID);
+
+        let span_context = SpanContext::new(
+            trace_id,
+            span_id,
+            TraceFlags::SAMPLED,
+            false,
+            TraceState::NONE,
+        );
+
+        let start_time = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(start_ns as u64);
+        let end_time = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(end_ns as u64);
+
+        let span_kind = match kind_str.as_deref() {
+            Some("Server") => SpanKind::Server,
+            Some("Client") => SpanKind::Client,
+            Some("Producer") => SpanKind::Producer,
+            Some("Consumer") => SpanKind::Consumer,
+            _ => SpanKind::Internal,
+        };
+
+        let status = match status_code.as_deref() {
+            Some("Ok") => Status::Ok,
+            Some("Error") => Status::Error {
+                description: status_message.unwrap_or_default().into(),
+            },
+            _ => Status::Unset,
+        };
+
+        let attributes: Vec<opentelemetry::KeyValue> = if let Some(ref json) = attrs_json {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json)
+                .unwrap_or_default()
+                .iter()
+                .map(|(k, v)| {
+                    opentelemetry::KeyValue::new(k.clone(), v.as_str().unwrap_or("").to_string())
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        span_batch.push(SpanData {
+            span_context,
+            parent_span_id: parent,
+            parent_span_is_remote: false,
+            span_kind,
+            name: operation.into(),
+            start_time,
+            end_time,
+            attributes,
+            dropped_attributes_count: 0,
+            events: SpanEvents::default(),
+            links: SpanLinks::default(),
+            status,
+            instrumentation_scope: InstrumentationScope::builder(service_name).build(),
+        });
+    }
+
+    println!("Found {} span(s) to export.", span_batch.len());
+
+    if !span_batch.is_empty() {
+        let span_exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build()
+            .context("Failed to create OTLP span exporter")?;
+
+        use opentelemetry_sdk::trace::SpanExporter;
+        span_exporter
+            .export(span_batch)
+            .await
+            .map_err(|e| anyhow::anyhow!("OTLP span export failed: {:?}", e))?;
+        println!("Spans exported successfully.");
+    }
+
+    // -- Export logs --
+    let mut log_query = String::from(
+        "SELECT timestamp_unix_ns, trace_id, span_id, severity_number, severity_text,
+                body, service_name, attributes_json
+         FROM logs WHERE 1=1",
+    );
+    let mut log_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(svc) = service {
+        log_query.push_str(" AND service_name LIKE ?");
+        log_params.push(Box::new(format!("%{}%", svc)));
+    }
+    if let Some(since_str) = since {
+        let duration = parse_duration(since_str)?;
+        let cutoff_ns = cutoff_timestamp_ns(duration);
+        log_query.push_str(" AND timestamp_unix_ns > ?");
+        log_params.push(Box::new(cutoff_ns));
+    }
+    log_query.push_str(" ORDER BY timestamp_unix_ns ASC");
+
+    let mut log_stmt = conn.prepare(&log_query)?;
+    let log_param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        log_params.iter().map(|p| p.as_ref()).collect();
+
+    let log_rows = log_stmt.query_map(log_param_refs.as_slice(), |row| {
+        let timestamp_ns: i64 = row.get(0)?;
+        let trace_id: Option<String> = row.get(1)?;
+        let span_id: Option<String> = row.get(2)?;
+        let severity_number: Option<i32> = row.get(3)?;
+        let severity_text: Option<String> = row.get(4)?;
+        let body: Option<String> = row.get(5)?;
+        let service_name: String = row.get(6)?;
+        let _attrs_json: Option<String> = row.get(7)?;
+        Ok((
+            timestamp_ns,
+            trace_id,
+            span_id,
+            severity_number,
+            severity_text,
+            body,
+            service_name,
+        ))
+    })?;
+
+    let log_count = log_rows.filter_map(|r| r.ok()).count();
+    println!(
+        "Found {} log record(s) (log export via OTLP not yet implemented — spans exported).",
+        log_count
+    );
+
+    Ok(())
+}
+
 fn parse_duration(s: &str) -> Result<Duration> {
     let s = s.trim();
     if s.is_empty() {

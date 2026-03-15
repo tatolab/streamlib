@@ -47,6 +47,11 @@ tracing.workspace = true
 streamlib-telemetry.workspace = true
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 
+# OTLP export for telemetry backfill
+opentelemetry = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["trace", "logs"] }
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic", "trace", "logs"] }
+
 # Timestamp parsing for log filtering
 chrono = "0.4"
 

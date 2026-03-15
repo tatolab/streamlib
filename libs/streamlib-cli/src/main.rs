@@ -333,6 +333,20 @@ enum TelemetryCommands {
         #[arg(long = "older-than", default_value = "7d")]
         older_than: String,
     },
+    /// Export historical telemetry to an OTLP endpoint (Grafana/Jaeger backfill)
+    Export {
+        /// OTLP gRPC endpoint (e.g., "http://localhost:4317")
+        #[arg(long)]
+        endpoint: String,
+
+        /// Export data since duration (e.g., "7d", "1h")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter by service name
+        #[arg(long = "service", short = 's')]
+        service: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -468,6 +482,13 @@ async fn async_main(cli: Cli) -> Result<()> {
             }
             TelemetryCommands::Prune { older_than } => {
                 commands::telemetry::prune(&older_than).await?
+            }
+            TelemetryCommands::Export {
+                endpoint,
+                since,
+                service,
+            } => {
+                commands::telemetry::export(&endpoint, since.as_deref(), service.as_deref()).await?
             }
         },
         None => {
