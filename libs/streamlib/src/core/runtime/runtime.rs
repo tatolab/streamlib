@@ -127,6 +127,9 @@ impl StreamRuntime {
             }
         };
 
+        // Load .env file (dev-setup.sh generates this with STREAMLIB_BROKER_PORT, etc.)
+        let _ = dotenvy::dotenv();
+
         // Initialize unified telemetry pipeline (broker-as-collector).
         // Must happen after Tokio runtime exists — gRPC exporters capture the handle.
         // Safe to call multiple times — only the first call sets up the subscriber.
@@ -559,11 +562,6 @@ impl StreamRuntime {
     /// Processors can then call runtime operations directly without indirection.
     #[tracing::instrument(name = "runtime.start", skip_all)]
     pub fn start(self: &Arc<Self>) -> Result<()> {
-        // Load .env file if present (development environment variables)
-        if let Ok(path) = dotenvy::dotenv() {
-            tracing::info!("[start] Loaded environment from {}", path.display());
-        }
-
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
