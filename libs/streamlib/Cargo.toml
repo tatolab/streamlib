@@ -129,6 +129,7 @@ ctor = "0.4"  # Global constructor for automatic broker mode detection
 tonic = "0.12"  # gRPC client for broker availability check
 prost = "0.13"  # Protocol Buffers for gRPC message types
 streamlib-broker = { path = "../streamlib-broker" }  # Broker proto types for gRPC client
+streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified telemetry pipeline
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"

@@ -20,6 +20,7 @@ Environment variables:
 """
 
 import importlib
+import logging
 import os
 import select
 import sys
@@ -32,6 +33,10 @@ from .processor_context import (
     bridge_send_message,
     load_native_lib,
 )
+from .telemetry import setup_subprocess_telemetry
+
+# Module-level logger, initialized in main()
+_logger: logging.Logger | None = None
 
 
 def _load_processor_class(entrypoint: str, project_path: str):
@@ -61,16 +66,13 @@ def _setup_native_context(msg, native_lib_path, processor_id):
         port_name = inp["name"]
         service_name = inp["service_name"]
         read_mode = inp.get("read_mode", "skip_to_latest")
-        print(
-            f"[streamlib:{processor_id}] Subscribing to input: port='{port_name}', service='{service_name}', read_mode='{read_mode}'",
-            file=sys.stderr,
+        _logger.info(
+            "Subscribing to input: port='%s', service='%s', read_mode='%s'",
+            port_name, service_name, read_mode,
         )
         result = lib.slpn_input_subscribe(ctx_ptr, service_name.encode("utf-8"))
         if result != 0:
-            print(
-                f"[streamlib:{processor_id}] Failed to subscribe to '{service_name}'",
-                file=sys.stderr,
-            )
+            _logger.error("Failed to subscribe to '%s'", service_name)
         # Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
         mode_int = 0 if read_mode == "skip_to_latest" else 1
         lib.slpn_input_set_read_mode(ctx_ptr, port_name.encode("utf-8"), mode_int)
@@ -81,9 +83,9 @@ def _setup_native_context(msg, native_lib_path, processor_id):
         dest_port = out["dest_port"]
         dest_service = out["dest_service_name"]
         schema_name = out.get("schema_name", "")
-        print(
-            f"[streamlib:{processor_id}] Publishing to output: port='{port_name}', dest='{dest_port}', service='{dest_service}'",
-            file=sys.stderr,
+        _logger.info(
+            "Publishing to output: port='%s', dest='%s', service='%s'",
+            port_name, dest_port, dest_service,
         )
         result = lib.slpn_output_publish(
             ctx_ptr,
@@ -93,10 +95,7 @@ def _setup_native_context(msg, native_lib_path, processor_id):
             schema_name.encode("utf-8"),
         )
         if result != 0:
-            print(
-                f"[streamlib:{processor_id}] Failed to create publisher for '{dest_service}'",
-                file=sys.stderr,
-            )
+            _logger.error("Failed to create publisher for '%s'", dest_service)
 
     # Connect to broker for surface resolution (if XPC service name is set)
     broker_ptr = None
@@ -108,14 +107,13 @@ def _setup_native_context(msg, native_lib_path, processor_id):
             xpc_service_name.encode("utf-8"), runtime_id_arg
         )
         if broker_ptr:
-            print(
-                f"[streamlib:{processor_id}] Connected to broker '{xpc_service_name}' with runtime_id='{runtime_id}'",
-                file=sys.stderr,
+            _logger.info(
+                "Connected to broker '%s' with runtime_id='%s'",
+                xpc_service_name, runtime_id,
             )
         else:
-            print(
-                f"[streamlib:{processor_id}] Warning: broker connect failed for '{xpc_service_name}'",
-                file=sys.stderr,
+            _logger.warning(
+                "Broker connect failed for '%s'", xpc_service_name,
             )
 
     ctx = NativeProcessorContext(lib, ctx_ptr, config, broker_ptr)
@@ -150,10 +148,7 @@ def _handle_stdin_during_run(stdin, stdout, processor, ctx, processor_id):
             try:
                 processor.on_pause(ctx)
             except Exception as e:
-                print(
-                    f"[streamlib:{processor_id}] on_pause() error: {e}",
-                    file=sys.stderr,
-                )
+                _logger.error("on_pause() error: %s", e)
         bridge_send_message(stdout, {"rpc": "ok"})
         return None
 
@@ -162,10 +157,7 @@ def _handle_stdin_during_run(stdin, stdout, processor, ctx, processor_id):
             try:
                 processor.on_resume(ctx)
             except Exception as e:
-                print(
-                    f"[streamlib:{processor_id}] on_resume() error: {e}",
-                    file=sys.stderr,
-                )
+                _logger.error("on_resume() error: %s", e)
         bridge_send_message(stdout, {"rpc": "ok"})
         return None
 
@@ -175,22 +167,18 @@ def _handle_stdin_during_run(stdin, stdout, processor, ctx, processor_id):
             try:
                 processor.update_config(config)
             except Exception as e:
-                print(
-                    f"[streamlib:{processor_id}] update_config() error: {e}",
-                    file=sys.stderr,
-                )
+                _logger.error("update_config() error: %s", e)
         bridge_send_message(stdout, {"rpc": "ok"})
         return None
 
-    print(
-        f"[streamlib:{processor_id}] Unknown command during run: {cmd}",
-        file=sys.stderr,
-    )
+    _logger.warning("Unknown command during run: %s", cmd)
     return None
 
 
 def main():
     """Main entry point for the subprocess runner."""
+    global _logger
+
     entrypoint = os.environ.get("STREAMLIB_ENTRYPOINT")
     if not entrypoint:
         print("[streamlib] STREAMLIB_ENTRYPOINT not set", file=sys.stderr)
@@ -200,11 +188,11 @@ def main():
     native_lib_path = os.environ.get("STREAMLIB_PYTHON_NATIVE_LIB", "")
     processor_id = os.environ.get("STREAMLIB_PROCESSOR_ID", "unknown")
 
+    # Initialize telemetry logger (writes to SQLite + stderr)
+    _logger = setup_subprocess_telemetry(processor_id)
+
     if not native_lib_path:
-        print(
-            f"[streamlib:{processor_id}] STREAMLIB_PYTHON_NATIVE_LIB not set",
-            file=sys.stderr,
-        )
+        _logger.error("STREAMLIB_PYTHON_NATIVE_LIB not set")
         sys.exit(1)
 
     # Use binary stdin/stdout for the lifecycle protocol
@@ -221,10 +209,7 @@ def main():
     native_broker_ptr = None
     running = False
 
-    print(
-        f"[streamlib:{processor_id}] Subprocess runner started: entrypoint={entrypoint}",
-        file=sys.stderr,
-    )
+    _logger.info("Subprocess runner started: entrypoint=%s", entrypoint)
 
     try:
         while True:
@@ -232,10 +217,7 @@ def main():
             cmd = msg.get("cmd", "")
 
             if cmd == "setup":
-                print(
-                    f"[streamlib:{processor_id}] Native mode: loading {native_lib_path}",
-                    file=sys.stderr,
-                )
+                _logger.info("Native mode: loading %s", native_lib_path)
                 try:
                     native_lib, native_ctx_ptr, native_broker_ptr, ctx = _setup_native_context(
                         msg, native_lib_path, processor_id
@@ -255,10 +237,7 @@ def main():
 
             elif cmd == "run":
                 if not native_lib or not ctx:
-                    print(
-                        f"[streamlib:{processor_id}] run before setup",
-                        file=sys.stderr,
-                    )
+                    _logger.warning("run before setup")
                     continue
 
                 execution_mode = msg.get("execution", "reactive")
@@ -266,10 +245,7 @@ def main():
                 running = True
                 data_count = 0
 
-                print(
-                    f"[streamlib:{processor_id}] Entering {execution_mode} loop",
-                    file=sys.stderr,
-                )
+                _logger.info("Entering %s loop", execution_mode)
 
                 if execution_mode == "reactive":
                     while running:
@@ -277,18 +253,14 @@ def main():
                         if has_data == 1:
                             data_count += 1
                             if data_count <= 3 or data_count % 60 == 0:
-                                print(
-                                    f"[streamlib:{processor_id}] poll: data received (frame #{data_count})",
-                                    file=sys.stderr,
+                                _logger.debug(
+                                    "poll: data received (frame #%d)", data_count,
                                 )
                             try:
                                 if hasattr(processor, "process"):
                                     processor.process(ctx)
                             except Exception as e:
-                                print(
-                                    f"[streamlib:{processor_id}] process() error: {e}",
-                                    file=sys.stderr,
-                                )
+                                _logger.error("process() error: %s", e)
                         else:
                             time.sleep(0.001)  # 1ms yield
 
@@ -301,10 +273,7 @@ def main():
                                 try:
                                     processor.teardown(ctx)
                                 except Exception as e:
-                                    print(
-                                        f"[streamlib:{processor_id}] teardown() error: {e}",
-                                        file=sys.stderr,
-                                    )
+                                    _logger.error("teardown() error: %s", e)
                             bridge_send_message(stdout, {"rpc": "done"})
                             _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr)
                             sys.exit(0)
@@ -319,10 +288,7 @@ def main():
                             if hasattr(processor, "process"):
                                 processor.process(ctx)
                         except Exception as e:
-                            print(
-                                f"[streamlib:{processor_id}] process() error: {e}",
-                                file=sys.stderr,
-                            )
+                            _logger.error("process() error: %s", e)
                         if interval_ms > 0:
                             time.sleep(interval_ms / 1000.0)
                         else:
@@ -337,10 +303,7 @@ def main():
                                 try:
                                     processor.teardown(ctx)
                                 except Exception as e:
-                                    print(
-                                        f"[streamlib:{processor_id}] teardown() error: {e}",
-                                        file=sys.stderr,
-                                    )
+                                    _logger.error("teardown() error: %s", e)
                             bridge_send_message(stdout, {"rpc": "done"})
                             _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr)
                             sys.exit(0)
@@ -354,10 +317,7 @@ def main():
                         try:
                             processor.start(ctx)
                         except Exception as e:
-                            print(
-                                f"[streamlib:{processor_id}] start() error: {e}",
-                                file=sys.stderr,
-                            )
+                            _logger.error("start() error: %s", e)
 
             elif cmd == "teardown":
                 try:
@@ -406,23 +366,19 @@ def main():
                 bridge_send_message(stdout, {"rpc": "ok"})
 
             else:
-                print(
-                    f"[streamlib:{processor_id}] Unknown command: {cmd}",
-                    file=sys.stderr,
-                )
+                _logger.warning("Unknown command: %s", cmd)
 
     except EOFError:
-        print(f"[streamlib:{processor_id}] stdin closed, shutting down", file=sys.stderr)
+        _logger.info("stdin closed, shutting down")
     except Exception as e:
-        print(f"[streamlib:{processor_id}] Fatal error: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        _logger.error("Fatal error: %s", e, exc_info=True)
         if native_lib and native_ctx_ptr:
             _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr)
         sys.exit(1)
 
     _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr)
 
-    print(f"[streamlib:{processor_id}] Subprocess runner exiting", file=sys.stderr)
+    _logger.info("Subprocess runner exiting")
 
 
 if __name__ == "__main__":

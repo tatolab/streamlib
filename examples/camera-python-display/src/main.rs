@@ -49,18 +49,7 @@ use blending_compositor::BlendingCompositorProcessor;
 use crt_film_grain::CrtFilmGrainProcessor;
 
 fn main() -> Result<()> {
-    // Initialize tracing subscriber
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "info,naga=warn,wgpu_core=warn,wgpu_hal=warn"
-                    .parse()
-                    .unwrap()
-            }),
-        )
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
+    // Telemetry is initialized automatically by StreamRuntime::new()
 
     println!("=== Cyberpunk Pipeline (Breaking News PiP) ===\n");
 

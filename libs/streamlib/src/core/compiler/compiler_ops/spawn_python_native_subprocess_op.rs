@@ -123,7 +123,7 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 .arg("streamlib.subprocess_runner")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
+                .stderr(Stdio::piped())
                 .env_remove("PYTHONHOME")
                 .env("PYTHONPATH", &python_path)
                 .env("STREAMLIB_ENTRYPOINT", &self.entrypoint)
@@ -153,6 +153,32 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
             let stdout = child.stdout.take().ok_or_else(|| {
                 StreamError::Runtime("Failed to capture subprocess stdout".to_string())
             })?;
+
+            // Forward stderr lines through the tracing pipeline → broker telemetry
+            if let Some(stderr) = child.stderr.take() {
+                let proc_id = self.processor_id.clone();
+                std::thread::Builder::new()
+                    .name(format!("py-stderr-{}", &proc_id[..8.min(proc_id.len())]))
+                    .spawn(move || {
+                        use std::io::BufRead;
+                        let reader = BufReader::new(stderr);
+                        for line in reader.lines() {
+                            match line {
+                                Ok(text) if !text.is_empty() => {
+                                    tracing::info!(
+                                        target: "streamlib::python",
+                                        processor_id = %proc_id,
+                                        "{}",
+                                        text
+                                    );
+                                }
+                                Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                    })
+                    .ok();
+            }
 
             self.child = Some(child);
             self.stdin_writer = Some(BufWriter::new(stdin));

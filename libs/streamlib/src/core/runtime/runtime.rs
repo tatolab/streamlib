@@ -105,29 +105,18 @@ pub struct StreamRuntime {
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     /// Created in new() so PUBSUB can initialize before start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
+    /// Telemetry guard — keeps the OTel pipeline alive for the runtime's lifetime.
+    _telemetry_guard: streamlib_telemetry::TelemetryGuard,
 }
 
 impl StreamRuntime {
     pub fn new() -> Result<Arc<Self>> {
-        // Generate or retrieve runtime ID (checks STREAMLIB_RUNTIME_ID env var)
-        let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
-        tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
-
-        // Get STREAMLIB_HOME and run init hooks (once per process)
-        let streamlib_home = crate::core::get_streamlib_home();
-        tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
-        crate::core::run_init_hooks(&streamlib_home)?;
-
-        // Auto-detect tokio context (issue #92)
+        // Auto-detect tokio context FIRST — telemetry exporters need a Tokio handle.
         // If inside tokio runtime: use current handle (external handle mode)
         // If outside tokio runtime: create owned runtime
         let tokio_runtime_variant = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tracing::debug!("Detected existing tokio runtime, using external handle mode");
-                TokioRuntimeVariant::ExternalTokioHandle(handle)
-            }
+            Ok(handle) => TokioRuntimeVariant::ExternalTokioHandle(handle),
             Err(_) => {
-                // Create tokio runtime with default thread count (one per CPU core)
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
@@ -137,6 +126,46 @@ impl StreamRuntime {
                 TokioRuntimeVariant::OwnedTokioRuntime(rt)
             }
         };
+
+        // Load .env file (dev-setup.sh generates this with STREAMLIB_BROKER_PORT, etc.)
+        let _ = dotenvy::dotenv();
+
+        // Generate runtime ID first — used as service_name for telemetry.
+        let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
+
+        // Initialize unified telemetry pipeline (broker-as-collector).
+        // Must happen after Tokio runtime exists — gRPC exporters capture the handle.
+        // Safe to call multiple times — only the first call sets up the subscriber.
+        let tokio_handle = tokio_runtime_variant.handle();
+        let _enter_guard = tokio_handle.enter();
+        let broker_endpoint = {
+            let port = std::env::var("STREAMLIB_BROKER_PORT")
+                .ok()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(streamlib_broker::GRPC_PORT);
+            format!("http://127.0.0.1:{}", port)
+        };
+        let _telemetry_guard =
+            streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
+                service_name: format!("runtime:{}", runtime_id),
+                resource_attributes: vec![
+                    ("runtime.id".into(), runtime_id.to_string()),
+                    ("process.pid".into(), std::process::id().to_string()),
+                ],
+                file_log_path: None,
+                stdout_logging: true,
+                otlp_endpoint: std::env::var("STREAMLIB_OTLP_ENDPOINT").ok(),
+                sqlite_database_path: None,
+                broker_endpoint: Some(broker_endpoint),
+            })
+            .map_err(|e| StreamError::Runtime(format!("Failed to initialize telemetry: {}", e)))?;
+        drop(_enter_guard);
+        tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
+
+        // Get STREAMLIB_HOME and run init hooks (once per process)
+        let streamlib_home = crate::core::get_streamlib_home();
+        tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
+        crate::core::run_init_hooks(&streamlib_home)?;
 
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
@@ -177,6 +206,7 @@ impl StreamRuntime {
             status,
             _graph_change_listener: listener,
             iceoryx2_node,
+            _telemetry_guard,
         }))
     }
 
@@ -533,12 +563,8 @@ impl StreamRuntime {
     ///
     /// Takes `&Arc<Self>` to allow passing the runtime to processors via RuntimeContext.
     /// Processors can then call runtime operations directly without indirection.
+    #[tracing::instrument(name = "runtime.start", skip_all)]
     pub fn start(self: &Arc<Self>) -> Result<()> {
-        // Load .env file if present (development environment variables)
-        if let Ok(path) = dotenvy::dotenv() {
-            tracing::info!("[start] Loaded environment from {}", path.display());
-        }
-
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
@@ -659,6 +685,7 @@ impl StreamRuntime {
     }
 
     /// Stop the runtime.
+    #[tracing::instrument(name = "runtime.stop", skip_all)]
     pub fn stop(&self) -> Result<()> {
         tracing::info!("[stop] Beginning graceful shutdown");
         *self.status.lock() = RuntimeStatus::Stopping;

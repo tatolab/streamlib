@@ -82,6 +82,7 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
 /// - Rust→Python: Only source-side wiring (publisher + OutputWriter). Python creates its own subscriber.
 /// - Python→Rust: Only dest-side wiring (subscriber + InputMailboxes). Python creates its own publisher.
 /// - Python→Python: Service created but no Rust-side wiring. Both subprocesses manage their own connections.
+#[tracing::instrument(name = "compiler.open_iceoryx2_service", skip(graph, runtime_ctx), fields(link_id = %link_id))]
 pub fn open_iceoryx2_service(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
@@ -170,6 +171,7 @@ pub fn open_iceoryx2_service(
 }
 
 /// Close an iceoryx2 service by link ID.
+#[tracing::instrument(name = "compiler.close_iceoryx2_service", skip(graph), fields(link_id = %link_id))]
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 

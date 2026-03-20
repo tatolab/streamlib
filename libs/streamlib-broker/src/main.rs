@@ -5,6 +5,9 @@
 //!
 //! This binary runs as a launchd service on macOS, providing:
 //! - gRPC interface for runtime tracking and diagnostics
+//! - Telemetry ingestion (single SQLite writer for all runtimes)
+
+use std::sync::Arc;
 
 use clap::Parser;
 use tracing::info;
@@ -14,6 +17,11 @@ use streamlib_broker::{
     proto::broker_service_server::BrokerServiceServer, BrokerGrpcService, BrokerState,
     XpcSurfaceService,
 };
+
+#[cfg(target_os = "macos")]
+use streamlib_telemetry::proto::telemetry_ingest_service_server::TelemetryIngestServiceServer;
+#[cfg(target_os = "macos")]
+use streamlib_telemetry::sqlite_telemetry_database::SqliteTelemetryDatabase;
 
 #[derive(Parser)]
 #[command(name = "streamlib-broker")]
@@ -33,18 +41,32 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".parse().unwrap()),
-        )
-        .init();
+    // Initialize telemetry for the broker's OWN logs (SQLite path, no broker_endpoint)
+    let _telemetry_guard =
+        streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
+            service_name: "streamlib-broker".into(),
+            resource_attributes: vec![("process.pid".into(), std::process::id().to_string())],
+            file_log_path: None,
+            stdout_logging: true,
+            otlp_endpoint: std::env::var("STREAMLIB_OTLP_ENDPOINT").ok(),
+            sqlite_database_path: None,
+            broker_endpoint: None, // Broker IS the collector — writes to SQLite directly
+        })
+        .expect("Failed to initialize telemetry");
 
     info!(
         "[Broker] Starting StreamLib broker service v{} (PID: {})",
         streamlib_broker::VERSION,
         std::process::id()
+    );
+
+    // Open the telemetry database for the IngestTelemetry handler
+    let telemetry_db_path =
+        streamlib_telemetry::sqlite_telemetry_database::default_telemetry_database_path()
+            .expect("Failed to determine telemetry database path");
+    let telemetry_database = Arc::new(
+        SqliteTelemetryDatabase::open(&telemetry_db_path)
+            .expect("Failed to open telemetry database for ingestion"),
     );
 
     // Create shared state for diagnostics
@@ -89,8 +111,20 @@ async fn main() {
         }
     });
 
+    // Start periodic telemetry pruning (deletes entries older than 7 days, every hour)
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            match streamlib_telemetry::prune_old_telemetry(7) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("[Broker] Pruned {} old telemetry record(s)", n),
+                Err(e) => tracing::warn!("[Broker] Telemetry prune failed: {}", e),
+            }
+        }
+    });
+
     // Start gRPC server (blocks forever)
-    if let Err(e) = start_grpc_server(state, cli.port).await {
+    if let Err(e) = start_grpc_server(state, telemetry_database, cli.port).await {
         tracing::error!("[Broker] gRPC server error: {}", e);
         std::process::exit(1);
     }
@@ -99,17 +133,41 @@ async fn main() {
 #[cfg(target_os = "macos")]
 async fn start_grpc_server(
     state: BrokerState,
+    telemetry_database: Arc<SqliteTelemetryDatabase>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use opentelemetry_otlp::WithExportConfig;
     use tonic::transport::Server;
 
     let addr = format!("127.0.0.1:{}", port).parse()?;
-    let service = BrokerGrpcService::new(state);
 
-    info!("[Broker] Starting gRPC server on {}", addr);
+    // Create OTLP span exporter if endpoint is configured
+    let otlp_span_exporter = if let Ok(endpoint) = std::env::var("STREAMLIB_OTLP_ENDPOINT") {
+        info!("[Broker] OTLP forwarding enabled → {}", endpoint);
+        Some(
+            opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint(&endpoint)
+                .build()?,
+        )
+    } else {
+        None
+    };
+
+    let service = Arc::new(BrokerGrpcService::new(
+        state,
+        telemetry_database,
+        otlp_span_exporter,
+    ));
+
+    info!(
+        "[Broker] Starting gRPC server on {} (BrokerService + TelemetryIngestService)",
+        addr
+    );
 
     Server::builder()
-        .add_service(BrokerServiceServer::new(service))
+        .add_service(BrokerServiceServer::from_arc(service.clone()))
+        .add_service(TelemetryIngestServiceServer::from_arc(service))
         .serve(addr)
         .await?;
 

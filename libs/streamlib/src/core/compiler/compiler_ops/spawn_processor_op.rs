@@ -26,6 +26,7 @@ use crate::core::processors::{ProcessorInstanceFactory, ProcessorState, PROCESSO
 /// 4. Wait for CONTINUE via barrier (wiring happens here)
 /// 5. Call setup (no locks held - safe to call runtime ops)
 /// 6. Run processor loop
+#[tracing::instrument(name = "compiler.spawn_processor", skip(graph_arc, factory, runtime_ctx), fields(processor_id = processor_id.as_ref()))]
 pub(crate) fn spawn_processor(
     graph_arc: Arc<RwLock<Graph>>,
     factory: &ProcessorInstanceFactory,

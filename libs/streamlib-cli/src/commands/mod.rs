@@ -11,3 +11,4 @@ pub mod runtimes;
 pub mod schema;
 pub mod serve;
 pub mod setup;
+pub mod telemetry;

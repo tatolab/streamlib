@@ -33,6 +33,48 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Query logs from all runtimes (unified telemetry)
+    Logs {
+        /// Filter by runtime or service name
+        #[arg(long = "runtime", short = 'r')]
+        runtime: Option<String>,
+
+        /// Show logs since duration (e.g., "5m", "1h", "30s")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Number of lines to show (default: 100)
+        #[arg(short = 'n', long, default_value = "100")]
+        lines: usize,
+
+        /// Minimum severity (5=DEBUG, 9=INFO, 13=WARN, 17=ERROR)
+        #[arg(long)]
+        severity: Option<i32>,
+
+        /// Follow log output (like tail -f)
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
+
+    /// Query spans/traces from all runtimes (unified telemetry)
+    Spans {
+        /// Filter by runtime or service name
+        #[arg(long = "runtime", short = 'r')]
+        runtime: Option<String>,
+
+        /// Show spans since duration (e.g., "5m", "1h")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Number of spans to show (default: 50)
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+
+        /// Filter by status (Ok, Error, Unset)
+        #[arg(long)]
+        status: Option<String>,
+    },
+
     /// Run the StreamLib runtime
     Run {
         /// Pipeline graph file to load (JSON)
@@ -107,6 +149,12 @@ enum Commands {
     Pkg {
         #[command(subcommand)]
         action: PkgCommands,
+    },
+
+    /// Query telemetry data (traces, logs) from the SQLite database
+    Telemetry {
+        #[command(subcommand)]
+        action: TelemetryCommands,
     },
 }
 
@@ -283,6 +331,70 @@ enum PkgCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum TelemetryCommands {
+    /// Query structured logs from the telemetry database
+    Logs {
+        /// Filter by service name (e.g., "streamlib-runtime")
+        #[arg(long = "service", short = 's')]
+        service: Option<String>,
+
+        /// Show logs since duration (e.g., "5m", "1h", "30s")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Number of lines to show (default: 100)
+        #[arg(short = 'n', long, default_value = "100")]
+        lines: usize,
+
+        /// Minimum severity (1=TRACE, 5=DEBUG, 9=INFO, 13=WARN, 17=ERROR)
+        #[arg(long)]
+        severity: Option<i32>,
+
+        /// Follow log output (like tail -f)
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
+    /// Query spans/traces from the telemetry database
+    Spans {
+        /// Filter by service name
+        #[arg(long = "service", short = 's')]
+        service: Option<String>,
+
+        /// Show spans since duration (e.g., "5m", "1h")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Number of spans to show (default: 50)
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+
+        /// Filter by status (Ok, Error, Unset)
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Delete old telemetry data
+    Prune {
+        /// Delete records older than this (e.g., "7d", "24h")
+        #[arg(long = "older-than", default_value = "7d")]
+        older_than: String,
+    },
+    /// Export historical telemetry to an OTLP endpoint (Grafana/Jaeger backfill)
+    Export {
+        /// OTLP gRPC endpoint (e.g., "http://localhost:4317")
+        #[arg(long)]
+        endpoint: String,
+
+        /// Export data since duration (e.g., "7d", "1h")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter by service name
+        #[arg(long = "service", short = 's')]
+        service: Option<String>,
+    },
+}
+
 fn main() -> Result<()> {
     // Load .env file if present (picks up STREAMLIB_BROKER_PORT, etc. in dev)
     let _ = dotenvy::dotenv();
@@ -296,14 +408,48 @@ fn main() -> Result<()> {
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".parse().unwrap()),
-        )
-        .init();
+    let _telemetry_guard =
+        streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
+            service_name: "streamlib-cli".into(),
+            resource_attributes: vec![],
+            file_log_path: None,
+            stdout_logging: false,
+            otlp_endpoint: None,
+            sqlite_database_path: None,
+            broker_endpoint: None, // CLI is short-lived, no need to route through broker
+        })?;
 
     match cli.command {
+        Some(Commands::Logs {
+            runtime,
+            since,
+            lines,
+            severity,
+            follow,
+        }) => {
+            commands::telemetry::logs(
+                runtime.as_deref(),
+                since.as_deref(),
+                lines,
+                severity,
+                follow,
+            )
+            .await?
+        }
+        Some(Commands::Spans {
+            runtime,
+            since,
+            lines,
+            status,
+        }) => {
+            commands::telemetry::spans(
+                runtime.as_deref(),
+                since.as_deref(),
+                lines,
+                status.as_deref(),
+            )
+            .await?
+        }
         Some(Commands::Pack {
             package_dir,
             output,
@@ -385,6 +531,48 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List => commands::pkg::list()?,
             PkgCommands::Remove { name } => commands::pkg::remove(&name)?,
+        },
+        Some(Commands::Telemetry { action }) => match action {
+            TelemetryCommands::Logs {
+                service,
+                since,
+                lines,
+                severity,
+                follow,
+            } => {
+                commands::telemetry::logs(
+                    service.as_deref(),
+                    since.as_deref(),
+                    lines,
+                    severity,
+                    follow,
+                )
+                .await?
+            }
+            TelemetryCommands::Spans {
+                service,
+                since,
+                lines,
+                status,
+            } => {
+                commands::telemetry::spans(
+                    service.as_deref(),
+                    since.as_deref(),
+                    lines,
+                    status.as_deref(),
+                )
+                .await?
+            }
+            TelemetryCommands::Prune { older_than } => {
+                commands::telemetry::prune(&older_than).await?
+            }
+            TelemetryCommands::Export {
+                endpoint,
+                since,
+                service,
+            } => {
+                commands::telemetry::export(&endpoint, since.as_deref(), service.as_deref()).await?
+            }
         },
         None => {
             // No subcommand: show help

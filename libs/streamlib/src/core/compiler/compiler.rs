@@ -57,6 +57,7 @@ impl Compiler {
     }
 
     /// Flush transaction. Callable from any thread - compile() is dispatched to main thread.
+    #[tracing::instrument(name = "compiler.commit", skip_all)]
     pub fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
         let operations = std::mem::take(&mut *self.transaction.lock());
         if operations.is_empty() {

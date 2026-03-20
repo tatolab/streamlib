@@ -1,0 +1,53 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+syntax = "proto3";
+
+package streamlib.telemetry;
+
+// Telemetry ingestion service — runtimes send spans and logs to the broker.
+service TelemetryIngestService {
+  // Ingest a batch of spans and/or logs.
+  rpc IngestTelemetry(IngestTelemetryRequest) returns (IngestTelemetryResponse);
+}
+
+// A single span record matching the SQLite spans table schema.
+message TelemetrySpanRecord {
+  string trace_id = 1;
+  string span_id = 2;
+  string parent_span_id = 3;
+  string operation_name = 4;
+  string service_name = 5;
+  string span_kind = 6;
+  int64 start_time_unix_ns = 7;
+  int64 end_time_unix_ns = 8;
+  int64 duration_ns = 9;
+  string status_code = 10;
+  string status_message = 11;
+  string attributes_json = 12;
+  string resource_json = 13;
+  string events_json = 14;
+}
+
+// A single log record matching the SQLite logs table schema.
+message TelemetryLogRecord {
+  int64 timestamp_unix_ns = 1;
+  string trace_id = 2;
+  string span_id = 3;
+  int32 severity_number = 4;
+  string severity_text = 5;
+  string body = 6;
+  string service_name = 7;
+  string attributes_json = 8;
+  string resource_json = 9;
+}
+
+message IngestTelemetryRequest {
+  repeated TelemetrySpanRecord spans = 1;
+  repeated TelemetryLogRecord logs = 2;
+}
+
+message IngestTelemetryResponse {
+  int32 accepted_spans = 1;
+  int32 accepted_logs = 2;
+}
