@@ -255,8 +255,8 @@ impl VulkanDevice {
             }
         }
         Err(StreamError::GpuError(format!(
-            "No suitable memory type found (filter: 0x{:x}, required: {:?})",
-            type_filter, required_properties
+            "No suitable memory type found (filter: 0x{:x}, required: 0x{:x})",
+            type_filter, required_properties.as_raw()
         )))
     }
 
