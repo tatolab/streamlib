@@ -46,15 +46,6 @@ impl FFmpegMuxer {
             StreamError::Configuration(format!("Failed to create MP4 output context: {e}"))
         })?;
 
-        // Set faststart for streaming-friendly moov atom placement
-        unsafe {
-            let mut opts = ffmpeg::Dictionary::new();
-            opts.set("movflags", "faststart");
-            let opts_ptr = opts.as_mut_ptr();
-            // Apply format options
-            ffmpeg::ffi::av_dict_copy(&mut (*output_context.as_mut_ptr()).metadata, opts_ptr, 0);
-        }
-
         // Add video stream
         let video_codec = ffmpeg::encoder::find(ffmpeg::codec::Id::H264)
             .ok_or_else(|| StreamError::Configuration("H.264 codec not found for muxer".into()))?;
@@ -114,9 +105,11 @@ impl FFmpegMuxer {
             audio_time_base = Some(tb);
         }
 
-        // Write file header
-        output_context
-            .write_header()
+        // Write file header with faststart for streaming-friendly moov atom placement
+        let mut format_opts = ffmpeg::Dictionary::new();
+        format_opts.set("movflags", "faststart");
+        let _unused_opts = output_context
+            .write_header_with(format_opts)
             .map_err(|e| StreamError::Configuration(format!("Failed to write MP4 header: {e}")))?;
 
         Ok(Self {
@@ -135,8 +128,9 @@ impl FFmpegMuxer {
         let mut packet = ffmpeg::Packet::copy(&frame.data);
 
         let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
-        // Convert nanoseconds to stream time base units
-        let pts = ffmpeg::rescale::TIME_BASE.rescale(timestamp_ns, self.video_time_base);
+        // Convert nanoseconds to microseconds (TIME_BASE is 1/1_000_000), then to stream time base
+        let timestamp_us = timestamp_ns / 1_000;
+        let pts = ffmpeg::rescale::TIME_BASE.rescale(timestamp_us, self.video_time_base);
         packet.set_pts(Some(pts));
         packet.set_dts(Some(pts));
         packet.set_stream(self.video_stream_index);
@@ -166,8 +160,9 @@ impl FFmpegMuxer {
 
         let mut packet = ffmpeg::Packet::copy(&frame.data);
 
-        // Convert nanoseconds to audio stream time base units
-        let pts = ffmpeg::rescale::TIME_BASE.rescale(frame.timestamp_ns, audio_time_base);
+        // Convert nanoseconds to microseconds (TIME_BASE is 1/1_000_000), then to stream time base
+        let timestamp_us = frame.timestamp_ns / 1_000;
+        let pts = ffmpeg::rescale::TIME_BASE.rescale(timestamp_us, audio_time_base);
         packet.set_pts(Some(pts));
         packet.set_dts(Some(pts));
         packet.set_stream(stream_index);
@@ -195,6 +190,17 @@ impl FFmpegMuxer {
     /// Get the muxer configuration.
     pub fn config(&self) -> &Mp4MuxerConfig {
         &self.config
+    }
+}
+
+impl Drop for FFmpegMuxer {
+    fn drop(&mut self) {
+        if self.header_written {
+            if let Err(e) = self.output_context.write_trailer() {
+                tracing::error!("Failed to write MP4 trailer on drop: {e}");
+            }
+            self.header_written = false;
+        }
     }
 }
 

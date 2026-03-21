@@ -31,6 +31,7 @@ pub struct FFmpegEncoder {
     scaler: scaling::Context,
     frame_count: u64,
     force_next_keyframe: bool,
+    codec_name: String,
 }
 
 impl FFmpegEncoder {
@@ -73,14 +74,23 @@ impl FFmpegEncoder {
             }
         }
 
-        // Set low-latency options via codec private options
+        // Set low-latency options (codec-specific)
+        let codec_name = codec.name().to_string();
         let mut opts = ffmpeg::Dictionary::new();
-        if config.low_latency {
-            opts.set("preset", "ultrafast");
-            opts.set("tune", "zerolatency");
-        } else {
-            opts.set("preset", "medium");
+        if codec_name == "libx264" {
+            if config.low_latency {
+                opts.set("preset", "ultrafast");
+                opts.set("tune", "zerolatency");
+            } else {
+                opts.set("preset", "medium");
+            }
+        } else if codec_name == "h264_nvenc" {
+            if config.low_latency {
+                opts.set("preset", "p1");
+                opts.set("tune", "ull");
+            }
         }
+        // h264_vaapi has no equivalent preset/tune options
 
         let encoder = video.open_as_with(codec, opts).map_err(|e| {
             StreamError::Configuration(format!("Failed to open H.264 encoder: {e}"))
@@ -106,6 +116,7 @@ impl FFmpegEncoder {
             scaler,
             frame_count: 0,
             force_next_keyframe: false,
+            codec_name,
         })
     }
 
@@ -179,25 +190,32 @@ impl FFmpegEncoder {
             StreamError::Configuration(format!("Failed to send frame to encoder: {e}"))
         })?;
 
-        // Receive encoded packet
+        // Receive encoded packet (encoder may buffer frames before producing output)
         let mut packet = ffmpeg::Packet::empty();
-        match self.encoder.receive_packet(&mut packet) {
-            Ok(()) => {}
+        let got_packet = match self.encoder.receive_packet(&mut packet) {
+            Ok(()) => true,
+            Err(ffmpeg::Error::Other {
+                errno: libc::EAGAIN,
+            }) => false,
             Err(e) => {
                 return Err(StreamError::Configuration(format!(
                     "Failed to receive encoded packet: {e}"
                 )));
             }
-        }
+        };
 
         let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
         let frame_number = self.frame_count;
         self.frame_count += 1;
 
         Ok(Encodedvideoframe {
-            data: packet.data().unwrap_or(&[]).to_vec(),
+            data: if got_packet {
+                packet.data().unwrap_or(&[]).to_vec()
+            } else {
+                Vec::new()
+            },
             frame_number: frame_number.to_string(),
-            is_keyframe: packet.is_key(),
+            is_keyframe: if got_packet { packet.is_key() } else { false },
             timestamp_ns: timestamp_ns.to_string(),
         })
     }
