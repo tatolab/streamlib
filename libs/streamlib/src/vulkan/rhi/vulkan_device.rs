@@ -27,6 +27,7 @@ pub struct VulkanDevice {
     queue_family_index: u32,
     #[allow(dead_code)]
     device_name: String,
+    supports_external_memory: bool,
 }
 
 impl VulkanDevice {
@@ -164,6 +165,46 @@ impl VulkanDevice {
             device_extensions.push(c"VK_KHR_portability_subset".as_ptr());
         }
 
+        // On Linux, check for DMA-BUF external memory extensions
+        #[cfg(target_os = "linux")]
+        let has_external_memory = {
+            let available_device_extensions =
+                unsafe { instance.enumerate_device_extension_properties(physical_device) }
+                    .unwrap_or_default();
+
+            let available_device_ext_names: Vec<&CStr> = available_device_extensions
+                .iter()
+                .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
+                .collect();
+
+            let external_memory_ext = c"VK_KHR_external_memory";
+            let external_memory_fd_ext = c"VK_KHR_external_memory_fd";
+            let external_memory_dmabuf_ext = c"VK_EXT_external_memory_dma_buf";
+
+            let has_external_memory = available_device_ext_names.contains(&external_memory_ext)
+                && available_device_ext_names.contains(&external_memory_fd_ext);
+
+            if has_external_memory {
+                device_extensions.push(external_memory_ext.as_ptr());
+                device_extensions.push(external_memory_fd_ext.as_ptr());
+
+                if available_device_ext_names.contains(&external_memory_dmabuf_ext) {
+                    device_extensions.push(external_memory_dmabuf_ext.as_ptr());
+                    tracing::info!("VK_EXT_external_memory_dma_buf available");
+                }
+                tracing::info!("Vulkan external memory extensions enabled");
+            } else {
+                tracing::info!("Vulkan external memory extensions not available");
+            }
+
+            has_external_memory
+        };
+
+        #[cfg(target_os = "linux")]
+        let supports_external_memory = has_external_memory;
+        #[cfg(not(target_os = "linux"))]
+        let supports_external_memory = false;
+
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions);
@@ -194,6 +235,7 @@ impl VulkanDevice {
             queue,
             queue_family_index,
             device_name: device_name.into_owned(),
+            supports_external_memory,
         })
     }
 
@@ -262,6 +304,11 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index
+    }
+
+    /// Whether DMA-BUF external memory extensions are available.
+    pub fn supports_external_memory(&self) -> bool {
+        self.supports_external_memory
     }
 }
 

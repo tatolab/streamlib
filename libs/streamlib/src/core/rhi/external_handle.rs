@@ -70,3 +70,27 @@ pub trait RhiPixelBufferImport {
     where
         Self: Sized;
 }
+
+#[cfg(target_os = "linux")]
+impl RhiPixelBufferExport for super::RhiPixelBuffer {
+    fn export_handle(&self) -> Result<RhiExternalHandle> {
+        Err(crate::core::StreamError::NotSupported(
+            "DMA-BUF export for pixel buffers not yet implemented".into(),
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl RhiPixelBufferImport for super::RhiPixelBuffer {
+    fn from_external_handle(
+        handle: RhiExternalHandle,
+        width: u32,
+        height: u32,
+        format: super::PixelFormat,
+    ) -> Result<Self> {
+        let _ = (handle, width, height, format);
+        Err(crate::core::StreamError::NotSupported(
+            "DMA-BUF import for pixel buffers not yet implemented".into(),
+        ))
+    }
+}
