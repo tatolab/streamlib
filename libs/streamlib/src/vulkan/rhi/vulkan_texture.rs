@@ -67,8 +67,8 @@ pub struct VulkanTexture {
     gpu_memory_allocation: Option<Allocation>,
     /// Shared allocator handle for freeing the sub-allocation in Drop.
     gpu_memory_allocator: Option<Arc<Mutex<Allocator>>>,
-    /// Raw device memory for imported textures (DMA-BUF) that bypass the sub-allocator.
-    imported_device_memory: Option<vk::DeviceMemory>,
+    /// Raw device memory not managed by gpu-allocator (DMA-BUF export/import paths).
+    raw_device_memory: Option<vk::DeviceMemory>,
     /// Whether this texture was imported from IOSurface (no memory to free)
     imported_from_iosurface: bool,
     width: u32,
@@ -134,7 +134,7 @@ impl VulkanTexture {
                 image: Some(image),
                 gpu_memory_allocation: None,
                 gpu_memory_allocator: None,
-                imported_device_memory: Some(memory),
+                raw_device_memory: Some(memory),
                 imported_from_iosurface: false,
                 width: desc.width,
                 height: desc.height,
@@ -164,7 +164,7 @@ impl VulkanTexture {
             image: Some(image),
             gpu_memory_allocation: Some(allocation),
             gpu_memory_allocator,
-            imported_device_memory: None,
+            raw_device_memory: None,
             imported_from_iosurface: false,
             width: desc.width,
             height: desc.height,
@@ -245,7 +245,7 @@ impl VulkanTexture {
             image: Some(image),
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,
-            imported_device_memory: None, // IOSurface manages the memory
+            raw_device_memory: None, // IOSurface manages the memory
             imported_from_iosurface: true,
             width,
             height,
@@ -261,7 +261,7 @@ impl VulkanTexture {
             image: None,
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,
-            imported_device_memory: None,
+            raw_device_memory: None,
             imported_from_iosurface: false,
             width: 0,
             height: 0,
@@ -296,7 +296,7 @@ impl VulkanTexture {
     pub fn export_dma_buf_fd(&self, device: &VulkanDevice) -> Result<std::os::unix::io::RawFd> {
         // DMA-BUF export only works with raw device memory (exportable allocations),
         // not with gpu-allocator sub-allocations.
-        let memory = self.imported_device_memory.ok_or_else(|| {
+        let memory = self.raw_device_memory.ok_or_else(|| {
             StreamError::GpuError("Cannot export DMA-BUF from texture without exportable memory".into())
         })?;
 
@@ -375,7 +375,7 @@ impl VulkanTexture {
             image: Some(image),
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,
-            imported_device_memory: Some(memory),
+            raw_device_memory: Some(memory),
             imported_from_iosurface: false,
             width,
             height,
@@ -393,7 +393,7 @@ impl Clone for VulkanTexture {
             image: None,
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,
-            imported_device_memory: None,
+            raw_device_memory: None,
             imported_from_iosurface: false,
             width: self.width,
             height: self.height,
@@ -422,7 +422,7 @@ impl Drop for VulkanTexture {
 
             // Free raw device memory (DMA-BUF imports / exportable allocations)
             if !self.imported_from_iosurface {
-                if let Some(memory) = self.imported_device_memory {
+                if let Some(memory) = self.raw_device_memory {
                     unsafe { device.free_memory(memory, None) };
                 }
             }

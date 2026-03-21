@@ -376,12 +376,16 @@ impl VulkanDevice {
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
-        // Drop the allocator before destroying the device — it may call
-        // vkFreeMemory for internal memory blocks during its own drop.
+        // Wait for all GPU work to finish before freeing any memory.
+        unsafe {
+            let _ = self.device.device_wait_idle();
+        }
+
+        // Now safe to drop the allocator — GPU is idle, so freeing its
+        // internal memory blocks won't cause use-after-free on the GPU.
         drop(self.gpu_memory_allocator.take());
 
         unsafe {
-            let _ = self.device.device_wait_idle();
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         }
