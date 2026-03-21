@@ -3,6 +3,7 @@
 
 use ash::vk;
 
+use crate::core::rhi::PixelFormat;
 use crate::core::{Result, StreamError};
 
 use super::VulkanDevice;
@@ -16,6 +17,7 @@ pub struct VulkanPixelBuffer {
     width: u32,
     height: u32,
     bytes_per_pixel: u32,
+    format: PixelFormat,
     size: vk::DeviceSize,
 }
 
@@ -26,6 +28,7 @@ impl VulkanPixelBuffer {
         width: u32,
         height: u32,
         bytes_per_pixel: u32,
+        format: PixelFormat,
     ) -> Result<Self> {
         let size = (width as vk::DeviceSize)
             * (height as vk::DeviceSize)
@@ -79,6 +82,7 @@ impl VulkanPixelBuffer {
             width,
             height,
             bytes_per_pixel,
+            format,
             size,
         })
     }
@@ -101,6 +105,11 @@ impl VulkanPixelBuffer {
     /// Bytes per pixel.
     pub fn bytes_per_pixel(&self) -> u32 {
         self.bytes_per_pixel
+    }
+
+    /// Pixel format.
+    pub fn format(&self) -> PixelFormat {
+        self.format
     }
 
     /// Total buffer size in bytes.
@@ -142,7 +151,7 @@ mod tests {
             }
         };
 
-        let result = VulkanPixelBuffer::new(&device, 1920, 1080, 4);
+        let result = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::default());
         match result {
             Ok(buf) => {
                 assert_eq!(buf.width(), 1920);

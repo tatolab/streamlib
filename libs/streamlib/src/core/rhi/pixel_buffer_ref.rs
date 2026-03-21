@@ -5,21 +5,21 @@
 
 use super::PixelFormat;
 
-/// Lightweight reference to a platform pixel buffer (8 bytes).
+/// Platform pixel buffer reference.
 ///
-/// This is a thin wrapper around the platform's native pixel buffer type:
-/// - macOS/iOS: CVPixelBufferRef
+/// Wraps the platform's native pixel buffer type:
+/// - macOS/iOS: CVPixelBufferRef (raw pointer, platform manages lifecycle)
+/// - Linux: Arc\<VulkanPixelBuffer\> (shared GPU staging buffer, Rust manages lifecycle)
 /// - Windows: ID3D11Texture2D* (future)
-/// - Linux: DMA-BUF fd (future)
 ///
-/// Clone increments the platform refcount, Drop decrements it.
-/// No image data is ever copied - this is just a pointer.
+/// Clone increments the appropriate refcount, Drop decrements it.
+/// No image data is ever copied.
 pub struct RhiPixelBufferRef {
     #[cfg(target_os = "macos")]
     pub(crate) inner: std::ptr::NonNull<std::ffi::c_void>,
 
     #[cfg(target_os = "linux")]
-    pub(crate) inner: crate::vulkan::rhi::VulkanPixelBuffer,
+    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::VulkanPixelBuffer>,
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
@@ -34,7 +34,7 @@ impl RhiPixelBufferRef {
         }
         #[cfg(target_os = "linux")]
         {
-            PixelFormat::Unknown
+            self.inner.format()
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -101,11 +101,11 @@ impl Clone for RhiPixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::clone_impl(self)
         }
-        // VulkanPixelBuffer owns GPU resources and cannot be trivially cloned.
-        // A proper implementation requires Arc-based sharing or re-allocation.
         #[cfg(target_os = "linux")]
         {
-            panic!("RhiPixelBufferRef::clone not yet implemented for Linux — VulkanPixelBuffer owns GPU resources")
+            Self {
+                inner: std::sync::Arc::clone(&self.inner),
+            }
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
