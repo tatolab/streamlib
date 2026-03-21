@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/tatolab/streamlib/compare/v0.4.0...v0.4.1) (2026-03-21)
+
+
+### Features
+
+* complete Vulkan RHI integration for Linux GPU pipeline ([ed22dad](https://github.com/tatolab/streamlib/commit/ed22dad11ab2290fe943d800ea3c61e3442cbe81))
+
 ## [0.4.0](https://github.com/tatolab/streamlib/compare/v0.3.11...v0.4.0) (2026-03-21)
 
 
