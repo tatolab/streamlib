@@ -4,8 +4,14 @@
 //! Vulkan device implementation for RHI.
 
 use std::ffi::{c_char, CStr};
+use std::sync::Arc;
 
 use ash::vk;
+use gpu_allocator::vulkan::{
+    Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc,
+};
+use gpu_allocator::MemoryLocation;
+use parking_lot::Mutex;
 
 use crate::core::rhi::TextureDescriptor;
 use crate::core::{Result, StreamError};
@@ -28,6 +34,7 @@ pub struct VulkanDevice {
     #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
+    gpu_memory_allocator: Option<Arc<Mutex<Allocator>>>,
 }
 
 impl VulkanDevice {
@@ -219,8 +226,23 @@ impl VulkanDevice {
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
+        // 10. Create gpu-allocator for sub-allocation
+        let allocator = Allocator::new(&AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.clone(),
+            physical_device,
+            debug_settings: Default::default(),
+            buffer_device_address: false,
+            allocation_sizes: Default::default(),
+        })
+        .map_err(|e| {
+            StreamError::GpuError(format!("Failed to create GPU memory allocator: {e}"))
+        })?;
+
+        let gpu_memory_allocator = Some(Arc::new(Mutex::new(allocator)));
+
         tracing::info!(
-            "Vulkan device initialized: {} (queue family {}, {} memory types)",
+            "Vulkan device initialized: {} (queue family {}, {} memory types, gpu-allocator enabled)",
             device_name,
             queue_family_index,
             memory_properties.memory_type_count
@@ -236,6 +258,7 @@ impl VulkanDevice {
             queue_family_index,
             device_name: device_name.into_owned(),
             supports_external_memory,
+            gpu_memory_allocator,
         })
     }
 
@@ -310,10 +333,58 @@ impl VulkanDevice {
     pub fn supports_external_memory(&self) -> bool {
         self.supports_external_memory
     }
+
+    /// Allocate GPU memory through the sub-allocator.
+    pub fn allocate_gpu_memory(
+        &self,
+        name: &str,
+        requirements: vk::MemoryRequirements,
+        location: MemoryLocation,
+        linear: bool,
+    ) -> Result<Allocation> {
+        let allocator_arc = self.gpu_memory_allocator.as_ref().ok_or_else(|| {
+            StreamError::GpuError("GPU memory allocator not available".into())
+        })?;
+        allocator_arc
+            .lock()
+            .allocate(&AllocationCreateDesc {
+                name,
+                requirements,
+                location,
+                linear,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            })
+            .map_err(|e| StreamError::GpuError(format!("GPU memory allocation failed: {e}")))
+    }
+
+    /// Free GPU memory through the sub-allocator.
+    pub fn free_gpu_memory(&self, allocation: Allocation) -> Result<()> {
+        let allocator_arc = self.gpu_memory_allocator.as_ref().ok_or_else(|| {
+            StreamError::GpuError("GPU memory allocator not available".into())
+        })?;
+        allocator_arc
+            .lock()
+            .free(allocation)
+            .map_err(|e| StreamError::GpuError(format!("GPU memory free failed: {e}")))
+    }
+
+    /// Get a shared reference to the GPU memory allocator.
+    pub fn gpu_memory_allocator(&self) -> Option<&Arc<Mutex<Allocator>>> {
+        self.gpu_memory_allocator.as_ref()
+    }
 }
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
+        // Wait for all GPU work to finish before freeing any memory.
+        unsafe {
+            let _ = self.device.device_wait_idle();
+        }
+
+        // Now safe to drop the allocator — GPU is idle, so freeing its
+        // internal memory blocks won't cause use-after-free on the GPU.
+        drop(self.gpu_memory_allocator.take());
+
         unsafe {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
