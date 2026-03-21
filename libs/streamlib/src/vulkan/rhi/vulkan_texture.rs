@@ -62,6 +62,8 @@ fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
 /// Can be created from scratch or imported from an IOSurface via VK_EXT_metal_objects.
 pub struct VulkanTexture {
     device: Option<ash::Device>,
+    /// Vulkan instance handle for extension loaders (e.g., DMA-BUF export).
+    instance: Option<ash::Instance>,
     image: Option<vk::Image>,
     /// Sub-allocated memory from gpu-allocator (used for internally-created textures).
     gpu_memory_allocation: Option<Allocation>,
@@ -131,6 +133,7 @@ impl VulkanTexture {
 
             return Ok(Self {
                 device: Some(device.clone()),
+                instance: Some(vulkan_device.instance().clone()),
                 image: Some(image),
                 gpu_memory_allocation: None,
                 gpu_memory_allocator: None,
@@ -161,6 +164,7 @@ impl VulkanTexture {
 
         Ok(Self {
             device: Some(device.clone()),
+            instance: Some(vulkan_device.instance().clone()),
             image: Some(image),
             gpu_memory_allocation: Some(allocation),
             gpu_memory_allocator,
@@ -242,6 +246,7 @@ impl VulkanTexture {
 
         Ok(Self {
             device: Some(device.clone()),
+            instance: None,
             image: Some(image),
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,
@@ -258,6 +263,7 @@ impl VulkanTexture {
     pub fn placeholder() -> Self {
         Self {
             device: None,
+            instance: None,
             image: None,
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,
@@ -293,11 +299,21 @@ impl VulkanTexture {
 #[cfg(target_os = "linux")]
 impl VulkanTexture {
     /// Export the texture's memory as a DMA-BUF file descriptor.
-    pub fn export_dma_buf_fd(&self, device: &VulkanDevice) -> Result<std::os::unix::io::RawFd> {
+    pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         // DMA-BUF export only works with raw device memory (exportable allocations),
         // not with gpu-allocator sub-allocations.
         let memory = self.raw_device_memory.ok_or_else(|| {
-            StreamError::GpuError("Cannot export DMA-BUF from texture without exportable memory".into())
+            StreamError::GpuError(
+                "Cannot export DMA-BUF from texture without exportable memory".into(),
+            )
+        })?;
+
+        let instance = self.instance.as_ref().ok_or_else(|| {
+            StreamError::GpuError("Cannot export DMA-BUF: no Vulkan instance stored".into())
+        })?;
+
+        let device = self.device.as_ref().ok_or_else(|| {
+            StreamError::GpuError("Cannot export DMA-BUF: no Vulkan device stored".into())
         })?;
 
         let get_fd_info = vk::MemoryGetFdInfoKHR::default()
@@ -305,7 +321,7 @@ impl VulkanTexture {
             .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
 
         let external_memory_fd =
-            ash::khr::external_memory_fd::Device::new(device.instance(), device.device());
+            ash::khr::external_memory_fd::Device::new(instance, device);
 
         let fd = unsafe { external_memory_fd.get_memory_fd(&get_fd_info) }
             .map_err(|e| StreamError::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
@@ -372,6 +388,7 @@ impl VulkanTexture {
 
         Ok(Self {
             device: Some(device.clone()),
+            instance: Some(vulkan_device.instance().clone()),
             image: Some(image),
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,
@@ -390,6 +407,7 @@ impl Clone for VulkanTexture {
         // Real textures should use Arc<VulkanTexture> for sharing
         Self {
             device: None,
+            instance: None,
             image: None,
             gpu_memory_allocation: None,
             gpu_memory_allocator: None,

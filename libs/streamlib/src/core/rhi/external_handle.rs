@@ -71,25 +71,15 @@ pub trait RhiPixelBufferImport {
         Self: Sized;
 }
 
-/// Intentionally deferred: the Unix socket + SCM_RIGHTS transport layer is
-/// complete, but VulkanPixelBuffer uses gpu-allocator `CpuToGpu` staging memory
-/// which is not allocated with `VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT`.
-/// Enabling DMA-BUF export requires allocating with exportable memory flags,
-/// which is a separate piece of work (requires changes to VulkanPixelBuffer's
-/// allocation path in gpu-allocator).
 #[cfg(target_os = "linux")]
 impl RhiPixelBufferExport for super::RhiPixelBuffer {
     fn export_handle(&self) -> Result<RhiExternalHandle> {
-        Err(crate::core::StreamError::NotSupported(
-            "DMA-BUF export requires VulkanPixelBuffer allocated with exportable memory".into(),
-        ))
+        let fd = self.ref_.inner.export_dma_buf_fd()?;
+        let size = self.ref_.inner.size() as usize;
+        Ok(RhiExternalHandle::DmaBuf { fd, size })
     }
 }
 
-/// Intentionally deferred: DMA-BUF import requires a VulkanDevice reference to
-/// call `vkAllocateMemory` with `VkImportMemoryFdInfoKHR` and bind it to a new
-/// buffer. The current `from_external_handle` signature doesn't carry
-/// VulkanDevice, so this needs a design change to the trait or the creation path.
 #[cfg(target_os = "linux")]
 impl RhiPixelBufferImport for super::RhiPixelBuffer {
     fn from_external_handle(
@@ -98,9 +88,47 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         height: u32,
         format: super::PixelFormat,
     ) -> Result<Self> {
-        let _ = (handle, width, height, format);
-        Err(crate::core::StreamError::NotSupported(
-            "DMA-BUF import requires VulkanDevice to be threaded through RhiPixelBuffer".into(),
-        ))
+        let RhiExternalHandle::DmaBuf { fd, size } = handle;
+
+        let vulkan_device =
+            crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+                .get()
+                .ok_or_else(|| {
+                    crate::core::StreamError::NotSupported(
+                        "DMA-BUF import: VulkanDevice not initialized (GpuDevice::new() not called)"
+                            .into(),
+                    )
+                })?;
+
+        let bytes_per_pixel = format.bits_per_pixel() / 8;
+        let bytes_per_pixel = if bytes_per_pixel > 0 { bytes_per_pixel } else { 4 };
+
+        let allocation_size = if size > 0 {
+            size as u64
+        } else if width > 0 && height > 0 {
+            (width as u64) * (height as u64) * (bytes_per_pixel as u64)
+        } else {
+            return Err(crate::core::StreamError::Configuration(
+                "DMA-BUF import: cannot determine allocation size (size=0, width=0 or height=0)"
+                    .into(),
+            ));
+        };
+
+        let vulkan_pixel_buffer =
+            crate::vulkan::rhi::VulkanPixelBuffer::from_dma_buf_fd(
+                vulkan_device,
+                fd,
+                width,
+                height,
+                bytes_per_pixel,
+                format,
+                allocation_size,
+            )?;
+
+        let pixel_buffer_ref = super::RhiPixelBufferRef {
+            inner: std::sync::Arc::new(vulkan_pixel_buffer),
+        };
+
+        Ok(super::RhiPixelBuffer::new(pixel_buffer_ref))
     }
 }
