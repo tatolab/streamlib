@@ -11,7 +11,9 @@
 
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::VideoDecoder;
-use crate::core::streaming::{H264RtpDepacketizer, OpusDecoder, RtpSample, WhepClient, WhepConfig};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use crate::core::streaming::OpusDecoder;
+use crate::core::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
 use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
 use bytes::Bytes;

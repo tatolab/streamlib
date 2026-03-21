@@ -10,10 +10,12 @@
 
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::{H264Profile, VideoCodec, VideoEncoder};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
-    OpusEncoder, WhipClient, WhipConfig,
+    OpusEncoder,
 };
+use crate::core::streaming::{WhipClient, WhipConfig};
 use crate::core::VideoEncoderConfig;
 use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError};
 

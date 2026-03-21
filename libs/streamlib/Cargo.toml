@@ -131,6 +131,10 @@ prost = "0.13"  # Protocol Buffers for gRPC message types
 streamlib-broker = { path = "../streamlib-broker" }  # Broker proto types for gRPC client
 streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified telemetry pipeline
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = { version = "0.38", default-features = false, features = ["std", "loaded"] }
+libc.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
 core-graphics = "0.24"

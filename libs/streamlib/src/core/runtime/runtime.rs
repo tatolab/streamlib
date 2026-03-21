@@ -106,6 +106,7 @@ pub struct StreamRuntime {
     /// Created in new() so PUBSUB can initialize before start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
     /// Telemetry guard — keeps the OTel pipeline alive for the runtime's lifetime.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     _telemetry_guard: streamlib_telemetry::TelemetryGuard,
 }
 
@@ -138,6 +139,7 @@ impl StreamRuntime {
         // Safe to call multiple times — only the first call sets up the subscriber.
         let tokio_handle = tokio_runtime_variant.handle();
         let _enter_guard = tokio_handle.enter();
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         let broker_endpoint = {
             let port = std::env::var("STREAMLIB_BROKER_PORT")
                 .ok()
@@ -145,6 +147,7 @@ impl StreamRuntime {
                 .unwrap_or(streamlib_broker::GRPC_PORT);
             format!("http://127.0.0.1:{}", port)
         };
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         let _telemetry_guard =
             streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
                 service_name: format!("runtime:{}", runtime_id),
@@ -206,6 +209,7 @@ impl StreamRuntime {
             status,
             _graph_change_listener: listener,
             iceoryx2_node,
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             _telemetry_guard,
         }))
     }

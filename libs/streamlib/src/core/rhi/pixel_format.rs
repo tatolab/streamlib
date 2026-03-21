@@ -148,3 +148,11 @@ mod platform {
 // Re-export platform-specific type
 #[cfg(target_os = "macos")]
 pub use platform::PixelFormat;
+
+// Linux stub — real pixel format variants added with #166 (Linux processors)
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PixelFormat {
+    #[default]
+    Unknown,
+}

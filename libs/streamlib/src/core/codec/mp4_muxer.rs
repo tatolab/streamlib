@@ -9,7 +9,9 @@
 
 use super::Mp4MuxerConfig;
 use crate::_generated_::Encodedvideoframe;
-use crate::core::{EncodedAudioFrame, Result, RuntimeContext};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use crate::core::streaming::EncodedAudioFrame;
+use crate::core::{Result, RuntimeContext};
 
 /// Platform-agnostic MP4 muxer.
 ///
@@ -101,7 +103,7 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded audio frame (unsupported platform).
-    pub fn write_audio(&mut self, _frame: &EncodedAudioFrame) -> Result<()> {
+    pub fn write_audio<T>(&mut self, _frame: &T) -> Result<()> {
         Err(crate::core::StreamError::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))
