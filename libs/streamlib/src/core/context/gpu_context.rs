@@ -142,6 +142,11 @@ impl PixelBufferPoolManager {
                 inner: {
                     let vulkan_device = std::sync::Arc::clone(&self.device.inner);
                     let bytes_per_pixel = format.bits_per_pixel() / 8;
+                    if bytes_per_pixel == 0 {
+                        return Err(crate::core::StreamError::Configuration(
+                            format!("Cannot create pixel buffer pool: PixelFormat {:?} has 0 bits per pixel", format),
+                        ));
+                    }
                     crate::vulkan::rhi::VulkanPixelBufferPool::new(
                         vulkan_device,
                         width,
