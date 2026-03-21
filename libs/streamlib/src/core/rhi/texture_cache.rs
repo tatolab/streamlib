@@ -15,7 +15,10 @@ pub struct RhiTextureCache {
     #[cfg(target_os = "macos")]
     pub(crate) inner: crate::metal::rhi::texture_cache::TextureCacheMacOS,
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    pub(crate) inner: crate::vulkan::rhi::VulkanTextureCache,
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
 }
 
@@ -29,7 +32,17 @@ impl RhiTextureCache {
         {
             self.inner.create_view(buffer)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            // VulkanTextureCache needs a VkImage to create a view from,
+            // but RhiPixelBuffer on Linux wraps a VkBuffer (not VkImage).
+            // For now, return NotSupported until pixel buffer -> texture path is wired.
+            let _ = buffer;
+            Err(crate::core::StreamError::NotSupported(
+                "Vulkan texture cache create_view not yet implemented".into(),
+            ))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = buffer;
             Err(crate::core::StreamError::Configuration(
@@ -43,6 +56,10 @@ impl RhiTextureCache {
     /// Call periodically (e.g., every few seconds) to free memory.
     pub fn flush(&self) {
         #[cfg(target_os = "macos")]
+        {
+            self.inner.flush();
+        }
+        #[cfg(target_os = "linux")]
         {
             self.inner.flush();
         }
@@ -63,7 +80,10 @@ pub struct RhiTextureView {
     #[cfg(target_os = "macos")]
     pub(crate) inner: crate::metal::rhi::texture_cache::TextureViewMacOS,
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    pub(crate) vulkan_image_view_handle: u64,
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
 
     /// Keep the source buffer alive while this view exists.

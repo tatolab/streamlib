@@ -19,15 +19,15 @@ use super::{VulkanCommandQueue, VulkanTexture};
 pub struct VulkanDevice {
     #[allow(dead_code)]
     entry: ash::Entry,
-    #[allow(dead_code)]
     instance: ash::Instance,
-    #[allow(dead_code)]
     physical_device: vk::PhysicalDevice,
+    memory_properties: vk::PhysicalDeviceMemoryProperties,
     device: ash::Device,
     queue: vk::Queue,
     queue_family_index: u32,
     #[allow(dead_code)]
     device_name: String,
+    supports_external_memory: bool,
 }
 
 impl VulkanDevice {
@@ -165,6 +165,46 @@ impl VulkanDevice {
             device_extensions.push(c"VK_KHR_portability_subset".as_ptr());
         }
 
+        // On Linux, check for DMA-BUF external memory extensions
+        #[cfg(target_os = "linux")]
+        let has_external_memory = {
+            let available_device_extensions =
+                unsafe { instance.enumerate_device_extension_properties(physical_device) }
+                    .unwrap_or_default();
+
+            let available_device_ext_names: Vec<&CStr> = available_device_extensions
+                .iter()
+                .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
+                .collect();
+
+            let external_memory_ext = c"VK_KHR_external_memory";
+            let external_memory_fd_ext = c"VK_KHR_external_memory_fd";
+            let external_memory_dmabuf_ext = c"VK_EXT_external_memory_dma_buf";
+
+            let has_external_memory = available_device_ext_names.contains(&external_memory_ext)
+                && available_device_ext_names.contains(&external_memory_fd_ext);
+
+            if has_external_memory {
+                device_extensions.push(external_memory_ext.as_ptr());
+                device_extensions.push(external_memory_fd_ext.as_ptr());
+
+                if available_device_ext_names.contains(&external_memory_dmabuf_ext) {
+                    device_extensions.push(external_memory_dmabuf_ext.as_ptr());
+                    tracing::info!("VK_EXT_external_memory_dma_buf available");
+                }
+                tracing::info!("Vulkan external memory extensions enabled");
+            } else {
+                tracing::info!("Vulkan external memory extensions not available");
+            }
+
+            has_external_memory
+        };
+
+        #[cfg(target_os = "linux")]
+        let supports_external_memory = has_external_memory;
+        #[cfg(not(target_os = "linux"))]
+        let supports_external_memory = false;
+
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions);
@@ -175,26 +215,54 @@ impl VulkanDevice {
         // 8. Get the graphics queue
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
+        // 9. Query memory properties (used by find_memory_type for all allocations)
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
         tracing::info!(
-            "Vulkan device initialized: {} (queue family {})",
+            "Vulkan device initialized: {} (queue family {}, {} memory types)",
             device_name,
-            queue_family_index
+            queue_family_index,
+            memory_properties.memory_type_count
         );
 
         Ok(Self {
             entry,
             instance,
             physical_device,
+            memory_properties,
             device,
             queue,
             queue_family_index,
             device_name: device_name.into_owned(),
+            supports_external_memory,
         })
+    }
+
+    /// Find a memory type that satisfies both the type filter and required properties.
+    pub fn find_memory_type(
+        &self,
+        type_filter: u32,
+        required_properties: vk::MemoryPropertyFlags,
+    ) -> Result<u32> {
+        for i in 0..self.memory_properties.memory_type_count {
+            let type_supported = (type_filter & (1 << i)) != 0;
+            let properties_supported = self.memory_properties.memory_types[i as usize]
+                .property_flags
+                .contains(required_properties);
+            if type_supported && properties_supported {
+                return Ok(i);
+            }
+        }
+        Err(StreamError::GpuError(format!(
+            "No suitable memory type found (filter: 0x{:x}, required: 0x{:x})",
+            type_filter, required_properties.as_raw()
+        )))
     }
 
     /// Create a texture on this device.
     pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<VulkanTexture> {
-        VulkanTexture::new(&self.device, desc)
+        VulkanTexture::new(self, desc)
     }
 
     /// Create a VulkanCommandQueue wrapper for the shared command queue.
@@ -206,6 +274,12 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn name(&self) -> String {
         self.device_name.clone()
+    }
+
+    /// Get the Vulkan instance.
+    #[allow(dead_code)]
+    pub fn instance(&self) -> &ash::Instance {
+        &self.instance
     }
 
     /// Get the Vulkan physical device.
@@ -230,6 +304,11 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index
+    }
+
+    /// Whether DMA-BUF external memory extensions are available.
+    pub fn supports_external_memory(&self) -> bool {
+        self.supports_external_memory
     }
 }
 
