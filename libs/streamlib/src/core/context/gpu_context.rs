@@ -90,13 +90,17 @@ struct PixelBufferPoolManager {
     /// Global cache for UUID -> RhiPixelBuffer lookups (includes buffers from all pools).
     /// Used by consumers (e.g., display processor) to resolve UUIDs received via IPC.
     buffer_cache: Mutex<HashMap<String, RhiPixelBuffer>>,
+    /// GPU device reference for creating platform pixel buffer pools.
+    #[allow(dead_code)]
+    device: Arc<GpuDevice>,
 }
 
 impl PixelBufferPoolManager {
-    fn new() -> Self {
+    fn new(device: Arc<GpuDevice>) -> Self {
         Self {
             pools: Mutex::new(HashMap::new()),
             buffer_cache: Mutex::new(HashMap::new()),
+            device,
         }
     }
 
@@ -135,9 +139,20 @@ impl PixelBufferPoolManager {
                     "PixelBufferPool creation via descriptor not yet implemented".into(),
                 )),
                 #[cfg(target_os = "linux")]
-                inner: return Err(crate::core::StreamError::Configuration(
-                    "PixelBufferPool creation via descriptor not yet implemented on Linux".into(),
-                )),
+                inner: {
+                    let vulkan_device = std::sync::Arc::clone(&self.device.inner);
+                    // Default to 4 bytes per pixel (BGRA/RGBA) — PixelFormat is
+                    // a stub on Linux until #166 (Linux processors) lands.
+                    let bytes_per_pixel = 4u32;
+                    crate::vulkan::rhi::VulkanPixelBufferPool::new(
+                        vulkan_device,
+                        width,
+                        height,
+                        bytes_per_pixel,
+                        format,
+                        POOL_PRE_ALLOCATE_COUNT,
+                    )?
+                },
                 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                 _marker: std::marker::PhantomData,
             };
@@ -363,9 +378,9 @@ impl GpuContext {
         let texture_pool = TexturePool::new(Arc::clone(&device));
         let blitter = Self::create_blitter(&device);
         Self {
+            pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new(Arc::clone(&device))),
             device,
             texture_pool,
-            pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
         }
@@ -377,9 +392,9 @@ impl GpuContext {
         let texture_pool = TexturePool::with_config(Arc::clone(&device), pool_config);
         let blitter = Self::create_blitter(&device);
         Self {
+            pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new(Arc::clone(&device))),
             device,
             texture_pool,
-            pixel_buffer_pool_manager: Arc::new(PixelBufferPoolManager::new()),
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
         }

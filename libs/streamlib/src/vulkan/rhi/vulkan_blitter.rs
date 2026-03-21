@@ -10,7 +10,6 @@ use crate::core::{Result, StreamError};
 /// Vulkan implementation of [`RhiBlitter`] for GPU copy operations on Linux.
 pub struct VulkanBlitter {
     device: ash::Device,
-    #[allow(dead_code)]
     queue: vk::Queue,
     #[allow(dead_code)]
     queue_family_index: u32,
@@ -39,10 +38,65 @@ impl VulkanBlitter {
 }
 
 impl RhiBlitter for VulkanBlitter {
-    fn blit_copy(&self, _src: &RhiPixelBuffer, _dest: &RhiPixelBuffer) -> Result<()> {
-        Err(StreamError::NotSupported(
-            "Vulkan blitter blit_copy not yet implemented".into(),
-        ))
+    fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+        let src_buffer = src.buffer_ref().inner.buffer();
+        let dest_buffer = dest.buffer_ref().inner.buffer();
+        let src_size = src.buffer_ref().inner.size();
+        let dest_size = dest.buffer_ref().inner.size();
+
+        if src_size != dest_size {
+            return Err(StreamError::GpuError(format!(
+                "blit_copy requires same-size buffers: src={} bytes, dest={} bytes",
+                src_size, dest_size
+            )));
+        }
+
+        let copy_size = src_size;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(self.command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+
+        let command_buffer = unsafe { self.device.allocate_command_buffers(&alloc_info) }
+            .map_err(|e| StreamError::GpuError(format!("Failed to allocate blit command buffer: {e}")))?[0];
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            self.device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .map_err(|e| StreamError::GpuError(format!("Failed to begin blit command buffer: {e}")))?;
+
+            let region = vk::BufferCopy::default()
+                .src_offset(0)
+                .dst_offset(0)
+                .size(copy_size);
+
+            self.device
+                .cmd_copy_buffer(command_buffer, src_buffer, dest_buffer, &[region]);
+
+            self.device
+                .end_command_buffer(command_buffer)
+                .map_err(|e| StreamError::GpuError(format!("Failed to end blit command buffer: {e}")))?;
+
+            let submit_info =
+                vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&command_buffer));
+
+            self.device
+                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
+                .map_err(|e| StreamError::GpuError(format!("Failed to submit blit command: {e}")))?;
+
+            self.device
+                .queue_wait_idle(self.queue)
+                .map_err(|e| StreamError::GpuError(format!("Failed to wait for blit queue: {e}")))?;
+
+            self.device
+                .free_command_buffers(self.command_pool, &[command_buffer]);
+        }
+
+        Ok(())
     }
 
     unsafe fn blit_copy_iosurface_raw(

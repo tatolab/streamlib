@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::rhi::{PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
 use crate::core::{Result, StreamError};
 
 use super::{VulkanDevice, VulkanPixelBuffer};
@@ -16,6 +16,7 @@ pub struct VulkanPixelBufferPool {
     width: u32,
     height: u32,
     bytes_per_pixel: u32,
+    format: PixelFormat,
     buffers: Vec<Arc<VulkanPixelBuffer>>,
     next_index: AtomicUsize,
     buffer_to_pool_id: Mutex<HashMap<usize, PixelBufferPoolId>>,
@@ -28,13 +29,14 @@ impl VulkanPixelBufferPool {
         width: u32,
         height: u32,
         bytes_per_pixel: u32,
+        format: PixelFormat,
         pre_allocate: usize,
     ) -> Result<Self> {
         let mut buffers = Vec::with_capacity(pre_allocate);
         let mut buffer_to_pool_id = HashMap::with_capacity(pre_allocate);
 
         for i in 0..pre_allocate {
-            let buffer = VulkanPixelBuffer::new(&device, width, height, bytes_per_pixel)?;
+            let buffer = VulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format)?;
             buffers.push(Arc::new(buffer));
             buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
         }
@@ -44,6 +46,7 @@ impl VulkanPixelBufferPool {
             width,
             height,
             bytes_per_pixel,
+            format,
             buffers,
             next_index: AtomicUsize::new(0),
             buffer_to_pool_id: Mutex::new(buffer_to_pool_id),
@@ -77,15 +80,8 @@ impl VulkanPixelBufferPool {
                         .unwrap_or_else(PixelBufferPoolId::new)
                 };
 
-                let vulkan_pixel_buffer = VulkanPixelBuffer::new(
-                    &self.device,
-                    self.width,
-                    self.height,
-                    self.bytes_per_pixel,
-                )?;
-
                 let pixel_buffer_ref = RhiPixelBufferRef {
-                    inner: vulkan_pixel_buffer,
+                    inner: Arc::clone(buffer),
                 };
 
                 let rhi_pixel_buffer = RhiPixelBuffer::new(pixel_buffer_ref);

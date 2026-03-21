@@ -3,8 +3,8 @@
 
 //! Vulkan RHI implementation.
 //!
-//! This module provides stub implementations for the Vulkan backend.
-//! Full implementation is pending.
+//! Device, texture, command buffer/queue, sync, pixel buffer, and texture cache
+//! are fully implemented via ash. Blitter and format converter are partial.
 
 mod vulkan_command_buffer;
 mod vulkan_command_queue;
