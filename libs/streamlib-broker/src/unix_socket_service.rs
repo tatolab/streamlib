@@ -191,11 +191,9 @@ fn handle_client_connection(
             ),
         };
 
-        // Close received fd if it wasn't consumed
+        // Always close received fd after dispatch — handlers dup when they need to keep it
         if let Some(fd) = received_fd {
-            if op != "register" && op != "check_in" {
-                unsafe { libc::close(fd) };
-            }
+            unsafe { libc::close(fd) };
         }
 
         // Send response
@@ -226,11 +224,20 @@ fn recv_message_with_fd(
 ) -> Result<(Vec<u8>, Option<RawFd>), std::io::Error> {
     use std::os::unix::io::AsRawFd;
 
-    let mut buf = vec![0u8; msg_len];
+    const CMSG_SPACE_SIZE: usize =
+        unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
 
-    // Control message buffer for SCM_RIGHTS (one fd)
-    let mut cmsg_buf = [0u8; unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) }
-        as usize];
+    // Aligned control message buffer for SCM_RIGHTS (one fd)
+    #[repr(C)]
+    union CmsgBuf {
+        buf: [u8; CMSG_SPACE_SIZE],
+        _align: libc::cmsghdr,
+    }
+    let mut cmsg_buf = CmsgBuf {
+        buf: [0u8; CMSG_SPACE_SIZE],
+    };
+
+    let mut buf = vec![0u8; msg_len];
 
     let mut iov = libc::iovec {
         iov_base: buf.as_mut_ptr() as *mut libc::c_void,
@@ -240,8 +247,8 @@ fn recv_message_with_fd(
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
-    msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-    msg.msg_controllen = cmsg_buf.len();
+    msg.msg_control = unsafe { cmsg_buf.buf.as_mut_ptr() } as *mut libc::c_void;
+    msg.msg_controllen = CMSG_SPACE_SIZE;
 
     let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, 0) };
     if n < 0 {
@@ -251,6 +258,14 @@ fn recv_message_with_fd(
         return Err(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "Connection closed",
+        ));
+    }
+
+    // Check for truncated control message (fd silently lost)
+    if msg.msg_flags & libc::MSG_CTRUNC != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "SCM_RIGHTS control message truncated",
         ));
     }
 
@@ -322,12 +337,22 @@ fn send_message_with_fd(
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
 
-    let mut cmsg_buf = [0u8; unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) }
-        as usize];
+    const CMSG_SPACE_SIZE: usize =
+        unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+
+    // Aligned control message buffer for SCM_RIGHTS (one fd)
+    #[repr(C)]
+    union CmsgBuf {
+        buf: [u8; CMSG_SPACE_SIZE],
+        _align: libc::cmsghdr,
+    }
+    let mut cmsg_buf = CmsgBuf {
+        buf: [0u8; CMSG_SPACE_SIZE],
+    };
 
     if let Some(send_fd) = fd {
-        msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-        msg.msg_controllen = cmsg_buf.len();
+        msg.msg_control = unsafe { cmsg_buf.buf.as_mut_ptr() } as *mut libc::c_void;
+        msg.msg_controllen = CMSG_SPACE_SIZE;
 
         let cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
         if !cmsg_ptr.is_null() {
@@ -339,8 +364,7 @@ fn send_message_with_fd(
                 let fd_ptr = libc::CMSG_DATA(cmsg_ptr) as *mut RawFd;
                 *fd_ptr = send_fd;
             }
-            msg.msg_controllen =
-                unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+            msg.msg_controllen = CMSG_SPACE_SIZE;
         }
     }
 
@@ -365,9 +389,6 @@ fn handle_register(
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => {
-            if let Some(fd) = received_fd {
-                unsafe { libc::close(fd) };
-            }
             return (serde_json::json!({"error": "missing surface_id"}), None);
         }
     };
