@@ -100,9 +100,18 @@ impl VulkanTexture {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
+        let mut alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_requirements.size)
             .memory_type_index(memory_type_index);
+
+        #[cfg(target_os = "linux")]
+        let mut export_info = vk::ExportMemoryAllocateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
+        #[cfg(target_os = "linux")]
+        if vulkan_device.supports_external_memory() {
+            alloc_info = alloc_info.push_next(&mut export_info);
+        }
 
         let memory = unsafe { device.allocate_memory(&alloc_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to allocate memory: {e}")))?;
@@ -233,6 +242,96 @@ impl VulkanTexture {
     /// Texture format.
     pub fn format(&self) -> TextureFormat {
         self.format
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl VulkanTexture {
+    /// Export the texture's memory as a DMA-BUF file descriptor.
+    pub fn export_dma_buf_fd(&self, device: &VulkanDevice) -> Result<std::os::unix::io::RawFd> {
+        let memory = self.memory.ok_or_else(|| {
+            StreamError::GpuError("Cannot export DMA-BUF from texture without owned memory".into())
+        })?;
+
+        let get_fd_info = vk::MemoryGetFdInfoKHR::default()
+            .memory(memory)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
+        let external_memory_fd =
+            ash::khr::external_memory_fd::Device::new(device.instance(), device.device());
+
+        let fd = unsafe { external_memory_fd.get_memory_fd(&get_fd_info) }
+            .map_err(|e| StreamError::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
+
+        Ok(fd)
+    }
+
+    /// Import a texture from a DMA-BUF file descriptor.
+    pub fn from_dma_buf_fd(
+        vulkan_device: &VulkanDevice,
+        fd: std::os::unix::io::RawFd,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        allocation_size: vk::DeviceSize,
+    ) -> Result<Self> {
+        let device = vulkan_device.device();
+        let vk_format = texture_format_to_vk(format);
+
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk_format)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::LINEAR)
+            .usage(
+                vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+
+        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
+            StreamError::GpuError(format!("Failed to create image for DMA-BUF import: {e}"))
+        })?;
+
+        let mut import_info = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .fd(fd);
+
+        let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
+        let memory_type_index = vulkan_device.find_memory_type(
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(allocation_size)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import_info);
+
+        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+            .map_err(|e| StreamError::GpuError(format!("Failed to import DMA-BUF memory: {e}")))?;
+
+        unsafe { device.bind_image_memory(image, memory, 0) }
+            .map_err(|e| StreamError::GpuError(format!("Failed to bind imported memory: {e}")))?;
+
+        Ok(Self {
+            device: Some(device.clone()),
+            image: Some(image),
+            memory: Some(memory),
+            imported_from_iosurface: false,
+            width,
+            height,
+            format,
+        })
     }
 }
 
