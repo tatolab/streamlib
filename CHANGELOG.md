@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.9](https://github.com/tatolab/streamlib/compare/v0.3.8...v0.3.9) (2026-03-20)
+
+
+### Features
+
+* add Grafana + Tempo + Loki docker-compose for local telemetry visualization ([4c4a58c](https://github.com/tatolab/streamlib/commit/4c4a58c46d9a50ed43871144e559c22546d85d39))
+* add tracing span instrumentation to runtime/compiler lifecycle ([98d0de6](https://github.com/tatolab/streamlib/commit/98d0de6e3799707081642979ed143ce87323af00))
+* **broker:** forward ingested telemetry to OTLP endpoint ([182fdee](https://github.com/tatolab/streamlib/commit/182fdeee0060b737a091ead9b2ad913d509c0cc0))
+* **cli:** add `streamlib telemetry export` command for OTLP backfill ([2d0fe5f](https://github.com/tatolab/streamlib/commit/2d0fe5f17a054fecf597a9869dba413c389256f1))
+* integrate telemetry into StreamRuntime — every runtime gets unified logging ([d6ae795](https://github.com/tatolab/streamlib/commit/d6ae79550919361c47734872af4503a92956d455))
+* span instrumentation + Python subprocess stderr forwarding ([c547491](https://github.com/tatolab/streamlib/commit/c547491c1d419936ac05422989ebc5f85bcb8035))
+* top-level `streamlib logs` and `streamlib spans` commands with --follow ([6b19534](https://github.com/tatolab/streamlib/commit/6b19534941542eacbbbe0119b66aaf1d15fd03b3))
+* unified OpenTelemetry observability with broker-as-collector ([5ec1ab4](https://github.com/tatolab/streamlib/commit/5ec1ab474ef57c2da7121d86399888048964ca9f))
+* unified OpenTelemetry observability with broker-as-collector architecture ([1878be3](https://github.com/tatolab/streamlib/commit/1878be35e37c25f56f70ec5c3565d5151abb5078))
+
+
+### Bug Fixes
+
+* init Tokio runtime before telemetry in StreamRuntime::new() ([b2ed4ac](https://github.com/tatolab/streamlib/commit/b2ed4ac163f7eea9aab314cf8072888de07330f0))
+* load .env in StreamRuntime::new() before broker port resolution ([a82f4a1](https://github.com/tatolab/streamlib/commit/a82f4a1580d94f7dbd4684f7276550098b63629e))
+
 ## [0.3.8](https://github.com/tatolab/streamlib/compare/v0.3.7...v0.3.8) (2026-03-05)
 
 
