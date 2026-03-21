@@ -19,7 +19,7 @@ const POOL_MAX_BUFFER_COUNT: usize = 64;
 /// Maximum number of entries in the buffer_cache before eviction.
 const MAX_BUFFER_CACHE_SIZE: usize = 512;
 
-/// No-op blitter for non-macOS platforms.
+/// No-op blitter for platforms without a native blitter.
 #[cfg(not(target_os = "macos"))]
 struct NoOpBlitter;
 
@@ -380,7 +380,26 @@ impl GpuContext {
         Arc::new(crate::metal::rhi::MetalBlitter::new(command_queue))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    fn create_blitter(device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
+        let vulkan_device = &device.inner;
+        match crate::vulkan::rhi::VulkanBlitter::new(
+            vulkan_device.device(),
+            vulkan_device.queue(),
+            vulkan_device.queue_family_index(),
+        ) {
+            Ok(blitter) => Arc::new(blitter),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to create VulkanBlitter: {}, falling back to no-op",
+                    e
+                );
+                Arc::new(NoOpBlitter)
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn create_blitter(_device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
         Arc::new(NoOpBlitter)
     }
