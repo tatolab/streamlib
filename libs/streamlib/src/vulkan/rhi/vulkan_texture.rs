@@ -3,7 +3,12 @@
 
 //! Vulkan texture implementation for RHI.
 
+use std::sync::Arc;
+
 use ash::vk;
+use gpu_allocator::vulkan::{Allocation, Allocator};
+use gpu_allocator::MemoryLocation;
+use parking_lot::Mutex;
 
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{Result, StreamError};
@@ -58,7 +63,12 @@ fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
 pub struct VulkanTexture {
     device: Option<ash::Device>,
     image: Option<vk::Image>,
-    memory: Option<vk::DeviceMemory>,
+    /// Sub-allocated memory from gpu-allocator (used for internally-created textures).
+    gpu_memory_allocation: Option<Allocation>,
+    /// Shared allocator handle for freeing the sub-allocation in Drop.
+    gpu_memory_allocator: Option<Arc<Mutex<Allocator>>>,
+    /// Raw device memory for imported textures (DMA-BUF) that bypass the sub-allocator.
+    imported_device_memory: Option<vk::DeviceMemory>,
     /// Whether this texture was imported from IOSurface (no memory to free)
     imported_from_iosurface: bool,
     width: u32,
@@ -93,37 +103,68 @@ impl VulkanTexture {
         let image = unsafe { device.create_image(&image_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create image: {e}")))?;
 
-        // Get memory requirements and find a suitable DEVICE_LOCAL memory type
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
-        let memory_type_index = vulkan_device.find_memory_type(
-            mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
 
-        let mut alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type_index);
-
-        #[cfg(target_os = "linux")]
-        let mut export_info = vk::ExportMemoryAllocateInfo::default()
-            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-
+        // On Linux with external memory support, we must use raw vkAllocateMemory
+        // with VkExportMemoryAllocateInfo in the pNext chain — gpu-allocator
+        // does not support pNext-extended allocations.
         #[cfg(target_os = "linux")]
         if vulkan_device.supports_external_memory() {
-            alloc_info = alloc_info.push_next(&mut export_info);
+            let memory_type_index = vulkan_device.find_memory_type(
+                mem_requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )?;
+
+            let mut export_info = vk::ExportMemoryAllocateInfo::default()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
+            let alloc_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(mem_requirements.size)
+                .memory_type_index(memory_type_index)
+                .push_next(&mut export_info);
+
+            let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+                .map_err(|e| StreamError::GpuError(format!("Failed to allocate exportable memory: {e}")))?;
+
+            unsafe { device.bind_image_memory(image, memory, 0) }
+                .map_err(|e| StreamError::GpuError(format!("Failed to bind memory: {e}")))?;
+
+            return Ok(Self {
+                device: Some(device.clone()),
+                image: Some(image),
+                gpu_memory_allocation: None,
+                gpu_memory_allocator: None,
+                imported_device_memory: Some(memory),
+                imported_from_iosurface: false,
+                width: desc.width,
+                height: desc.height,
+                format: desc.format,
+            });
         }
 
-        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to allocate memory: {e}")))?;
+        // Standard path: sub-allocate through gpu-allocator
+        let allocation = vulkan_device.allocate_gpu_memory(
+            "texture",
+            mem_requirements,
+            MemoryLocation::GpuOnly,
+            false, // images are non-linear (tiled)
+        )?;
 
-        // Bind memory to image
-        unsafe { device.bind_image_memory(image, memory, 0) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to bind memory: {e}")))?;
+        unsafe {
+            device.bind_image_memory(image, allocation.memory(), allocation.offset())
+        }
+        .map_err(|e| StreamError::GpuError(format!("Failed to bind memory: {e}")))?;
+
+        let gpu_memory_allocator = vulkan_device
+            .gpu_memory_allocator()
+            .cloned();
 
         Ok(Self {
             device: Some(device.clone()),
             image: Some(image),
-            memory: Some(memory),
+            gpu_memory_allocation: Some(allocation),
+            gpu_memory_allocator,
+            imported_device_memory: None,
             imported_from_iosurface: false,
             width: desc.width,
             height: desc.height,
@@ -202,7 +243,9 @@ impl VulkanTexture {
         Ok(Self {
             device: Some(device.clone()),
             image: Some(image),
-            memory: None, // IOSurface manages the memory
+            gpu_memory_allocation: None,
+            gpu_memory_allocator: None,
+            imported_device_memory: None, // IOSurface manages the memory
             imported_from_iosurface: true,
             width,
             height,
@@ -216,7 +259,9 @@ impl VulkanTexture {
         Self {
             device: None,
             image: None,
-            memory: None,
+            gpu_memory_allocation: None,
+            gpu_memory_allocator: None,
+            imported_device_memory: None,
             imported_from_iosurface: false,
             width: 0,
             height: 0,
@@ -249,8 +294,10 @@ impl VulkanTexture {
 impl VulkanTexture {
     /// Export the texture's memory as a DMA-BUF file descriptor.
     pub fn export_dma_buf_fd(&self, device: &VulkanDevice) -> Result<std::os::unix::io::RawFd> {
-        let memory = self.memory.ok_or_else(|| {
-            StreamError::GpuError("Cannot export DMA-BUF from texture without owned memory".into())
+        // DMA-BUF export only works with raw device memory (exportable allocations),
+        // not with gpu-allocator sub-allocations.
+        let memory = self.imported_device_memory.ok_or_else(|| {
+            StreamError::GpuError("Cannot export DMA-BUF from texture without exportable memory".into())
         })?;
 
         let get_fd_info = vk::MemoryGetFdInfoKHR::default()
@@ -326,7 +373,9 @@ impl VulkanTexture {
         Ok(Self {
             device: Some(device.clone()),
             image: Some(image),
-            memory: Some(memory),
+            gpu_memory_allocation: None,
+            gpu_memory_allocator: None,
+            imported_device_memory: Some(memory),
             imported_from_iosurface: false,
             width,
             height,
@@ -339,28 +388,16 @@ impl Clone for VulkanTexture {
     fn clone(&self) -> Self {
         // Placeholder textures can be cloned directly
         // Real textures should use Arc<VulkanTexture> for sharing
-        if self.device.is_none() {
-            Self {
-                device: None,
-                image: None,
-                memory: None,
-                imported_from_iosurface: false,
-                width: self.width,
-                height: self.height,
-                format: self.format,
-            }
-        } else {
-            // For now, create a placeholder clone
-            // Real cloning would require reference counting
-            Self {
-                device: None,
-                image: None,
-                memory: None,
-                imported_from_iosurface: false,
-                width: self.width,
-                height: self.height,
-                format: self.format,
-            }
+        Self {
+            device: None,
+            image: None,
+            gpu_memory_allocation: None,
+            gpu_memory_allocator: None,
+            imported_device_memory: None,
+            imported_from_iosurface: false,
+            width: self.width,
+            height: self.height,
+            format: self.format,
         }
     }
 }
@@ -372,11 +409,21 @@ impl Drop for VulkanTexture {
                 if let Some(image) = self.image {
                     device.destroy_image(image, None);
                 }
-                // Only free memory if we allocated it (not imported from IOSurface)
-                if !self.imported_from_iosurface {
-                    if let Some(memory) = self.memory {
-                        device.free_memory(memory, None);
+            }
+
+            // Free sub-allocated memory through the allocator
+            if let Some(allocation) = self.gpu_memory_allocation.take() {
+                if let Some(allocator) = &self.gpu_memory_allocator {
+                    if let Err(e) = allocator.lock().free(allocation) {
+                        tracing::error!("Failed to free texture allocation: {e}");
                     }
+                }
+            }
+
+            // Free raw device memory (DMA-BUF imports / exportable allocations)
+            if !self.imported_from_iosurface {
+                if let Some(memory) = self.imported_device_memory {
+                    unsafe { device.free_memory(memory, None) };
                 }
             }
         }

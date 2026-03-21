@@ -1,7 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::sync::Arc;
+
 use ash::vk;
+use gpu_allocator::vulkan::{Allocation, Allocator};
+use gpu_allocator::MemoryLocation;
+use parking_lot::Mutex;
 
 use crate::core::rhi::PixelFormat;
 use crate::core::{Result, StreamError};
@@ -12,7 +17,8 @@ use super::VulkanDevice;
 pub struct VulkanPixelBuffer {
     device: ash::Device,
     buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    gpu_memory_allocation: Option<Allocation>,
+    gpu_memory_allocator: Arc<Mutex<Allocator>>,
     mapped_ptr: *mut u8,
     width: u32,
     height: u32,
@@ -46,38 +52,38 @@ impl VulkanPixelBuffer {
 
         let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
 
-        let memory_type_index = vulkan_device.find_memory_type(
-            mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        let allocation = vulkan_device.allocate_gpu_memory(
+            "staging_pixel_buffer",
+            mem_requirements,
+            MemoryLocation::CpuToGpu,
+            true, // buffers are linear
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type_index);
-
-        let memory = unsafe { device.allocate_memory(&alloc_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!("Failed to allocate staging memory: {e}"))
-        })?;
-
-        unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
+        unsafe {
+            device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+        }
+        .map_err(|e| {
             StreamError::GpuError(format!("Failed to bind staging buffer memory: {e}"))
         })?;
 
-        let mapped_ptr = unsafe {
-            device.map_memory(
-                memory,
-                0,
-                mem_requirements.size,
-                vk::MemoryMapFlags::empty(),
+        let mapped_ptr = allocation.mapped_ptr().ok_or_else(|| {
+            StreamError::GpuError(
+                "Staging buffer allocation is not host-mapped".into(),
             )
-        }
-        .map_err(|e| StreamError::GpuError(format!("Failed to map staging buffer memory: {e}")))?
-            as *mut u8;
+        })?.as_ptr() as *mut u8;
+
+        let gpu_memory_allocator = vulkan_device
+            .gpu_memory_allocator()
+            .ok_or_else(|| {
+                StreamError::GpuError("GPU memory allocator not available".into())
+            })?
+            .clone();
 
         Ok(Self {
             device: device.clone(),
             buffer,
-            memory,
+            gpu_memory_allocation: Some(allocation),
+            gpu_memory_allocator,
             mapped_ptr,
             width,
             height,
@@ -126,9 +132,12 @@ impl VulkanPixelBuffer {
 impl Drop for VulkanPixelBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.device.unmap_memory(self.memory);
             self.device.destroy_buffer(self.buffer, None);
-            self.device.free_memory(self.memory, None);
+        }
+        if let Some(allocation) = self.gpu_memory_allocation.take() {
+            if let Err(e) = self.gpu_memory_allocator.lock().free(allocation) {
+                tracing::error!("Failed to free staging buffer allocation: {e}");
+            }
         }
     }
 }

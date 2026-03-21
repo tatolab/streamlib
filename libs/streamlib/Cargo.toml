@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 default = []
 # GPU backend selection (feature overrides default platform backend)
 backend-metal = []
-backend-vulkan = ["dep:ash"]
+backend-vulkan = ["dep:ash", "dep:gpu-allocator"]
 # FFmpeg-based encoding/decoding (Linux)
 ffmpeg = []
 
@@ -73,6 +73,7 @@ rubato = "0.16"
 
 # Vulkan backend (optional, enabled via backend-vulkan feature)
 ash = { version = "0.38", default-features = false, features = ["std", "loaded"], optional = true }
+gpu-allocator = { version = "0.28", optional = true, default-features = false, features = ["vulkan", "std"] }
 
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
@@ -133,6 +134,7 @@ streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified tel
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["std", "loaded"] }
+gpu-allocator = { version = "0.28", default-features = false, features = ["vulkan", "std"] }
 libc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
