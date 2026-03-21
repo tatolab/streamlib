@@ -9,7 +9,10 @@
 
 use super::Mp4MuxerConfig;
 use crate::_generated_::Encodedvideoframe;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    any(target_os = "macos", target_os = "ios"),
+    all(target_os = "linux", feature = "ffmpeg")
+))]
 use crate::core::streaming::EncodedAudioFrame;
 use crate::core::{Result, RuntimeContext};
 
