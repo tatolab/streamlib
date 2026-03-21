@@ -27,3 +27,9 @@ pub use vulkan_pixel_buffer::VulkanPixelBuffer;
 
 mod vulkan_texture_cache;
 pub use vulkan_texture_cache::VulkanTextureCache;
+
+mod vulkan_pixel_buffer_pool;
+pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
+
+mod vulkan_format_converter;
+pub use vulkan_format_converter::VulkanFormatConverter;

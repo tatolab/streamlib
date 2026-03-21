@@ -77,7 +77,10 @@ pub struct RhiPixelBufferPool {
     #[cfg(target_os = "macos")]
     pub(crate) inner: crate::metal::rhi::pixel_buffer_pool::PixelBufferPoolMacOS,
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    pub(crate) inner: crate::vulkan::rhi::VulkanPixelBufferPool,
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
 }
 
@@ -91,7 +94,11 @@ impl RhiPixelBufferPool {
         {
             self.inner.acquire()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.acquire()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             Err(crate::core::StreamError::Configuration(
                 "RhiPixelBufferPool not implemented for this platform".into(),

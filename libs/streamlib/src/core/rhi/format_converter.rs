@@ -24,7 +24,10 @@ pub struct RhiFormatConverter {
     #[cfg(target_os = "macos")]
     pub(crate) inner: crate::metal::rhi::format_converter::FormatConverterMacOS,
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    pub(crate) inner: crate::vulkan::rhi::VulkanFormatConverter,
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     _marker: std::marker::PhantomData<()>,
 }
 
@@ -41,7 +44,14 @@ impl RhiFormatConverter {
                 inner: FormatConverterMacOS::new(source_format, dest_format)?,
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            let _ = (source_format, dest_format);
+            Err(crate::core::StreamError::NotSupported(
+                "RhiFormatConverter::new requires Vulkan device/queue — use VulkanFormatConverter directly".into(),
+            ))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = (source_format, dest_format);
             Err(crate::core::StreamError::Configuration(
@@ -56,7 +66,11 @@ impl RhiFormatConverter {
         {
             self.inner.source_format()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            PixelFormat::Unknown
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             PixelFormat::Unknown
         }
@@ -68,7 +82,11 @@ impl RhiFormatConverter {
         {
             self.inner.dest_format()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            PixelFormat::Unknown
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             PixelFormat::Unknown
         }
@@ -87,7 +105,14 @@ impl RhiFormatConverter {
         {
             self.inner.convert(source, dest)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            let _ = (source, dest);
+            Err(crate::core::StreamError::NotSupported(
+                "Vulkan format conversion not yet implemented".into(),
+            ))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = (source, dest);
             Err(crate::core::StreamError::Configuration(
