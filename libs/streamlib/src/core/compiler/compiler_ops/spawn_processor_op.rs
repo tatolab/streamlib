@@ -263,6 +263,30 @@ fn spawn_dedicated_thread(
                 }
             }
 
+            #[cfg(target_os = "linux")]
+            {
+                let is_manual = processor_arc_clone
+                    .lock()
+                    .execution_config()
+                    .execution
+                    .is_manual();
+                if is_manual {
+                    tracing::info!(
+                        "[{}] Manual mode: skipping thread priority (callbacks use OS threads)",
+                        proc_id_clone
+                    );
+                } else if let Err(e) =
+                    crate::linux::thread_priority::apply_thread_priority(priority)
+                {
+                    tracing::warn!(
+                        "[{}] Failed to apply {:?} thread priority: {}",
+                        proc_id_clone,
+                        priority,
+                        e
+                    );
+                }
+            }
+
             // === PHASE 1: Attach instance to graph ===
             tracing::trace!(
                 "[{}] Attaching ProcessorInstanceComponent to graph",
