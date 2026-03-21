@@ -18,7 +18,10 @@ pub struct RhiPixelBufferRef {
     #[cfg(target_os = "macos")]
     pub(crate) inner: std::ptr::NonNull<std::ffi::c_void>,
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    pub(crate) inner: crate::vulkan::rhi::VulkanPixelBuffer,
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
 }
 
@@ -29,7 +32,11 @@ impl RhiPixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::format_impl(self)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            PixelFormat::Unknown
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             PixelFormat::Unknown
         }
@@ -41,7 +48,11 @@ impl RhiPixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::width_impl(self)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.width()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             0
         }
@@ -53,7 +64,11 @@ impl RhiPixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::height_impl(self)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.height()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             0
         }
@@ -86,7 +101,13 @@ impl Clone for RhiPixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::clone_impl(self)
         }
-        #[cfg(not(target_os = "macos"))]
+        // VulkanPixelBuffer owns GPU resources and cannot be trivially cloned.
+        // A proper implementation requires Arc-based sharing or re-allocation.
+        #[cfg(target_os = "linux")]
+        {
+            panic!("RhiPixelBufferRef::clone not yet implemented for Linux — VulkanPixelBuffer owns GPU resources")
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             Self {
                 _marker: std::marker::PhantomData,
@@ -101,6 +122,8 @@ impl Drop for RhiPixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::drop_impl(self);
         }
+        // On Linux, VulkanPixelBuffer handles its own cleanup via its Drop impl.
+        // No additional action needed here.
     }
 }
 

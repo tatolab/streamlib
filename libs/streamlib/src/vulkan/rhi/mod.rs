@@ -21,3 +21,6 @@ pub use vulkan_texture::VulkanTexture;
 
 mod vulkan_blitter;
 pub use vulkan_blitter::VulkanBlitter;
+
+mod vulkan_pixel_buffer;
+pub use vulkan_pixel_buffer::VulkanPixelBuffer;
