@@ -10,7 +10,7 @@ use std::sync::Arc;
 use parking_lot::{Condvar, Mutex};
 
 use crate::core::rhi::{
-    GpuDevice, NativeTextureHandle, StreamTexture, TextureFormat, TextureUsages,
+    GpuDevice, NativeTextureHandle, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages,
 };
 use crate::core::{Result, StreamError};
 

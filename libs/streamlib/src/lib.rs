@@ -36,7 +36,6 @@ pub use streamlib_macros::{processor, ConfigDescriptor};
 
 pub use core::{
     are_synchronized,
-    convert_audio_to_sample,
     gl_constants,
     // Port marker traits and helpers for compile-time safe connections
     input,
@@ -46,15 +45,12 @@ pub use core::{
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
-    ApiServerProcessor,
     // TODO: Migrate to iceoryx2 API
     // AudioCaptureConfig,
     AudioChannelConverterProcessor,
     AudioCodec,
     // TODO: Migrate to iceoryx2 API
     // AudioDevice,
-    AudioEncoderConfig,
-    AudioEncoderOpus,
     // TODO: Migrate to iceoryx2 API
     // AudioInputDevice,
     AudioMixerProcessor,
@@ -66,15 +62,11 @@ pub use core::{
     // CameraConfig,
     // CameraDevice,
     ChordGeneratorProcessor,
-    ClapEffectProcessor,
-    ClapPluginInfo,
-    ClapScanner,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
     // TODO: Migrate to iceoryx2 API
     // DisplayConfig,
-    EncodedAudioFrame,
     GlContext,
     GlTextureBinding,
     GpuContext,
@@ -88,8 +80,6 @@ pub use core::{
     // TODO: Migrate to iceoryx2 API
     // Mp4WriterConfig,
     NativeTextureHandle,
-    // Streaming utilities:
-    OpusEncoder,
     OutputPortMarker,
     ParameterAutomation,
     ParameterInfo,
@@ -124,7 +114,11 @@ pub use core::{
 };
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use core::convert_video_to_samples;
+pub use core::{
+    convert_audio_to_sample, convert_video_to_samples, ApiServerProcessor, AudioEncoderConfig,
+    AudioEncoderOpus, ClapEffectProcessor, ClapPluginInfo, ClapScanner, EncodedAudioFrame,
+    OpusEncoder,
+};
 
 // GPU Backends - Metal and Vulkan
 // Metal module is always available on macOS/iOS since Apple platform services need Metal types
@@ -163,7 +157,8 @@ pub use apple::{
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
-// WebRTC WHIP/WHEP processors (cross-platform)
+// WebRTC WHIP/WHEP processors (macOS/iOS — depend on opus encoder/decoder)
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

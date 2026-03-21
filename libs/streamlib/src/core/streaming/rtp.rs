@@ -1,10 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::_generated_::Encodedvideoframe;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::core::streaming::opus::EncodedAudioFrame;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::core::{Result, StreamError};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use bytes::Bytes;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::time::Duration;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -42,6 +47,7 @@ pub fn convert_video_to_samples(
 }
 
 /// Converts encoded Opus audio frame to webrtc Sample.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn convert_audio_to_sample(
     frame: &EncodedAudioFrame,
     sample_rate: u32,

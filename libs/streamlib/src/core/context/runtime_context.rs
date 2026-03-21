@@ -282,7 +282,8 @@ impl RuntimeContext {
         // 3. PostMessage with custom WM_USER message containing boxed closure
         // 4. Message loop handler unboxes and executes closure
         let thread_id = std::thread::current().id();
-        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        let current_thread = std::thread::current();
+        let thread_name = current_thread.name().unwrap_or("unnamed");
         tracing::debug!(
             "[run_on_runtime_thread_async] Windows passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
@@ -312,7 +313,8 @@ impl RuntimeContext {
         // 2. PostMessage + ManualResetEvent for completion signaling
         // 3. Return result via shared memory or channel
         let thread_id = std::thread::current().id();
-        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        let current_thread = std::thread::current();
+        let thread_name = current_thread.name().unwrap_or("unnamed");
         tracing::debug!(
             "[run_on_runtime_thread_blocking] Windows passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
@@ -354,7 +356,8 @@ impl RuntimeContext {
         // 2. Runtime thread polls the fd in its event loop
         // 3. Write closure pointer to fd, runtime thread reads and executes
         let thread_id = std::thread::current().id();
-        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        let current_thread = std::thread::current();
+        let thread_name = current_thread.name().unwrap_or("unnamed");
         tracing::debug!(
             "[run_on_runtime_thread_async] Linux passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
@@ -384,7 +387,8 @@ impl RuntimeContext {
         // 2. Include oneshot channel or CondVar for result
         // 3. Block on channel/condvar until runtime thread signals completion
         let thread_id = std::thread::current().id();
-        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        let current_thread = std::thread::current();
+        let thread_name = current_thread.name().unwrap_or("unnamed");
         tracing::debug!(
             "[run_on_runtime_thread_blocking] Linux passthrough, executing directly on thread ({:?} '{}')",
             thread_id,
@@ -412,7 +416,8 @@ impl RuntimeContext {
         F: FnOnce() + Send + 'static,
     {
         let thread_id = std::thread::current().id();
-        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        let current_thread = std::thread::current();
+        let thread_name = current_thread.name().unwrap_or("unnamed");
         tracing::debug!(
             "[run_on_runtime_thread_async] unsupported platform, executing directly on thread ({:?} '{}')",
             thread_id,
@@ -434,7 +439,8 @@ impl RuntimeContext {
         R: Send + 'static,
     {
         let thread_id = std::thread::current().id();
-        let thread_name = std::thread::current().name().unwrap_or("unnamed");
+        let current_thread = std::thread::current();
+        let thread_name = current_thread.name().unwrap_or("unnamed");
         tracing::debug!(
             "[run_on_runtime_thread_blocking] unsupported platform, executing directly on thread ({:?} '{}')",
             thread_id,

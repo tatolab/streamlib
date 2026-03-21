@@ -9,6 +9,7 @@ pub mod traits;
 #[doc(hidden)]
 pub mod __generated_private;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod api_server;
 mod processor_instance_factory;
 mod processor_spec;
@@ -51,11 +52,14 @@ pub mod audio_channel_converter;
 pub mod audio_mixer;
 pub mod audio_resampler;
 pub mod buffer_rechunker;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod clap_effect;
 pub mod simple_passthrough;
 
 // WebRTC Streaming
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod webrtc_whep;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod webrtc_whip;
 
 // TODO: Migrate to iceoryx2 API
@@ -68,12 +72,16 @@ pub use chord_generator::ChordGeneratorProcessor;
 // pub use display::{DisplayConfig, DisplayProcessor, WindowId};
 // pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use api_server::*;
 pub use audio_channel_converter::AudioChannelConverterProcessor;
 pub use audio_mixer::AudioMixerProcessor;
 pub use audio_resampler::AudioResamplerProcessor;
 pub use buffer_rechunker::BufferRechunkerProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use webrtc_whep::WebRtcWhepProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use webrtc_whip::WebRtcWhipProcessor;

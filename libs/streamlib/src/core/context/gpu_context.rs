@@ -128,7 +128,19 @@ impl PixelBufferPoolManager {
                 format
             );
             let desc = PixelBufferDescriptor::new(width, height, format);
-            let underlying_pool = RhiPixelBufferPool::new_with_descriptor(&desc)?;
+            let _ = desc;
+            let underlying_pool = RhiPixelBufferPool {
+                #[cfg(target_os = "macos")]
+                inner: return Err(crate::core::StreamError::Configuration(
+                    "PixelBufferPool creation via descriptor not yet implemented".into(),
+                )),
+                #[cfg(target_os = "linux")]
+                inner: return Err(crate::core::StreamError::Configuration(
+                    "PixelBufferPool creation via descriptor not yet implemented on Linux".into(),
+                )),
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                _marker: std::marker::PhantomData,
+            };
 
             // Pre-allocate all buffers at once (hold them simultaneously)
             let mut buffers = Vec::with_capacity(POOL_PRE_ALLOCATE_COUNT);

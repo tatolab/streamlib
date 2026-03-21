@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::Audioframe;
-use crate::core::clap::{ClapPluginHost, ParameterInfo, PluginInfo};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use crate::core::clap::ClapPluginHost;
+use crate::core::clap::{ParameterInfo, PluginInfo};
 use crate::core::utils::ProcessorAudioConverterTargetFormat;
 use crate::core::{Result, RuntimeContext};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -306,4 +308,5 @@ impl crate::core::clap::ClapParameterControl for ClapEffectProcessor::Processor 
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use crate::core::clap::{ClapPluginInfo, ClapScanner};
