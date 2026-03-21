@@ -18,3 +18,6 @@ pub use vulkan_device::VulkanDevice;
 #[allow(unused_imports)]
 pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 pub use vulkan_texture::VulkanTexture;
+
+mod vulkan_texture_cache;
+pub use vulkan_texture_cache::VulkanTextureCache;
