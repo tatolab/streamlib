@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.10](https://github.com/tatolab/streamlib/compare/v0.3.9...v0.3.10) (2026-03-21)
+
+
+### Features
+
+* Vulkan RHI — complete GPU backend for Linux ([#163](https://github.com/tatolab/streamlib/issues/163)) ([f2072ed](https://github.com/tatolab/streamlib/commit/f2072edb5700ff4ba35bba7d82b51b524e68dcf9))
+
 ## [0.3.9](https://github.com/tatolab/streamlib/compare/v0.3.8...v0.3.9) (2026-03-20)
 
 
