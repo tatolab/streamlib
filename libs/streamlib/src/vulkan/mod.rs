@@ -7,4 +7,6 @@ pub mod rhi;
 
 // Re-exports for public API (intentionally exposed for external use)
 #[allow(unused_imports)]
-pub use rhi::{VulkanCommandBuffer, VulkanCommandQueue, VulkanDevice, VulkanTexture};
+pub use rhi::{
+    VulkanBlitter, VulkanCommandBuffer, VulkanCommandQueue, VulkanDevice, VulkanTexture,
+};
