@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2](https://github.com/tatolab/streamlib/compare/v0.4.1...v0.4.2) (2026-03-21)
+
+
+### Features
+
+* gpu-allocator integration for Vulkan sub-allocation ([c91d814](https://github.com/tatolab/streamlib/commit/c91d8148b9d24b02d8e0d89c030b11b68eb0783c))
+* Linux platform services — audio clock + thread priority ([347a782](https://github.com/tatolab/streamlib/commit/347a782e6a22c571d636a3276561e78c3f6878c9))
+* make PixelFormat enum cross-platform ([bf22190](https://github.com/tatolab/streamlib/commit/bf2219037c48b21a39768f20e37c9ed1b87ac596))
+
 ## [0.4.1](https://github.com/tatolab/streamlib/compare/v0.4.0...v0.4.1) (2026-03-21)
 
 
