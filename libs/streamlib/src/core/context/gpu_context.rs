@@ -141,9 +141,7 @@ impl PixelBufferPoolManager {
                 #[cfg(target_os = "linux")]
                 inner: {
                     let vulkan_device = std::sync::Arc::clone(&self.device.inner);
-                    // Default to 4 bytes per pixel (BGRA/RGBA) — PixelFormat is
-                    // a stub on Linux until #166 (Linux processors) lands.
-                    let bytes_per_pixel = 4u32;
+                    let bytes_per_pixel = format.bits_per_pixel() / 8;
                     crate::vulkan::rhi::VulkanPixelBufferPool::new(
                         vulkan_device,
                         width,
