@@ -276,7 +276,7 @@ impl BrokerService for BrokerGrpcService {
         &self,
         request: Request<ListSurfacesRequest>,
     ) -> Result<Response<ListSurfacesResponse>, Status> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let runtime_id = &request.get_ref().runtime_id;
 
@@ -303,7 +303,7 @@ impl BrokerService for BrokerGrpcService {
             Ok(Response::new(ListSurfacesResponse { surfaces }))
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = request;
             Ok(Response::new(ListSurfacesResponse {
@@ -435,12 +435,24 @@ impl BrokerService for BrokerGrpcService {
             }))
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         {
             let _ = request;
             Ok(Response::new(SnapshotSurfaceResponse {
                 success: false,
-                error: "Surface snapshots are only supported on macOS".to_string(),
+                error: "Surface snapshots are not yet supported on Linux".to_string(),
+                png_data: Vec::new(),
+                width: 0,
+                height: 0,
+            }))
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = request;
+            Ok(Response::new(SnapshotSurfaceResponse {
+                success: false,
+                error: "Surface snapshots are not supported on this platform".to_string(),
                 png_data: Vec::new(),
                 width: 0,
                 height: 0,
@@ -701,6 +713,7 @@ fn convert_proto_spans_to_span_data(
 }
 
 /// Encode RGBA pixel data as PNG.
+#[cfg(target_os = "macos")]
 fn encode_png(rgba_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     use image::codecs::png::PngEncoder;
     use image::ImageEncoder;

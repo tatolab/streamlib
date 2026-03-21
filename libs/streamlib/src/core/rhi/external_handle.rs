@@ -74,8 +74,12 @@ pub trait RhiPixelBufferImport {
 #[cfg(target_os = "linux")]
 impl RhiPixelBufferExport for super::RhiPixelBuffer {
     fn export_handle(&self) -> Result<RhiExternalHandle> {
+        // VulkanPixelBuffer uses gpu-allocator with CpuToGpu memory. These
+        // allocations are not created with VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+        // so they cannot be exported as DMA-BUF fds. Full DMA-BUF pixel buffer
+        // export requires VulkanPixelBuffer to allocate with exportable memory flags.
         Err(crate::core::StreamError::NotSupported(
-            "DMA-BUF export for pixel buffers not yet implemented".into(),
+            "DMA-BUF export requires VulkanPixelBuffer allocated with exportable memory".into(),
         ))
     }
 }
@@ -88,9 +92,12 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         height: u32,
         format: super::PixelFormat,
     ) -> Result<Self> {
+        // DMA-BUF import requires VulkanDevice to create the buffer and bind
+        // imported memory. The current RhiPixelBuffer creation path doesn't
+        // carry VulkanDevice through to this point.
         let _ = (handle, width, height, format);
         Err(crate::core::StreamError::NotSupported(
-            "DMA-BUF import for pixel buffers not yet implemented".into(),
+            "DMA-BUF import requires VulkanDevice to be threaded through RhiPixelBuffer".into(),
         ))
     }
 }

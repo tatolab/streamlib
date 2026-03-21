@@ -48,7 +48,11 @@ pub struct SurfaceMetadata {
     /// The runtime that registered this surface.
     pub runtime_id: String,
     /// The mach port send right for the IOSurface.
+    #[cfg(target_os = "macos")]
     pub mach_port: u32,
+    /// The DMA-BUF file descriptor for the surface.
+    #[cfg(target_os = "linux")]
+    pub dma_buf_fd: std::os::unix::io::RawFd,
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
@@ -145,7 +149,7 @@ impl BrokerState {
     pub fn unregister_runtime(&self, runtime_id: &str) {
         self.inner.runtimes.write().remove(runtime_id);
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let released = self.release_surfaces_for_runtime(runtime_id);
             if released > 0 {
@@ -315,7 +319,7 @@ impl BrokerState {
         }
 
         // Release surfaces for pruned runtimes (after dropping runtimes lock)
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         for runtime_id in &pruned_ids {
             let released = self.release_surfaces_for_runtime(runtime_id);
             if released > 0 {
@@ -333,7 +337,7 @@ impl BrokerState {
         // was added). Skip when no runtimes are registered — standalone
         // pipelines (without api_server) register surfaces via XPC but never
         // register the runtime via gRPC, so an empty set would remove everything.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let registered_ids: std::collections::HashSet<String> =
                 self.inner.runtimes.read().keys().cloned().collect();
@@ -376,10 +380,7 @@ impl BrokerState {
     // Surface Store (Cross-Process GPU Surface Sharing)
     // =========================================================================
 
-    /// Register a surface with client-provided ID.
-    ///
-    /// The client generates the surface_id (UUID) and provides it along with the mach_port.
-    /// Returns true if registration succeeded, false if surface_id already exists.
+    /// Register a surface with client-provided ID (macOS: mach port).
     #[cfg(target_os = "macos")]
     pub fn register_surface(
         &self,
@@ -394,7 +395,6 @@ impl BrokerState {
 
         let mut surfaces = self.inner.surfaces.write();
 
-        // Don't overwrite existing registrations
         if surfaces.contains_key(surface_id) {
             return false;
         }
@@ -405,6 +405,42 @@ impl BrokerState {
             surface_id: surface_id.to_string(),
             runtime_id: runtime_id.to_string(),
             mach_port,
+            width,
+            height,
+            format: format.to_string(),
+            registered_at: Instant::now(),
+            checkout_count: 0,
+        };
+
+        surfaces.insert(surface_id.to_string(), metadata);
+        true
+    }
+
+    /// Register a surface with client-provided ID (Linux: DMA-BUF fd).
+    #[cfg(target_os = "linux")]
+    pub fn register_surface(
+        &self,
+        surface_id: &str,
+        runtime_id: &str,
+        dma_buf_fd: std::os::unix::io::RawFd,
+        width: u32,
+        height: u32,
+        format: &str,
+    ) -> bool {
+        use std::sync::atomic::Ordering;
+
+        let mut surfaces = self.inner.surfaces.write();
+
+        if surfaces.contains_key(surface_id) {
+            return false;
+        }
+
+        self.inner.surface_counter.fetch_add(1, Ordering::Relaxed);
+
+        let metadata = SurfaceMetadata {
+            surface_id: surface_id.to_string(),
+            runtime_id: runtime_id.to_string(),
+            dma_buf_fd,
             width,
             height,
             format: format.to_string(),
@@ -428,6 +464,18 @@ impl BrokerState {
         }
     }
 
+    /// Get the DMA-BUF fd for a surface ID (for check_out).
+    #[cfg(target_os = "linux")]
+    pub fn get_surface_dma_buf_fd(&self, surface_id: &str) -> Option<std::os::unix::io::RawFd> {
+        let mut surfaces = self.inner.surfaces.write();
+        if let Some(metadata) = surfaces.get_mut(surface_id) {
+            metadata.checkout_count += 1;
+            Some(metadata.dma_buf_fd)
+        } else {
+            None
+        }
+    }
+
     /// Release a surface by ID.
     #[cfg(target_os = "macos")]
     pub fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
@@ -441,23 +489,46 @@ impl BrokerState {
         false
     }
 
+    /// Release a surface by ID.
+    #[cfg(target_os = "linux")]
+    pub fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
+        let mut surfaces = self.inner.surfaces.write();
+        if let Some(metadata) = surfaces.get(surface_id) {
+            if metadata.runtime_id == runtime_id {
+                // Close the duplicated fd
+                unsafe { libc::close(metadata.dma_buf_fd) };
+                surfaces.remove(surface_id);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Release all surfaces for a runtime.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn release_surfaces_for_runtime(&self, runtime_id: &str) -> usize {
         let mut surfaces = self.inner.surfaces.write();
         let before = surfaces.len();
+        #[cfg(target_os = "linux")]
+        {
+            for (_, metadata) in surfaces.iter() {
+                if metadata.runtime_id == runtime_id {
+                    unsafe { libc::close(metadata.dma_buf_fd) };
+                }
+            }
+        }
         surfaces.retain(|_, metadata| metadata.runtime_id != runtime_id);
         before - surfaces.len()
     }
 
     /// Get all surfaces.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn get_surfaces(&self) -> Vec<SurfaceMetadata> {
         self.inner.surfaces.read().values().cloned().collect()
     }
 
     /// Get surface count.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn surface_count(&self) -> usize {
         self.inner.surfaces.read().len()
     }

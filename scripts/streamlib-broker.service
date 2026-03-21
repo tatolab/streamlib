@@ -1,0 +1,32 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# StreamLib Broker - systemd user service template
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/streamlib-broker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now streamlib-broker.service
+#
+# Check status:
+#   systemctl --user status streamlib-broker.service
+#   journalctl --user -u streamlib-broker.service -f
+
+[Unit]
+Description=StreamLib Broker Service
+Documentation=https://github.com/tatolab/streamlib
+After=default.target
+
+[Service]
+Type=simple
+Environment=STREAMLIB_HOME=%h/.streamlib
+Environment=STREAMLIB_BROKER_SOCKET=%h/.streamlib/broker.sock
+ExecStart=%h/.streamlib/bin/streamlib-broker --port 50051 --socket-path %h/.streamlib/broker.sock
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

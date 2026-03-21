@@ -18,11 +18,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 STREAMLIB_HOME="${REPO_ROOT}/.streamlib"
 BROKER_PORT=50052
 
+# Detect platform
+PLATFORM="$(uname)"
+
 # Generate short hash from full path (supports multiple worktrees)
 PATH_HASH="$(echo -n "$REPO_ROOT" | shasum | cut -c1-6)"
 SERVICE_LABEL="Streamlib-dev-${PATH_HASH}"
 SERVICE_NAME="com.tatolab.streamlib.broker.dev-${PATH_HASH}"
 LOG_FILE="/tmp/streamlib-broker-dev-${PATH_HASH}.log"
+BROKER_SOCKET="${STREAMLIB_HOME}/broker.sock"
 
 # Colors
 RED='\033[0;31m'
@@ -38,10 +42,15 @@ error() { echo -e "${RED}==>${NC} $1" >&2; }
 
 # Check platform
 check_platform() {
-    if [[ "$(uname)" != "Darwin" ]]; then
-        error "StreamLib broker is currently macOS-only"
-        exit 1
-    fi
+    case "$PLATFORM" in
+        Darwin|Linux)
+            info "Detected platform: $PLATFORM"
+            ;;
+        *)
+            error "Unsupported platform: $PLATFORM (macOS and Linux only)"
+            exit 1
+            ;;
+    esac
 }
 
 # Check dependencies
@@ -57,10 +66,17 @@ uninstall() {
     info "Uninstalling existing dev installation..."
 
     info "Stopping broker service..."
-    local domain="gui/$(id -u)"
-    launchctl bootout "$domain/${SERVICE_LABEL}" 2>/dev/null || true
-    info "Removing launchd plist..."
-    rm -f "${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
+    if [[ "$PLATFORM" == "Darwin" ]]; then
+        local domain="gui/$(id -u)"
+        launchctl bootout "$domain/${SERVICE_LABEL}" 2>/dev/null || true
+        info "Removing launchd plist..."
+        rm -f "${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
+    elif [[ "$PLATFORM" == "Linux" ]]; then
+        systemctl --user stop streamlib-broker-dev 2>/dev/null || true
+        systemctl --user disable streamlib-broker-dev 2>/dev/null || true
+        rm -f "${HOME}/.config/systemd/user/streamlib-broker-dev.service"
+        systemctl --user daemon-reload 2>/dev/null || true
+    fi
     info "Removing .streamlib directory..."
     rm -rf "${STREAMLIB_HOME}"
     info "Removing .env..."
@@ -82,10 +98,15 @@ generate_dotenv() {
 # StreamLib configuration
 STREAMLIB_HOME=${STREAMLIB_HOME}
 STREAMLIB_BROKER_PORT=${BROKER_PORT}
-STREAMLIB_XPC_SERVICE_NAME=${SERVICE_NAME}
 STREAMLIB_RUNTIME_BIN=${STREAMLIB_HOME}/bin/streamlib-runtime
 STREAMLIB_DEV_MODE=1
 EOF
+
+    if [[ "$PLATFORM" == "Darwin" ]]; then
+        echo "STREAMLIB_XPC_SERVICE_NAME=${SERVICE_NAME}" >> "$env_file"
+    elif [[ "$PLATFORM" == "Linux" ]]; then
+        echo "STREAMLIB_BROKER_SOCKET=${BROKER_SOCKET}" >> "$env_file"
+    fi
 
     success "Generated .env (auto-loaded by runtime)"
 }
@@ -132,7 +153,8 @@ EOF
     success "Created CLI proxy: $bin_dir/streamlib"
 
     # Broker proxy script
-    cat > "$bin_dir/streamlib-broker" << EOF
+    if [[ "$PLATFORM" == "Darwin" ]]; then
+        cat > "$bin_dir/streamlib-broker" << EOF
 #!/usr/bin/env bash
 # StreamLib Broker proxy - calls cargo run for dev mode
 set -euo pipefail
@@ -148,11 +170,30 @@ export STREAMLIB_DEV_MODE=1
 
 exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --quiet -- --port "\$BROKER_PORT" --xpc-service-name "\$XPC_SERVICE_NAME" "\$@"
 EOF
+    elif [[ "$PLATFORM" == "Linux" ]]; then
+        cat > "$bin_dir/streamlib-broker" << EOF
+#!/usr/bin/env bash
+# StreamLib Broker proxy - calls cargo run for dev mode
+set -euo pipefail
+
+export PATH="${cargo_bin}:\$PATH"
+SOURCE_ROOT="${REPO_ROOT}"
+BROKER_PORT=${BROKER_PORT}
+BROKER_SOCKET="${BROKER_SOCKET}"
+
+export STREAMLIB_HOME="${STREAMLIB_HOME}"
+export STREAMLIB_BROKER_SOCKET="\$BROKER_SOCKET"
+export STREAMLIB_DEV_MODE=1
+
+exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-broker --quiet -- --port "\$BROKER_PORT" --socket-path "\$BROKER_SOCKET" "\$@"
+EOF
+    fi
     chmod 755 "$bin_dir/streamlib-broker"
     success "Created broker proxy: $bin_dir/streamlib-broker"
 
     # Runtime binary proxy script (spawned by CLI's `streamlib run`)
-    cat > "$bin_dir/streamlib-runtime" << EOF
+    if [[ "$PLATFORM" == "Darwin" ]]; then
+        cat > "$bin_dir/streamlib-runtime" << EOF
 #!/usr/bin/env bash
 # StreamLib Runtime proxy - calls cargo run for dev mode
 set -euo pipefail
@@ -167,20 +208,37 @@ export STREAMLIB_DEV_MODE=1
 
 exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-runtime --quiet -- "\$@"
 EOF
+    elif [[ "$PLATFORM" == "Linux" ]]; then
+        cat > "$bin_dir/streamlib-runtime" << EOF
+#!/usr/bin/env bash
+# StreamLib Runtime proxy - calls cargo run for dev mode
+set -euo pipefail
+
+export PATH="${cargo_bin}:\$PATH"
+SOURCE_ROOT="${REPO_ROOT}"
+
+export STREAMLIB_HOME="${STREAMLIB_HOME}"
+export STREAMLIB_BROKER_PORT="${BROKER_PORT}"
+export STREAMLIB_BROKER_SOCKET="${BROKER_SOCKET}"
+export STREAMLIB_DEV_MODE=1
+
+exec cargo run --manifest-path "\$SOURCE_ROOT/Cargo.toml" -p streamlib-runtime --quiet -- "\$@"
+EOF
+    fi
     chmod 755 "$bin_dir/streamlib-runtime"
     success "Created runtime proxy: $bin_dir/streamlib-runtime"
 }
 
-# Generate and install launchd plist
-install_plist() {
-    local plist_path="${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
+# Install platform service
+install_service() {
     local broker_path="${STREAMLIB_HOME}/bin/streamlib-broker"
 
-    info "Creating launchd plist..."
+    if [[ "$PLATFORM" == "Darwin" ]]; then
+        local plist_path="${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
+        info "Creating launchd plist..."
+        mkdir -p "${HOME}/Library/LaunchAgents"
 
-    mkdir -p "${HOME}/Library/LaunchAgents"
-
-    cat > "$plist_path" << EOF
+        cat > "$plist_path" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -209,29 +267,64 @@ install_plist() {
 </dict>
 </plist>
 EOF
+        success "Created ${plist_path}"
 
-    success "Created ${plist_path}"
+    elif [[ "$PLATFORM" == "Linux" ]]; then
+        local service_dir="${HOME}/.config/systemd/user"
+        local service_path="${service_dir}/streamlib-broker-dev.service"
+        info "Creating systemd user service..."
+        mkdir -p "$service_dir"
+
+        cat > "$service_path" << EOF
+[Unit]
+Description=StreamLib Broker Service (dev)
+
+[Service]
+Type=simple
+Environment=STREAMLIB_HOME=${STREAMLIB_HOME}
+Environment=STREAMLIB_BROKER_SOCKET=${BROKER_SOCKET}
+ExecStart=${broker_path} --port ${BROKER_PORT} --socket-path ${BROKER_SOCKET}
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=${REPO_ROOT}
+
+[Install]
+WantedBy=default.target
+EOF
+        systemctl --user daemon-reload
+        success "Created ${service_path}"
+    fi
 }
 
 # Start broker service
 start_broker() {
-    local plist_path="${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
-    local domain="gui/$(id -u)"
-
     info "Starting broker service..."
 
-    # Bootstrap the service
-    launchctl bootstrap "$domain" "$plist_path" 2>/dev/null || true
+    if [[ "$PLATFORM" == "Darwin" ]]; then
+        local plist_path="${HOME}/Library/LaunchAgents/${SERVICE_NAME}.plist"
+        local domain="gui/$(id -u)"
+        launchctl bootstrap "$domain" "$plist_path" 2>/dev/null || true
 
-    # Wait for it to start (cargo run takes longer)
-    info "Waiting for broker to compile and start..."
-    sleep 5
+        info "Waiting for broker to compile and start..."
+        sleep 5
 
-    # Verify
-    if launchctl list "$SERVICE_LABEL" &>/dev/null; then
-        success "Broker service started"
-    else
-        warn "Broker may not have started. Check: $LOG_FILE"
+        if launchctl list "$SERVICE_LABEL" &>/dev/null; then
+            success "Broker service started"
+        else
+            warn "Broker may not have started. Check: $LOG_FILE"
+        fi
+
+    elif [[ "$PLATFORM" == "Linux" ]]; then
+        systemctl --user enable --now streamlib-broker-dev 2>/dev/null || true
+
+        info "Waiting for broker to compile and start..."
+        sleep 5
+
+        if systemctl --user is-active --quiet streamlib-broker-dev; then
+            success "Broker service started"
+        else
+            warn "Broker may not have started. Check: journalctl --user -u streamlib-broker-dev"
+        fi
     fi
 }
 
@@ -280,7 +373,7 @@ verify() {
 install() {
     create_proxy_scripts
     generate_dotenv
-    install_plist
+    install_service
     start_broker
     verify
 
