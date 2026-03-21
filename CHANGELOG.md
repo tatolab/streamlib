@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.11](https://github.com/tatolab/streamlib/compare/v0.3.10...v0.3.11) (2026-03-21)
+
+
+### Bug Fixes
+
+* gate macOS-only code for Linux compilation ([2bd1711](https://github.com/tatolab/streamlib/commit/2bd1711bbd2da8d1180ed407669399d65d904b5a))
+* gate macOS-only code for Linux compilation ([2918696](https://github.com/tatolab/streamlib/commit/291869649ef45b60b5580cdccc3dc29cdfec019a))
+
 ## [0.3.10](https://github.com/tatolab/streamlib/compare/v0.3.9...v0.3.10) (2026-03-21)
 
 
