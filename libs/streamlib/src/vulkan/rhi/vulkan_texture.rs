@@ -8,6 +8,8 @@ use ash::vk;
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{Result, StreamError};
 
+use super::VulkanDevice;
+
 /// Convert RHI TextureFormat to Vulkan format.
 fn texture_format_to_vk(format: TextureFormat) -> vk::Format {
     match format {
@@ -66,7 +68,8 @@ pub struct VulkanTexture {
 
 impl VulkanTexture {
     /// Create a new Vulkan texture.
-    pub fn new(device: &ash::Device, desc: &TextureDescriptor) -> Result<Self> {
+    pub fn new(vulkan_device: &VulkanDevice, desc: &TextureDescriptor) -> Result<Self> {
+        let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(desc.format);
         let usage_flags = texture_usages_to_vk(desc.usage);
 
@@ -90,13 +93,16 @@ impl VulkanTexture {
         let image = unsafe { device.create_image(&image_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create image: {e}")))?;
 
-        // Get memory requirements
+        // Get memory requirements and find a suitable DEVICE_LOCAL memory type
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
+        let memory_type_index = vulkan_device.find_memory_type(
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
 
-        // Allocate memory (device local)
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(mem_requirements.size)
-            .memory_type_index(0); // TODO: Find appropriate memory type
+            .memory_type_index(memory_type_index);
 
         let memory = unsafe { device.allocate_memory(&alloc_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to allocate memory: {e}")))?;

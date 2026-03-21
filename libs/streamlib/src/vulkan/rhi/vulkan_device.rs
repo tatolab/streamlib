@@ -19,10 +19,9 @@ use super::{VulkanCommandQueue, VulkanTexture};
 pub struct VulkanDevice {
     #[allow(dead_code)]
     entry: ash::Entry,
-    #[allow(dead_code)]
     instance: ash::Instance,
-    #[allow(dead_code)]
     physical_device: vk::PhysicalDevice,
+    memory_properties: vk::PhysicalDeviceMemoryProperties,
     device: ash::Device,
     queue: vk::Queue,
     queue_family_index: u32,
@@ -175,16 +174,22 @@ impl VulkanDevice {
         // 8. Get the graphics queue
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
+        // 9. Query memory properties (used by find_memory_type for all allocations)
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
         tracing::info!(
-            "Vulkan device initialized: {} (queue family {})",
+            "Vulkan device initialized: {} (queue family {}, {} memory types)",
             device_name,
-            queue_family_index
+            queue_family_index,
+            memory_properties.memory_type_count
         );
 
         Ok(Self {
             entry,
             instance,
             physical_device,
+            memory_properties,
             device,
             queue,
             queue_family_index,
@@ -192,9 +197,30 @@ impl VulkanDevice {
         })
     }
 
+    /// Find a memory type that satisfies both the type filter and required properties.
+    pub fn find_memory_type(
+        &self,
+        type_filter: u32,
+        required_properties: vk::MemoryPropertyFlags,
+    ) -> Result<u32> {
+        for i in 0..self.memory_properties.memory_type_count {
+            let type_supported = (type_filter & (1 << i)) != 0;
+            let properties_supported = self.memory_properties.memory_types[i as usize]
+                .property_flags
+                .contains(required_properties);
+            if type_supported && properties_supported {
+                return Ok(i);
+            }
+        }
+        Err(StreamError::GpuError(format!(
+            "No suitable memory type found (filter: 0x{:x}, required: {:?})",
+            type_filter, required_properties
+        )))
+    }
+
     /// Create a texture on this device.
     pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<VulkanTexture> {
-        VulkanTexture::new(&self.device, desc)
+        VulkanTexture::new(self, desc)
     }
 
     /// Create a VulkanCommandQueue wrapper for the shared command queue.
@@ -206,6 +232,12 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn name(&self) -> String {
         self.device_name.clone()
+    }
+
+    /// Get the Vulkan instance.
+    #[allow(dead_code)]
+    pub fn instance(&self) -> &ash::Instance {
+        &self.instance
     }
 
     /// Get the Vulkan physical device.
