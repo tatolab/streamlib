@@ -11,7 +11,7 @@ use ffmpeg::util::format::Pixel;
 use ffmpeg_next as ffmpeg;
 
 use crate::_generated_::{Encodedvideoframe, Videoframe};
-use crate::core::codec::video_codec::H264Profile;
+use crate::core::codec::H264Profile;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig};
 
 static FFMPEG_INIT: Once = Once::new();
@@ -27,7 +27,7 @@ fn ensure_ffmpeg_initialized() {
 /// Uses FFmpeg's libavcodec for H.264 encoding on Linux.
 pub struct FFmpegEncoder {
     config: VideoEncoderConfig,
-    encoder: ffmpeg::encoder::video::Video,
+    encoder: ffmpeg::encoder::video::Encoder,
     scaler: scaling::Context,
     frame_count: u64,
     force_next_keyframe: bool,

@@ -5,6 +5,7 @@
 
 use std::sync::Once;
 
+use ffmpeg::rescale::Rescale;
 use ffmpeg_next as ffmpeg;
 
 use crate::_generated_::Encodedvideoframe;
@@ -108,7 +109,7 @@ impl FFmpegMuxer {
         // Write file header with faststart for streaming-friendly moov atom placement
         let mut format_opts = ffmpeg::Dictionary::new();
         format_opts.set("movflags", "faststart");
-        let _unused_opts = output_context
+        let _ = output_context
             .write_header_with(format_opts)
             .map_err(|e| StreamError::Configuration(format!("Failed to write MP4 header: {e}")))?;
 
@@ -130,7 +131,7 @@ impl FFmpegMuxer {
         let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
         // Convert nanoseconds to microseconds (TIME_BASE is 1/1_000_000), then to stream time base
         let timestamp_us = timestamp_ns / 1_000;
-        let pts = ffmpeg::rescale::TIME_BASE.rescale(timestamp_us, self.video_time_base);
+        let pts = timestamp_us.rescale(ffmpeg::rescale::TIME_BASE, self.video_time_base);
         packet.set_pts(Some(pts));
         packet.set_dts(Some(pts));
         packet.set_stream(self.video_stream_index);
@@ -162,7 +163,7 @@ impl FFmpegMuxer {
 
         // Convert nanoseconds to microseconds (TIME_BASE is 1/1_000_000), then to stream time base
         let timestamp_us = frame.timestamp_ns / 1_000;
-        let pts = ffmpeg::rescale::TIME_BASE.rescale(timestamp_us, audio_time_base);
+        let pts = timestamp_us.rescale(ffmpeg::rescale::TIME_BASE, audio_time_base);
         packet.set_pts(Some(pts));
         packet.set_dts(Some(pts));
         packet.set_stream(stream_index);
