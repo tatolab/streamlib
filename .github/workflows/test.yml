@@ -24,6 +24,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: actions/cache@v3
@@ -67,10 +69,19 @@ jobs:
             protobuf-compiler \
             libvulkan-dev \
             libopus-dev \
-            libasound2-dev
+            libasound2-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libavfilter-dev \
+            libavdevice-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: actions/cache@v3
@@ -81,29 +92,20 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      # Basic compilation check for streamlib on Linux
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy -p streamlib -p streamlib-broker --features ffmpeg -- -D warnings
+
       - name: Check streamlib
         run: cargo check -p streamlib
-
-      # FFmpeg feature requires FFmpeg dev libraries
-      - name: Install FFmpeg dev libraries
-        run: |
-          sudo apt-get install -y \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libavfilter-dev \
-            libavdevice-dev
 
       - name: Check streamlib with FFmpeg
         run: cargo check -p streamlib --features ffmpeg
 
-      # Unit tests (no GPU required)
       - name: Run unit tests
         run: cargo test -p streamlib --lib
 
-      # Broker compilation check
       - name: Check streamlib-broker
         run: cargo check -p streamlib-broker
