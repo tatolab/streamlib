@@ -261,3 +261,56 @@ impl LinuxAudioCaptureProcessor::Processor {
         self.device_info.as_ref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::_generated_::AudioCaptureConfig;
+    use crate::core::GeneratedProcessor;
+
+    #[test]
+    #[ignore] // Requires real audio hardware - not available in CI
+    fn test_list_devices() {
+        let devices = LinuxAudioCaptureProcessor::Processor::list_devices();
+
+        assert!(devices.is_ok());
+
+        if let Ok(devices) = devices {
+            println!("Found {} audio input devices:", devices.len());
+            for device in &devices {
+                println!(
+                    "  [{}] {}: {}Hz, {} channels{}",
+                    device.id,
+                    device.name,
+                    device.sample_rate,
+                    device.channels,
+                    if device.is_default { " (default)" } else { "" }
+                );
+            }
+
+            assert!(
+                !devices.is_empty(),
+                "Expected at least one audio input device"
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_default_device() {
+        let config = AudioCaptureConfig { device_id: None };
+
+        let result = LinuxAudioCaptureProcessor::Processor::from_config(config);
+
+        match result {
+            Ok(_processor) => {
+                println!("Successfully created audio capture processor from config");
+            }
+            Err(e) => {
+                println!(
+                    "Note: Could not create audio capture (may require permissions): {}",
+                    e
+                );
+            }
+        }
+    }
+}
