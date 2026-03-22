@@ -4,7 +4,7 @@
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::_generated_::Encodedvideoframe;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use crate::core::streaming::opus::EncodedAudioFrame;
+use crate::_generated_::Encodedaudioframe;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::core::{Result, StreamError};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -49,7 +49,7 @@ pub fn convert_video_to_samples(
 /// Converts encoded Opus audio frame to webrtc Sample.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn convert_audio_to_sample(
-    frame: &EncodedAudioFrame,
+    frame: &Encodedaudioframe,
     sample_rate: u32,
 ) -> Result<webrtc::media::Sample> {
     // Calculate duration from sample count

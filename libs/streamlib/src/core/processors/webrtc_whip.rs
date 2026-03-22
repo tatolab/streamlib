@@ -296,7 +296,7 @@ mod tests {
     use super::*;
     use crate::_generated_::Encodedvideoframe;
     use crate::apple::videotoolbox::parse_nal_units;
-    use crate::core::streaming::EncodedAudioFrame;
+    use crate::_generated_::Encodedaudioframe;
     use std::time::Duration;
 
     #[test]
@@ -321,9 +321,9 @@ mod tests {
 
     #[test]
     fn test_convert_audio_to_sample() {
-        let encoded = EncodedAudioFrame {
+        let encoded = Encodedaudioframe {
             data: vec![0xAA, 0xBB, 0xCC, 0xDD],
-            timestamp_ns: 1_000_000_000,
+            timestamp_ns: "1000000000".to_string(),
             sample_count: 960,
         };
 

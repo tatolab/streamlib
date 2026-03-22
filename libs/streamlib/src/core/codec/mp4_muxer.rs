@@ -8,12 +8,7 @@
 //! - Linux: FFmpeg libavformat
 
 use super::Mp4MuxerConfig;
-use crate::_generated_::Encodedvideoframe;
-#[cfg(any(
-    any(target_os = "macos", target_os = "ios"),
-    all(target_os = "linux", feature = "ffmpeg")
-))]
-use crate::core::streaming::EncodedAudioFrame;
+use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
 use crate::core::{Result, RuntimeContext};
 
 /// Platform-agnostic MP4 muxer.
@@ -50,7 +45,7 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded audio frame.
-    pub fn write_audio(&mut self, frame: &EncodedAudioFrame) -> Result<()> {
+    pub fn write_audio(&mut self, frame: &Encodedaudioframe) -> Result<()> {
         self.inner.write_audio(frame)
     }
 
@@ -75,7 +70,7 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded audio frame.
-    pub fn write_audio(&mut self, frame: &EncodedAudioFrame) -> Result<()> {
+    pub fn write_audio(&mut self, frame: &Encodedaudioframe) -> Result<()> {
         self.inner.write_audio(frame)
     }
 
@@ -106,7 +101,7 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded audio frame (unsupported platform).
-    pub fn write_audio<T>(&mut self, _frame: &T) -> Result<()> {
+    pub fn write_audio(&mut self, _frame: &Encodedaudioframe) -> Result<()> {
         Err(crate::core::StreamError::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))

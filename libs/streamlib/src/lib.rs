@@ -27,7 +27,7 @@ pub mod iceoryx2;
 pub mod _generated_;
 
 // Re-export commonly used generated config types
-pub use _generated_::{ApiServerConfig, Encodedvideoframe, Videoframe};
+pub use _generated_::{ApiServerConfig, Encodedaudioframe, Encodedvideoframe, Videoframe};
 
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("com.tatolab.camera")] - Processor definition by name lookup in streamlib.yaml
@@ -116,8 +116,7 @@ pub use core::{
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{
     convert_audio_to_sample, convert_video_to_samples, ApiServerProcessor, AudioEncoderConfig,
-    AudioEncoderOpus, ClapEffectProcessor, ClapPluginInfo, ClapScanner, EncodedAudioFrame,
-    OpusEncoder,
+    AudioEncoderOpus, ClapEffectProcessor, ClapPluginInfo, ClapScanner, OpusEncoder,
 };
 
 // GPU Backends - Metal and Vulkan

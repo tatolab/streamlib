@@ -170,6 +170,7 @@ schemas = [
     "schemas/com.tatolab.videoframe.yaml",
     "schemas/com.tatolab.audioframe.yaml",
     "schemas/com.tatolab.encodedvideoframe.yaml",
+    "schemas/com.tatolab.encodedaudioframe.yaml",
     # Config schemas (JTD format)
     "schemas/com.streamlib.api_server.config@1.0.0.yaml",
     "schemas/com.streamlib.clap.effect.config@1.0.0.yaml",

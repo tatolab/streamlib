@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for encoded audio frames
+
+metadata:
+  name: com.tatolab.encodedaudioframe
+  version: 1.0.0
+  description: "Encoded audio frame with Opus/AAC bitstream data"
+  read_mode: skip_to_latest
+  buffer_size: 8
+
+properties:
+  data:
+    metadata:
+      description: "Encoded audio bitstream data (Opus/AAC)"
+    elements:
+      type: uint8
+  timestamp_ns:
+    metadata:
+      description: "Monotonic timestamp in nanoseconds (int64 as string)"
+    type: string
+  sample_count:
+    metadata:
+      description: "Number of audio samples per channel in this frame"
+    type: uint32

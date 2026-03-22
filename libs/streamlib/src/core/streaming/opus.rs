@@ -5,21 +5,9 @@
 //
 // Provides Opus encoding for real-time audio streaming.
 
-use crate::_generated_::Audioframe;
+use crate::_generated_::{Audioframe, Encodedaudioframe};
 use crate::core::{Result, StreamError};
 use serde::{Deserialize, Serialize};
-
-// ============================================================================
-// ENCODED AUDIO FRAME
-// ============================================================================
-
-/// Internal representation of encoded Opus frame
-#[derive(Clone, Debug)]
-pub struct EncodedAudioFrame {
-    pub data: Vec<u8>,
-    pub timestamp_ns: i64,
-    pub sample_count: usize,
-}
 
 // ============================================================================
 // OPUS ENCODING CONFIGURATION
@@ -53,7 +41,7 @@ impl Default for AudioEncoderConfig {
 // ============================================================================
 
 pub trait AudioEncoderOpus: Send {
-    fn encode(&mut self, frame: &Audioframe) -> Result<EncodedAudioFrame>;
+    fn encode(&mut self, frame: &Audioframe) -> Result<Encodedaudioframe>;
     fn config(&self) -> &AudioEncoderConfig;
     fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()>;
 }
@@ -145,7 +133,7 @@ impl OpusEncoder {
 }
 
 impl AudioEncoderOpus for OpusEncoder {
-    fn encode(&mut self, frame: &Audioframe) -> Result<EncodedAudioFrame> {
+    fn encode(&mut self, frame: &Audioframe) -> Result<Encodedaudioframe> {
         // Validate sample rate
         if frame.sample_rate != 48000 {
             return Err(StreamError::Configuration(
@@ -183,12 +171,10 @@ impl AudioEncoderOpus for OpusEncoder {
             (actual_samples * 2 * 4) as f32 / encoded_data.len() as f32 // f32 = 4 bytes per sample
         );
 
-        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
-
-        Ok(EncodedAudioFrame {
+        Ok(Encodedaudioframe {
             data: encoded_data,
-            timestamp_ns, // Preserve timestamp exactly
-            sample_count: actual_samples,
+            timestamp_ns: frame.timestamp_ns.clone(),
+            sample_count: actual_samples as u32,
         })
     }
 

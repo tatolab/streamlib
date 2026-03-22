@@ -5,7 +5,8 @@
 
 use crate::_generated_::Encodedvideoframe;
 use crate::core::codec::Mp4MuxerConfig;
-use crate::core::{EncodedAudioFrame, Result, RuntimeContext, StreamError};
+use crate::_generated_::Encodedaudioframe;
+use crate::core::{Result, RuntimeContext, StreamError};
 
 /// Apple MP4 muxer using AVAssetWriter.
 ///
@@ -44,7 +45,7 @@ impl AppleMp4Muxer {
     }
 
     /// Write an encoded audio frame.
-    pub fn write_audio(&mut self, _frame: &EncodedAudioFrame) -> Result<()> {
+    pub fn write_audio(&mut self, _frame: &Encodedaudioframe) -> Result<()> {
         // TODO: Wrap encoded audio in CMSampleBuffer
         // - Create CMBlockBuffer from frame.data
         // - Create CMSampleBuffer with audio format description
