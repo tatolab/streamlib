@@ -29,7 +29,7 @@ pub struct VulkanPixelBuffer {
     instance: Option<ash::Instance>,
     buffer: vk::Buffer,
     gpu_memory_allocation: Option<Allocation>,
-    gpu_memory_allocator: Arc<Mutex<Allocator>>,
+    gpu_memory_allocator: Option<Arc<Mutex<Allocator>>>,
     /// Raw device memory not managed by gpu-allocator (DMA-BUF export/import paths).
     raw_device_memory: Option<vk::DeviceMemory>,
     mapped_ptr: *mut u8,
@@ -70,10 +70,16 @@ impl VulkanPixelBuffer {
         // because it does not support pNext-extended allocations.
         #[cfg(target_os = "linux")]
         if vulkan_device.supports_external_memory() {
-            let memory_type_index = vulkan_device.find_memory_type(
-                mem_requirements.memory_type_bits,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
+            let memory_type_index = vulkan_device
+                .find_memory_type(
+                    mem_requirements.memory_type_bits,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE
+                        | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+                .map_err(|e| {
+                    unsafe { device.destroy_buffer(buffer, None) };
+                    e
+                })?;
 
             let mut export_info = vk::ExportMemoryAllocateInfo::default()
                 .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
@@ -84,12 +90,17 @@ impl VulkanPixelBuffer {
                 .push_next(&mut export_info);
 
             let memory = unsafe { device.allocate_memory(&alloc_info, None) }.map_err(|e| {
+                unsafe { device.destroy_buffer(buffer, None) };
                 StreamError::GpuError(format!(
                     "Failed to allocate exportable buffer memory: {e}"
                 ))
             })?;
 
             unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
+                unsafe {
+                    device.free_memory(memory, None);
+                    device.destroy_buffer(buffer, None);
+                }
                 StreamError::GpuError(format!(
                     "Failed to bind exportable buffer memory: {e}"
                 ))
@@ -99,22 +110,19 @@ impl VulkanPixelBuffer {
                 device.map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
             }
             .map_err(|e| {
+                unsafe {
+                    device.free_memory(memory, None);
+                    device.destroy_buffer(buffer, None);
+                }
                 StreamError::GpuError(format!("Failed to map exportable buffer memory: {e}"))
             })? as *mut u8;
-
-            let gpu_memory_allocator = vulkan_device
-                .gpu_memory_allocator()
-                .ok_or_else(|| {
-                    StreamError::GpuError("GPU memory allocator not available".into())
-                })?
-                .clone();
 
             return Ok(Self {
                 device: device.clone(),
                 instance: Some(vulkan_device.instance().clone()),
                 buffer,
                 gpu_memory_allocation: None,
-                gpu_memory_allocator,
+                gpu_memory_allocator: None,
                 raw_device_memory: Some(memory),
                 mapped_ptr,
                 width,
@@ -159,7 +167,7 @@ impl VulkanPixelBuffer {
             instance: None,
             buffer,
             gpu_memory_allocation: Some(allocation),
-            gpu_memory_allocator,
+            gpu_memory_allocator: Some(gpu_memory_allocator),
             raw_device_memory: None,
             mapped_ptr,
             width,
@@ -268,42 +276,54 @@ impl VulkanPixelBuffer {
             .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
             .fd(fd);
 
-        let memory_type_index = vulkan_device.find_memory_type(
-            mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        let memory_type_index = vulkan_device
+            .find_memory_type(
+                mem_requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .map_err(|e| {
+                unsafe { device.destroy_buffer(buffer, None) };
+                e
+            })?;
+
+        // Allocation size must be >= mem_requirements.size per Vulkan spec
+        let alloc_size = effective_size.max(mem_requirements.size);
 
         let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(effective_size)
+            .allocation_size(alloc_size)
             .memory_type_index(memory_type_index)
             .push_next(&mut import_info);
 
-        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to import DMA-BUF memory: {e}")))?;
+        let memory = unsafe { device.allocate_memory(&alloc_info, None) }.map_err(|e| {
+            unsafe { device.destroy_buffer(buffer, None) };
+            StreamError::GpuError(format!("Failed to import DMA-BUF memory: {e}"))
+        })?;
 
-        unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to bind imported memory: {e}")))?;
+        unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
+            unsafe {
+                device.free_memory(memory, None);
+                device.destroy_buffer(buffer, None);
+            }
+            StreamError::GpuError(format!("Failed to bind imported memory: {e}"))
+        })?;
 
         let mapped_ptr = unsafe {
             device.map_memory(memory, 0, effective_size, vk::MemoryMapFlags::empty())
         }
         .map_err(|e| {
+            unsafe {
+                device.free_memory(memory, None);
+                device.destroy_buffer(buffer, None);
+            }
             StreamError::GpuError(format!("Failed to map imported buffer memory: {e}"))
         })? as *mut u8;
-
-        let gpu_memory_allocator = vulkan_device
-            .gpu_memory_allocator()
-            .ok_or_else(|| {
-                StreamError::GpuError("GPU memory allocator not available".into())
-            })?
-            .clone();
 
         Ok(Self {
             device: device.clone(),
             instance: Some(vulkan_device.instance().clone()),
             buffer,
             gpu_memory_allocation: None,
-            gpu_memory_allocator,
+            gpu_memory_allocator: None,
             raw_device_memory: Some(memory),
             mapped_ptr,
             width,
@@ -323,8 +343,10 @@ impl Drop for VulkanPixelBuffer {
 
         // Free sub-allocated memory through the allocator
         if let Some(allocation) = self.gpu_memory_allocation.take() {
-            if let Err(e) = self.gpu_memory_allocator.lock().free(allocation) {
-                tracing::error!("Failed to free staging buffer allocation: {e}");
+            if let Some(ref allocator) = self.gpu_memory_allocator {
+                if let Err(e) = allocator.lock().free(allocation) {
+                    tracing::error!("Failed to free staging buffer allocation: {e}");
+                }
             }
         }
 

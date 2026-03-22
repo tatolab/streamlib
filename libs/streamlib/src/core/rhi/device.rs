@@ -103,8 +103,14 @@ impl GpuDevice {
             // static method with no device parameter, so the global bridges that gap.
             #[cfg(target_os = "linux")]
             {
-                let _ = crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
-                    .set(std::sync::Arc::clone(&device_arc));
+                if crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+                    .set(std::sync::Arc::clone(&device_arc))
+                    .is_err()
+                {
+                    tracing::warn!(
+                        "VULKAN_DEVICE_FOR_IMPORT already set (duplicate GpuDevice::new() call)"
+                    );
+                }
             }
 
             Ok(Self {
