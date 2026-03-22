@@ -11,10 +11,6 @@ use streamlib::{
 };
 
 fn main() -> Result<()> {
-    // Initialize logging - use DEBUG level for diagnostics
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
 
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
 

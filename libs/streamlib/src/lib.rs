@@ -113,10 +113,12 @@ pub use core::{
     PROCESSOR_REGISTRY,
 };
 
+pub use core::ApiServerProcessor;
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{
-    convert_audio_to_sample, convert_video_to_samples, ApiServerProcessor, AudioEncoderConfig,
-    AudioEncoderOpus, ClapEffectProcessor, ClapPluginInfo, ClapScanner, OpusEncoder,
+    convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
+    ClapEffectProcessor, ClapPluginInfo, ClapScanner, OpusEncoder,
 };
 
 // GPU Backends - Metal and Vulkan
@@ -151,6 +153,15 @@ pub use apple::{
     // MetalDevice,
     // VideoToolbox encoder (config types are in core::codec):
     // VideoToolboxEncoder,
+};
+
+// Linux processor re-exports
+#[cfg(target_os = "linux")]
+pub use linux::{
+    LinuxAudioCaptureProcessor as AudioCaptureProcessor,
+    LinuxAudioOutputProcessor as AudioOutputProcessor,
+    LinuxCameraProcessor as CameraProcessor,
+    LinuxDisplayProcessor as DisplayProcessor,
 };
 
 // WebRTC streaming (cross-platform)

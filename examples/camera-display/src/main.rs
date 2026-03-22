@@ -24,17 +24,6 @@ use streamlib::{
 };
 
 fn main() -> Result<()> {
-    // Initialize tracing with sensible defaults (silence noisy GPU crates)
-    // Override with RUST_LOG env var if needed, e.g., RUST_LOG=trace
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "debug,naga=warn,wgpu_core=warn,wgpu_hal=warn"
-                    .parse()
-                    .unwrap()
-            }),
-        )
-        .init();
 
     // Check for --string-mode argument
     let use_string_mode = std::env::args().any(|arg| arg == "--string-mode");
@@ -60,7 +49,7 @@ fn run_typed_mode() -> Result<()> {
 
     println!("📷 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id: Some("47B4B64B-7067-4B9C-AD2B-AE273A71F4B5".to_string()),
+        device_id: None, // Use default camera (macOS: first AVFoundation device, Linux: /dev/video0)
         ..Default::default()
     }))?;
     println!("✓ Camera added: {}\n", camera);
