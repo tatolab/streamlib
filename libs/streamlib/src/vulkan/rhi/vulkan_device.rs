@@ -23,7 +23,6 @@ use super::{VulkanCommandQueue, VulkanTexture};
 /// Wraps the Vulkan instance, physical device, and logical device.
 /// On macOS/iOS, uses MoltenVK to provide Vulkan API on top of Metal.
 pub struct VulkanDevice {
-    #[allow(dead_code)]
     entry: ash::Entry,
     instance: ash::Instance,
     physical_device: vk::PhysicalDevice,
@@ -82,6 +81,33 @@ impl VulkanDevice {
                 tracing::warn!(
                     "VK_EXT_metal_objects not available - Metal interop will be limited"
                 );
+            }
+        }
+
+        // On Linux, enable surface extensions for windowed display (Vulkan WSI)
+        #[cfg(target_os = "linux")]
+        {
+            let surface_ext = c"VK_KHR_surface";
+            if available_ext_names.contains(&surface_ext) {
+                instance_extensions.push(surface_ext.as_ptr());
+                tracing::info!("VK_KHR_surface enabled");
+            }
+
+            // Enable all available platform surface extensions
+            let wayland_ext = c"VK_KHR_wayland_surface";
+            if available_ext_names.contains(&wayland_ext) {
+                instance_extensions.push(wayland_ext.as_ptr());
+                tracing::info!("VK_KHR_wayland_surface available");
+            }
+            let xcb_ext = c"VK_KHR_xcb_surface";
+            if available_ext_names.contains(&xcb_ext) {
+                instance_extensions.push(xcb_ext.as_ptr());
+                tracing::info!("VK_KHR_xcb_surface available");
+            }
+            let xlib_ext = c"VK_KHR_xlib_surface";
+            if available_ext_names.contains(&xlib_ext) {
+                instance_extensions.push(xlib_ext.as_ptr());
+                tracing::info!("VK_KHR_xlib_surface available");
             }
         }
 
@@ -204,6 +230,13 @@ impl VulkanDevice {
                 tracing::info!("Vulkan external memory extensions not available");
             }
 
+            // VK_KHR_swapchain for windowed display rendering
+            let swapchain_ext = c"VK_KHR_swapchain";
+            if available_device_ext_names.contains(&swapchain_ext) {
+                device_extensions.push(swapchain_ext.as_ptr());
+                tracing::info!("VK_KHR_swapchain enabled");
+            }
+
             has_external_memory
         };
 
@@ -297,6 +330,11 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn name(&self) -> String {
         self.device_name.clone()
+    }
+
+    /// Get the Vulkan entry point loader.
+    pub fn entry(&self) -> &ash::Entry {
+        &self.entry
     }
 
     /// Get the Vulkan instance.
