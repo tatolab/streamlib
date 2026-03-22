@@ -143,10 +143,14 @@ impl crate::core::ManualProcessor for LinuxAudioOutputProcessor::Processor {
         let device_sample_rate = device_config.sample_rate().0;
         let device_channels = device_config.channels() as u32;
 
-        // Query the device's preferred buffer size
+        // Use a reasonable buffer size, clamped to the device's supported range.
+        // 512 samples (~10ms at 48kHz) balances latency and reliability.
         let device_buffer_size = match device_config.buffer_size() {
-            cpal::SupportedBufferSize::Range { min: _, max } => *max as usize,
-            cpal::SupportedBufferSize::Unknown => 512, // Fallback to reasonable default
+            cpal::SupportedBufferSize::Range { min, max } => {
+                let preferred = 512u32;
+                preferred.clamp(*min, *max) as usize
+            }
+            cpal::SupportedBufferSize::Unknown => 512,
         };
 
         tracing::info!(
