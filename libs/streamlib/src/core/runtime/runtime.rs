@@ -13,7 +13,7 @@ use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
 use crate::core::compiler::{Compiler, PendingOperation};
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use crate::core::context::SoftwareAudioClock;
 use crate::core::context::{
     AudioClockConfig, GpuContext, RuntimeContext, SharedAudioClock, TimeContext,
@@ -106,7 +106,7 @@ pub struct StreamRuntime {
     /// Created in new() so PUBSUB can initialize before start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
     /// Telemetry guard — keeps the OTel pipeline alive for the runtime's lifetime.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
     _telemetry_guard: streamlib_telemetry::TelemetryGuard,
 }
 
@@ -139,7 +139,7 @@ impl StreamRuntime {
         // Safe to call multiple times — only the first call sets up the subscriber.
         let tokio_handle = tokio_runtime_variant.handle();
         let _enter_guard = tokio_handle.enter();
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let broker_endpoint = {
             let port = std::env::var("STREAMLIB_BROKER_PORT")
                 .ok()
@@ -147,7 +147,7 @@ impl StreamRuntime {
                 .unwrap_or(streamlib_broker::GRPC_PORT);
             format!("http://127.0.0.1:{}", port)
         };
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let _telemetry_guard =
             streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
                 service_name: format!("runtime:{}", runtime_id),
@@ -209,7 +209,7 @@ impl StreamRuntime {
             status,
             _graph_change_listener: listener,
             iceoryx2_node,
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _telemetry_guard,
         }))
     }
@@ -612,6 +612,32 @@ impl StreamRuntime {
             }
         }
 
+        // Initialize SurfaceStore for cross-process GPU surface sharing (Linux)
+        #[cfg(target_os = "linux")]
+        {
+            use crate::core::context::SurfaceStore;
+
+            let socket_path = std::env::var("STREAMLIB_BROKER_SOCKET").unwrap_or_else(|_| {
+                let streamlib_home = crate::core::get_streamlib_home();
+                format!("{}/broker.sock", streamlib_home.display())
+            });
+            tracing::info!(
+                "[start] Initializing SurfaceStore with Unix socket '{}'...",
+                socket_path
+            );
+            let surface_store =
+                SurfaceStore::new(socket_path, self.runtime_id.to_string());
+            if let Err(e) = surface_store.connect() {
+                tracing::warn!(
+                    "[start] SurfaceStore Unix socket connection failed (surface sharing disabled): {}",
+                    e
+                );
+            } else {
+                gpu.set_surface_store(surface_store);
+                tracing::info!("[start] SurfaceStore initialized");
+            }
+        }
+
         // Create shared timing context - clock starts now
         let time = Arc::new(TimeContext::new());
 
@@ -630,7 +656,16 @@ impl StreamRuntime {
                 );
                 Arc::new(crate::apple::CoreAudioClock::new(audio_clock_config))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            {
+                tracing::info!(
+                    "[start] Creating LinuxTimerFdAudioClock: {}Hz, {} samples/tick",
+                    audio_clock_config.sample_rate,
+                    audio_clock_config.buffer_size
+                );
+                Arc::new(crate::linux::LinuxTimerFdAudioClock::new(audio_clock_config))
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             {
                 tracing::info!(
                     "[start] Creating SoftwareAudioClock: {}Hz, {} samples/tick",
@@ -722,8 +757,8 @@ impl StreamRuntime {
                 tracing::warn!("[stop] Failed to stop audio clock: {}", e);
             }
 
-            // Cleanup SurfaceStore (macOS only) - releases all surfaces and disconnects XPC
-            #[cfg(target_os = "macos")]
+            // Cleanup SurfaceStore - releases all surfaces and disconnects
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 ctx.gpu.clear_surface_store();
                 tracing::debug!("[stop] SurfaceStore cleared");
