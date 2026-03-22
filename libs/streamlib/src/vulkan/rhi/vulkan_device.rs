@@ -198,18 +198,21 @@ impl VulkanDevice {
             device_extensions.push(c"VK_KHR_portability_subset".as_ptr());
         }
 
-        // On Linux, check for DMA-BUF external memory extensions
+        // On Linux, enumerate device extensions once and enable what's available
         #[cfg(target_os = "linux")]
-        let has_external_memory = {
+        let available_device_ext_names: Vec<&CStr> = {
             let available_device_extensions =
                 unsafe { instance.enumerate_device_extension_properties(physical_device) }
                     .unwrap_or_default();
-
-            let available_device_ext_names: Vec<&CStr> = available_device_extensions
+            available_device_extensions
                 .iter()
                 .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
-                .collect();
+                .collect()
+        };
 
+        // On Linux, check for DMA-BUF external memory extensions
+        #[cfg(target_os = "linux")]
+        let has_external_memory = {
             let external_memory_ext = c"VK_KHR_external_memory";
             let external_memory_fd_ext = c"VK_KHR_external_memory_fd";
             let external_memory_dmabuf_ext = c"VK_EXT_external_memory_dma_buf";
@@ -230,15 +233,18 @@ impl VulkanDevice {
                 tracing::info!("Vulkan external memory extensions not available");
             }
 
-            // VK_KHR_swapchain for windowed display rendering
+            has_external_memory
+        };
+
+        // On Linux, enable VK_KHR_swapchain for windowed display rendering
+        #[cfg(target_os = "linux")]
+        {
             let swapchain_ext = c"VK_KHR_swapchain";
             if available_device_ext_names.contains(&swapchain_ext) {
                 device_extensions.push(swapchain_ext.as_ptr());
                 tracing::info!("VK_KHR_swapchain enabled");
             }
-
-            has_external_memory
-        };
+        }
 
         #[cfg(target_os = "linux")]
         let supports_external_memory = has_external_memory;

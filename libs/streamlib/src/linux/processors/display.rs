@@ -300,8 +300,8 @@ impl ApplicationHandler for DisplayEventLoopHandler {
                         let _ = self.vulkan_device.device().device_wait_idle();
                     }
                     if let Some(old_state) = self.swapchain_state.take() {
-                        destroy_swapchain_resources_only(&self.vulkan_device, &old_state);
-
+                        // Recreate FIRST (old swapchain must be alive for old_swapchain param),
+                        // then destroy old resources on success.
                         match recreate_swapchain(
                             &self.vulkan_device,
                             window,
@@ -311,6 +311,10 @@ impl ApplicationHandler for DisplayEventLoopHandler {
                             self.vsync,
                         ) {
                             Ok(new_state) => {
+                                destroy_swapchain_resources_only(
+                                    &self.vulkan_device,
+                                    &old_state,
+                                );
                                 tracing::debug!(
                                     "Display {}: Swapchain recreated ({}x{})",
                                     self.window_id,
@@ -835,10 +839,19 @@ fn recreate_swapchain(
         }
     };
 
+    let present_modes = unsafe {
+        surface_loader.get_physical_device_surface_present_modes(physical_device, surface)
+    }
+    .map_err(|e| {
+        StreamError::GpuError(format!("Failed to query present modes: {}", e))
+    })?;
+
     let present_mode = if vsync {
         vk::PresentModeKHR::FIFO
-    } else {
+    } else if present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
         vk::PresentModeKHR::MAILBOX
+    } else {
+        vk::PresentModeKHR::FIFO
     };
 
     let mut image_count = capabilities.min_image_count + 1;
