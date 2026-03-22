@@ -97,7 +97,11 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
             .spawn(move || {
                 tracing::debug!("Display {}: Render thread started", window_id);
 
-                let event_loop = match EventLoop::new() {
+                // Use any_thread() to allow event loop on non-main thread.
+                let event_loop = match {
+                    use winit::platform::x11::EventLoopBuilderExtX11;
+                    EventLoop::builder().with_any_thread(true).build()
+                } {
                     Ok(el) => el,
                     Err(e) => {
                         tracing::error!(
