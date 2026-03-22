@@ -12,7 +12,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust-tests-macos:
+  rust-tests:
     name: Rust Tests (macOS)
     runs-on: macos-14  # macOS for Apple-specific code
 
@@ -66,6 +66,7 @@ jobs:
             pkg-config \
             protobuf-compiler \
             libvulkan-dev \
+            libopus-dev \
             libasound2-dev
 
       - name: Install Rust
