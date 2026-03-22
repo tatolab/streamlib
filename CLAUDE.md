@@ -161,8 +161,8 @@ Use the `/refine-name` command to get suggestions that follow this pattern. The 
 3. ❌ Methods that do nothing: `fn foo() { /* no-op */ }`
 4. ❌ Compatibility shims for "old code" in new implementations
 5. ❌ Bypassing type safety "just to make it compile"
-6. ❌ Modifying source code to make tests work (tests must adapt to the API, not vice versa)
-7. ❌ Adding `#[cfg(test)]` to any source file (only the user may add test-only code to source)
+6. ❌ Modifying source code to make tests pass — tests must adapt to the API, not vice versa. Never weaken, stub out, or reshape library code so a test stops failing. If the API can't support the test, that's a design signal — report it.
+7. ❌ Writing tests that paper over broken APIs — if you have to mock half the system or ignore errors to get a test green, the test is lying. A test that passes against a broken API is worse than no test.
 
 **Instead**: Stop, explain the problem, present options, and wait for guidance.
 
