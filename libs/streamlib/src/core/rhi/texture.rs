@@ -233,9 +233,10 @@ impl StreamTexture {
         }
         #[cfg(target_os = "linux")]
         {
-            // DMA-BUF export requires VulkanDevice reference — deferred to Phase 2
-            // when the full cross-process sharing path is built.
-            None
+            self.inner
+                .export_dma_buf_fd()
+                .ok()
+                .map(|fd| NativeTextureHandle::DmaBuf { fd })
         }
         #[cfg(target_os = "windows")]
         {

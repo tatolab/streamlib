@@ -96,8 +96,25 @@ impl GpuDevice {
                 metal_queue,
             };
 
+            let device_arc = std::sync::Arc::new(vulkan_device);
+
+            // Store a global reference for DMA-BUF import (Linux only).
+            // The import trait (RhiPixelBufferImport::from_external_handle) is a
+            // static method with no device parameter, so the global bridges that gap.
+            #[cfg(target_os = "linux")]
+            {
+                if crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+                    .set(std::sync::Arc::clone(&device_arc))
+                    .is_err()
+                {
+                    tracing::warn!(
+                        "VULKAN_DEVICE_FOR_IMPORT already set (duplicate GpuDevice::new() call)"
+                    );
+                }
+            }
+
             Ok(Self {
-                inner: std::sync::Arc::new(vulkan_device),
+                inner: device_arc,
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 metal_device,
                 command_queue,

@@ -74,9 +74,9 @@ pub trait RhiPixelBufferImport {
 #[cfg(target_os = "linux")]
 impl RhiPixelBufferExport for super::RhiPixelBuffer {
     fn export_handle(&self) -> Result<RhiExternalHandle> {
-        Err(crate::core::StreamError::NotSupported(
-            "DMA-BUF export for pixel buffers not yet implemented".into(),
-        ))
+        let fd = self.ref_.inner.export_dma_buf_fd()?;
+        let size = self.ref_.inner.size() as usize;
+        Ok(RhiExternalHandle::DmaBuf { fd, size })
     }
 }
 
@@ -88,9 +88,51 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         height: u32,
         format: super::PixelFormat,
     ) -> Result<Self> {
-        let _ = (handle, width, height, format);
-        Err(crate::core::StreamError::NotSupported(
-            "DMA-BUF import for pixel buffers not yet implemented".into(),
-        ))
+        let RhiExternalHandle::DmaBuf { fd, size } = handle;
+
+        let vulkan_device =
+            crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+                .get()
+                .ok_or_else(|| {
+                    crate::core::StreamError::NotSupported(
+                        "DMA-BUF import: VulkanDevice not initialized (GpuDevice::new() not called)"
+                            .into(),
+                    )
+                })?;
+
+        let bytes_per_pixel = format.bits_per_pixel() / 8;
+        if bytes_per_pixel == 0 {
+            return Err(crate::core::StreamError::Configuration(
+                "DMA-BUF import: unsupported pixel format (0 bits per pixel)".into(),
+            ));
+        }
+
+        let allocation_size = if size > 0 {
+            size as u64
+        } else if width > 0 && height > 0 {
+            (width as u64) * (height as u64) * (bytes_per_pixel as u64)
+        } else {
+            return Err(crate::core::StreamError::Configuration(
+                "DMA-BUF import: cannot determine allocation size (size=0, width=0 or height=0)"
+                    .into(),
+            ));
+        };
+
+        let vulkan_pixel_buffer =
+            crate::vulkan::rhi::VulkanPixelBuffer::from_dma_buf_fd(
+                vulkan_device,
+                fd,
+                width,
+                height,
+                bytes_per_pixel,
+                format,
+                allocation_size,
+            )?;
+
+        let pixel_buffer_ref = super::RhiPixelBufferRef {
+            inner: std::sync::Arc::new(vulkan_pixel_buffer),
+        };
+
+        Ok(super::RhiPixelBuffer::new(pixel_buffer_ref))
     }
 }

@@ -7,6 +7,7 @@
 //! Surfaces are cached locally after first checkout to minimize XPC overhead.
 
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -122,13 +123,17 @@ struct SurfaceStoreInner {
     #[cfg(target_os = "macos")]
     connection: Mutex<Option<xpc_connection_t>>,
 
+    /// Unix socket connection to the broker (Linux only).
+    #[cfg(target_os = "linux")]
+    connection: Mutex<Option<std::os::unix::net::UnixStream>>,
+
     /// Local cache of checked-out surfaces (surface_id -> pixel_buffer).
     cache: Mutex<SurfaceCache>,
 
     /// Reverse lookup for checked-in surfaces (iosurface_id -> surface_id).
     checked_in: Mutex<CheckedInSurfaces>,
 
-    /// The XPC service name to connect to.
+    /// The XPC service name (macOS) or Unix socket path (Linux) to connect to.
     service_name: String,
 
     /// Runtime ID for tracking which surfaces belong to this runtime.
@@ -140,7 +145,7 @@ impl SurfaceStore {
     pub fn new(service_name: String, runtime_id: String) -> Self {
         Self {
             inner: Arc::new(SurfaceStoreInner {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
                 connection: Mutex::new(None),
                 cache: Mutex::new(SurfaceCache::new()),
                 checked_in: Mutex::new(CheckedInSurfaces::new()),
@@ -771,46 +776,322 @@ impl SurfaceStore {
     }
 
     // =========================================================================
-    // Non-macOS stubs
+    // Linux: Unix socket client
     // =========================================================================
 
-    #[cfg(not(target_os = "macos"))]
+    /// Connect to the broker's Unix socket.
+    #[cfg(target_os = "linux")]
+    pub fn connect(&self) -> Result<()> {
+        let stream = std::os::unix::net::UnixStream::connect(&self.inner.service_name)
+            .map_err(|e| {
+                StreamError::Configuration(format!(
+                    "Failed to connect to broker socket '{}': {}",
+                    self.inner.service_name, e
+                ))
+            })?;
+
+        *self.inner.connection.lock() = Some(stream);
+
+        tracing::info!(
+            "SurfaceStore: Connected to broker socket '{}'",
+            self.inner.service_name
+        );
+
+        Ok(())
+    }
+
+    /// Disconnect from the broker and release all surfaces.
+    #[cfg(target_os = "linux")]
+    pub fn disconnect(&self) -> Result<()> {
+        // Release all checked-in surfaces
+        let surface_ids = self.inner.checked_in.lock().surface_ids();
+        for surface_id in surface_ids {
+            if let Err(e) = self.release_from_broker_unix(&surface_id) {
+                tracing::warn!(
+                    "SurfaceStore: Failed to release surface '{}': {}",
+                    surface_id,
+                    e
+                );
+            }
+        }
+
+        // Clear local state
+        self.inner.cache.lock().clear();
+        self.inner.checked_in.lock().clear();
+
+        // Drop the connection
+        self.inner.connection.lock().take();
+
+        tracing::info!("SurfaceStore: Disconnected from broker socket");
+        Ok(())
+    }
+
+    /// Check in a pixel buffer via Unix socket, returning a surface ID.
+    #[cfg(target_os = "linux")]
+    pub fn check_in(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+        use crate::core::rhi::RhiPixelBufferExport;
+
+        // Export the DMA-BUF fd
+        let handle = pixel_buffer.export_handle()?;
+        let (fd, _size) = match handle {
+            crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
+        };
+
+        // Send check_in request with fd
+        let request = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": self.inner.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": format!("{:?}", pixel_buffer.format()),
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration("SurfaceStore not connected to broker".into())
+        })?;
+
+        let (response, _response_fd): (serde_json::Value, _) =
+            streamlib_broker::unix_socket_service::send_request(stream, &request, Some(fd))
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Unix socket check_in failed: {}", e))
+                })?;
+
+        // Close the exported fd (broker has its own dup)
+        unsafe { libc::close(fd) };
+
+        // Extract surface_id from response
+        let surface_id = response
+            .get("surface_id")
+            .and_then(|v: &serde_json::Value| v.as_str())
+            .ok_or_else(|| {
+                StreamError::Configuration("check_in: missing surface_id in response".into())
+            })?
+            .to_string();
+
+        // Cache locally
+        self.inner
+            .cache
+            .lock()
+            .insert(surface_id.clone(), pixel_buffer.clone());
+
+        tracing::debug!("SurfaceStore: Checked in as '{}'", surface_id);
+
+        Ok(surface_id)
+    }
+
+    /// Check out a surface by ID via Unix socket.
+    #[cfg(target_os = "linux")]
+    pub fn check_out(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+        // Check cache first
+        {
+            let mut cache = self.inner.cache.lock();
+            if let Some(cached) = cache.surfaces.get_mut(surface_id) {
+                cached.checkout_count += 1;
+                tracing::trace!(
+                    "SurfaceStore: Cache hit for '{}' (checkout #{})",
+                    surface_id,
+                    cached.checkout_count
+                );
+                return Ok(cached.pixel_buffer.clone());
+            }
+        }
+
+        // Cache miss - fetch from broker
+        tracing::debug!(
+            "SurfaceStore: Cache miss for '{}', fetching from broker",
+            surface_id
+        );
+
+        let request = serde_json::json!({
+            "op": "check_out",
+            "surface_id": surface_id,
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration("SurfaceStore not connected to broker".into())
+        })?;
+
+        let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
+            streamlib_broker::unix_socket_service::send_request(stream, &request, None).map_err(
+                |e| StreamError::Configuration(format!("Unix socket check_out failed: {}", e)),
+            )?;
+
+        // Check for error
+        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            return Err(StreamError::Configuration(format!(
+                "check_out: {}",
+                error
+            )));
+        }
+
+        let dma_buf_fd = received_fd.ok_or_else(|| {
+            StreamError::Configuration("check_out: no DMA-BUF fd in response".into())
+        })?;
+
+        // Import pixel buffer from DMA-BUF fd
+        use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
+
+        let handle = RhiExternalHandle::DmaBuf {
+            fd: dma_buf_fd,
+            size: 0,
+        };
+        let pixel_buffer =
+            RhiPixelBuffer::from_external_handle(handle, 0, 0, PixelFormat::default())?;
+
+        // Cache for future use
+        self.inner
+            .cache
+            .lock()
+            .insert(surface_id.to_string(), pixel_buffer.clone());
+
+        Ok(pixel_buffer)
+    }
+
+    /// Register a buffer with the broker via Unix socket.
+    #[cfg(target_os = "linux")]
+    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &RhiPixelBuffer) -> Result<()> {
+        use crate::core::rhi::RhiPixelBufferExport;
+
+        // Export the DMA-BUF fd
+        let handle = pixel_buffer.export_handle()?;
+        let (fd, _size) = match handle {
+            crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
+        };
+
+        let request = serde_json::json!({
+            "op": "register",
+            "surface_id": pool_id,
+            "runtime_id": self.inner.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": format!("{:?}", pixel_buffer.format()),
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration("SurfaceStore not connected to broker".into())
+        })?;
+
+        let (response, _): (serde_json::Value, _) =
+            streamlib_broker::unix_socket_service::send_request(stream, &request, Some(fd))
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Unix socket register failed: {}", e))
+                })?;
+
+        // Close the exported fd
+        unsafe { libc::close(fd) };
+
+        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            return Err(StreamError::Configuration(format!(
+                "register: {}",
+                error
+            )));
+        }
+
+        tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
+        Ok(())
+    }
+
+    /// Lookup a buffer from the broker via Unix socket.
+    #[cfg(target_os = "linux")]
+    pub fn lookup_buffer(&self, pool_id: &str) -> Result<RhiPixelBuffer> {
+        let request = serde_json::json!({
+            "op": "lookup",
+            "surface_id": pool_id,
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration("SurfaceStore not connected to broker".into())
+        })?;
+
+        let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
+            streamlib_broker::unix_socket_service::send_request(stream, &request, None).map_err(
+                |e| StreamError::Configuration(format!("Unix socket lookup failed: {}", e)),
+            )?;
+
+        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            return Err(StreamError::Configuration(format!(
+                "lookup: {}",
+                error
+            )));
+        }
+
+        let dma_buf_fd = received_fd.ok_or_else(|| {
+            StreamError::Configuration("lookup: no DMA-BUF fd in response".into())
+        })?;
+
+        use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
+
+        let handle = RhiExternalHandle::DmaBuf {
+            fd: dma_buf_fd,
+            size: 0,
+        };
+        RhiPixelBuffer::from_external_handle(handle, 0, 0, PixelFormat::default())
+    }
+
+    /// Send release request to broker via Unix socket.
+    #[cfg(target_os = "linux")]
+    fn release_from_broker_unix(&self, surface_id: &str) -> Result<()> {
+        let request = serde_json::json!({
+            "op": "release",
+            "surface_id": surface_id,
+            "runtime_id": self.inner.runtime_id,
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = match connection.as_ref() {
+            Some(s) => s,
+            None => return Ok(()), // Already disconnected
+        };
+
+        let _ = streamlib_broker::unix_socket_service::send_request(stream, &request, None);
+        Ok(())
+    }
+
+    // =========================================================================
+    // Unsupported platform stubs
+    // =========================================================================
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn connect(&self) -> Result<()> {
         Err(StreamError::NotSupported(
-            "SurfaceStore is only supported on macOS".into(),
+            "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn disconnect(&self) -> Result<()> {
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn check_in(&self, _pixel_buffer: &RhiPixelBuffer) -> Result<String> {
         Err(StreamError::NotSupported(
-            "SurfaceStore is only supported on macOS".into(),
+            "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn check_out(&self, _surface_id: &str) -> Result<RhiPixelBuffer> {
         Err(StreamError::NotSupported(
-            "SurfaceStore is only supported on macOS".into(),
+            "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn register_buffer(&self, _pool_id: &str, _pixel_buffer: &RhiPixelBuffer) -> Result<()> {
         Err(StreamError::NotSupported(
-            "SurfaceStore is only supported on macOS".into(),
+            "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn lookup_buffer(&self, _pool_id: &str) -> Result<RhiPixelBuffer> {
         Err(StreamError::NotSupported(
-            "SurfaceStore is only supported on macOS".into(),
+            "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 }
