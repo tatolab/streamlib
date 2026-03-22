@@ -73,7 +73,7 @@ pub struct VulkanTexture {
     raw_device_memory: Option<vk::DeviceMemory>,
     /// Cached DMA-BUF fd to avoid leaking a new fd on each export call.
     #[cfg(target_os = "linux")]
-    cached_dma_buf_fd: std::cell::Cell<Option<std::os::unix::io::RawFd>>,
+    cached_dma_buf_fd: std::sync::OnceLock<std::os::unix::io::RawFd>,
     /// Whether this texture was imported from IOSurface (no memory to free)
     imported_from_iosurface: bool,
     width: u32,
@@ -154,7 +154,7 @@ impl VulkanTexture {
                 gpu_memory_allocator: None,
                 raw_device_memory: Some(memory),
                 #[cfg(target_os = "linux")]
-                cached_dma_buf_fd: std::cell::Cell::new(None),
+                cached_dma_buf_fd: std::sync::OnceLock::new(),
                 imported_from_iosurface: false,
                 width: desc.width,
                 height: desc.height,
@@ -187,7 +187,7 @@ impl VulkanTexture {
             gpu_memory_allocator,
             raw_device_memory: None,
             #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: std::cell::Cell::new(None),
+            cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
             width: desc.width,
             height: desc.height,
@@ -288,7 +288,7 @@ impl VulkanTexture {
             gpu_memory_allocator: None,
             raw_device_memory: None,
             #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: std::cell::Cell::new(None),
+            cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
             width: 0,
             height: 0,
@@ -322,7 +322,7 @@ impl VulkanTexture {
     /// Export the texture's memory as a DMA-BUF file descriptor.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         // Return cached fd if already exported (vkGetMemoryFdKHR returns a new fd each call)
-        if let Some(fd) = self.cached_dma_buf_fd.get() {
+        if let Some(&fd) = self.cached_dma_buf_fd.get() {
             return Ok(fd);
         }
 
@@ -352,7 +352,7 @@ impl VulkanTexture {
         let fd = unsafe { external_memory_fd.get_memory_fd(&get_fd_info) }
             .map_err(|e| StreamError::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
 
-        self.cached_dma_buf_fd.set(Some(fd));
+        let _ = self.cached_dma_buf_fd.set(fd);
         Ok(fd)
     }
 
@@ -436,7 +436,7 @@ impl VulkanTexture {
             gpu_memory_allocator: None,
             raw_device_memory: Some(memory),
             #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: std::cell::Cell::new(None),
+            cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
             width,
             height,
@@ -457,7 +457,7 @@ impl Clone for VulkanTexture {
             gpu_memory_allocator: None,
             raw_device_memory: None,
             #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: std::cell::Cell::new(None),
+            cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
             width: self.width,
             height: self.height,
@@ -470,7 +470,7 @@ impl Drop for VulkanTexture {
     fn drop(&mut self) {
         // Close cached DMA-BUF fd before freeing GPU resources
         #[cfg(target_os = "linux")]
-        if let Some(fd) = self.cached_dma_buf_fd.get() {
+        if let Some(&fd) = self.cached_dma_buf_fd.get() {
             unsafe { libc::close(fd) };
         }
 
