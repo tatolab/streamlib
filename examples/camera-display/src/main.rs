@@ -49,7 +49,7 @@ fn run_typed_mode() -> Result<()> {
 
     println!("📷 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id: Some("47B4B64B-7067-4B9C-AD2B-AE273A71F4B5".to_string()),
+        device_id: None, // Use default camera (macOS: first AVFoundation device, Linux: /dev/video0)
         ..Default::default()
     }))?;
     println!("✓ Camera added: {}\n", camera);
