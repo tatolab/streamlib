@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.3](https://github.com/tatolab/streamlib/compare/v0.4.2...v0.4.3) (2026-03-22)
+
+
+### Features
+
+* FFmpeg H.264 encode/decode/mux for Linux ([#167](https://github.com/tatolab/streamlib/issues/167)) ([3080bd7](https://github.com/tatolab/streamlib/commit/3080bd7851397970ace1cd32fcfe781b94dc3bcb))
+* implement DMA-BUF GPU memory sharing for Linux broker ([95cabdd](https://github.com/tatolab/streamlib/commit/95cabdd2381fa323435eddb8581490a544c99182))
+* implement FFmpeg H.264 encode/decode/mux and VulkanFormatConverter ([b35f774](https://github.com/tatolab/streamlib/commit/b35f77404728cc099be17493dfa1aa375e28fd97))
+* Linux broker backend — Unix sockets + DMA-BUF fd passing ([#164](https://github.com/tatolab/streamlib/issues/164)) ([2df653f](https://github.com/tatolab/streamlib/commit/2df653f648d80b05bed0504e969783acef4bfff7))
+* Linux broker backend with Unix sockets + DMA-BUF fd passing ([#164](https://github.com/tatolab/streamlib/issues/164)) ([943e6b3](https://github.com/tatolab/streamlib/commit/943e6b3070648e2c9a672e21dbef0d65f8d16fab))
+* replace hand-built EncodedAudioFrame with JTD schema-generated Encodedaudioframe ([dcfa250](https://github.com/tatolab/streamlib/commit/dcfa250d88560e0a2af96a46e3d82c03002a4d34)), closes [#190](https://github.com/tatolab/streamlib/issues/190)
+* replace hand-built EncodedAudioFrame with JTD schema-generated type ([4dafc49](https://github.com/tatolab/streamlib/commit/4dafc493a3b479ff87ed4265d88036e692600602))
+* widen macOS-only cfg gates for Linux runtime ([#192](https://github.com/tatolab/streamlib/issues/192)) ([d247f11](https://github.com/tatolab/streamlib/commit/d247f1156a0e404990a30d12e6c605b3a614cff3))
+* widen macOS-only cfg gates for Linux runtime, telemetry, and codecs ([0ced224](https://github.com/tatolab/streamlib/commit/0ced2246095309160e6f2d2440806e31e9dd0fb0)), closes [#192](https://github.com/tatolab/streamlib/issues/192)
+
+
+### Bug Fixes
+
+* address critical review feedback on FFmpeg encoder/muxer ([17c9bd6](https://github.com/tatolab/streamlib/commit/17c9bd6ab75b37989c096dd7b5be2f721b1aa020))
+* address P0/P1 review feedback on unix socket service ([f42530c](https://github.com/tatolab/streamlib/commit/f42530c90aee3f89f5d46d05aa4c5a61d7b6a92a))
+* address P0/P1/P2 review feedback on DMA-BUF memory sharing ([f56fce7](https://github.com/tatolab/streamlib/commit/f56fce732edd0b0fea913687935aae0d1090dd2b))
+* replace Cell with OnceLock for cached DMA-BUF fd (soundness fix) ([83b03fa](https://github.com/tatolab/streamlib/commit/83b03fa177ba4ff56c84220949c4b32e3d5ecce8))
+* resolve 5 FFmpeg compilation errors in encoder and muxer ([b39efa8](https://github.com/tatolab/streamlib/commit/b39efa8338eccceb2e4a4e91f327bcb351150926))
+
 ## [0.4.2](https://github.com/tatolab/streamlib/compare/v0.4.1...v0.4.2) (2026-03-21)
 
 
