@@ -24,16 +24,6 @@ use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime};
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "info,naga=warn,wgpu_core=warn,wgpu_hal=warn"
-                    .parse()
-                    .unwrap()
-            }),
-        )
-        .try_init().ok();
-
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("deno");
 

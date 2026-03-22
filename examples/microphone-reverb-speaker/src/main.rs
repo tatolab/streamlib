@@ -12,10 +12,6 @@ use streamlib::{
 };
 
 fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .try_init().ok();
 
     println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");
 

@@ -16,11 +16,6 @@ pub async fn main() -> Result<()> {
     // Initialize rustls crypto provider
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Initialize tracing with DEBUG level
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .try_init().ok();
-
     tracing::info!("🚀🚀🚀 WEBRTC ISOLATION TEST - PSYCHO LOGGING MODE 🚀🚀🚀");
     tracing::info!("========================================================");
 

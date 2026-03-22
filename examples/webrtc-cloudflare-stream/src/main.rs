@@ -16,11 +16,6 @@ fn main() -> Result<()> {
     // MUST be called before any TLS/DTLS operations
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .try_init().ok();
-
     println!("=== WebRTC WHIP Streaming to Cloudflare Stream ===\n");
 
     // Create runtime first

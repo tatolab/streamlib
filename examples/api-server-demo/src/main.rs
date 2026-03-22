@@ -17,13 +17,6 @@ const WS_URL: &str = "ws://127.0.0.1:9000/ws/events";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".parse().unwrap()),
-        )
-        .try_init().ok();
-
     println!("=== API Server Processor Demo ===\n");
 
     // StreamRuntime::new() auto-detects tokio context and uses the current handle

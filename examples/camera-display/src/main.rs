@@ -24,17 +24,6 @@ use streamlib::{
 };
 
 fn main() -> Result<()> {
-    // Initialize tracing with sensible defaults (silence noisy GPU crates)
-    // Override with RUST_LOG env var if needed, e.g., RUST_LOG=trace
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "debug,naga=warn,wgpu_core=warn,wgpu_hal=warn"
-                    .parse()
-                    .unwrap()
-            }),
-        )
-        .try_init().ok();
 
     // Check for --string-mode argument
     let use_string_mode = std::env::args().any(|arg| arg == "--string-mode");

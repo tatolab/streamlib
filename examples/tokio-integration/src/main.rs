@@ -14,13 +14,6 @@ use streamlib::{Result, StreamRuntime};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".parse().unwrap()),
-        )
-        .try_init().ok();
-
     println!("=== Tokio Integration Example ===\n");
 
     // Just call new() - it auto-detects the tokio context!
