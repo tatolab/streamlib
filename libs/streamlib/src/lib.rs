@@ -153,6 +153,15 @@ pub use apple::{
     // VideoToolboxEncoder,
 };
 
+// Linux processor re-exports
+#[cfg(target_os = "linux")]
+pub use linux::{
+    LinuxAudioCaptureProcessor as AudioCaptureProcessor,
+    LinuxAudioOutputProcessor as AudioOutputProcessor,
+    LinuxCameraProcessor as CameraProcessor,
+    LinuxDisplayProcessor as DisplayProcessor,
+};
+
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
