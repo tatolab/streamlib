@@ -113,12 +113,15 @@ fn install_sigterm_handler_macos() -> std::io::Result<()> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn install_unix_signal_handlers() -> std::io::Result<()> {
-    use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
 
     // Create a pipe for async-signal-safe communication
     let (mut reader, writer) = UnixStream::pair()?;
-    let writer_fd = writer.as_raw_fd();
+
+    // Clone writer so each signal registration owns its own fd.
+    // pipe::register() wraps the raw fd in a WakeFd that closes on drop,
+    // so sharing a single fd between two registrations would double-close.
+    let writer_for_sigterm = writer.try_clone()?;
 
     // Spawn thread to handle signals from pipe
     let handler_thread = std::thread::Builder::new()
@@ -163,32 +166,35 @@ fn install_unix_signal_handlers() -> std::io::Result<()> {
     // Detach the thread so it continues running independently
     std::mem::forget(handler_thread);
 
-    // Install signal handlers using signal_hook
-    install_sigterm_handler(writer_fd)?;
-    install_sigint_handler(writer_fd)?;
+    // Install signal handlers — each takes ownership of its own stream.
+    // into_raw_fd() transfers fd ownership without closing it.
+    install_sigterm_handler(writer_for_sigterm)?;
+    install_sigint_handler(writer)?;
 
     tracing::info!("Native signal handlers installed (SIGTERM, SIGINT)");
     Ok(())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn install_sigterm_handler(pipe_fd: std::os::fd::RawFd) -> std::io::Result<()> {
+fn install_sigterm_handler(pipe: std::os::unix::net::UnixStream) -> std::io::Result<()> {
     use signal_hook::consts::signal::*;
     use signal_hook::low_level::pipe;
+    use std::os::unix::io::IntoRawFd;
 
-    // Register SIGTERM to write to pipe
-    pipe::register(SIGTERM, pipe_fd)?;
+    // IntoRawFd transfers fd ownership to pipe::register without closing it
+    pipe::register(SIGTERM, pipe.into_raw_fd())?;
 
     Ok(())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn install_sigint_handler(pipe_fd: std::os::fd::RawFd) -> std::io::Result<()> {
+fn install_sigint_handler(pipe: std::os::unix::net::UnixStream) -> std::io::Result<()> {
     use signal_hook::consts::signal::*;
     use signal_hook::low_level::pipe;
+    use std::os::unix::io::IntoRawFd;
 
-    // Register SIGINT (Ctrl+C) to write to pipe
-    pipe::register(SIGINT, pipe_fd)?;
+    // IntoRawFd transfers fd ownership to pipe::register without closing it
+    pipe::register(SIGINT, pipe.into_raw_fd())?;
 
     Ok(())
 }
