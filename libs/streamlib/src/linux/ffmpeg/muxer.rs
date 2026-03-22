@@ -8,9 +8,8 @@ use std::sync::Once;
 use ffmpeg::rescale::Rescale;
 use ffmpeg_next as ffmpeg;
 
-use crate::_generated_::Encodedvideoframe;
+use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
 use crate::core::codec::Mp4MuxerConfig;
-use crate::core::streaming::EncodedAudioFrame;
 use crate::core::{AudioCodec, Result, StreamError};
 
 static FFMPEG_INIT: Once = Once::new();
@@ -150,7 +149,7 @@ impl FFmpegMuxer {
     }
 
     /// Write an encoded audio frame.
-    pub fn write_audio(&mut self, frame: &EncodedAudioFrame) -> Result<()> {
+    pub fn write_audio(&mut self, frame: &Encodedaudioframe) -> Result<()> {
         let stream_index = self.audio_stream_index.ok_or_else(|| {
             StreamError::Configuration("No audio stream configured in muxer".into())
         })?;
@@ -162,7 +161,8 @@ impl FFmpegMuxer {
         let mut packet = ffmpeg::Packet::copy(&frame.data);
 
         // Convert nanoseconds to microseconds (TIME_BASE is 1/1_000_000), then to stream time base
-        let timestamp_us = frame.timestamp_ns / 1_000;
+        let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
+        let timestamp_us = timestamp_ns / 1_000;
         let pts = timestamp_us.rescale(ffmpeg::rescale::TIME_BASE, audio_time_base);
         packet.set_pts(Some(pts));
         packet.set_dts(Some(pts));

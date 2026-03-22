@@ -17,16 +17,7 @@ pub mod whip_client;
 
 pub use h264_rtp::H264RtpDepacketizer;
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-pub use opus::{AudioEncoderConfig, AudioEncoderOpus, EncodedAudioFrame, OpusEncoder};
-
-/// Encoded audio frame (cross-platform definition for muxer support).
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
-#[derive(Clone, Debug)]
-pub struct EncodedAudioFrame {
-    pub data: Vec<u8>,
-    pub timestamp_ns: i64,
-    pub sample_count: usize,
-}
+pub use opus::{AudioEncoderConfig, AudioEncoderOpus, OpusEncoder};
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
 pub use opus_decoder::OpusDecoder;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
