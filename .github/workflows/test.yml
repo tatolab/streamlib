@@ -13,7 +13,7 @@ env:
 
 jobs:
   rust-tests:
-    name: Rust Tests
+    name: Rust Tests (macOS)
     runs-on: macos-14  # macOS for Apple-specific code
 
     steps:
@@ -24,6 +24,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: actions/cache@v3
@@ -51,3 +53,59 @@ jobs:
           cargo build -p camera-display
           cargo build -p whep-player
           cargo build -p microphone-reverb-speaker
+
+  rust-tests-linux:
+    name: Rust Tests (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            protobuf-compiler \
+            libvulkan-dev \
+            libopus-dev \
+            libasound2-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libavfilter-dev \
+            libavdevice-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy -p streamlib -p streamlib-broker --features ffmpeg -- -D warnings
+
+      - name: Check streamlib
+        run: cargo check -p streamlib
+
+      - name: Check streamlib with FFmpeg
+        run: cargo check -p streamlib --features ffmpeg
+
+      - name: Run unit tests
+        run: cargo test -p streamlib --lib
+
+      - name: Check streamlib-broker
+        run: cargo check -p streamlib-broker
