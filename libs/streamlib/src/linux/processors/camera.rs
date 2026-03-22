@@ -89,12 +89,36 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
             StreamError::Configuration(format!("Failed to read current format: {}", e))
         })?;
 
-        // Set format to NV12 at the current resolution (preferred for CamLink 4K)
-        let mut fmt = current_fmt;
-        fmt.fourcc = FourCC::new(b"NV12");
-        let fmt = dev.set_format(&fmt).map_err(|e| {
-            StreamError::Configuration(format!("Failed to set NV12 format: {}", e))
-        })?;
+        // Set format: try NV12 first (preferred for CamLink 4K), fall back to YUYV
+        let fmt = {
+            let mut try_fmt = current_fmt.clone();
+            try_fmt.fourcc = FourCC::new(b"NV12");
+            match dev.set_format(&try_fmt) {
+                Ok(f) if f.fourcc == FourCC::new(b"NV12") => f,
+                _ => {
+                    // NV12 rejected or driver negotiated to a different format — try YUYV
+                    tracing::info!(
+                        "Camera {}: NV12 not available, trying YUYV",
+                        self.camera_name
+                    );
+                    let mut try_fmt = current_fmt;
+                    try_fmt.fourcc = FourCC::new(b"YUYV");
+                    let f = dev.set_format(&try_fmt).map_err(|e| {
+                        StreamError::Configuration(format!(
+                            "Failed to set camera format (tried NV12, YUYV): {}",
+                            e
+                        ))
+                    })?;
+                    if f.fourcc != FourCC::new(b"YUYV") {
+                        return Err(StreamError::Configuration(format!(
+                            "Camera does not support NV12 or YUYV (driver negotiated {:?})",
+                            f.fourcc
+                        )));
+                    }
+                    f
+                }
+            }
+        };
 
         let capture_width = fmt.width;
         let capture_height = fmt.height;
@@ -109,7 +133,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         );
 
         // Create mmap stream with V4L2_BUFFER_COUNT buffers
-        let stream =
+        let mut stream =
             v4l::io::mmap::Stream::with_buffers(&mut dev, Type::VideoCapture, V4L2_BUFFER_COUNT)
                 .map_err(|e| {
                     StreamError::Configuration(format!(
@@ -117,6 +141,11 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
                         e
                     ))
                 })?;
+
+        // Set a poll timeout so the capture thread can check is_capturing periodically.
+        // Without this, stream.next() blocks indefinitely on poll(), causing stop() to deadlock
+        // if the camera stops producing frames (USB disconnect, device error).
+        stream.set_timeout(std::time::Duration::from_secs(1));
 
         self.is_capturing.store(true, Ordering::Release);
 
@@ -147,10 +176,11 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         self.capture_thread_handle = Some(handle);
 
         tracing::info!(
-            "Camera {}: V4L2 capture started ({}x{} NV12, {} mmap buffers)",
+            "Camera {}: V4L2 capture started ({}x{} {:?}, {} mmap buffers)",
             self.camera_name,
             capture_width,
             capture_height,
+            capture_fourcc,
             V4L2_BUFFER_COUNT
         );
         Ok(())
@@ -190,6 +220,10 @@ fn capture_thread_loop(
     while is_capturing.load(Ordering::Acquire) {
         let (buf, meta) = match stream.next() {
             Ok(frame) => frame,
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                // Poll timeout — check is_capturing and retry
+                continue;
+            }
             Err(e) => {
                 if is_capturing.load(Ordering::Acquire) {
                     eprintln!("[Camera {}] V4L2 stream error: {}", camera_name, e);
@@ -281,6 +315,16 @@ fn convert_nv12_to_bgra(src: &[u8], dst_ptr: *mut u8, dst_size: usize, width: u3
     let expected_nv12_size = y_plane_size + y_plane_size / 2;
 
     if src.len() < expected_nv12_size || dst_size < (width * height * 4) as usize {
+        eprintln!(
+            "[Camera] NV12 size mismatch: got {} bytes, expected {} ({}x{}), zero-filling",
+            src.len(),
+            expected_nv12_size,
+            width,
+            height
+        );
+        unsafe {
+            std::ptr::write_bytes(dst_ptr, 0, dst_size);
+        }
         return;
     }
 
@@ -318,6 +362,16 @@ fn convert_yuyv_to_bgra(src: &[u8], dst_ptr: *mut u8, dst_size: usize, width: u3
     let expected_yuyv_size = (width * height * 2) as usize;
 
     if src.len() < expected_yuyv_size || dst_size < (width * height * 4) as usize {
+        eprintln!(
+            "[Camera] YUYV size mismatch: got {} bytes, expected {} ({}x{}), zero-filling",
+            src.len(),
+            expected_yuyv_size,
+            width,
+            height
+        );
+        unsafe {
+            std::ptr::write_bytes(dst_ptr, 0, dst_size);
+        }
         return;
     }
 
