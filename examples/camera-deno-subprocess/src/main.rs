@@ -32,7 +32,7 @@ fn main() -> Result<()> {
                     .unwrap()
             }),
         )
-        .init();
+        .try_init().ok();
 
     let runtime = StreamRuntime::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("deno");

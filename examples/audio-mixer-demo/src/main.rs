@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     // Initialize logging - use DEBUG level for diagnostics
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
-        .init();
+        .try_init().ok();
 
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");
 

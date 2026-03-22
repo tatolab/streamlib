@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init().ok();
 
     println!("=== Simple Pipeline Example ===\n");
     println!("This example demonstrates:");

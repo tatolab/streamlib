@@ -19,7 +19,7 @@ pub async fn main() -> Result<()> {
     // Initialize tracing with DEBUG level
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
-        .init();
+        .try_init().ok();
 
     tracing::info!("🚀🚀🚀 WEBRTC ISOLATION TEST - PSYCHO LOGGING MODE 🚀🚀🚀");
     tracing::info!("========================================================");

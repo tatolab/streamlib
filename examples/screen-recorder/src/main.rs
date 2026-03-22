@@ -11,7 +11,7 @@ fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
-        .init();
+        .try_init().ok();
 
     println!("=== Screen Recorder Pipeline ===\n");
 

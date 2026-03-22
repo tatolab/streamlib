@@ -34,7 +34,7 @@ fn main() -> Result<()> {
                     .unwrap()
             }),
         )
-        .init();
+        .try_init().ok();
 
     let runtime = StreamRuntime::new()?;
 

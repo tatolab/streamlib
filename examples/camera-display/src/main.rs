@@ -34,7 +34,7 @@ fn main() -> Result<()> {
                     .unwrap()
             }),
         )
-        .init();
+        .try_init().ok();
 
     // Check for --string-mode argument
     let use_string_mode = std::env::args().any(|arg| arg == "--string-mode");

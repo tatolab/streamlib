@@ -21,7 +21,7 @@ fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .init();
+        .try_init().ok();
 
     tracing::info!("=== WHEP Player - StreamLib Edition ===\n");
 
