@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.4](https://github.com/tatolab/streamlib/compare/v0.4.3...v0.4.4) (2026-03-22)
+
+
+### Features
+
+* add Linux processor implementations for audio capture, output, camera, and display ([f3962b2](https://github.com/tatolab/streamlib/commit/f3962b2b5901da60634cf8ed018011863c9d2d9b)), closes [#166](https://github.com/tatolab/streamlib/issues/166)
+* Linux processors — audio capture, output, camera, display ([bf035ae](https://github.com/tatolab/streamlib/commit/bf035ae2590c3b1e4ea6d2647e0f4f6180d5f284))
+* **linux:** implement V4L2 camera processor with NV12→BGRA conversion ([784f81e](https://github.com/tatolab/streamlib/commit/784f81e0d7cbb148fad01cb3c8dcbe008e4f893c))
+* **linux:** implement Vulkan + winit display processor ([8748cfa](https://github.com/tatolab/streamlib/commit/8748cfa5da4ab8691ad3c57a3d387fa7394767a3))
+
+
+### Bug Fixes
+
+* **linux:** address code review issues in V4L2 camera processor ([e305462](https://github.com/tatolab/streamlib/commit/e305462f2fb0d50cb75e924f3b2b19534f6599ad))
+* **linux:** address display processor review — use-after-free, MAILBOX fallback, swapchain placement ([76a57e1](https://github.com/tatolab/streamlib/commit/76a57e149ab96d9f8a55323bac97099e7179c6d6))
+* **linux:** prevent writer fd from closing, breaking Ctrl+C signal handling ([7cdb479](https://github.com/tatolab/streamlib/commit/7cdb479eeaff8c8ab4e25b4ca24ce45191fd10d1))
+* make ApiServerProcessor available on Linux ([6b0e0c5](https://github.com/tatolab/streamlib/commit/6b0e0c509f83099dd78901df1fceeff2b39fa9d6))
+* use any_thread for winit event loop on Linux ([e5e207e](https://github.com/tatolab/streamlib/commit/e5e207e767373a585f018e855cc42b5477acb24e))
+* use default camera instead of hardcoded macOS UUID ([5aaef28](https://github.com/tatolab/streamlib/commit/5aaef283c082591c1d2dd148ebbe089507914dae))
+* use reasonable ALSA buffer size instead of device max ([6358fee](https://github.com/tatolab/streamlib/commit/6358fee3d5675145db39a8360e96e7b0394f1c40))
+* use try_init() for tracing in all examples ([1148d45](https://github.com/tatolab/streamlib/commit/1148d457f1b09babd7ac08d8aa9bb427b0a787f5))
+
 ## [0.4.3](https://github.com/tatolab/streamlib/compare/v0.4.2...v0.4.3) (2026-03-22)
 
 
