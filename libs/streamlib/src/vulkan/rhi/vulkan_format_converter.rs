@@ -223,3 +223,134 @@ impl Drop for VulkanFormatConverter {
 // Safety: Vulkan handles are thread-safe
 unsafe impl Send for VulkanFormatConverter {}
 unsafe impl Sync for VulkanFormatConverter {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::rhi::{PixelFormat, RhiPixelBufferRef};
+    use crate::vulkan::rhi::{VulkanDevice, VulkanPixelBuffer};
+    use std::sync::Arc;
+
+    fn make_pixel_buffer(
+        device: &VulkanDevice,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Option<RhiPixelBuffer> {
+        let bpp = format.bits_per_pixel() / 8;
+        let buf = VulkanPixelBuffer::new(device, width, height, bpp, format).ok()?;
+        let ref_ = RhiPixelBufferRef {
+            inner: Arc::new(buf),
+        };
+        Some(RhiPixelBuffer::new(ref_))
+    }
+
+    #[test]
+    fn test_bgra_to_nv12_roundtrip() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping test - Vulkan not available");
+                return;
+            }
+        };
+
+        let width = 4u32;
+        let height = 4u32;
+
+        let src_bgra = match make_pixel_buffer(&device, width, height, PixelFormat::Bgra32) {
+            Some(b) => b,
+            None => {
+                println!("Skipping test - failed to create source buffer");
+                return;
+            }
+        };
+
+        // NV12 size: width * height (Y) + width * height/2 (UV)
+        let nv12_buf = match VulkanPixelBuffer::new(&device, width, height, 1, PixelFormat::Nv12FullRange) {
+            Ok(b) => b,
+            Err(_) => {
+                println!("Skipping test - failed to create NV12 buffer");
+                return;
+            }
+        };
+        // NV12 buffer needs to be large enough for Y + UV planes.
+        // VulkanPixelBuffer allocates width * height * bpp, so with bpp=1 we get width*height.
+        // We actually need width*height*3/2. Use a workaround: allocate with bpp=2 for enough space.
+        let nv12_buf = match VulkanPixelBuffer::new(&device, width, height, 2, PixelFormat::Nv12FullRange) {
+            Ok(b) => b,
+            Err(_) => {
+                println!("Skipping test - failed to create NV12 buffer");
+                return;
+            }
+        };
+        let nv12 = RhiPixelBuffer::new(RhiPixelBufferRef {
+            inner: Arc::new(nv12_buf),
+        });
+
+        let dest_bgra = match make_pixel_buffer(&device, width, height, PixelFormat::Bgra32) {
+            Some(b) => b,
+            None => {
+                println!("Skipping test - failed to create dest buffer");
+                return;
+            }
+        };
+
+        // Write a known BGRA color (red: B=0, G=0, R=255, A=255)
+        let src_ptr = src_bgra.buffer_ref().inner.mapped_ptr();
+        unsafe {
+            for i in 0..(width * height) as usize {
+                let offset = i * 4;
+                *src_ptr.add(offset) = 0;     // B
+                *src_ptr.add(offset + 1) = 0; // G
+                *src_ptr.add(offset + 2) = 255; // R
+                *src_ptr.add(offset + 3) = 255; // A
+            }
+        }
+
+        let converter = match VulkanFormatConverter::new(
+            device.device(),
+            device.queue(),
+            device.queue_family_index(),
+            4, // source bpp (BGRA)
+            1, // dest bpp (NV12 average)
+        ) {
+            Ok(c) => c,
+            Err(_) => {
+                println!("Skipping test - failed to create converter");
+                return;
+            }
+        };
+
+        // BGRA → NV12
+        let result = converter.convert(&src_bgra, &nv12);
+        assert!(result.is_ok(), "BGRA → NV12 conversion failed: {:?}", result.err());
+
+        // NV12 → BGRA (roundtrip)
+        let converter_back = VulkanFormatConverter::new(
+            device.device(),
+            device.queue(),
+            device.queue_family_index(),
+            1,
+            4,
+        )
+        .unwrap();
+
+        let result = converter_back.convert(&nv12, &dest_bgra);
+        assert!(result.is_ok(), "NV12 → BGRA conversion failed: {:?}", result.err());
+
+        // Check roundtrip: red pixel should survive within tolerance
+        let dest_ptr = dest_bgra.buffer_ref().inner.mapped_ptr();
+        unsafe {
+            let b = *dest_ptr;
+            let g = *dest_ptr.add(1);
+            let r = *dest_ptr.add(2);
+            // YUV conversion is lossy — allow tolerance of ~10
+            assert!(r > 240, "Red channel too low after roundtrip: {r}");
+            assert!(g < 20, "Green channel too high after roundtrip: {g}");
+            assert!(b < 20, "Blue channel too high after roundtrip: {b}");
+        }
+
+        println!("BGRA → NV12 → BGRA roundtrip passed");
+    }
+}

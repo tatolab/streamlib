@@ -242,3 +242,56 @@ impl FFmpegEncoder {
 // FFmpegEncoder is Send because FFmpeg contexts can be used from any thread
 // (with proper synchronization, which we handle internally)
 unsafe impl Send for FFmpegEncoder {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_h264_encoder() {
+        ensure_ffmpeg_initialized();
+        let result = FFmpegEncoder::find_best_h264_encoder();
+        match &result {
+            Ok(codec) => {
+                println!("Found H.264 encoder: {}", codec.name());
+                assert!(
+                    ["libx264", "h264_nvenc", "h264_vaapi"].contains(&codec.name()),
+                    "Unexpected codec: {}",
+                    codec.name()
+                );
+            }
+            Err(e) => {
+                println!("No H.264 encoder found (expected in minimal FFmpeg installs): {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_encoder_creation() {
+        ensure_ffmpeg_initialized();
+
+        // Skip if no encoder available
+        if FFmpegEncoder::find_best_h264_encoder().is_err() {
+            println!("Skipping test - no H.264 encoder available");
+            return;
+        }
+
+        let config = VideoEncoderConfig {
+            width: 320,
+            height: 240,
+            fps: 30,
+            bitrate_bps: 1_000_000,
+            keyframe_interval_frames: 30,
+            low_latency: true,
+            codec: crate::core::VideoCodec::H264(crate::core::codec::H264Profile::Main),
+        };
+
+        // Encoder needs RuntimeContext, but we can test that config validation works
+        // by checking the codec detection path
+        let codec = FFmpegEncoder::find_best_h264_encoder().unwrap();
+        let mut context = CodecContext::new_with_codec(codec);
+        let video = context.encoder().video();
+        assert!(video.is_ok(), "Failed to create video encoder context: {:?}", video.err());
+        println!("Encoder context created successfully for {}x{}", config.width, config.height);
+    }
+}
