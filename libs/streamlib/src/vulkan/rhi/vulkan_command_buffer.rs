@@ -132,7 +132,9 @@ impl VulkanCommandBuffer {
 
     /// Commit the command buffer for execution.
     ///
-    /// Uses a fence to ensure GPU completion before freeing the command buffer.
+    /// Uses a timeline semaphore (Vulkan 1.2 core) to ensure GPU completion
+    /// before freeing the command buffer. More efficient than fences for
+    /// GPU-GPU ordering — avoids kernel roundtrip.
     pub fn commit(self) {
         // End command buffer recording
         unsafe {
@@ -141,27 +143,45 @@ impl VulkanCommandBuffer {
                 .expect("Failed to end command buffer");
         }
 
-        // Submit to queue with a fence to track GPU completion
+        // Submit to queue with a timeline semaphore to track GPU completion
         let command_buffers = [self.command_buffer];
-        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
         unsafe {
-            let fence_info = vk::FenceCreateInfo::default();
-            let fence = self
+            let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::default()
+                .semaphore_type(vk::SemaphoreType::TIMELINE)
+                .initial_value(0);
+            let timeline_semaphore_info = vk::SemaphoreCreateInfo::default()
+                .push_next(&mut timeline_type_info);
+            let timeline_semaphore = self
                 .device
-                .create_fence(&fence_info, None)
-                .expect("Failed to create command buffer fence");
+                .create_semaphore(&timeline_semaphore_info, None)
+                .expect("Failed to create command buffer timeline semaphore");
+
+            let signal_semaphores = [timeline_semaphore];
+            let signal_values = [1u64];
+            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::default()
+                .signal_semaphore_values(&signal_values);
+
+            let submit_info = vk::SubmitInfo::default()
+                .command_buffers(&command_buffers)
+                .signal_semaphores(&signal_semaphores)
+                .push_next(&mut timeline_submit_info);
 
             self.device
-                .queue_submit(self.queue, &[submit_info], fence)
+                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
                 .expect("Failed to submit command buffer");
 
-            // Wait for GPU completion before freeing the command buffer
+            // Wait for GPU completion via timeline semaphore before freeing
+            let wait_semaphores = [timeline_semaphore];
+            let wait_values = [1u64];
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&wait_semaphores)
+                .values(&wait_values);
             self.device
-                .wait_for_fences(&[fence], true, u64::MAX)
-                .expect("Failed to wait for command buffer fence");
+                .wait_semaphores(&wait_info, u64::MAX)
+                .expect("Failed to wait for command buffer timeline semaphore");
 
-            self.device.destroy_fence(fence, None);
+            self.device.destroy_semaphore(timeline_semaphore, None);
 
             // Now safe to free — GPU has finished with the command buffer
             self.device
@@ -170,6 +190,9 @@ impl VulkanCommandBuffer {
     }
 
     /// Commit and wait for completion (blocking).
+    ///
+    /// Uses a timeline semaphore (Vulkan 1.2 core) for targeted synchronization
+    /// on this specific command buffer, not the entire queue.
     pub fn commit_and_wait(self) {
         // End command buffer recording
         unsafe {
@@ -178,27 +201,45 @@ impl VulkanCommandBuffer {
                 .expect("Failed to end command buffer");
         }
 
-        // Submit to queue with a fence for targeted synchronization
+        // Submit to queue with a timeline semaphore for targeted synchronization
         let command_buffers = [self.command_buffer];
-        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
         unsafe {
-            let fence_info = vk::FenceCreateInfo::default();
-            let fence = self
+            let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::default()
+                .semaphore_type(vk::SemaphoreType::TIMELINE)
+                .initial_value(0);
+            let timeline_semaphore_info = vk::SemaphoreCreateInfo::default()
+                .push_next(&mut timeline_type_info);
+            let timeline_semaphore = self
                 .device
-                .create_fence(&fence_info, None)
-                .expect("Failed to create command buffer fence");
+                .create_semaphore(&timeline_semaphore_info, None)
+                .expect("Failed to create command buffer timeline semaphore");
+
+            let signal_semaphores = [timeline_semaphore];
+            let signal_values = [1u64];
+            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::default()
+                .signal_semaphore_values(&signal_values);
+
+            let submit_info = vk::SubmitInfo::default()
+                .command_buffers(&command_buffers)
+                .signal_semaphores(&signal_semaphores)
+                .push_next(&mut timeline_submit_info);
 
             self.device
-                .queue_submit(self.queue, &[submit_info], fence)
+                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
                 .expect("Failed to submit command buffer");
 
-            // Wait for this specific command buffer, not the entire queue
+            // Wait for this specific command buffer via timeline semaphore
+            let wait_semaphores = [timeline_semaphore];
+            let wait_values = [1u64];
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&wait_semaphores)
+                .values(&wait_values);
             self.device
-                .wait_for_fences(&[fence], true, u64::MAX)
-                .expect("Failed to wait for command buffer fence");
+                .wait_semaphores(&wait_info, u64::MAX)
+                .expect("Failed to wait for command buffer timeline semaphore");
 
-            self.device.destroy_fence(fence, None);
+            self.device.destroy_semaphore(timeline_semaphore, None);
 
             // Free the command buffer
             self.device

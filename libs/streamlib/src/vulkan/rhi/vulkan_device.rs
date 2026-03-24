@@ -254,6 +254,13 @@ impl VulkanDevice {
                     device_extensions.push(external_memory_dmabuf_ext.as_ptr());
                     tracing::info!("VK_EXT_external_memory_dma_buf available");
                 }
+
+                let drm_format_modifier_ext = c"VK_EXT_image_drm_format_modifier";
+                if available_device_ext_names.contains(&drm_format_modifier_ext) {
+                    device_extensions.push(drm_format_modifier_ext.as_ptr());
+                    tracing::info!("VK_EXT_image_drm_format_modifier available");
+                }
+
                 tracing::info!("Vulkan external memory extensions enabled");
             } else {
                 tracing::info!("Vulkan external memory extensions not available");
