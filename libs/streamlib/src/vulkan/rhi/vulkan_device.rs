@@ -244,6 +244,13 @@ impl VulkanDevice {
                 device_extensions.push(swapchain_ext.as_ptr());
                 tracing::info!("VK_KHR_swapchain enabled");
             }
+
+            // VK_KHR_dynamic_rendering — renderpass-free graphics pipelines
+            let dynamic_rendering_ext = c"VK_KHR_dynamic_rendering";
+            if available_device_ext_names.contains(&dynamic_rendering_ext) {
+                device_extensions.push(dynamic_rendering_ext.as_ptr());
+                tracing::info!("VK_KHR_dynamic_rendering enabled");
+            }
         }
 
         #[cfg(target_os = "linux")]
@@ -251,6 +258,23 @@ impl VulkanDevice {
         #[cfg(not(target_os = "linux"))]
         let supports_external_memory = false;
 
+        // Enable dynamic rendering and timeline semaphore features on Linux
+        #[cfg(target_os = "linux")]
+        let mut dynamic_rendering_features =
+            vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
+
+        #[cfg(target_os = "linux")]
+        let mut timeline_semaphore_features =
+            vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
+
+        #[cfg(target_os = "linux")]
+        let device_create_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_create_infos)
+            .enabled_extension_names(&device_extensions)
+            .push_next(&mut dynamic_rendering_features)
+            .push_next(&mut timeline_semaphore_features);
+
+        #[cfg(not(target_os = "linux"))]
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions);
