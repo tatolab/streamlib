@@ -1,0 +1,67 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) readonly buffer NV12Input {
+    uint data[];
+} nv12_input;
+
+layout(set = 0, binding = 1) writeonly buffer BgraOutput {
+    uint data[];
+} bgra_output;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+    uint flags; // bit 0: is_bgra, bit 1: full_range
+} pc;
+
+/// Read a single byte from the uint32 array at the given byte offset.
+uint read_byte(uint byte_offset) {
+    return (nv12_input.data[byte_offset >> 2u] >> (8u * (byte_offset & 3u))) & 0xFFu;
+}
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    bool is_bgra = (pc.flags & 1u) != 0u;
+    bool full_range = (pc.flags & 2u) != 0u;
+
+    // Y plane: width * height bytes at offset 0
+    float Y = float(read_byte(pos.y * pc.width + pos.x));
+
+    // UV plane: interleaved U,V at half resolution, starts at width * height
+    uint uv_offset = pc.width * pc.height + (pos.y >> 1u) * pc.width + (pos.x & ~1u);
+    float U = float(read_byte(uv_offset));
+    float V = float(read_byte(uv_offset + 1u));
+
+    float R, G, B;
+    if (full_range) {
+        float Cb = U - 128.0;
+        float Cr = V - 128.0;
+        R = clamp(Y + 1.402 * Cr, 0.0, 255.0);
+        G = clamp(Y - 0.344136 * Cb - 0.714136 * Cr, 0.0, 255.0);
+        B = clamp(Y + 1.772 * Cb, 0.0, 255.0);
+    } else {
+        float C = Y - 16.0;
+        float D = U - 128.0;
+        float E = V - 128.0;
+        R = clamp(1.164 * C + 1.596 * E, 0.0, 255.0);
+        G = clamp(1.164 * C - 0.392 * D - 0.813 * E, 0.0, 255.0);
+        B = clamp(1.164 * C + 2.017 * D, 0.0, 255.0);
+    }
+
+    // Pack 4 bytes into 1 uint32 (little-endian: byte0 | byte1<<8 | byte2<<16 | byte3<<24)
+    uint pixel_index = pos.y * pc.width + pos.x;
+    uint packed;
+    if (is_bgra) {
+        packed = uint(B) | (uint(G) << 8u) | (uint(R) << 16u) | (255u << 24u);
+    } else {
+        packed = uint(R) | (uint(G) << 8u) | (uint(B) << 16u) | (255u << 24u);
+    }
+    bgra_output.data[pixel_index] = packed;
+}

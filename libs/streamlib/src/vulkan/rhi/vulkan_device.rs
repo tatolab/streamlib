@@ -30,6 +30,7 @@ pub struct VulkanDevice {
     device: ash::Device,
     queue: vk::Queue,
     queue_family_index: u32,
+    transfer_queue_family_index: u32,
     #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
@@ -181,6 +182,31 @@ impl VulkanDevice {
             .map(|(idx, _)| idx as u32)
             .ok_or_else(|| StreamError::GpuError("No graphics queue family found".into()))?;
 
+        // 6b. Find dedicated transfer queue family (TRANSFER-only, no GRAPHICS/COMPUTE).
+        //     Dedicated transfer queues use independent DMA engines for parallel data movement.
+        //     Falls back to graphics queue if no dedicated transfer queue is available.
+        let transfer_queue_family_index = queue_families
+            .iter()
+            .enumerate()
+            .find(|(_, props)| {
+                let has_transfer = props.queue_flags.contains(vk::QueueFlags::TRANSFER);
+                let no_graphics = !props.queue_flags.contains(vk::QueueFlags::GRAPHICS);
+                let no_compute = !props.queue_flags.contains(vk::QueueFlags::COMPUTE);
+                has_transfer && no_graphics && no_compute
+            })
+            .map(|(idx, _)| idx as u32)
+            .unwrap_or(queue_family_index);
+
+        if transfer_queue_family_index != queue_family_index {
+            tracing::info!(
+                "Dedicated transfer queue family found: {} (graphics: {})",
+                transfer_queue_family_index,
+                queue_family_index
+            );
+        } else {
+            tracing::info!("No dedicated transfer queue — using graphics queue for transfers");
+        }
+
         // 7. Create logical device with required extensions
         let queue_priorities = [1.0f32];
         let queue_create_info = vk::DeviceQueueCreateInfo::default()
@@ -319,6 +345,7 @@ impl VulkanDevice {
             device,
             queue,
             queue_family_index,
+            transfer_queue_family_index,
             device_name: device_name.into_owned(),
             supports_external_memory,
             gpu_memory_allocator,
@@ -395,6 +422,12 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index
+    }
+
+    /// Get the dedicated transfer queue family index (falls back to graphics queue).
+    #[allow(dead_code)]
+    pub fn transfer_queue_family_index(&self) -> u32 {
+        self.transfer_queue_family_index
     }
 
     /// Whether DMA-BUF external memory extensions are available.

@@ -1,0 +1,78 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) readonly buffer BgraInput {
+    uint data[];
+} bgra_input;
+
+layout(set = 0, binding = 1) buffer NV12Output {
+    uint data[];
+} nv12_output;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+    uint flags; // bit 0: is_bgra, bit 1: full_range
+} pc;
+
+/// Write a single byte into the uint32 array at the given byte offset via atomic OR.
+/// Requires the output buffer to be zeroed before dispatch.
+void write_byte(uint byte_offset, uint value) {
+    uint word_index = byte_offset >> 2u;
+    uint shift = 8u * (byte_offset & 3u);
+    atomicOr(nv12_output.data[word_index], (value & 0xFFu) << shift);
+}
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    bool is_bgra = (pc.flags & 1u) != 0u;
+    bool full_range = (pc.flags & 2u) != 0u;
+
+    // Read packed BGRA/RGBA pixel (1 uint32 per pixel)
+    uint pixel_index = pos.y * pc.width + pos.x;
+    uint packed = bgra_input.data[pixel_index];
+
+    float R, G, B;
+    if (is_bgra) {
+        B = float(packed & 0xFFu);
+        G = float((packed >> 8u) & 0xFFu);
+        R = float((packed >> 16u) & 0xFFu);
+    } else {
+        R = float(packed & 0xFFu);
+        G = float((packed >> 8u) & 0xFFu);
+        B = float((packed >> 16u) & 0xFFu);
+    }
+
+    // Compute Y value
+    float Y;
+    if (full_range) {
+        Y = clamp(0.299 * R + 0.587 * G + 0.114 * B, 0.0, 255.0);
+    } else {
+        Y = clamp(16.0 + 65.481 * R / 255.0 + 128.553 * G / 255.0 + 24.966 * B / 255.0, 16.0, 235.0);
+    }
+
+    // Write Y to Y plane (byte-level atomic OR into packed uint32)
+    write_byte(pos.y * pc.width + pos.x, uint(Y));
+
+    // Subsample UV at 2x2 blocks (only even row and even col)
+    if ((pos.x & 1u) == 0u && (pos.y & 1u) == 0u) {
+        float U, V;
+        if (full_range) {
+            U = clamp(-0.14713 * R - 0.28886 * G + 0.436 * B + 128.0, 0.0, 255.0);
+            V = clamp(0.615 * R - 0.51499 * G - 0.10001 * B + 128.0, 0.0, 255.0);
+        } else {
+            U = clamp(128.0 - 37.797 * R / 255.0 - 74.203 * G / 255.0 + 112.0 * B / 255.0, 16.0, 240.0);
+            V = clamp(128.0 + 112.0 * R / 255.0 - 93.786 * G / 255.0 - 18.214 * B / 255.0, 16.0, 240.0);
+        }
+
+        uint uv_offset = pc.width * pc.height + (pos.y >> 1u) * pc.width + pos.x;
+        write_byte(uv_offset, uint(U));
+        write_byte(uv_offset + 1u, uint(V));
+    }
+}
