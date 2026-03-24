@@ -4,6 +4,8 @@
 use crate::_generated_::com_tatolab_display_config::ScalingMode;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use ash::vk;
+use gpu_allocator::vulkan::Allocation;
+use gpu_allocator::MemoryLocation;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -148,8 +150,8 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                         unsafe {
                             device.destroy_image_view(tex.image_view, None);
                             device.destroy_image(tex.image, None);
-                            device.free_memory(tex.memory, None);
                         }
+                        let _ = app.vulkan_device.free_gpu_memory(tex.gpu_memory_allocation);
                     }
                 }
 
@@ -254,7 +256,7 @@ struct PersistentPipelineState {
 struct CameraTextureState {
     image: vk::Image,
     image_view: vk::ImageView,
-    memory: vk::DeviceMemory,
+    gpu_memory_allocation: Allocation,
     width: u32,
     height: u32,
 }
@@ -504,8 +506,8 @@ impl DisplayEventLoopHandler {
                     unsafe {
                         device.destroy_image_view(old_tex.image_view, None);
                         device.destroy_image(old_tex.image, None);
-                        device.free_memory(old_tex.memory, None);
                     }
+                    let _ = self.vulkan_device.free_gpu_memory(old_tex.gpu_memory_allocation);
                 }
             }
 
@@ -542,170 +544,45 @@ impl DisplayEventLoopHandler {
 
                 let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
 
-                // Select a DEVICE_LOCAL memory type backed by the main VRAM heap,
-                // not the BAR aperture. Prefer types that are DEVICE_LOCAL but NOT
-                // HOST_VISIBLE — the HOST_VISIBLE | DEVICE_LOCAL types map to the
-                // small BAR heap (256 MB without ReBAR). Fall back to any DEVICE_LOCAL.
-                let mem_props = unsafe {
-                    self.vulkan_device.instance()
-                        .get_physical_device_memory_properties(self.vulkan_device.physical_device())
+                // Sub-allocate through gpu-allocator so camera textures share
+                // the same DEVICE_LOCAL memory blocks as other GPU resources.
+                // Raw vkAllocateMemory was hitting the driver's per-process
+                // allocation count limit (maxMemoryAllocationCount ≈ 4096 on
+                // NVIDIA), causing DEVICE_LOCAL to fail despite free VRAM.
+                let allocation = match self.vulkan_device.allocate_gpu_memory(
+                    "camera_texture",
+                    mem_requirements,
+                    MemoryLocation::GpuOnly,
+                    false, // OPTIMAL tiling = non-linear
+                ) {
+                    Ok(alloc) => alloc,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Display {}: Failed to allocate camera texture memory [{}]: {}",
+                            self.window_id,
+                            ring_idx,
+                            e
+                        );
+                        unsafe { device.destroy_image(image, None) };
+                        return;
+                    }
                 };
-                let type_filter = mem_requirements.memory_type_bits;
-
-                // Diagnostic: log memory layout on first allocation attempt only
-                if ring_idx == 0 {
-                    tracing::debug!(
-                        "Display {}: Image memoryTypeBits=0x{:x}, size={}, alignment={}",
-                        self.window_id,
-                        type_filter,
-                        mem_requirements.size,
-                        mem_requirements.alignment
-                    );
-                    for i in 0..mem_props.memory_type_count {
-                        let flags = mem_props.memory_types[i as usize].property_flags;
-                        let heap_idx = mem_props.memory_types[i as usize].heap_index;
-                        let heap_size = mem_props.memory_heaps[heap_idx as usize].size;
-                        let in_filter = (type_filter & (1 << i)) != 0;
-                        tracing::debug!(
-                            "Display {}: MemType[{}]: flags=0x{:04x} ({}{}{}{}), heap={}, heapSize={} MB, inFilter={}",
-                            self.window_id,
-                            i,
-                            flags.as_raw(),
-                            if flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL) { "DEVICE_LOCAL " } else { "" },
-                            if flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE) { "HOST_VISIBLE " } else { "" },
-                            if flags.contains(vk::MemoryPropertyFlags::HOST_COHERENT) { "HOST_COHERENT " } else { "" },
-                            if flags.contains(vk::MemoryPropertyFlags::HOST_CACHED) { "HOST_CACHED " } else { "" },
-                            heap_idx,
-                            heap_size / (1024 * 1024),
-                            in_filter
-                        );
-                    }
-                    for i in 0..mem_props.memory_heap_count {
-                        let heap = mem_props.memory_heaps[i as usize];
-                        tracing::debug!(
-                            "Display {}: Heap[{}]: size={} MB, flags=0x{:x}",
-                            self.window_id,
-                            i,
-                            heap.size / (1024 * 1024),
-                            heap.flags.as_raw()
-                        );
-                    }
-                }
-
-                // Collect compatible memory types ordered by preference:
-                // 1. DEVICE_LOCAL only (main VRAM)
-                // 2. Any DEVICE_LOCAL (including HOST_VISIBLE BAR types)
-                // 3. Any compatible type (system RAM fallback)
-                let mut candidate_types: Vec<u32> = Vec::new();
-                // Pass 1: DEVICE_LOCAL without HOST_VISIBLE
-                for i in 0..mem_props.memory_type_count {
-                    let flags = mem_props.memory_types[i as usize].property_flags;
-                    if (type_filter & (1 << i)) != 0
-                        && flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                        && !flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-                    {
-                        candidate_types.push(i);
-                    }
-                }
-                // Pass 2: any DEVICE_LOCAL (not already added)
-                for i in 0..mem_props.memory_type_count {
-                    let flags = mem_props.memory_types[i as usize].property_flags;
-                    if (type_filter & (1 << i)) != 0
-                        && flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                        && !candidate_types.contains(&i)
-                    {
-                        candidate_types.push(i);
-                    }
-                }
-                // Pass 3: any compatible type (system RAM fallback)
-                for i in 0..mem_props.memory_type_count {
-                    if (type_filter & (1 << i)) != 0 && !candidate_types.contains(&i) {
-                        candidate_types.push(i);
-                    }
-                }
 
                 if ring_idx == 0 {
-                    tracing::debug!(
-                        "Display {}: Candidate memory types (preference order): {:?}",
+                    tracing::info!(
+                        "Display {}: Camera texture allocated via gpu-allocator, size={} bytes",
                         self.window_id,
-                        candidate_types
+                        mem_requirements.size
                     );
                 }
 
-                if candidate_types.is_empty() {
-                    tracing::warn!(
-                        "Display {}: No compatible memory type for camera texture [{}] (type_bits=0x{:x})",
-                        self.window_id,
-                        ring_idx,
-                        type_filter
-                    );
+                if unsafe {
+                    device.bind_image_memory(image, allocation.memory(), allocation.offset())
+                }
+                .is_err()
+                {
+                    let _ = self.vulkan_device.free_gpu_memory(allocation);
                     unsafe { device.destroy_image(image, None) };
-                    return;
-                }
-
-                // Try each candidate: first with dedicated allocation, then without.
-                // Some drivers require dedicated alloc for large tiled images; others
-                // reject the pNext chain. Try both strategies per type.
-                let mut memory = vk::DeviceMemory::null();
-                for &type_idx in &candidate_types {
-                    // Attempt A: with dedicated allocation
-                    let mut dedicated_info = vk::MemoryDedicatedAllocateInfo::default()
-                        .image(image);
-                    let alloc_info_dedicated = vk::MemoryAllocateInfo::default()
-                        .allocation_size(mem_requirements.size)
-                        .memory_type_index(type_idx)
-                        .push_next(&mut dedicated_info);
-
-                    if let Ok(mem) = unsafe { device.allocate_memory(&alloc_info_dedicated, None) } {
-                        if ring_idx == 0 {
-                            tracing::info!(
-                                "Display {}: Camera texture allocated on memory type {} (dedicated), size={} bytes",
-                                self.window_id, type_idx, mem_requirements.size
-                            );
-                        }
-                        memory = mem;
-                        break;
-                    }
-
-                    // Attempt B: plain allocation (no dedicated)
-                    let alloc_info_plain = vk::MemoryAllocateInfo::default()
-                        .allocation_size(mem_requirements.size)
-                        .memory_type_index(type_idx);
-
-                    if let Ok(mem) = unsafe { device.allocate_memory(&alloc_info_plain, None) } {
-                        if ring_idx == 0 {
-                            tracing::info!(
-                                "Display {}: Camera texture allocated on memory type {} (plain), size={} bytes",
-                                self.window_id, type_idx, mem_requirements.size
-                            );
-                        }
-                        memory = mem;
-                        break;
-                    }
-
-                    if ring_idx == 0 {
-                        tracing::debug!(
-                            "Display {}: memory type {} failed (both dedicated and plain)",
-                            self.window_id, type_idx
-                        );
-                    }
-                }
-
-                if memory == vk::DeviceMemory::null() {
-                    tracing::warn!(
-                        "Display {}: All memory types exhausted for camera texture [{}]",
-                        self.window_id,
-                        ring_idx,
-                    );
-                    unsafe { device.destroy_image(image, None) };
-                    return;
-                }
-
-                if unsafe { device.bind_image_memory(image, memory, 0) }.is_err() {
-                    unsafe {
-                        device.free_memory(memory, None);
-                        device.destroy_image(image, None);
-                    }
                     return;
                 }
 
@@ -731,10 +608,8 @@ impl DisplayEventLoopHandler {
                             ring_idx,
                             e
                         );
-                        unsafe {
-                            device.free_memory(memory, None);
-                            device.destroy_image(image, None);
-                        }
+                        let _ = self.vulkan_device.free_gpu_memory(allocation);
+                        unsafe { device.destroy_image(image, None) };
                         return;
                     }
                 };
@@ -742,7 +617,7 @@ impl DisplayEventLoopHandler {
                 self.camera_texture_ring.push(CameraTextureState {
                     image,
                     image_view,
-                    memory,
+                    gpu_memory_allocation: allocation,
                     width: src_width,
                     height: src_height,
                 });
