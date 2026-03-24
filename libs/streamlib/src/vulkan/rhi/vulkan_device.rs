@@ -30,6 +30,7 @@ pub struct VulkanDevice {
     device: ash::Device,
     queue: vk::Queue,
     queue_family_index: u32,
+    transfer_queue_family_index: u32,
     #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
@@ -181,6 +182,31 @@ impl VulkanDevice {
             .map(|(idx, _)| idx as u32)
             .ok_or_else(|| StreamError::GpuError("No graphics queue family found".into()))?;
 
+        // 6b. Find dedicated transfer queue family (TRANSFER-only, no GRAPHICS/COMPUTE).
+        //     Dedicated transfer queues use independent DMA engines for parallel data movement.
+        //     Falls back to graphics queue if no dedicated transfer queue is available.
+        let transfer_queue_family_index = queue_families
+            .iter()
+            .enumerate()
+            .find(|(_, props)| {
+                let has_transfer = props.queue_flags.contains(vk::QueueFlags::TRANSFER);
+                let no_graphics = !props.queue_flags.contains(vk::QueueFlags::GRAPHICS);
+                let no_compute = !props.queue_flags.contains(vk::QueueFlags::COMPUTE);
+                has_transfer && no_graphics && no_compute
+            })
+            .map(|(idx, _)| idx as u32)
+            .unwrap_or(queue_family_index);
+
+        if transfer_queue_family_index != queue_family_index {
+            tracing::info!(
+                "Dedicated transfer queue family found: {} (graphics: {})",
+                transfer_queue_family_index,
+                queue_family_index
+            );
+        } else {
+            tracing::info!("No dedicated transfer queue — using graphics queue for transfers");
+        }
+
         // 7. Create logical device with required extensions
         let queue_priorities = [1.0f32];
         let queue_create_info = vk::DeviceQueueCreateInfo::default()
@@ -244,6 +270,13 @@ impl VulkanDevice {
                 device_extensions.push(swapchain_ext.as_ptr());
                 tracing::info!("VK_KHR_swapchain enabled");
             }
+
+            // VK_KHR_dynamic_rendering — renderpass-free graphics pipelines
+            let dynamic_rendering_ext = c"VK_KHR_dynamic_rendering";
+            if available_device_ext_names.contains(&dynamic_rendering_ext) {
+                device_extensions.push(dynamic_rendering_ext.as_ptr());
+                tracing::info!("VK_KHR_dynamic_rendering enabled");
+            }
         }
 
         #[cfg(target_os = "linux")]
@@ -251,6 +284,23 @@ impl VulkanDevice {
         #[cfg(not(target_os = "linux"))]
         let supports_external_memory = false;
 
+        // Enable dynamic rendering and timeline semaphore features on Linux
+        #[cfg(target_os = "linux")]
+        let mut dynamic_rendering_features =
+            vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
+
+        #[cfg(target_os = "linux")]
+        let mut timeline_semaphore_features =
+            vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
+
+        #[cfg(target_os = "linux")]
+        let device_create_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_create_infos)
+            .enabled_extension_names(&device_extensions)
+            .push_next(&mut dynamic_rendering_features)
+            .push_next(&mut timeline_semaphore_features);
+
+        #[cfg(not(target_os = "linux"))]
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions);
@@ -295,6 +345,7 @@ impl VulkanDevice {
             device,
             queue,
             queue_family_index,
+            transfer_queue_family_index,
             device_name: device_name.into_owned(),
             supports_external_memory,
             gpu_memory_allocator,
@@ -371,6 +422,12 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index
+    }
+
+    /// Get the dedicated transfer queue family index (falls back to graphics queue).
+    #[allow(dead_code)]
+    pub fn transfer_queue_family_index(&self) -> u32 {
+        self.transfer_queue_family_index
     }
 
     /// Whether DMA-BUF external memory extensions are available.

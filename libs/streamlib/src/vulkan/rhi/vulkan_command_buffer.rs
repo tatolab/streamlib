@@ -130,7 +130,9 @@ impl VulkanCommandBuffer {
         }
     }
 
-    /// Commit the command buffer for execution (async).
+    /// Commit the command buffer for execution.
+    ///
+    /// Uses a fence to ensure GPU completion before freeing the command buffer.
     pub fn commit(self) {
         // End command buffer recording
         unsafe {
@@ -139,19 +141,29 @@ impl VulkanCommandBuffer {
                 .expect("Failed to end command buffer");
         }
 
-        // Submit to queue
+        // Submit to queue with a fence to track GPU completion
         let command_buffers = [self.command_buffer];
         let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
         unsafe {
-            self.device
-                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
-                .expect("Failed to submit command buffer");
-        }
+            let fence_info = vk::FenceCreateInfo::default();
+            let fence = self
+                .device
+                .create_fence(&fence_info, None)
+                .expect("Failed to create command buffer fence");
 
-        // Free the command buffer after submission
-        // Note: This is safe because queue_submit copies the commands
-        unsafe {
+            self.device
+                .queue_submit(self.queue, &[submit_info], fence)
+                .expect("Failed to submit command buffer");
+
+            // Wait for GPU completion before freeing the command buffer
+            self.device
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .expect("Failed to wait for command buffer fence");
+
+            self.device.destroy_fence(fence, None);
+
+            // Now safe to free — GPU has finished with the command buffer
             self.device
                 .free_command_buffers(self.command_pool, &command_buffers);
         }
@@ -166,19 +178,27 @@ impl VulkanCommandBuffer {
                 .expect("Failed to end command buffer");
         }
 
-        // Submit to queue
+        // Submit to queue with a fence for targeted synchronization
         let command_buffers = [self.command_buffer];
         let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
         unsafe {
+            let fence_info = vk::FenceCreateInfo::default();
+            let fence = self
+                .device
+                .create_fence(&fence_info, None)
+                .expect("Failed to create command buffer fence");
+
             self.device
-                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
+                .queue_submit(self.queue, &[submit_info], fence)
                 .expect("Failed to submit command buffer");
 
-            // Wait for queue to become idle
+            // Wait for this specific command buffer, not the entire queue
             self.device
-                .queue_wait_idle(self.queue)
-                .expect("Failed to wait for queue");
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .expect("Failed to wait for command buffer fence");
+
+            self.device.destroy_fence(fence, None);
 
             // Free the command buffer
             self.device

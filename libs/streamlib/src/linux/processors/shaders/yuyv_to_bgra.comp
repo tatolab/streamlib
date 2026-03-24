@@ -1,0 +1,47 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) readonly buffer YUYVInput {
+    uint data[];
+} yuyv_input;
+
+layout(rgba8, set = 0, binding = 1) writeonly uniform image2D bgra_output;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+} pc;
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    // YUYV: 4 bytes per 2 pixels [Y0, U, Y1, V]
+    // Each macro-pixel (2 adjacent pixels) packs into one uint32.
+    // Row stride in uint32: width / 2 macro-pixels per row.
+    uint macro_index = pos.y * (pc.width >> 1u) + (pos.x >> 1u);
+    uint macro_pixel = yuyv_input.data[macro_index];
+
+    float Y0 = float(macro_pixel & 0xFFu);
+    float U  = float((macro_pixel >> 8u) & 0xFFu);
+    float Y1 = float((macro_pixel >> 16u) & 0xFFu);
+    float V  = float((macro_pixel >> 24u) & 0xFFu);
+
+    // Select Y0 for even pixels, Y1 for odd pixels
+    float Y = ((pos.x & 1u) == 0u) ? Y0 : Y1;
+
+    // BT.601 full-range YUV to RGB (matches existing CPU conversion coefficients)
+    float Cb = U - 128.0;
+    float Cr = V - 128.0;
+    float R = clamp(Y + 1.402 * Cr, 0.0, 255.0);
+    float G = clamp(Y - 0.344136 * Cb - 0.714136 * Cr, 0.0, 255.0);
+    float B = clamp(Y + 1.772 * Cb, 0.0, 255.0);
+
+    // Write BGRA via storage image: R8G8B8A8_UNORM layout maps R→byte0, G→byte1, B→byte2, A→byte3
+    // Write B into R channel, G into G channel, R into B channel to produce BGRA memory layout
+    imageStore(bgra_output, ivec2(pos), vec4(B / 255.0, G / 255.0, R / 255.0, 1.0));
+}

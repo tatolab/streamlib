@@ -84,14 +84,27 @@ impl RhiBlitter for VulkanBlitter {
             let submit_info =
                 vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&command_buffer));
 
-            self.device
-                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
-                .map_err(|e| StreamError::GpuError(format!("Failed to submit blit command: {e}")))?;
+            let fence_info = vk::FenceCreateInfo::default();
+            let fence = self
+                .device
+                .create_fence(&fence_info, None)
+                .map_err(|e| StreamError::GpuError(format!("Failed to create blit fence: {e}")))?;
 
             self.device
-                .queue_wait_idle(self.queue)
-                .map_err(|e| StreamError::GpuError(format!("Failed to wait for blit queue: {e}")))?;
+                .queue_submit(self.queue, &[submit_info], fence)
+                .map_err(|e| {
+                    self.device.destroy_fence(fence, None);
+                    StreamError::GpuError(format!("Failed to submit blit command: {e}"))
+                })?;
 
+            self.device
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .map_err(|e| {
+                    self.device.destroy_fence(fence, None);
+                    StreamError::GpuError(format!("Failed to wait for blit fence: {e}"))
+                })?;
+
+            self.device.destroy_fence(fence, None);
             self.device
                 .free_command_buffers(self.command_pool, &[command_buffer]);
         }

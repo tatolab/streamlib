@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use ash::vk;
 use crate::core::rhi::PixelFormat;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
@@ -84,40 +85,120 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
             caps.bus
         );
 
-        // Get current format to read the device's native resolution
+        // Read the device's current format as a fallback baseline
         let current_fmt = dev.format().map_err(|e| {
             StreamError::Configuration(format!("Failed to read current format: {}", e))
         })?;
 
-        // Set format: try NV12 first (preferred for CamLink 4K), fall back to YUYV
+        // Negotiate format + resolution: enumerate frame sizes for NV12 (preferred) or
+        // YUYV, pick the highest resolution, then set_format with those parameters.
         let fmt = {
-            let mut try_fmt = current_fmt.clone();
-            try_fmt.fourcc = FourCC::new(b"NV12");
-            match dev.set_format(&try_fmt) {
-                Ok(f) if f.fourcc == FourCC::new(b"NV12") => f,
-                _ => {
-                    // NV12 rejected or driver negotiated to a different format — try YUYV
-                    tracing::info!(
-                        "Camera {}: NV12 not available, trying YUYV",
-                        self.camera_name
-                    );
-                    let mut try_fmt = current_fmt;
-                    try_fmt.fourcc = FourCC::new(b"YUYV");
-                    let f = dev.set_format(&try_fmt).map_err(|e| {
-                        StreamError::Configuration(format!(
-                            "Failed to set camera format (tried NV12, YUYV): {}",
-                            e
-                        ))
-                    })?;
-                    if f.fourcc != FourCC::new(b"YUYV") {
-                        return Err(StreamError::Configuration(format!(
-                            "Camera does not support NV12 or YUYV (driver negotiated {:?})",
-                            f.fourcc
-                        )));
+            let nv12_fourcc = FourCC::new(b"NV12");
+            let yuyv_fourcc = FourCC::new(b"YUYV");
+
+            let mut negotiated: Option<v4l::format::Format> = None;
+
+            // Try NV12 first — enumerate available frame sizes and pick largest
+            if let Ok(framesizes) = dev.enum_framesizes(nv12_fourcc) {
+                let mut best_pixels = 0u64;
+                let mut best_w = current_fmt.width;
+                let mut best_h = current_fmt.height;
+                for fs in &framesizes {
+                    match &fs.size {
+                        v4l::framesize::FrameSizeEnum::Discrete(d) => {
+                            let pixels = d.width as u64 * d.height as u64;
+                            if pixels > best_pixels {
+                                best_pixels = pixels;
+                                best_w = d.width;
+                                best_h = d.height;
+                            }
+                        }
+                        v4l::framesize::FrameSizeEnum::Stepwise(s) => {
+                            let pixels = s.max_width as u64 * s.max_height as u64;
+                            if pixels > best_pixels {
+                                best_pixels = pixels;
+                                best_w = s.max_width;
+                                best_h = s.max_height;
+                            }
+                        }
                     }
-                    f
+                }
+                if best_pixels > 0 {
+                    let mut try_fmt = current_fmt.clone();
+                    try_fmt.fourcc = nv12_fourcc;
+                    try_fmt.width = best_w;
+                    try_fmt.height = best_h;
+                    if let Ok(f) = dev.set_format(&try_fmt) {
+                        if f.fourcc == nv12_fourcc {
+                            tracing::info!(
+                                "Camera {}: NV12 available, highest resolution {}x{}",
+                                self.camera_name,
+                                f.width,
+                                f.height
+                            );
+                            negotiated = Some(f);
+                        }
+                    }
                 }
             }
+
+            // If NV12 didn't work, try YUYV with highest available resolution
+            if negotiated.is_none() {
+                tracing::info!(
+                    "Camera {}: NV12 not available, trying YUYV",
+                    self.camera_name
+                );
+
+                let (best_w, best_h) = if let Ok(framesizes) = dev.enum_framesizes(yuyv_fourcc) {
+                    let mut best_pixels = 0u64;
+                    let mut w = current_fmt.width;
+                    let mut h = current_fmt.height;
+                    for fs in &framesizes {
+                        match &fs.size {
+                            v4l::framesize::FrameSizeEnum::Discrete(d) => {
+                                let pixels = d.width as u64 * d.height as u64;
+                                if pixels > best_pixels {
+                                    best_pixels = pixels;
+                                    w = d.width;
+                                    h = d.height;
+                                }
+                            }
+                            v4l::framesize::FrameSizeEnum::Stepwise(s) => {
+                                let pixels = s.max_width as u64 * s.max_height as u64;
+                                if pixels > best_pixels {
+                                    best_pixels = pixels;
+                                    w = s.max_width;
+                                    h = s.max_height;
+                                }
+                            }
+                        }
+                    }
+                    (w, h)
+                } else {
+                    // enum_framesizes not supported — use current resolution
+                    (current_fmt.width, current_fmt.height)
+                };
+
+                let mut try_fmt = current_fmt;
+                try_fmt.fourcc = yuyv_fourcc;
+                try_fmt.width = best_w;
+                try_fmt.height = best_h;
+                let f = dev.set_format(&try_fmt).map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "Failed to set camera format (tried NV12, YUYV): {}",
+                        e
+                    ))
+                })?;
+                if f.fourcc != yuyv_fourcc {
+                    return Err(StreamError::Configuration(format!(
+                        "Camera does not support NV12 or YUYV (driver negotiated {:?})",
+                        f.fourcc
+                    )));
+                }
+                negotiated = Some(f);
+            }
+
+            negotiated.unwrap()
         };
 
         let capture_width = fmt.width;
@@ -204,8 +285,9 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
 
 /// V4L2 capture thread main loop.
 ///
-/// Polls for frames from the mmap stream, converts NV12 to BGRA,
-/// writes to a Vulkan pixel buffer, and publishes via OutputWriter.
+/// Polls for frames from the mmap stream, converts NV12/YUYV to BGRA via
+/// GPU compute shader, writes to a pooled Vulkan pixel buffer, and publishes
+/// via OutputWriter.
 fn capture_thread_loop(
     mut stream: v4l::io::mmap::Stream,
     is_capturing: Arc<AtomicBool>,
@@ -217,6 +299,651 @@ fn capture_thread_loop(
     height: u32,
     fourcc: FourCC,
 ) {
+    let vulkan_device = &gpu_context.device().inner;
+    let device = vulkan_device.device();
+    let queue = vulkan_device.queue();
+    let queue_family_index = vulkan_device.queue_family_index();
+
+    let fourcc_bytes = fourcc.repr;
+
+    // Determine input buffer size and select shader SPIR-V based on pixel format
+    let (input_byte_size, shader_spirv): (usize, &[u8]) = match &fourcc_bytes {
+        b"NV12" => (
+            (width as usize) * (height as usize) * 3 / 2,
+            include_bytes!("shaders/nv12_to_bgra.spv"),
+        ),
+        b"YUYV" => (
+            (width as usize) * (height as usize) * 2,
+            include_bytes!("shaders/yuyv_to_bgra.spv"),
+        ),
+        _ => {
+            eprintln!(
+                "[Camera {}] Unsupported format {:?} — no GPU compute shader available",
+                camera_name, fourcc
+            );
+            return;
+        }
+    };
+
+    // Pad input size to uint32 alignment for SSBO
+    let input_alloc_size = ((input_byte_size + 3) / 4 * 4) as vk::DeviceSize;
+
+    // -----------------------------------------------------------------------
+    // Create double-buffered input SSBOs (HOST_VISIBLE) for raw V4L2 data upload.
+    // CPU uploads frame N+1 to SSBO[1] while GPU processes frame N on SSBO[0].
+    // -----------------------------------------------------------------------
+    let input_buffer_info = vk::BufferCreateInfo::default()
+        .size(input_alloc_size)
+        .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+    let mut input_buffers = [vk::Buffer::null(); 2];
+    let mut input_memories = [vk::DeviceMemory::null(); 2];
+    let mut input_mapped_ptrs = [std::ptr::null_mut::<u8>(); 2];
+
+    for i in 0..2 {
+        let input_buffer = match unsafe { device.create_buffer(&input_buffer_info, None) } {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[Camera {}] Failed to create input SSBO[{}]: {}", camera_name, i, e);
+                for j in 0..i {
+                    unsafe {
+                        device.unmap_memory(input_memories[j]);
+                        device.free_memory(input_memories[j], None);
+                        device.destroy_buffer(input_buffers[j], None);
+                    }
+                }
+                return;
+            }
+        };
+
+        let input_mem_reqs = unsafe { device.get_buffer_memory_requirements(input_buffer) };
+
+        let input_memory_type = match vulkan_device.find_memory_type(
+            input_mem_reqs.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        ) {
+            Ok(idx) => idx,
+            Err(e) => {
+                eprintln!("[Camera {}] No suitable memory type for input SSBO[{}]: {}", camera_name, i, e);
+                unsafe { device.destroy_buffer(input_buffer, None) };
+                for j in 0..i {
+                    unsafe {
+                        device.unmap_memory(input_memories[j]);
+                        device.free_memory(input_memories[j], None);
+                        device.destroy_buffer(input_buffers[j], None);
+                    }
+                }
+                return;
+            }
+        };
+
+        let input_alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(input_mem_reqs.size)
+            .memory_type_index(input_memory_type);
+
+        let input_memory = match unsafe { device.allocate_memory(&input_alloc_info, None) } {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("[Camera {}] Failed to allocate input SSBO[{}] memory: {}", camera_name, i, e);
+                unsafe { device.destroy_buffer(input_buffer, None) };
+                for j in 0..i {
+                    unsafe {
+                        device.unmap_memory(input_memories[j]);
+                        device.free_memory(input_memories[j], None);
+                        device.destroy_buffer(input_buffers[j], None);
+                    }
+                }
+                return;
+            }
+        };
+
+        if let Err(e) = unsafe { device.bind_buffer_memory(input_buffer, input_memory, 0) } {
+            eprintln!("[Camera {}] Failed to bind input SSBO[{}] memory: {}", camera_name, i, e);
+            unsafe {
+                device.free_memory(input_memory, None);
+                device.destroy_buffer(input_buffer, None);
+            }
+            for j in 0..i {
+                unsafe {
+                    device.unmap_memory(input_memories[j]);
+                    device.free_memory(input_memories[j], None);
+                    device.destroy_buffer(input_buffers[j], None);
+                }
+            }
+            return;
+        }
+
+        let input_mapped_ptr = match unsafe {
+            device.map_memory(input_memory, 0, input_alloc_size, vk::MemoryMapFlags::empty())
+        } {
+            Ok(ptr) => ptr as *mut u8,
+            Err(e) => {
+                eprintln!("[Camera {}] Failed to map input SSBO[{}]: {}", camera_name, i, e);
+                unsafe {
+                    device.free_memory(input_memory, None);
+                    device.destroy_buffer(input_buffer, None);
+                }
+                for j in 0..i {
+                    unsafe {
+                        device.unmap_memory(input_memories[j]);
+                        device.free_memory(input_memories[j], None);
+                        device.destroy_buffer(input_buffers[j], None);
+                    }
+                }
+                return;
+            }
+        };
+
+        input_buffers[i] = input_buffer;
+        input_memories[i] = input_memory;
+        input_mapped_ptrs[i] = input_mapped_ptr;
+    }
+
+    // -----------------------------------------------------------------------
+    // Create compute pipeline
+    // -----------------------------------------------------------------------
+
+    // Shader module
+    let spirv_code = match ash::util::read_spv(&mut std::io::Cursor::new(shader_spirv)) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("[Camera {}] Failed to read SPIR-V: {}", camera_name, e);
+            unsafe {
+                for k in 0..2 {
+                    device.unmap_memory(input_memories[k]);
+                    device.free_memory(input_memories[k], None);
+                    device.destroy_buffer(input_buffers[k], None);
+                }
+            }
+            return;
+        }
+    };
+
+    let shader_module_info = vk::ShaderModuleCreateInfo::default().code(&spirv_code);
+    let shader_module = match unsafe { device.create_shader_module(&shader_module_info, None) } {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[Camera {}] Failed to create shader module: {}", camera_name, e);
+            unsafe {
+                for k in 0..2 {
+                    device.unmap_memory(input_memories[k]);
+                    device.free_memory(input_memories[k], None);
+                    device.destroy_buffer(input_buffers[k], None);
+                }
+            }
+            return;
+        }
+    };
+
+    // Descriptor set layout: binding 0 = input SSBO, binding 1 = output storage image
+    let bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+    ];
+
+    let descriptor_set_layout_info =
+        vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+
+    let descriptor_set_layout =
+        match unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) } {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[Camera {}] Failed to create descriptor set layout: {}", camera_name, e);
+                unsafe {
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+
+    // Push constant range: width + height (2 × uint32 = 8 bytes)
+    let push_constant_range = vk::PushConstantRange::default()
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .offset(0)
+        .size(8);
+
+    let set_layouts = [descriptor_set_layout];
+    let push_constant_ranges = [push_constant_range];
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&set_layouts)
+        .push_constant_ranges(&push_constant_ranges);
+
+    let pipeline_layout =
+        match unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) } {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[Camera {}] Failed to create pipeline layout: {}", camera_name, e);
+                unsafe {
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+
+    // Compute pipeline
+    let stage_info = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::COMPUTE)
+        .module(shader_module)
+        .name(c"main");
+
+    let compute_pipeline_info = vk::ComputePipelineCreateInfo::default()
+        .stage(stage_info)
+        .layout(pipeline_layout);
+
+    let compute_pipeline = match unsafe {
+        device.create_compute_pipelines(vk::PipelineCache::null(), &[compute_pipeline_info], None)
+    } {
+        Ok(pipelines) => pipelines[0],
+        Err((_, e)) => {
+            eprintln!("[Camera {}] Failed to create compute pipeline: {}", camera_name, e);
+            unsafe {
+                device.destroy_pipeline_layout(pipeline_layout, None);
+                device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                device.destroy_shader_module(shader_module, None);
+                for k in 0..2 {
+                    device.unmap_memory(input_memories[k]);
+                    device.free_memory(input_memories[k], None);
+                    device.destroy_buffer(input_buffers[k], None);
+                }
+            }
+            return;
+        }
+    };
+
+    // Descriptor pool (1 set, 1 storage buffer + 1 storage image)
+    let pool_sizes = [
+        vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1),
+        vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1),
+    ];
+
+    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+        .max_sets(1)
+        .pool_sizes(&pool_sizes);
+
+    let descriptor_pool =
+        match unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) } {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[Camera {}] Failed to create descriptor pool: {}", camera_name, e);
+                unsafe {
+                    device.destroy_pipeline(compute_pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+
+    // Allocate descriptor set
+    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+        .descriptor_pool(descriptor_pool)
+        .set_layouts(&set_layouts);
+
+    let descriptor_set = match unsafe { device.allocate_descriptor_sets(&alloc_info) } {
+        Ok(sets) => sets[0],
+        Err(e) => {
+            eprintln!("[Camera {}] Failed to allocate descriptor set: {}", camera_name, e);
+            unsafe {
+                device.destroy_descriptor_pool(descriptor_pool, None);
+                device.destroy_pipeline(compute_pipeline, None);
+                device.destroy_pipeline_layout(pipeline_layout, None);
+                device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                device.destroy_shader_module(shader_module, None);
+                for k in 0..2 {
+                    device.unmap_memory(input_memories[k]);
+                    device.free_memory(input_memories[k], None);
+                    device.destroy_buffer(input_buffers[k], None);
+                }
+            }
+            return;
+        }
+    };
+
+    // -----------------------------------------------------------------------
+    // Create command pool + command buffer + fence for compute dispatch
+    // -----------------------------------------------------------------------
+    let pool_info = vk::CommandPoolCreateInfo::default()
+        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+        .queue_family_index(queue_family_index);
+
+    let compute_command_pool = match unsafe { device.create_command_pool(&pool_info, None) } {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[Camera {}] Failed to create compute command pool: {}", camera_name, e);
+            unsafe {
+                device.destroy_descriptor_pool(descriptor_pool, None);
+                device.destroy_pipeline(compute_pipeline, None);
+                device.destroy_pipeline_layout(pipeline_layout, None);
+                device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                device.destroy_shader_module(shader_module, None);
+                for k in 0..2 {
+                    device.unmap_memory(input_memories[k]);
+                    device.free_memory(input_memories[k], None);
+                    device.destroy_buffer(input_buffers[k], None);
+                }
+            }
+            return;
+        }
+    };
+
+    let cmd_alloc_info = vk::CommandBufferAllocateInfo::default()
+        .command_pool(compute_command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(1);
+
+    let compute_command_buffer =
+        match unsafe { device.allocate_command_buffers(&cmd_alloc_info) } {
+            Ok(bufs) => bufs[0],
+            Err(e) => {
+                eprintln!("[Camera {}] Failed to allocate compute command buffer: {}", camera_name, e);
+                unsafe {
+                    device.destroy_command_pool(compute_command_pool, None);
+                    device.destroy_descriptor_pool(descriptor_pool, None);
+                    device.destroy_pipeline(compute_pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+
+    let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+    let mut compute_fences = [vk::Fence::null(); 2];
+    for i in 0..2 {
+        compute_fences[i] = match unsafe { device.create_fence(&fence_info, None) } {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!(
+                    "[Camera {}] Failed to create compute fence[{}]: {}",
+                    camera_name, i, e
+                );
+                unsafe {
+                    for j in 0..i {
+                        device.destroy_fence(compute_fences[j], None);
+                    }
+                    device.destroy_command_pool(compute_command_pool, None);
+                    device.destroy_descriptor_pool(descriptor_pool, None);
+                    device.destroy_pipeline(compute_pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Create DEVICE_LOCAL storage image for compute output (fast VRAM writes)
+    // -----------------------------------------------------------------------
+    let compute_output_image_info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(vk::Format::R8G8B8A8_UNORM)
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .initial_layout(vk::ImageLayout::UNDEFINED);
+
+    let compute_output_image =
+        match unsafe { device.create_image(&compute_output_image_info, None) } {
+            Ok(img) => img,
+            Err(e) => {
+                eprintln!(
+                    "[Camera {}] Failed to create compute output image: {}",
+                    camera_name, e
+                );
+                unsafe {
+                    for k in 0..2 {
+                        device.destroy_fence(compute_fences[k], None);
+                    }
+                    device.destroy_command_pool(compute_command_pool, None);
+                    device.destroy_descriptor_pool(descriptor_pool, None);
+                    device.destroy_pipeline(compute_pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+
+    let compute_output_mem_reqs =
+        unsafe { device.get_image_memory_requirements(compute_output_image) };
+
+    let compute_output_memory_type = match vulkan_device.find_memory_type(
+        compute_output_mem_reqs.memory_type_bits,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    ) {
+        Ok(idx) => idx,
+        Err(e) => {
+            eprintln!(
+                "[Camera {}] No device-local memory for compute output image: {}",
+                camera_name, e
+            );
+            unsafe {
+                device.destroy_image(compute_output_image, None);
+                for k in 0..2 {
+                    device.destroy_fence(compute_fences[k], None);
+                }
+                device.destroy_command_pool(compute_command_pool, None);
+                device.destroy_descriptor_pool(descriptor_pool, None);
+                device.destroy_pipeline(compute_pipeline, None);
+                device.destroy_pipeline_layout(pipeline_layout, None);
+                device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                device.destroy_shader_module(shader_module, None);
+                for k in 0..2 {
+                    device.unmap_memory(input_memories[k]);
+                    device.free_memory(input_memories[k], None);
+                    device.destroy_buffer(input_buffers[k], None);
+                }
+            }
+            return;
+        }
+    };
+
+    let compute_output_alloc_info = vk::MemoryAllocateInfo::default()
+        .allocation_size(compute_output_mem_reqs.size)
+        .memory_type_index(compute_output_memory_type);
+
+    let compute_output_image_memory =
+        match unsafe { device.allocate_memory(&compute_output_alloc_info, None) } {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!(
+                    "[Camera {}] Failed to allocate compute output image memory: {}",
+                    camera_name, e
+                );
+                unsafe {
+                    device.destroy_image(compute_output_image, None);
+                    for k in 0..2 {
+                        device.destroy_fence(compute_fences[k], None);
+                    }
+                    device.destroy_command_pool(compute_command_pool, None);
+                    device.destroy_descriptor_pool(descriptor_pool, None);
+                    device.destroy_pipeline(compute_pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+
+    if let Err(e) =
+        unsafe { device.bind_image_memory(compute_output_image, compute_output_image_memory, 0) }
+    {
+        eprintln!(
+            "[Camera {}] Failed to bind compute output image memory: {}",
+            camera_name, e
+        );
+        unsafe {
+            device.free_memory(compute_output_image_memory, None);
+            device.destroy_image(compute_output_image, None);
+            for k in 0..2 {
+                device.destroy_fence(compute_fences[k], None);
+            }
+            device.destroy_command_pool(compute_command_pool, None);
+            device.destroy_descriptor_pool(descriptor_pool, None);
+            device.destroy_pipeline(compute_pipeline, None);
+            device.destroy_pipeline_layout(pipeline_layout, None);
+            device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+            device.destroy_shader_module(shader_module, None);
+            for k in 0..2 {
+                device.unmap_memory(input_memories[k]);
+                device.free_memory(input_memories[k], None);
+                device.destroy_buffer(input_buffers[k], None);
+            }
+        }
+        return;
+    }
+
+    let compute_output_view_info = vk::ImageViewCreateInfo::default()
+        .image(compute_output_image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(vk::Format::R8G8B8A8_UNORM)
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+        );
+
+    let compute_output_image_view =
+        match unsafe { device.create_image_view(&compute_output_view_info, None) } {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "[Camera {}] Failed to create compute output image view: {}",
+                    camera_name, e
+                );
+                unsafe {
+                    device.free_memory(compute_output_image_memory, None);
+                    device.destroy_image(compute_output_image, None);
+                    for k in 0..2 {
+                        device.destroy_fence(compute_fences[k], None);
+                    }
+                    device.destroy_command_pool(compute_command_pool, None);
+                    device.destroy_descriptor_pool(descriptor_pool, None);
+                    device.destroy_pipeline(compute_pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        device.unmap_memory(input_memories[k]);
+                        device.free_memory(input_memories[k], None);
+                        device.destroy_buffer(input_buffers[k], None);
+                    }
+                }
+                return;
+            }
+        };
+
+    // Write descriptor set — input SSBO binding will be updated per-frame for double buffering
+    let input_buffer_descriptor = vk::DescriptorBufferInfo::default()
+        .buffer(input_buffers[0])
+        .offset(0)
+        .range(input_alloc_size);
+    let input_buffer_infos = [input_buffer_descriptor];
+
+    let output_image_descriptor = vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::GENERAL)
+        .image_view(compute_output_image_view)
+        .sampler(vk::Sampler::null());
+    let output_image_infos = [output_image_descriptor];
+
+    let descriptor_writes = [
+        vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&input_buffer_infos),
+        vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(&output_image_infos),
+    ];
+
+    unsafe {
+        device.update_descriptor_sets(&descriptor_writes, &[]);
+    }
+
+    let dispatch_x = (width + 15) / 16;
+    let dispatch_y = (height + 15) / 16;
+    let output_buffer_size = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
+
+    eprintln!(
+        "[Camera {}] GPU compute pipeline ready ({:?}, {}x{}, dispatch {}x{})",
+        camera_name, fourcc, width, height, dispatch_x, dispatch_y
+    );
+
+    // -----------------------------------------------------------------------
+    // Main capture loop (double-buffered: CPU uploads to SSBO[N] while GPU
+    // processes SSBO[1-N])
+    // -----------------------------------------------------------------------
+    let mut ping_pong_index: usize = 0;
+
     while is_capturing.load(Ordering::Acquire) {
         let (buf, meta) = match stream.next() {
             Ok(frame) => frame,
@@ -238,7 +965,7 @@ fn capture_thread_loop(
 
         let frame_num = frame_counter.fetch_add(1, Ordering::Relaxed);
 
-        // Acquire a BGRA pixel buffer from the pool
+        // Acquire a BGRA pixel buffer from the pool (used as compute output SSBO)
         let (pool_id, pooled_buffer) =
             match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Bgra32) {
                 Ok(result) => result,
@@ -253,29 +980,202 @@ fn capture_thread_loop(
                 }
             };
 
-        // Convert captured frame to BGRA and write into the pixel buffer
-        let dst_ptr = pooled_buffer.buffer_ref().inner.mapped_ptr();
-        let dst_size = (width * height * 4) as usize;
+        let output_vk_buffer = pooled_buffer.buffer_ref().inner.buffer();
 
-        let fourcc_bytes = fourcc.repr;
-        match &fourcc_bytes {
-            b"NV12" => {
-                convert_nv12_to_bgra(buf, dst_ptr, dst_size, width, height);
+        let current_ssbo = ping_pong_index;
+        let current_fence = compute_fences[current_ssbo];
+
+        // Wait for any previous GPU work on this SSBO slot before uploading
+        unsafe {
+            let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
+            let _ = device.reset_fences(&[current_fence]);
+        }
+
+        // Upload raw V4L2 frame data to current input SSBO
+        let copy_len = buf.len().min(input_byte_size);
+        unsafe {
+            std::ptr::copy_nonoverlapping(buf.as_ptr(), input_mapped_ptrs[current_ssbo], copy_len);
+        }
+
+        // Update descriptor set binding 0 to point to current input SSBO
+        let input_buffer_descriptor = vk::DescriptorBufferInfo::default()
+            .buffer(input_buffers[current_ssbo])
+            .offset(0)
+            .range(input_alloc_size);
+        let input_buffer_infos = [input_buffer_descriptor];
+        let input_descriptor_write = vk::WriteDescriptorSet::default()
+            .dst_set(descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&input_buffer_infos);
+        unsafe {
+            device.update_descriptor_sets(&[input_descriptor_write], &[]);
+        }
+
+        // Record compute dispatch command buffer
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        let color_subresource_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1);
+
+        unsafe {
+            if device
+                .reset_command_buffer(compute_command_buffer, vk::CommandBufferResetFlags::empty())
+                .is_err()
+            {
+                continue;
             }
-            b"YUYV" => {
-                convert_yuyv_to_bgra(buf, dst_ptr, dst_size, width, height);
+
+            if device
+                .begin_command_buffer(compute_command_buffer, &begin_info)
+                .is_err()
+            {
+                continue;
             }
-            _ => {
+
+            // Transition storage image: UNDEFINED → GENERAL (discard old contents)
+            let image_barrier_to_general = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(compute_output_image)
+                .subresource_range(color_subresource_range)
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
+
+            device.cmd_pipeline_barrier(
+                compute_command_buffer,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[image_barrier_to_general],
+            );
+
+            device.cmd_bind_pipeline(
+                compute_command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                compute_pipeline,
+            );
+
+            device.cmd_bind_descriptor_sets(
+                compute_command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline_layout,
+                0,
+                &[descriptor_set],
+                &[],
+            );
+
+            // Push constants: width, height
+            let push_data = [width, height];
+            let push_bytes: &[u8] = std::slice::from_raw_parts(
+                push_data.as_ptr() as *const u8,
+                std::mem::size_of_val(&push_data),
+            );
+            device.cmd_push_constants(
+                compute_command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                push_bytes,
+            );
+
+            device.cmd_dispatch(compute_command_buffer, dispatch_x, dispatch_y, 1);
+
+            // Transition storage image: GENERAL → TRANSFER_SRC_OPTIMAL
+            let image_barrier_to_transfer = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(compute_output_image)
+                .subresource_range(color_subresource_range)
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+
+            device.cmd_pipeline_barrier(
+                compute_command_buffer,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[image_barrier_to_transfer],
+            );
+
+            // Copy storage image → pooled pixel buffer (for IPC sharing)
+            let copy_region = vk::BufferImageCopy::default()
+                .buffer_offset(0)
+                .buffer_row_length(width)
+                .buffer_image_height(height)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(0)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                )
+                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+                .image_extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                });
+
+            device.cmd_copy_image_to_buffer(
+                compute_command_buffer,
+                compute_output_image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                output_vk_buffer,
+                &[copy_region],
+            );
+
+            // Buffer barrier: transfer write → host/transfer read
+            let buffer_barrier = vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::TRANSFER_READ)
+                .buffer(output_vk_buffer)
+                .offset(0)
+                .size(output_buffer_size);
+
+            device.cmd_pipeline_barrier(
+                compute_command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[buffer_barrier],
+                &[],
+            );
+
+            if device.end_command_buffer(compute_command_buffer).is_err() {
+                continue;
+            }
+
+            // Submit and wait for completion
+            let command_buffers = [compute_command_buffer];
+            let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
+            if let Err(e) = device.queue_submit(queue, &[submit_info], current_fence) {
                 if frame_num == 0 {
                     eprintln!(
-                        "[Camera {}] Unsupported capture format: {:?}, writing zeros",
-                        camera_name, fourcc
+                        "[Camera {}] Failed to submit compute dispatch: {}",
+                        camera_name, e
                     );
                 }
-                unsafe {
-                    std::ptr::write_bytes(dst_ptr, 0, dst_size);
-                }
+                continue;
             }
+
+            // Wait for this frame to complete before publishing
+            let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
         }
 
         let surface_id = pool_id.to_string();
@@ -293,121 +1193,41 @@ fn capture_thread_loop(
             eprintln!("[Camera {}] Failed to write frame: {}", camera_name, e);
             continue;
         }
-        // _pooled_buffer is dropped here after the write, releasing the ring slot
 
         if frame_num == 0 {
             eprintln!(
-                "[Camera {}] First frame captured (seq={}, {}x{} {:?})",
+                "[Camera {}] First frame captured via GPU compute (seq={}, {}x{} {:?})",
                 camera_name, meta.sequence, width, height, fourcc
             );
         } else if frame_num % 300 == 0 {
             eprintln!("[Camera {}] Frame #{}", camera_name, frame_num);
         }
-    }
-}
 
-/// Convert NV12 (YUV 4:2:0 bi-planar) to BGRA.
-///
-/// NV12 layout: Y plane (width*height bytes) followed by interleaved UV plane (width*height/2 bytes).
-/// Uses BT.601 full-range conversion coefficients.
-fn convert_nv12_to_bgra(src: &[u8], dst_ptr: *mut u8, dst_size: usize, width: u32, height: u32) {
-    let y_plane_size = (width * height) as usize;
-    let expected_nv12_size = y_plane_size + y_plane_size / 2;
-
-    if src.len() < expected_nv12_size || dst_size < (width * height * 4) as usize {
-        eprintln!(
-            "[Camera] NV12 size mismatch: got {} bytes, expected {} ({}x{}), zero-filling",
-            src.len(),
-            expected_nv12_size,
-            width,
-            height
-        );
-        unsafe {
-            std::ptr::write_bytes(dst_ptr, 0, dst_size);
-        }
-        return;
+        // Toggle ping-pong index for next frame
+        ping_pong_index = 1 - ping_pong_index;
     }
 
-    let y_plane = &src[..y_plane_size];
-    let uv_plane = &src[y_plane_size..];
-
+    // -----------------------------------------------------------------------
+    // Cleanup — destroy all compute pipeline resources
+    // -----------------------------------------------------------------------
     unsafe {
-        for row in 0..height {
-            for col in 0..width {
-                let y_idx = (row * width + col) as usize;
-                let uv_idx = ((row / 2) * width + (col & !1)) as usize;
-
-                let y = y_plane[y_idx] as f32;
-                let u = uv_plane[uv_idx] as f32 - 128.0;
-                let v = uv_plane[uv_idx + 1] as f32 - 128.0;
-
-                let r = (y + 1.402 * v).clamp(0.0, 255.0);
-                let g = (y - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0);
-                let b = (y + 1.772 * u).clamp(0.0, 255.0);
-
-                let px_offset = ((row * width + col) * 4) as usize;
-                *dst_ptr.add(px_offset) = b as u8;
-                *dst_ptr.add(px_offset + 1) = g as u8;
-                *dst_ptr.add(px_offset + 2) = r as u8;
-                *dst_ptr.add(px_offset + 3) = 255;
-            }
+        let _ = device.device_wait_idle();
+        device.destroy_image_view(compute_output_image_view, None);
+        device.destroy_image(compute_output_image, None);
+        device.free_memory(compute_output_image_memory, None);
+        for k in 0..2 {
+            device.destroy_fence(compute_fences[k], None);
         }
-    }
-}
-
-/// Convert YUYV (YUV 4:2:2 packed) to BGRA.
-///
-/// YUYV layout: [Y0 U0 Y1 V0] per 2 pixels. Uses BT.601 full-range coefficients.
-fn convert_yuyv_to_bgra(src: &[u8], dst_ptr: *mut u8, dst_size: usize, width: u32, height: u32) {
-    let expected_yuyv_size = (width * height * 2) as usize;
-
-    if src.len() < expected_yuyv_size || dst_size < (width * height * 4) as usize {
-        eprintln!(
-            "[Camera] YUYV size mismatch: got {} bytes, expected {} ({}x{}), zero-filling",
-            src.len(),
-            expected_yuyv_size,
-            width,
-            height
-        );
-        unsafe {
-            std::ptr::write_bytes(dst_ptr, 0, dst_size);
-        }
-        return;
-    }
-
-    unsafe {
-        for row in 0..height {
-            for col in (0..width).step_by(2) {
-                let yuyv_offset = ((row * width + col) * 2) as usize;
-                let y0 = src[yuyv_offset] as f32;
-                let u = src[yuyv_offset + 1] as f32 - 128.0;
-                let y1 = src[yuyv_offset + 2] as f32;
-                let v = src[yuyv_offset + 3] as f32 - 128.0;
-
-                // First pixel
-                let r0 = (y0 + 1.402 * v).clamp(0.0, 255.0);
-                let g0 = (y0 - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0);
-                let b0 = (y0 + 1.772 * u).clamp(0.0, 255.0);
-
-                let px0 = ((row * width + col) * 4) as usize;
-                *dst_ptr.add(px0) = b0 as u8;
-                *dst_ptr.add(px0 + 1) = g0 as u8;
-                *dst_ptr.add(px0 + 2) = r0 as u8;
-                *dst_ptr.add(px0 + 3) = 255;
-
-                // Second pixel
-                if col + 1 < width {
-                    let r1 = (y1 + 1.402 * v).clamp(0.0, 255.0);
-                    let g1 = (y1 - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0);
-                    let b1 = (y1 + 1.772 * u).clamp(0.0, 255.0);
-
-                    let px1 = ((row * width + col + 1) * 4) as usize;
-                    *dst_ptr.add(px1) = b1 as u8;
-                    *dst_ptr.add(px1 + 1) = g1 as u8;
-                    *dst_ptr.add(px1 + 2) = r1 as u8;
-                    *dst_ptr.add(px1 + 3) = 255;
-                }
-            }
+        device.destroy_command_pool(compute_command_pool, None);
+        device.destroy_descriptor_pool(descriptor_pool, None);
+        device.destroy_pipeline(compute_pipeline, None);
+        device.destroy_pipeline_layout(pipeline_layout, None);
+        device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+        device.destroy_shader_module(shader_module, None);
+        for k in 0..2 {
+            device.unmap_memory(input_memories[k]);
+            device.free_memory(input_memories[k], None);
+            device.destroy_buffer(input_buffers[k], None);
         }
     }
 }
