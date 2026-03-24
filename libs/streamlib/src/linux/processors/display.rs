@@ -134,20 +134,22 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     scaling_mode,
                     swapchain_state: None,
                     pipeline_state: None,
-                    camera_texture: None,
+                    camera_texture_ring: Vec::new(),
                 };
 
                 if let Err(e) = event_loop.run_app(&mut app) {
                     tracing::error!("Display {}: Event loop error: {}", window_id, e);
                 }
 
-                // Clean up camera texture resources
-                if let Some(tex) = app.camera_texture.take() {
+                // Clean up camera texture ring resources
+                if !app.camera_texture_ring.is_empty() {
                     let device = app.vulkan_device.device();
-                    unsafe {
-                        device.destroy_image_view(tex.image_view, None);
-                        device.destroy_image(tex.image, None);
-                        device.free_memory(tex.memory, None);
+                    for tex in app.camera_texture_ring.drain(..) {
+                        unsafe {
+                            device.destroy_image_view(tex.image_view, None);
+                            device.destroy_image(tex.image, None);
+                            device.free_memory(tex.memory, None);
+                        }
                     }
                 }
 
@@ -276,7 +278,7 @@ struct DisplayEventLoopHandler {
     scaling_mode: ScalingMode,
     swapchain_state: Option<SwapchainState>,
     pipeline_state: Option<PersistentPipelineState>,
-    camera_texture: Option<CameraTextureState>,
+    camera_texture_ring: Vec<CameraTextureState>,
 }
 
 impl ApplicationHandler for DisplayEventLoopHandler {
@@ -479,141 +481,159 @@ impl DisplayEventLoopHandler {
         let src_width = vulkan_pixel_buffer.width();
         let src_height = vulkan_pixel_buffer.height();
 
-        // Create or recreate device-local camera texture if dimensions changed
-        let need_camera_texture = match &self.camera_texture {
-            Some(tex) => tex.width != src_width || tex.height != src_height,
-            None => true,
+        // Create or recreate camera texture ring if dimensions changed or ring
+        // size no longer matches the swapchain image count (e.g. after resize).
+        // Each in-flight frame gets its own device-local texture, avoiding
+        // write-after-read hazards between buffer copy and fragment shader.
+        let need_camera_texture_ring = if self.camera_texture_ring.is_empty() {
+            true
+        } else {
+            let existing = &self.camera_texture_ring[0];
+            existing.width != src_width
+                || existing.height != src_height
+                || self.camera_texture_ring.len() != image_count
         };
 
-        if need_camera_texture {
-            // Destroy old camera texture if it exists
-            if let Some(old_tex) = self.camera_texture.take() {
+        if need_camera_texture_ring {
+            // Destroy all existing camera textures
+            if !self.camera_texture_ring.is_empty() {
                 unsafe {
                     let _ = device.device_wait_idle();
-                    device.destroy_image_view(old_tex.image_view, None);
-                    device.destroy_image(old_tex.image, None);
-                    device.free_memory(old_tex.memory, None);
+                }
+                for old_tex in self.camera_texture_ring.drain(..) {
+                    unsafe {
+                        device.destroy_image_view(old_tex.image_view, None);
+                        device.destroy_image(old_tex.image, None);
+                        device.free_memory(old_tex.memory, None);
+                    }
                 }
             }
 
-            let image_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::B8G8R8A8_UNORM)
-                .extent(vk::Extent3D {
-                    width: src_width,
-                    height: src_height,
-                    depth: 1,
-                })
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .initial_layout(vk::ImageLayout::UNDEFINED);
+            // Allocate one camera texture per swapchain image (ring buffer).
+            for ring_idx in 0..image_count {
+                let image_info = vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(vk::Format::B8G8R8A8_UNORM)
+                    .extent(vk::Extent3D {
+                        width: src_width,
+                        height: src_height,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .initial_layout(vk::ImageLayout::UNDEFINED);
 
-            let image = match unsafe { device.create_image(&image_info, None) } {
-                Ok(img) => img,
-                Err(e) => {
-                    tracing::warn!(
-                        "Display {}: Failed to create camera texture: {}",
-                        self.window_id,
-                        e
-                    );
-                    return;
-                }
-            };
+                let image = match unsafe { device.create_image(&image_info, None) } {
+                    Ok(img) => img,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Display {}: Failed to create camera texture [{}]: {}",
+                            self.window_id,
+                            ring_idx,
+                            e
+                        );
+                        return;
+                    }
+                };
 
-            let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
+                let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
 
-            let memory_type_index = match self.vulkan_device.find_memory_type(
-                mem_requirements.memory_type_bits,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ) {
-                Ok(idx) => idx,
-                Err(e) => {
-                    tracing::warn!(
-                        "Display {}: No device-local memory for camera texture: {}",
-                        self.window_id,
-                        e
-                    );
-                    unsafe { device.destroy_image(image, None) };
-                    return;
-                }
-            };
+                let memory_type_index = match self.vulkan_device.find_memory_type(
+                    mem_requirements.memory_type_bits,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                ) {
+                    Ok(idx) => idx,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Display {}: No device-local memory for camera texture [{}]: {}",
+                            self.window_id,
+                            ring_idx,
+                            e
+                        );
+                        unsafe { device.destroy_image(image, None) };
+                        return;
+                    }
+                };
 
-            let alloc_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(mem_requirements.size)
-                .memory_type_index(memory_type_index);
+                let alloc_info = vk::MemoryAllocateInfo::default()
+                    .allocation_size(mem_requirements.size)
+                    .memory_type_index(memory_type_index);
 
-            let memory = match unsafe { device.allocate_memory(&alloc_info, None) } {
-                Ok(mem) => mem,
-                Err(e) => {
-                    tracing::warn!(
-                        "Display {}: Failed to allocate camera texture memory: {}",
-                        self.window_id,
-                        e
-                    );
-                    unsafe { device.destroy_image(image, None) };
-                    return;
-                }
-            };
+                let memory = match unsafe { device.allocate_memory(&alloc_info, None) } {
+                    Ok(mem) => mem,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Display {}: Failed to allocate camera texture memory [{}]: {}",
+                            self.window_id,
+                            ring_idx,
+                            e
+                        );
+                        unsafe { device.destroy_image(image, None) };
+                        return;
+                    }
+                };
 
-            if unsafe { device.bind_image_memory(image, memory, 0) }.is_err() {
-                unsafe {
-                    device.free_memory(memory, None);
-                    device.destroy_image(image, None);
-                }
-                return;
-            }
-
-            let view_info = vk::ImageViewCreateInfo::default()
-                .image(image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(vk::Format::B8G8R8A8_UNORM)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
-
-            let image_view = match unsafe { device.create_image_view(&view_info, None) } {
-                Ok(view) => view,
-                Err(e) => {
-                    tracing::warn!(
-                        "Display {}: Failed to create camera texture view: {}",
-                        self.window_id,
-                        e
-                    );
+                if unsafe { device.bind_image_memory(image, memory, 0) }.is_err() {
                     unsafe {
                         device.free_memory(memory, None);
                         device.destroy_image(image, None);
                     }
                     return;
                 }
-            };
 
-            self.camera_texture = Some(CameraTextureState {
-                image,
-                image_view,
-                memory,
-                width: src_width,
-                height: src_height,
-            });
+                let view_info = vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(vk::Format::B8G8R8A8_UNORM)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    );
 
+                let image_view = match unsafe { device.create_image_view(&view_info, None) } {
+                    Ok(view) => view,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Display {}: Failed to create camera texture view [{}]: {}",
+                            self.window_id,
+                            ring_idx,
+                            e
+                        );
+                        unsafe {
+                            device.free_memory(memory, None);
+                            device.destroy_image(image, None);
+                        }
+                        return;
+                    }
+                };
+
+                self.camera_texture_ring.push(CameraTextureState {
+                    image,
+                    image_view,
+                    memory,
+                    width: src_width,
+                    height: src_height,
+                });
+            }
 
             tracing::debug!(
-                "Display {}: Camera texture created ({}x{})",
+                "Display {}: Camera texture ring created ({} textures, {}x{})",
                 self.window_id,
+                image_count,
                 src_width,
                 src_height
             );
         }
 
-        let camera_tex = self.camera_texture.as_ref().unwrap();
+        let camera_tex = &self.camera_texture_ring[frame_index];
 
         // Update descriptor set with camera texture every frame.
         // This is a single descriptor write — negligible CPU cost — and ensures
