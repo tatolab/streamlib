@@ -544,16 +544,15 @@ impl DisplayEventLoopHandler {
 
                 let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
 
-                // Sub-allocate through gpu-allocator so camera textures share
-                // the same DEVICE_LOCAL memory blocks as other GPU resources.
-                // Raw vkAllocateMemory was hitting the driver's per-process
-                // allocation count limit (maxMemoryAllocationCount ≈ 4096 on
-                // NVIDIA), causing DEVICE_LOCAL to fail despite free VRAM.
-                let allocation = match self.vulkan_device.allocate_gpu_memory(
+                // Allocate via gpu-allocator with DedicatedImage scheme.
+                // Uses Unknown location — GpuOnly fails on NVIDIA because
+                // gpu-allocator's strict DEVICE_LOCAL matching rejects
+                // compatible types under certain driver configurations.
+                let allocation = match self.vulkan_device.allocate_gpu_memory_dedicated_image(
                     "camera_texture",
                     mem_requirements,
-                    MemoryLocation::GpuOnly,
-                    false, // OPTIMAL tiling = non-linear
+                    MemoryLocation::Unknown,
+                    image,
                 ) {
                     Ok(alloc) => alloc,
                     Err(e) => {
