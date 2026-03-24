@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.5](https://github.com/tatolab/streamlib/compare/v0.4.4...v0.4.5) (2026-03-24)
+
+
+### Features
+
+* complete Phase 5 — Vulkan RHI sync fixes + GPU format converter ([f0889c2](https://github.com/tatolab/streamlib/commit/f0889c2379f23d8d35ffc4e82bc99891aa4ba1f4))
+* Linux rendering perf phases 1-4 + partial phase 5 ([5c266c1](https://github.com/tatolab/streamlib/commit/5c266c1143d18bb844a89550195c33d8b768aad4))
+* Linux rendering performance — GPU pipeline parity with macOS ([#200](https://github.com/tatolab/streamlib/issues/200)) ([d1c5205](https://github.com/tatolab/streamlib/commit/d1c5205ea2d55a31e9f76d03e7f22afc072cb1f1))
+
 ## [0.4.4](https://github.com/tatolab/streamlib/compare/v0.4.3...v0.4.4) (2026-03-22)
 
 
