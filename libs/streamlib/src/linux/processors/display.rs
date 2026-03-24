@@ -544,10 +544,7 @@ impl DisplayEventLoopHandler {
 
                 let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
 
-                // Allocate via gpu-allocator with DedicatedImage scheme.
-                // Uses Unknown location — GpuOnly fails on NVIDIA because
-                // gpu-allocator's strict DEVICE_LOCAL matching rejects
-                // compatible types under certain driver configurations.
+                // Allocate via gpu-allocator with DedicatedImage on DEVICE_LOCAL VRAM.
                 let allocation = match self.vulkan_device.allocate_gpu_memory_dedicated_image(
                     "camera_texture",
                     mem_requirements,

@@ -53,12 +53,25 @@ impl VulkanPixelBuffer {
             * (height as vk::DeviceSize)
             * (bytes_per_pixel as vk::DeviceSize);
 
-        let buffer_info = vk::BufferCreateInfo::default()
+        let device = vulkan_device.device();
+
+        // When external memory is available, declare DMA-BUF handle type at buffer
+        // creation (VkExternalMemoryBufferCreateInfo). Required by Vulkan spec:
+        // if memory is allocated with VkExportMemoryAllocateInfo::handleTypes,
+        // the buffer must declare matching handle types at creation time.
+        #[cfg(target_os = "linux")]
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
+        let mut buffer_info = vk::BufferCreateInfo::default()
             .size(size)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        let device = vulkan_device.device();
+        #[cfg(target_os = "linux")]
+        if vulkan_device.supports_external_memory() {
+            buffer_info = buffer_info.push_next(&mut external_buffer_info);
+        }
 
         let buffer = unsafe { device.create_buffer(&buffer_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create staging buffer: {e}")))?;
@@ -261,10 +274,15 @@ impl VulkanPixelBuffer {
             size
         };
 
+        // Import path always uses DMA-BUF handle type
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
         let buffer_info = vk::BufferCreateInfo::default()
             .size(effective_size)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut external_buffer_info);
 
         let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
             StreamError::GpuError(format!("Failed to create buffer for DMA-BUF import: {e}"))
