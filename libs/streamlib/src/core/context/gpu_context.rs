@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Number of buffers to pre-allocate per pool.
-const POOL_PRE_ALLOCATE_COUNT: usize = 24;
+const POOL_PRE_ALLOCATE_COUNT: usize = 4;
 
 /// Maximum number of buffers per pool (expansion limit).
 const POOL_MAX_BUFFER_COUNT: usize = 64;

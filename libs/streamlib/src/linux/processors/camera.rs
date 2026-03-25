@@ -939,33 +939,376 @@ fn capture_thread_loop(
     );
 
     // -----------------------------------------------------------------------
-    // Main capture loop (double-buffered: CPU uploads to SSBO[N] while GPU
-    // processes SSBO[1-N])
+    // Runtime DMABUF probe — try exporting V4L2 MMAP buffer as DMA-BUF fd
+    // and importing into Vulkan. If either step fails, fall back to the
+    // existing MMAP + memcpy path. This is the runtime driver probe for
+    // Phase 6: AMD/Intel Mesa drivers typically support cross-device DMA-BUF,
+    // NVIDIA proprietary drivers do not.
     // -----------------------------------------------------------------------
-    let mut ping_pong_index: usize = 0;
+    let device_fd = stream.handle().fd();
+    let mut use_dmabuf = false;
+    let mut dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize] = [-1; V4L2_BUFFER_COUNT as usize];
+    let mut dmabuf_imported_buffers: [vk::Buffer; V4L2_BUFFER_COUNT as usize] =
+        [vk::Buffer::null(); V4L2_BUFFER_COUNT as usize];
+    let mut dmabuf_imported_memories: [vk::DeviceMemory; V4L2_BUFFER_COUNT as usize] =
+        [vk::DeviceMemory::null(); V4L2_BUFFER_COUNT as usize];
 
-    while is_capturing.load(Ordering::Acquire) {
-        let (buf, meta) = match stream.next() {
-            Ok(frame) => frame,
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Poll timeout — check is_capturing and retry
-                continue;
-            }
-            Err(e) => {
-                if is_capturing.load(Ordering::Acquire) {
-                    eprintln!("[Camera {}] V4L2 stream error: {}", camera_name, e);
+    if vulkan_device.supports_external_memory() {
+        // Step 1: Try VIDIOC_EXPBUF on buffer 0 to check DMA-BUF export support
+        let probe_succeeded: bool = unsafe {
+            let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
+            expbuf.type_ = v4l::buffer::Type::VideoCapture as u32;
+            expbuf.index = 0;
+            expbuf.flags = libc::O_CLOEXEC as u32;
+
+            let expbuf_result = libc::ioctl(
+                device_fd,
+                v4l::v4l2::vidioc::VIDIOC_EXPBUF as libc::c_ulong,
+                &mut expbuf,
+            );
+
+            if expbuf_result != 0 {
+                eprintln!(
+                    "[Camera {}] VIDIOC_EXPBUF not supported — using MMAP path",
+                    camera_name
+                );
+                false
+            } else {
+                let probe_fd = expbuf.fd;
+
+                // Step 2: Try importing the DMA-BUF fd as a VkBuffer (SSBO)
+                let buffer_info = vk::BufferCreateInfo::default()
+                    .size(input_alloc_size)
+                    .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+                match device.create_buffer(&buffer_info, None) {
+                    Ok(buffer) => {
+                        let mem_reqs = device.get_buffer_memory_requirements(buffer);
+                        let mut import_info = vk::ImportMemoryFdInfoKHR::default()
+                            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                            .fd(probe_fd);
+
+                        match vulkan_device.find_memory_type(
+                            mem_reqs.memory_type_bits,
+                            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                        ) {
+                            Ok(memory_type_index) => {
+                                let alloc_info = vk::MemoryAllocateInfo::default()
+                                    .allocation_size(mem_reqs.size.max(input_alloc_size))
+                                    .memory_type_index(memory_type_index)
+                                    .push_next(&mut import_info);
+
+                                match device.allocate_memory(&alloc_info, None) {
+                                    Ok(memory) => {
+                                        match device.bind_buffer_memory(buffer, memory, 0) {
+                                            Ok(()) => {
+                                                dmabuf_fds[0] = expbuf.fd;
+                                                dmabuf_imported_buffers[0] = buffer;
+                                                dmabuf_imported_memories[0] = memory;
+                                                true
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "[Camera {}] DMA-BUF bind failed: {} — using MMAP path",
+                                                    camera_name, e
+                                                );
+                                                device.free_memory(memory, None);
+                                                device.destroy_buffer(buffer, None);
+                                                libc::close(probe_fd);
+                                                false
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // NVIDIA cross-device DMA-BUF import typically fails here
+                                        let device_name = vulkan_device.name();
+                                        if device_name.contains("NVIDIA") || device_name.contains("nvidia") {
+                                            tracing::info!(
+                                                "Camera {}: DMA-BUF import failed on NVIDIA GPU \
+                                                 (cross-device DMA-BUF limitation). Falling back to \
+                                                 MMAP + memcpy. This is expected and performant with \
+                                                 GPU compute.",
+                                                camera_name
+                                            );
+                                        } else {
+                                            tracing::warn!(
+                                                "Camera {}: DMA-BUF import failed (unexpected on {}): {}. \
+                                                 Falling back to MMAP + memcpy.",
+                                                camera_name, device_name, e
+                                            );
+                                        }
+                                        device.destroy_buffer(buffer, None);
+                                        libc::close(probe_fd);
+                                        false
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                device.destroy_buffer(buffer, None);
+                                libc::close(probe_fd);
+                                false
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        libc::close(probe_fd);
+                        false
+                    }
                 }
-                break;
             }
         };
 
-        if !is_capturing.load(Ordering::Acquire) {
-            break;
+        // Step 3: If probe succeeded, export and import remaining buffers
+        if probe_succeeded {
+            let mut all_imported = true;
+            for i in 1..V4L2_BUFFER_COUNT as usize {
+                let imported: bool = unsafe {
+                    let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
+                    expbuf.type_ = v4l::buffer::Type::VideoCapture as u32;
+                    expbuf.index = i as u32;
+                    expbuf.flags = libc::O_CLOEXEC as u32;
+
+                    if libc::ioctl(
+                        device_fd,
+                        v4l::v4l2::vidioc::VIDIOC_EXPBUF as libc::c_ulong,
+                        &mut expbuf,
+                    ) != 0
+                    {
+                        false
+                    } else {
+                        let buffer_info = vk::BufferCreateInfo::default()
+                            .size(input_alloc_size)
+                            .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+                            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+                        match device.create_buffer(&buffer_info, None) {
+                            Ok(buffer) => {
+                                let mem_reqs = device.get_buffer_memory_requirements(buffer);
+                                let mut import_info = vk::ImportMemoryFdInfoKHR::default()
+                                    .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                                    .fd(expbuf.fd);
+
+                                match vulkan_device.find_memory_type(
+                                    mem_reqs.memory_type_bits,
+                                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                                ) {
+                                    Ok(memory_type_index) => {
+                                        let alloc_info = vk::MemoryAllocateInfo::default()
+                                            .allocation_size(mem_reqs.size.max(input_alloc_size))
+                                            .memory_type_index(memory_type_index)
+                                            .push_next(&mut import_info);
+
+                                        match device.allocate_memory(&alloc_info, None) {
+                                            Ok(memory) => {
+                                                match device.bind_buffer_memory(buffer, memory, 0) {
+                                                    Ok(()) => {
+                                                        dmabuf_fds[i] = expbuf.fd;
+                                                        dmabuf_imported_buffers[i] = buffer;
+                                                        dmabuf_imported_memories[i] = memory;
+                                                        true
+                                                    }
+                                                    Err(_) => {
+                                                        device.free_memory(memory, None);
+                                                        device.destroy_buffer(buffer, None);
+                                                        libc::close(expbuf.fd);
+                                                        false
+                                                    }
+                                                }
+                                            }
+                                            Err(_) => {
+                                                device.destroy_buffer(buffer, None);
+                                                libc::close(expbuf.fd);
+                                                false
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        device.destroy_buffer(buffer, None);
+                                        libc::close(expbuf.fd);
+                                        false
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                libc::close(expbuf.fd);
+                                false
+                            }
+                        }
+                    }
+                };
+
+                if !imported {
+                    all_imported = false;
+                    break;
+                }
+            }
+
+            if all_imported {
+                use_dmabuf = true;
+                eprintln!(
+                    "[Camera {}] DMA-BUF zero-copy enabled ({} buffers imported into Vulkan)",
+                    camera_name, V4L2_BUFFER_COUNT
+                );
+            } else {
+                // Clean up any partially imported buffers
+                for i in 0..V4L2_BUFFER_COUNT as usize {
+                    unsafe {
+                        if dmabuf_imported_buffers[i] != vk::Buffer::null() {
+                            device.destroy_buffer(dmabuf_imported_buffers[i], None);
+                            dmabuf_imported_buffers[i] = vk::Buffer::null();
+                        }
+                        if dmabuf_imported_memories[i] != vk::DeviceMemory::null() {
+                            device.free_memory(dmabuf_imported_memories[i], None);
+                            dmabuf_imported_memories[i] = vk::DeviceMemory::null();
+                        }
+                        if dmabuf_fds[i] >= 0 {
+                            libc::close(dmabuf_fds[i]);
+                            dmabuf_fds[i] = -1;
+                        }
+                    }
+                }
+                eprintln!(
+                    "[Camera {}] DMA-BUF partial import failed — using MMAP path",
+                    camera_name
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Main capture loop — DMABUF zero-copy path or MMAP + memcpy fallback.
+    //
+    // DMABUF: raw V4L2 DQBUF/QBUF to get buffer index, GPU reads directly
+    //   from V4L2 buffer memory via imported VkBuffer (no memcpy).
+    // MMAP: stream.next() + memcpy to HOST_VISIBLE SSBO (double-buffered).
+    // -----------------------------------------------------------------------
+    let mut ping_pong_index: usize = 0;
+
+    // In DMABUF mode, manually start the V4L2 stream via raw ioctls
+    // (the mmap stream allocated buffers but we bypass stream.next())
+    if use_dmabuf {
+        unsafe {
+            for i in 0..V4L2_BUFFER_COUNT {
+                let mut v4l2_buf: v4l::v4l_sys::v4l2_buffer = std::mem::zeroed();
+                v4l2_buf.type_ = v4l::buffer::Type::VideoCapture as u32;
+                v4l2_buf.memory = v4l::memory::Memory::Mmap as u32;
+                v4l2_buf.index = i;
+                libc::ioctl(
+                    device_fd,
+                    v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                    &mut v4l2_buf,
+                );
+            }
+            let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
+            libc::ioctl(
+                device_fd,
+                v4l::v4l2::vidioc::VIDIOC_STREAMON as libc::c_ulong,
+                &mut buf_type,
+            );
+        }
+    }
+
+    while is_capturing.load(Ordering::Acquire) {
+        // ---- Step 1: Acquire frame and select input SSBO ----
+        let input_ssbo_buffer: vk::Buffer;
+        let current_fence: vk::Fence;
+        let mut v4l2_requeue_buf: Option<v4l::v4l_sys::v4l2_buffer> = None;
+        let mut frame_sequence: u32 = 0;
+
+        if use_dmabuf {
+            // DMABUF path: raw V4L2 poll + DQBUF → imported VkBuffer (zero-copy)
+            unsafe {
+                let mut pollfd = libc::pollfd {
+                    fd: device_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let poll_result = libc::poll(&mut pollfd, 1, 1000);
+                if poll_result == 0 {
+                    continue; // Poll timeout — check is_capturing and retry
+                }
+                if poll_result < 0 {
+                    if is_capturing.load(Ordering::Acquire) {
+                        eprintln!("[Camera {}] V4L2 poll error", camera_name);
+                    }
+                    break;
+                }
+
+                let mut v4l2_buf: v4l::v4l_sys::v4l2_buffer = std::mem::zeroed();
+                v4l2_buf.type_ = v4l::buffer::Type::VideoCapture as u32;
+                v4l2_buf.memory = v4l::memory::Memory::Mmap as u32;
+
+                if libc::ioctl(
+                    device_fd,
+                    v4l::v4l2::vidioc::VIDIOC_DQBUF as libc::c_ulong,
+                    &mut v4l2_buf,
+                ) != 0
+                {
+                    if is_capturing.load(Ordering::Acquire) {
+                        eprintln!("[Camera {}] DQBUF failed", camera_name);
+                    }
+                    continue;
+                }
+
+                let buffer_index = v4l2_buf.index as usize;
+                frame_sequence = v4l2_buf.sequence;
+                input_ssbo_buffer = dmabuf_imported_buffers[buffer_index];
+                // Use fence 0 for all DMABUF dispatches (no double buffering needed)
+                current_fence = compute_fences[0];
+                v4l2_requeue_buf = Some(v4l2_buf);
+            }
+
+            // Wait for previous GPU dispatch to complete before reusing the fence
+            unsafe {
+                let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
+                let _ = device.reset_fences(&[current_fence]);
+            }
+        } else {
+            // MMAP path: stream.next() + memcpy to HOST_VISIBLE SSBO
+            let (buf, meta) = match stream.next() {
+                Ok(frame) => frame,
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    continue;
+                }
+                Err(e) => {
+                    if is_capturing.load(Ordering::Acquire) {
+                        eprintln!("[Camera {}] V4L2 stream error: {}", camera_name, e);
+                    }
+                    break;
+                }
+            };
+
+            if !is_capturing.load(Ordering::Acquire) {
+                break;
+            }
+
+            frame_sequence = meta.sequence;
+            let current_ssbo = ping_pong_index;
+            current_fence = compute_fences[current_ssbo];
+
+            // Wait for any previous GPU work on this SSBO slot before uploading
+            unsafe {
+                let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
+                let _ = device.reset_fences(&[current_fence]);
+            }
+
+            // Upload raw V4L2 frame data to current input SSBO (the memcpy)
+            let copy_len = buf.len().min(input_byte_size);
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    buf.as_ptr(),
+                    input_mapped_ptrs[current_ssbo],
+                    copy_len,
+                );
+            }
+
+            input_ssbo_buffer = input_buffers[current_ssbo];
         }
 
         let frame_num = frame_counter.fetch_add(1, Ordering::Relaxed);
 
-        // Acquire a BGRA pixel buffer from the pool (used as compute output SSBO)
+        // ---- Step 2: Acquire output pixel buffer ----
         let (pool_id, pooled_buffer) =
             match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Bgra32) {
                 Ok(result) => result,
@@ -976,30 +1319,25 @@ fn capture_thread_loop(
                             camera_name, e
                         );
                     }
+                    // Re-queue V4L2 buffer in DMABUF mode before continuing
+                    if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+                        unsafe {
+                            libc::ioctl(
+                                device_fd,
+                                v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                                &mut v4l2_buf,
+                            );
+                        }
+                    }
                     continue;
                 }
             };
 
         let output_vk_buffer = pooled_buffer.buffer_ref().inner.buffer();
 
-        let current_ssbo = ping_pong_index;
-        let current_fence = compute_fences[current_ssbo];
-
-        // Wait for any previous GPU work on this SSBO slot before uploading
-        unsafe {
-            let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
-            let _ = device.reset_fences(&[current_fence]);
-        }
-
-        // Upload raw V4L2 frame data to current input SSBO
-        let copy_len = buf.len().min(input_byte_size);
-        unsafe {
-            std::ptr::copy_nonoverlapping(buf.as_ptr(), input_mapped_ptrs[current_ssbo], copy_len);
-        }
-
-        // Update descriptor set binding 0 to point to current input SSBO
+        // ---- Step 3: Update descriptor set with selected input SSBO ----
         let input_buffer_descriptor = vk::DescriptorBufferInfo::default()
-            .buffer(input_buffers[current_ssbo])
+            .buffer(input_ssbo_buffer)
             .offset(0)
             .range(input_alloc_size);
         let input_buffer_infos = [input_buffer_descriptor];
@@ -1012,7 +1350,7 @@ fn capture_thread_loop(
             device.update_descriptor_sets(&[input_descriptor_write], &[]);
         }
 
-        // Record compute dispatch command buffer
+        // ---- Step 4: Record and submit compute dispatch ----
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
@@ -1028,6 +1366,13 @@ fn capture_thread_loop(
                 .reset_command_buffer(compute_command_buffer, vk::CommandBufferResetFlags::empty())
                 .is_err()
             {
+                if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+                    libc::ioctl(
+                        device_fd,
+                        v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                        &mut v4l2_buf,
+                    );
+                }
                 continue;
             }
 
@@ -1035,8 +1380,35 @@ fn capture_thread_loop(
                 .begin_command_buffer(compute_command_buffer, &begin_info)
                 .is_err()
             {
+                if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+                    libc::ioctl(
+                        device_fd,
+                        v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                        &mut v4l2_buf,
+                    );
+                }
                 continue;
             }
+
+            // DMABUF memory barrier: ensure GPU sees fresh external memory
+            // after V4L2 DMA write (GPU caches may have stale data).
+            let dmabuf_input_barrier = if use_dmabuf {
+                Some(
+                    vk::BufferMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::NONE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                        .buffer(input_ssbo_buffer)
+                        .offset(0)
+                        .size(input_alloc_size),
+                )
+            } else {
+                None
+            };
+            let dmabuf_buffer_barriers: &[vk::BufferMemoryBarrier] =
+                match dmabuf_input_barrier.as_ref() {
+                    Some(b) => std::slice::from_ref(b),
+                    None => &[],
+                };
 
             // Transition storage image: UNDEFINED → GENERAL (discard old contents)
             let image_barrier_to_general = vk::ImageMemoryBarrier::default()
@@ -1055,7 +1427,7 @@ fn capture_thread_loop(
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::DependencyFlags::empty(),
                 &[],
-                &[],
+                dmabuf_buffer_barriers,
                 &[image_barrier_to_general],
             );
 
@@ -1157,6 +1529,13 @@ fn capture_thread_loop(
             );
 
             if device.end_command_buffer(compute_command_buffer).is_err() {
+                if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+                    libc::ioctl(
+                        device_fd,
+                        v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                        &mut v4l2_buf,
+                    );
+                }
                 continue;
             }
 
@@ -1171,6 +1550,13 @@ fn capture_thread_loop(
                         camera_name, e
                     );
                 }
+                if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+                    libc::ioctl(
+                        device_fd,
+                        v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                        &mut v4l2_buf,
+                    );
+                }
                 continue;
             }
 
@@ -1178,6 +1564,18 @@ fn capture_thread_loop(
             let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
         }
 
+        // ---- Step 5: Re-queue V4L2 buffer in DMABUF mode ----
+        if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+            unsafe {
+                libc::ioctl(
+                    device_fd,
+                    v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                    &mut v4l2_buf,
+                );
+            }
+        }
+
+        // ---- Step 6: Publish frame via IPC ----
         let surface_id = pool_id.to_string();
         let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
@@ -1195,23 +1593,55 @@ fn capture_thread_loop(
         }
 
         if frame_num == 0 {
+            let mode = if use_dmabuf { "DMA-BUF zero-copy" } else { "MMAP + memcpy" };
             eprintln!(
-                "[Camera {}] First frame captured via GPU compute (seq={}, {}x{} {:?})",
-                camera_name, meta.sequence, width, height, fourcc
+                "[Camera {}] First frame captured via GPU compute ({}, seq={}, {}x{} {:?})",
+                camera_name, mode, frame_sequence, width, height, fourcc
             );
         } else if frame_num % 300 == 0 {
             eprintln!("[Camera {}] Frame #{}", camera_name, frame_num);
         }
 
-        // Toggle ping-pong index for next frame
-        ping_pong_index = 1 - ping_pong_index;
+        // Toggle ping-pong index for next frame (MMAP path only)
+        if !use_dmabuf {
+            ping_pong_index = 1 - ping_pong_index;
+        }
     }
 
     // -----------------------------------------------------------------------
     // Cleanup — destroy all compute pipeline resources
     // -----------------------------------------------------------------------
+
+    // Stop V4L2 stream in DMABUF mode (mmap stream Drop handles MMAP mode)
+    if use_dmabuf {
+        unsafe {
+            let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
+            libc::ioctl(
+                device_fd,
+                v4l::v4l2::vidioc::VIDIOC_STREAMOFF as libc::c_ulong,
+                &mut buf_type,
+            );
+        }
+    }
+
     unsafe {
         let _ = device.device_wait_idle();
+
+        // Clean up DMABUF imported buffers
+        if use_dmabuf {
+            for i in 0..V4L2_BUFFER_COUNT as usize {
+                if dmabuf_imported_buffers[i] != vk::Buffer::null() {
+                    device.destroy_buffer(dmabuf_imported_buffers[i], None);
+                }
+                if dmabuf_imported_memories[i] != vk::DeviceMemory::null() {
+                    device.free_memory(dmabuf_imported_memories[i], None);
+                }
+                if dmabuf_fds[i] >= 0 {
+                    libc::close(dmabuf_fds[i]);
+                }
+            }
+        }
+
         device.destroy_image_view(compute_output_image_view, None);
         device.destroy_image(compute_output_image, None);
         device.free_memory(compute_output_image_memory, None);

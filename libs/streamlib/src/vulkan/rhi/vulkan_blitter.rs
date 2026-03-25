@@ -81,30 +81,48 @@ impl RhiBlitter for VulkanBlitter {
                 .end_command_buffer(command_buffer)
                 .map_err(|e| StreamError::GpuError(format!("Failed to end blit command buffer: {e}")))?;
 
-            let submit_info =
-                vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&command_buffer));
-
-            let fence_info = vk::FenceCreateInfo::default();
-            let fence = self
+            // Timeline semaphore (Vulkan 1.2 core) for targeted blit synchronization.
+            // More efficient than fences for GPU-GPU ordering.
+            let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::default()
+                .semaphore_type(vk::SemaphoreType::TIMELINE)
+                .initial_value(0);
+            let timeline_semaphore_info = vk::SemaphoreCreateInfo::default()
+                .push_next(&mut timeline_type_info);
+            let timeline_semaphore = self
                 .device
-                .create_fence(&fence_info, None)
-                .map_err(|e| StreamError::GpuError(format!("Failed to create blit fence: {e}")))?;
+                .create_semaphore(&timeline_semaphore_info, None)
+                .map_err(|e| StreamError::GpuError(format!("Failed to create blit timeline semaphore: {e}")))?;
+
+            let signal_semaphores = [timeline_semaphore];
+            let signal_values = [1u64];
+            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::default()
+                .signal_semaphore_values(&signal_values);
+
+            let submit_info = vk::SubmitInfo::default()
+                .command_buffers(std::slice::from_ref(&command_buffer))
+                .signal_semaphores(&signal_semaphores)
+                .push_next(&mut timeline_submit_info);
 
             self.device
-                .queue_submit(self.queue, &[submit_info], fence)
+                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
                 .map_err(|e| {
-                    self.device.destroy_fence(fence, None);
+                    self.device.destroy_semaphore(timeline_semaphore, None);
                     StreamError::GpuError(format!("Failed to submit blit command: {e}"))
                 })?;
 
+            let wait_semaphores = [timeline_semaphore];
+            let wait_values = [1u64];
+            let wait_info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&wait_semaphores)
+                .values(&wait_values);
             self.device
-                .wait_for_fences(&[fence], true, u64::MAX)
+                .wait_semaphores(&wait_info, u64::MAX)
                 .map_err(|e| {
-                    self.device.destroy_fence(fence, None);
-                    StreamError::GpuError(format!("Failed to wait for blit fence: {e}"))
+                    self.device.destroy_semaphore(timeline_semaphore, None);
+                    StreamError::GpuError(format!("Failed to wait for blit timeline semaphore: {e}"))
                 })?;
 
-            self.device.destroy_fence(fence, None);
+            self.device.destroy_semaphore(timeline_semaphore, None);
             self.device
                 .free_command_buffers(self.command_pool, &[command_buffer]);
         }

@@ -254,6 +254,13 @@ impl VulkanDevice {
                     device_extensions.push(external_memory_dmabuf_ext.as_ptr());
                     tracing::info!("VK_EXT_external_memory_dma_buf available");
                 }
+
+                let drm_format_modifier_ext = c"VK_EXT_image_drm_format_modifier";
+                if available_device_ext_names.contains(&drm_format_modifier_ext) {
+                    device_extensions.push(drm_format_modifier_ext.as_ptr());
+                    tracing::info!("VK_EXT_image_drm_format_modifier available");
+                }
+
                 tracing::info!("Vulkan external memory extensions enabled");
             } else {
                 tracing::info!("Vulkan external memory extensions not available");
@@ -316,11 +323,15 @@ impl VulkanDevice {
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
         // 10. Create gpu-allocator for sub-allocation
+        let mut debug_settings = gpu_allocator::AllocatorDebugSettings::default();
+        debug_settings.log_memory_information = true;
+        debug_settings.log_leaks_on_shutdown = true;
+
         let allocator = Allocator::new(&AllocatorCreateDesc {
             instance: instance.clone(),
             device: device.clone(),
             physical_device,
-            debug_settings: Default::default(),
+            debug_settings,
             buffer_device_address: false,
             allocation_sizes: Default::default(),
         })
@@ -454,6 +465,33 @@ impl VulkanDevice {
                 location,
                 linear,
                 allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            })
+            .map_err(|e| StreamError::GpuError(format!("GPU memory allocation failed: {e}")))
+    }
+
+    /// Allocate GPU memory as a dedicated image allocation.
+    ///
+    /// Uses DedicatedImage scheme — creates a 1:1 driver allocation for
+    /// this specific image. Use for large images (camera textures, render
+    /// targets) where sub-allocation from shared blocks isn't appropriate.
+    pub fn allocate_gpu_memory_dedicated_image(
+        &self,
+        name: &str,
+        requirements: vk::MemoryRequirements,
+        location: MemoryLocation,
+        image: vk::Image,
+    ) -> Result<Allocation> {
+        let allocator_arc = self.gpu_memory_allocator.as_ref().ok_or_else(|| {
+            StreamError::GpuError("GPU memory allocator not available".into())
+        })?;
+        allocator_arc
+            .lock()
+            .allocate(&AllocationCreateDesc {
+                name,
+                requirements,
+                location,
+                linear: false,
+                allocation_scheme: AllocationScheme::DedicatedImage(image),
             })
             .map_err(|e| StreamError::GpuError(format!("GPU memory allocation failed: {e}")))
     }
