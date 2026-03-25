@@ -55,9 +55,7 @@ pub mod clap_effect;
 pub mod simple_passthrough;
 
 // WebRTC Streaming
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod webrtc_whep;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod webrtc_whip;
 
 // TODO: Migrate to iceoryx2 API
@@ -77,7 +75,5 @@ pub use audio_resampler::AudioResamplerProcessor;
 pub use buffer_rechunker::BufferRechunkerProcessor;
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use webrtc_whep::WebRtcWhepProcessor;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use webrtc_whip::WebRtcWhipProcessor;

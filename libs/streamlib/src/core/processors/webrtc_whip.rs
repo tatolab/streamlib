@@ -10,7 +10,6 @@
 
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::{H264Profile, VideoCodec, VideoEncoder};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
     OpusEncoder,
@@ -295,7 +294,7 @@ impl WebRtcWhipProcessor::Processor {
 mod tests {
     use super::*;
     use crate::_generated_::Encodedvideoframe;
-    use crate::apple::videotoolbox::parse_nal_units;
+    use crate::core::streaming::rtp::parse_nal_units;
     use crate::_generated_::Encodedaudioframe;
     use std::time::Duration;
 

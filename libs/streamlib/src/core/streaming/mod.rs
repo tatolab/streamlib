@@ -20,9 +20,7 @@ pub use h264_rtp::H264RtpDepacketizer;
 pub use opus::{AudioEncoderConfig, AudioEncoderOpus, OpusEncoder};
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
 pub use opus_decoder::OpusDecoder;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use rtp::convert_video_to_samples;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use rtp::convert_audio_to_sample;
 pub use rtp::RtpTimestampCalculator;
 pub use webrtc_session::WebRtcSession;
