@@ -120,6 +120,7 @@ pub use core::{
     OpusEncoder,
 };
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 
 // GPU Backends - Metal and Vulkan
