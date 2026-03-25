@@ -51,7 +51,6 @@ pub mod audio_channel_converter;
 pub mod audio_mixer;
 pub mod audio_resampler;
 pub mod buffer_rechunker;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod clap_effect;
 pub mod simple_passthrough;
 
@@ -76,7 +75,6 @@ pub use audio_channel_converter::AudioChannelConverterProcessor;
 pub use audio_mixer::AudioMixerProcessor;
 pub use audio_resampler::AudioResamplerProcessor;
 pub use buffer_rechunker::BufferRechunkerProcessor;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use clack_host::{
-    bundle::PluginBundle,
+    entry::PluginEntry,
     events::{event_types::ParamValueEvent, io::EventBuffer},
     host::HostInfo,
     plugin::PluginInstance,
@@ -72,7 +72,7 @@ impl<'a> SharedHandler<'a> for HostShared {
 }
 
 pub struct ClapPluginHost {
-    bundle: PluginBundle,
+    entry: PluginEntry,
 
     plugin_id: std::ffi::CString,
 
@@ -95,7 +95,7 @@ pub struct ClapPluginHost {
     last_parameter_generation: usize,
 }
 
-// SAFETY: ClapPluginHost is Send despite PluginBundle containing raw pointers
+// SAFETY: ClapPluginHost is Send despite PluginEntry containing raw pointers
 unsafe impl Send for ClapPluginHost {}
 
 impl ClapPluginHost {
@@ -209,7 +209,7 @@ impl ClapPluginHost {
 
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         let bundle = unsafe {
-            PluginBundle::load(&binary_path).map_err(|e| {
+            PluginEntry::load(&binary_path).map_err(|e| {
                 StreamError::Configuration(format!(
                     "Failed to load CLAP plugin from {:?}: {:?}",
                     path, e
@@ -269,7 +269,7 @@ impl ClapPluginHost {
 
         Ok(Self {
             plugin_info,
-            bundle,
+            entry: bundle,
             plugin_id: plugin_id_cstring,
             instance: Arc::new(ParkingLotMutex::new(None)),
             audio_processor: Arc::new(ParkingLotMutex::new(None)),
@@ -352,7 +352,7 @@ impl ClapPluginHost {
                 state: Arc::clone(&shared_state_clone),
             },
             |_shared| (), // Main thread handler factory
-            &self.bundle,
+            &self.entry,
             &self.plugin_id,
             &host_info,
         )
