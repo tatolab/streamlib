@@ -248,7 +248,7 @@ struct PersistentPipelineState {
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
-    descriptor_set: vk::DescriptorSet,
+    descriptor_sets: Vec<vk::DescriptorSet>,
     sampler: vk::Sampler,
 }
 
@@ -633,13 +633,16 @@ impl DisplayEventLoopHandler {
         // Update descriptor set with camera texture every frame.
         // This is a single descriptor write — negligible CPU cost — and ensures
         // correctness after swapchain recreation (which creates a new descriptor set).
+        // Update this frame's descriptor set with the camera texture.
+        // Each swapchain image has its own descriptor set to avoid updating
+        // a set that's still in use by a pending command buffer.
         let desc_image_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(camera_tex.image_view)
             .sampler(ps.sampler);
         let desc_image_infos = [desc_image_info];
         let descriptor_write = vk::WriteDescriptorSet::default()
-            .dst_set(ps.descriptor_set)
+            .dst_set(ps.descriptor_sets[frame_index])
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&desc_image_infos);
@@ -849,7 +852,7 @@ impl DisplayEventLoopHandler {
                 vk::PipelineBindPoint::GRAPHICS,
                 ps.pipeline_layout,
                 0,
-                &[ps.descriptor_set],
+                &[ps.descriptor_sets[frame_index]],
                 &[],
             );
 
@@ -1337,23 +1340,25 @@ fn create_swapchain_state(
         device.destroy_shader_module(frag_module, None);
     }
 
-    // Descriptor pool and set for camera texture binding
+    // Descriptor pool and sets — one per swapchain image to avoid updating
+    // a descriptor set while a previous frame's command buffer is still pending.
     let pool_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(1);
+        .descriptor_count(image_count as u32);
     let pool_sizes = [pool_size];
     let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
-        .max_sets(1)
+        .max_sets(image_count as u32)
         .pool_sizes(&pool_sizes);
     let descriptor_pool = unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create descriptor pool: {}", e)))?;
 
-    let set_layouts_alloc = [descriptor_set_layout];
+    let set_layouts_alloc: Vec<vk::DescriptorSetLayout> =
+        vec![descriptor_set_layout; image_count];
     let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(descriptor_pool)
         .set_layouts(&set_layouts_alloc);
-    let descriptor_set = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate descriptor set: {}", e)))?[0];
+    let descriptor_sets = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
+        .map_err(|e| StreamError::GpuError(format!("Failed to allocate descriptor sets: {}", e)))?;
 
     // Dynamic rendering loader
     let dynamic_rendering_loader = ash::khr::dynamic_rendering::Device::new(instance, device);
@@ -1391,7 +1396,7 @@ fn create_swapchain_state(
             pipeline_layout,
             descriptor_set_layout,
             descriptor_pool,
-            descriptor_set,
+            descriptor_sets,
             sampler,
         },
     ))
