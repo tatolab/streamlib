@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.6](https://github.com/tatolab/streamlib/compare/v0.4.5...v0.4.6) (2026-03-25)
+
+
+### Features
+
+* Phase 6 — timeline semaphores + V4L2 DMABUF zero-copy ([#200](https://github.com/tatolab/streamlib/issues/200)) ([24db878](https://github.com/tatolab/streamlib/commit/24db878e60a8761efb3983f1480a29907e608a06))
+
 ## [0.4.5](https://github.com/tatolab/streamlib/compare/v0.4.4...v0.4.5) (2026-03-24)
 
 
