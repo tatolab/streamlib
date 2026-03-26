@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use clack_host::bundle::PluginBundle;
+use clack_host::entry::PluginEntry;
 
 use crate::core::{Result, StreamError};
 use std::path::{Path, PathBuf};
@@ -113,7 +113,7 @@ impl ClapScanner {
 
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         let bundle = unsafe {
-            PluginBundle::load(&binary_path).map_err(|e| {
+            PluginEntry::load(&binary_path).map_err(|e| {
                 StreamError::Configuration(format!("Failed to load bundle {:?}: {:?}", path, e))
             })?
         };

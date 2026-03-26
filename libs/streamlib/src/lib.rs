@@ -118,8 +118,10 @@ pub use core::ApiServerProcessor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
-    ClapEffectProcessor, ClapPluginInfo, ClapScanner, OpusEncoder,
+    OpusEncoder,
 };
+
+pub use core::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 
 // GPU Backends - Metal and Vulkan
 // Metal module is always available on macOS/iOS since Apple platform services need Metal types
