@@ -62,11 +62,17 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
             StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
         })?;
 
-        let device_path = self
-            .config
-            .device_id
-            .clone()
-            .unwrap_or_else(|| DEFAULT_DEVICE_PATH.to_string());
+        let device_path = match &self.config.device_id {
+            Some(id) => id.clone(),
+            None => {
+                let devices = Self::list_devices()?;
+                devices.first().map(|d| d.id.clone()).ok_or_else(|| {
+                    StreamError::Configuration(
+                        "No V4L2 capture devices found. Check that a camera is connected.".into(),
+                    )
+                })?
+            }
+        };
 
         // Open the V4L2 device
         let mut dev = v4l::Device::with_path(&device_path).map_err(|e| {

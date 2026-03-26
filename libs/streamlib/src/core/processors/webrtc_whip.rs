@@ -10,7 +10,6 @@
 
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::{H264Profile, VideoCodec, VideoEncoder};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::core::streaming::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
     OpusEncoder,
@@ -18,6 +17,18 @@ use crate::core::streaming::{
 use crate::core::streaming::{WhipClient, WhipConfig};
 use crate::core::VideoEncoderConfig;
 use crate::core::{media_clock::MediaClock, GpuContext, Result, RuntimeContext, StreamError};
+use std::sync::Arc;
+use tokio::sync::mpsc as tokio_mpsc;
+
+// ============================================================================
+// ASYNC CHANNEL MESSAGE
+// ============================================================================
+
+/// Message sent from the processor thread to the async WHIP client task.
+enum WhipClientMessage {
+    VideoSamples(Vec<webrtc::media::Sample>),
+    AudioSample(webrtc::media::Sample),
+}
 
 // ============================================================================
 // PROCESSOR
@@ -38,8 +49,14 @@ pub struct WebRtcWhipProcessor {
     video_encoder: Option<VideoEncoder>,
     audio_encoder: Option<OpusEncoder>,
 
-    // WHIP client (owns WebRTC session)
+    // WHIP client (owns WebRTC session, moved to async task after connect)
     whip_client: Option<WhipClient>,
+
+    // Async channel sender to the background WHIP client task
+    whip_client_message_sender: Option<tokio_mpsc::Sender<WhipClientMessage>>,
+
+    // Peer connection reference for stats (cloned before client moves to async task)
+    peer_connection_for_stats: Option<Arc<webrtc::peer_connection::RTCPeerConnection>>,
 
     // Stats tracking
     last_stats_time_ns: i64,
@@ -56,7 +73,7 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
             channels: self.config.audio.channels as u16,
             bitrate_bps: self.config.audio.bitrate_bps,
             frame_duration_ms: 20, // Standard Opus frame duration
-            complexity: 10,        // Maximum quality
+            complexity: 5,         // Opus-recommended for real-time (identical quality at 128kbps)
             vbr: true,             // Variable bitrate for better quality
         };
         self.audio_encoder = Some(OpusEncoder::new(audio_config)?);
@@ -77,7 +94,13 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
     async fn teardown(&mut self) -> Result<()> {
         tracing::info!("WebRtcWhipProcessor shutting down");
 
-        // Terminate WHIP session
+        // Drop the channel sender to signal the async task to terminate.
+        // The task will call client.terminate() when it sees the channel close.
+        self.whip_client_message_sender.take();
+        self.peer_connection_for_stats.take();
+
+        // If the client was never moved to the async task (session never started),
+        // terminate it directly.
         if let Some(mut client) = self.whip_client.take() {
             if let Err(e) = client.terminate().await {
                 tracing::warn!("Error terminating WHIP session: {}", e);
@@ -174,7 +197,7 @@ impl WebRtcWhipProcessor::Processor {
             tracing::info!("Video encoder initialized");
         }
 
-        // Connect WHIP client
+        // Connect WHIP client (one-time setup, block_on is fine here)
         let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
         let client = self
             .whip_client
@@ -185,6 +208,40 @@ impl WebRtcWhipProcessor::Processor {
             client.connect(self.config.video.bitrate_bps, self.config.audio.bitrate_bps),
         )?;
 
+        // Clone the peer connection Arc for stats before moving client to async task
+        self.peer_connection_for_stats = client.peer_connection.clone();
+
+        // Move client into async task, communicate via bounded channel
+        let mut client = self
+            .whip_client
+            .take()
+            .ok_or_else(|| StreamError::Runtime("WhipClient not initialized".into()))?;
+
+        let (sender, mut receiver) = tokio_mpsc::channel::<WhipClientMessage>(8);
+
+        tokio_handle.spawn(async move {
+            while let Some(msg) = receiver.recv().await {
+                match msg {
+                    WhipClientMessage::VideoSamples(samples) => {
+                        if let Err(e) = client.write_video_samples(samples).await {
+                            tracing::error!("[WebRTC] Async video write failed: {}", e);
+                        }
+                    }
+                    WhipClientMessage::AudioSample(sample) => {
+                        if let Err(e) = client.write_audio_sample(sample).await {
+                            tracing::error!("[WebRTC] Async audio write failed: {}", e);
+                        }
+                    }
+                }
+            }
+            // Channel closed (sender dropped) — terminate the session
+            tracing::info!("[WebRTC] Channel closed, terminating WHIP client");
+            if let Err(e) = client.terminate().await {
+                tracing::warn!("[WebRTC] Error terminating WHIP client: {}", e);
+            }
+        });
+
+        self.whip_client_message_sender = Some(sender);
         self.last_stats_time_ns = MediaClock::now().as_nanos() as i64;
 
         tracing::info!("WebRTC WHIP session started");
@@ -217,6 +274,12 @@ impl WebRtcWhipProcessor::Processor {
             }
         };
 
+        // Skip frames where encoder hasn't produced output yet (normal buffering)
+        if encoded.data.is_empty() {
+            tracing::debug!("[WebRTC] Encoder buffering (no output yet), skipping frame");
+            return Ok(());
+        }
+
         let samples = convert_video_to_samples(&encoded, self.config.video.fps)?;
         tracing::debug!(
             "[WebRTC] Encoded video frame: {} NAL units, {} bytes, keyframe={}",
@@ -225,10 +288,21 @@ impl WebRtcWhipProcessor::Processor {
             encoded.is_keyframe
         );
 
-        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
-        let client = self.whip_client.as_mut().unwrap();
+        let sender = self.whip_client_message_sender.as_ref().ok_or_else(|| {
+            StreamError::Runtime("WHIP client channel not initialized".into())
+        })?;
 
-        tokio_handle.block_on(client.write_video_samples(samples))?;
+        match sender.try_send(WhipClientMessage::VideoSamples(samples)) {
+            Ok(()) => {}
+            Err(tokio_mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!("[WebRTC] Video channel full, dropping frame (backpressure)");
+            }
+            Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
+                return Err(StreamError::Runtime(
+                    "WHIP client channel closed".into(),
+                ));
+            }
+        }
 
         Ok(())
     }
@@ -246,43 +320,53 @@ impl WebRtcWhipProcessor::Processor {
         let encoded = encoder.encode(frame)?;
         let sample = convert_audio_to_sample(&encoded, self.config.audio.sample_rate)?;
 
-        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
-        let client = self.whip_client.as_mut().unwrap();
+        let sender = self.whip_client_message_sender.as_ref().ok_or_else(|| {
+            StreamError::Runtime("WHIP client channel not initialized".into())
+        })?;
 
-        tokio_handle.block_on(client.write_audio_sample(sample))?;
+        match sender.try_send(WhipClientMessage::AudioSample(sample)) {
+            Ok(()) => {}
+            Err(tokio_mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!("[WebRTC] Audio channel full, dropping frame (backpressure)");
+            }
+            Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
+                return Err(StreamError::Runtime(
+                    "WHIP client channel closed".into(),
+                ));
+            }
+        }
 
         Ok(())
     }
 
     fn log_stats(&self) {
-        if let (Some(client), Some(ctx)) = (&self.whip_client, &self.ctx) {
+        if let (Some(pc), Some(ctx)) = (&self.peer_connection_for_stats, &self.ctx) {
             let tokio_handle = ctx.tokio_handle();
-            if let Some(stats) = tokio_handle.block_on(client.get_stats()) {
-                let mut video_bytes_sent = 0u64;
-                let mut audio_bytes_sent = 0u64;
-                let mut video_packets_sent = 0u64;
-                let mut audio_packets_sent = 0u64;
+            let stats = tokio_handle.block_on(pc.get_stats());
+            let mut video_bytes_sent = 0u64;
+            let mut audio_bytes_sent = 0u64;
+            let mut video_packets_sent = 0u64;
+            let mut audio_packets_sent = 0u64;
 
-                for (_id, stat_type) in stats.reports.iter() {
-                    if let webrtc::stats::StatsReportType::OutboundRTP(outbound) = stat_type {
-                        if outbound.kind == "video" {
-                            video_bytes_sent = outbound.bytes_sent;
-                            video_packets_sent = outbound.packets_sent;
-                        } else if outbound.kind == "audio" {
-                            audio_bytes_sent = outbound.bytes_sent;
-                            audio_packets_sent = outbound.packets_sent;
-                        }
+            for (_id, stat_type) in stats.reports.iter() {
+                if let webrtc::stats::StatsReportType::OutboundRTP(outbound) = stat_type {
+                    if outbound.kind == "video" {
+                        video_bytes_sent = outbound.bytes_sent;
+                        video_packets_sent = outbound.packets_sent;
+                    } else if outbound.kind == "audio" {
+                        audio_bytes_sent = outbound.bytes_sent;
+                        audio_packets_sent = outbound.packets_sent;
                     }
                 }
-
-                tracing::info!(
-                    "[WebRTC Stats] Video: {} packets ({:.2} MB), Audio: {} packets ({:.2} KB)",
-                    video_packets_sent,
-                    video_bytes_sent as f64 / 1_000_000.0,
-                    audio_packets_sent,
-                    audio_bytes_sent as f64 / 1_000.0
-                );
             }
+
+            tracing::info!(
+                "[WebRTC Stats] Video: {} packets ({:.2} MB), Audio: {} packets ({:.2} KB)",
+                video_packets_sent,
+                video_bytes_sent as f64 / 1_000_000.0,
+                audio_packets_sent,
+                audio_bytes_sent as f64 / 1_000.0
+            );
         }
     }
 }
@@ -295,7 +379,7 @@ impl WebRtcWhipProcessor::Processor {
 mod tests {
     use super::*;
     use crate::_generated_::Encodedvideoframe;
-    use crate::apple::videotoolbox::parse_nal_units;
+    use crate::core::streaming::rtp::parse_nal_units;
     use crate::_generated_::Encodedaudioframe;
     use std::time::Duration;
 

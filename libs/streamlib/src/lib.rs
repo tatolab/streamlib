@@ -115,12 +115,12 @@ pub use core::{
 
 pub use core::ApiServerProcessor;
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{
     convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
     OpusEncoder,
 };
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 
 // GPU Backends - Metal and Vulkan
@@ -169,8 +169,7 @@ pub use linux::{
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
-// WebRTC WHIP/WHEP processors (macOS/iOS — depend on opus encoder/decoder)
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+// WebRTC WHIP/WHEP processors (cross-platform)
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
