@@ -30,7 +30,7 @@ impl Default for AudioEncoderConfig {
             channels: 2,
             bitrate_bps: 128_000,
             frame_duration_ms: 20,
-            complexity: 10,
+            complexity: 5,
             vbr: true,
         }
     }

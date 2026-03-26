@@ -28,7 +28,11 @@ fn ensure_ffmpeg_initialized() {
 pub struct FFmpegEncoder {
     config: VideoEncoderConfig,
     encoder: ffmpeg::encoder::video::Encoder,
-    scaler: scaling::Context,
+    scaler: Option<scaling::Context>,
+    bgra_frame: Option<ffmpeg::frame::Video>,
+    yuv_frame: Option<ffmpeg::frame::Video>,
+    last_input_width: u32,
+    last_input_height: u32,
     frame_count: u64,
     force_next_keyframe: bool,
     codec_name: String,
@@ -96,24 +100,14 @@ impl FFmpegEncoder {
             StreamError::Configuration(format!("Failed to open H.264 encoder: {e}"))
         })?;
 
-        // Create BGRA → YUV420P scaler for pixel format conversion
-        let scaler = scaling::Context::get(
-            Pixel::BGRA,
-            config.width,
-            config.height,
-            Pixel::YUV420P,
-            config.width,
-            config.height,
-            scaling::Flags::BILINEAR,
-        )
-        .map_err(|e| {
-            StreamError::Configuration(format!("Failed to create pixel format scaler: {e}"))
-        })?;
-
         Ok(Self {
             config,
             encoder,
-            scaler,
+            scaler: None,
+            bgra_frame: None,
+            yuv_frame: None,
+            last_input_width: 0,
+            last_input_height: 0,
             frame_count: 0,
             force_next_keyframe: false,
             codec_name,
@@ -157,36 +151,60 @@ impl FFmpegEncoder {
         let src_bpp = vulkan_buffer.bytes_per_pixel();
         let src_row_bytes = (width * src_bpp) as usize;
 
-        // Create BGRA input frame from pixel buffer data
-        let mut bgra_frame = ffmpeg::frame::Video::new(Pixel::BGRA, width, height);
+        // (Re)create cached frames and scaler if input dimensions changed
+        if self.scaler.is_none() || width != self.last_input_width || height != self.last_input_height {
+            self.bgra_frame = Some(ffmpeg::frame::Video::new(Pixel::BGRA, width, height));
+            self.yuv_frame = Some(ffmpeg::frame::Video::new(Pixel::YUV420P, self.config.width, self.config.height));
+            self.scaler = Some(scaling::Context::get(
+                Pixel::BGRA,
+                width,
+                height,
+                Pixel::YUV420P,
+                self.config.width,
+                self.config.height,
+                scaling::Flags::FAST_BILINEAR,
+            ).map_err(|e| StreamError::GpuError(format!("Failed to create pixel format scaler: {e}")))?);
+            self.last_input_width = width;
+            self.last_input_height = height;
+            tracing::info!("FFmpegEncoder: created scaler {}x{} → {}x{}", width, height, self.config.width, self.config.height);
+        }
+
+        // Copy pixel data into cached BGRA frame
+        let bgra_frame = self.bgra_frame.as_mut().unwrap();
         let bgra_stride = bgra_frame.stride(0);
         unsafe {
             let dst_data = bgra_frame.data_mut(0);
-            for row in 0..height as usize {
-                let src_offset = row * src_row_bytes;
-                let dst_offset = row * bgra_stride;
-                let src_slice = std::slice::from_raw_parts(src_ptr.add(src_offset), src_row_bytes);
-                dst_data[dst_offset..dst_offset + src_row_bytes].copy_from_slice(src_slice);
+            if bgra_stride == src_row_bytes {
+                std::ptr::copy_nonoverlapping(src_ptr, dst_data.as_mut_ptr(), (height as usize) * src_row_bytes);
+            } else {
+                for row in 0..height as usize {
+                    let src_offset = row * src_row_bytes;
+                    let dst_offset = row * bgra_stride;
+                    let src_slice = std::slice::from_raw_parts(src_ptr.add(src_offset), src_row_bytes);
+                    dst_data[dst_offset..dst_offset + src_row_bytes].copy_from_slice(src_slice);
+                }
             }
         }
 
-        // Scale BGRA → YUV420P
-        let mut yuv_frame = ffmpeg::frame::Video::new(Pixel::YUV420P, width, height);
-        self.scaler
-            .run(&bgra_frame, &mut yuv_frame)
-            .map_err(|e| StreamError::GpuError(format!("BGRA to YUV420P scaling failed: {e}")))?;
+        // Scale BGRA → YUV420P using cached frames
+        {
+            let scaler = self.scaler.as_mut().unwrap();
+            let yuv = self.yuv_frame.as_mut().unwrap();
+            scaler.run(bgra_frame, yuv)
+                .map_err(|e| StreamError::GpuError(format!("BGRA to YUV420P scaling failed: {e}")))?;
+        }
 
-        // Set presentation timestamp
+        // Set presentation timestamp and keyframe on cached YUV frame
+        let yuv_frame = self.yuv_frame.as_mut().unwrap();
         yuv_frame.set_pts(Some(self.frame_count as i64));
 
-        // Force keyframe if requested
         if self.force_next_keyframe {
             yuv_frame.set_kind(ffmpeg::picture::Type::I);
             self.force_next_keyframe = false;
         }
 
         // Send frame to encoder
-        self.encoder.send_frame(&yuv_frame).map_err(|e| {
+        self.encoder.send_frame(yuv_frame).map_err(|e| {
             StreamError::Configuration(format!("Failed to send frame to encoder: {e}"))
         })?;
 

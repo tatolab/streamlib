@@ -71,7 +71,20 @@ impl WebRtcSession {
                         sdp_fmtp_line:
                             "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
                                 .to_owned(),
-                        rtcp_feedback: vec![],
+                        rtcp_feedback: vec![
+                            webrtc::rtp_transceiver::RTCPFeedback {
+                                typ: "goog-remb".to_owned(),
+                                parameter: "".to_owned(),
+                            },
+                            webrtc::rtp_transceiver::RTCPFeedback {
+                                typ: "nack".to_owned(),
+                                parameter: "".to_owned(),
+                            },
+                            webrtc::rtp_transceiver::RTCPFeedback {
+                                typ: "nack".to_owned(),
+                                parameter: "pli".to_owned(),
+                            },
+                        ],
                     },
                     payload_type: 102,
                     ..Default::default()
@@ -379,7 +392,20 @@ impl WebRtcSession {
                         sdp_fmtp_line:
                             "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
                                 .to_owned(),
-                        rtcp_feedback: vec![],
+                        rtcp_feedback: vec![
+                            webrtc::rtp_transceiver::RTCPFeedback {
+                                typ: "goog-remb".to_owned(),
+                                parameter: "".to_owned(),
+                            },
+                            webrtc::rtp_transceiver::RTCPFeedback {
+                                typ: "nack".to_owned(),
+                                parameter: "".to_owned(),
+                            },
+                            webrtc::rtp_transceiver::RTCPFeedback {
+                                typ: "nack".to_owned(),
+                                parameter: "pli".to_owned(),
+                            },
+                        ],
                     },
                     payload_type: 102,
                     ..Default::default()

@@ -135,14 +135,6 @@ impl LinuxAudioCaptureProcessor::Processor {
             is_default: self.config.device_id.is_none(),
         };
 
-        // Only support mono devices
-        if device_channels != 1 {
-            return Err(StreamError::Configuration(format!(
-                "Audio input device '{}' is not mono (has {} channels). Only mono devices are supported.",
-                device_name, device_channels
-            )));
-        }
-
         let outputs_clone: Arc<OutputWriter> = self.outputs.clone();
         let frame_counter_clone = self.frame_counter.clone();
         let is_capturing_clone = Arc::clone(&self.is_capturing);
