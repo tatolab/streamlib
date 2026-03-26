@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.7](https://github.com/tatolab/streamlib/compare/v0.4.6...v0.4.7) (2026-03-26)
+
+
+### Features
+
+* widen CLAP plugin host to cross-platform ([#198](https://github.com/tatolab/streamlib/issues/198)) ([909a11b](https://github.com/tatolab/streamlib/commit/909a11bbfca0501af933a879774f5716635db0f4))
+
 ## [0.4.6](https://github.com/tatolab/streamlib/compare/v0.4.5...v0.4.6) (2026-03-25)
 
 
