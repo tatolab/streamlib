@@ -43,6 +43,7 @@ struct EncodeResources {
     video_session: VulkanVideoSession,
     format_converter: VulkanFormatConverter,
     nv12_staging_buffer: RhiPixelBuffer,
+    nv12_staging_buffer_b: RhiPixelBuffer,
     nv12_image: vk::Image,
     nv12_image_view: vk::ImageView,
     nv12_image_memory: vk::DeviceMemory,
@@ -55,15 +56,21 @@ struct EncodeResources {
     bitstream_buffer: vk::Buffer,
     bitstream_buffer_memory: vk::DeviceMemory,
     bitstream_mapped_ptr: *mut u8,
+    bitstream_buffer_b: vk::Buffer,
+    bitstream_buffer_memory_b: vk::DeviceMemory,
+    bitstream_mapped_ptr_b: *mut u8,
     // Graphics queue command resources (for buffer→image copy — video encode
     // queue family typically doesn't support transfer operations)
     transfer_command_pool: vk::CommandPool,
     transfer_command_buffer: vk::CommandBuffer,
+    transfer_command_buffer_b: vk::CommandBuffer,
     transfer_fence: vk::Fence,
     // Video encode queue command resources
     encode_command_pool: vk::CommandPool,
     encode_command_buffer: vk::CommandBuffer,
+    encode_command_buffer_b: vk::CommandBuffer,
     encode_fence: vk::Fence,
+    encode_fence_b: vk::Fence,
     // Query pools for encode feedback and status
     encode_feedback_query_pool: vk::QueryPool,
     encode_status_query_pool: vk::QueryPool,
@@ -87,6 +94,10 @@ pub struct VulkanVideoEncoder {
     video_encode_queue_loader: ash::khr::video_encode_queue::Device,
     frame_count: u64,
     force_next_keyframe: bool,
+    /// Whether the previous frame was an IDR (for SPS/PPS prepending in pipelined output).
+    previous_frame_was_idr: bool,
+    /// Timestamp of the previous frame (returned one frame later in pipelined output).
+    previous_frame_timestamp_ns: i64,
     /// Lazily initialized on first encode when frame dimensions are known.
     resources: Option<EncodeResources>,
 }
@@ -140,6 +151,8 @@ impl VulkanVideoEncoder {
             video_encode_queue_loader,
             frame_count: 0,
             force_next_keyframe: false,
+            previous_frame_was_idr: false,
+            previous_frame_timestamp_ns: 0,
             resources: None,
         })
     }
@@ -245,12 +258,21 @@ impl VulkanVideoEncoder {
 
         let (bitstream_buffer, bitstream_buffer_memory, bitstream_mapped_ptr) =
             Self::create_bitstream_buffer(&self.vulkan_device, &mut profile_list)?;
+        let (bitstream_buffer_b, bitstream_buffer_memory_b, bitstream_mapped_ptr_b) =
+            Self::create_bitstream_buffer(&self.vulkan_device, &mut profile_list)?;
 
-        // NV12 staging buffer created after GPU images to reduce peak memory
+        // NV12 staging buffers created after GPU images to reduce peak memory.
+        // Two staging buffers for double-buffered pipeline: while the GPU reads
+        // from buffer A for transfer+encode, the CPU/GPU writes to buffer B.
         let nv12_vk_buffer =
             VulkanPixelBuffer::new(&self.vulkan_device, width, height, 2, PixelFormat::Nv12VideoRange)?;
         let nv12_staging_buffer = RhiPixelBuffer::new(RhiPixelBufferRef {
             inner: Arc::new(nv12_vk_buffer),
+        });
+        let nv12_vk_buffer_b =
+            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 2, PixelFormat::Nv12VideoRange)?;
+        let nv12_staging_buffer_b = RhiPixelBuffer::new(RhiPixelBufferRef {
+            inner: Arc::new(nv12_vk_buffer_b),
         });
 
         // Create encode feedback query pool (reports bitstream bytes written).
@@ -319,14 +341,18 @@ impl VulkanVideoEncoder {
         let gfx_cmd_alloc = vk::CommandBufferAllocateInfo::default()
             .command_pool(transfer_command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-        let transfer_command_buffer =
+            .command_buffer_count(2);
+        let gfx_cmd_buffers =
             unsafe { self.device.allocate_command_buffers(&gfx_cmd_alloc) }.map_err(|e| {
                 StreamError::GpuError(format!(
-                    "Failed to allocate transfer command buffer: {e}"
+                    "Failed to allocate transfer command buffers: {e}"
                 ))
-            })?[0];
-        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+            })?;
+        let transfer_command_buffer = gfx_cmd_buffers[0];
+        let transfer_command_buffer_b = gfx_cmd_buffers[1];
+        // Fences created UNSIGNALED — the pipelined encode() skips fence waits
+        // on frame 0 and only waits for fences that were actually signaled.
+        let fence_info = vk::FenceCreateInfo::default();
         let transfer_fence = unsafe { self.device.create_fence(&fence_info, None) }
             .map_err(|e| {
                 StreamError::GpuError(format!("Failed to create transfer fence: {e}"))
@@ -343,13 +369,17 @@ impl VulkanVideoEncoder {
         let ve_cmd_alloc = vk::CommandBufferAllocateInfo::default()
             .command_pool(encode_command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-        let encode_command_buffer =
+            .command_buffer_count(2);
+        let ve_cmd_buffers =
             unsafe { self.device.allocate_command_buffers(&ve_cmd_alloc) }.map_err(|e| {
-                StreamError::GpuError(format!("Failed to allocate encode command buffer: {e}"))
-            })?[0];
+                StreamError::GpuError(format!("Failed to allocate encode command buffers: {e}"))
+            })?;
+        let encode_command_buffer = ve_cmd_buffers[0];
+        let encode_command_buffer_b = ve_cmd_buffers[1];
         let encode_fence = unsafe { self.device.create_fence(&fence_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create encode fence: {e}")))?;
+        let encode_fence_b = unsafe { self.device.create_fence(&fence_info, None) }
+            .map_err(|e| StreamError::GpuError(format!("Failed to create encode fence B: {e}")))?;
 
         tracing::info!(
             "VulkanVideoEncoder resources initialized: {}x{} H.264 on queue family {}",
@@ -369,6 +399,7 @@ impl VulkanVideoEncoder {
             video_session,
             format_converter,
             nv12_staging_buffer,
+            nv12_staging_buffer_b,
             nv12_image,
             nv12_image_view,
             nv12_image_memory,
@@ -381,12 +412,18 @@ impl VulkanVideoEncoder {
             bitstream_buffer,
             bitstream_buffer_memory,
             bitstream_mapped_ptr,
+            bitstream_buffer_b,
+            bitstream_buffer_memory_b,
+            bitstream_mapped_ptr_b,
             transfer_command_pool,
             transfer_command_buffer,
+            transfer_command_buffer_b,
             transfer_fence,
             encode_command_pool,
             encode_command_buffer,
+            encode_command_buffer_b,
             encode_fence,
+            encode_fence_b,
             encode_feedback_query_pool,
             encode_status_query_pool,
             encode_width: width,
@@ -398,12 +435,17 @@ impl VulkanVideoEncoder {
         Ok(())
     }
 
-    /// Encode a video frame.
+    /// Encode a video frame using a double-buffered pipeline.
+    ///
+    /// Returns the PREVIOUS frame's encoded data (one frame of latency).
+    /// Frame 0 returns empty data; the actual encoded bytes arrive on the
+    /// next call. This pipelining allows format conversion for frame N+1
+    /// to overlap with the GPU encode of frame N.
     pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<Encodedvideoframe> {
-        // 1. Resolve the BGRA pixel buffer from the video frame
-        let bgra_buffer = gpu.resolve_videoframe_buffer(frame)?;
-        let input_width = bgra_buffer.buffer_ref().inner.width();
-        let input_height = bgra_buffer.buffer_ref().inner.height();
+        // 1. Resolve the pixel buffer from the video frame
+        let source_buffer = gpu.resolve_videoframe_buffer(frame)?;
+        let input_width = source_buffer.buffer_ref().inner.width();
+        let input_height = source_buffer.buffer_ref().inner.height();
 
         // 2. Lazy init or reinit if dimensions changed
         let needs_init = match &self.resources {
@@ -416,44 +458,126 @@ impl VulkanVideoEncoder {
             self.init_resources(input_width, input_height)?;
             self.frame_count = 0;
             self.force_next_keyframe = false;
+            self.previous_frame_was_idr = false;
+            self.previous_frame_timestamp_ns = 0;
         }
-
-        let res = self.resources.as_ref().unwrap();
 
         // 5-second timeout for all GPU fence waits (detect hangs instead of deadlocking)
         const FENCE_TIMEOUT_NS: u64 = 5_000_000_000;
 
-        // 3. GPU format conversion: BGRA → NV12 (runs on graphics queue)
-        tracing::info!("VulkanVideoEncoder: starting BGRA→NV12 format conversion ({}x{})", input_width, input_height);
-        res.format_converter
-            .convert(&bgra_buffer, &res.nv12_staging_buffer)?;
+        // Double-buffer index: alternates 0/1 each frame, aligned with DPB ping-pong.
+        let buf_idx = (self.frame_count % 2) as usize;
 
-        // NV12 format conversion complete — convert() waits for its fence.
+        // 3. Format conversion: skip if source is already NV12, otherwise BGRA → NV12.
+        //    When BGRA, converts into the CURRENT staging buffer on the graphics queue,
+        //    which can overlap with the previous frame's encode (different queue families).
+        let source_format = source_buffer.format();
+        let source_is_nv12 = matches!(
+            source_format,
+            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange
+        );
 
-        // 4. Wait for any previous transfer + encode to finish
-        unsafe {
-            self.device
-                .wait_for_fences(
-                    &[res.transfer_fence, res.encode_fence],
-                    true,
-                    FENCE_TIMEOUT_NS,
-                )
-                .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to wait for fences (timeout 5s): {e}"))
-                })?;
-            self.device
-                .reset_fences(&[res.transfer_fence, res.encode_fence])
-                .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to reset fences: {e}"))
-                })?;
-        }
+        let res = self.resources.as_ref().unwrap();
+        let nv12_source_vk_buffer = if source_is_nv12 {
+            tracing::info!(
+                "VulkanVideoEncoder: source is NV12, skipping format conversion ({}x{}, buf={})",
+                input_width, input_height, buf_idx
+            );
+            source_buffer.buffer_ref().inner.buffer()
+        } else {
+            let current_staging_buffer = if buf_idx == 0 {
+                &res.nv12_staging_buffer
+            } else {
+                &res.nv12_staging_buffer_b
+            };
+            tracing::info!(
+                "VulkanVideoEncoder: starting BGRA→NV12 format conversion ({}x{}, buf={})",
+                input_width, input_height, buf_idx
+            );
+            res.format_converter
+                .convert(&source_buffer, current_staging_buffer)?;
+            current_staging_buffer.buffer_ref().inner.buffer()
+        };
 
-        // 5. Zero-clear the bitstream buffer so the scan fallback in
+        // 4. Wait for the PREVIOUS frame's encode fence.
+        //    This ensures: (a) the previous encode is done so we can read its
+        //    bitstream, and (b) the NV12 image is free for our transfer.
+        //    For frame 0 there is no previous encode — skip the wait.
+        let previous_frame_data = if self.frame_count > 0 {
+            let prev_idx = ((self.frame_count + 1) % 2) as usize;
+            let res = self.resources.as_ref().unwrap();
+            let prev_encode_fence = if prev_idx == 0 {
+                res.encode_fence
+            } else {
+                res.encode_fence_b
+            };
+
+            unsafe {
+                self.device
+                    .wait_for_fences(&[prev_encode_fence], true, FENCE_TIMEOUT_NS)
+                    .map_err(|e| {
+                        StreamError::GpuError(format!(
+                            "Previous encode fence timeout (5s) or error: {e}"
+                        ))
+                    })?;
+                self.device
+                    .reset_fences(&[prev_encode_fence])
+                    .map_err(|e| {
+                        StreamError::GpuError(format!("Failed to reset previous encode fence: {e}"))
+                    })?;
+            }
+
+            // Read the previous frame's bitstream (encode is done by now).
+            let mut bitstream_data = self.read_bitstream(prev_idx)?;
+
+            // Prepend SPS/PPS for IDR frames (NVIDIA doesn't emit them inline).
+            if self.previous_frame_was_idr && !bitstream_data.is_empty() {
+                let res = self.resources.as_ref().unwrap();
+                if !res.sps_pps_nalu.is_empty() {
+                    let mut with_params = res.sps_pps_nalu.clone();
+                    with_params.extend_from_slice(&bitstream_data);
+                    bitstream_data = with_params;
+                }
+            }
+
+            tracing::info!(
+                "VulkanVideoEncoder: previous frame {} readback, {} bytes, idr={}",
+                self.frame_count - 1,
+                bitstream_data.len(),
+                self.previous_frame_was_idr
+            );
+
+            // Debug: dump raw H.264 bitstream to file for offline verification
+            if !bitstream_data.is_empty() {
+                use std::io::Write;
+                let path = "/tmp/vulkan_encode_output.h264";
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .ok();
+                if let Some(ref mut f) = file {
+                    let _ = f.write_all(&bitstream_data);
+                }
+            }
+
+            Some(bitstream_data)
+        } else {
+            None
+        };
+
+        // 5. Zero-clear the CURRENT bitstream buffer so the scan fallback in
         //    read_bitstream() can detect actual data boundaries.
         //    The buffer is HOST_COHERENT so this is immediately visible to GPU.
+        let res = self.resources.as_ref().unwrap();
+        let current_bitstream_ptr = if buf_idx == 0 {
+            res.bitstream_mapped_ptr
+        } else {
+            res.bitstream_mapped_ptr_b
+        };
         unsafe {
             std::ptr::write_bytes(
-                res.bitstream_mapped_ptr,
+                current_bitstream_ptr,
                 0u8,
                 BITSTREAM_BUFFER_SIZE as usize,
             );
@@ -465,21 +589,26 @@ impl VulkanVideoEncoder {
             || (self.frame_count % self.config.keyframe_interval_frames as u64) == 0;
         self.force_next_keyframe = false;
 
-        // 7. Record and submit: transfer on graphics queue, then encode on video queue
-        tracing::info!("VulkanVideoEncoder: recording transfer commands");
-        self.record_transfer_commands()?;
+        // 7. Record and submit transfer on graphics queue.
+        //    Wait for transfer fence (cross-queue sync — encode queue needs
+        //    the NV12 image copy to be complete before encoding).
+        tracing::info!("VulkanVideoEncoder: recording transfer commands (buf={})", buf_idx);
+        self.record_transfer_commands(buf_idx, nv12_source_vk_buffer)?;
         let gfx_queue = self.vulkan_device.queue();
         let res = self.resources.as_ref().unwrap();
+        let transfer_cmd = if buf_idx == 0 {
+            res.transfer_command_buffer
+        } else {
+            res.transfer_command_buffer_b
+        };
         unsafe {
-            let cmds = [res.transfer_command_buffer];
+            let cmds = [transfer_cmd];
             let submit = vk::SubmitInfo::default().command_buffers(&cmds);
-            tracing::info!("VulkanVideoEncoder: submitting transfer to graphics queue");
             self.device
                 .queue_submit(gfx_queue, &[submit], res.transfer_fence)
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to submit transfer commands: {e}"))
                 })?;
-            tracing::info!("VulkanVideoEncoder: waiting for transfer fence");
             self.device
                 .wait_for_fences(&[res.transfer_fence], true, FENCE_TIMEOUT_NS)
                 .map_err(|e| {
@@ -487,93 +616,86 @@ impl VulkanVideoEncoder {
                         "Transfer fence timeout (5s) or error: {e}"
                     ))
                 })?;
-            tracing::info!("VulkanVideoEncoder: transfer complete");
+            self.device
+                .reset_fences(&[res.transfer_fence])
+                .map_err(|e| {
+                    StreamError::GpuError(format!("Failed to reset transfer fence: {e}"))
+                })?;
         }
 
-        tracing::info!("VulkanVideoEncoder: recording encode commands (idr={})", is_idr);
-        self.record_encode_commands(is_idr)?;
+        // 8. Record and submit encode on video encode queue.
+        //    Signal the current buffer set's encode fence but do NOT wait —
+        //    the fence is checked at the start of the NEXT encode() call,
+        //    allowing this encode to overlap with the next frame's format conversion.
+        tracing::info!("VulkanVideoEncoder: recording encode commands (idr={}, buf={})", is_idr, buf_idx);
+        self.record_encode_commands(is_idr, buf_idx)?;
         let res = self.resources.as_ref().unwrap();
+        let encode_cmd = if buf_idx == 0 {
+            res.encode_command_buffer
+        } else {
+            res.encode_command_buffer_b
+        };
+        let current_encode_fence = if buf_idx == 0 {
+            res.encode_fence
+        } else {
+            res.encode_fence_b
+        };
         unsafe {
-            let cmds = [res.encode_command_buffer];
+            let cmds = [encode_cmd];
             let submit = vk::SubmitInfo::default().command_buffers(&cmds);
-            tracing::info!("VulkanVideoEncoder: submitting encode to video queue");
             self.device
-                .queue_submit(self.video_encode_queue, &[submit], res.encode_fence)
+                .queue_submit(self.video_encode_queue, &[submit], current_encode_fence)
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to submit encode commands: {e}"))
                 })?;
-            tracing::info!("VulkanVideoEncoder: waiting for encode fence");
-            self.device
-                .wait_for_fences(&[res.encode_fence], true, FENCE_TIMEOUT_NS)
-                .map_err(|e| {
-                    StreamError::GpuError(format!(
-                        "Encode fence timeout (5s) or error: {e}"
-                    ))
-                })?;
-            tracing::info!("VulkanVideoEncoder: encode complete");
+            tracing::info!("VulkanVideoEncoder: encode submitted (buf={}), not waiting", buf_idx);
         }
 
-        // 8. Read the encoded bitstream
-        let mut bitstream_data = self.read_bitstream()?;
+        // 9. Build the output from the PREVIOUS frame's data (pipelined).
+        //    Frame 0 returns empty data — the actual encoded bytes arrive
+        //    on the next call (1-frame latency, invisible in real-time streaming).
+        let (output_data, output_is_keyframe, output_frame_number, output_timestamp_ns) =
+            if let Some(data) = previous_frame_data {
+                (
+                    data,
+                    self.previous_frame_was_idr,
+                    self.frame_count - 1,
+                    self.previous_frame_timestamp_ns,
+                )
+            } else {
+                (Vec::new(), false, 0, 0i64)
+            };
 
-        // The NVIDIA Vulkan Video encoder does not emit SPS/PPS NAL units
-        // (generate_prefix_nalu capability is not supported). Prepend the
-        // SPS+PPS extracted from session parameters before IDR frames so
-        // decoders (Cloudflare, WebRTC peers) can initialize.
-        if is_idr && !bitstream_data.is_empty() {
-            let res = self.resources.as_ref().unwrap();
-            if !res.sps_pps_nalu.is_empty() {
-                let mut with_params = res.sps_pps_nalu.clone();
-                with_params.extend_from_slice(&bitstream_data);
-                bitstream_data = with_params;
-            }
-        }
-        tracing::info!(
-            "VulkanVideoEncoder: frame {} encoded, {} bytes, idr={}",
-            self.frame_count,
-            bitstream_data.len(),
-            is_idr
-        );
-
-        // Debug: dump raw H.264 bitstream to file for offline verification
-        if !bitstream_data.is_empty() {
-            use std::io::Write;
-            let path = "/tmp/vulkan_encode_output.h264";
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .ok();
-            if let Some(ref mut f) = file {
-                let _ = f.write_all(&bitstream_data);
-            }
-        }
-
+        // Track current frame state for the next call's readback.
         let timestamp_ns: i64 = frame.timestamp_ns.parse().unwrap_or(0);
-        let frame_number = self.frame_count;
+        self.previous_frame_was_idr = is_idr;
+        self.previous_frame_timestamp_ns = timestamp_ns;
         self.frame_count += 1;
 
         Ok(Encodedvideoframe {
-            data: bitstream_data,
-            frame_number: frame_number.to_string(),
-            is_keyframe: is_idr,
-            timestamp_ns: timestamp_ns.to_string(),
+            data: output_data,
+            frame_number: output_frame_number.to_string(),
+            is_keyframe: output_is_keyframe,
+            timestamp_ns: output_timestamp_ns.to_string(),
         })
     }
 
     /// Record buffer→image copy commands on the graphics queue command buffer.
-    fn record_transfer_commands(&mut self) -> Result<()> {
+    fn record_transfer_commands(&mut self, buf_idx: usize, nv12_source_vk_buffer: vk::Buffer) -> Result<()> {
         let res = self.resources.as_mut().unwrap();
         let encode_width = res.encode_width;
         let encode_height = res.encode_height;
 
-        let nv12_buffer_ref = res.nv12_staging_buffer.buffer_ref();
-        let nv12_vk_buffer = &nv12_buffer_ref.inner;
+        let cmd_buf = if buf_idx == 0 {
+            res.transfer_command_buffer
+        } else {
+            res.transfer_command_buffer_b
+        };
 
         unsafe {
             self.device
                 .reset_command_buffer(
-                    res.transfer_command_buffer,
+                    cmd_buf,
                     vk::CommandBufferResetFlags::empty(),
                 )
                 .map_err(|e| {
@@ -583,7 +705,7 @@ impl VulkanVideoEncoder {
             let begin_info = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.device
-                .begin_command_buffer(res.transfer_command_buffer, &begin_info)
+                .begin_command_buffer(cmd_buf, &begin_info)
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to begin transfer command buffer: {e}"))
                 })?;
@@ -603,7 +725,7 @@ impl VulkanVideoEncoder {
                 );
 
             self.device.cmd_pipeline_barrier(
-                res.transfer_command_buffer,
+                cmd_buf,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
@@ -646,8 +768,8 @@ impl VulkanVideoEncoder {
                 });
 
             self.device.cmd_copy_buffer_to_image(
-                res.transfer_command_buffer,
-                nv12_vk_buffer.buffer(),
+                cmd_buf,
+                nv12_source_vk_buffer,
                 res.nv12_image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[y_region, uv_region],
@@ -668,7 +790,7 @@ impl VulkanVideoEncoder {
                 );
 
             self.device.cmd_pipeline_barrier(
-                res.transfer_command_buffer,
+                cmd_buf,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::ALL_COMMANDS,
                 vk::DependencyFlags::empty(),
@@ -678,7 +800,7 @@ impl VulkanVideoEncoder {
             );
 
             self.device
-                .end_command_buffer(res.transfer_command_buffer)
+                .end_command_buffer(cmd_buf)
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to end transfer command buffer: {e}"))
                 })?;
@@ -688,15 +810,26 @@ impl VulkanVideoEncoder {
     }
 
     /// Record video encode commands on the video encode queue command buffer.
-    fn record_encode_commands(&mut self, is_idr: bool) -> Result<()> {
+    fn record_encode_commands(&mut self, is_idr: bool, buf_idx: usize) -> Result<()> {
         let res = self.resources.as_mut().unwrap();
         let encode_width = res.encode_width;
         let encode_height = res.encode_height;
 
+        let cmd_buf = if buf_idx == 0 {
+            res.encode_command_buffer
+        } else {
+            res.encode_command_buffer_b
+        };
+        let dst_bitstream_buffer = if buf_idx == 0 {
+            res.bitstream_buffer
+        } else {
+            res.bitstream_buffer_b
+        };
+
         unsafe {
             self.device
                 .reset_command_buffer(
-                    res.encode_command_buffer,
+                    cmd_buf,
                     vk::CommandBufferResetFlags::empty(),
                 )
                 .map_err(|e| {
@@ -706,7 +839,7 @@ impl VulkanVideoEncoder {
             let begin_info = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.device
-                .begin_command_buffer(res.encode_command_buffer, &begin_info)
+                .begin_command_buffer(cmd_buf, &begin_info)
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to begin encode command buffer: {e}"))
                 })?;
@@ -765,7 +898,7 @@ impl VulkanVideoEncoder {
             if is_idr {
                 // IDR: only need barrier for the current (write) DPB image.
                 self.device.cmd_pipeline_barrier(
-                    res.encode_command_buffer,
+                    cmd_buf,
                     vk::PipelineStageFlags::ALL_COMMANDS,
                     vk::PipelineStageFlags::ALL_COMMANDS,
                     vk::DependencyFlags::empty(),
@@ -793,7 +926,7 @@ impl VulkanVideoEncoder {
                     );
 
                 self.device.cmd_pipeline_barrier(
-                    res.encode_command_buffer,
+                    cmd_buf,
                     vk::PipelineStageFlags::ALL_COMMANDS,
                     vk::PipelineStageFlags::ALL_COMMANDS,
                     vk::DependencyFlags::empty(),
@@ -1026,7 +1159,7 @@ impl VulkanVideoEncoder {
                 .push_next(&mut begin_rate_control_info);
 
             (self.video_queue_loader.fp().cmd_begin_video_coding_khr)(
-                res.encode_command_buffer,
+                cmd_buf,
                 &begin_info,
             );
 
@@ -1035,7 +1168,7 @@ impl VulkanVideoEncoder {
                 let reset_info = vk::VideoCodingControlInfoKHR::default()
                     .flags(vk::VideoCodingControlFlagsKHR::RESET);
                 (self.video_queue_loader.fp().cmd_control_video_coding_khr)(
-                    res.encode_command_buffer,
+                    cmd_buf,
                     &reset_info,
                 );
 
@@ -1079,7 +1212,7 @@ impl VulkanVideoEncoder {
                     .push_next(&mut h264_rate_control_info);
 
                 (self.video_queue_loader.fp().cmd_control_video_coding_khr)(
-                    res.encode_command_buffer,
+                    cmd_buf,
                     &rc_control_info,
                 );
 
@@ -1094,7 +1227,7 @@ impl VulkanVideoEncoder {
                 };
 
             let encode_info = vk::VideoEncodeInfoKHR::default()
-                .dst_buffer(res.bitstream_buffer)
+                .dst_buffer(dst_bitstream_buffer)
                 .dst_buffer_offset(0)
                 .dst_buffer_range(BITSTREAM_BUFFER_SIZE)
                 .src_picture_resource(src_picture_resource)
@@ -1105,18 +1238,18 @@ impl VulkanVideoEncoder {
             // Encode without queries — queries were causing validation errors
             // (VUID-vkCmdBeginQuery-None-07127). Using scan fallback for bitstream size.
             (self.video_encode_queue_loader.fp().cmd_encode_video_khr)(
-                res.encode_command_buffer,
+                cmd_buf,
                 &encode_info,
             );
 
             let end_info = vk::VideoEndCodingInfoKHR::default();
             (self.video_queue_loader.fp().cmd_end_video_coding_khr)(
-                res.encode_command_buffer,
+                cmd_buf,
                 &end_info,
             );
 
             self.device
-                .end_command_buffer(res.encode_command_buffer)
+                .end_command_buffer(cmd_buf)
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to end encode command buffer: {e}"))
                 })?;
@@ -1125,8 +1258,15 @@ impl VulkanVideoEncoder {
         Ok(())
     }
 
-    fn read_bitstream(&self) -> Result<Vec<u8>> {
+    /// Read the encoded bitstream from the specified buffer set.
+    fn read_bitstream(&self, buf_idx: usize) -> Result<Vec<u8>> {
         let res = self.resources.as_ref().unwrap();
+
+        let bitstream_ptr = if buf_idx == 0 {
+            res.bitstream_mapped_ptr
+        } else {
+            res.bitstream_mapped_ptr_b
+        };
 
         // Check encode status via RESULT_STATUS_ONLY_KHR query (non-blocking).
         // NVIDIA drivers may not populate this reliably at all resolutions,
@@ -1196,7 +1336,7 @@ impl VulkanVideoEncoder {
             // where uncached reads are ~100x slower than normal memory.
             let buf_size = BITSTREAM_BUFFER_SIZE as usize;
             let data = unsafe {
-                std::slice::from_raw_parts(res.bitstream_mapped_ptr, buf_size)
+                std::slice::from_raw_parts(bitstream_ptr, buf_size)
             };
             const SCAN_CHUNK: usize = 4096;
             let mut data_region_end = 0usize;
@@ -1235,7 +1375,7 @@ impl VulkanVideoEncoder {
         }
 
         let data = unsafe {
-            std::slice::from_raw_parts(res.bitstream_mapped_ptr, bytes_written)
+            std::slice::from_raw_parts(bitstream_ptr, bytes_written)
         };
 
         Ok(data.to_vec())
@@ -1504,6 +1644,7 @@ impl Drop for VulkanVideoEncoder {
                 self.device
                     .destroy_command_pool(res.transfer_command_pool, None);
                 self.device.destroy_fence(res.encode_fence, None);
+                self.device.destroy_fence(res.encode_fence_b, None);
                 self.device
                     .destroy_command_pool(res.encode_command_pool, None);
 
@@ -1515,6 +1656,10 @@ impl Drop for VulkanVideoEncoder {
                 self.device.unmap_memory(res.bitstream_buffer_memory);
                 self.device.destroy_buffer(res.bitstream_buffer, None);
                 self.device.free_memory(res.bitstream_buffer_memory, None);
+
+                self.device.unmap_memory(res.bitstream_buffer_memory_b);
+                self.device.destroy_buffer(res.bitstream_buffer_b, None);
+                self.device.free_memory(res.bitstream_buffer_memory_b, None);
 
                 self.device.destroy_image_view(res.dpb_image_view_a, None);
                 self.device.destroy_image(res.dpb_image_a, None);
@@ -1528,7 +1673,7 @@ impl Drop for VulkanVideoEncoder {
                 self.device.destroy_image(res.nv12_image, None);
                 self.device.free_memory(res.nv12_image_memory, None);
             }
-            // video_session, format_converter, nv12_staging_buffer drop automatically
+            // video_session, format_converter, nv12_staging_buffer{,_b} drop automatically
         }
 
         tracing::info!("VulkanVideoEncoder destroyed");

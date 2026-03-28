@@ -419,37 +419,6 @@ impl VulkanFormatConverter {
                     StreamError::GpuError(format!("Failed to begin command buffer: {e}"))
                 })?;
 
-            // For BGRA→NV12: zero the output buffer before atomic OR writes
-            if is_bgra_to_nv12 {
-                self.device.cmd_fill_buffer(
-                    self.compute_command_buffer,
-                    dst_buffer,
-                    0,
-                    vk::WHOLE_SIZE,
-                    0,
-                );
-
-                // Barrier: fill must complete before compute shader reads/writes
-                let fill_barrier = vk::BufferMemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(
-                        vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
-                    )
-                    .buffer(dst_buffer)
-                    .offset(0)
-                    .size(vk::WHOLE_SIZE);
-
-                self.device.cmd_pipeline_barrier(
-                    self.compute_command_buffer,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[fill_barrier],
-                    &[],
-                );
-            }
-
             // Bind pipeline and descriptor set
             self.device.cmd_bind_pipeline(
                 self.compute_command_buffer,
@@ -480,9 +449,15 @@ impl VulkanFormatConverter {
                 push_bytes,
             );
 
-            // Dispatch compute: 16x16 workgroups
-            let dispatch_x = (width + 15) / 16;
-            let dispatch_y = (height + 15) / 16;
+            // Dispatch compute: 16×16 workgroups.
+            // BGRA→NV12 shader processes 4×2 pixel blocks per thread
+            // (each workgroup covers 64 pixels wide × 32 pixels tall);
+            // NV12→BGRA shader processes 1 pixel per thread.
+            let (dispatch_x, dispatch_y) = if is_bgra_to_nv12 {
+                ((width / 4 + 15) / 16, (height / 2 + 15) / 16)
+            } else {
+                ((width + 15) / 16, (height + 15) / 16)
+            };
             self.device
                 .cmd_dispatch(self.compute_command_buffer, dispatch_x, dispatch_y, 1);
 
