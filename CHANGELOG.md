@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.8](https://github.com/tatolab/streamlib/compare/v0.4.7...v0.4.8) (2026-03-28)
+
+
+### Features
+
+* Vulkan Video H.264/H.265 encoder — zero-copy GPU encoding ([#207](https://github.com/tatolab/streamlib/issues/207)) ([67e5659](https://github.com/tatolab/streamlib/commit/67e5659d7bf0ee2df0bf676dd29dae0e26f0edfc))
+* widen WebRTC WHIP/WHEP and RTP to cross-platform ([#197](https://github.com/tatolab/streamlib/issues/197)) ([3ae9f45](https://github.com/tatolab/streamlib/commit/3ae9f451c20447e70356710ec93d7d11273b0e6a))
+
+
+### Performance
+
+* optimize Vulkan Video encode pipeline — 25fps → 50fps ([#207](https://github.com/tatolab/streamlib/issues/207)) ([c15ce8f](https://github.com/tatolab/streamlib/commit/c15ce8f85a32fec07504c62cfca62166a5529e0a))
+
 ## [0.4.7](https://github.com/tatolab/streamlib/compare/v0.4.6...v0.4.7) (2026-03-26)
 
 
