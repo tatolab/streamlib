@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/tatolab/streamlib/compare/v0.4.8...v0.4.9) (2026-03-28)
+
+
+### Bug Fixes
+
+* drain RTCP on RTP senders to unblock interceptor pipeline ([c59624a](https://github.com/tatolab/streamlib/commit/c59624a8b8ab7273a9fd383cdec9f058bfcfa574))
+
 ## [0.4.8](https://github.com/tatolab/streamlib/compare/v0.4.7...v0.4.8) (2026-03-28)
 
 
