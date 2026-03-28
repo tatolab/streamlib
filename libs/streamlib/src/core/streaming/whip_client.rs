@@ -353,11 +353,26 @@ impl WhipClient {
             ),
         );
 
-        peer_connection
+        let video_rtp_sender = peer_connection
             .add_track(Arc::clone(&video_track)
                 as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
             .await
             .map_err(|e| StreamError::Configuration(format!("Failed to add video track: {}", e)))?;
+
+        // Drain incoming RTCP on the video sender. Required by webrtc-rs —
+        // without this, the interceptor pipeline stalls and RTCP Sender Reports
+        // are never generated, preventing the receiver from computing stats.
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1500];
+            loop {
+                match video_rtp_sender.read(&mut buf).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        });
 
         // Create audio track
         let audio_track = Arc::new(
@@ -374,11 +389,24 @@ impl WhipClient {
             ),
         );
 
-        peer_connection
+        let audio_rtp_sender = peer_connection
             .add_track(Arc::clone(&audio_track)
                 as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
             .await
             .map_err(|e| StreamError::Configuration(format!("Failed to add audio track: {}", e)))?;
+
+        // Drain incoming RTCP on the audio sender (same reason as video above).
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1500];
+            loop {
+                match audio_rtp_sender.read(&mut buf).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        });
 
         // Set transceivers to send-only
         let transceivers = peer_connection.get_transceivers().await;
