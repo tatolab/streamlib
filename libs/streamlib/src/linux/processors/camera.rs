@@ -207,6 +207,33 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
             negotiated.unwrap()
         };
 
+        // Cap capture resolution to 1920x1080 for real-time encoding performance.
+        // The initial negotiation picks the highest to probe DMA-BUF capability;
+        // now re-negotiate to a manageable resolution for encoding.
+        let fmt = if fmt.width > 1920 || fmt.height > 1080 {
+            let mut capped = fmt.clone();
+            capped.width = 1920;
+            capped.height = 1080;
+            match dev.set_format(&capped) {
+                Ok(f) => {
+                    tracing::info!(
+                        "Camera {}: capped resolution from {}x{} to {}x{}",
+                        self.camera_name, fmt.width, fmt.height, f.width, f.height
+                    );
+                    f
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Camera {}: failed to cap resolution to 1920x1080 ({}), using {}x{}",
+                        self.camera_name, e, fmt.width, fmt.height
+                    );
+                    fmt
+                }
+            }
+        } else {
+            fmt
+        };
+
         let capture_width = fmt.width;
         let capture_height = fmt.height;
         let capture_fourcc = fmt.fourcc;

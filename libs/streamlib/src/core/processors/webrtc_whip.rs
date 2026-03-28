@@ -190,7 +190,7 @@ impl WebRtcWhipProcessor::Processor {
                 fps: self.config.video.fps,
                 bitrate_bps: self.config.video.bitrate_bps,
                 keyframe_interval_frames: 60, // Keyframe every 2 seconds at 30fps
-                codec: VideoCodec::H264(H264Profile::Baseline), // Baseline for WebRTC compatibility
+                codec: VideoCodec::H264(H264Profile::Baseline), // Constrained Baseline for WebRTC/Cloudflare (42e01f)
                 low_latency: true,            // Real-time streaming mode
             };
             self.video_encoder = Some(VideoEncoder::new(video_config, gpu_context, ctx)?);

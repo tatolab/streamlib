@@ -48,39 +48,44 @@ fn main() -> Result<()> {
     }))?;
     println!("✓ Camera added (capturing video @ 1280x720)\n");
 
+    // Audio pipeline is optional — skip if no audio device is available
     println!("🎤 Adding audio capture processor...");
-    let audio_capture =
-        runtime.add_processor(AudioCaptureProcessor::node(AudioCaptureProcessor::Config {
+    let audio_pipeline = match runtime.add_processor(AudioCaptureProcessor::node(
+        AudioCaptureProcessor::Config {
             device_id: None, // Use default microphone
-        }))?;
-    println!("✓ Audio capture added (mono @ 24kHz)\n");
-
-    println!("🔄 Adding audio resampler (24kHz → 48kHz)...");
-    let resampler = runtime.add_processor(AudioResamplerProcessor::node(
-        AudioResamplerProcessor::Config {
-            source_sample_rate: 24000,
-            target_sample_rate: 48000,
-            quality: Quality::High,
         },
-    ))?;
-    println!("✓ Resampler added\n");
+    )) {
+        Ok(audio_capture) => {
+            println!("✓ Audio capture added (mono @ 24kHz)\n");
 
-    println!("🎛️  Adding channel converter (mono → stereo)...");
-    let channel_converter = runtime.add_processor(AudioChannelConverterProcessor::node(
-        AudioChannelConverterProcessor::Config {
-            mode: Mode::Duplicate,
-            output_channels: None, // default: 2
-        },
-    ))?;
-    println!("✓ Channel converter added\n");
+            let resampler = runtime.add_processor(AudioResamplerProcessor::node(
+                AudioResamplerProcessor::Config {
+                    source_sample_rate: 24000,
+                    target_sample_rate: 48000,
+                    quality: Quality::High,
+                },
+            ))?;
 
-    println!("📦 Adding buffer rechunker (512 samples → 960 samples for Opus)...");
-    let rechunker = runtime.add_processor(BufferRechunkerProcessor::node(
-        BufferRechunkerProcessor::Config {
-            target_buffer_size: 960, // 20ms @ 48kHz (Opus requirement)
-        },
-    ))?;
-    println!("✓ Buffer rechunker added\n");
+            let channel_converter = runtime.add_processor(AudioChannelConverterProcessor::node(
+                AudioChannelConverterProcessor::Config {
+                    mode: Mode::Duplicate,
+                    output_channels: None,
+                },
+            ))?;
+
+            let rechunker = runtime.add_processor(BufferRechunkerProcessor::node(
+                BufferRechunkerProcessor::Config {
+                    target_buffer_size: 960,
+                },
+            ))?;
+
+            Some((audio_capture, resampler, channel_converter, rechunker))
+        }
+        Err(e) => {
+            println!("⚠️  Audio capture unavailable ({}), streaming video only\n", e);
+            None
+        }
+    };
 
     println!("🌐 Adding WebRTC WHIP streaming processor...");
     let webrtc = runtime.add_processor(WebRtcWhipProcessor::node(WebRtcWhipProcessor::Config {
@@ -112,33 +117,37 @@ fn main() -> Result<()> {
     )?;
     println!("   ✓ Camera → WebRTC");
 
-    println!("   audio_capture.audio → resampler.audio_in");
-    runtime.connect(
-        output::<AudioCaptureProcessor::OutputLink::audio>(&audio_capture),
-        input::<AudioResamplerProcessor::InputLink::audio_in>(&resampler),
-    )?;
-    println!("   ✓ Audio capture → resampler");
+    if let Some((audio_capture, resampler, channel_converter, rechunker)) = &audio_pipeline {
+        println!("   audio_capture.audio → resampler.audio_in");
+        runtime.connect(
+            output::<AudioCaptureProcessor::OutputLink::audio>(audio_capture),
+            input::<AudioResamplerProcessor::InputLink::audio_in>(resampler),
+        )?;
+        println!("   ✓ Audio capture → resampler");
 
-    println!("   resampler.audio_out → channel_converter.audio_in");
-    runtime.connect(
-        output::<AudioResamplerProcessor::OutputLink::audio_out>(&resampler),
-        input::<AudioChannelConverterProcessor::InputLink::audio_in>(&channel_converter),
-    )?;
-    println!("   ✓ Resampler → channel converter");
+        println!("   resampler.audio_out → channel_converter.audio_in");
+        runtime.connect(
+            output::<AudioResamplerProcessor::OutputLink::audio_out>(resampler),
+            input::<AudioChannelConverterProcessor::InputLink::audio_in>(channel_converter),
+        )?;
+        println!("   ✓ Resampler → channel converter");
 
-    println!("   channel_converter.audio_out → rechunker.audio_in");
-    runtime.connect(
-        output::<AudioChannelConverterProcessor::OutputLink::audio_out>(&channel_converter),
-        input::<BufferRechunkerProcessor::InputLink::audio_in>(&rechunker),
-    )?;
-    println!("   ✓ Channel converter → rechunker");
+        println!("   channel_converter.audio_out → rechunker.audio_in");
+        runtime.connect(
+            output::<AudioChannelConverterProcessor::OutputLink::audio_out>(channel_converter),
+            input::<BufferRechunkerProcessor::InputLink::audio_in>(rechunker),
+        )?;
+        println!("   ✓ Channel converter → rechunker");
 
-    println!("   rechunker.audio_out → webrtc.audio_in");
-    runtime.connect(
-        output::<BufferRechunkerProcessor::OutputLink::audio_out>(&rechunker),
-        input::<WebRtcWhipProcessor::InputLink::audio_in>(&webrtc),
-    )?;
-    println!("   ✓ Rechunker → WebRTC\n");
+        println!("   rechunker.audio_out → webrtc.audio_in");
+        runtime.connect(
+            output::<BufferRechunkerProcessor::OutputLink::audio_out>(rechunker),
+            input::<WebRtcWhipProcessor::InputLink::audio_in>(&webrtc),
+        )?;
+        println!("   ✓ Rechunker → WebRTC\n");
+    } else {
+        println!("   (audio pipeline skipped — no audio device)\n");
+    }
 
     println!("✅ Pipeline connected\n");
 

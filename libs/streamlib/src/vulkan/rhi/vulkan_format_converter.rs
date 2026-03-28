@@ -353,7 +353,8 @@ impl VulkanFormatConverter {
         let src_size = src_vk.size();
         let dst_size = dst_vk.size();
 
-        // Wait for any previous compute work to finish
+        // Wait for previous compute dispatch to finish before re-recording the command buffer.
+        // This is essential — without it, we'd reset a command buffer that's still executing.
         unsafe {
             self.device
                 .wait_for_fences(&[self.compute_fence], true, u64::MAX)
@@ -501,7 +502,8 @@ impl VulkanFormatConverter {
                     StreamError::GpuError(format!("Failed to submit compute dispatch: {e}"))
                 })?;
 
-            // Wait for GPU to finish before returning (caller reads result from mapped pointer)
+            // Wait for the compute dispatch to complete, ensuring the output
+            // buffer data is visible before the caller submits dependent work.
             self.device
                 .wait_for_fences(&[self.compute_fence], true, u64::MAX)
                 .map_err(|e| {

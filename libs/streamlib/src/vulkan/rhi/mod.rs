@@ -33,3 +33,13 @@ pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
 mod vulkan_format_converter;
 pub use vulkan_format_converter::VulkanFormatConverter;
+
+#[cfg(target_os = "linux")]
+mod vulkan_video_session;
+#[cfg(target_os = "linux")]
+pub use vulkan_video_session::VulkanVideoSession;
+
+#[cfg(all(target_os = "linux", feature = "vulkan-video"))]
+mod vulkan_video_encoder;
+#[cfg(all(target_os = "linux", feature = "vulkan-video"))]
+pub use vulkan_video_encoder::VulkanVideoEncoder;

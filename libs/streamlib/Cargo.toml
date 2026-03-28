@@ -20,6 +20,8 @@ backend-metal = []
 backend-vulkan = ["dep:ash", "dep:gpu-allocator"]
 # FFmpeg-based encoding/decoding (Linux)
 ffmpeg = ["dep:ffmpeg-next"]
+# Vulkan Video hardware encoding (requires GPU with VK_KHR_video_encode_h264)
+vulkan-video = ["backend-vulkan"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
