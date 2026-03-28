@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use webrtc::track::track_local::TrackLocalWriter;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 // ============================================================================
 // WHIP CONFIGURATION
@@ -69,9 +70,9 @@ pub struct WhipClient {
     /// RTCPeerConnection
     pub(crate) peer_connection: Option<Arc<webrtc::peer_connection::RTCPeerConnection>>,
 
-    /// Video track (H.264 @ 90kHz)
-    video_track:
-        Option<Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>>,
+    /// Video track (H.264 @ 90kHz) — uses TrackLocalStaticSample for automatic
+    /// H.264 packetization (STAP-A aggregation of SPS/PPS, FU-A fragmentation).
+    video_track: Option<Arc<TrackLocalStaticSample>>,
 
     /// Audio track (Opus @ 48kHz)
     audio_track:
@@ -80,10 +81,8 @@ pub struct WhipClient {
     /// ICE candidate receiver (candidates collected from callback)
     ice_candidate_rx: Option<mpsc::Receiver<String>>,
 
-    /// Video RTP state
-    video_seq_num: u32,
-    video_timestamp: u32,
-    video_sample_count: u64,
+    /// Video frame counter (for startup logging).
+    video_frame_count: u64,
 
     /// Audio RTP state
     audio_seq_num: u32,
@@ -134,18 +133,8 @@ impl WhipClient {
             audio_track: None,
             ice_candidate_rx: None,
             // RTP sequence numbers and timestamps should start at random values for security
+            video_frame_count: 0,
             // Use simple time-based seeds since we don't have rand crate
-            video_seq_num: (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u32)
-                ^ 0xDEAD_BEEF,
-            video_timestamp: (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u32)
-                ^ 0xCAFE_BABE,
-            video_sample_count: 0,
             audio_seq_num: (std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -211,7 +200,7 @@ impl WhipClient {
         &self,
     ) -> Result<(
         Arc<webrtc::peer_connection::RTCPeerConnection>,
-        Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>,
+        Arc<TrackLocalStaticSample>,
         Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>,
         mpsc::Receiver<String>,
     )> {
@@ -336,22 +325,21 @@ impl WhipClient {
             })
         }));
 
-        // Create video track
-        let video_track = Arc::new(
-            webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP::new(
-                webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
-                    mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
-                    clock_rate: 90000,
-                    channels: 0,
-                    sdp_fmtp_line:
-                        "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
-                            .to_owned(),
-                    ..Default::default()
-                },
-                "video".to_owned(),
-                "streamlib-video".to_owned(),
-            ),
-        );
+        // Create video track — TrackLocalStaticSample handles H.264 RTP
+        // packetization automatically (STAP-A for SPS/PPS, FU-A for large NALs)
+        let video_track = Arc::new(TrackLocalStaticSample::new(
+            webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
+                mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
+                clock_rate: 90000,
+                channels: 0,
+                sdp_fmtp_line:
+                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+                        .to_owned(),
+                ..Default::default()
+            },
+            "video".to_owned(),
+            "streamlib-video".to_owned(),
+        ));
 
         let video_rtp_sender = peer_connection
             .add_track(Arc::clone(&video_track)
@@ -658,152 +646,32 @@ impl WhipClient {
         }
     }
 
-    /// Writes video samples to the WebRTC track.
-    pub async fn write_video_samples(&mut self, samples: Vec<webrtc::media::Sample>) -> Result<()> {
-        // Clone the Arc to avoid borrowing self while iterating
+    /// Writes a video frame to the WebRTC track.
+    ///
+    /// The sample data should be the full Annex B frame (with start codes).
+    /// The H264Payloader inside TrackLocalStaticSample handles NAL parsing,
+    /// STAP-A aggregation of SPS/PPS before IDR frames, and FU-A fragmentation.
+    pub async fn write_video_sample(&mut self, sample: webrtc::media::Sample) -> Result<()> {
         let track = self
             .video_track
             .clone()
             .ok_or_else(|| StreamError::Runtime("Video track not initialized".into()))?;
 
-        const MAX_PAYLOAD_SIZE: usize = 1200;
-        let timestamp_increment = 90000 / 30; // 90kHz @ 30fps
-
-        for (i, sample) in samples.iter().enumerate() {
-            let is_last_nal = i == samples.len() - 1;
-            let nal_type = sample.data[0] & 0x1F;
-
-            // Log first few samples and keyframes
-            if self.video_sample_count < 10 || nal_type == 5 || nal_type == 7 || nal_type == 8 {
-                let nal_name = match nal_type {
-                    1 => "P-frame",
-                    5 => "IDR",
-                    7 => "SPS",
-                    8 => "PPS",
-                    _ => "Other",
-                };
-                tracing::info!(
-                    "[WhipClient] Video NAL #{}: {} ({} bytes)",
-                    self.video_sample_count,
-                    nal_name,
-                    sample.data.len()
-                );
-            }
-
-            if sample.data.len() <= MAX_PAYLOAD_SIZE {
-                // Single NAL unit mode
-                self.write_video_single_nal(&track, &sample.data, is_last_nal)
-                    .await?;
-            } else {
-                // FU-A fragmentation mode
-                self.write_video_fua(&track, &sample.data, is_last_nal)
-                    .await?;
-            }
+        // Log first frame and keyframes at startup to confirm encoding pipeline works
+        if self.video_frame_count < 5 {
+            tracing::info!(
+                "[WhipClient] Video frame #{}: {} bytes",
+                self.video_frame_count,
+                sample.data.len()
+            );
         }
-
-        self.video_timestamp = self.video_timestamp.wrapping_add(timestamp_increment);
-        self.video_sample_count += samples.len() as u64;
-
-        Ok(())
-    }
-
-    /// Writes a single NAL unit as one RTP packet.
-    async fn write_video_single_nal(
-        &mut self,
-        track: &Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>,
-        nal_data: &[u8],
-        is_last_nal: bool,
-    ) -> Result<()> {
-        use webrtc::rtp::header::Header as RtpHeader;
-        use webrtc::rtp::packet::Packet as RtpPacket;
-
-        let rtp_packet = RtpPacket {
-            header: RtpHeader {
-                version: 2,
-                padding: false,
-                extension: false,
-                marker: is_last_nal,
-                payload_type: 102,
-                sequence_number: self.video_seq_num as u16,
-                timestamp: self.video_timestamp,
-                ssrc: 0,
-                ..Default::default()
-            },
-            payload: bytes::Bytes::copy_from_slice(nal_data),
-        };
-
-        self.video_seq_num = self.video_seq_num.wrapping_add(1);
 
         track
-            .write_rtp(&rtp_packet)
+            .write_sample(&sample)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to write video RTP: {}", e)))?;
+            .map_err(|e| StreamError::Runtime(format!("Failed to write video sample: {}", e)))?;
 
-        Ok(())
-    }
-
-    /// Writes a large NAL unit using FU-A fragmentation.
-    async fn write_video_fua(
-        &mut self,
-        track: &Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>,
-        nal_data: &[u8],
-        is_last_nal: bool,
-    ) -> Result<()> {
-        use webrtc::rtp::header::Header as RtpHeader;
-        use webrtc::rtp::packet::Packet as RtpPacket;
-
-        const MAX_PAYLOAD_SIZE: usize = 1200;
-
-        let nal_header = nal_data[0];
-        let nal_payload = &nal_data[1..];
-
-        // FU Indicator: F=0, NRI from NAL header, Type=28 (FU-A)
-        let fu_indicator = (nal_header & 0xE0) | 28;
-        let nal_type = nal_header & 0x1F;
-
-        let mut offset = 0;
-
-        while offset < nal_payload.len() {
-            let remaining = nal_payload.len() - offset;
-            let payload_size = remaining.min(MAX_PAYLOAD_SIZE - 2);
-
-            let is_start = offset == 0;
-            let is_end = offset + payload_size >= nal_payload.len();
-
-            // FU Header: S | E | R | Type
-            let fu_header = (if is_start { 0x80 } else { 0x00 })
-                | (if is_end { 0x40 } else { 0x00 })
-                | nal_type;
-
-            let mut fu_payload = Vec::with_capacity(2 + payload_size);
-            fu_payload.push(fu_indicator);
-            fu_payload.push(fu_header);
-            fu_payload.extend_from_slice(&nal_payload[offset..offset + payload_size]);
-
-            let rtp_packet = RtpPacket {
-                header: RtpHeader {
-                    version: 2,
-                    padding: false,
-                    extension: false,
-                    marker: is_end && is_last_nal,
-                    payload_type: 102,
-                    sequence_number: self.video_seq_num as u16,
-                    timestamp: self.video_timestamp,
-                    ssrc: 0,
-                    ..Default::default()
-                },
-                payload: fu_payload.into(),
-            };
-
-            self.video_seq_num = self.video_seq_num.wrapping_add(1);
-
-            track
-                .write_rtp(&rtp_packet)
-                .await
-                .map_err(|e| StreamError::Runtime(format!("Failed to write video RTP: {}", e)))?;
-
-            offset += payload_size;
-        }
+        self.video_frame_count += 1;
 
         Ok(())
     }

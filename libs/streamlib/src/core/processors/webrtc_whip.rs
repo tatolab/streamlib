@@ -11,7 +11,7 @@
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::codec::{H264Profile, VideoCodec, VideoEncoder};
 use crate::core::streaming::{
-    convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
+    convert_audio_to_sample, AudioEncoderConfig, AudioEncoderOpus,
     OpusEncoder,
 };
 use crate::core::streaming::{WhipClient, WhipConfig};
@@ -26,7 +26,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 /// Message sent from the processor thread to the async WHIP client task.
 enum WhipClientMessage {
-    VideoSamples(Vec<webrtc::media::Sample>),
+    VideoSample(webrtc::media::Sample),
     AudioSample(webrtc::media::Sample),
 }
 
@@ -222,8 +222,8 @@ impl WebRtcWhipProcessor::Processor {
         tokio_handle.spawn(async move {
             while let Some(msg) = receiver.recv().await {
                 match msg {
-                    WhipClientMessage::VideoSamples(samples) => {
-                        if let Err(e) = client.write_video_samples(samples).await {
+                    WhipClientMessage::VideoSample(sample) => {
+                        if let Err(e) = client.write_video_sample(sample).await {
                             tracing::error!("[WebRTC] Async video write failed: {}", e);
                         }
                     }
@@ -280,19 +280,26 @@ impl WebRtcWhipProcessor::Processor {
             return Ok(());
         }
 
-        let samples = convert_video_to_samples(&encoded, self.config.video.fps)?;
+        // Pass the full Annex B frame to TrackLocalStaticSample — the H264Payloader
+        // handles NAL parsing, STAP-A aggregation of SPS/PPS, and FU-A fragmentation.
+        let is_keyframe = encoded.is_keyframe;
+        let duration = std::time::Duration::from_secs_f64(1.0 / self.config.video.fps as f64);
+        let sample = webrtc::media::Sample {
+            data: bytes::Bytes::from(encoded.data),
+            duration,
+            ..Default::default()
+        };
         tracing::debug!(
-            "[WebRTC] Encoded video frame: {} NAL units, {} bytes, keyframe={}",
-            samples.len(),
-            encoded.data.len(),
-            encoded.is_keyframe
+            "[WebRTC] Encoded video frame: {} bytes, keyframe={}",
+            sample.data.len(),
+            is_keyframe
         );
 
         let sender = self.whip_client_message_sender.as_ref().ok_or_else(|| {
             StreamError::Runtime("WHIP client channel not initialized".into())
         })?;
 
-        match sender.try_send(WhipClientMessage::VideoSamples(samples)) {
+        match sender.try_send(WhipClientMessage::VideoSample(sample)) {
             Ok(()) => {}
             Err(tokio_mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!("[WebRTC] Video channel full, dropping frame (backpressure)");
@@ -379,6 +386,7 @@ impl WebRtcWhipProcessor::Processor {
 mod tests {
     use super::*;
     use crate::_generated_::Encodedvideoframe;
+    use crate::core::streaming::convert_video_to_samples;
     use crate::core::streaming::rtp::parse_nal_units;
     use crate::_generated_::Encodedaudioframe;
     use std::time::Duration;
