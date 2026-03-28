@@ -36,7 +36,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.7"
+version = "0.4.8"
 edition = "2021"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license-file = "LICENSE"
