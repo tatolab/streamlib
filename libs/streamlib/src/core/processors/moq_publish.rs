@@ -171,6 +171,7 @@ impl MoqPublishProcessor::Processor {
         let session = tokio_handle.block_on(MoqPublishSession::connect(relay_config))?;
         self.moq_publish_session = Some(session);
 
+        self.session_started = true;
         self.last_stats_time_ns = MediaClock::now().as_nanos() as i64;
         tracing::info!(
             broadcast = %self.config.relay.broadcast_path,

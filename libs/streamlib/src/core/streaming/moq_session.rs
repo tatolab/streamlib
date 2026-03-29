@@ -88,6 +88,8 @@ pub struct MoqPublishSession {
     _config: MoqRelayConfig,
     tracks_writer: moq_transport::serve::TracksWriter,
     track_subgroup_writers: HashMap<String, moq_transport::serve::SubgroupsWriter>,
+    /// Keeps the TracksRequest alive so announce can fulfill dynamic subscriptions.
+    _tracks_request: moq_transport::serve::TracksRequest,
     /// Keeps the MoQ session event loop alive.
     _session_task: tokio::task::JoinHandle<()>,
     /// Keeps the announce (serve subscriptions) loop alive.
@@ -127,11 +129,13 @@ impl MoqPublishSession {
             }
         });
 
-        // Create tracks namespace from broadcast path
+        // Namespace must be a non-empty broadcast name. The URL path is the
+        // scope (routing bucket) and the namespace lives inside it.
+        // Publisher and subscriber must use the exact same namespace.
         let namespace = moq_transport::coding::TrackNamespace::from_utf8_path(
             &config.broadcast_path,
         );
-        let (tracks_writer, _tracks_request, tracks_reader) =
+        let (tracks_writer, tracks_request, tracks_reader) =
             moq_transport::serve::Tracks::new(namespace).produce();
 
         // Spawn announce loop — serves incoming subscriptions from the relay
@@ -157,6 +161,7 @@ impl MoqPublishSession {
             _config: config,
             tracks_writer,
             track_subgroup_writers: HashMap::new(),
+            _tracks_request: tracks_request,
             _session_task: session_task,
             _announce_task: announce_task,
         })
@@ -266,6 +271,7 @@ impl MoqSubscribeSession {
             }
         });
 
+        // Namespace must match exactly what the publisher announced.
         let namespace = moq_transport::coding::TrackNamespace::from_utf8_path(
             &config.broadcast_path,
         );
