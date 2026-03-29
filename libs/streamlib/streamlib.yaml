@@ -266,6 +266,23 @@ processors:
         schema: com.tatolab.videoframe@1.0.0
         description: Received data frames from MoQ subscription
 
+  - name: com.streamlib.moq_publish
+    version: 1.0.0
+    description: "Encodes and publishes video+audio to a MoQ relay"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.moq_publish.config@1.0.0
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
+        description: Input video frames to encode and publish
+      - name: audio_in
+        schema: com.tatolab.audioframe@1.0.0
+        description: Input audio frames to encode and publish
+
   # === Test mock processors ===
 
   - name: com.streamlib.test.mock_processor

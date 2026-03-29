@@ -61,6 +61,8 @@ pub mod webrtc_whip;
 
 // MoQ Streaming
 #[cfg(feature = "moq")]
+pub mod moq_publish;
+#[cfg(feature = "moq")]
 pub mod moq_subscribe;
 
 // TODO: Migrate to iceoryx2 API
@@ -83,5 +85,7 @@ pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
 pub use webrtc_whep::WebRtcWhepProcessor;
 pub use webrtc_whip::WebRtcWhipProcessor;
+#[cfg(feature = "moq")]
+pub use moq_publish::MoqPublishProcessor;
 #[cfg(feature = "moq")]
 pub use moq_subscribe::MoqSubscribeProcessor;
