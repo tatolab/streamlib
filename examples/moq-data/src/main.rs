@@ -80,9 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // --- Subscriber: receive and deserialize sensor readings ---
     println!("\nConnecting subscriber...");
     let subscriber = MoqSubscribeSession::connect(config).await?;
-    let mut track_consumer = subscriber
-        .subscribe_track(&broadcast_path, TRACK_NAME, Duration::from_secs(30))
-        .await?;
+    let mut track_consumer = subscriber.subscribe_track(TRACK_NAME)?;
     println!("Subscribed to '{TRACK_NAME}'. Reading frames...\n");
 
     let mut received = 0usize;

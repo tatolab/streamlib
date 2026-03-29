@@ -56,9 +56,7 @@ async fn main() -> anyhow::Result<()> {
     };
     println!("Connecting subscriber...");
     let subscribe_session = MoqSubscribeSession::connect(subscribe_config).await?;
-    let mut track_consumer = subscribe_session
-        .subscribe_track(&broadcast_path, TRACK_NAME, Duration::from_secs(30))
-        .await?;
+    let mut track_consumer = subscribe_session.subscribe_track(TRACK_NAME)?;
     println!("Subscriber connected.\n");
 
     // Spawn publisher task

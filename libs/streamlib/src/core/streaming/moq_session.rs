@@ -84,13 +84,12 @@ impl MoqPublishSession {
             .map_err(|e| StreamError::Runtime(format!("MoQ client init failed: {e}")))?;
 
         let origin = moq_lite::Origin::produce();
+        // Path is "" because the URL already scopes the broadcast.
+        // If we put "foo" here, it would be published as "{url_path}/foo".
         let broadcast_producer = origin
-            .create_broadcast(&config.broadcast_path)
+            .create_broadcast("")
             .ok_or_else(|| {
-                StreamError::Configuration(format!(
-                    "Failed to create broadcast '{}'",
-                    config.broadcast_path
-                ))
+                StreamError::Configuration("Failed to create broadcast".to_string())
             })?;
 
         let session = client
@@ -224,82 +223,47 @@ impl MoqSubscribeSession {
         })
     }
 
-    /// Subscribe to a specific track within a broadcast.
+    /// Subscribe to a specific track within the broadcast.
     ///
-    /// If the broadcast hasn't been announced yet, this waits for the
-    /// announcement to arrive from the relay (up to `timeout`).
-    pub async fn subscribe_track(
+    /// The relay routes based on the URL path. We create a dynamic broadcast
+    /// in the origin so that when we request a track, the IETF subscriber
+    /// sends a SUBSCRIBE to the relay which forwards the publisher's data.
+    pub fn subscribe_track(
         &self,
-        broadcast_path: &str,
         track_name: &str,
-        timeout: std::time::Duration,
     ) -> Result<moq_lite::TrackConsumer> {
-        let broadcast_consumer = self
-            .wait_for_broadcast(broadcast_path, timeout)
-            .await?;
+        // Create a broadcast with dynamic track handling.
+        // When subscribe_track is called below, the broadcast creates a
+        // TrackProducer and queues it as a "request". The IETF subscriber
+        // (running in the background via the session) picks up this request
+        // and sends SUBSCRIBE to the relay, which forwards the publisher's data.
+        let mut broadcast = moq_lite::BroadcastProducer::new();
+        let dynamic = broadcast.dynamic();
+        let consumer = broadcast.consume();
 
+        // Publish the broadcast at "" (the URL already scopes the namespace).
+        // This registers it in the origin so the IETF subscriber can find it.
+        self.origin_producer.publish_broadcast("", consumer.clone());
+
+        // Now subscribe to the track through the consumer.
+        // This triggers the dynamic handler which the IETF subscriber fulfills.
         let track = moq_lite::Track::new(track_name);
-        broadcast_consumer
+        let track_consumer = consumer
             .subscribe_track(&track)
             .map_err(|e| {
                 StreamError::Runtime(format!(
                     "Failed to subscribe to track '{track_name}': {e}"
                 ))
-            })
-    }
+            })?;
 
-    /// Wait for a broadcast to be announced on the relay.
-    ///
-    /// First checks if the broadcast is already known. If not, listens
-    /// for announcements until the broadcast appears or the timeout expires.
-    pub async fn wait_for_broadcast(
-        &self,
-        broadcast_path: &str,
-        timeout: std::time::Duration,
-    ) -> Result<moq_lite::BroadcastConsumer> {
-        // Check if already available
-        if let Some(broadcast) = self.origin_producer.consume_broadcast(broadcast_path) {
-            return Ok(broadcast);
-        }
+        tracing::info!(track = track_name, "Subscribed to MoQ track");
 
-        tracing::info!(
-            broadcast = broadcast_path,
-            "Waiting for broadcast announcement from relay..."
-        );
+        // Keep the dynamic handler and broadcast alive for the lifetime of the subscription.
+        // They'll be cleaned up when the TrackConsumer is dropped.
+        std::mem::forget(dynamic);
+        std::mem::forget(broadcast);
 
-        // Listen for announcements until we find the one we want
-        let mut consumer = self.origin_producer.consume();
-
-        let result = tokio::time::timeout(timeout, async {
-            while let Some((path, maybe_broadcast)) = consumer.announced().await {
-                if let Some(broadcast) = maybe_broadcast {
-                    let path_str = path.to_string();
-                    tracing::debug!(path = %path_str, "Received broadcast announcement");
-                    if path_str == broadcast_path
-                        || path_str.ends_with(broadcast_path)
-                        || broadcast_path.ends_with(&path_str)
-                    {
-                        return Ok(broadcast);
-                    }
-                }
-            }
-            Err(StreamError::Runtime(format!(
-                "Announcement stream closed before broadcast '{broadcast_path}' was found"
-            )))
-        })
-        .await;
-
-        match result {
-            Ok(Ok(broadcast)) => {
-                tracing::info!(broadcast = broadcast_path, "Broadcast found");
-                Ok(broadcast)
-            }
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(StreamError::Runtime(format!(
-                "Timed out waiting for broadcast '{broadcast_path}' (waited {:?})",
-                timeout
-            ))),
-        }
+        Ok(track_consumer)
     }
 
     /// Get an origin consumer that receives broadcast announcements.
