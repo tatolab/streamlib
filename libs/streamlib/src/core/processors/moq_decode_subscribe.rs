@@ -324,13 +324,15 @@ async fn run_moq_track_reader(
 /// Expects each MoQ frame to contain one or more H.264 NAL units in
 /// Annex B format (0x00 0x00 0x00 0x01 + NAL data). Collects SPS/PPS
 /// to initialize the decoder, then decodes IDR and non-IDR frames.
+///
+/// Mirrors the decode path used by [`WebRtcWhepProcessor`] so that the
+/// resulting [`Videoframe`] is identical to what DisplayProcessor expects.
 struct VideoDecodeState {
     ctx: RuntimeContext,
     gpu_context: GpuContext,
     decoder: Option<VideoDecoder>,
     sps_nal: Option<Bytes>,
     pps_nal: Option<Bytes>,
-    received_first_idr: bool,
     frame_count: u64,
 }
 
@@ -342,7 +344,6 @@ impl VideoDecodeState {
             decoder: None,
             sps_nal: None,
             pps_nal: None,
-            received_first_idr: false,
             frame_count: 0,
         }
     }
@@ -371,6 +372,13 @@ impl VideoDecodeState {
         result_frame
     }
 
+    /// Process a single NAL unit (without start code prefix).
+    ///
+    /// Matches the WHEP processor's decode path exactly: SPS/PPS are stored
+    /// and used to initialize the decoder via `update_format`, then IDR and
+    /// non-IDR NALs are wrapped in Annex B format and passed to `decode()`.
+    /// The decoder's extradata (set by `update_format`) provides SPS/PPS
+    /// context -- no need to prepend them before IDR frames.
     fn process_nal_unit(&mut self, nal: &[u8]) -> Option<Videoframe> {
         if nal.is_empty() {
             return None;
@@ -385,7 +393,11 @@ impl VideoDecodeState {
                 nal.len()
             );
             self.sps_nal = Some(Bytes::copy_from_slice(nal));
-            self.try_initialize_decoder();
+
+            // Try to initialize decoder if we have both SPS and PPS
+            if let (Some(sps), Some(pps)) = (&self.sps_nal, &self.pps_nal) {
+                self.initialize_decoder(sps.clone(), pps.clone());
+            }
             return None;
         }
 
@@ -396,72 +408,43 @@ impl VideoDecodeState {
                 nal.len()
             );
             self.pps_nal = Some(Bytes::copy_from_slice(nal));
-            self.try_initialize_decoder();
+
+            // Try to initialize decoder if we have both SPS and PPS
+            if let (Some(sps), Some(pps)) = (&self.sps_nal, &self.pps_nal) {
+                self.initialize_decoder(sps.clone(), pps.clone());
+            }
             return None;
         }
 
-        // IDR (5) or Non-IDR (1) — decode
-        if nal_type == 5 {
-            self.received_first_idr = true;
-        }
-        if (nal_type == 1 || nal_type == 5) && self.received_first_idr {
+        // IDR (5) or Non-IDR (1) — decode frame
+        // Identical to WHEP: just wrap in Annex B and decode. The decoder
+        // already has SPS/PPS set as extradata via update_format().
+        if nal_type == 1 || nal_type == 5 {
             if let Some(decoder) = &mut self.decoder {
-                // For IDR frames, prepend SPS+PPS so the decoder has full context
-                if nal_type == 5 {
-                    if let (Some(sps), Some(pps)) = (&self.sps_nal, &self.pps_nal) {
-                        let mut idr_with_params =
-                            Vec::with_capacity(4 + sps.len() + 4 + pps.len() + 4 + nal.len());
-                        idr_with_params.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-                        idr_with_params.extend_from_slice(sps);
-                        idr_with_params.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-                        idr_with_params.extend_from_slice(pps);
-                        idr_with_params.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-                        idr_with_params.extend_from_slice(nal);
-
-                        let timestamp_ns = MediaClock::now().as_nanos() as i64;
-                        match decoder.decode(&idr_with_params, timestamp_ns, &self.gpu_context) {
-                            Ok(Some(video_frame)) => {
-                                self.frame_count += 1;
-                                if self.frame_count == 1 {
-                                    tracing::info!(
-                                        "[MoqDecodeSubscribeProcessor] First video frame decoded!"
-                                    );
-                                }
-                                return Some(video_frame);
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                tracing::warn!(
-                                    "[MoqDecodeSubscribeProcessor] IDR decode error: {e}"
-                                );
-                            }
-                        }
-                        return None;
-                    }
-                }
                 let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
-                // Wrap NAL in Annex B format for the decoder
+                // Convert raw NAL to Annex B format (add start code)
                 let mut annex_b = Vec::with_capacity(4 + nal.len());
                 annex_b.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
                 annex_b.extend_from_slice(nal);
+                let nal_data = Bytes::from(annex_b);
 
-                match decoder.decode(&annex_b, timestamp_ns, &self.gpu_context) {
-                    Ok(Some(video_frame)) => {
+                // Decoder returns Videoframe directly (handles buffer pooling internally)
+                match decoder.decode(&nal_data, timestamp_ns, &self.gpu_context) {
+                    Ok(Some(ipc_frame)) => {
                         self.frame_count += 1;
-                        if self.frame_count == 1 {
-                            tracing::info!(
-                                "[MoqDecodeSubscribeProcessor] First video frame decoded"
-                            );
-                        } else if self.frame_count % 30 == 0 {
+
+                        if self.frame_count % 30 == 0 {
                             tracing::info!(
                                 "[MoqDecodeSubscribeProcessor] Decoded video frame #{}",
                                 self.frame_count
                             );
                         }
-                        return Some(video_frame);
+                        return Some(ipc_frame);
                     }
-                    Ok(None) => {} // Decoder buffering
+                    Ok(None) => {
+                        // Decoder needs more data
+                    }
                     Err(e) => {
                         tracing::warn!(
                             "[MoqDecodeSubscribeProcessor] Video decode error: {}",
@@ -480,18 +463,13 @@ impl VideoDecodeState {
         None
     }
 
-    fn try_initialize_decoder(&mut self) {
+    fn initialize_decoder(&mut self, sps: Bytes, pps: Bytes) {
         if self.decoder.is_some() {
-            return;
+            return; // Already initialized
         }
 
-        let (sps, pps) = match (&self.sps_nal, &self.pps_nal) {
-            (Some(s), Some(p)) => (s.clone(), p.clone()),
-            _ => return,
-        };
-
         tracing::info!(
-            "[MoqDecodeSubscribeProcessor] Initializing video decoder (SPS={} bytes, PPS={} bytes)",
+            "[MoqDecodeSubscribeProcessor] Initializing video decoder with SPS ({} bytes) and PPS ({} bytes)",
             sps.len(),
             pps.len()
         );
@@ -500,13 +478,13 @@ impl VideoDecodeState {
             Ok(mut decoder) => {
                 if let Err(e) = decoder.update_format(&sps, &pps) {
                     tracing::error!(
-                        "[MoqDecodeSubscribeProcessor] Failed to set decoder format: {}",
+                        "[MoqDecodeSubscribeProcessor] Failed to update decoder format: {}",
                         e
                     );
                     return;
                 }
                 self.decoder = Some(decoder);
-                tracing::info!("[MoqDecodeSubscribeProcessor] Video decoder ready");
+                tracing::info!("[MoqDecodeSubscribeProcessor] Video decoder initialized");
             }
             Err(e) => {
                 tracing::error!(
