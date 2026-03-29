@@ -431,11 +431,35 @@ impl VideoDecodeState {
             if let Some(decoder) = &mut self.decoder {
                 let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
-                // Convert raw NAL to Annex B format (add start code)
-                let mut annex_b = Vec::with_capacity(4 + nal.len());
-                annex_b.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-                annex_b.extend_from_slice(nal);
-                let nal_data = Bytes::from(annex_b);
+                // For IDR frames, prepend SPS+PPS because FFmpeg's decoder
+                // context was opened before extradata was set (avcodec_open2
+                // is called in VideoDecoder::new, before update_format).
+                // Sending SPS+PPS inline with each IDR ensures the parser
+                // always has the parameter sets available.
+                let nal_data = if nal_type == 5 {
+                    if let (Some(sps), Some(pps)) = (&self.sps_nal, &self.pps_nal) {
+                        let mut buf = Vec::with_capacity(
+                            4 + sps.len() + 4 + pps.len() + 4 + nal.len(),
+                        );
+                        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                        buf.extend_from_slice(sps);
+                        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                        buf.extend_from_slice(pps);
+                        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                        buf.extend_from_slice(nal);
+                        Bytes::from(buf)
+                    } else {
+                        let mut buf = Vec::with_capacity(4 + nal.len());
+                        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                        buf.extend_from_slice(nal);
+                        Bytes::from(buf)
+                    }
+                } else {
+                    let mut buf = Vec::with_capacity(4 + nal.len());
+                    buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                    buf.extend_from_slice(nal);
+                    Bytes::from(buf)
+                };
 
                 // Decoder returns Videoframe directly (handles buffer pooling internally)
                 match decoder.decode(&nal_data, timestamp_ns, &self.gpu_context) {
