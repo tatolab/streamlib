@@ -59,6 +59,14 @@ pub mod simple_passthrough;
 pub mod webrtc_whep;
 pub mod webrtc_whip;
 
+// MoQ Streaming
+#[cfg(feature = "moq")]
+pub mod moq_decode_subscribe;
+#[cfg(feature = "moq")]
+pub mod moq_publish;
+#[cfg(feature = "moq")]
+pub mod moq_subscribe;
+
 // TODO: Migrate to iceoryx2 API
 // pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
 // pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
@@ -79,3 +87,9 @@ pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
 pub use webrtc_whep::WebRtcWhepProcessor;
 pub use webrtc_whip::WebRtcWhipProcessor;
+#[cfg(feature = "moq")]
+pub use moq_decode_subscribe::MoqDecodeSubscribeProcessor;
+#[cfg(feature = "moq")]
+pub use moq_publish::MoqPublishProcessor;
+#[cfg(feature = "moq")]
+pub use moq_subscribe::MoqSubscribeProcessor;

@@ -1,0 +1,16 @@
+[package]
+name = "moq-roundtrip"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "moq-roundtrip"
+path = "src/main.rs"
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib", features = ["moq"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
+anyhow = "1.0.100"
+rustls = { version = "0.23", features = ["ring"] }

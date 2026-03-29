@@ -22,6 +22,8 @@ backend-vulkan = ["dep:ash", "dep:gpu-allocator"]
 ffmpeg = ["dep:ffmpeg-next"]
 # Vulkan Video hardware encoding (requires GPU with VK_KHR_video_encode_h264)
 vulkan-video = ["backend-vulkan"]
+# MoQ (Media over QUIC) transport layer for network-transparent IPC
+moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
@@ -85,6 +87,12 @@ webrtc = "0.14.0"  # Full-featured WebRTC implementation
 bytes = "1.5"      # Zero-copy byte buffers for RTP samples
 fastrand = "2.0"   # Fast PRNG for RTP timestamp base
 local-ip-address = "0.6"  # Network interface enumeration for ICE candidates
+
+# MoQ (Media over QUIC) transport layer (optional, enabled via moq feature)
+moq-transport = { workspace = true, optional = true }
+web-transport = { workspace = true, optional = true }
+quinn = { workspace = true, optional = true }
+url = { version = "2", optional = true }
 
 # HTTP client for WHIP signaling (reuses existing hyper from workspace)
 hyper = { workspace = true }  # HTTP client core
@@ -195,6 +203,7 @@ schemas = [
     "schemas/com.tatolab.mp4_writer.config@1.0.0.yaml",
     "schemas/com.tatolab.screen_capture.config@1.0.0.yaml",
     "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
+    "schemas/com.streamlib.moq_subscribe.config@1.0.0.yaml",
 ]
 
 # Processor schemas (co-located with Rust source)
@@ -215,6 +224,7 @@ processors = [
     "src/core/processors/simple_passthrough.yaml",
     "src/core/processors/webrtc_whep.yaml",
     "src/core/processors/webrtc_whip.yaml",
+    "src/core/processors/moq_subscribe.yaml",
 ]
 
 # MCP Server Binary removed - needs redesign for Phase 1

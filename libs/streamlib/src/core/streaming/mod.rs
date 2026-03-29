@@ -14,6 +14,10 @@ pub mod rtp;
 pub mod webrtc_session;
 pub mod whep_client;
 pub mod whip_client;
+#[cfg(feature = "moq")]
+pub mod moq_catalog;
+#[cfg(feature = "moq")]
+pub mod moq_session;
 
 pub use h264_rtp::H264RtpDepacketizer;
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
@@ -26,3 +30,7 @@ pub use rtp::RtpTimestampCalculator;
 pub use webrtc_session::WebRtcSession;
 pub use whep_client::{RtpSample, WhepClient, WhepConfig};
 pub use whip_client::{WhipClient, WhipConfig};
+#[cfg(feature = "moq")]
+pub use moq_catalog::{MoqBroadcastCatalog, MoqCatalogTrackEntry};
+#[cfg(feature = "moq")]
+pub use moq_session::{MoqRelayConfig, MoqPublishSession, MoqSubscribeSession, MoqTrackReader, MoqSubgroupReader};

@@ -18,3 +18,5 @@ pub use link_port_markers::{input, output, InputPortMarker, OutputPortMarker, Po
 pub use link_state::LinkState;
 pub use link_unique_id::LinkUniqueId;
 pub use output_link_port_ref::OutputLinkPortRef;
+#[cfg(feature = "moq")]
+pub use link::MoqLinkTransportConfig;

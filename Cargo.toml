@@ -21,6 +21,9 @@ members = [
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
+    "examples/moq-publish",              # Example: Publish test data to a MoQ relay
+    "examples/moq-subscribe",            # Example: Subscribe to a MoQ relay broadcast
+    "examples/moq-roundtrip",             # Example: MoQ roundtrip latency test (publish + subscribe)
     # "examples/whep-player",     # Example: WHEP (WebRTC egress) player (uses WebRTC WHEP)
     # "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization (uses CameraProcessor, etc.)
     # "examples/graph-json-export",         # Example: Graph data structure JSON export (uses custom processors with old syntax)
@@ -33,11 +36,15 @@ members = [
     "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
     "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example
     "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
+    "examples/moq-av-publish",            # Example: Publish synthetic A/V over MoQ (two tracks)
+    "examples/moq-data",                 # Example: Schema-agnostic data over MoQ (sensor telemetry)
+    "examples/moq-av-subscribe",          # Example: Subscribe to A/V over MoQ (two tracks)
 ]
 
 [workspace.package]
 version = "0.4.10"
 edition = "2021"
+rust-version = "1.85"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license-file = "LICENSE"
 repository = "https://github.com/tato123/streamlib"
@@ -83,6 +90,11 @@ libc = "0.2.177"
 
 # WebRTC
 str0m = "0.11.1"
+
+# MoQ (Media over QUIC) - optional transport layer (cloudflare/moq-rs)
+moq-transport = "0.14"
+web-transport = "0.10"
+quinn = "0.11"
 
 # HTTP/Web
 axum = { version = "0.8.8", features = ["ws"] }
