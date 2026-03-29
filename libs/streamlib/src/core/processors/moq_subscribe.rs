@@ -92,13 +92,15 @@ impl crate::core::ManualProcessor for MoqSubscribeProcessor::Processor {
                 StreamError::Runtime("MoqSubscribeSession not initialized".into())
             })?;
 
-        // Subscribe to each configured track
+        // Subscribe to each configured track, waiting for broadcast announcement
+        let timeout = std::time::Duration::from_secs(30);
         let mut track_consumers = Vec::new();
         for track_name in &self.config.track_names {
-            let consumer = session.subscribe_track(
+            let consumer = ctx.tokio_handle().block_on(session.subscribe_track(
                 &self.config.broadcast_path,
                 track_name,
-            )?;
+                timeout,
+            ))?;
             tracing::info!(
                 track = %track_name,
                 "[MoqSubscribeProcessor] Subscribed to track"

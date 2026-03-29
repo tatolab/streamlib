@@ -226,20 +226,17 @@ impl MoqSubscribeSession {
 
     /// Subscribe to a specific track within a broadcast.
     ///
-    /// Returns a consumer that can read groups and frames from the track.
-    pub fn subscribe_track(
+    /// If the broadcast hasn't been announced yet, this waits for the
+    /// announcement to arrive from the relay (up to `timeout`).
+    pub async fn subscribe_track(
         &self,
         broadcast_path: &str,
         track_name: &str,
+        timeout: std::time::Duration,
     ) -> Result<moq_lite::TrackConsumer> {
         let broadcast_consumer = self
-            .origin_producer
-            .consume_broadcast(broadcast_path)
-            .ok_or_else(|| {
-                StreamError::Runtime(format!(
-                    "Broadcast '{broadcast_path}' not found on relay"
-                ))
-            })?;
+            .wait_for_broadcast(broadcast_path, timeout)
+            .await?;
 
         let track = moq_lite::Track::new(track_name);
         broadcast_consumer
@@ -249,6 +246,60 @@ impl MoqSubscribeSession {
                     "Failed to subscribe to track '{track_name}': {e}"
                 ))
             })
+    }
+
+    /// Wait for a broadcast to be announced on the relay.
+    ///
+    /// First checks if the broadcast is already known. If not, listens
+    /// for announcements until the broadcast appears or the timeout expires.
+    pub async fn wait_for_broadcast(
+        &self,
+        broadcast_path: &str,
+        timeout: std::time::Duration,
+    ) -> Result<moq_lite::BroadcastConsumer> {
+        // Check if already available
+        if let Some(broadcast) = self.origin_producer.consume_broadcast(broadcast_path) {
+            return Ok(broadcast);
+        }
+
+        tracing::info!(
+            broadcast = broadcast_path,
+            "Waiting for broadcast announcement from relay..."
+        );
+
+        // Listen for announcements until we find the one we want
+        let mut consumer = self.origin_producer.consume();
+
+        let result = tokio::time::timeout(timeout, async {
+            while let Some((path, maybe_broadcast)) = consumer.announced().await {
+                if let Some(broadcast) = maybe_broadcast {
+                    let path_str = path.to_string();
+                    tracing::debug!(path = %path_str, "Received broadcast announcement");
+                    if path_str == broadcast_path
+                        || path_str.ends_with(broadcast_path)
+                        || broadcast_path.ends_with(&path_str)
+                    {
+                        return Ok(broadcast);
+                    }
+                }
+            }
+            Err(StreamError::Runtime(format!(
+                "Announcement stream closed before broadcast '{broadcast_path}' was found"
+            )))
+        })
+        .await;
+
+        match result {
+            Ok(Ok(broadcast)) => {
+                tracing::info!(broadcast = broadcast_path, "Broadcast found");
+                Ok(broadcast)
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(StreamError::Runtime(format!(
+                "Timed out waiting for broadcast '{broadcast_path}' (waited {:?})",
+                timeout
+            ))),
+        }
     }
 
     /// Get an origin consumer that receives broadcast announcements.

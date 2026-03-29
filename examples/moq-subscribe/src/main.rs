@@ -38,7 +38,9 @@ async fn main() -> anyhow::Result<()> {
     let session = MoqSubscribeSession::connect(config).await?;
     println!("Connected. Subscribing to track '{TRACK_NAME}'...");
 
-    let mut track_consumer = session.subscribe_track(&broadcast_path, TRACK_NAME)?;
+    let mut track_consumer = session
+        .subscribe_track(&broadcast_path, TRACK_NAME, std::time::Duration::from_secs(30))
+        .await?;
     println!("Subscribed. Waiting for frames...");
     println!("Press Ctrl+C to stop.\n");
 
