@@ -780,8 +780,11 @@ impl DisplayEventLoopHandler {
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ);
 
+            // Swapchain images are in PRESENT_SRC_KHR after being presented.
+            // On the very first frame they may be UNDEFINED, but PRESENT_SRC_KHR
+            // is the correct old_layout for all subsequent frames.
             let barrier_swapchain_to_color_attachment = vk::ImageMemoryBarrier::default()
-                .old_layout(vk::ImageLayout::UNDEFINED)
+                .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
