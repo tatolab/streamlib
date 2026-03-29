@@ -23,7 +23,7 @@ ffmpeg = ["dep:ffmpeg-next"]
 # Vulkan Video hardware encoding (requires GPU with VK_KHR_video_encode_h264)
 vulkan-video = ["backend-vulkan"]
 # MoQ (Media over QUIC) transport layer for network-transparent IPC
-moq = ["dep:moq-lite", "dep:moq-native", "dep:web-transport-quinn", "dep:quinn"]
+moq = ["dep:moq-lite", "dep:moq-native", "dep:web-transport-quinn", "dep:quinn", "dep:url"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
@@ -93,6 +93,7 @@ moq-lite = { workspace = true, optional = true }
 moq-native = { workspace = true, optional = true }
 web-transport-quinn = { workspace = true, optional = true }
 quinn = { workspace = true, optional = true }
+url = { version = "2", optional = true }
 
 # HTTP client for WHIP signaling (reuses existing hyper from workspace)
 hyper = { workspace = true }  # HTTP client core
