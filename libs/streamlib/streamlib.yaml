@@ -266,6 +266,23 @@ processors:
         schema: com.tatolab.videoframe@1.0.0
         description: Received data frames from MoQ subscription
 
+  - name: com.streamlib.moq_decode_subscribe
+    version: 1.0.0
+    description: "Subscribes to MoQ A/V tracks, decodes H.264 video + Opus audio, outputs frames"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.moq_decode_subscribe.config@1.0.0
+    outputs:
+      - name: video_out
+        schema: com.tatolab.videoframe@1.0.0
+        description: Decoded video frames from MoQ H.264 track
+      - name: audio_out
+        schema: com.tatolab.audioframe@1.0.0
+        description: Decoded audio frames from MoQ Opus track
+
   - name: com.streamlib.moq_publish
     version: 1.0.0
     description: "Encodes and publishes video+audio to a MoQ relay"

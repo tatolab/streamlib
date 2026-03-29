@@ -174,6 +174,8 @@ pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 // MoQ processors
 #[cfg(feature = "moq")]
+pub use core::processors::MoqDecodeSubscribeProcessor;
+#[cfg(feature = "moq")]
 pub use core::processors::MoqPublishProcessor;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

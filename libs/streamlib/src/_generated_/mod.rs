@@ -5,6 +5,7 @@
 
 pub mod com_streamlib_api_server_config;
 pub mod com_streamlib_clap_effect_config;
+pub mod com_streamlib_moq_decode_subscribe_config;
 pub mod com_streamlib_moq_publish_config;
 pub mod com_streamlib_moq_subscribe_config;
 pub mod com_streamlib_webrtc_whep_config;
@@ -28,6 +29,7 @@ pub mod com_tatolab_videoframe;
 
 pub use com_streamlib_api_server_config::ApiServerConfig;
 pub use com_streamlib_clap_effect_config::EffectConfig;
+pub use com_streamlib_moq_decode_subscribe_config::MoqDecodeSubscribeConfig;
 pub use com_streamlib_moq_publish_config::MoqPublishConfig;
 pub use com_streamlib_moq_subscribe_config::MoqSubscribeConfig;
 pub use com_streamlib_webrtc_whep_config::WebrtcWhepConfig;
