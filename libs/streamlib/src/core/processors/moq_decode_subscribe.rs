@@ -330,6 +330,7 @@ struct VideoDecodeState {
     decoder: Option<VideoDecoder>,
     sps_nal: Option<Bytes>,
     pps_nal: Option<Bytes>,
+    received_first_idr: bool,
     frame_count: u64,
 }
 
@@ -341,6 +342,7 @@ impl VideoDecodeState {
             decoder: None,
             sps_nal: None,
             pps_nal: None,
+            received_first_idr: false,
             frame_count: 0,
         }
     }
@@ -399,8 +401,44 @@ impl VideoDecodeState {
         }
 
         // IDR (5) or Non-IDR (1) — decode
-        if nal_type == 1 || nal_type == 5 {
+        if nal_type == 5 {
+            self.received_first_idr = true;
+        }
+        if (nal_type == 1 || nal_type == 5) && self.received_first_idr {
             if let Some(decoder) = &mut self.decoder {
+                // For IDR frames, prepend SPS+PPS so the decoder has full context
+                if nal_type == 5 {
+                    if let (Some(sps), Some(pps)) = (&self.sps_nal, &self.pps_nal) {
+                        let mut idr_with_params =
+                            Vec::with_capacity(4 + sps.len() + 4 + pps.len() + 4 + nal.len());
+                        idr_with_params.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                        idr_with_params.extend_from_slice(sps);
+                        idr_with_params.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                        idr_with_params.extend_from_slice(pps);
+                        idr_with_params.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+                        idr_with_params.extend_from_slice(nal);
+
+                        let timestamp_ns = MediaClock::now().as_nanos() as i64;
+                        match decoder.decode(&idr_with_params, timestamp_ns, &self.gpu_context) {
+                            Ok(Some(video_frame)) => {
+                                self.frame_count += 1;
+                                if self.frame_count == 1 {
+                                    tracing::info!(
+                                        "[MoqDecodeSubscribeProcessor] First video frame decoded!"
+                                    );
+                                }
+                                return Some(video_frame);
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    "[MoqDecodeSubscribeProcessor] IDR decode error: {e}"
+                                );
+                            }
+                        }
+                        return None;
+                    }
+                }
                 let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
                 // Wrap NAL in Annex B format for the decoder
