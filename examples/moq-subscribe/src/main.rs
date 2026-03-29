@@ -38,28 +38,28 @@ async fn main() -> anyhow::Result<()> {
     let session = MoqSubscribeSession::connect(config).await?;
     println!("Connected. Subscribing to track '{TRACK_NAME}'...");
 
-    let mut track_consumer = session.subscribe_track(TRACK_NAME)?;
+    let mut track_reader = session.subscribe_track(TRACK_NAME)?;
     println!("Subscribed. Waiting for frames...");
     println!("Press Ctrl+C to stop.\n");
 
     let mut frame_count: u64 = 0;
     loop {
-        // Wait for the next group
-        let mut group_consumer = match track_consumer.next_group().await {
-            Ok(Some(group)) => group,
+        // Wait for the next subgroup
+        let mut subgroup = match track_reader.next_subgroup().await {
+            Ok(Some(sg)) => sg,
             Ok(None) => {
-                println!("Track ended (no more groups).");
+                println!("Track ended (no more subgroups).");
                 break;
             }
             Err(e) => {
-                eprintln!("Error reading next group: {e}");
+                eprintln!("Error reading next subgroup: {e}");
                 break;
             }
         };
 
-        // Read all frames in this group
+        // Read all frames in this subgroup
         loop {
-            match group_consumer.read_frame().await {
+            match subgroup.read_frame().await {
                 Ok(Some(frame_bytes)) => {
                     let now_ms = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
 
                     frame_count += 1;
                 }
-                Ok(None) => break, // Group finished
+                Ok(None) => break, // Subgroup finished
                 Err(e) => {
                     eprintln!("Error reading frame: {e}");
                     break;

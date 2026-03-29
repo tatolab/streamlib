@@ -80,25 +80,25 @@ async fn main() -> anyhow::Result<()> {
     // --- Subscriber: receive and deserialize sensor readings ---
     println!("\nConnecting subscriber...");
     let subscriber = MoqSubscribeSession::connect(config).await?;
-    let mut track_consumer = subscriber.subscribe_track(TRACK_NAME)?;
+    let mut track_reader = subscriber.subscribe_track(TRACK_NAME)?;
     println!("Subscribed to '{TRACK_NAME}'. Reading frames...\n");
 
     let mut received = 0usize;
     'outer: loop {
-        let mut group_consumer = match track_consumer.next_group().await {
-            Ok(Some(group)) => group,
+        let mut subgroup = match track_reader.next_subgroup().await {
+            Ok(Some(sg)) => sg,
             Ok(None) => {
-                println!("Track ended (no more groups).");
+                println!("Track ended (no more subgroups).");
                 break;
             }
             Err(e) => {
-                eprintln!("Error reading next group: {e}");
+                eprintln!("Error reading next subgroup: {e}");
                 break;
             }
         };
 
         loop {
-            match group_consumer.read_frame().await {
+            match subgroup.read_frame().await {
                 Ok(Some(frame_bytes)) => {
                     let reading: SensorReading = rmp_serde::from_slice(&frame_bytes)?;
                     println!(

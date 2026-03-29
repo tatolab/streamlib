@@ -23,7 +23,7 @@ ffmpeg = ["dep:ffmpeg-next"]
 # Vulkan Video hardware encoding (requires GPU with VK_KHR_video_encode_h264)
 vulkan-video = ["backend-vulkan"]
 # MoQ (Media over QUIC) transport layer for network-transparent IPC
-moq = ["dep:moq-lite", "dep:moq-native", "dep:web-transport-quinn", "dep:quinn", "dep:url"]
+moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
@@ -89,9 +89,8 @@ fastrand = "2.0"   # Fast PRNG for RTP timestamp base
 local-ip-address = "0.6"  # Network interface enumeration for ICE candidates
 
 # MoQ (Media over QUIC) transport layer (optional, enabled via moq feature)
-moq-lite = { workspace = true, optional = true }
-moq-native = { workspace = true, optional = true }
-web-transport-quinn = { workspace = true, optional = true }
+moq-transport = { workspace = true, optional = true }
+web-transport = { workspace = true, optional = true }
 quinn = { workspace = true, optional = true }
 url = { version = "2", optional = true }
 

@@ -8,7 +8,7 @@
 // the same format used by iceoryx2 payloads.
 
 use crate::core::media_clock::MediaClock;
-use crate::core::streaming::{MoqRelayConfig, MoqSubscribeSession};
+use crate::core::streaming::{MoqRelayConfig, MoqSubscribeSession, MoqTrackReader};
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
 use std::future::Future;
@@ -93,14 +93,14 @@ impl crate::core::ManualProcessor for MoqSubscribeProcessor::Processor {
             })?;
 
         // Subscribe to each configured track
-        let mut track_consumers = Vec::new();
+        let mut track_readers = Vec::new();
         for track_name in &self.config.track_names {
-            let consumer = session.subscribe_track(track_name)?;
+            let reader = session.subscribe_track(track_name)?;
             tracing::info!(
                 track = %track_name,
                 "[MoqSubscribeProcessor] Subscribed to track"
             );
-            track_consumers.push((track_name.clone(), consumer));
+            track_readers.push((track_name.clone(), reader));
         }
 
         let outputs = self.outputs.clone();
@@ -111,7 +111,7 @@ impl crate::core::ManualProcessor for MoqSubscribeProcessor::Processor {
 
         // Spawn the async receive loop
         ctx.tokio_handle().spawn(async move {
-            run_moq_subscribe_receive_loop(track_consumers, outputs, shutdown_rx).await;
+            run_moq_subscribe_receive_loop(track_readers, outputs, shutdown_rx).await;
         });
 
         tracing::info!("[MoqSubscribeProcessor] Started async receive loop");
@@ -131,9 +131,9 @@ impl crate::core::ManualProcessor for MoqSubscribeProcessor::Processor {
 // ASYNC RECEIVE LOOP
 // ============================================================================
 
-/// Async loop that receives MoQ groups/frames and outputs raw bytes to the graph.
+/// Async loop that receives MoQ subgroups/frames and outputs raw bytes to the graph.
 async fn run_moq_subscribe_receive_loop(
-    track_consumers: Vec<(String, moq_lite::TrackConsumer)>,
+    track_readers: Vec<(String, MoqTrackReader)>,
     outputs: Arc<OutputWriter>,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -141,11 +141,11 @@ async fn run_moq_subscribe_receive_loop(
     let (moq_frame_sender, mut moq_frame_receiver) =
         tokio::sync::mpsc::channel::<MoqReceivedFrame>(256);
 
-    for (track_name, track_consumer) in track_consumers {
+    for (track_name, track_reader) in track_readers {
         let sender = moq_frame_sender.clone();
         tokio::spawn(run_moq_track_receive_loop(
             track_name,
-            track_consumer,
+            track_reader,
             sender,
         ));
     }
@@ -200,20 +200,20 @@ struct MoqReceivedFrame {
     payload: Vec<u8>,
 }
 
-/// Per-track receive loop: reads groups then frames from a single TrackConsumer.
+/// Per-track receive loop: reads subgroups then frames from a single MoqTrackReader.
 async fn run_moq_track_receive_loop(
     track_name: String,
-    mut track_consumer: moq_lite::TrackConsumer,
+    mut track_reader: MoqTrackReader,
     sender: tokio::sync::mpsc::Sender<MoqReceivedFrame>,
 ) {
     loop {
-        // Wait for the next group in this track
-        let group_consumer = match track_consumer.next_group().await {
-            Ok(Some(group)) => group,
+        // Wait for the next subgroup in this track
+        let mut subgroup_reader = match track_reader.next_subgroup().await {
+            Ok(Some(subgroup)) => subgroup,
             Ok(None) => {
                 tracing::info!(
                     track = %track_name,
-                    "[MoqSubscribeProcessor] Track ended (no more groups)"
+                    "[MoqSubscribeProcessor] Track ended (no more subgroups)"
                 );
                 break;
             }
@@ -221,46 +221,34 @@ async fn run_moq_track_receive_loop(
                 tracing::warn!(
                     track = %track_name,
                     %e,
-                    "[MoqSubscribeProcessor] Error reading next group"
+                    "[MoqSubscribeProcessor] Error reading next subgroup"
                 );
                 break;
             }
         };
 
-        // Read all frames within this group
-        if let Err(e) =
-            read_moq_group_frames(&track_name, group_consumer, &sender).await
-        {
-            tracing::warn!(
-                track = %track_name,
-                %e,
-                "[MoqSubscribeProcessor] Error reading group frames"
-            );
-        }
-    }
-}
-
-/// Read all frames from a single MoQ group and send them through the channel.
-async fn read_moq_group_frames(
-    track_name: &str,
-    mut group_consumer: moq_lite::GroupConsumer,
-    sender: &tokio::sync::mpsc::Sender<MoqReceivedFrame>,
-) -> std::result::Result<(), moq_lite::Error> {
-    loop {
-        match group_consumer.read_frame().await? {
-            Some(frame_bytes) => {
-                let received_frame = MoqReceivedFrame {
-                    track_name: track_name.to_string(),
-                    payload: frame_bytes.to_vec(),
-                };
-                if sender.send(received_frame).await.is_err() {
-                    // Receiver dropped (processor shutting down)
-                    return Ok(());
+        // Read all frames within this subgroup
+        loop {
+            match subgroup_reader.read_frame().await {
+                Ok(Some(frame_bytes)) => {
+                    let received_frame = MoqReceivedFrame {
+                        track_name: track_name.clone(),
+                        payload: frame_bytes.to_vec(),
+                    };
+                    if sender.send(received_frame).await.is_err() {
+                        // Receiver dropped (processor shutting down)
+                        return;
+                    }
                 }
-            }
-            None => {
-                // Group finished (no more frames)
-                return Ok(());
+                Ok(None) => break, // Subgroup finished
+                Err(e) => {
+                    tracing::warn!(
+                        track = %track_name,
+                        %e,
+                        "[MoqSubscribeProcessor] Error reading subgroup frame"
+                    );
+                    break;
+                }
             }
         }
     }

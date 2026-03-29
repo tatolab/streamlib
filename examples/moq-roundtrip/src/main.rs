@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     };
     println!("Connecting subscriber...");
     let subscribe_session = MoqSubscribeSession::connect(subscribe_config).await?;
-    let mut track_consumer = subscribe_session.subscribe_track(TRACK_NAME)?;
+    let mut track_reader = subscribe_session.subscribe_track(TRACK_NAME)?;
     println!("Subscriber connected.\n");
 
     // Spawn publisher task
@@ -90,17 +90,17 @@ async fn main() -> anyhow::Result<()> {
         let mut latencies_ms: Vec<u64> = Vec::new();
 
         loop {
-            let mut group_consumer = match track_consumer.next_group().await {
-                Ok(Some(group)) => group,
+            let mut subgroup = match track_reader.next_subgroup().await {
+                Ok(Some(sg)) => sg,
                 Ok(None) => break,
                 Err(e) => {
-                    tracing::warn!(%e, "Error reading next group");
+                    tracing::warn!(%e, "Error reading next subgroup");
                     break;
                 }
             };
 
             loop {
-                match group_consumer.read_frame().await {
+                match subgroup.read_frame().await {
                     Ok(Some(frame_bytes)) => {
                         let now_ms = SystemTime::now()
                             .duration_since(UNIX_EPOCH)
