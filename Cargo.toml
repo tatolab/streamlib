@@ -38,6 +38,7 @@ members = [
 [workspace.package]
 version = "0.4.10"
 edition = "2021"
+rust-version = "1.85"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license-file = "LICENSE"
 repository = "https://github.com/tato123/streamlib"
@@ -83,6 +84,12 @@ libc = "0.2.177"
 
 # WebRTC
 str0m = "0.11.1"
+
+# MoQ (Media over QUIC) - optional transport layer
+moq-lite = "0.15"
+moq-native = { version = "0.13", features = ["quinn"] }
+web-transport-quinn = "0.10"
+quinn = "0.11"
 
 # HTTP/Web
 axum = { version = "0.8.8", features = ["ws"] }

@@ -22,6 +22,8 @@ backend-vulkan = ["dep:ash", "dep:gpu-allocator"]
 ffmpeg = ["dep:ffmpeg-next"]
 # Vulkan Video hardware encoding (requires GPU with VK_KHR_video_encode_h264)
 vulkan-video = ["backend-vulkan"]
+# MoQ (Media over QUIC) transport layer for network-transparent IPC
+moq = ["dep:moq-lite", "dep:moq-native", "dep:web-transport-quinn", "dep:quinn"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
@@ -85,6 +87,12 @@ webrtc = "0.14.0"  # Full-featured WebRTC implementation
 bytes = "1.5"      # Zero-copy byte buffers for RTP samples
 fastrand = "2.0"   # Fast PRNG for RTP timestamp base
 local-ip-address = "0.6"  # Network interface enumeration for ICE candidates
+
+# MoQ (Media over QUIC) transport layer (optional, enabled via moq feature)
+moq-lite = { workspace = true, optional = true }
+moq-native = { workspace = true, optional = true }
+web-transport-quinn = { workspace = true, optional = true }
+quinn = { workspace = true, optional = true }
 
 # HTTP client for WHIP signaling (reuses existing hyper from workspace)
 hyper = { workspace = true }  # HTTP client core
