@@ -166,8 +166,89 @@ pub fn open_iceoryx2_service(
             &dest_port,
             link_id,
             runtime_ctx,
-        )
+        )?;
+
+        // After iceoryx2 wiring, check if this link also needs MoQ fanout
+        #[cfg(feature = "moq")]
+        {
+            let moq_config = graph
+                .traversal_mut()
+                .e(link_id)
+                .first()
+                .and_then(|link| link.moq_transport_config.clone());
+
+            if let Some(moq_config) = moq_config {
+                let source_processor = get_single_processor(graph, &source_proc_id)?;
+                wire_moq_fanout_for_link(
+                    &source_processor,
+                    &source_port,
+                    &moq_config,
+                    link_id,
+                )?;
+            }
+        }
+
+        Ok(())
     }
+}
+
+/// Wire a MoQ publish session for a link's output port.
+///
+/// Creates a MoQ publish session connected to the relay and adds it
+/// as a remote destination on the source processor's OutputWriter.
+#[cfg(feature = "moq")]
+fn wire_moq_fanout_for_link(
+    source_processor: &Arc<Mutex<ProcessorInstance>>,
+    source_port: &str,
+    moq_config: &crate::core::graph::MoqLinkTransportConfig,
+    link_id: &LinkUniqueId,
+) -> Result<()> {
+    use crate::core::streaming::MoqRelayConfig;
+
+    let relay_config = MoqRelayConfig {
+        relay_endpoint_url: moq_config.moq_relay_url.clone(),
+        broadcast_path: moq_config.moq_broadcast_namespace.clone(),
+        tls_disable_verify: false,
+        timeout_ms: 10000,
+    };
+
+    // Use the track name override or derive from schema
+    let track_name = moq_config
+        .moq_track_name_override
+        .clone()
+        .unwrap_or_else(|| source_port.to_string());
+
+    tracing::info!(
+        link_id = %link_id,
+        relay = %relay_config.relay_endpoint_url,
+        broadcast = %relay_config.broadcast_path,
+        track = %track_name,
+        "Wiring MoQ fanout for output port '{}'",
+        source_port,
+    );
+
+    // Create the MoQ publish session asynchronously via a blocking spawn
+    // The session needs a tokio runtime, which we have
+    let session = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            crate::core::streaming::MoqPublishSession::connect(relay_config).await
+        })
+    })?;
+
+    let session_arc = std::sync::Arc::new(parking_lot::Mutex::new(session));
+
+    // Add the MoQ session as a remote destination on the OutputWriter
+    let source_guard = source_processor.lock();
+    if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
+        output_writer.add_moq_connection(source_port, &track_name, session_arc);
+        tracing::info!(
+            "Added MoQ fanout destination for port '{}' -> track '{}'",
+            source_port,
+            track_name,
+        );
+    }
+
+    Ok(())
 }
 
 /// Close an iceoryx2 service by link ID.
