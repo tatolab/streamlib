@@ -48,7 +48,7 @@ pub struct MoqPublishProcessor {
 impl crate::core::ReactiveProcessor for MoqPublishProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
-        self.ctx = Some(ctx);
+        self.ctx = Some(ctx.clone());
 
         // Initialize audio encoder
         let audio_config = AudioEncoderConfig {
@@ -61,7 +61,25 @@ impl crate::core::ReactiveProcessor for MoqPublishProcessor::Processor {
         };
         self.audio_encoder = Some(OpusEncoder::new(audio_config)?);
 
-        tracing::info!("MoqPublishProcessor initialized (will connect on first frame)");
+        // Connect to MoQ relay eagerly during setup so tracks exist before
+        // any subscriber tries to subscribe. Video encoder is still lazy
+        // (needs GPU context from first frame), but the MoQ session and
+        // track announcement happen now.
+        let relay_config = MoqRelayConfig {
+            relay_endpoint_url: self.config.relay.endpoint_url.clone(),
+            broadcast_path: self.config.relay.broadcast_path.clone(),
+            tls_disable_verify: self.config.relay.tls_disable_verify.unwrap_or(false),
+            timeout_ms: 10000,
+        };
+
+        let session = MoqPublishSession::connect(relay_config).await?;
+        self.moq_publish_session = Some(session);
+        self.session_started = true;
+
+        tracing::info!(
+            broadcast = %self.config.relay.broadcast_path,
+            "MoqPublishProcessor connected to relay (video encoder deferred to first frame)"
+        );
         Ok(())
     }
 
@@ -99,11 +117,10 @@ impl crate::core::ReactiveProcessor for MoqPublishProcessor::Processor {
             None
         };
 
-        // Start session on first frame
-        if !self.session_started && (video_frame.is_some() || audio_frame.is_some()) {
-            tracing::info!("[MoqPublish] Starting session - received first frame");
+        // Initialize video encoder on first frame (MoQ session already connected in setup)
+        if self.video_encoder.is_none() && (video_frame.is_some() || audio_frame.is_some()) {
+            tracing::info!("[MoqPublish] First frame received, initializing video encoder");
             self.start_session()?;
-            self.session_started = true;
         }
 
         // Encode and publish video
@@ -138,7 +155,7 @@ impl crate::core::ReactiveProcessor for MoqPublishProcessor::Processor {
 impl MoqPublishProcessor::Processor {
     /// Starts the MoQ publish session: initializes video encoder and connects to relay.
     fn start_session(&mut self) -> Result<()> {
-        // Initialize video encoder lazily (needs GPU context)
+        // Initialize video encoder lazily (needs actual frame dimensions from GPU)
         if self.video_encoder.is_none() {
             let gpu_context = self.gpu_context.clone();
             let ctx = self
@@ -159,24 +176,8 @@ impl MoqPublishProcessor::Processor {
             tracing::info!("[MoqPublish] Video encoder initialized");
         }
 
-        // Connect to MoQ relay
-        let relay_config = MoqRelayConfig {
-            relay_endpoint_url: self.config.relay.endpoint_url.clone(),
-            broadcast_path: self.config.relay.broadcast_path.clone(),
-            tls_disable_verify: self.config.relay.tls_disable_verify.unwrap_or(false),
-            timeout_ms: 10000,
-        };
-
-        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
-        let session = tokio_handle.block_on(MoqPublishSession::connect(relay_config))?;
-
-        self.moq_publish_session = Some(session);
         self.last_stats_time_ns = MediaClock::now().as_nanos() as i64;
-
-        tracing::info!(
-            broadcast = %self.config.relay.broadcast_path,
-            "[MoqPublish] Connected to relay, publishing"
-        );
+        tracing::info!("[MoqPublish] Session ready, encoding started");
         Ok(())
     }
 

@@ -90,15 +90,55 @@ impl crate::core::ManualProcessor for MoqDecodeSubscribeProcessor::Processor {
                 StreamError::Runtime("MoqSubscribeSession not initialized".into())
             })?;
 
-        // Subscribe to video and audio tracks
-        let video_reader = session.subscribe_track(VIDEO_TRACK_NAME)?;
-        let audio_reader = session.subscribe_track(AUDIO_TRACK_NAME)?;
+        // Subscribe to video and audio tracks with retry
+        // The publisher may not have created tracks yet (lazy init on first frame),
+        // so we retry subscription until the tracks appear on the relay.
+        let max_retries = 10;
+        let retry_delay = std::time::Duration::from_secs(2);
 
-        tracing::info!(
-            "[MoqDecodeSubscribeProcessor] Subscribed to '{}' and '{}' tracks",
-            VIDEO_TRACK_NAME,
-            AUDIO_TRACK_NAME
-        );
+        let mut video_reader = None;
+        let mut audio_reader = None;
+
+        for attempt in 1..=max_retries {
+            if video_reader.is_none() {
+                match session.subscribe_track(VIDEO_TRACK_NAME) {
+                    Ok(r) => {
+                        tracing::info!("[MoqDecodeSubscribeProcessor] Subscribed to 'video' track (attempt {attempt})");
+                        video_reader = Some(r);
+                    }
+                    Err(e) => {
+                        tracing::warn!("[MoqDecodeSubscribeProcessor] Video subscribe attempt {attempt} failed: {e}");
+                    }
+                }
+            }
+            if audio_reader.is_none() {
+                match session.subscribe_track(AUDIO_TRACK_NAME) {
+                    Ok(r) => {
+                        tracing::info!("[MoqDecodeSubscribeProcessor] Subscribed to 'audio' track (attempt {attempt})");
+                        audio_reader = Some(r);
+                    }
+                    Err(e) => {
+                        tracing::warn!("[MoqDecodeSubscribeProcessor] Audio subscribe attempt {attempt} failed: {e}");
+                    }
+                }
+            }
+
+            if video_reader.is_some() && audio_reader.is_some() {
+                break;
+            }
+
+            if attempt < max_retries {
+                tracing::info!("[MoqDecodeSubscribeProcessor] Waiting {retry_delay:?} before retry...");
+                std::thread::sleep(retry_delay);
+            }
+        }
+
+        let video_reader = video_reader.ok_or_else(|| {
+            StreamError::Runtime("Failed to subscribe to video track after retries".into())
+        })?;
+        let audio_reader = audio_reader.ok_or_else(|| {
+            StreamError::Runtime("Failed to subscribe to audio track after retries".into())
+        })?;
 
         let outputs = self.outputs.clone();
 
