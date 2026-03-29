@@ -28,7 +28,6 @@ fn generate_broadcast_path() -> String {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let relay_url = std::env::var("RELAY_URL").unwrap_or_else(|_| DEFAULT_RELAY_URL.to_string());

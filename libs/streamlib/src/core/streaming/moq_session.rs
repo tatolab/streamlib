@@ -228,6 +228,8 @@ pub struct MoqSubscribeSession {
     _config: MoqRelayConfig,
     subscriber: moq_transport::session::Subscriber,
     namespace: moq_transport::coding::TrackNamespace,
+    /// Tokio handle captured during connect() for spawning from non-tokio threads.
+    tokio_handle: tokio::runtime::Handle,
     /// Keeps the MoQ session event loop alive.
     _session_task: tokio::task::JoinHandle<()>,
 }
@@ -277,6 +279,7 @@ impl MoqSubscribeSession {
             _config: config,
             subscriber,
             namespace,
+            tokio_handle: tokio::runtime::Handle::current(),
             _session_task: session_task,
         })
     }
@@ -298,9 +301,14 @@ impl MoqSubscribeSession {
 
         // Spawn the subscribe task — sends SUBSCRIBE to the relay and blocks
         // until the subscription ends. Data is routed to the TrackWriter.
+        // Uses tokio::Handle::current() so this works from both tokio tasks
+        // and dedicated processor threads (which have a tokio runtime available
+        // via RuntimeContext).
         let mut subscriber = self.subscriber.clone();
         let track_name_owned = track_name.to_string();
-        let _subscribe_task = tokio::spawn(async move {
+        let handle = tokio::runtime::Handle::try_current()
+            .unwrap_or_else(|_| self.tokio_handle.clone());
+        let _subscribe_task = handle.spawn(async move {
             if let Err(e) = subscriber.subscribe(writer).await {
                 tracing::debug!(
                     track = %track_name_owned,
