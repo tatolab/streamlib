@@ -204,6 +204,7 @@ schemas = [
     "schemas/com.tatolab.mp4_writer.config@1.0.0.yaml",
     "schemas/com.tatolab.screen_capture.config@1.0.0.yaml",
     "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
+    "schemas/com.streamlib.moq_subscribe.config@1.0.0.yaml",
 ]
 
 # Processor schemas (co-located with Rust source)
@@ -224,6 +225,7 @@ processors = [
     "src/core/processors/simple_passthrough.yaml",
     "src/core/processors/webrtc_whep.yaml",
     "src/core/processors/webrtc_whip.yaml",
+    "src/core/processors/moq_subscribe.yaml",
 ]
 
 # MCP Server Binary removed - needs redesign for Phase 1
