@@ -333,6 +333,9 @@ struct VideoDecodeState {
     decoder: Option<VideoDecoder>,
     sps_nal: Option<Bytes>,
     pps_nal: Option<Bytes>,
+    /// Skip P-frames until we've decoded at least one IDR (keyframe).
+    /// Necessary when joining a live stream mid-GOP.
+    received_first_idr: bool,
     frame_count: u64,
 }
 
@@ -344,6 +347,7 @@ impl VideoDecodeState {
             decoder: None,
             sps_nal: None,
             pps_nal: None,
+            received_first_idr: false,
             frame_count: 0,
         }
     }
@@ -416,10 +420,14 @@ impl VideoDecodeState {
             return None;
         }
 
+        // IDR (5) — mark that we can start decoding
+        if nal_type == 5 {
+            self.received_first_idr = true;
+        }
+
         // IDR (5) or Non-IDR (1) — decode frame
-        // Identical to WHEP: just wrap in Annex B and decode. The decoder
-        // already has SPS/PPS set as extradata via update_format().
-        if nal_type == 1 || nal_type == 5 {
+        // Skip P-frames until first IDR when joining mid-stream.
+        if (nal_type == 1 || nal_type == 5) && self.received_first_idr {
             if let Some(decoder) = &mut self.decoder {
                 let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
