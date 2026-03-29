@@ -61,25 +61,7 @@ impl crate::core::ReactiveProcessor for MoqPublishProcessor::Processor {
         };
         self.audio_encoder = Some(OpusEncoder::new(audio_config)?);
 
-        // Connect to MoQ relay eagerly during setup so tracks exist before
-        // any subscriber tries to subscribe. Video encoder is still lazy
-        // (needs GPU context from first frame), but the MoQ session and
-        // track announcement happen now.
-        let relay_config = MoqRelayConfig {
-            relay_endpoint_url: self.config.relay.endpoint_url.clone(),
-            broadcast_path: self.config.relay.broadcast_path.clone(),
-            tls_disable_verify: self.config.relay.tls_disable_verify.unwrap_or(false),
-            timeout_ms: 10000,
-        };
-
-        let session = MoqPublishSession::connect(relay_config).await?;
-        self.moq_publish_session = Some(session);
-        self.session_started = true;
-
-        tracing::info!(
-            broadcast = %self.config.relay.broadcast_path,
-            "MoqPublishProcessor connected to relay (video encoder deferred to first frame)"
-        );
+        tracing::info!("MoqPublishProcessor initialized (relay connect deferred to first frame)");
         Ok(())
     }
 
@@ -176,8 +158,24 @@ impl MoqPublishProcessor::Processor {
             tracing::info!("[MoqPublish] Video encoder initialized");
         }
 
+        // Connect to MoQ relay (deferred to first frame to avoid interfering
+        // with camera/Vulkan initialization during setup)
+        let relay_config = MoqRelayConfig {
+            relay_endpoint_url: self.config.relay.endpoint_url.clone(),
+            broadcast_path: self.config.relay.broadcast_path.clone(),
+            tls_disable_verify: self.config.relay.tls_disable_verify.unwrap_or(false),
+            timeout_ms: 10000,
+        };
+
+        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
+        let session = tokio_handle.block_on(MoqPublishSession::connect(relay_config))?;
+        self.moq_publish_session = Some(session);
+
         self.last_stats_time_ns = MediaClock::now().as_nanos() as i64;
-        tracing::info!("[MoqPublish] Session ready, encoding started");
+        tracing::info!(
+            broadcast = %self.config.relay.broadcast_path,
+            "[MoqPublish] Connected to relay, encoding started"
+        );
         Ok(())
     }
 
