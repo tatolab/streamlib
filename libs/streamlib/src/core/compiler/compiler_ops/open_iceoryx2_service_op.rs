@@ -181,6 +181,7 @@ pub fn open_iceoryx2_service(
                 let source_processor = get_single_processor(graph, &source_proc_id)?;
                 wire_moq_fanout_for_link(
                     &source_processor,
+                    &source_proc_id,
                     &source_port,
                     &moq_config,
                     link_id,
@@ -199,6 +200,7 @@ pub fn open_iceoryx2_service(
 #[cfg(feature = "moq")]
 fn wire_moq_fanout_for_link(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
+    source_proc_id: &ProcessorUniqueId,
     source_port: &str,
     moq_config: &crate::core::graph::MoqLinkTransportConfig,
     link_id: &LinkUniqueId,
@@ -212,11 +214,11 @@ fn wire_moq_fanout_for_link(
         timeout_ms: 10000,
     };
 
-    // Use the track name override or derive from schema
+    // Use the track name override or derive from processor_id/port_name
     let track_name = moq_config
         .moq_track_name_override
         .clone()
-        .unwrap_or_else(|| source_port.to_string());
+        .unwrap_or_else(|| format!("{}/{}", source_proc_id, source_port));
 
     tracing::info!(
         link_id = %link_id,

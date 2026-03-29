@@ -73,24 +73,23 @@ impl Default for MoqBroadcastCatalog {
     }
 }
 
-/// Map a StreamLib JTD schema name to a MoQ track name.
+/// Map a processor ID and port name to a MoQ track name.
 ///
-/// By default, the schema name IS the track name. This provides a simple,
-/// deterministic mapping that remote subscribers can use to discover tracks.
-///
-/// Example: "com.tatolab.encodedvideoframe@1.0.0" → "com.tatolab.encodedvideoframe@1.0.0"
-pub fn schema_name_to_moq_track_name(schema_name: &str) -> String {
-    schema_name.to_string()
+/// Uses `{processor_id}/{port_name}` format to avoid collisions when
+/// multiple processors output the same schema type.
+pub fn processor_port_to_moq_track_name(processor_id: &str, port_name: &str) -> String {
+    format!("{}/{}", processor_id, port_name)
 }
 
 /// Generate a catalog entry for a single output port.
 pub fn catalog_entry_for_output_port(
+    processor_id: &str,
     schema_name: &str,
     processor_type: &str,
     port_name: &str,
 ) -> MoqCatalogTrackEntry {
     MoqCatalogTrackEntry {
-        track_name: schema_name_to_moq_track_name(schema_name),
+        track_name: processor_port_to_moq_track_name(processor_id, port_name),
         schema_name: schema_name.to_string(),
         source_processor_type: processor_type.to_string(),
         source_port_name: port_name.to_string(),
