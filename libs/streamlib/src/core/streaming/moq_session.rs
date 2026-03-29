@@ -188,6 +188,11 @@ pub struct MoqSubscribeSession {
 
 impl MoqSubscribeSession {
     /// Connect to a MoQ relay and prepare to subscribe.
+    ///
+    /// Uses `with_origin` (both publish + consume roles) so the IETF subscriber
+    /// can handle track requests that come through the origin. This is necessary
+    /// because some relays (e.g., Cloudflare) don't forward namespace announcements,
+    /// so the subscriber needs the full session to route track subscriptions.
     pub async fn connect(config: MoqRelayConfig) -> Result<Self> {
         let url = config.full_url()?;
 
@@ -200,6 +205,9 @@ impl MoqSubscribeSession {
             .init()
             .map_err(|e| StreamError::Runtime(format!("MoQ client init failed: {e}")))?;
 
+        // Use with_origin to set up both publish and consume roles.
+        // This ensures the IETF subscriber's run_broadcast loop is active
+        // and can send SUBSCRIBE messages when tracks are requested.
         let origin = moq_lite::Origin::produce();
 
         let session = client
