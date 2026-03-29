@@ -35,6 +35,7 @@ members = [
     "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
     "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example
     "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
+    "examples/moq-data",                 # Example: Schema-agnostic data over MoQ (sensor telemetry)
 ]
 
 [workspace.package]
