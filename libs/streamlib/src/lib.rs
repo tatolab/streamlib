@@ -172,11 +172,14 @@ pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, Whi
 // WebRTC WHIP/WHEP processors (cross-platform)
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
-// MoQ processors
+// MoQ link-level transport
 #[cfg(feature = "moq")]
-pub use core::processors::MoqDecodeSubscribeProcessor;
+pub use core::graph::MoqLinkTransportConfig;
 #[cfg(feature = "moq")]
-pub use core::processors::MoqPublishProcessor;
+pub use core::streaming::{
+    MoqPublishSession, MoqRelayConfig, MoqSubscribeSession, MoqSubgroupReader, MoqTrackReader,
+};
+
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{

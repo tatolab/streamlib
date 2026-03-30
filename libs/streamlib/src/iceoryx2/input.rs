@@ -14,6 +14,7 @@ use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
 use super::FramePayload;
 use crate::core::error::{Result, StreamError};
+use crate::core::media_clock::MediaClock;
 
 /// Thread-local subscriber wrapper.
 ///
@@ -50,6 +51,16 @@ impl SendableSubscriber {
     }
 }
 
+/// A MoQ remote subscription feeding frames into the mailbox system.
+///
+/// A background tokio task reads from MoQ and sends FramePayloads through
+/// a crossbeam channel. `receive_pending()` drains this channel alongside iceoryx2.
+#[cfg(feature = "moq")]
+struct MoqRemoteInputSubscription {
+    moq_frame_receiver: crossbeam_channel::Receiver<FramePayload>,
+    _receive_task: tokio::task::JoinHandle<()>,
+}
+
 /// Per-port configuration: mailbox and read mode.
 struct PortConfig {
     mailbox: PortMailbox,
@@ -66,6 +77,9 @@ struct PortConfig {
 pub struct InputMailboxes {
     ports: HashMap<String, PortConfig>,
     subscriber: SendableSubscriber,
+    /// Remote MoQ subscriptions feeding frames into this mailbox collection.
+    #[cfg(feature = "moq")]
+    moq_subscriptions: Vec<MoqRemoteInputSubscription>,
 }
 
 impl InputMailboxes {
@@ -74,6 +88,8 @@ impl InputMailboxes {
         Self {
             ports: HashMap::new(),
             subscriber: SendableSubscriber::new(),
+            #[cfg(feature = "moq")]
+            moq_subscriptions: Vec::new(),
         }
     }
 
@@ -100,21 +116,96 @@ impl InputMailboxes {
         self.subscriber.set(subscriber);
     }
 
-    /// Receive all pending payloads from the iceoryx2 Subscriber and route them to mailboxes.
+    /// Add a MoQ remote subscription for the given port and track.
+    ///
+    /// Spawns a background tokio task that reads frames from the MoQ relay
+    /// and feeds them into the mailbox system via a crossbeam channel.
+    #[cfg(feature = "moq")]
+    pub fn add_moq_subscription(
+        &mut self,
+        dest_port: &str,
+        schema: &str,
+        mut track_reader: crate::core::streaming::MoqTrackReader,
+    ) {
+        let (sender, receiver) = crossbeam_channel::bounded::<FramePayload>(64);
+        let port_name = dest_port.to_string();
+        let schema_name = schema.to_string();
+
+        let receive_task = tokio::spawn(async move {
+            loop {
+                match track_reader.next_subgroup().await {
+                    Ok(Some(mut subgroup)) => {
+                        loop {
+                            match subgroup.read_frame().await {
+                                Ok(Some(frame_bytes)) => {
+                                    let timestamp_ns = MediaClock::now().as_nanos() as i64;
+                                    let payload = FramePayload::new(
+                                        &port_name,
+                                        &schema_name,
+                                        timestamp_ns,
+                                        &frame_bytes,
+                                    );
+                                    if sender.send(payload).is_err() {
+                                        tracing::debug!(
+                                            port = %port_name,
+                                            "MoQ input channel closed, stopping subscription"
+                                        );
+                                        return;
+                                    }
+                                }
+                                Ok(None) => break, // subgroup done
+                                Err(e) => {
+                                    tracing::warn!(
+                                        port = %port_name,
+                                        %e,
+                                        "MoQ subgroup read error"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::info!(port = %port_name, "MoQ track ended");
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(port = %port_name, %e, "MoQ track error");
+                        return;
+                    }
+                }
+            }
+        });
+
+        self.moq_subscriptions.push(MoqRemoteInputSubscription {
+            moq_frame_receiver: receiver,
+            _receive_task: receive_task,
+        });
+    }
+
+    /// Receive all pending payloads from iceoryx2 and MoQ sources, routing them to mailboxes.
     ///
     /// This is called automatically by `read()` and `has_data()`, but can be called
     /// explicitly if needed.
     ///
     /// Note: This should only be called from the thread that owns the subscriber.
     pub fn receive_pending(&self) {
-        let Some(subscriber) = self.subscriber.get() else {
-            return;
-        };
+        // Drain iceoryx2 subscriber
+        if let Some(subscriber) = self.subscriber.get() {
+            while let Ok(Some(sample)) = subscriber.receive() {
+                let payload = *sample.payload();
+                self.route(payload);
+            }
+        }
 
-        // Receive and route payloads directly (no collection needed with thread-safe mailboxes)
-        while let Ok(Some(sample)) = subscriber.receive() {
-            let payload = *sample.payload();
-            self.route(payload);
+        // Drain MoQ remote subscription channels
+        #[cfg(feature = "moq")]
+        {
+            for sub in &self.moq_subscriptions {
+                while let Ok(payload) = sub.moq_frame_receiver.try_recv() {
+                    self.route(payload);
+                }
+            }
         }
     }
 

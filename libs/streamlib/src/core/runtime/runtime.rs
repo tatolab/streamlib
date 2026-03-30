@@ -1085,6 +1085,29 @@ impl StreamRuntime {
         <Self as RuntimeOperations>::connect(self, from.into(), to.into())
     }
 
+    /// Connect two ports with MoQ remote transport configuration.
+    ///
+    /// Creates a link between the ports and attaches MoQ transport config,
+    /// enabling the compiler to wire both iceoryx2 and MoQ transport.
+    #[cfg(feature = "moq")]
+    pub fn connect_with_moq_transport(
+        &self,
+        from: impl Into<OutputLinkPortRef>,
+        to: impl Into<InputLinkPortRef>,
+        moq_config: crate::core::graph::MoqLinkTransportConfig,
+    ) -> Result<LinkUniqueId> {
+        let link_id = self.connect(from, to)?;
+
+        self.compiler.scope(|graph, _tx| {
+            if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
+                link.moq_transport_config = Some(moq_config);
+            }
+            Ok::<(), StreamError>(())
+        })?;
+
+        Ok(link_id)
+    }
+
     /// Disconnect a link.
     pub fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
         <Self as RuntimeOperations>::disconnect(self, link_id)
