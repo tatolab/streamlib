@@ -168,7 +168,7 @@ pub fn open_iceoryx2_service(
             runtime_ctx,
         )?;
 
-        // After iceoryx2 wiring, check if this link also needs MoQ remote transport
+        // After iceoryx2 wiring, check if this link also needs MoQ fanout
         #[cfg(feature = "moq")]
         {
             let moq_config = graph
@@ -178,24 +178,11 @@ pub fn open_iceoryx2_service(
                 .and_then(|link| link.moq_transport_config.clone());
 
             if let Some(moq_config) = moq_config {
-                // Wire output side: publish to MoQ relay
                 let source_processor = get_single_processor(graph, &source_proc_id)?;
-                wire_moq_remote_output_for_link(
+                wire_moq_fanout_for_link(
                     &source_processor,
                     &source_proc_id,
                     &source_port,
-                    &moq_config,
-                    link_id,
-                )?;
-
-                // Wire input side: subscribe from MoQ relay
-                let dest_processor = get_single_processor(graph, &dest_proc_id)?;
-                wire_moq_remote_input_for_link(
-                    &dest_processor,
-                    &dest_proc_id,
-                    &dest_port,
-                    &source_port,
-                    &source_proc_id,
                     &moq_config,
                     link_id,
                 )?;
@@ -211,7 +198,7 @@ pub fn open_iceoryx2_service(
 /// Creates a MoQ publish session connected to the relay and adds it
 /// as a remote destination on the source processor's OutputWriter.
 #[cfg(feature = "moq")]
-fn wire_moq_remote_output_for_link(
+fn wire_moq_fanout_for_link(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
@@ -238,7 +225,7 @@ fn wire_moq_remote_output_for_link(
         relay = %relay_config.relay_endpoint_url,
         broadcast = %relay_config.broadcast_path,
         track = %track_name,
-        "Wiring MoQ remote output for port '{}'",
+        "Wiring MoQ fanout for output port '{}'",
         source_port,
     );
 
@@ -257,96 +244,11 @@ fn wire_moq_remote_output_for_link(
     if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
         output_writer.add_moq_connection(source_port, &track_name, session_arc);
         tracing::info!(
-            "Added MoQ remote destination for port '{}' -> track '{}'",
+            "Added MoQ fanout destination for port '{}' -> track '{}'",
             source_port,
             track_name,
         );
     }
-
-    Ok(())
-}
-
-/// Wire a MoQ subscribe session for a link's input port.
-///
-/// Creates a MoQ subscribe session connected to the relay and adds it
-/// as a remote source on the destination processor's InputMailboxes.
-#[cfg(feature = "moq")]
-#[allow(clippy::too_many_arguments)]
-fn wire_moq_remote_input_for_link(
-    dest_processor: &Arc<Mutex<ProcessorInstance>>,
-    dest_proc_id: &ProcessorUniqueId,
-    dest_port: &str,
-    source_port: &str,
-    source_proc_id: &ProcessorUniqueId,
-    moq_config: &crate::core::graph::MoqLinkTransportConfig,
-    link_id: &LinkUniqueId,
-) -> Result<()> {
-    use crate::core::streaming::MoqRelayConfig;
-
-    let relay_config = MoqRelayConfig {
-        relay_endpoint_url: moq_config.moq_relay_url.clone(),
-        broadcast_path: moq_config.moq_broadcast_namespace.clone(),
-        tls_disable_verify: false,
-        timeout_ms: 10000,
-    };
-
-    // Use the track name override or derive from source processor_id/port_name
-    let track_name = moq_config
-        .moq_track_name_override
-        .clone()
-        .unwrap_or_else(|| format!("{}/{}", source_proc_id, source_port));
-
-    tracing::info!(
-        link_id = %link_id,
-        relay = %relay_config.relay_endpoint_url,
-        broadcast = %relay_config.broadcast_path,
-        track = %track_name,
-        "Wiring MoQ remote input for port '{}'",
-        dest_port,
-    );
-
-    // Create the MoQ subscribe session and track reader asynchronously
-    let (session, track_reader) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            let session =
-                crate::core::streaming::MoqSubscribeSession::connect(relay_config).await?;
-            let track_reader = session.subscribe_track(&track_name)?;
-            Ok::<_, crate::core::error::StreamError>((session, track_reader))
-        })
-    })?;
-
-    // Look up the schema for the source output port
-    let output_schema = {
-        let source_proc_type = PROCESSOR_REGISTRY
-            .descriptor(&source_proc_id.to_string())
-            .map(|d| d.name)
-            .unwrap_or_default();
-
-        PROCESSOR_REGISTRY
-            .port_info(&source_proc_type)
-            .and_then(|(_, outputs)| {
-                outputs
-                    .iter()
-                    .find(|p| p.name == source_port)
-                    .map(|p| p.data_type.clone())
-            })
-            .unwrap_or_else(|| track_name.clone())
-    };
-
-    // Add the MoQ subscription to the destination's InputMailboxes
-    let mut dest_guard = dest_processor.lock();
-    if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
-        input_mailboxes.add_moq_subscription(dest_port, &output_schema, track_reader);
-        tracing::info!(
-            "Added MoQ remote input for port '{}' <- track '{}'",
-            dest_port,
-            track_name,
-        );
-    }
-
-    // Keep the session alive by leaking it into a background Arc
-    // (the session task runs as long as the Arc is alive)
-    std::mem::forget(session);
 
     Ok(())
 }

@@ -532,7 +532,7 @@ fn generate_descriptor_from_schema(
                     schema: #port_schema.to_string(),
                     required: true,
                     is_iceoryx2: true,
-                    remote: false,
+                    moq_fanout: false,
                 })
             }
         })
@@ -553,7 +553,7 @@ fn generate_descriptor_from_schema(
                     schema: #port_schema.to_string(),
                     required: true,
                     is_iceoryx2: true,
-                    remote: false,
+                    moq_fanout: false,
                 })
             }
         })
