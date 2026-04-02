@@ -1,13 +1,5 @@
 # Changelog
 
-## [0.4.10](https://github.com/tatolab/streamlib/compare/v0.4.9...v0.4.10) (2026-03-28)
-
-
-### Bug Fixes
-
-* STAP-A RTP packetization for reliable SPS/PPS delivery ([#214](https://github.com/tatolab/streamlib/issues/214)) ([8e138b8](https://github.com/tatolab/streamlib/commit/8e138b8b3aaaf4a641f455d7f7095b828d055a55))
-* STAP-A RTP packetization for reliable SPS/PPS delivery ([#214](https://github.com/tatolab/streamlib/issues/214)) ([2256485](https://github.com/tatolab/streamlib/commit/22564856ef66f8648b3940c782b2c887c8639b2a))
-
 ## [0.4.9](https://github.com/tatolab/streamlib/compare/v0.4.8...v0.4.9) (2026-03-28)
 
 

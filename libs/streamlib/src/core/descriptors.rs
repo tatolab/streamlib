@@ -59,7 +59,6 @@ impl PortDescriptor {
             is_iceoryx2: true,
         }
     }
-
 }
 
 /// Code examples for a processor in different languages.
