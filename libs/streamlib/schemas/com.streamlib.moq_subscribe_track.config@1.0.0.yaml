@@ -9,11 +9,12 @@ metadata:
   description: "Configuration for subscribing to a single track from a MoQ relay"
 
 properties:
-  url:
-    metadata:
-      description: "MoQ relay URL including broadcast path (e.g., https://relay.example.com/my-broadcast)"
-    type: string
   track_name:
     metadata:
       description: "Track name to subscribe to"
+    type: string
+optionalProperties:
+  url:
+    metadata:
+      description: "MoQ relay URL (defaults to Cloudflare draft-14 relay with auto-generated broadcast path)"
     type: string

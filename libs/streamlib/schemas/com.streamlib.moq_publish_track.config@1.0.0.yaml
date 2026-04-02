@@ -8,13 +8,12 @@ metadata:
   version: 1.0.0
   description: "Configuration for publishing a single track to a MoQ relay"
 
-properties:
-  url:
-    metadata:
-      description: "MoQ relay URL including broadcast path (e.g., https://relay.example.com/my-broadcast)"
-    type: string
 optionalProperties:
   track_name:
     metadata:
       description: "Track name (auto-generated from processor ID if not set)"
+    type: string
+  url:
+    metadata:
+      description: "MoQ relay URL (defaults to Cloudflare draft-14 relay with auto-generated broadcast path)"
     type: string

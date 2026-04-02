@@ -14,6 +14,9 @@ use crate::iceoryx2::OutputWriter;
 use std::future::Future;
 use std::sync::Arc;
 
+/// Default MoQ relay (Cloudflare draft-14).
+const DEFAULT_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";
+
 // ============================================================================
 // PROCESSOR
 // ============================================================================
@@ -32,28 +35,41 @@ pub struct MoqSubscribeTrackProcessor {
 
 impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
     fn setup(&mut self, ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
-        self.runtime_context = Some(ctx);
+        self.runtime_context = Some(ctx.clone());
 
         async move {
-            // Parse the single URL into relay base + broadcast path
-            let parsed_url = url::Url::parse(&self.config.url)
-                .map_err(|e| StreamError::Configuration(format!("Invalid MoQ URL: {e}")))?;
-            let broadcast_path = parsed_url.path().trim_start_matches('/').to_string();
-            let mut relay_base = parsed_url.clone();
-            relay_base.set_path("");
-            let relay_endpoint_url = relay_base.to_string().trim_end_matches('/').to_string();
-
-            let relay_config = MoqRelayConfig {
-                relay_endpoint_url,
-                broadcast_path: broadcast_path.clone(),
-                tls_disable_verify: false,
-                timeout_ms: 10000,
+            // Build relay config: use provided URL or default relay + auto-generated broadcast path
+            let relay_config = match &self.config.url {
+                Some(url) => {
+                    let parsed_url = url::Url::parse(url)
+                        .map_err(|e| StreamError::Configuration(format!("Invalid MoQ URL: {e}")))?;
+                    let broadcast_path = parsed_url.path().trim_start_matches('/').to_string();
+                    let mut relay_base = parsed_url.clone();
+                    relay_base.set_path("");
+                    MoqRelayConfig {
+                        relay_endpoint_url: relay_base.to_string().trim_end_matches('/').to_string(),
+                        broadcast_path,
+                        tls_disable_verify: false,
+                        timeout_ms: 10000,
+                    }
+                }
+                None => {
+                    // Auto-generate broadcast path from runtime ID
+                    let broadcast_path = format!("streamlib/{}", ctx.runtime_id());
+                    MoqRelayConfig {
+                        relay_endpoint_url: DEFAULT_RELAY_URL.to_string(),
+                        broadcast_path,
+                        tls_disable_verify: false,
+                        timeout_ms: 10000,
+                    }
+                }
             };
 
-            let session = MoqSubscribeSession::connect(relay_config).await?;
+            let session = MoqSubscribeSession::connect(relay_config.clone()).await?;
 
             tracing::info!(
-                broadcast = %broadcast_path,
+                relay = %relay_config.relay_endpoint_url,
+                broadcast = %relay_config.broadcast_path,
                 track = %self.config.track_name,
                 "[MoqSubscribeTrack] Connected to relay"
             );
@@ -176,7 +192,7 @@ async fn run_moq_subscribe_track_receive_loop(
                                         );
                                     }
                                 }
-                                Ok(None) => break, // Subgroup finished
+                                Ok(None) => break,
                                 Err(e) => {
                                     tracing::warn!(
                                         track = %track_name,

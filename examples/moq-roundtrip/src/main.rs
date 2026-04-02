@@ -7,11 +7,10 @@
 //! Publishes audio from a ChordGenerator through a MoQ relay, subscribes to
 //! the same track, proving type-agnostic byte-forwarding works end-to-end.
 //!
-//! Usage:
-//!   cargo run -p moq-roundtrip -- <relay_url>/<broadcast_path>
+//! Uses the default Cloudflare draft-14 relay with an auto-generated broadcast path.
 //!
-//! Example:
-//!   cargo run -p moq-roundtrip -- https://draft-14.cloudflare.mediaoverquic.com/moq-roundtrip-test
+//! Usage:
+//!   cargo run -p moq-roundtrip
 
 use streamlib::{
     input, output,
@@ -28,20 +27,7 @@ fn main() -> Result<()> {
         .install_default()
         .ok();
 
-    let args: Vec<String> = std::env::args().collect();
-    let moq_url = if args.len() >= 2 {
-        args[1].clone()
-    } else {
-        eprintln!("Usage: {} <relay_url>/<broadcast_path>", args[0]);
-        eprintln!(
-            "Example: {} https://draft-14.cloudflare.mediaoverquic.com/moq-roundtrip-test",
-            args[0]
-        );
-        std::process::exit(1);
-    };
-
     tracing::info!("=== MoQ Roundtrip - StreamLib Edition ===");
-    tracing::info!("  URL: {}", moq_url);
 
     // Create StreamRuntime
     let runtime = StreamRuntime::new()?;
@@ -57,24 +43,26 @@ fn main() -> Result<()> {
     tracing::info!("Created ChordGenerator");
 
     // Create MoQ publish track — publishes audio bytes to the relay
+    // No URL needed: defaults to Cloudflare draft-14 relay with auto-generated broadcast path
     let moq_pub = runtime.add_processor(MoqPublishTrackProcessor::Processor::node(
         MoqPublishTrackConfig {
-            url: moq_url.clone(),
             track_name: Some("audio".to_string()),
+            ..Default::default()
         },
     ))?;
     tracing::info!("Created MoqPublishTrack");
 
     // Create MoQ subscribe track — receives audio bytes from the relay
+    // Same default relay, just specify which track to subscribe to
     let _moq_sub = runtime.add_processor(MoqSubscribeTrackProcessor::Processor::node(
         MoqSubscribeTrackConfig {
-            url: moq_url,
             track_name: "audio".to_string(),
+            ..Default::default()
         },
     ))?;
     tracing::info!("Created MoqSubscribeTrack");
 
-    // Wire: ChordGenerator → MoqPublishTrack
+    // Wire: ChordGenerator → MoqPublishTrack (any type flows through)
     runtime.connect(
         output::<ChordGeneratorProcessor::OutputLink::chord>(&chord),
         input::<MoqPublishTrackProcessor::InputLink::data_in>(&moq_pub),
@@ -82,7 +70,7 @@ fn main() -> Result<()> {
     tracing::info!("Connected ChordGenerator → MoqPublishTrack");
 
     // MoqSubscribeTrack output is unconnected — it logs received frames.
-    // In a real pipeline you'd wire it to an audio decoder or output processor.
+    // In a real pipeline you'd wire it to an audio output processor.
 
     tracing::info!("Starting MoQ roundtrip pipeline...");
     tracing::info!("Press Ctrl+C to stop.");

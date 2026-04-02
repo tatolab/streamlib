@@ -27,9 +27,6 @@ pub struct PortDescriptor {
     /// Whether this port uses iceoryx2 IPC.
     #[serde(default)]
     pub is_iceoryx2: bool,
-    /// Whether this port publishes via MoQ fanout alongside iceoryx2.
-    #[serde(default)]
-    pub moq_fanout: bool,
 }
 
 impl PortDescriptor {
@@ -45,7 +42,6 @@ impl PortDescriptor {
             schema: schema.into(),
             required,
             is_iceoryx2: false,
-            moq_fanout: false,
         }
     }
 
@@ -61,15 +57,9 @@ impl PortDescriptor {
             schema: schema.into(),
             required: true,
             is_iceoryx2: true,
-            moq_fanout: false,
         }
     }
 
-    /// Enable MoQ fanout publishing on this port.
-    pub fn with_moq_fanout(mut self) -> Self {
-        self.moq_fanout = true;
-        self
-    }
 }
 
 /// Code examples for a processor in different languages.

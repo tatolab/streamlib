@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoqSubscribeTrackConfig {
-    /// MoQ relay URL including broadcast path.
-    #[serde(rename = "url")]
-    pub url: String,
-
     /// Track name to subscribe to.
     #[serde(rename = "track_name")]
     pub track_name: String,
+
+    /// MoQ relay URL (defaults to Cloudflare draft-14 relay with auto-generated broadcast path).
+    #[serde(rename = "url")]
+    pub url: Option<String>,
 }
