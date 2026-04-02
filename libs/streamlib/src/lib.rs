@@ -172,6 +172,12 @@ pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, Whi
 // WebRTC WHIP/WHEP processors (cross-platform)
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
+// MoQ streaming (cross-platform)
+#[cfg(feature = "moq")]
+pub use core::processors::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
+#[cfg(feature = "moq")]
+pub use _generated_::{MoqPublishTrackConfig, MoqSubscribeTrackConfig};
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,

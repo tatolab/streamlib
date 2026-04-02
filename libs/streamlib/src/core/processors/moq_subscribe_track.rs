@@ -35,17 +35,25 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         self.runtime_context = Some(ctx);
 
         async move {
+            // Parse the single URL into relay base + broadcast path
+            let parsed_url = url::Url::parse(&self.config.url)
+                .map_err(|e| StreamError::Configuration(format!("Invalid MoQ URL: {e}")))?;
+            let broadcast_path = parsed_url.path().trim_start_matches('/').to_string();
+            let mut relay_base = parsed_url.clone();
+            relay_base.set_path("");
+            let relay_endpoint_url = relay_base.to_string().trim_end_matches('/').to_string();
+
             let relay_config = MoqRelayConfig {
-                relay_endpoint_url: self.config.relay_endpoint_url.clone(),
-                broadcast_path: self.config.broadcast_path.clone(),
-                tls_disable_verify: self.config.tls_disable_verify.unwrap_or(false),
+                relay_endpoint_url,
+                broadcast_path: broadcast_path.clone(),
+                tls_disable_verify: false,
                 timeout_ms: 10000,
             };
 
             let session = MoqSubscribeSession::connect(relay_config).await?;
 
             tracing::info!(
-                broadcast = %self.config.broadcast_path,
+                broadcast = %broadcast_path,
                 track = %self.config.track_name,
                 "[MoqSubscribeTrack] Connected to relay"
             );

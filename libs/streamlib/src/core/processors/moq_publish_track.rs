@@ -16,11 +16,11 @@ use crate::core::{Result, RuntimeContext, StreamError};
 
 #[crate::processor("com.streamlib.moq_publish_track")]
 pub struct MoqPublishTrackProcessor {
-    /// Runtime context for tokio handle.
-    runtime_context: Option<RuntimeContext>,
-
     /// MoQ publish session (connected to relay).
     moq_publish_session: Option<MoqPublishSession>,
+
+    /// Resolved track name (from config or auto-generated).
+    track_name: String,
 
     /// Frames published counter.
     frames_published: u64,
@@ -28,20 +28,33 @@ pub struct MoqPublishTrackProcessor {
 
 impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        self.runtime_context = Some(ctx.clone());
+        // Parse the single URL into relay base + broadcast path
+        let parsed_url = url::Url::parse(&self.config.url)
+            .map_err(|e| StreamError::Configuration(format!("Invalid MoQ URL: {e}")))?;
+        let broadcast_path = parsed_url.path().trim_start_matches('/').to_string();
+        let mut relay_base = parsed_url.clone();
+        relay_base.set_path("");
+        let relay_endpoint_url = relay_base.to_string().trim_end_matches('/').to_string();
 
         let relay_config = MoqRelayConfig {
-            relay_endpoint_url: self.config.relay_endpoint_url.clone(),
-            broadcast_path: self.config.broadcast_path.clone(),
-            tls_disable_verify: self.config.tls_disable_verify.unwrap_or(false),
+            relay_endpoint_url,
+            broadcast_path: broadcast_path.clone(),
+            tls_disable_verify: false,
             timeout_ms: 10000,
         };
+
+        // Track name: use config value or auto-generate from processor ID
+        self.track_name = self.config.track_name.clone().unwrap_or_else(|| {
+            ctx.processor_id()
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        });
 
         let session = MoqPublishSession::connect(relay_config).await?;
 
         tracing::info!(
-            broadcast = %self.config.broadcast_path,
-            track = %self.config.track_name,
+            broadcast = %broadcast_path,
+            track = %self.track_name,
             "[MoqPublishTrack] Connected to relay"
         );
 
@@ -55,7 +68,6 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
             "[MoqPublishTrack] Shutting down"
         );
         self.moq_publish_session.take();
-        self.runtime_context.take();
         Ok(())
     }
 
@@ -76,12 +88,12 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
             .as_mut()
             .ok_or_else(|| StreamError::Runtime("MoQ session not connected".into()))?;
 
-        session.publish_frame(&self.config.track_name, &bytes, false)?;
+        session.publish_frame(&self.track_name, &bytes, false)?;
 
         self.frames_published += 1;
         if self.frames_published == 1 {
             tracing::info!(
-                track = %self.config.track_name,
+                track = %self.track_name,
                 "[MoqPublishTrack] First frame published"
             );
         } else if self.frames_published % 100 == 0 {

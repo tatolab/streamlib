@@ -9,19 +9,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoqPublishTrackConfig {
-    /// MoQ relay endpoint URL.
-    #[serde(rename = "relay_endpoint_url")]
-    pub relay_endpoint_url: String,
+    /// MoQ relay URL including broadcast path.
+    #[serde(rename = "url")]
+    pub url: String,
 
-    /// MoQ broadcast namespace path.
-    #[serde(rename = "broadcast_path")]
-    pub broadcast_path: String,
-
-    /// MoQ track name to publish to.
+    /// Track name (auto-generated from processor ID if not set).
     #[serde(rename = "track_name")]
-    pub track_name: String,
-
-    /// Disable TLS certificate verification (development only).
-    #[serde(rename = "tls_disable_verify")]
-    pub tls_disable_verify: Option<bool>,
+    pub track_name: Option<String>,
 }

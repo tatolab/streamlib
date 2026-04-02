@@ -9,20 +9,12 @@ metadata:
   description: "Configuration for publishing a single track to a MoQ relay"
 
 properties:
-  relay_endpoint_url:
+  url:
     metadata:
-      description: "MoQ relay endpoint URL"
-    type: string
-  broadcast_path:
-    metadata:
-      description: "MoQ broadcast namespace path"
-    type: string
-  track_name:
-    metadata:
-      description: "MoQ track name to publish to"
+      description: "MoQ relay URL including broadcast path (e.g., https://relay.example.com/my-broadcast)"
     type: string
 optionalProperties:
-  tls_disable_verify:
+  track_name:
     metadata:
-      description: "Disable TLS certificate verification (development only)"
-    type: boolean
+      description: "Track name (auto-generated from processor ID if not set)"
+    type: string
