@@ -12,8 +12,4 @@ pub struct MoqPublishTrackConfig {
     /// Track name (auto-generated from processor ID if not set).
     #[serde(rename = "track_name")]
     pub track_name: Option<String>,
-
-    /// MoQ relay URL (defaults to Cloudflare draft-14 relay with auto-generated broadcast path).
-    #[serde(rename = "url")]
-    pub url: Option<String>,
 }

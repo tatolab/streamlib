@@ -13,8 +13,3 @@ properties:
     metadata:
       description: "Track name to subscribe to"
     type: string
-optionalProperties:
-  url:
-    metadata:
-      description: "MoQ relay URL (defaults to Cloudflare draft-14 relay with auto-generated broadcast path)"
-    type: string

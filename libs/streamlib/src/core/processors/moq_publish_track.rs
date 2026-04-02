@@ -6,6 +6,9 @@
 // Forwards raw bytes from a single graph input to a named MoQ track.
 // Type-agnostic: uses read_raw() to receive any serialized data type
 // and publishes the bytes as-is to the MoQ relay.
+//
+// Connects to the Cloudflare draft-14 relay with an auto-generated
+// broadcast namespace derived from the runtime ID.
 
 use crate::core::streaming::{MoqPublishSession, MoqRelayConfig};
 use crate::core::{Result, RuntimeContext, StreamError};
@@ -38,38 +41,20 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
                 .unwrap_or_else(|| "default".to_string())
         });
 
-        // Build relay config: use provided URL or default relay + auto-generated broadcast path
-        let relay_config = match &self.config.url {
-            Some(url) => {
-                let parsed_url = url::Url::parse(url)
-                    .map_err(|e| StreamError::Configuration(format!("Invalid MoQ URL: {e}")))?;
-                let broadcast_path = parsed_url.path().trim_start_matches('/').to_string();
-                let mut relay_base = parsed_url.clone();
-                relay_base.set_path("");
-                MoqRelayConfig {
-                    relay_endpoint_url: relay_base.to_string().trim_end_matches('/').to_string(),
-                    broadcast_path,
-                    tls_disable_verify: false,
-                    timeout_ms: 10000,
-                }
-            }
-            None => {
-                // Auto-generate broadcast path from runtime ID
-                let broadcast_path = format!("streamlib/{}", ctx.runtime_id());
-                MoqRelayConfig {
-                    relay_endpoint_url: DEFAULT_RELAY_URL.to_string(),
-                    broadcast_path,
-                    tls_disable_verify: false,
-                    timeout_ms: 10000,
-                }
-            }
+        // Broadcast namespace derived from runtime ID
+        let broadcast_path = format!("streamlib/{}", ctx.runtime_id());
+
+        let relay_config = MoqRelayConfig {
+            relay_endpoint_url: DEFAULT_RELAY_URL.to_string(),
+            broadcast_path: broadcast_path.clone(),
+            tls_disable_verify: false,
+            timeout_ms: 10000,
         };
 
-        let session = MoqPublishSession::connect(relay_config.clone()).await?;
+        let session = MoqPublishSession::connect(relay_config).await?;
 
         tracing::info!(
-            relay = %relay_config.relay_endpoint_url,
-            broadcast = %relay_config.broadcast_path,
+            broadcast = %broadcast_path,
             track = %self.track_name,
             "[MoqPublishTrack] Connected to relay"
         );

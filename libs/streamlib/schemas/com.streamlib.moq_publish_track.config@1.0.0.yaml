@@ -13,7 +13,3 @@ optionalProperties:
     metadata:
       description: "Track name (auto-generated from processor ID if not set)"
     type: string
-  url:
-    metadata:
-      description: "MoQ relay URL (defaults to Cloudflare draft-14 relay with auto-generated broadcast path)"
-    type: string
