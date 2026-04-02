@@ -61,11 +61,9 @@ pub mod webrtc_whip;
 
 // MoQ Streaming
 #[cfg(feature = "moq")]
-pub mod moq_decode_subscribe;
+pub mod moq_publish_track;
 #[cfg(feature = "moq")]
-pub mod moq_publish;
-#[cfg(feature = "moq")]
-pub mod moq_subscribe;
+pub mod moq_subscribe_track;
 
 // TODO: Migrate to iceoryx2 API
 // pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
@@ -88,8 +86,6 @@ pub use simple_passthrough::SimplePassthroughProcessor;
 pub use webrtc_whep::WebRtcWhepProcessor;
 pub use webrtc_whip::WebRtcWhipProcessor;
 #[cfg(feature = "moq")]
-pub use moq_decode_subscribe::MoqDecodeSubscribeProcessor;
+pub use moq_publish_track::MoqPublishTrackProcessor;
 #[cfg(feature = "moq")]
-pub use moq_publish::MoqPublishProcessor;
-#[cfg(feature = "moq")]
-pub use moq_subscribe::MoqSubscribeProcessor;
+pub use moq_subscribe_track::MoqSubscribeTrackProcessor;

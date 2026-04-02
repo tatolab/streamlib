@@ -5,23 +5,23 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for MoQ relay subscription
+/// Configuration for publishing a single track to a MoQ relay.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MoqSubscribeConfig {
-    /// MoQ relay endpoint URL (e.g., https://relay.example.com)
+pub struct MoqPublishTrackConfig {
+    /// MoQ relay endpoint URL.
     #[serde(rename = "relay_endpoint_url")]
     pub relay_endpoint_url: String,
 
-    /// Broadcast namespace path to subscribe to
+    /// MoQ broadcast namespace path.
     #[serde(rename = "broadcast_path")]
     pub broadcast_path: String,
 
-    /// Track names to subscribe to within the broadcast
-    #[serde(rename = "track_names")]
-    pub track_names: Vec<String>,
+    /// MoQ track name to publish to.
+    #[serde(rename = "track_name")]
+    pub track_name: String,
 
-    /// Disable TLS certificate verification (development only)
+    /// Disable TLS certificate verification (development only).
     #[serde(rename = "tls_disable_verify")]
     pub tls_disable_verify: Option<bool>,
 }

@@ -1,9 +1,0 @@
-[package]
-name = "moq-av-subscribe"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-streamlib = { path = "../../libs/streamlib", features = ["moq", "ffmpeg"] }
-tracing = "0.1.41"
-rustls = { version = "0.23", features = ["ring"] }

@@ -252,53 +252,33 @@ processors:
 
   # === MoQ Streaming ===
 
-  - name: com.streamlib.moq_subscribe
+  - name: com.streamlib.moq_publish_track
     version: 1.0.0
-    description: "Receives data from a MoQ relay via subscription"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: com.streamlib.moq_subscribe.config@1.0.0
-    outputs:
-      - name: data_out
-        schema: com.tatolab.videoframe@1.0.0
-        description: Received data frames from MoQ subscription
-
-  - name: com.streamlib.moq_decode_subscribe
-    version: 1.0.0
-    description: "Subscribes to MoQ A/V tracks, decodes H.264 video + Opus audio, outputs frames"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: com.streamlib.moq_decode_subscribe.config@1.0.0
-    outputs:
-      - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
-        description: Decoded video frames from MoQ H.264 track
-      - name: audio_out
-        schema: com.tatolab.audioframe@1.0.0
-        description: Decoded audio frames from MoQ Opus track
-
-  - name: com.streamlib.moq_publish
-    version: 1.0.0
-    description: "Encodes and publishes video+audio to a MoQ relay"
+    description: "Publishes raw bytes from a single graph input to a named MoQ track"
     execution: reactive
     runtime:
       language: rust
     config:
       name: config
-      schema: com.streamlib.moq_publish.config@1.0.0
+      schema: com.streamlib.moq_publish_track.config@1.0.0
     inputs:
-      - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
-        description: Input video frames to encode and publish
-      - name: audio_in
-        schema: com.tatolab.audioframe@1.0.0
-        description: Input audio frames to encode and publish
+      - name: data_in
+        schema: any
+        description: Input data to publish to MoQ track (any serialized type)
+
+  - name: com.streamlib.moq_subscribe_track
+    version: 1.0.0
+    description: "Subscribes to a named MoQ track and outputs raw bytes to the graph"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.moq_subscribe_track.config@1.0.0
+    outputs:
+      - name: data_out
+        schema: any
+        description: Received data from MoQ track subscription (any serialized type)
 
   # === Test mock processors ===
 

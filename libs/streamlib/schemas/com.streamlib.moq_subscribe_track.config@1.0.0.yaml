@@ -1,0 +1,28 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for MoQ Subscribe Track config
+
+metadata:
+  name: com.streamlib.moq_subscribe_track.config
+  version: 1.0.0
+  description: "Configuration for subscribing to a single track from a MoQ relay"
+
+properties:
+  relay_endpoint_url:
+    metadata:
+      description: "MoQ relay endpoint URL"
+    type: string
+  broadcast_path:
+    metadata:
+      description: "MoQ broadcast namespace path"
+    type: string
+  track_name:
+    metadata:
+      description: "MoQ track name to subscribe to"
+    type: string
+optionalProperties:
+  tls_disable_verify:
+    metadata:
+      description: "Disable TLS certificate verification (development only)"
+    type: boolean

@@ -21,9 +21,7 @@ members = [
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
-    "examples/moq-publish",              # Example: Publish test data to a MoQ relay
-    "examples/moq-subscribe",            # Example: Subscribe to a MoQ relay broadcast
-    "examples/moq-roundtrip",             # Example: MoQ roundtrip latency test (publish + subscribe)
+    "examples/moq-roundtrip",             # Example: MoQ roundtrip test (publish + subscribe via relay)
     # "examples/whep-player",     # Example: WHEP (WebRTC egress) player (uses WebRTC WHEP)
     # "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization (uses CameraProcessor, etc.)
     # "examples/graph-json-export",         # Example: Graph data structure JSON export (uses custom processors with old syntax)
@@ -36,9 +34,6 @@ members = [
     "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
     "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example
     "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
-    "examples/moq-av-publish",            # Example: Publish synthetic A/V over MoQ (two tracks)
-    "examples/moq-data",                 # Example: Schema-agnostic data over MoQ (sensor telemetry)
-    "examples/moq-av-subscribe",          # Example: Subscribe to A/V over MoQ (two tracks)
 ]
 
 [workspace.package]
