@@ -21,9 +21,9 @@ pub mod moq_session;
 
 pub use h264_rtp::H264RtpDepacketizer;
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-pub use opus::{AudioEncoderConfig, AudioEncoderOpus, OpusEncoder};
+pub(crate) use opus::{AudioEncoderConfig, AudioEncoderOpus, OpusEncoder};
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-pub use opus_decoder::OpusDecoder;
+pub(crate) use opus_decoder::OpusDecoder;
 pub use rtp::convert_video_to_samples;
 pub use rtp::convert_audio_to_sample;
 pub use rtp::RtpTimestampCalculator;
