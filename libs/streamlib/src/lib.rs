@@ -172,6 +172,16 @@ pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, Whi
 // WebRTC WHIP/WHEP processors (cross-platform)
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
+// Codec processors (cross-platform)
+pub use core::processors::{
+    H264EncoderProcessor, H264DecoderProcessor,
+    OpusEncoderProcessor, OpusDecoderProcessor,
+};
+pub use _generated_::{
+    H264EncoderConfig, H264DecoderConfig,
+    OpusEncoderConfig, OpusDecoderConfig,
+};
+
 // MoQ streaming (cross-platform)
 #[cfg(feature = "moq")]
 pub use core::processors::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
