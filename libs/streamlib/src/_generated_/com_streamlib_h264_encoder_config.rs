@@ -21,7 +21,11 @@ pub struct H264EncoderConfig {
     #[serde(rename = "bitrate_bps")]
     pub bitrate_bps: Option<u32>,
 
-    /// Frames between keyframes (default: 30).
+    /// Frames between keyframes (default: 60).
     #[serde(rename = "keyframe_interval")]
     pub keyframe_interval: Option<u32>,
+
+    /// H.264 profile: baseline, main, or high (default: main).
+    #[serde(rename = "profile")]
+    pub profile: Option<String>,
 }

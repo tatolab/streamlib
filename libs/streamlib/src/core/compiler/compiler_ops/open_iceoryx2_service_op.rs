@@ -292,10 +292,12 @@ fn open_iceoryx2_pubsub(
     {
         let mut dest_guard = dest_processor.lock();
         if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
-            // Always add the port mapping
-            // Default history of 1 - keeps only the most recent payload
-            // Default read mode is SkipToLatest (optimal for video)
-            input_mailboxes.add_port(dest_port, 1, Default::default());
+            // Buffer size of 8 ensures encoded video IDR frames aren't overwritten
+            // by P-frames before the decoder reads them. ReadMode default is
+            // SkipToLatest which is fine for raw video but the decoder processor's
+            // macro-generated inputs use the schema's read_mode (read_next_in_order
+            // for encoded video).
+            input_mailboxes.add_port(dest_port, 8, Default::default());
 
             // Only set subscriber if this is the first connection to this destination
             // All subsequent connections reuse the same subscriber
@@ -532,7 +534,7 @@ fn open_iceoryx2_subprocess_to_rust(
     {
         let mut dest_guard = dest_processor.lock();
         if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
-            input_mailboxes.add_port(dest_port, 1, Default::default());
+            input_mailboxes.add_port(dest_port, 8, Default::default());
 
             if !input_mailboxes.has_subscriber() {
                 let subscriber = service.create_subscriber()?;

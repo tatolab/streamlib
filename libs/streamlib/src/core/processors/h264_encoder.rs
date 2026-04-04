@@ -72,13 +72,19 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             let width = self.config.width.unwrap_or(frame.width);
             let height = self.config.height.unwrap_or(frame.height);
 
+            let profile = match self.config.profile.as_deref() {
+                Some("baseline") => H264Profile::Baseline,
+                Some("high") => H264Profile::High,
+                _ => H264Profile::Main, // default: Main (better compression than Baseline)
+            };
+
             let encoder_config = VideoEncoderConfig {
                 width,
                 height,
                 fps: 30,
-                bitrate_bps: self.config.bitrate_bps.unwrap_or(1_500_000),
+                bitrate_bps: self.config.bitrate_bps.unwrap_or(6_000_000),
                 keyframe_interval_frames: self.config.keyframe_interval.unwrap_or(60),
-                codec: VideoCodec::H264(H264Profile::Baseline),
+                codec: VideoCodec::H264(profile),
                 low_latency: true,
             };
 

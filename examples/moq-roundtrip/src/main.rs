@@ -38,6 +38,7 @@ use streamlib::{
 };
 use streamlib::_generated_::{
     AudioResamplerConfig, BufferRechunkerConfig, ChordGeneratorConfig, DisplayConfig,
+    H264EncoderConfig,
 };
 
 fn main() -> Result<()> {
@@ -57,7 +58,10 @@ fn main() -> Result<()> {
 
     // Video: Camera → H264 Encoder → MoQ Publish
     let camera = runtime.add_processor(CameraProcessor::Processor::node(Default::default()))?;
-    let h264_enc = runtime.add_processor(H264EncoderProcessor::Processor::node(Default::default()))?;
+    let h264_enc = runtime.add_processor(H264EncoderProcessor::Processor::node(H264EncoderConfig {
+        profile: Some("main".to_string()), // Main profile — better compression via CABAC
+        ..Default::default()
+    }))?;
     let video_pub = runtime.add_processor(MoqPublishTrackProcessor::Processor::node(
         MoqPublishTrackConfig { track_name: Some("video".to_string()) },
     ))?;
