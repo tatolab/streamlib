@@ -5,6 +5,7 @@
 //
 // Encodes VideoFrame to EncodedVideoFrame using platform-specific hardware
 // acceleration (Vulkan Video on Linux, VideoToolbox on macOS).
+// Handles GPU device loss gracefully by stopping encode attempts.
 
 use crate::_generated_::{Encodedvideoframe, Videoframe};
 use crate::core::codec::{VideoEncoder, VideoEncoderConfig};
@@ -24,6 +25,9 @@ pub struct H264EncoderProcessor {
 
     /// Frames encoded counter.
     frames_encoded: u64,
+
+    /// Set to true when GPU device is lost — stops further encode attempts.
+    device_lost: bool,
 }
 
 impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
@@ -63,6 +67,10 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
+        if self.device_lost {
+            return Ok(());
+        }
+
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }
@@ -78,14 +86,30 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             .as_ref()
             .ok_or_else(|| StreamError::Runtime("GPU context not available".into()))?;
 
-        let encoded: Encodedvideoframe = encoder.encode(&frame, gpu)?;
-        self.outputs.write("encoded_video_out", &encoded)?;
-
-        self.frames_encoded += 1;
-        if self.frames_encoded == 1 {
-            tracing::info!("[H264Encoder] First frame encoded");
-        } else if self.frames_encoded % 100 == 0 {
-            tracing::info!(frames = self.frames_encoded, "[H264Encoder] Encode progress");
+        match encoder.encode(&frame, gpu) {
+            Ok(encoded) => {
+                self.outputs.write("encoded_video_out", &encoded)?;
+                self.frames_encoded += 1;
+                if self.frames_encoded == 1 {
+                    tracing::info!("[H264Encoder] First frame encoded");
+                } else if self.frames_encoded % 100 == 0 {
+                    tracing::info!(frames = self.frames_encoded, "[H264Encoder] Encode progress");
+                }
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("device has been lost") || err_str.contains("device memory allocation") {
+                    tracing::error!(
+                        frames_encoded = self.frames_encoded,
+                        "[H264Encoder] GPU device lost — stopping encode. Encoded {} frames before failure.",
+                        self.frames_encoded
+                    );
+                    self.device_lost = true;
+                    self.video_encoder.take();
+                } else {
+                    tracing::warn!("[H264Encoder] Encode error: {}", e);
+                }
+            }
         }
 
         Ok(())
