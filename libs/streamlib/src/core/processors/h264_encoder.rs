@@ -76,7 +76,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
                 width,
                 height,
                 fps: 30,
-                bitrate_bps: self.config.bitrate_bps.unwrap_or(2_500_000),
+                bitrate_bps: self.config.bitrate_bps.unwrap_or(1_500_000),
                 keyframe_interval_frames: self.config.keyframe_interval.unwrap_or(60),
                 codec: VideoCodec::H264(H264Profile::Baseline),
                 low_latency: true,
@@ -106,6 +106,9 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
 
         match encoder.encode(&frame, gpu) {
             Ok(encoded) => {
+                if encoded.data.is_empty() {
+                    return Ok(());
+                }
                 self.outputs.write("encoded_video_out", &encoded)?;
                 self.frames_encoded += 1;
                 if self.frames_encoded == 1 {

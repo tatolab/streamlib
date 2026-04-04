@@ -126,8 +126,9 @@ impl VulkanVideoSession {
         }
 
         // 3. Create video session
-        // Use 1 DPB slot for IPP encoding (no B-frames), capped to hardware max
-        let dpb_slots = 1u32.min(capabilities.max_dpb_slots);
+        // Use 2 DPB slots for IPP encoding (ping-pong pattern: one for setup/reconstructed
+        // picture output, one for reference picture input), capped to hardware max.
+        let dpb_slots = 2u32.min(capabilities.max_dpb_slots);
         let active_refs = 1u32.min(capabilities.max_active_reference_pictures);
 
         let mut h264_session_create_info =

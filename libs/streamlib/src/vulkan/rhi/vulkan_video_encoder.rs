@@ -1094,7 +1094,11 @@ impl VulkanVideoEncoder {
 
             let ref_std_reference_info = StdVideoEncodeH264ReferenceInfo {
                 flags: ref_dpb_ref_info_flags,
-                primary_pic_type: StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_P,
+                primary_pic_type: if self.previous_frame_was_idr {
+                    StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_IDR
+                } else {
+                    StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_P
+                },
                 FrameNum: ((self.frame_count.wrapping_sub(1)) % 16) as u32,
                 PicOrderCnt: ref_pic_order_cnt,
                 long_term_pic_num: 0,

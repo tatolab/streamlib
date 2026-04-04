@@ -223,8 +223,11 @@ fn spawn_dedicated_thread(
 
     let thread_name = format!("processor-{}", processor_id);
 
+    // 4 MB stack — FramePayload is 128 KB inline (MAX_PAYLOAD_SIZE) and
+    // multiple instances may be on the stack during IPC read/write operations.
     let thread = std::thread::Builder::new()
         .name(thread_name.clone())
+        .stack_size(8 * 1024 * 1024)
         .spawn(move || {
             let current_thread = std::thread::current();
             let thread_name = current_thread.name().unwrap_or("unnamed");
