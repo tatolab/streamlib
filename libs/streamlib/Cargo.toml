@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 default = []
 # GPU backend selection (feature overrides default platform backend)
 backend-metal = []
-backend-vulkan = ["dep:ash", "dep:gpu-allocator"]
+backend-vulkan = ["dep:ash"]
 # FFmpeg-based encoding/decoding (Linux)
 ffmpeg = ["dep:ffmpeg-next"]
 # Vulkan Video hardware encoding (requires GPU with VK_KHR_video_encode_h264)
@@ -76,8 +76,7 @@ clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["cla
 rubato = "0.16"
 
 # Vulkan backend (optional, enabled via backend-vulkan feature)
-ash = { version = "0.38", default-features = false, features = ["std", "loaded"], optional = true }
-gpu-allocator = { version = "0.28", optional = true, default-features = false, features = ["vulkan", "std"] }
+ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"], optional = true }
 
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
@@ -143,8 +142,7 @@ streamlib-broker = { path = "../streamlib-broker" }  # Broker proto types for gR
 streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified telemetry pipeline
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ash = { version = "0.38", default-features = false, features = ["std", "loaded"] }
-gpu-allocator = { version = "0.28", default-features = false, features = ["vulkan", "std"] }
+ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"] }
 libc.workspace = true
 ffmpeg-next = { version = "7.0", optional = true }
 v4l = "0.14"  # V4L2 camera capture (Video for Linux 2)

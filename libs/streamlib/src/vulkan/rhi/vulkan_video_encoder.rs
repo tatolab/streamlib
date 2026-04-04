@@ -1424,40 +1424,19 @@ impl VulkanVideoEncoder {
         let image = unsafe { device.create_image(&image_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create NV12 image: {e}")))?;
 
-        let mem_reqs = unsafe { device.get_image_memory_requirements(image) };
-
-        let memory_type_index = vulkan_device
-            .find_memory_type(
-                mem_reqs.memory_type_bits,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            )
-            .or_else(|_| {
-                vulkan_device.find_memory_type(
-                    mem_reqs.memory_type_bits,
-                    vk::MemoryPropertyFlags::empty(),
-                )
+        // Allocate through VulkanDevice RHI (export + dedicated flags, tracked).
+        let memory = vulkan_device
+            .allocate_image_memory(image, vk::MemoryPropertyFlags::DEVICE_LOCAL, false)
+            .map_err(|e| {
+                unsafe { device.destroy_image(image, None) };
+                e
             })?;
 
-        // Dedicated allocation required for video encode images — without
-        // VkMemoryDedicatedAllocateInfo, the NVIDIA encode hardware may not
-        // be able to read the image data, producing 0-byte bitstream output.
-        let mut dedicated_info = vk::MemoryDedicatedAllocateInfo::default().image(image);
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_reqs.size)
-            .memory_type_index(memory_type_index)
-            .push_next(&mut dedicated_info);
-
-        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to allocate NV12 image memory: {e}")))?;
-
-        tracing::info!(
-            "NV12/DPB image memory allocated: {} bytes, memory_type={} (dedicated)",
-            mem_reqs.size,
-            memory_type_index,
-        );
-
-        unsafe { device.bind_image_memory(image, memory, 0) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to bind NV12 image memory: {e}")))?;
+        unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
+            vulkan_device.free_device_memory(memory);
+            unsafe { device.destroy_image(image, None) };
+            StreamError::GpuError(format!("Failed to bind NV12 image memory: {e}"))
+        })?;
 
         Ok((image, memory))
     }
@@ -1498,28 +1477,30 @@ impl VulkanVideoEncoder {
         let buffer = unsafe { device.create_buffer(&buffer_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create bitstream buffer: {e}")))?;
 
-        let mem_reqs = unsafe { device.get_buffer_memory_requirements(buffer) };
+        // Allocate through VulkanDevice RHI (export flags, tracked).
+        let memory = vulkan_device
+            .allocate_buffer_memory(
+                buffer,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                false,
+            )
+            .map_err(|e| {
+                unsafe { device.destroy_buffer(buffer, None) };
+                e
+            })?;
 
-        let memory_type_index = vulkan_device.find_memory_type(
-            mem_reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
+            vulkan_device.free_device_memory(memory);
+            unsafe { device.destroy_buffer(buffer, None) };
+            StreamError::GpuError(format!("Failed to bind bitstream memory: {e}"))
+        })?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_reqs.size)
-            .memory_type_index(memory_type_index);
-
-        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to allocate bitstream memory: {e}")))?;
-
-        unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to bind bitstream memory: {e}")))?;
-
-        let mapped_ptr = unsafe {
-            device.map_memory(memory, 0, BITSTREAM_BUFFER_SIZE, vk::MemoryMapFlags::empty())
-        }
-        .map_err(|e| StreamError::GpuError(format!("Failed to map bitstream buffer: {e}")))?
-            as *mut u8;
+        let mapped_ptr = vulkan_device.map_device_memory(memory, BITSTREAM_BUFFER_SIZE)
+            .map_err(|e| {
+                vulkan_device.free_device_memory(memory);
+                unsafe { device.destroy_buffer(buffer, None) };
+                e
+            })?;
 
         Ok((buffer, memory, mapped_ptr))
     }
@@ -1653,25 +1634,25 @@ impl Drop for VulkanVideoEncoder {
                 self.device
                     .destroy_query_pool(res.encode_status_query_pool, None);
 
-                self.device.unmap_memory(res.bitstream_buffer_memory);
                 self.device.destroy_buffer(res.bitstream_buffer, None);
-                self.device.free_memory(res.bitstream_buffer_memory, None);
+                self.vulkan_device.unmap_device_memory(res.bitstream_buffer_memory);
+                self.vulkan_device.free_device_memory(res.bitstream_buffer_memory);
 
-                self.device.unmap_memory(res.bitstream_buffer_memory_b);
                 self.device.destroy_buffer(res.bitstream_buffer_b, None);
-                self.device.free_memory(res.bitstream_buffer_memory_b, None);
+                self.vulkan_device.unmap_device_memory(res.bitstream_buffer_memory_b);
+                self.vulkan_device.free_device_memory(res.bitstream_buffer_memory_b);
 
                 self.device.destroy_image_view(res.dpb_image_view_a, None);
                 self.device.destroy_image(res.dpb_image_a, None);
-                self.device.free_memory(res.dpb_image_memory_a, None);
+                self.vulkan_device.free_device_memory(res.dpb_image_memory_a);
 
                 self.device.destroy_image_view(res.dpb_image_view_b, None);
                 self.device.destroy_image(res.dpb_image_b, None);
-                self.device.free_memory(res.dpb_image_memory_b, None);
+                self.vulkan_device.free_device_memory(res.dpb_image_memory_b);
 
                 self.device.destroy_image_view(res.nv12_image_view, None);
                 self.device.destroy_image(res.nv12_image, None);
-                self.device.free_memory(res.nv12_image_memory, None);
+                self.vulkan_device.free_device_memory(res.nv12_image_memory);
             }
             // video_session, format_converter, nv12_staging_buffer{,_b} drop automatically
         }

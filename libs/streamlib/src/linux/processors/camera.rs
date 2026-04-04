@@ -381,8 +381,8 @@ fn capture_thread_loop(
                 eprintln!("[Camera {}] Failed to create input SSBO[{}]: {}", camera_name, i, e);
                 for j in 0..i {
                     unsafe {
-                        device.unmap_memory(input_memories[j]);
-                        device.free_memory(input_memories[j], None);
+                        vulkan_device.unmap_device_memory(input_memories[j]);
+                        vulkan_device.free_device_memory(input_memories[j]);
                         device.destroy_buffer(input_buffers[j], None);
                     }
                 }
@@ -402,8 +402,8 @@ fn capture_thread_loop(
                 unsafe { device.destroy_buffer(input_buffer, None) };
                 for j in 0..i {
                     unsafe {
-                        device.unmap_memory(input_memories[j]);
-                        device.free_memory(input_memories[j], None);
+                        vulkan_device.unmap_device_memory(input_memories[j]);
+                        vulkan_device.free_device_memory(input_memories[j]);
                         device.destroy_buffer(input_buffers[j], None);
                     }
                 }
@@ -411,19 +411,19 @@ fn capture_thread_loop(
             }
         };
 
-        let input_alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(input_mem_reqs.size)
-            .memory_type_index(input_memory_type);
-
-        let input_memory = match unsafe { device.allocate_memory(&input_alloc_info, None) } {
+        let input_memory = match vulkan_device.allocate_buffer_memory(
+            input_buffer,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            false,
+        ) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("[Camera {}] Failed to allocate input SSBO[{}] memory: {}", camera_name, i, e);
                 unsafe { device.destroy_buffer(input_buffer, None) };
                 for j in 0..i {
                     unsafe {
-                        device.unmap_memory(input_memories[j]);
-                        device.free_memory(input_memories[j], None);
+                        vulkan_device.unmap_device_memory(input_memories[j]);
+                        vulkan_device.free_device_memory(input_memories[j]);
                         device.destroy_buffer(input_buffers[j], None);
                     }
                 }
@@ -434,33 +434,31 @@ fn capture_thread_loop(
         if let Err(e) = unsafe { device.bind_buffer_memory(input_buffer, input_memory, 0) } {
             eprintln!("[Camera {}] Failed to bind input SSBO[{}] memory: {}", camera_name, i, e);
             unsafe {
-                device.free_memory(input_memory, None);
+                vulkan_device.free_device_memory(input_memory);
                 device.destroy_buffer(input_buffer, None);
             }
             for j in 0..i {
                 unsafe {
-                    device.unmap_memory(input_memories[j]);
-                    device.free_memory(input_memories[j], None);
+                    vulkan_device.unmap_device_memory(input_memories[j]);
+                    vulkan_device.free_device_memory(input_memories[j]);
                     device.destroy_buffer(input_buffers[j], None);
                 }
             }
             return;
         }
 
-        let input_mapped_ptr = match unsafe {
-            device.map_memory(input_memory, 0, input_alloc_size, vk::MemoryMapFlags::empty())
-        } {
-            Ok(ptr) => ptr as *mut u8,
+        let input_mapped_ptr = match vulkan_device.map_device_memory(input_memory, input_alloc_size) {
+            Ok(ptr) => ptr,
             Err(e) => {
                 eprintln!("[Camera {}] Failed to map input SSBO[{}]: {}", camera_name, i, e);
                 unsafe {
-                    device.free_memory(input_memory, None);
+                    vulkan_device.free_device_memory(input_memory);
                     device.destroy_buffer(input_buffer, None);
                 }
                 for j in 0..i {
                     unsafe {
-                        device.unmap_memory(input_memories[j]);
-                        device.free_memory(input_memories[j], None);
+                        vulkan_device.unmap_device_memory(input_memories[j]);
+                        vulkan_device.free_device_memory(input_memories[j]);
                         device.destroy_buffer(input_buffers[j], None);
                     }
                 }
@@ -484,8 +482,8 @@ fn capture_thread_loop(
             eprintln!("[Camera {}] Failed to read SPIR-V: {}", camera_name, e);
             unsafe {
                 for k in 0..2 {
-                    device.unmap_memory(input_memories[k]);
-                    device.free_memory(input_memories[k], None);
+                    vulkan_device.unmap_device_memory(input_memories[k]);
+                    vulkan_device.free_device_memory(input_memories[k]);
                     device.destroy_buffer(input_buffers[k], None);
                 }
             }
@@ -500,8 +498,8 @@ fn capture_thread_loop(
             eprintln!("[Camera {}] Failed to create shader module: {}", camera_name, e);
             unsafe {
                 for k in 0..2 {
-                    device.unmap_memory(input_memories[k]);
-                    device.free_memory(input_memories[k], None);
+                    vulkan_device.unmap_device_memory(input_memories[k]);
+                    vulkan_device.free_device_memory(input_memories[k]);
                     device.destroy_buffer(input_buffers[k], None);
                 }
             }
@@ -534,8 +532,8 @@ fn capture_thread_loop(
                 unsafe {
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -564,8 +562,8 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -594,8 +592,8 @@ fn capture_thread_loop(
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    device.unmap_memory(input_memories[k]);
-                    device.free_memory(input_memories[k], None);
+                    vulkan_device.unmap_device_memory(input_memories[k]);
+                    vulkan_device.free_device_memory(input_memories[k]);
                     device.destroy_buffer(input_buffers[k], None);
                 }
             }
@@ -628,8 +626,8 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -653,8 +651,8 @@ fn capture_thread_loop(
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    device.unmap_memory(input_memories[k]);
-                    device.free_memory(input_memories[k], None);
+                    vulkan_device.unmap_device_memory(input_memories[k]);
+                    vulkan_device.free_device_memory(input_memories[k]);
                     device.destroy_buffer(input_buffers[k], None);
                 }
             }
@@ -680,8 +678,8 @@ fn capture_thread_loop(
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    device.unmap_memory(input_memories[k]);
-                    device.free_memory(input_memories[k], None);
+                    vulkan_device.unmap_device_memory(input_memories[k]);
+                    vulkan_device.free_device_memory(input_memories[k]);
                     device.destroy_buffer(input_buffers[k], None);
                 }
             }
@@ -707,8 +705,8 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -737,8 +735,8 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -785,8 +783,8 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -819,8 +817,8 @@ fn capture_thread_loop(
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    device.unmap_memory(input_memories[k]);
-                    device.free_memory(input_memories[k], None);
+                    vulkan_device.unmap_device_memory(input_memories[k]);
+                    vulkan_device.free_device_memory(input_memories[k]);
                     device.destroy_buffer(input_buffers[k], None);
                 }
             }
@@ -828,12 +826,12 @@ fn capture_thread_loop(
         }
     };
 
-    let compute_output_alloc_info = vk::MemoryAllocateInfo::default()
-        .allocation_size(compute_output_mem_reqs.size)
-        .memory_type_index(compute_output_memory_type);
-
     let compute_output_image_memory =
-        match unsafe { device.allocate_memory(&compute_output_alloc_info, None) } {
+        match vulkan_device.allocate_image_memory(
+            compute_output_image,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            false,
+        ) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!(
@@ -852,8 +850,8 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -869,7 +867,7 @@ fn capture_thread_loop(
             camera_name, e
         );
         unsafe {
-            device.free_memory(compute_output_image_memory, None);
+            vulkan_device.free_device_memory(compute_output_image_memory);
             device.destroy_image(compute_output_image, None);
             for k in 0..2 {
                 device.destroy_fence(compute_fences[k], None);
@@ -881,8 +879,8 @@ fn capture_thread_loop(
             device.destroy_descriptor_set_layout(descriptor_set_layout, None);
             device.destroy_shader_module(shader_module, None);
             for k in 0..2 {
-                device.unmap_memory(input_memories[k]);
-                device.free_memory(input_memories[k], None);
+                vulkan_device.unmap_device_memory(input_memories[k]);
+                vulkan_device.free_device_memory(input_memories[k]);
                 device.destroy_buffer(input_buffers[k], None);
             }
         }
@@ -911,7 +909,7 @@ fn capture_thread_loop(
                     camera_name, e
                 );
                 unsafe {
-                    device.free_memory(compute_output_image_memory, None);
+                    vulkan_device.free_device_memory(compute_output_image_memory);
                     device.destroy_image(compute_output_image, None);
                     for k in 0..2 {
                         device.destroy_fence(compute_fences[k], None);
@@ -923,8 +921,8 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        device.unmap_memory(input_memories[k]);
-                        device.free_memory(input_memories[k], None);
+                        vulkan_device.unmap_device_memory(input_memories[k]);
+                        vulkan_device.free_device_memory(input_memories[k]);
                         device.destroy_buffer(input_buffers[k], None);
                     }
                 }
@@ -1018,66 +1016,50 @@ fn capture_thread_loop(
                 match device.create_buffer(&buffer_info, None) {
                     Ok(buffer) => {
                         let mem_reqs = device.get_buffer_memory_requirements(buffer);
-                        let mut import_info = vk::ImportMemoryFdInfoKHR::default()
-                            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-                            .fd(probe_fd);
 
-                        match vulkan_device.find_memory_type(
+                        match vulkan_device.import_dma_buf_memory(
+                            probe_fd,
+                            mem_reqs.size.max(input_alloc_size),
                             mem_reqs.memory_type_bits,
                             vk::MemoryPropertyFlags::DEVICE_LOCAL,
                         ) {
-                            Ok(memory_type_index) => {
-                                let alloc_info = vk::MemoryAllocateInfo::default()
-                                    .allocation_size(mem_reqs.size.max(input_alloc_size))
-                                    .memory_type_index(memory_type_index)
-                                    .push_next(&mut import_info);
-
-                                match device.allocate_memory(&alloc_info, None) {
-                                    Ok(memory) => {
-                                        match device.bind_buffer_memory(buffer, memory, 0) {
-                                            Ok(()) => {
-                                                dmabuf_fds[0] = expbuf.fd;
-                                                dmabuf_imported_buffers[0] = buffer;
-                                                dmabuf_imported_memories[0] = memory;
-                                                true
-                                            }
-                                            Err(e) => {
-                                                eprintln!(
-                                                    "[Camera {}] DMA-BUF bind failed: {} — using MMAP path",
-                                                    camera_name, e
-                                                );
-                                                device.free_memory(memory, None);
-                                                device.destroy_buffer(buffer, None);
-                                                libc::close(probe_fd);
-                                                false
-                                            }
-                                        }
+                            Ok(memory) => {
+                                match device.bind_buffer_memory(buffer, memory, 0) {
+                                    Ok(()) => {
+                                        dmabuf_fds[0] = expbuf.fd;
+                                        dmabuf_imported_buffers[0] = buffer;
+                                        dmabuf_imported_memories[0] = memory;
+                                        true
                                     }
                                     Err(e) => {
-                                        // NVIDIA cross-device DMA-BUF import typically fails here
-                                        let device_name = vulkan_device.name();
-                                        if device_name.contains("NVIDIA") || device_name.contains("nvidia") {
-                                            tracing::info!(
-                                                "Camera {}: DMA-BUF import failed on NVIDIA GPU \
-                                                 (cross-device DMA-BUF limitation). Falling back to \
-                                                 MMAP + memcpy. This is expected and performant with \
-                                                 GPU compute.",
-                                                camera_name
-                                            );
-                                        } else {
-                                            tracing::warn!(
-                                                "Camera {}: DMA-BUF import failed (unexpected on {}): {}. \
-                                                 Falling back to MMAP + memcpy.",
-                                                camera_name, device_name, e
-                                            );
-                                        }
+                                        eprintln!(
+                                            "[Camera {}] DMA-BUF bind failed: {} — using MMAP path",
+                                            camera_name, e
+                                        );
+                                        vulkan_device.free_device_memory(memory);
                                         device.destroy_buffer(buffer, None);
                                         libc::close(probe_fd);
                                         false
                                     }
                                 }
                             }
-                            Err(_) => {
+                            Err(e) => {
+                                let device_name = vulkan_device.name();
+                                if device_name.contains("NVIDIA") || device_name.contains("nvidia") {
+                                    tracing::info!(
+                                        "Camera {}: DMA-BUF import failed on NVIDIA GPU \
+                                         (cross-device DMA-BUF limitation). Falling back to \
+                                         MMAP + memcpy. This is expected and performant with \
+                                         GPU compute.",
+                                        camera_name
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        "Camera {}: DMA-BUF import failed (unexpected on {}): {}. \
+                                         Falling back to MMAP + memcpy.",
+                                        camera_name, device_name, e
+                                    );
+                                }
                                 device.destroy_buffer(buffer, None);
                                 libc::close(probe_fd);
                                 false
@@ -1118,38 +1100,23 @@ fn capture_thread_loop(
                         match device.create_buffer(&buffer_info, None) {
                             Ok(buffer) => {
                                 let mem_reqs = device.get_buffer_memory_requirements(buffer);
-                                let mut import_info = vk::ImportMemoryFdInfoKHR::default()
-                                    .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-                                    .fd(expbuf.fd);
 
-                                match vulkan_device.find_memory_type(
+                                match vulkan_device.import_dma_buf_memory(
+                                    expbuf.fd,
+                                    mem_reqs.size.max(input_alloc_size),
                                     mem_reqs.memory_type_bits,
                                     vk::MemoryPropertyFlags::DEVICE_LOCAL,
                                 ) {
-                                    Ok(memory_type_index) => {
-                                        let alloc_info = vk::MemoryAllocateInfo::default()
-                                            .allocation_size(mem_reqs.size.max(input_alloc_size))
-                                            .memory_type_index(memory_type_index)
-                                            .push_next(&mut import_info);
-
-                                        match device.allocate_memory(&alloc_info, None) {
-                                            Ok(memory) => {
-                                                match device.bind_buffer_memory(buffer, memory, 0) {
-                                                    Ok(()) => {
-                                                        dmabuf_fds[i] = expbuf.fd;
-                                                        dmabuf_imported_buffers[i] = buffer;
-                                                        dmabuf_imported_memories[i] = memory;
-                                                        true
-                                                    }
-                                                    Err(_) => {
-                                                        device.free_memory(memory, None);
-                                                        device.destroy_buffer(buffer, None);
-                                                        libc::close(expbuf.fd);
-                                                        false
-                                                    }
-                                                }
+                                    Ok(memory) => {
+                                        match device.bind_buffer_memory(buffer, memory, 0) {
+                                            Ok(()) => {
+                                                dmabuf_fds[i] = expbuf.fd;
+                                                dmabuf_imported_buffers[i] = buffer;
+                                                dmabuf_imported_memories[i] = memory;
+                                                true
                                             }
                                             Err(_) => {
+                                                vulkan_device.free_device_memory(memory);
                                                 device.destroy_buffer(buffer, None);
                                                 libc::close(expbuf.fd);
                                                 false
@@ -1192,7 +1159,7 @@ fn capture_thread_loop(
                             dmabuf_imported_buffers[i] = vk::Buffer::null();
                         }
                         if dmabuf_imported_memories[i] != vk::DeviceMemory::null() {
-                            device.free_memory(dmabuf_imported_memories[i], None);
+                            vulkan_device.free_device_memory(dmabuf_imported_memories[i]);
                             dmabuf_imported_memories[i] = vk::DeviceMemory::null();
                         }
                         if dmabuf_fds[i] >= 0 {
@@ -1667,7 +1634,7 @@ fn capture_thread_loop(
                     device.destroy_buffer(dmabuf_imported_buffers[i], None);
                 }
                 if dmabuf_imported_memories[i] != vk::DeviceMemory::null() {
-                    device.free_memory(dmabuf_imported_memories[i], None);
+                    vulkan_device.free_device_memory(dmabuf_imported_memories[i]);
                 }
                 if dmabuf_fds[i] >= 0 {
                     libc::close(dmabuf_fds[i]);
@@ -1677,7 +1644,7 @@ fn capture_thread_loop(
 
         device.destroy_image_view(compute_output_image_view, None);
         device.destroy_image(compute_output_image, None);
-        device.free_memory(compute_output_image_memory, None);
+        vulkan_device.free_device_memory(compute_output_image_memory);
         for k in 0..2 {
             device.destroy_fence(compute_fences[k], None);
         }
@@ -1688,8 +1655,8 @@ fn capture_thread_loop(
         device.destroy_descriptor_set_layout(descriptor_set_layout, None);
         device.destroy_shader_module(shader_module, None);
         for k in 0..2 {
-            device.unmap_memory(input_memories[k]);
-            device.free_memory(input_memories[k], None);
+            vulkan_device.unmap_device_memory(input_memories[k]);
+            vulkan_device.free_device_memory(input_memories[k]);
             device.destroy_buffer(input_buffers[k], None);
         }
     }

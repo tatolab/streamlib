@@ -260,6 +260,52 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 - **macOS/iOS code**: `libs/streamlib/src/apple/`
 - **DO NOT** use `#[cfg]` inside platform-specific directories (already conditionally compiled)
 
+### Vulkan RHI Boundary — ABSOLUTE RULE
+
+**NOTHING outside the RHI (`vulkan/rhi/`) may touch Vulkan APIs directly.** No processor, utility, codec wrapper, or any other code may call `ash::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through the RHI. This is non-negotiable.
+
+The RHI is the **single gateway** to all GPU operations on Linux. Like Unreal Engine's RHI, it gives the runtime absolute control and traceability over every GPU resource.
+
+#### The boundary:
+- **`vulkan/rhi/`** (VulkanDevice, VulkanTexture, VulkanPixelBuffer, VulkanVideoEncoder, etc.) — MAY call Vulkan APIs. All `vkAllocateMemory` calls go through VulkanDevice methods.
+- **`core/context/`** (GpuContext, TexturePool, PixelBufferPoolManager) — wraps the RHI with pooling, caps, and lifecycle management. This is what processors see.
+- **Processors** (`core/processors/`, `linux/processors/`, `apple/processors/`) — ONLY interact with GpuContext. They acquire/release resources from managed pools. They NEVER import from `ash`, `vk`, or `vulkan/rhi/` directly.
+
+#### Violations of this rule:
+```rust
+// ❌ WRONG — processor importing Vulkan types
+use ash::vk;
+use crate::vulkan::rhi::VulkanDevice;
+
+// ❌ WRONG — processor doing raw allocation
+let memory = unsafe { device.allocate_memory(&alloc_info, None) };
+
+// ❌ WRONG — processor creating Vulkan images
+let image = unsafe { device.create_image(&image_info, None) };
+
+// ✅ CORRECT — processor uses GpuContext
+let (id, buffer) = ctx.gpu.acquire_pixel_buffer(width, height, format)?;
+let texture = ctx.gpu.acquire_texture(&desc)?;
+```
+
+**Exception:** Platform display processors (`linux/processors/display.rs`) may access the underlying Vulkan device handle from GpuContext for swapchain and rendering pipeline setup (this is platform-specific rendering, like Metal rendering on macOS). But they MUST acquire all textures and buffers through GpuContext pools, never allocate GPU memory directly.
+
+### GPU Memory Allocation (Linux/Vulkan) — NON-NEGOTIABLE
+
+**Do NOT use `gpu-allocator` or any third-party memory allocator crate.** All Vulkan memory allocation on Linux MUST use raw `vkAllocateMemory` through VulkanDevice methods in the RHI.
+
+#### Rules:
+1. **All allocations include `VkExportMemoryAllocateInfo`** with `DMA_BUF_EXT` handle type — every texture and buffer is cross-process shareable by default
+2. **All allocation goes through VulkanDevice** — the single authority for GPU memory. VulkanDevice methods handle export flags, memory type selection, and tracking internally
+3. **Processors use GpuContext** — pooled resources with caps (like macOS PixelBufferPool). Processors acquire/release, never allocate
+4. **Allocation count guardrails** — Vulkan has a max allocation count (~4096 on NVIDIA). VulkanDevice tracks live allocations. If this limit is approached, it indicates a processor is thrashing — that's a bug, not a memory issue
+
+#### Why no gpu-allocator:
+- Sub-allocation is incompatible with DMA-BUF export (can't export a sub-region of a shared block)
+- Mixed allocation strategies (raw + sub-allocator) cause VRAM contention on the same memory type
+- This pipeline uses ~30 allocations total — nowhere near the 4096 limit that sub-allocators exist to solve
+- Adds complexity and failure modes without solving any problem this codebase has
+
 ### Custom Commands
 
 - `/refine-name <current_name>` - Get MORE explicit naming suggestions (never shorter)

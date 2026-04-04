@@ -4,8 +4,6 @@
 use crate::_generated_::com_tatolab_display_config::ScalingMode;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use ash::vk;
-use gpu_allocator::vulkan::Allocation;
-use gpu_allocator::MemoryLocation;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -151,7 +149,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                             device.destroy_image_view(tex.image_view, None);
                             device.destroy_image(tex.image, None);
                         }
-                        let _ = app.vulkan_device.free_gpu_memory(tex.gpu_memory_allocation);
+                        let _ = app.vulkan_device.free_device_memory(tex.device_memory);
                     }
                 }
 
@@ -256,7 +254,7 @@ struct PersistentPipelineState {
 struct CameraTextureState {
     image: vk::Image,
     image_view: vk::ImageView,
-    gpu_memory_allocation: Allocation,
+    device_memory: vk::DeviceMemory,
     width: u32,
     height: u32,
 }
@@ -507,12 +505,19 @@ impl DisplayEventLoopHandler {
                         device.destroy_image_view(old_tex.image_view, None);
                         device.destroy_image(old_tex.image, None);
                     }
-                    let _ = self.vulkan_device.free_gpu_memory(old_tex.gpu_memory_allocation);
+                    let _ = self.vulkan_device.free_device_memory(old_tex.device_memory);
                 }
             }
 
             // Allocate one camera texture per swapchain image (ring buffer).
+            // Images are created with VkExternalMemoryImageCreateInfo so they can
+            // be DMA-BUF exported — this also avoids an NVIDIA driver bug where
+            // DEVICE_LOCAL dedicated allocations fail after DMA-BUF exportable
+            // buffer allocations on the same device.
             for ring_idx in 0..image_count {
+                let mut external_image_info = vk::ExternalMemoryImageCreateInfo::default()
+                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
                 let image_info = vk::ImageCreateInfo::default()
                     .image_type(vk::ImageType::TYPE_2D)
                     .format(vk::Format::B8G8R8A8_UNORM)
@@ -527,7 +532,8 @@ impl DisplayEventLoopHandler {
                     .tiling(vk::ImageTiling::OPTIMAL)
                     .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .initial_layout(vk::ImageLayout::UNDEFINED);
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .push_next(&mut external_image_info);
 
                 let image = match unsafe { device.create_image(&image_info, None) } {
                     Ok(img) => img,
@@ -542,16 +548,14 @@ impl DisplayEventLoopHandler {
                     }
                 };
 
-                let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
-
-                // Allocate via gpu-allocator with DedicatedImage on DEVICE_LOCAL VRAM.
-                let allocation = match self.vulkan_device.allocate_gpu_memory_dedicated_image(
-                    "camera_texture",
-                    mem_requirements,
-                    MemoryLocation::Unknown,
+                // Allocate through VulkanDevice RHI — exportable keeps textures
+                // in DEVICE_LOCAL VRAM via the DMA-BUF allocation path.
+                let memory = match self.vulkan_device.allocate_image_memory(
                     image,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    true,
                 ) {
-                    Ok(alloc) => alloc,
+                    Ok(mem) => mem,
                     Err(e) => {
                         tracing::warn!(
                             "Display {}: Failed to allocate camera texture memory [{}]: {}",
@@ -564,20 +568,8 @@ impl DisplayEventLoopHandler {
                     }
                 };
 
-                if ring_idx == 0 {
-                    tracing::info!(
-                        "Display {}: Camera texture allocated via gpu-allocator, size={} bytes",
-                        self.window_id,
-                        mem_requirements.size
-                    );
-                }
-
-                if unsafe {
-                    device.bind_image_memory(image, allocation.memory(), allocation.offset())
-                }
-                .is_err()
-                {
-                    let _ = self.vulkan_device.free_gpu_memory(allocation);
+                if unsafe { device.bind_image_memory(image, memory, 0) }.is_err() {
+                    self.vulkan_device.free_device_memory(memory);
                     unsafe { device.destroy_image(image, None) };
                     return;
                 }
@@ -604,7 +596,7 @@ impl DisplayEventLoopHandler {
                             ring_idx,
                             e
                         );
-                        let _ = self.vulkan_device.free_gpu_memory(allocation);
+                        self.vulkan_device.free_device_memory(memory);
                         unsafe { device.destroy_image(image, None) };
                         return;
                     }
@@ -613,7 +605,7 @@ impl DisplayEventLoopHandler {
                 self.camera_texture_ring.push(CameraTextureState {
                     image,
                     image_view,
-                    gpu_memory_allocation: allocation,
+                    device_memory: memory,
                     width: src_width,
                     height: src_height,
                 });

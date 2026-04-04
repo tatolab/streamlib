@@ -5,6 +5,7 @@
 
 use std::mem::MaybeUninit;
 use std::ptr;
+use std::sync::Arc;
 
 use ash::vk;
 use ash::vk::native::{
@@ -28,6 +29,7 @@ use super::VulkanDevice;
 /// Vulkan Video session for H.264 encoding.
 pub struct VulkanVideoSession {
     device: ash::Device,
+    vulkan_device: Arc<VulkanDevice>,
     video_queue_loader: ash::khr::video_queue::Device,
     video_session: vk::VideoSessionKHR,
     video_session_parameters: vk::VideoSessionParametersKHR,
@@ -37,7 +39,7 @@ pub struct VulkanVideoSession {
 
 impl VulkanVideoSession {
     /// Create a new Vulkan Video session for H.264 encoding.
-    pub fn new(vulkan_device: &VulkanDevice, config: &VideoEncoderConfig) -> Result<Self> {
+    pub fn new(vulkan_device: &Arc<VulkanDevice>, config: &VideoEncoderConfig) -> Result<Self> {
         let ve_family = vulkan_device
             .video_encode_queue_family_index()
             .ok_or_else(|| {
@@ -178,6 +180,7 @@ impl VulkanVideoSession {
 
         Ok(Self {
             device,
+            vulkan_device: Arc::clone(vulkan_device),
             video_queue_loader,
             video_session,
             video_session_parameters,
@@ -258,16 +261,11 @@ impl VulkanVideoSession {
                     )
                 })?;
 
-            let alloc_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(req.memory_requirements.size)
-                .memory_type_index(memory_type_index);
-
-            let memory = unsafe { device.allocate_memory(&alloc_info, None) }.map_err(|e| {
-                StreamError::GpuError(format!(
-                    "Failed to allocate video session memory (bind_index={}): {e}",
-                    req.memory_bind_index
-                ))
-            })?;
+            // Allocate through VulkanDevice RHI (tracked).
+            let memory = vulkan_device.allocate_session_memory(
+                req.memory_requirements.size,
+                memory_type_index,
+            )?;
 
             bind_infos.push(
                 vk::BindVideoSessionMemoryInfoKHR::default()
@@ -585,8 +583,8 @@ impl Drop for VulkanVideoSession {
                 ptr::null(),
             );
 
-            for memory in &self.video_session_memory {
-                self.device.free_memory(*memory, None);
+            for &memory in &self.video_session_memory {
+                self.vulkan_device.free_device_memory(memory);
             }
         }
 
@@ -604,7 +602,7 @@ mod tests {
     #[test]
     fn test_vulkan_video_session_creation() {
         let device = match VulkanDevice::new() {
-            Ok(d) => d,
+            Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping test — Vulkan not available");
                 return;
