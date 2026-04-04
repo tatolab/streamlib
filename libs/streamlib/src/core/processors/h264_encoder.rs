@@ -5,9 +5,10 @@
 //
 // Encodes VideoFrame to EncodedVideoFrame using platform-specific hardware
 // acceleration (Vulkan Video on Linux, VideoToolbox on macOS).
-// Handles GPU device loss gracefully by stopping encode attempts.
+// Defers encoder creation to the first frame so GPU resources are fully
+// initialized and frame dimensions are known.
 
-use crate::_generated_::{Encodedvideoframe, Videoframe};
+use crate::_generated_::Videoframe;
 use crate::core::codec::{VideoEncoder, VideoEncoderConfig};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 
@@ -17,10 +18,13 @@ use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 
 #[crate::processor("com.streamlib.h264_encoder")]
 pub struct H264EncoderProcessor {
+    /// Runtime context (kept for deferred encoder creation).
+    runtime_context: Option<RuntimeContext>,
+
     /// GPU context for encoder and buffer lookup.
     gpu_context: Option<GpuContext>,
 
-    /// Video encoder (platform-specific).
+    /// Video encoder (created on first frame, not in setup).
     video_encoder: Option<VideoEncoder>,
 
     /// Frames encoded counter.
@@ -32,27 +36,9 @@ pub struct H264EncoderProcessor {
 
 impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        let mut encoder_config = VideoEncoderConfig::default();
-        if let Some(w) = self.config.width {
-            encoder_config.width = w;
-        }
-        if let Some(h) = self.config.height {
-            encoder_config.height = h;
-        }
-        if let Some(bps) = self.config.bitrate_bps {
-            encoder_config.bitrate_bps = bps;
-        }
-        if let Some(ki) = self.config.keyframe_interval {
-            encoder_config.keyframe_interval_frames = ki;
-        }
-
-        let gpu_context = ctx.gpu.clone();
-        let encoder = VideoEncoder::new(encoder_config, Some(gpu_context.clone()), &ctx)?;
-
-        tracing::info!("[H264Encoder] Initialized");
-
-        self.gpu_context = Some(gpu_context);
-        self.video_encoder = Some(encoder);
+        self.gpu_context = Some(ctx.gpu.clone());
+        self.runtime_context = Some(ctx);
+        tracing::info!("[H264Encoder] Initialized (encoder deferred to first frame)");
         Ok(())
     }
 
@@ -63,6 +49,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         );
         self.video_encoder.take();
         self.gpu_context.take();
+        self.runtime_context.take();
         Ok(())
     }
 
@@ -76,14 +63,45 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         }
         let frame: Videoframe = self.inputs.read("video_in")?;
 
-        let encoder = self
-            .video_encoder
-            .as_mut()
-            .ok_or_else(|| StreamError::Runtime("Encoder not initialized".into()))?;
+        // Create encoder on first frame — dimensions are now known from the actual frame
+        if self.video_encoder.is_none() {
+            let ctx = self.runtime_context.as_ref()
+                .ok_or_else(|| StreamError::Runtime("RuntimeContext not available".into()))?;
+            let gpu_context = self.gpu_context.clone();
 
-        let gpu = self
-            .gpu_context
-            .as_ref()
+            let width = self.config.width.unwrap_or(frame.width);
+            let height = self.config.height.unwrap_or(frame.height);
+
+            let mut encoder_config = VideoEncoderConfig::default();
+            encoder_config.width = width;
+            encoder_config.height = height;
+            if let Some(bps) = self.config.bitrate_bps {
+                encoder_config.bitrate_bps = bps;
+            }
+            if let Some(ki) = self.config.keyframe_interval {
+                encoder_config.keyframe_interval_frames = ki;
+            }
+
+            tracing::info!(
+                width, height,
+                "[H264Encoder] Creating encoder for {}x{} (from first frame)",
+                width, height
+            );
+
+            match VideoEncoder::new(encoder_config, gpu_context, ctx) {
+                Ok(encoder) => {
+                    self.video_encoder = Some(encoder);
+                }
+                Err(e) => {
+                    tracing::error!("[H264Encoder] Failed to create encoder: {}", e);
+                    self.device_lost = true;
+                    return Ok(());
+                }
+            }
+        }
+
+        let encoder = self.video_encoder.as_mut().unwrap();
+        let gpu = self.gpu_context.as_ref()
             .ok_or_else(|| StreamError::Runtime("GPU context not available".into()))?;
 
         match encoder.encode(&frame, gpu) {
