@@ -150,11 +150,22 @@ fn main() -> Result<()> {
         input::<DisplayProcessor::InputLink::video>(&display),
     )?;
 
-    // Audio: MoQ Subscribe → Opus Decoder → Audio Output
+    // Audio: MoQ Subscribe → Opus Decoder → Resampler (44100Hz) → Rechunker (512) → Audio Output
     let audio_sub = runtime.add_processor(MoqSubscribeTrackProcessor::Processor::node(
         MoqSubscribeTrackConfig { track_name: "audio".to_string() },
     ))?;
     let opus_dec = runtime.add_processor(OpusDecoderProcessor::Processor::node(Default::default()))?;
+    let sub_resampler = runtime.add_processor(AudioResamplerProcessor::Processor::node(
+        AudioResamplerConfig {
+            target_sample_rate: 44100,
+            ..Default::default()
+        },
+    ))?;
+    let sub_rechunker = runtime.add_processor(BufferRechunkerProcessor::Processor::node(
+        BufferRechunkerConfig {
+            target_buffer_size: 512,
+        },
+    ))?;
     let speaker = runtime.add_processor(AudioOutputProcessor::Processor::node(Default::default()))?;
 
     runtime.connect(
@@ -163,6 +174,14 @@ fn main() -> Result<()> {
     )?;
     runtime.connect(
         output::<OpusDecoderProcessor::OutputLink::audio_out>(&opus_dec),
+        input::<AudioResamplerProcessor::InputLink::audio_in>(&sub_resampler),
+    )?;
+    runtime.connect(
+        output::<AudioResamplerProcessor::OutputLink::audio_out>(&sub_resampler),
+        input::<BufferRechunkerProcessor::InputLink::audio_in>(&sub_rechunker),
+    )?;
+    runtime.connect(
+        output::<BufferRechunkerProcessor::OutputLink::audio_out>(&sub_rechunker),
         input::<AudioOutputProcessor::InputLink::audio>(&speaker),
     )?;
 
