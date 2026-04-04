@@ -9,7 +9,7 @@
 // initialized and frame dimensions are known.
 
 use crate::_generated_::Videoframe;
-use crate::core::codec::{VideoEncoder, VideoEncoderConfig};
+use crate::core::codec::{H264Profile, VideoCodec, VideoEncoder, VideoEncoderConfig};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 
 // ============================================================================
@@ -72,15 +72,15 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             let width = self.config.width.unwrap_or(frame.width);
             let height = self.config.height.unwrap_or(frame.height);
 
-            let mut encoder_config = VideoEncoderConfig::default();
-            encoder_config.width = width;
-            encoder_config.height = height;
-            if let Some(bps) = self.config.bitrate_bps {
-                encoder_config.bitrate_bps = bps;
-            }
-            if let Some(ki) = self.config.keyframe_interval {
-                encoder_config.keyframe_interval_frames = ki;
-            }
+            let encoder_config = VideoEncoderConfig {
+                width,
+                height,
+                fps: 30,
+                bitrate_bps: self.config.bitrate_bps.unwrap_or(2_500_000),
+                keyframe_interval_frames: self.config.keyframe_interval.unwrap_or(60),
+                codec: VideoCodec::H264(H264Profile::Baseline),
+                low_latency: true,
+            };
 
             tracing::info!(
                 width, height,
