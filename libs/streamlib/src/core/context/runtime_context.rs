@@ -28,6 +28,9 @@ pub struct RuntimeContext {
     iceoryx2_node: Iceoryx2Node,
     /// Audio clock for synchronized audio timing.
     audio_clock: SharedAudioClock,
+    /// Shared MoQ sessions (one publish + one subscribe per runtime).
+    #[cfg(feature = "moq")]
+    moq_sessions: crate::core::streaming::SharedMoqSessions,
 }
 
 impl RuntimeContext {
@@ -43,6 +46,8 @@ impl RuntimeContext {
         Self {
             gpu,
             time,
+            #[cfg(feature = "moq")]
+            moq_sessions: crate::core::streaming::SharedMoqSessions::new(&runtime_id.to_string()),
             runtime_id,
             processor_id: None,
             pause_gate: None,
@@ -125,6 +130,12 @@ impl RuntimeContext {
         &self.audio_clock
     }
 
+    /// Get the shared MoQ sessions for this runtime.
+    #[cfg(feature = "moq")]
+    pub fn moq_sessions(&self) -> &crate::core::streaming::SharedMoqSessions {
+        &self.moq_sessions
+    }
+
     /// Create a processor-specific context with a processor ID.
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
@@ -137,6 +148,8 @@ impl RuntimeContext {
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
+            #[cfg(feature = "moq")]
+            moq_sessions: self.moq_sessions.clone(),
         }
     }
 
@@ -152,6 +165,8 @@ impl RuntimeContext {
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
+            #[cfg(feature = "moq")]
+            moq_sessions: self.moq_sessions.clone(),
         }
     }
 

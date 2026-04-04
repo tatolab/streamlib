@@ -24,9 +24,10 @@ use streamlib::{
     input, output,
     // Sources
     CameraProcessor, AudioCaptureProcessor, ChordGeneratorProcessor,
-    // Codecs
+    // Codecs + audio processing
     H264EncoderProcessor, H264DecoderProcessor,
     OpusEncoderProcessor, OpusDecoderProcessor,
+    AudioResamplerProcessor, BufferRechunkerProcessor,
     // MoQ transport
     MoqPublishTrackConfig, MoqPublishTrackProcessor,
     MoqSubscribeTrackConfig, MoqSubscribeTrackProcessor,
@@ -36,11 +37,10 @@ use streamlib::{
     Result, StreamRuntime,
 };
 use streamlib::_generated_::{
-    ChordGeneratorConfig, DisplayConfig,
+    AudioResamplerConfig, BufferRechunkerConfig, ChordGeneratorConfig, DisplayConfig,
 };
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();
@@ -71,8 +71,19 @@ fn main() -> Result<()> {
         input::<MoqPublishTrackProcessor::InputLink::data_in>(&video_pub),
     )?;
 
-    // Audio: AudioCapture → Opus Encoder → MoQ Publish
+    // Audio: AudioCapture → Resampler (48kHz) → Rechunker (960 samples) → Opus Encoder → MoQ Publish
     let mic = runtime.add_processor(AudioCaptureProcessor::Processor::node(Default::default()))?;
+    let resampler = runtime.add_processor(AudioResamplerProcessor::Processor::node(
+        AudioResamplerConfig {
+            target_sample_rate: 48000,
+            ..Default::default()
+        },
+    ))?;
+    let rechunker = runtime.add_processor(BufferRechunkerProcessor::Processor::node(
+        BufferRechunkerConfig {
+            target_buffer_size: 960,
+        },
+    ))?;
     let opus_enc = runtime.add_processor(OpusEncoderProcessor::Processor::node(Default::default()))?;
     let audio_pub = runtime.add_processor(MoqPublishTrackProcessor::Processor::node(
         MoqPublishTrackConfig { track_name: Some("audio".to_string()) },
@@ -80,6 +91,14 @@ fn main() -> Result<()> {
 
     runtime.connect(
         output::<AudioCaptureProcessor::OutputLink::audio>(&mic),
+        input::<AudioResamplerProcessor::InputLink::audio_in>(&resampler),
+    )?;
+    runtime.connect(
+        output::<AudioResamplerProcessor::OutputLink::audio_out>(&resampler),
+        input::<BufferRechunkerProcessor::InputLink::audio_in>(&rechunker),
+    )?;
+    runtime.connect(
+        output::<BufferRechunkerProcessor::OutputLink::audio_out>(&rechunker),
         input::<OpusEncoderProcessor::InputLink::audio_in>(&opus_enc),
     )?;
     runtime.connect(

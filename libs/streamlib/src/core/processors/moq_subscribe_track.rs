@@ -3,22 +3,16 @@
 
 // MoQ Subscribe Track
 //
-// Subscribes to a single named MoQ track on a relay and forwards
-// received bytes to the graph output. Type-agnostic: uses write_raw()
-// to pass through raw bytes without deserialization.
-//
-// Connects to the Cloudflare draft-14 relay with an auto-generated
-// broadcast namespace derived from the runtime ID.
+// Subscribes to a single named MoQ track on the shared relay session
+// and forwards received bytes to the graph output. Type-agnostic:
+// uses write_raw() to pass through raw bytes without deserialization.
 
 use crate::core::media_clock::MediaClock;
-use crate::core::streaming::{MoqRelayConfig, MoqSubscribeSession, MoqTrackReader};
+use crate::core::streaming::MoqTrackReader;
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
 use std::future::Future;
 use std::sync::Arc;
-
-/// Default MoQ relay (Cloudflare draft-14).
-const DEFAULT_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";
 
 // ============================================================================
 // PROCESSOR
@@ -29,8 +23,8 @@ pub struct MoqSubscribeTrackProcessor {
     /// Runtime context for tokio handle.
     runtime_context: Option<RuntimeContext>,
 
-    /// MoQ subscribe session (connected to relay).
-    moq_subscribe_session: Option<MoqSubscribeSession>,
+    /// Track reader (from shared subscribe session).
+    track_reader: Option<MoqTrackReader>,
 
     /// Shutdown signaling for the async receive loop.
     shutdown_signal_sender: Option<tokio::sync::oneshot::Sender<()>>,
@@ -41,25 +35,19 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         self.runtime_context = Some(ctx.clone());
 
         async move {
-            // Broadcast namespace derived from runtime ID
-            let broadcast_path = format!("streamlib/{}", ctx.runtime_id());
+            // Get the shared subscribe session from the runtime
+            let session = ctx.moq_sessions().get_subscribe_session().await?;
 
-            let relay_config = MoqRelayConfig {
-                relay_endpoint_url: DEFAULT_RELAY_URL.to_string(),
-                broadcast_path: broadcast_path.clone(),
-                tls_disable_verify: false,
-                timeout_ms: 10000,
-            };
-
-            let session = MoqSubscribeSession::connect(relay_config).await?;
+            // Subscribe to the specific track
+            let track_reader = session.subscribe_track(&self.config.track_name)?;
 
             tracing::info!(
-                broadcast = %broadcast_path,
+                broadcast = %ctx.moq_sessions().broadcast_path(),
                 track = %self.config.track_name,
-                "[MoqSubscribeTrack] Connected to relay"
+                "[MoqSubscribeTrack] Using shared session"
             );
 
-            self.moq_subscribe_session = Some(session);
+            self.track_reader = Some(track_reader);
             Ok(())
         }
     }
@@ -71,7 +59,7 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
             let _ = tx.send(());
         }
 
-        self.moq_subscribe_session.take();
+        self.track_reader.take();
         self.runtime_context.take();
 
         tracing::info!("[MoqSubscribeTrack] Shutdown complete");
@@ -93,19 +81,10 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
             .ok_or_else(|| StreamError::Runtime("RuntimeContext not available".into()))?
             .clone();
 
-        let session = self
-            .moq_subscribe_session
-            .as_ref()
-            .ok_or_else(|| {
-                StreamError::Runtime("MoqSubscribeSession not initialized".into())
-            })?;
-
-        let track_reader = session.subscribe_track(&self.config.track_name)?;
-
-        tracing::info!(
-            track = %self.config.track_name,
-            "[MoqSubscribeTrack] Subscribed to track"
-        );
+        let track_reader = self
+            .track_reader
+            .take()
+            .ok_or_else(|| StreamError::Runtime("Track reader not initialized".into()))?;
 
         let outputs = self.outputs.clone();
         let track_name = self.config.track_name.clone();
@@ -118,7 +97,10 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
                 .await;
         });
 
-        tracing::info!("[MoqSubscribeTrack] Started async receive loop");
+        tracing::info!(
+            track = %self.config.track_name,
+            "[MoqSubscribeTrack] Started async receive loop"
+        );
         Ok(())
     }
 
@@ -143,6 +125,14 @@ async fn run_moq_subscribe_track_receive_loop(
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut frame_count: u64 = 0;
+    let has_output_port = outputs.has_port("data_out");
+
+    if !has_output_port {
+        tracing::info!(
+            track = %track_name,
+            "[MoqSubscribeTrack] No downstream connection — will log received frames only"
+        );
+    }
 
     loop {
         tokio::select! {
@@ -156,18 +146,23 @@ async fn run_moq_subscribe_track_receive_loop(
                         loop {
                             match subgroup_reader.read_frame().await {
                                 Ok(Some(frame_bytes)) => {
-                                    let timestamp_ns = MediaClock::now().as_nanos() as i64;
-                                    if let Err(e) = outputs.write_raw("data_out", &frame_bytes, timestamp_ns) {
-                                        tracing::warn!(
-                                            track = %track_name,
-                                            %e,
-                                            "[MoqSubscribeTrack] Failed to write received frame"
-                                        );
-                                    }
                                     frame_count += 1;
+
+                                    if has_output_port {
+                                        let timestamp_ns = MediaClock::now().as_nanos() as i64;
+                                        if let Err(e) = outputs.write_raw("data_out", &frame_bytes, timestamp_ns) {
+                                            tracing::warn!(
+                                                track = %track_name,
+                                                %e,
+                                                "[MoqSubscribeTrack] Failed to write received frame"
+                                            );
+                                        }
+                                    }
+
                                     if frame_count == 1 {
                                         tracing::info!(
                                             track = %track_name,
+                                            bytes = frame_bytes.len(),
                                             "[MoqSubscribeTrack] First frame received"
                                         );
                                     } else if frame_count % 100 == 0 {

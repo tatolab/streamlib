@@ -63,11 +63,10 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        let frame: Videoframe = match self.inputs.read("video_in") {
-            Ok(Some(f)) => f,
-            Ok(None) => return Ok(()),
-            Err(e) => return Err(e),
-        };
+        if !self.inputs.has_data("video_in") {
+            return Ok(());
+        }
+        let frame: Videoframe = self.inputs.read("video_in")?;
 
         let encoder = self
             .video_encoder

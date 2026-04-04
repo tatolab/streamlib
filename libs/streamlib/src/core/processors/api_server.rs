@@ -641,12 +641,15 @@ async fn get_openapi_spec(State(state): State<AppState>) -> Json<utoipa::openapi
     Json(state.openapi)
 }
 
-/// Returns the MoQ broadcast catalog as JSON.
+/// Returns the MoQ broadcast catalog with active published tracks.
 #[cfg(feature = "moq")]
-async fn get_moq_catalog() -> Json<crate::core::streaming::MoqBroadcastCatalog> {
-    // Returns an empty catalog for now — the runtime doesn't track active MoQ tracks yet.
-    // Future: populate from runtime state when MoqPublishTrack processors register their tracks.
-    Json(crate::core::streaming::MoqBroadcastCatalog::new())
+async fn get_moq_catalog(State(state): State<AppState>) -> Json<crate::core::streaming::MoqBroadcastCatalog> {
+    let sessions = state.runtime_ctx.moq_sessions();
+    let mut catalog = crate::core::streaming::MoqBroadcastCatalog::new();
+    for track_name in sessions.published_track_names() {
+        catalog.add_track(&track_name, "", "", &track_name);
+    }
+    Json(catalog)
 }
 
 // ============================================================================

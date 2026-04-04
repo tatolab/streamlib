@@ -5,16 +5,12 @@
 //
 // Forwards raw bytes from a single graph input to a named MoQ track.
 // Type-agnostic: uses read_raw() to receive any serialized data type
-// and publishes the bytes as-is to the MoQ relay.
-//
-// Connects to the Cloudflare draft-14 relay with an auto-generated
-// broadcast namespace derived from the runtime ID.
+// and publishes the bytes as-is to the shared MoQ relay session.
 
-use crate::core::streaming::{MoqPublishSession, MoqRelayConfig};
+use crate::core::streaming::MoqPublishSession;
 use crate::core::{Result, RuntimeContext, StreamError};
-
-/// Default MoQ relay (Cloudflare draft-14).
-const DEFAULT_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 // ============================================================================
 // PROCESSOR
@@ -22,8 +18,8 @@ const DEFAULT_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";
 
 #[crate::processor("com.streamlib.moq_publish_track")]
 pub struct MoqPublishTrackProcessor {
-    /// MoQ publish session (connected to relay).
-    moq_publish_session: Option<MoqPublishSession>,
+    /// Shared MoQ publish session (from RuntimeContext).
+    shared_publish_session: Option<Arc<Mutex<MoqPublishSession>>>,
 
     /// Resolved track name (from config or auto-generated).
     track_name: String,
@@ -41,25 +37,19 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
                 .unwrap_or_else(|| "default".to_string())
         });
 
-        // Broadcast namespace derived from runtime ID
-        let broadcast_path = format!("streamlib/{}", ctx.runtime_id());
+        // Get the shared publish session from the runtime (one QUIC connection, N tracks)
+        let session = ctx.moq_sessions().get_publish_session().await?;
 
-        let relay_config = MoqRelayConfig {
-            relay_endpoint_url: DEFAULT_RELAY_URL.to_string(),
-            broadcast_path: broadcast_path.clone(),
-            tls_disable_verify: false,
-            timeout_ms: 10000,
-        };
-
-        let session = MoqPublishSession::connect(relay_config).await?;
+        // Register this track in the catalog
+        ctx.moq_sessions().register_published_track(&self.track_name);
 
         tracing::info!(
-            broadcast = %broadcast_path,
+            broadcast = %ctx.moq_sessions().broadcast_path(),
             track = %self.track_name,
-            "[MoqPublishTrack] Connected to relay"
+            "[MoqPublishTrack] Using shared session"
         );
 
-        self.moq_publish_session = Some(session);
+        self.shared_publish_session = Some(session);
         Ok(())
     }
 
@@ -68,26 +58,28 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
             frames_published = self.frames_published,
             "[MoqPublishTrack] Shutting down"
         );
-        self.moq_publish_session.take();
+        self.shared_publish_session.take();
         Ok(())
     }
 
     fn process(&mut self) -> Result<()> {
+        if !self.inputs.has_data("data_in") {
+            return Ok(());
+        }
+
         let raw_data = match self.inputs.read_raw("data_in") {
             Ok(Some(data)) => data,
             Ok(None) => return Ok(()),
-            Err(e) => {
-                tracing::warn!("[MoqPublishTrack] Failed to read input: {}", e);
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
 
         let (bytes, _timestamp_ns) = raw_data;
 
-        let session = self
-            .moq_publish_session
-            .as_mut()
-            .ok_or_else(|| StreamError::Runtime("MoQ session not connected".into()))?;
+        let mut session = self
+            .shared_publish_session
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("MoQ session not connected".into()))?
+            .lock();
 
         session.publish_frame(&self.track_name, &bytes, false)?;
 

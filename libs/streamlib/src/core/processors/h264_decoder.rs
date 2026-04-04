@@ -57,11 +57,10 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        let encoded: Encodedvideoframe = match self.inputs.read("encoded_video_in") {
-            Ok(Some(f)) => f,
-            Ok(None) => return Ok(()),
-            Err(e) => return Err(e),
-        };
+        if !self.inputs.has_data("encoded_video_in") {
+            return Ok(());
+        }
+        let encoded: Encodedvideoframe = self.inputs.read("encoded_video_in")?;
 
         // Scan NAL units in the encoded data for SPS/PPS
         let (sps, pps) = extract_h264_parameter_sets(&encoded.data);

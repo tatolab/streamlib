@@ -33,4 +33,4 @@ pub use whip_client::{WhipClient, WhipConfig};
 #[cfg(feature = "moq")]
 pub use moq_catalog::{MoqBroadcastCatalog, MoqCatalogTrackEntry};
 #[cfg(feature = "moq")]
-pub use moq_session::{MoqRelayConfig, MoqPublishSession, MoqSubscribeSession, MoqTrackReader, MoqSubgroupReader};
+pub use moq_session::{MoqRelayConfig, MoqPublishSession, MoqSubscribeSession, MoqTrackReader, MoqSubgroupReader, SharedMoqSessions, DEFAULT_MOQ_RELAY_URL};

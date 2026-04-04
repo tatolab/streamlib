@@ -49,11 +49,10 @@ impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
     }
 
     fn process(&mut self) -> Result<()> {
-        let encoded: Encodedaudioframe = match self.inputs.read("encoded_audio_in") {
-            Ok(Some(f)) => f,
-            Ok(None) => return Ok(()),
-            Err(e) => return Err(e),
-        };
+        if !self.inputs.has_data("encoded_audio_in") {
+            return Ok(());
+        }
+        let encoded: Encodedaudioframe = self.inputs.read("encoded_audio_in")?;
 
         let decoder = self
             .opus_decoder

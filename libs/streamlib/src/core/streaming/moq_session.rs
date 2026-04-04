@@ -8,8 +8,10 @@
 // web-transport-quinn for the underlying QUIC/WebTransport connection.
 
 use crate::core::{Result, StreamError};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // ============================================================================
 // MOQ SESSION CONFIGURATION
@@ -392,5 +394,88 @@ impl MoqSubgroupReader {
         self.inner.read_next().await.map_err(|e| {
             StreamError::Runtime(format!("MoQ frame read error: {e}"))
         })
+    }
+}
+
+// ============================================================================
+// SHARED MOQ SESSIONS (runtime-managed)
+// ============================================================================
+
+/// Default MoQ relay (Cloudflare draft-14).
+pub const DEFAULT_MOQ_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";
+
+/// Runtime-managed MoQ sessions shared by all MoQ processors.
+///
+/// One QUIC connection for publishing (multiple tracks), one for subscribing.
+/// Sessions are created lazily on first use and shared via Arc.
+#[derive(Clone)]
+pub struct SharedMoqSessions {
+    relay_url: String,
+    broadcast_path: String,
+    publish_session: Arc<tokio::sync::OnceCell<Arc<Mutex<MoqPublishSession>>>>,
+    subscribe_session: Arc<tokio::sync::OnceCell<Arc<MoqSubscribeSession>>>,
+    /// Track names currently being published (for catalog).
+    published_tracks: Arc<Mutex<Vec<String>>>,
+}
+
+impl SharedMoqSessions {
+    /// Create a new shared session holder for a runtime.
+    pub fn new(runtime_id: &str) -> Self {
+        let broadcast_path = format!("streamlib/{}", runtime_id);
+        Self {
+            relay_url: DEFAULT_MOQ_RELAY_URL.to_string(),
+            broadcast_path,
+            publish_session: Arc::new(tokio::sync::OnceCell::new()),
+            subscribe_session: Arc::new(tokio::sync::OnceCell::new()),
+            published_tracks: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Get or create the shared publish session.
+    pub async fn get_publish_session(&self) -> Result<Arc<Mutex<MoqPublishSession>>> {
+        let session = self.publish_session.get_or_try_init(|| async {
+            let config = MoqRelayConfig {
+                relay_endpoint_url: self.relay_url.clone(),
+                broadcast_path: self.broadcast_path.clone(),
+                tls_disable_verify: false,
+                timeout_ms: 10000,
+            };
+            let session = MoqPublishSession::connect(config).await?;
+            Ok::<_, StreamError>(Arc::new(Mutex::new(session)))
+        }).await?;
+        Ok(Arc::clone(session))
+    }
+
+    /// Get or create the shared subscribe session.
+    pub async fn get_subscribe_session(&self) -> Result<Arc<MoqSubscribeSession>> {
+        let session = self.subscribe_session.get_or_try_init(|| async {
+            let config = MoqRelayConfig {
+                relay_endpoint_url: self.relay_url.clone(),
+                broadcast_path: self.broadcast_path.clone(),
+                tls_disable_verify: false,
+                timeout_ms: 10000,
+            };
+            let session = MoqSubscribeSession::connect(config).await?;
+            Ok::<_, StreamError>(Arc::new(session))
+        }).await?;
+        Ok(Arc::clone(session))
+    }
+
+    /// Register a track name as published (for catalog).
+    pub fn register_published_track(&self, track_name: &str) {
+        let mut tracks = self.published_tracks.lock();
+        if !tracks.contains(&track_name.to_string()) {
+            tracks.push(track_name.to_string());
+        }
+    }
+
+    /// Get all published track names.
+    pub fn published_track_names(&self) -> Vec<String> {
+        self.published_tracks.lock().clone()
+    }
+
+    /// Get the broadcast path (for logging/discovery).
+    pub fn broadcast_path(&self) -> &str {
+        &self.broadcast_path
     }
 }
