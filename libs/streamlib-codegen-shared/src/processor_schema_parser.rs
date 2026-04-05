@@ -94,6 +94,15 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
                 ),
             });
         }
+        if input.buffer_size == Some(0) {
+            return Err(SchemaError::InvalidName {
+                name: schema.name.clone(),
+                reason: format!(
+                    "input '{}' buffer_size cannot be 0",
+                    input.name
+                ),
+            });
+        }
     }
 
     // Validate output port schema references
