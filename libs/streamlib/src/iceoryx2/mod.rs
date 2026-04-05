@@ -8,7 +8,7 @@ mod mailbox;
 mod node;
 mod output;
 mod payload;
-mod read_mode;
+pub mod read_mode;
 
 pub use input::InputMailboxes;
 pub use mailbox::PortMailbox;
