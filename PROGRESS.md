@@ -54,8 +54,52 @@
 - DPB management working (active_refs=2, proper eviction)
 
 ## Step 4: Verify frames reach display
-- Status: FIX APPLIED — needs user verification
-- Root cause: display processor expects BGRA (B8G8R8A8_UNORM), decoder was outputting NV12
-- Fix: added VulkanFormatConverter (NV12→BGRA) in decoder's init_resources
-- Decoder now: decode → NV12 DPB → transfer to NV12 buffer → convert to BGRA buffer → output
-- Compiles clean, needs user to run and verify video in display window
+- Status: PARTIAL — display shows garbled stripes/colors, not camera feed
+- NV12→BGRA format conversion added via VulkanFormatConverter compute shader
+- Both encoder and decoder stable (1000+ frames each)
+- Display window opens, renders frames, but content is garbled
+
+### Current Display Issue (needs fresh investigation)
+
+**Symptom:** Display window shows vertical color banding/striping, pink wash on right side, green diagonal band. Not the camera feed.
+
+**What works:**
+- Decode: 200+ frames, all status OK, no device lost
+- Encoder: 1000+ frames stable
+- NV12→BGRA conversion runs without errors
+- Display window opens and renders (not black — actual pixel data is shown)
+
+**What's been verified:**
+- Shader source `nv12_to_bgra.comp` looks correct (Y/UV plane reads, BT.601 color matrix, BGRA packing)
+- Descriptor bindings use actual buffer sizes (`src_vk.size()`, `dst_vk.size()`), NOT the `source_bytes_per_pixel` field
+- NV12 buffer: 1920x1088 coded height, bpp=12, size=3,133,440 bytes
+- BGRA buffer: 1920x1088 coded height, bpp=32, size=8,355,840 bytes
+- Videoframe reports display height 1080, but pixel buffer dimensions are 1088
+- Dispatch: `(1920+15)/16=120, (1088+15)/16=68` → 1920x1088 exact fit, no overflow
+- NV12 transfer copies full coded height (1088 rows Y + 544 rows UV)
+- Push constants: width=1920, height=1088, flags=1 (is_bgra=true, full_range=false)
+
+**What has NOT been verified:**
+- Whether the NV12 data from the Vulkan Video decoder's DPB image is in the expected byte layout (Y plane contiguous, then interleaved UV)
+- Whether the display processor's `cmd_copy_buffer_to_image` for B8G8R8A8_UNORM correctly interprets the BGRA buffer at 1088 height
+- Whether there's a race condition between the format converter queue submission and the display processor reading the buffer
+- Whether the camera path's working BGRA output is truly identical in buffer layout to what the format converter produces
+- Whether the NV12 buffer pool reuse is causing stale data from a previous frame
+
+**Hypothesis to test next:**
+1. The NV12 data layout from Vulkan Video decode may use a different plane arrangement than what the shader expects (e.g., planar vs semi-planar, or different UV ordering U/V vs V/U)
+2. The DPB image's NV12 format (G8_B8R8_2PLANE_420_UNORM) may have a different memory layout than tightly-packed NV12 — planes may have alignment/padding between them
+3. The display processor may be reading from the NV12 buffer instead of the BGRA buffer (wrong surface_id mapping)
+
+**Key files:**
+- `libs/streamlib/src/vulkan/rhi/vulkan_video_decoder.rs` — decode + NV12 transfer + BGRA conversion
+- `libs/streamlib/src/vulkan/rhi/vulkan_format_converter.rs` — compute shader dispatch
+- `libs/streamlib/src/vulkan/rhi/shaders/nv12_to_bgra.comp` — the actual shader
+- `libs/streamlib/src/linux/processors/display.rs` — display rendering pipeline
+- `libs/streamlib/src/vulkan/rhi/vulkan_pixel_buffer.rs` — pixel buffer allocation
+
+**Working reference:**
+- The camera path (camera → BGRA pixel buffer → display) works perfectly
+- The encoder path (BGRA → NV12 via format converter → Vulkan Video encode) works perfectly
+- The decoder decode path (H.264 → Vulkan Video decode → NV12 DPB image) works perfectly
+- Only the decoder output path (NV12 DPB → NV12 buffer → BGRA buffer → display) shows corruption
