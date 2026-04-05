@@ -184,23 +184,33 @@ impl MoqPublishSession {
         &mut self,
         track_name: &str,
         payload: &[u8],
-        _is_keyframe: bool,
+        is_keyframe: bool,
     ) -> Result<()> {
-        let subgroups_writer = self.ensure_track_subgroups_writer(track_name)?;
+        // Per-GOP subgroup grouping: start a new subgroup on keyframe (or first
+        // frame), then reuse it for subsequent P-frames. SubgroupReader streams
+        // objects in real-time from in-progress subgroups, so the subscriber
+        // receives each frame as it's written without waiting for the GOP to end.
+        let needs_new_subgroup = is_keyframe
+            || !self.active_subgroup_writers.contains_key(track_name);
 
-        // One subgroup per frame — moq-transport's SubgroupsReader delivers
-        // only the latest subgroup, so per-GOP grouping causes the subscriber
-        // to block for the entire GOP duration. Per-frame ensures the subscriber
-        // always gets the most recent frame.
-        let mut subgroup = subgroups_writer.append(0).map_err(|e| {
-            StreamError::Runtime(format!("Failed to create MoQ subgroup: {e}"))
-        })?;
-
-        subgroup
-            .write(bytes::Bytes::copy_from_slice(payload))
-            .map_err(|e| {
-                StreamError::Runtime(format!("Failed to write MoQ frame: {e}"))
+        if needs_new_subgroup {
+            let subgroups_writer = self.ensure_track_subgroups_writer(track_name)?;
+            let subgroup = subgroups_writer.append(0).map_err(|e| {
+                StreamError::Runtime(format!("Failed to create MoQ subgroup: {e}"))
             })?;
+            self.active_subgroup_writers
+                .insert(track_name.to_string(), subgroup);
+        }
+
+        let subgroup = self.active_subgroup_writers.get_mut(track_name).unwrap();
+        let write_result = subgroup.write(bytes::Bytes::copy_from_slice(payload));
+        if let Err(e) = write_result {
+            // Remove the stale writer so next call creates a new one
+            self.active_subgroup_writers.remove(track_name);
+            return Err(StreamError::Runtime(format!(
+                "Failed to write MoQ frame: {e}"
+            )));
+        }
 
         Ok(())
     }
