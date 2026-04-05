@@ -558,7 +558,7 @@ impl VulkanVideoDecoder {
 
         self.record_transfer_commands(dest_vk_buffer)?;
         let res = self.resources.as_ref().unwrap();
-        let gfx_queue = self.vulkan_device.queue();
+        let gfx_queue = self.vulkan_device.graphics_queue_secondary().unwrap_or(self.vulkan_device.queue());
         unsafe {
             let cmds = [res.transfer_command_buffer];
             let submit = vk::SubmitInfo::default().command_buffers(&cmds);

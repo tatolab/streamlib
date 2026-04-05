@@ -37,6 +37,7 @@ pub struct VulkanDevice {
     supports_video_decode: bool,
     video_decode_queue_family_index: Option<u32>,
     video_decode_queue: Option<vk::Queue>,
+    graphics_queue_secondary: Option<vk::Queue>,
     live_allocation_count: AtomicUsize,
 }
 
@@ -247,9 +248,15 @@ impl VulkanDevice {
 
         // 7. Create logical device with required extensions
         let queue_priorities = [1.0f32];
+        let queue_priorities_dual = [1.0f32, 1.0f32];
+        let gfx_queue_count = queue_families[queue_family_index as usize].queue_count;
         let mut queue_create_infos = vec![vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family_index)
-            .queue_priorities(&queue_priorities)];
+            .queue_priorities(if gfx_queue_count >= 2 {
+                &queue_priorities_dual
+            } else {
+                &queue_priorities
+            })];
 
         // Request a separate video encode queue if it's a different family
         if let Some(ve_family) = video_encode_queue_family_index {
@@ -480,8 +487,14 @@ impl VulkanDevice {
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create logical device: {e}")))?;
 
-        // 8. Get the graphics queue
+        // 8. Get the graphics queue(s)
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
+        let graphics_queue_secondary = if gfx_queue_count >= 2 {
+            tracing::info!("VulkanDevice: secondary graphics queue created (queue family {})", queue_family_index);
+            Some(unsafe { device.get_device_queue(queue_family_index, 1) })
+        } else {
+            None
+        };
 
         // 8b. Get the video encode queue (if available)
         let video_encode_queue = if supports_video_encode {
@@ -530,6 +543,7 @@ impl VulkanDevice {
             supports_video_decode,
             video_decode_queue_family_index,
             video_decode_queue,
+            graphics_queue_secondary,
             live_allocation_count: AtomicUsize::new(0),
         })
     }
@@ -629,6 +643,11 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn queue(&self) -> vk::Queue {
         self.queue
+    }
+
+    /// Get the secondary graphics queue (for concurrent submissions from decoder).
+    pub fn graphics_queue_secondary(&self) -> Option<vk::Queue> {
+        self.graphics_queue_secondary
     }
 
     /// Get the graphics queue family index.

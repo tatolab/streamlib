@@ -7,8 +7,9 @@
 // platform-specific decoders (Vulkan Video on Linux, VideoToolbox on macOS).
 // Handles SPS/PPS parameter set extraction and decoder initialization.
 
-use crate::_generated_::Encodedvideoframe;
+use crate::_generated_::{Encodedvideoframe, Videoframe};
 use crate::core::codec::{VideoDecoder, VideoDecoderConfig};
+use crate::core::rhi::PixelFormat;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use bytes::Bytes;
 
@@ -35,12 +36,19 @@ pub struct H264DecoderProcessor {
 
     /// Frames decoded counter.
     frames_decoded: u64,
+
+    /// Emit color-coded NV12 diagnostic frames on decode failure/waiting states.
+    debug_diagnostic_frames: bool,
+
+    /// Diagnostic frames emitted counter.
+    diagnostic_frame_count: u64,
 }
 
 impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         self.runtime_context = Some(ctx);
+        self.debug_diagnostic_frames = false;
         tracing::info!("[H264Decoder] Initialized (waiting for SPS/PPS)");
         Ok(())
     }
@@ -61,6 +69,7 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
             return Ok(());
         }
         let encoded: Encodedvideoframe = self.inputs.read("encoded_video_in")?;
+        let timestamp_ns: i64 = encoded.timestamp_ns.parse().unwrap_or(0);
 
         // Log NAL types present in this packet
         let nal_types = scan_nal_types(&encoded.data);
@@ -83,6 +92,13 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
             self.pps_nal = Some(p);
         }
 
+        // Diagnostic state: (Y, U, V, label) for color-coded debug frames
+        // Red   (76,128,255) = no IDR, dropping P-frames
+        // Blue  (29,255,107) = decode failed
+        // Yellow(225,0,148)  = waiting for SPS/PPS
+        // Green (149,43,21)  = init failed, retrying
+        let mut diagnostic_yuv: Option<(u8, u8, u8, &str)> = None;
+
         // Try to initialize decoder if we have SPS + PPS but no decoder yet
         if self.video_decoder.is_none() {
             if let (Some(sps), Some(pps), Some(ctx)) =
@@ -92,6 +108,7 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
                     Ok(mut decoder) => {
                         if let Err(e) = decoder.update_format(sps, pps) {
                             tracing::error!("[H264Decoder] Failed to set format: {}", e);
+                            diagnostic_yuv = Some((149, 43, 21, "init_format_failed"));
                         } else {
                             tracing::info!("[H264Decoder] Decoder initialized with SPS/PPS");
                             self.video_decoder = Some(decoder);
@@ -99,6 +116,7 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
                     }
                     Err(e) => {
                         tracing::error!("[H264Decoder] Failed to create decoder: {}", e);
+                        diagnostic_yuv = Some((149, 43, 21, "init_create_failed"));
                     }
                 }
             }
@@ -110,8 +128,6 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
                 .gpu_context
                 .as_ref()
                 .ok_or_else(|| StreamError::Runtime("GPU context not available".into()))?;
-
-            let timestamp_ns: i64 = encoded.timestamp_ns.parse().unwrap_or(0);
 
             match decoder.decode(&encoded.data, timestamp_ns, gpu) {
                 Ok(Some(frame)) => {
@@ -126,9 +142,58 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
                         );
                     }
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    diagnostic_yuv = Some((76, 128, 255, "no_idr_dropping_p_frame"));
+                }
                 Err(e) => {
                     tracing::warn!("[H264Decoder] Decode error: {}", e);
+                    diagnostic_yuv = Some((29, 255, 107, "decode_failed"));
+                }
+            }
+        } else if diagnostic_yuv.is_none() {
+            diagnostic_yuv = Some((225, 0, 148, "waiting_for_sps_pps"));
+        }
+
+        // Emit diagnostic frame if enabled and in an error/waiting state
+        if self.debug_diagnostic_frames {
+            if let Some((y_val, u_val, v_val, label)) = diagnostic_yuv {
+                if let Some(gpu) = &self.gpu_context {
+                    let diag_width = 1920u32;
+                    let diag_height = 1088u32;
+                    match gpu.acquire_pixel_buffer(diag_width, diag_height, PixelFormat::Nv12VideoRange) {
+                        Ok((pool_id, buffer)) => {
+                            // Fill NV12 planes with solid diagnostic color
+                            #[cfg(target_os = "linux")]
+                            {
+                                let ptr = buffer.buffer_ref().inner.mapped_ptr();
+                                let y_plane_size = (diag_width * diag_height) as usize;
+                                let uv_plane_size = (diag_width * diag_height / 2) as usize;
+                                unsafe {
+                                    std::ptr::write_bytes(ptr, y_val, y_plane_size);
+                                    let uv_ptr = ptr.add(y_plane_size);
+                                    for i in (0..uv_plane_size).step_by(2) {
+                                        *uv_ptr.add(i) = u_val;
+                                        *uv_ptr.add(i + 1) = v_val;
+                                    }
+                                }
+                            }
+                            let frame = Videoframe {
+                                width: diag_width,
+                                height: diag_height,
+                                surface_id: pool_id.to_string(),
+                                timestamp_ns: timestamp_ns.to_string(),
+                                frame_index: self.diagnostic_frame_count.to_string(),
+                            };
+                            self.diagnostic_frame_count += 1;
+                            if let Err(e) = self.outputs.write("video_out", &frame) {
+                                tracing::warn!("[H264Decoder] Failed to write diagnostic frame: {}", e);
+                            }
+                            tracing::debug!("[H264Decoder] Diagnostic frame: {}", label);
+                        }
+                        Err(e) => {
+                            tracing::warn!("[H264Decoder] Failed to acquire diagnostic buffer: {}", e);
+                        }
+                    }
                 }
             }
         }

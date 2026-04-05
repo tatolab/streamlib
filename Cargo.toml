@@ -103,3 +103,6 @@ streamlib-telemetry = { path = "libs/streamlib-telemetry" }
 
 # YUV/RGB conversion - REMOVED (now using GPU-accelerated VTPixelTransferSession)
 # yuv = "0.8"
+
+[patch.crates-io]
+moq-transport = { path = "vendor/moq-transport" }

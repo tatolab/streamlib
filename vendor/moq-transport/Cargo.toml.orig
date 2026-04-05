@@ -1,0 +1,30 @@
+[package]
+name = "moq-transport"
+description = "Media over QUIC"
+authors = ["Luke Curley"]
+repository = "https://github.com/englishm/moq-rs"
+license = "MIT OR Apache-2.0"
+
+version = "0.14.0"
+edition = "2021"
+
+keywords = ["quic", "http3", "webtransport", "media", "live"]
+categories = ["multimedia", "network-programming", "web-programming"]
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytes = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "io-util", "sync"] }
+tracing = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+
+web-transport = { workspace = true }
+
+paste = "1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
