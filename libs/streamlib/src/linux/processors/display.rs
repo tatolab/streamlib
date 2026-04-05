@@ -100,6 +100,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
 
         let render_thread = std::thread::Builder::new()
             .name(format!("display-{}-render", window_id))
+            .stack_size(8 * 1024 * 1024) // 8 MB — FramePayload is 64KB+ on the stack
             .spawn(move || {
                 tracing::debug!("Display {}: Render thread started", window_id);
 
