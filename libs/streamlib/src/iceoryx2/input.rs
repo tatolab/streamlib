@@ -77,6 +77,11 @@ impl InputMailboxes {
         }
     }
 
+    /// Check if a port has already been configured.
+    pub fn has_port(&self, port: &str) -> bool {
+        self.ports.contains_key(port)
+    }
+
     /// Add a mailbox for the given port with the specified buffer size and read mode.
     pub fn add_port(&mut self, port: &str, buffer_size: usize, read_mode: ReadMode) {
         self.ports.insert(
