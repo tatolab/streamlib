@@ -30,7 +30,7 @@ pub struct VulkanPixelBuffer {
     mapped_ptr: *mut u8,
     width: u32,
     height: u32,
-    bytes_per_pixel: u32,
+    bits_per_pixel: u32,
     format: PixelFormat,
     size: vk::DeviceSize,
 }
@@ -41,12 +41,13 @@ impl VulkanPixelBuffer {
         vulkan_device: &Arc<VulkanDevice>,
         width: u32,
         height: u32,
-        bytes_per_pixel: u32,
+        bits_per_pixel: u32,
         format: PixelFormat,
     ) -> Result<Self> {
         let size = (width as vk::DeviceSize)
             * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
+            * (bits_per_pixel as vk::DeviceSize)
+            / 8;
 
         let device = vulkan_device.device();
 
@@ -95,7 +96,7 @@ impl VulkanPixelBuffer {
             mapped_ptr,
             width,
             height,
-            bytes_per_pixel,
+            bits_per_pixel,
             format,
             size,
         })
@@ -116,9 +117,9 @@ impl VulkanPixelBuffer {
         self.height
     }
 
-    /// Bytes per pixel.
-    pub fn bytes_per_pixel(&self) -> u32 {
-        self.bytes_per_pixel
+    /// Bits per pixel.
+    pub fn bits_per_pixel(&self) -> u32 {
+        self.bits_per_pixel
     }
 
     /// Pixel format.
@@ -164,14 +165,15 @@ impl VulkanPixelBuffer {
         fd: std::os::unix::io::RawFd,
         width: u32,
         height: u32,
-        bytes_per_pixel: u32,
+        bits_per_pixel: u32,
         format: PixelFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
         let device = vulkan_device.device();
         let size = (width as vk::DeviceSize)
             * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
+            * (bits_per_pixel as vk::DeviceSize)
+            / 8;
         let effective_size = if allocation_size > 0 {
             allocation_size
         } else {
@@ -226,7 +228,7 @@ impl VulkanPixelBuffer {
             mapped_ptr,
             width,
             height,
-            bytes_per_pixel,
+            bits_per_pixel,
             format,
             size: effective_size,
         })
@@ -267,21 +269,21 @@ mod tests {
             }
         };
 
-        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 32, PixelFormat::Bgra32)
             .expect("buffer creation failed");
 
         assert_eq!(buf.width(), 1920);
         assert_eq!(buf.height(), 1080);
-        assert_eq!(buf.bytes_per_pixel(), 4);
+        assert_eq!(buf.bits_per_pixel(), 32);
         assert_eq!(buf.size(), 1920 * 1080 * 4);
         assert!(!buf.mapped_ptr().is_null());
         assert_ne!(buf.buffer(), vk::Buffer::null());
 
         println!(
-            "Pool buffer created: {}x{}x{} = {} bytes",
+            "Pool buffer created: {}x{}x{} bpp = {} bytes",
             buf.width(),
             buf.height(),
-            buf.bytes_per_pixel(),
+            buf.bits_per_pixel(),
             buf.size()
         );
     }
@@ -296,7 +298,7 @@ mod tests {
             }
         };
 
-        let buf = VulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
+        let buf = VulkanPixelBuffer::new(&device, 64, 64, 32, PixelFormat::Bgra32)
             .expect("buffer creation failed");
 
         let size = buf.size() as usize;
@@ -334,7 +336,7 @@ mod tests {
             }
         };
 
-        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 32, PixelFormat::Bgra32)
             .expect("buffer creation failed");
 
         let fd = buf.export_dma_buf_fd().expect("DMA-BUF export failed");
@@ -357,13 +359,13 @@ mod tests {
 
         let before = device.live_allocation_count();
 
-        let b0 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b0 = VulkanPixelBuffer::new(&device, 1920, 1080, 32, PixelFormat::Bgra32)
             .expect("buffer 0 failed");
-        let b1 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b1 = VulkanPixelBuffer::new(&device, 1920, 1080, 32, PixelFormat::Bgra32)
             .expect("buffer 1 failed");
-        let b2 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b2 = VulkanPixelBuffer::new(&device, 1920, 1080, 32, PixelFormat::Bgra32)
             .expect("buffer 2 failed");
-        let b3 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b3 = VulkanPixelBuffer::new(&device, 1920, 1080, 32, PixelFormat::Bgra32)
             .expect("buffer 3 failed");
 
         assert_eq!(device.live_allocation_count(), before + 4);
@@ -397,7 +399,7 @@ mod tests {
         };
 
         let before = device.live_allocation_count();
-        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 32, PixelFormat::Bgra32)
             .expect("buffer creation failed");
         assert_eq!(device.live_allocation_count(), before + 1);
 
@@ -420,7 +422,7 @@ mod tests {
         // Create source buffer and write a known pattern
         let width = 64u32;
         let height = 64u32;
-        let bpp = 4u32;
+        let bpp = 32u32;
         let src = VulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
             .expect("source buffer creation failed");
 

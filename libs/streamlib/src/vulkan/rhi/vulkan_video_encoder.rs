@@ -265,12 +265,12 @@ impl VulkanVideoEncoder {
         // Two staging buffers for double-buffered pipeline: while the GPU reads
         // from buffer A for transfer+encode, the CPU/GPU writes to buffer B.
         let nv12_vk_buffer =
-            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 2, PixelFormat::Nv12VideoRange)?;
+            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 12, PixelFormat::Nv12VideoRange)?;
         let nv12_staging_buffer = RhiPixelBuffer::new(RhiPixelBufferRef {
             inner: Arc::new(nv12_vk_buffer),
         });
         let nv12_vk_buffer_b =
-            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 2, PixelFormat::Nv12VideoRange)?;
+            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 12, PixelFormat::Nv12VideoRange)?;
         let nv12_staging_buffer_b = RhiPixelBuffer::new(RhiPixelBufferRef {
             inner: Arc::new(nv12_vk_buffer_b),
         });

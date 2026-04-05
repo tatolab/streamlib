@@ -39,6 +39,7 @@ pub struct VulkanVideoDecodeSession {
     video_decode_queue_family_index: u32,
     max_dpb_slots: u32,
     max_active_reference_pictures: u32,
+    min_bitstream_buffer_size_alignment: vk::DeviceSize,
 }
 
 impl VulkanVideoDecodeSession {
@@ -247,6 +248,7 @@ impl VulkanVideoDecodeSession {
             video_decode_queue_family_index: vd_family,
             max_dpb_slots,
             max_active_reference_pictures,
+            min_bitstream_buffer_size_alignment: capabilities.min_bitstream_buffer_size_alignment,
         })
     }
 
@@ -551,6 +553,11 @@ impl VulkanVideoDecodeSession {
     #[allow(dead_code)]
     pub fn max_active_reference_pictures(&self) -> u32 {
         self.max_active_reference_pictures
+    }
+
+    /// Minimum bitstream buffer size alignment from hardware capabilities.
+    pub fn min_bitstream_buffer_size_alignment(&self) -> vk::DeviceSize {
+        self.min_bitstream_buffer_size_alignment
     }
 }
 

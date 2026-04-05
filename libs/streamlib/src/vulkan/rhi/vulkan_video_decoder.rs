@@ -30,11 +30,7 @@ const FENCE_TIMEOUT_NS: u64 = 5_000_000_000;
 /// GPU resources created lazily on first decode (when SPS/PPS are known).
 struct DecodeResources {
     video_decode_session: VulkanVideoDecodeSession,
-    // Output image: decode writes NV12 here (VIDEO_DECODE_DST)
-    decode_output_image: vk::Image,
-    decode_output_image_view: vk::ImageView,
-    decode_output_image_memory: vk::DeviceMemory,
-    // DPB images for reference frame storage (VIDEO_DECODE_DPB)
+    // DPB images: decode output + reference frame storage + transfer source (coincide mode)
     dpb_images: Vec<vk::Image>,
     dpb_image_views: Vec<vk::ImageView>,
     dpb_image_memories: Vec<vk::DeviceMemory>,
@@ -56,6 +52,8 @@ struct DecodeResources {
     decode_width: u32,
     decode_height: u32,
     session_initialized: bool,
+    // Which DPB slot was last decoded into (for transfer readback)
+    last_decoded_dpb_slot: usize,
 }
 
 /// Vulkan Video H.264 decoder using GPU hardware decode.
@@ -194,22 +192,7 @@ impl VulkanVideoDecoder {
 
         let gfx_family = self.vulkan_device.queue_family_index();
 
-        // Create decode output image (NV12, VIDEO_DECODE_DST + TRANSFER_SRC for readback)
-        let (decode_output_image, decode_output_image_memory) = Self::create_nv12_image(
-            &self.vulkan_device,
-            width,
-            height,
-            vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR | vk::ImageUsageFlags::TRANSFER_SRC,
-            &[self.vd_family, gfx_family],
-            &mut profile_list,
-        )?;
-        let decode_output_image_view = Self::create_image_view(
-            &self.device,
-            decode_output_image,
-            vk::Format::G8_B8R8_2PLANE_420_UNORM,
-        )?;
-
-        // Create DPB images
+        // Create DPB images (coincide mode: DPB + decode output + transfer source)
         let max_dpb_slots = video_decode_session.max_dpb_slots();
         let mut dpb_images = Vec::with_capacity(max_dpb_slots as usize);
         let mut dpb_image_views = Vec::with_capacity(max_dpb_slots as usize);
@@ -220,8 +203,10 @@ impl VulkanVideoDecoder {
                 &self.vulkan_device,
                 width,
                 height,
-                vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR,
-                &[self.vd_family],
+                vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
+                    | vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                    | vk::ImageUsageFlags::TRANSFER_SRC,
+                &[self.vd_family, gfx_family],
                 &mut profile_list,
             );
             let (dpb_image, dpb_image_memory) = match dpb_result {
@@ -242,9 +227,6 @@ impl VulkanVideoDecoder {
                         for mem in &dpb_image_memories {
                             self.vulkan_device.free_device_memory(*mem);
                         }
-                        self.device.destroy_image_view(decode_output_image_view, None);
-                        self.device.destroy_image(decode_output_image, None);
-                        self.vulkan_device.free_device_memory(decode_output_image_memory);
                     }
                     return Err(e);
                 }
@@ -268,9 +250,6 @@ impl VulkanVideoDecoder {
                         for mem in &dpb_image_memories {
                             self.vulkan_device.free_device_memory(*mem);
                         }
-                        self.device.destroy_image_view(decode_output_image_view, None);
-                        self.device.destroy_image(decode_output_image, None);
-                        self.vulkan_device.free_device_memory(decode_output_image_memory);
                     }
                     return Err(e);
                 }
@@ -368,9 +347,6 @@ impl VulkanVideoDecoder {
 
         self.resources = Some(DecodeResources {
             video_decode_session,
-            decode_output_image,
-            decode_output_image_view,
-            decode_output_image_memory,
             dpb_images,
             dpb_image_views,
             dpb_image_memories,
@@ -387,6 +363,7 @@ impl VulkanVideoDecoder {
             decode_width: width,
             decode_height: height,
             session_initialized: false,
+            last_decoded_dpb_slot: 0,
         });
 
         Ok(())
@@ -450,7 +427,17 @@ impl VulkanVideoDecoder {
         }
 
         // Parse the NAL units to determine frame type for DPB management
-        let nal_info = parse_nal_unit_info(active_nal_data);
+        let mut nal_info = parse_nal_unit_info(active_nal_data);
+
+        // For non-IDR frames, derive frame_num and POC from frame_count
+        // (proper slice header parsing requires RBSP emulation prevention removal)
+        if !nal_info.is_idr {
+            let log2_max_frame_num = parse_log2_max_frame_num(self.cached_sps.as_deref())
+                .unwrap_or(4);
+            let max_frame_num = 1u32 << log2_max_frame_num;
+            nal_info.frame_num = (self.frame_count as u32) % max_frame_num;
+            nal_info.pic_order_cnt = (self.frame_count as i32) * 2;
+        }
 
         tracing::info!(
             "VulkanVideoDecoder: received {} bytes (idr={}, ref={}, frame_num={}, poc={})",
@@ -499,26 +486,7 @@ impl VulkanVideoDecoder {
             );
         }
 
-        // 3. Wait for previous decode fence (if not first frame)
-        if self.frame_count > 0 {
-            let res = self.resources.as_ref().unwrap();
-            unsafe {
-                self.device
-                    .wait_for_fences(&[res.decode_fence], true, FENCE_TIMEOUT_NS)
-                    .map_err(|e| {
-                        StreamError::GpuError(format!(
-                            "Decode fence timeout (5s) or error: {e}"
-                        ))
-                    })?;
-                self.device
-                    .reset_fences(&[res.decode_fence])
-                    .map_err(|e| {
-                        StreamError::GpuError(format!("Failed to reset decode fence: {e}"))
-                    })?;
-            }
-        }
-
-        // 4. Record and submit decode commands (using slice-only buffer size)
+        // 3. Record and submit decode commands (using slice-only buffer size)
         tracing::info!("VulkanVideoDecoder: submitting decode commands (frame={}, slice_bytes={})", self.frame_count, slice_data_size);
         self.record_decode_commands(&nal_info, slice_data_size)?;
         let res = self.resources.as_ref().unwrap();
@@ -710,34 +678,12 @@ impl VulkanVideoDecoder {
                     StreamError::GpuError(format!("Failed to begin decode command buffer: {e}"))
                 })?;
 
-            // Transition decode output image to VIDEO_DECODE_DST
-            let output_barrier = vk::ImageMemoryBarrier::default()
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::VIDEO_DECODE_DST_KHR)
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                .image(res.decode_output_image)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .level_count(1)
-                        .layer_count(1),
-                );
-
-            self.device.cmd_pipeline_barrier(
-                cmd_buf,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[output_barrier],
-            );
-
-            // Transition DPB images that will be used
+            // Transition DPB images (coincide mode: setup slot → VIDEO_DECODE_DST,
+            // reference slots → VIDEO_DECODE_DPB)
             let mut dpb_barriers = Vec::new();
             for (i, slot) in self.dpb_slot_frame_numbers.iter().enumerate() {
-                if slot.is_some() || i == setup_slot_index {
+                if i == setup_slot_index {
+                    // Setup slot is the decode output in coincide mode
                     let old_layout = if slot.is_some() {
                         vk::ImageLayout::VIDEO_DECODE_DPB_KHR
                     } else {
@@ -746,6 +692,22 @@ impl VulkanVideoDecoder {
                     dpb_barriers.push(
                         vk::ImageMemoryBarrier::default()
                             .old_layout(old_layout)
+                            .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
+                            .src_access_mask(vk::AccessFlags::empty())
+                            .dst_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                            .image(res.dpb_images[i])
+                            .subresource_range(
+                                vk::ImageSubresourceRange::default()
+                                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                    .level_count(1)
+                                    .layer_count(1),
+                            ),
+                    );
+                } else if slot.is_some() {
+                    // Reference slots stay at DPB layout
+                    dpb_barriers.push(
+                        vk::ImageMemoryBarrier::default()
+                            .old_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
                             .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
                             .src_access_mask(
                                 vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
@@ -809,7 +771,7 @@ impl VulkanVideoDecoder {
                 .std_picture_info(&std_picture_info)
                 .slice_offsets(std::slice::from_ref(&slice_offset));
 
-            // Output picture resource (decode writes here)
+            // Output picture resource (coincide mode: same DPB image as setup slot)
             let output_picture_resource = vk::VideoPictureResourceInfoKHR::default()
                 .coded_offset(vk::Offset2D { x: 0, y: 0 })
                 .coded_extent(vk::Extent2D {
@@ -817,7 +779,7 @@ impl VulkanVideoDecoder {
                     height: decode_height,
                 })
                 .base_array_layer(0)
-                .image_view_binding(res.decode_output_image_view);
+                .image_view_binding(res.dpb_image_views[setup_slot_index]);
 
             // Setup reference slot (where reconstructed picture goes for future reference)
             let mut setup_dpb_ref_flags = StdVideoDecodeH264ReferenceInfoFlags {
@@ -931,13 +893,13 @@ impl VulkanVideoDecoder {
                 .video_session_parameters(res.video_decode_session.video_session_parameters())
                 .reference_slots(&all_slots_for_begin);
 
+            // Reset query pool BEFORE entering video coding scope (VUID-vkCmdResetQueryPool-videocoding)
+            self.device.cmd_reset_query_pool(cmd_buf, res.decode_status_query_pool, 0, 1);
+
             (self.video_queue_loader.fp().cmd_begin_video_coding_khr)(
                 cmd_buf,
                 &begin_info,
             );
-
-            // Reset query pool for decode status tracking
-            self.device.cmd_reset_query_pool(cmd_buf, res.decode_status_query_pool, 0, 1);
 
             // Reset session on first frame
             if !res.session_initialized {
@@ -960,10 +922,16 @@ impl VulkanVideoDecoder {
             );
 
             // Issue decode command
+            let alignment = res.video_decode_session.min_bitstream_buffer_size_alignment();
+            let aligned_range = if alignment > 0 {
+                ((nal_data_size as vk::DeviceSize) + alignment - 1) & !(alignment - 1)
+            } else {
+                nal_data_size as vk::DeviceSize
+            };
             let decode_info = vk::VideoDecodeInfoKHR::default()
                 .src_buffer(res.bitstream_input_buffer)
                 .src_buffer_offset(0)
-                .src_buffer_range(nal_data_size as vk::DeviceSize)
+                .src_buffer_range(aligned_range)
                 .dst_picture_resource(output_picture_resource)
                 .setup_reference_slot(&setup_reference_slot)
                 .reference_slots(&reference_slots)
@@ -988,6 +956,10 @@ impl VulkanVideoDecoder {
                 StreamError::GpuError(format!("Failed to end decode command buffer: {e}"))
             })?;
         }
+
+        // Track which DPB slot was decoded into for transfer readback
+        let res = self.resources.as_mut().unwrap();
+        res.last_decoded_dpb_slot = setup_slot_index;
 
         Ok(())
     }
@@ -1014,13 +986,14 @@ impl VulkanVideoDecoder {
                     StreamError::GpuError(format!("Failed to begin transfer command buffer: {e}"))
                 })?;
 
-            // Transition decode output image to TRANSFER_SRC
+            // Transition decoded DPB image to TRANSFER_SRC (coincide mode)
+            let decoded_image = res.dpb_images[res.last_decoded_dpb_slot];
             let barrier_to_transfer = vk::ImageMemoryBarrier::default()
-                .old_layout(vk::ImageLayout::VIDEO_DECODE_DST_KHR)
+                .old_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
                 .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
                 .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
-                .image(res.decode_output_image)
+                .image(decoded_image)
                 .subresource_range(
                     vk::ImageSubresourceRange::default()
                         .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -1073,10 +1046,34 @@ impl VulkanVideoDecoder {
 
             self.device.cmd_copy_image_to_buffer(
                 cmd_buf,
-                res.decode_output_image,
+                decoded_image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 dest_vk_buffer,
                 &[y_region, uv_region],
+            );
+
+            // Transition DPB image back to VIDEO_DECODE_DPB_KHR for future reference use
+            let barrier_back_to_dpb = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
+                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
+                .image(decoded_image)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+
+            self.device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_back_to_dpb],
             );
 
             self.device.end_command_buffer(cmd_buf).map_err(|e| {
@@ -1257,12 +1254,6 @@ impl Drop for VulkanVideoDecoder {
                     self.vulkan_device
                         .free_device_memory(res.dpb_image_memories[i]);
                 }
-
-                self.device
-                    .destroy_image_view(res.decode_output_image_view, None);
-                self.device.destroy_image(res.decode_output_image, None);
-                self.vulkan_device
-                    .free_device_memory(res.decode_output_image_memory);
             }
             // video_decode_session drops automatically
         }
@@ -1337,10 +1328,10 @@ fn parse_nal_unit_info(annex_b_data: &[u8]) -> NalUnitInfo {
 
         match nal_unit_type {
             5 => {
-                // IDR slice — offset points to NAL header byte (after start code)
+                // IDR slice — offset points to start code (Annex B required by NVIDIA)
                 is_idr = true;
                 is_reference = true;
-                slice_data_offset = nal_header_pos;
+                slice_data_offset = i;
                 frame_num = 0;
                 pic_order_cnt = 0;
             }
@@ -1348,9 +1339,10 @@ fn parse_nal_unit_info(annex_b_data: &[u8]) -> NalUnitInfo {
                 // Non-IDR slice
                 is_reference = nal_ref_idc > 0;
                 if slice_data_offset == 0 {
-                    slice_data_offset = nal_header_pos;
+                    slice_data_offset = i;
                 }
-                // frame_num would need full slice header parsing; use frame_count as approximation
+                // frame_num and pic_order_cnt are set by the caller from frame_count
+                // (proper slice header parsing requires RBSP emulation prevention removal)
             }
             _ => {}
         }
@@ -1516,4 +1508,43 @@ fn skip_scaling_list(data: &[u8], bit_pos: &mut usize, size: usize) -> Result<()
         last_scale = if next_scale == 0 { last_scale } else { next_scale };
     }
     Ok(())
+}
+
+/// Extract log2_max_frame_num_minus4 + 4 from SPS RBSP bytes.
+fn parse_log2_max_frame_num(sps_rbsp: Option<&[u8]>) -> Result<u32> {
+    let sps_rbsp = sps_rbsp.ok_or_else(|| {
+        StreamError::Configuration("SPS not available for log2_max_frame_num".into())
+    })?;
+    if sps_rbsp.len() < 4 {
+        return Err(StreamError::Configuration("SPS too short".into()));
+    }
+
+    let profile_idc = sps_rbsp[0];
+    let mut bit_pos: usize = 24; // skip profile_idc(8) + constraint_flags(8) + level_idc(8)
+
+    // seq_parameter_set_id (ue)
+    read_exp_golomb(sps_rbsp, &mut bit_pos)?;
+
+    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128) {
+        let chroma_format_idc = read_exp_golomb(sps_rbsp, &mut bit_pos)?;
+        if chroma_format_idc == 3 {
+            bit_pos += 1;
+        }
+        read_exp_golomb(sps_rbsp, &mut bit_pos)?; // bit_depth_luma_minus8
+        read_exp_golomb(sps_rbsp, &mut bit_pos)?; // bit_depth_chroma_minus8
+        bit_pos += 1; // qpprime_y_zero_transform_bypass_flag
+        let seq_scaling_matrix_present = read_bit(sps_rbsp, &mut bit_pos)?;
+        if seq_scaling_matrix_present == 1 {
+            let count = if chroma_format_idc != 3 { 8 } else { 12 };
+            for _ in 0..count {
+                let present = read_bit(sps_rbsp, &mut bit_pos)?;
+                if present == 1 {
+                    skip_scaling_list(sps_rbsp, &mut bit_pos, if count <= 6 { 16 } else { 64 })?;
+                }
+            }
+        }
+    }
+
+    let log2_max_frame_num_minus4 = read_exp_golomb(sps_rbsp, &mut bit_pos)?;
+    Ok(log2_max_frame_num_minus4 + 4)
 }

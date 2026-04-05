@@ -541,7 +541,7 @@ mod tests {
         height: u32,
         format: PixelFormat,
     ) -> Option<RhiPixelBuffer> {
-        let bpp = format.bits_per_pixel() / 8;
+        let bpp = format.bits_per_pixel();
         let buf = VulkanPixelBuffer::new(device, width, height, bpp, format).ok()?;
         let ref_ = RhiPixelBufferRef {
             inner: Arc::new(buf),
@@ -570,18 +570,8 @@ mod tests {
             }
         };
 
-        // NV12 size: width * height (Y) + width * height/2 (UV)
-        let nv12_buf = match VulkanPixelBuffer::new(&device, width, height, 1, PixelFormat::Nv12FullRange) {
-            Ok(b) => b,
-            Err(_) => {
-                println!("Skipping test - failed to create NV12 buffer");
-                return;
-            }
-        };
-        // NV12 buffer needs to be large enough for Y + UV planes.
-        // VulkanPixelBuffer allocates width * height * bpp, so with bpp=1 we get width*height.
-        // We actually need width*height*3/2. Use a workaround: allocate with bpp=2 for enough space.
-        let nv12_buf = match VulkanPixelBuffer::new(&device, width, height, 2, PixelFormat::Nv12FullRange) {
+        // NV12 size: width * height (Y) + width * height/2 (UV) = width * height * 12 / 8
+        let nv12_buf = match VulkanPixelBuffer::new(&device, width, height, 12, PixelFormat::Nv12FullRange) {
             Ok(b) => b,
             Err(_) => {
                 println!("Skipping test - failed to create NV12 buffer");

@@ -15,7 +15,7 @@ pub struct VulkanPixelBufferPool {
     device: Arc<VulkanDevice>,
     width: u32,
     height: u32,
-    bytes_per_pixel: u32,
+    bits_per_pixel: u32,
     format: PixelFormat,
     buffers: Vec<Arc<VulkanPixelBuffer>>,
     next_index: AtomicUsize,
@@ -28,7 +28,7 @@ impl VulkanPixelBufferPool {
         device: Arc<VulkanDevice>,
         width: u32,
         height: u32,
-        bytes_per_pixel: u32,
+        bits_per_pixel: u32,
         format: PixelFormat,
         pre_allocate: usize,
     ) -> Result<Self> {
@@ -36,7 +36,7 @@ impl VulkanPixelBufferPool {
         let mut buffer_to_pool_id = HashMap::with_capacity(pre_allocate);
 
         for i in 0..pre_allocate {
-            let buffer = VulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format)?;
+            let buffer = VulkanPixelBuffer::new(&device, width, height, bits_per_pixel, format)?;
             buffers.push(Arc::new(buffer));
             buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
         }
@@ -45,7 +45,7 @@ impl VulkanPixelBufferPool {
             device,
             width,
             height,
-            bytes_per_pixel,
+            bits_per_pixel,
             format,
             buffers,
             next_index: AtomicUsize::new(0),

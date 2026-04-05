@@ -100,8 +100,8 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
                     )
                 })?;
 
-        let bytes_per_pixel = format.bits_per_pixel() / 8;
-        if bytes_per_pixel == 0 {
+        let bits_per_pixel = format.bits_per_pixel();
+        if bits_per_pixel == 0 {
             return Err(crate::core::StreamError::Configuration(
                 "DMA-BUF import: unsupported pixel format (0 bits per pixel)".into(),
             ));
@@ -110,7 +110,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         let allocation_size = if size > 0 {
             size as u64
         } else if width > 0 && height > 0 {
-            (width as u64) * (height as u64) * (bytes_per_pixel as u64)
+            (width as u64) * (height as u64) * (bits_per_pixel as u64) / 8
         } else {
             return Err(crate::core::StreamError::Configuration(
                 "DMA-BUF import: cannot determine allocation size (size=0, width=0 or height=0)"
@@ -124,7 +124,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
                 fd,
                 width,
                 height,
-                bytes_per_pixel,
+                bits_per_pixel,
                 format,
                 allocation_size,
             )?;
