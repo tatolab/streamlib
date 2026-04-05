@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ash::vk;
 use ash::vk::native::{
-    StdVideoH264ChromaFormatIdc, StdVideoH264ChromaFormatIdc_STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
+    StdVideoH264ChromaFormatIdc_STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
     StdVideoH264LevelIdc, StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_3_1,
     StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_4_0,
     StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_5_1, StdVideoH264PictureParameterSet,

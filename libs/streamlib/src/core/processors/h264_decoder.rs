@@ -7,7 +7,7 @@
 // platform-specific decoders (FFmpeg on Linux, VideoToolbox on macOS).
 // Handles SPS/PPS parameter set extraction and decoder initialization.
 
-use crate::_generated_::{Encodedvideoframe, Videoframe};
+use crate::_generated_::Encodedvideoframe;
 use crate::core::codec::{VideoDecoder, VideoDecoderConfig};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use bytes::Bytes;

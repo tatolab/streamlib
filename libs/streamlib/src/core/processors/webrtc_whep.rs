@@ -12,7 +12,6 @@ use crate::core::media_clock::MediaClock;
 use crate::core::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
 use crate::core::{Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
-use bytes::Bytes;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::mpsc;
