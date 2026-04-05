@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.4.11](https://github.com/tatolab/streamlib/compare/v0.4.10...v0.4.11) (2026-04-05)
+
+
+### Features
+
+* add composable codec processors and full MoQ roundtrip example ([5b95416](https://github.com/tatolab/streamlib/commit/5b954165a96ec1d93343b5b7da2992a82aba6d5e))
+* **encoder:** configurable H264 profile, IPC buffer fix, broadcast defaults ([df4c34c](https://github.com/tatolab/streamlib/commit/df4c34c05cc79bb815deb45fb2549d48cfee2a58))
+* **moq:** add MoQ feature flag and dependencies ([#218](https://github.com/tatolab/streamlib/issues/218)) ([0a9a412](https://github.com/tatolab/streamlib/commit/0a9a41207406cf8bcedb39aa5134fb1f876dd6b8))
+* **moq:** add MoQ publish and subscribe examples ([#229](https://github.com/tatolab/streamlib/issues/229)) ([c657fff](https://github.com/tatolab/streamlib/commit/c657fff76e1ba39d5eea73b9096936bf98077002))
+* **moq:** add MoQ roundtrip latency example ([#228](https://github.com/tatolab/streamlib/issues/228)) ([927eb52](https://github.com/tatolab/streamlib/commit/927eb529f32cf8b8e01fc6f3ccdba7e01b467003))
+* **moq:** add MoQ session, publish, and subscribe primitives ([#219](https://github.com/tatolab/streamlib/issues/219), [#220](https://github.com/tatolab/streamlib/issues/220), [#221](https://github.com/tatolab/streamlib/issues/221)) ([408d7a1](https://github.com/tatolab/streamlib/commit/408d7a10927acf7fd18ef94bc5354bfee402a0bb))
+* **moq:** add MoQ subscribe processor for ingesting data into graph ([#227](https://github.com/tatolab/streamlib/issues/227)) ([771be3e](https://github.com/tatolab/streamlib/commit/771be3e795fb9dd4419322d9ccff181feab52ef0))
+* **moq:** add MoQ transport layer alongside iceoryx2 ([#217](https://github.com/tatolab/streamlib/issues/217)) ([1f713b3](https://github.com/tatolab/streamlib/commit/1f713b357db36b50acfc2ea2a504d51938311e9d))
+* **moq:** add moq_fanout flag to PortDescriptor ([#224](https://github.com/tatolab/streamlib/issues/224)) ([e2a0ad8](https://github.com/tatolab/streamlib/commit/e2a0ad8adc02d9cbd4b743e85011fa756d5baa74))
+* **moq:** add moq-av-publish example with dual video+audio tracks ([ca6738d](https://github.com/tatolab/streamlib/commit/ca6738d55f7394d7e80166445586eb7345767e31))
+* **moq:** add moq-av-subscribe example with dual video+audio tracks ([51f6167](https://github.com/tatolab/streamlib/commit/51f6167f1c1a4d155a5101de33c25b6718f6d8a6))
+* **moq:** add MoqDecodeSubscribeProcessor and real A/V subscriber example ([271af76](https://github.com/tatolab/streamlib/commit/271af768e89a8c76470ad3b558e674649e660e3d))
+* **moq:** add MoqLinkTransportConfig to Link ([#225](https://github.com/tatolab/streamlib/issues/225)) ([e047a95](https://github.com/tatolab/streamlib/commit/e047a954ac623f2c58ac974f9bb2c32c8aa79438))
+* **moq:** add schema-agnostic data example ([#230](https://github.com/tatolab/streamlib/issues/230)) ([5fb8b6c](https://github.com/tatolab/streamlib/commit/5fb8b6c891b37ee6e124af6c78f20ea1cf9abedc))
+* **moq:** compiler wiring for MoQ-annotated links ([#223](https://github.com/tatolab/streamlib/issues/223)) ([44a3bb7](https://github.com/tatolab/streamlib/commit/44a3bb72cbcd7fa2b1fdc7b30e89636adaff34a4))
+* **moq:** extend OutputWriter with MoQ remote destinations ([#222](https://github.com/tatolab/streamlib/issues/222)) ([fca3609](https://github.com/tatolab/streamlib/commit/fca36099027097877cbf4b842fc4ef3cc0c698cc))
+* **moq:** moq-subscribe saves H.264 to file, verified end-to-end pipeline ([5f2bc83](https://github.com/tatolab/streamlib/commit/5f2bc83b3bea614b79e39d3637a34b7990d503b5))
+* **moq:** replace moq-lite with cloudflare/moq-rs (moq-transport) ([10d7c04](https://github.com/tatolab/streamlib/commit/10d7c04d62ad5b941c83352100185257f340971e))
+* **moq:** replace synthetic moq-av-publish with real camera+mic capture ([03524f2](https://github.com/tatolab/streamlib/commit/03524f2c64aea9bb11eec627321ae8d0f7cb93c0))
+* **moq:** schema-to-track mapping and MoQ catalog generation ([#226](https://github.com/tatolab/streamlib/issues/226)) ([6c1f08d](https://github.com/tatolab/streamlib/commit/6c1f08d738a8ad6d47cea118daf3fc06b40ca3e8))
+* **moq:** shared sessions, auto-track names, populated catalog, graceful unconnected ports ([63223b5](https://github.com/tatolab/streamlib/commit/63223b56ca0e649cf3fd6ad8cdcc750f270c6f44))
+
+
+### Bug Fixes
+
+* **codegen:** wire schema read_mode and buffer_size into macro-generated port config ([2816037](https://github.com/tatolab/streamlib/commit/28160376c379e6e4b3db6e3b054a57e77f1b621d)), closes [#237](https://github.com/tatolab/streamlib/issues/237)
+* **codegen:** wire schema read_mode and buffer_size into port config ([caaed9d](https://github.com/tatolab/streamlib/commit/caaed9df923645267ee06ae08a557bced31e4e41))
+* **decoder:** FFmpeg LOW_DELAY, receive_frame loop, monotonic PTS ([eb20758](https://github.com/tatolab/streamlib/commit/eb2075878d93d589e648f65e271784968aa2bbe6))
+* **display:** add 8MB stack for render thread ([ad17cec](https://github.com/tatolab/streamlib/commit/ad17cece55749a8af3ca92d02ec29ad7bfc835ab))
+* **encoder:** DPB slot count, P-frame reference type, payload sizing ([3f6d6f5](https://github.com/tatolab/streamlib/commit/3f6d6f55219bd99d110d156f971d999eb9e7874f))
+* **encoder:** lower default keyframe interval from 60 to 15 frames ([ef7e1c6](https://github.com/tatolab/streamlib/commit/ef7e1c6dca6a156527c7ffbee47d1003f8f73ce0))
+* **example:** add resampler + rechunker on subscribe audio path ([bafdefc](https://github.com/tatolab/streamlib/commit/bafdefc958b18b84e3d509f5be34a3d826f53381))
+* **h264:** defer encoder creation to first frame, use actual frame dimensions ([aaf35ad](https://github.com/tatolab/streamlib/commit/aaf35ad20d18e3fae4a7900dbcd54075e994fe99))
+* **h264:** use Baseline profile matching old working encoder ([3aaf19c](https://github.com/tatolab/streamlib/commit/3aaf19cb8076482a5915a70cd952929fa3aa96d7))
+* **ipc:** ReadNextInOrder for all wired ports, fix keyframe detection ([527d1ae](https://github.com/tatolab/streamlib/commit/527d1aef981530bec1c5b03741fb48418a6cc42c))
+* **ipc:** respect macro-generated port config, add has_port guard ([01b8b69](https://github.com/tatolab/streamlib/commit/01b8b6921d8b5daf569253cc68e9632544615677))
+* **moq:** align MoqDecodeSubscribeProcessor video decode path with WHEP ([5dce5bc](https://github.com/tatolab/streamlib/commit/5dce5bcb6ef6349f3e78e36abbaa842571d07de6))
+* **moq:** capture tokio handle for subscribe_track on processor threads ([7872e23](https://github.com/tatolab/streamlib/commit/7872e23603300f4568d6445c23cbbaa414f994ea))
+* **moq:** defer relay connect to first frame to avoid FD safety crash ([2a76211](https://github.com/tatolab/streamlib/commit/2a76211ad09f746d6c84a603185226221ec6bd22))
+* **moq:** eager relay connect and subscribe retry for A/V processors ([fb5863a](https://github.com/tatolab/streamlib/commit/fb5863af9f8eb6666acebaa6dae5207604703614))
+* **moq:** fix broadcast path and subscribe flow for relay compatibility ([b0d1864](https://github.com/tatolab/streamlib/commit/b0d1864dfecc85c43ac27c41f24d7ef8b733c939))
+* **moq:** namespace routing and session_started for A/V pipeline ([9136074](https://github.com/tatolab/streamlib/commit/91360748431f3c17ba7d7dbc3eb18775934b503e))
+* **moq:** per-GOP subgroup grouping eliminates subscribe drops ([a8bacc9](https://github.com/tatolab/streamlib/commit/a8bacc9dcf958ffc0507c4c03da33646540e3483))
+* **moq:** prepend SPS+PPS to IDR frames for decoder and restore IDR gate ([3c69618](https://github.com/tatolab/streamlib/commit/3c69618fdbceef4fc6bb93655e581f960a30ba40))
+* **moq:** remove moq_fanout remnant, default to Cloudflare relay, auto-generate broadcast path ([f9c188b](https://github.com/tatolab/streamlib/commit/f9c188bb988df4527ee7432494a72c4c28d74c9a))
+* **moq:** remove url config, hardcode Cloudflare relay, add multi-track example ([0aa893d](https://github.com/tatolab/streamlib/commit/0aa893d64826b70cc2ebbf290766d1483a1e1a18))
+* **moq:** restore IDR gate for mid-stream join, investigating SPS/PPS size mismatch ([dc48080](https://github.com/tatolab/streamlib/commit/dc48080b3eb15c9b72663f40c68beb76ee1f7f80))
+* **moq:** simplify MoqPublishTrack/MoqSubscribeTrack config and rewrite example ([df30a69](https://github.com/tatolab/streamlib/commit/df30a698b56e0721af994f0d94b21c97ad1093df))
+* **moq:** skip P-frames until first IDR and prepend SPS/PPS to keyframes ([2d3950c](https://github.com/tatolab/streamlib/commit/2d3950cf398fe932183b81dae14d066ab24c86cb))
+* **moq:** subscribe resilience, keyframe detection, bitrate tuning ([7df7754](https://github.com/tatolab/streamlib/commit/7df775454578220dff9c1f58bd505e2c564f4df9))
+* **moq:** subscribe retry with exponential backoff, graceful GPU device lost ([c1b9c12](https://github.com/tatolab/streamlib/commit/c1b9c128f2987cb061a16950faca7ffc0dd415dc))
+* **moq:** use processor_id/port_name for MoQ track names to avoid collisions ([807b662](https://github.com/tatolab/streamlib/commit/807b662718436c5a49ac7dbe6edc04a3bee18576))
+* **moq:** use with_consume only for subscriber session ([75d20f6](https://github.com/tatolab/streamlib/commit/75d20f6006076db1b85c8eb8565f9e3a128d5173))
+* **moq:** wait for broadcast announcement before subscribing ([8f511f8](https://github.com/tatolab/streamlib/commit/8f511f84d4a7e5cb2f4ff548d0a5135c180cb0c3))
+* **vulkan:** correct swapchain image layout in DisplayProcessor barrier ([6a52708](https://github.com/tatolab/streamlib/commit/6a52708257ffa33600eab182de1a1c94b4c6e306))
+* **vulkan:** remove gpu-allocator, centralize allocation in VulkanDevice RHI ([777beac](https://github.com/tatolab/streamlib/commit/777beac2b7882f247feaea851a4c973f0d48e1de))
+
 ## [0.4.10](https://github.com/tatolab/streamlib/compare/v0.4.9...v0.4.10) (2026-04-05)
 
 
