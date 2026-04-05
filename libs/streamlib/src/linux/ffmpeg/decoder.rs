@@ -44,10 +44,15 @@ impl FFmpegDecoder {
 
         let mut context = CodecContext::new_with_codec(codec);
 
-        // Set expected dimensions
+        // Configure for live streaming: low delay, no frame reordering
         unsafe {
-            (*context.as_mut_ptr()).width = config.width as i32;
-            (*context.as_mut_ptr()).height = config.height as i32;
+            let ctx = context.as_mut_ptr();
+            (*ctx).width = config.width as i32;
+            (*ctx).height = config.height as i32;
+            (*ctx).flags |= ffmpeg::ffi::AV_CODEC_FLAG_LOW_DELAY as i32;
+            (*ctx).flags2 |= ffmpeg::ffi::AV_CODEC_FLAG2_FAST as i32;
+            // Single-threaded to avoid frame-level threading latency
+            (*ctx).thread_count = 1;
         }
 
         let decoder = context.decoder().video().map_err(|e| {
@@ -118,7 +123,10 @@ impl FFmpegDecoder {
     ) -> Result<Option<Videoframe>> {
         // Create packet from NAL unit data
         let mut packet = ffmpeg::Packet::copy(nal_units_annex_b);
+        // Increment frame_count per packet (not per decoded frame) to ensure
+        // monotonic PTS — duplicate PTS causes FFmpeg to silently drop frames.
         let pts = self.frame_count as i64;
+        self.frame_count += 1;
         packet.set_pts(Some(pts));
         packet.set_dts(Some(pts));
 
@@ -127,20 +135,23 @@ impl FFmpegDecoder {
             StreamError::Configuration(format!("Failed to send packet to decoder: {e}"))
         })?;
 
-        // Try to receive decoded frame
+        // Receive decoded frame — loop until EAGAIN (decoder may output
+        // buffered frames from previous send_packet calls).
         let mut decoded_frame = ffmpeg::frame::Video::empty();
-        match self.decoder.receive_frame(&mut decoded_frame) {
-            Ok(()) => {}
-            Err(ffmpeg::Error::Other {
-                errno: libc::EAGAIN,
-            }) => {
-                // Decoder needs more data before outputting a frame
-                return Ok(None);
-            }
-            Err(e) => {
-                return Err(StreamError::Configuration(format!(
-                    "Failed to receive decoded frame: {e}"
-                )));
+        loop {
+            match self.decoder.receive_frame(&mut decoded_frame) {
+                Ok(()) => break, // got a frame
+                Err(ffmpeg::Error::Other {
+                    errno: libc::EAGAIN,
+                }) => {
+                    // Decoder needs more data before outputting a frame
+                    return Ok(None);
+                }
+                Err(e) => {
+                    return Err(StreamError::Configuration(format!(
+                        "Failed to receive decoded frame: {e}"
+                    )));
+                }
             }
         }
 
@@ -203,8 +214,6 @@ impl FFmpegDecoder {
                 );
             }
         }
-
-        self.frame_count += 1;
 
         Ok(Some(Videoframe {
             width: dec_width,
