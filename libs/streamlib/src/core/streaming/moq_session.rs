@@ -12,6 +12,56 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Accepts any TLS certificate without verification (development only).
+#[derive(Debug)]
+struct NoTlsCertificateVerification(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for NoTlsCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
 
 // ============================================================================
 // MOQ SESSION CONFIGURATION
@@ -53,29 +103,64 @@ impl MoqRelayConfig {
     }
 }
 
-/// Create a WebTransport client based on TLS configuration.
+/// Create a WebTransport client with QUIC keep-alive to prevent relay idle timeouts.
 ///
-/// Uses `web_transport::quinn` (re-exported web-transport-quinn) to ensure
-/// type compatibility with `web_transport::Session`.
+/// Bypasses `ClientBuilder` to configure [`quinn::TransportConfig`] directly,
+/// setting a 4-second keep-alive interval (< Cloudflare's ~10-15s idle timeout).
 fn create_webtransport_client(
     tls_disable_verify: bool,
 ) -> Result<web_transport::quinn::Client> {
-    if tls_disable_verify {
-        web_transport::quinn::ClientBuilder::new()
+    let provider = web_transport::quinn::crypto::default_provider();
+
+    let crypto = if tls_disable_verify {
+        rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|e| {
+                StreamError::Runtime(format!("TLS config failed: {e}"))
+            })?
             .dangerous()
-            .with_no_certificate_verification()
-            .map_err(|e| {
-                StreamError::Runtime(format!(
-                    "MoQ WebTransport client init (insecure) failed: {e}"
-                ))
-            })
+            .with_custom_certificate_verifier(Arc::new(
+                NoTlsCertificateVerification(provider),
+            ))
+            .with_no_client_auth()
     } else {
-        web_transport::quinn::ClientBuilder::new()
-            .with_system_roots()
+        let mut roots = rustls::RootCertStore::empty();
+        let native_certs = rustls_native_certs::load_native_certs();
+        for cert in native_certs.certs {
+            roots.add(cert).map_err(|e| {
+                StreamError::Runtime(format!("Failed to add root cert: {e}"))
+            })?;
+        }
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|e| {
-                StreamError::Runtime(format!("MoQ WebTransport client init failed: {e}"))
-            })
-    }
+                StreamError::Runtime(format!("TLS config failed: {e}"))
+            })?
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    };
+
+    let mut crypto = crypto;
+    crypto.alpn_protocols = vec![b"h3".to_vec()];
+
+    let quic_client_config =
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(|e| {
+            StreamError::Runtime(format!("QUIC client config failed: {e}"))
+        })?;
+
+    let mut client_config = quinn::ClientConfig::new(Arc::new(quic_client_config));
+
+    let mut transport = quinn::TransportConfig::default();
+    transport.keep_alive_interval(Some(Duration::from_secs(4)));
+    client_config.transport_config(Arc::new(transport));
+
+    let endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).map_err(|e| {
+        StreamError::Runtime(format!("QUIC endpoint creation failed: {e}"))
+    })?;
+
+    tracing::info!(keep_alive_secs = 4, "QUIC transport configured with keep-alive");
+
+    Ok(web_transport::quinn::Client::new(endpoint, client_config))
 }
 
 // ============================================================================

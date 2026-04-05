@@ -87,12 +87,12 @@ Original plan proposed moq-lite/moq-native/hang — replaced with moq-transport 
 | Issue | Title | Status |
 |-------|-------|--------|
 | #237 | Schema codegen fix | Done — `read_mode` and `buffer_size` wired from schema YAML into macro-generated `add_port()` calls. Continuous video decode verified working. |
+| #238 | QUIC keep-alive | Done — Bypassed `ClientBuilder` to construct `Client::new()` with custom `TransportConfig`. `keep_alive_interval(4s)` set on Quinn transport, well under Cloudflare's ~10-15s idle timeout. Added `NoTlsCertificateVerification` for dev TLS path. Added `rustls-native-certs` dep. |
 
 ### Critical — Blocks Stable Video Streaming
 
 | Issue | Title | Description |
 |-------|-------|-------------|
-| #238 | QUIC keep-alive | Configure `keep_alive_interval` on Quinn transport to prevent Cloudflare relay idle timeout (~10-15s). Root cause of subscribe disconnects that break video decode. Highest priority — single config change, eliminates the disconnect cycle entirely. |
 | #242 | SPS/DPB ref frame mismatch | `VulkanVideoSession` declares `max_num_ref_frames=1` in SPS but encoder uses 2 DPB slots (ping-pong). FFmpeg discards references, making decoder fragile after any frame loss. Compounds with #238. |
 
 ### High — Performance & Quality
