@@ -566,17 +566,19 @@ impl VulkanVideoDecoder {
         }
 
         // 6. Copy decoded NV12 image to pixel buffer
-        //    Use display height (SPS crop applied) not coded height (MB-aligned).
+        //    Use coded height for intermediate buffers (compute shader dispatches
+        //    in 16-block rows, rounding 1080→1088). Display height only in Videoframe.
         let res = self.resources.as_ref().unwrap();
         let decode_width = res.decode_width;
+        let coded_height = res.decode_height;
         let display_height = self.display_height;
 
         let (_, nv12_buffer) =
-            gpu.acquire_pixel_buffer(decode_width, display_height, PixelFormat::Nv12VideoRange)?;
+            gpu.acquire_pixel_buffer(decode_width, coded_height, PixelFormat::Nv12VideoRange)?;
 
         let dest_vk_buffer = nv12_buffer.buffer_ref().inner.buffer();
 
-        self.record_transfer_commands(dest_vk_buffer, display_height)?;
+        self.record_transfer_commands(dest_vk_buffer, coded_height)?;
         let res = self.resources.as_ref().unwrap();
         let gfx_queue = self.vulkan_device.graphics_queue_secondary().unwrap_or(self.vulkan_device.queue());
         unsafe {
@@ -601,9 +603,9 @@ impl VulkanVideoDecoder {
                 })?;
         }
 
-        // 6b. Convert NV12→BGRA for display output
+        // 6b. Convert NV12→BGRA for display output (coded height for dispatch alignment)
         let (bgra_pool_id, bgra_buffer) =
-            gpu.acquire_pixel_buffer(decode_width, display_height, PixelFormat::Bgra32)?;
+            gpu.acquire_pixel_buffer(decode_width, coded_height, PixelFormat::Bgra32)?;
         let res = self.resources.as_ref().unwrap();
         res.nv12_to_bgra_converter.convert(&nv12_buffer, &bgra_buffer)?;
 
