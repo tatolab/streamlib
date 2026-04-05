@@ -83,7 +83,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
                 height,
                 fps: 30,
                 bitrate_bps: self.config.bitrate_bps.unwrap_or(2_500_000),
-                keyframe_interval_frames: self.config.keyframe_interval.unwrap_or(60),
+                keyframe_interval_frames: self.config.keyframe_interval.unwrap_or(15),
                 codec: VideoCodec::H264(profile),
                 low_latency: true,
             };
