@@ -93,13 +93,13 @@ Original plan proposed moq-lite/moq-native/hang — replaced with moq-transport 
 
 | Issue | Title | Description |
 |-------|-------|-------------|
-| #242 | SPS/DPB ref frame mismatch | `VulkanVideoSession` declares `max_num_ref_frames=1` in SPS but encoder uses 2 DPB slots (ping-pong). FFmpeg discards references, making decoder fragile after any frame loss. Compounds with #238. |
+| #242 | SPS/DPB ref frame mismatch | **Deferred to #207.** Changing `max_num_ref_frames` from 1→2 in SPS shifted FFmpeg's error from `(0+2) exceeds max (1)` to `(0+3) exceeds max (2)` — FFmpeg always sees max+1 refs regardless. Root cause is in the bitstream or FFmpeg's reference counting, not a simple SPS value fix. Need Vulkan decoder for full visibility into what DPB references are actually in the NALUs. |
 
 ### High — Performance & Quality
 
 | Issue | Title | Description |
 |-------|-------|-------------|
-| #207 | Vulkan Video decoder | Replace FFmpeg software decode with GPU hardware decode. Zero-copy pipeline: encode GPU → MoQ → decode GPU → display. |
+| #207 | Vulkan Video decoder | Replace FFmpeg software decode with GPU hardware decode. Zero-copy pipeline: encode GPU → MoQ → decode GPU → display. Also provides visibility to properly fix #242 (SPS/DPB ref frame mismatch). |
 | #239 | IPC heap allocation | Write FramePayload directly to iceoryx2 shared memory instead of stack-allocating. Removes 64KB limit, enables 6-8Mbps+ bitrates. |
 
 ### Low — Stability & Polish
@@ -113,17 +113,18 @@ Original plan proposed moq-lite/moq-native/hang — replaced with moq-transport 
 
 ```
 #237 (Schema codegen) ──→ ✓ Done
+#238 (QUIC keep-alive) ──→ ✓ Done
                               │
-#238 (QUIC keep-alive) ───────┤ ← Immediate next step
+#207 (Vulkan decoder) ────────┤ ← Immediate next step (also provides visibility for #242)
                               │
-#242 (SPS/DPB ref fix) ───────┤ ← Stable video decode
+#242 (SPS/DPB ref fix) ───────┤ ← Research after #207, may not need fix
                               │
-#207 (Vulkan decoder) ────────┤
+#239 (IPC heap alloc) ────────┤
                               ├──→ Broadcast-ready MoQ streaming
-#239 (IPC heap alloc) ────────┘     1080p30 @ 6-8Mbps, zero-copy GPU
+                              │     1080p30 @ 6-8Mbps, zero-copy GPU
 ```
 
-#238 is the immediate next step — eliminates the 10-15s disconnect cycle. #242 makes decode robust after any remaining frame loss. #207 and #239 are independent and can be parallelized after.
+#207 is the immediate next step — replaces FFmpeg software decode with GPU hardware decode, gives full visibility into DPB reference handling (needed to properly assess #242). #239 is independent and can be parallelized.
 
 ---
 

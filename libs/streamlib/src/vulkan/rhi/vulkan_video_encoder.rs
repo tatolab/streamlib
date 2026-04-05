@@ -479,7 +479,7 @@ impl VulkanVideoEncoder {
 
         let res = self.resources.as_ref().unwrap();
         let nv12_source_vk_buffer = if source_is_nv12 {
-            tracing::info!(
+            tracing::debug!(
                 "VulkanVideoEncoder: source is NV12, skipping format conversion ({}x{}, buf={})",
                 input_width, input_height, buf_idx
             );
@@ -490,7 +490,7 @@ impl VulkanVideoEncoder {
             } else {
                 &res.nv12_staging_buffer_b
             };
-            tracing::info!(
+            tracing::debug!(
                 "VulkanVideoEncoder: starting BGRA→NV12 format conversion ({}x{}, buf={})",
                 input_width, input_height, buf_idx
             );
@@ -540,7 +540,7 @@ impl VulkanVideoEncoder {
                 }
             }
 
-            tracing::info!(
+            tracing::debug!(
                 "VulkanVideoEncoder: previous frame {} readback, {} bytes, idr={}",
                 self.frame_count - 1,
                 bitstream_data.len(),
@@ -592,7 +592,7 @@ impl VulkanVideoEncoder {
         // 7. Record and submit transfer on graphics queue.
         //    Wait for transfer fence (cross-queue sync — encode queue needs
         //    the NV12 image copy to be complete before encoding).
-        tracing::info!("VulkanVideoEncoder: recording transfer commands (buf={})", buf_idx);
+        tracing::debug!("VulkanVideoEncoder: recording transfer commands (buf={})", buf_idx);
         self.record_transfer_commands(buf_idx, nv12_source_vk_buffer)?;
         let gfx_queue = self.vulkan_device.queue();
         let res = self.resources.as_ref().unwrap();
@@ -627,7 +627,7 @@ impl VulkanVideoEncoder {
         //    Signal the current buffer set's encode fence but do NOT wait —
         //    the fence is checked at the start of the NEXT encode() call,
         //    allowing this encode to overlap with the next frame's format conversion.
-        tracing::info!("VulkanVideoEncoder: recording encode commands (idr={}, buf={})", is_idr, buf_idx);
+        tracing::debug!("VulkanVideoEncoder: recording encode commands (idr={}, buf={})", is_idr, buf_idx);
         self.record_encode_commands(is_idr, buf_idx)?;
         let res = self.resources.as_ref().unwrap();
         let encode_cmd = if buf_idx == 0 {
@@ -648,7 +648,7 @@ impl VulkanVideoEncoder {
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to submit encode commands: {e}"))
                 })?;
-            tracing::info!("VulkanVideoEncoder: encode submitted (buf={}), not waiting", buf_idx);
+            tracing::debug!("VulkanVideoEncoder: encode submitted (buf={}), not waiting", buf_idx);
         }
 
         // 9. Build the output from the PREVIOUS frame's data (pipelined).

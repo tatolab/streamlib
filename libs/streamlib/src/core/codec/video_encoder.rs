@@ -6,8 +6,7 @@
 use crate::_generated_::{Encodedvideoframe, Videoframe};
 #[cfg(not(any(
     any(target_os = "macos", target_os = "ios"),
-    all(target_os = "linux", feature = "vulkan-video"),
-    all(target_os = "linux", feature = "ffmpeg")
+    target_os = "linux",
 )))]
 use crate::core::StreamError;
 use crate::core::{GpuContext, Result, RuntimeContext};
@@ -16,33 +15,24 @@ use super::VideoEncoderConfig;
 
 /// Platform-agnostic video encoder.
 ///
-/// Uses VideoToolbox on macOS/iOS, Vulkan Video or FFmpeg on Linux.
+/// Uses VideoToolbox on macOS/iOS, Vulkan Video on Linux.
 pub struct VideoEncoder {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub(crate) inner: crate::apple::videotoolbox::VideoToolboxEncoder,
 
-    #[cfg(all(target_os = "linux", feature = "vulkan-video"))]
+    #[cfg(target_os = "linux")]
     pub(crate) inner: crate::vulkan::rhi::VulkanVideoEncoder,
-
-    #[cfg(all(
-        target_os = "linux",
-        feature = "ffmpeg",
-        not(feature = "vulkan-video")
-    ))]
-    pub(crate) inner: crate::linux::ffmpeg::FFmpegEncoder,
 
     // Fallback for platforms without encoder support
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "vulkan-video"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     _marker: std::marker::PhantomData<()>,
 
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "vulkan-video"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     config: VideoEncoderConfig,
 }
@@ -61,7 +51,7 @@ impl VideoEncoder {
     }
 
     /// Create a new video encoder.
-    #[cfg(all(target_os = "linux", feature = "vulkan-video"))]
+    #[cfg(target_os = "linux")]
     pub fn new(
         config: VideoEncoderConfig,
         gpu_context: Option<GpuContext>,
@@ -72,26 +62,10 @@ impl VideoEncoder {
         Ok(Self { inner })
     }
 
-    /// Create a new video encoder.
-    #[cfg(all(
-        target_os = "linux",
-        feature = "ffmpeg",
-        not(feature = "vulkan-video")
-    ))]
-    pub fn new(
-        config: VideoEncoderConfig,
-        gpu_context: Option<GpuContext>,
-        ctx: &RuntimeContext,
-    ) -> Result<Self> {
-        let inner = crate::linux::ffmpeg::FFmpegEncoder::new(config, gpu_context, ctx)?;
-        Ok(Self { inner })
-    }
-
     /// Create a new video encoder (unsupported platform).
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "vulkan-video"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     pub fn new(
         config: VideoEncoderConfig,
@@ -111,17 +85,7 @@ impl VideoEncoder {
     }
 
     /// Encode a video frame.
-    #[cfg(all(target_os = "linux", feature = "vulkan-video"))]
-    pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<Encodedvideoframe> {
-        self.inner.encode(frame, gpu)
-    }
-
-    /// Encode a video frame.
-    #[cfg(all(
-        target_os = "linux",
-        feature = "ffmpeg",
-        not(feature = "vulkan-video")
-    ))]
+    #[cfg(target_os = "linux")]
     pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<Encodedvideoframe> {
         self.inner.encode(frame, gpu)
     }
@@ -129,8 +93,7 @@ impl VideoEncoder {
     /// Encode a video frame (unsupported platform).
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "vulkan-video"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     pub fn encode(&mut self, _frame: &Videoframe, _gpu: &GpuContext) -> Result<Encodedvideoframe> {
         Err(StreamError::Configuration(
@@ -145,17 +108,7 @@ impl VideoEncoder {
     }
 
     /// Set the target bitrate.
-    #[cfg(all(target_os = "linux", feature = "vulkan-video"))]
-    pub fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()> {
-        self.inner.set_bitrate(bitrate_bps)
-    }
-
-    /// Set the target bitrate.
-    #[cfg(all(
-        target_os = "linux",
-        feature = "ffmpeg",
-        not(feature = "vulkan-video")
-    ))]
+    #[cfg(target_os = "linux")]
     pub fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()> {
         self.inner.set_bitrate(bitrate_bps)
     }
@@ -163,8 +116,7 @@ impl VideoEncoder {
     /// Set the target bitrate (unsupported platform).
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "vulkan-video"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     pub fn set_bitrate(&mut self, _bitrate_bps: u32) -> Result<()> {
         Err(StreamError::Configuration(
@@ -179,17 +131,7 @@ impl VideoEncoder {
     }
 
     /// Force the next frame to be a keyframe.
-    #[cfg(all(target_os = "linux", feature = "vulkan-video"))]
-    pub fn force_keyframe(&mut self) {
-        self.inner.force_keyframe();
-    }
-
-    /// Force the next frame to be a keyframe.
-    #[cfg(all(
-        target_os = "linux",
-        feature = "ffmpeg",
-        not(feature = "vulkan-video")
-    ))]
+    #[cfg(target_os = "linux")]
     pub fn force_keyframe(&mut self) {
         self.inner.force_keyframe();
     }
@@ -197,8 +139,7 @@ impl VideoEncoder {
     /// Force the next frame to be a keyframe (unsupported platform).
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "vulkan-video"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     pub fn force_keyframe(&mut self) {
         // No-op on unsupported platforms
@@ -211,17 +152,7 @@ impl VideoEncoder {
     }
 
     /// Get the encoder configuration.
-    #[cfg(all(target_os = "linux", feature = "vulkan-video"))]
-    pub fn config(&self) -> &VideoEncoderConfig {
-        self.inner.config()
-    }
-
-    /// Get the encoder configuration.
-    #[cfg(all(
-        target_os = "linux",
-        feature = "ffmpeg",
-        not(feature = "vulkan-video")
-    ))]
+    #[cfg(target_os = "linux")]
     pub fn config(&self) -> &VideoEncoderConfig {
         self.inner.config()
     }
@@ -229,8 +160,7 @@ impl VideoEncoder {
     /// Get the encoder configuration (unsupported platform).
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "vulkan-video"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     pub fn config(&self) -> &VideoEncoderConfig {
         &self.config
@@ -241,12 +171,5 @@ impl VideoEncoder {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe impl Send for VideoEncoder {}
 
-#[cfg(all(target_os = "linux", feature = "vulkan-video"))]
-unsafe impl Send for VideoEncoder {}
-
-#[cfg(all(
-    target_os = "linux",
-    feature = "ffmpeg",
-    not(feature = "vulkan-video")
-))]
+#[cfg(target_os = "linux")]
 unsafe impl Send for VideoEncoder {}

@@ -39,7 +39,17 @@ mod vulkan_video_session;
 #[cfg(target_os = "linux")]
 pub use vulkan_video_session::VulkanVideoSession;
 
-#[cfg(all(target_os = "linux", feature = "vulkan-video"))]
+#[cfg(target_os = "linux")]
 mod vulkan_video_encoder;
-#[cfg(all(target_os = "linux", feature = "vulkan-video"))]
+#[cfg(target_os = "linux")]
 pub use vulkan_video_encoder::VulkanVideoEncoder;
+
+#[cfg(target_os = "linux")]
+mod vulkan_video_decode_session;
+#[cfg(target_os = "linux")]
+pub use vulkan_video_decode_session::VulkanVideoDecodeSession;
+
+#[cfg(target_os = "linux")]
+mod vulkan_video_decoder;
+#[cfg(target_os = "linux")]
+pub use vulkan_video_decoder::VulkanVideoDecoder;

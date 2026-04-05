@@ -4,7 +4,7 @@
 // H.264 Decoder Processor
 //
 // Decodes EncodedVideoFrame (H.264 NAL units) to VideoFrame using
-// platform-specific decoders (FFmpeg on Linux, VideoToolbox on macOS).
+// platform-specific decoders (Vulkan Video on Linux, VideoToolbox on macOS).
 // Handles SPS/PPS parameter set extraction and decoder initialization.
 
 use crate::_generated_::Encodedvideoframe;
@@ -62,12 +62,24 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
         }
         let encoded: Encodedvideoframe = self.inputs.read("encoded_video_in")?;
 
+        // Log NAL types present in this packet
+        let nal_types = scan_nal_types(&encoded.data);
+        if !nal_types.is_empty() {
+            tracing::info!(
+                "[H264Decoder] Received {} bytes, NAL types: {:?}",
+                encoded.data.len(),
+                nal_types
+            );
+        }
+
         // Scan NAL units in the encoded data for SPS/PPS
         let (sps, pps) = extract_h264_parameter_sets(&encoded.data);
         if let Some(s) = sps {
+            tracing::info!("[H264Decoder] SPS extracted ({} bytes)", s.len());
             self.sps_nal = Some(s);
         }
         if let Some(p) = pps {
+            tracing::info!("[H264Decoder] PPS extracted ({} bytes)", p.len());
             self.pps_nal = Some(p);
         }
 
@@ -129,7 +141,12 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
 // H.264 NAL PARSING
 // ============================================================================
 
-/// Extract SPS (NAL type 7) and PPS (NAL type 8) from Annex B formatted data.
+/// Extract SPS (NAL type 7) and PPS (NAL type 8) RBSP payloads from Annex B data.
+///
+/// Returns the raw byte sequence payload (RBSP) with the NAL header byte stripped.
+/// The Annex B structure is: [start_code][nal_header_byte][rbsp_payload...]
+/// The NAL header byte encodes forbidden_zero_bit, nal_ref_idc, and nal_unit_type.
+/// Downstream consumers (VulkanVideoDecodeSession, VideoToolbox) expect RBSP only.
 fn extract_h264_parameter_sets(data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
     let mut sps = None;
     let mut pps = None;
@@ -155,16 +172,18 @@ fn extract_h264_parameter_sets(data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
             continue;
         }
 
-        let nal_start = i + start_code_len;
-        if nal_start >= data.len() {
+        let nal_header_pos = i + start_code_len;
+        if nal_header_pos >= data.len() {
             break;
         }
 
-        let nal_type = data[nal_start] & 0x1F;
+        let nal_type = data[nal_header_pos] & 0x1F;
+        // RBSP starts after the NAL header byte
+        let rbsp_start = nal_header_pos + 1;
 
         // Find NAL end (next start code or end of data)
         let mut nal_end = data.len();
-        let mut j = nal_start + 1;
+        let mut j = rbsp_start;
         while j < data.len().saturating_sub(2) {
             if data[j] == 0
                 && data[j + 1] == 0
@@ -179,10 +198,14 @@ fn extract_h264_parameter_sets(data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
 
         match nal_type {
             7 => {
-                sps = Some(Bytes::copy_from_slice(&data[nal_start..nal_end]));
+                if rbsp_start < nal_end {
+                    sps = Some(Bytes::copy_from_slice(&data[rbsp_start..nal_end]));
+                }
             }
             8 => {
-                pps = Some(Bytes::copy_from_slice(&data[nal_start..nal_end]));
+                if rbsp_start < nal_end {
+                    pps = Some(Bytes::copy_from_slice(&data[rbsp_start..nal_end]));
+                }
             }
             _ => {}
         }
@@ -191,4 +214,53 @@ fn extract_h264_parameter_sets(data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
     }
 
     (sps, pps)
+}
+
+/// Scan NAL unit types present in Annex B data for logging.
+fn scan_nal_types(data: &[u8]) -> Vec<&'static str> {
+    let mut types = Vec::new();
+    let mut i = 0;
+
+    while i < data.len().saturating_sub(3) {
+        let (start_code_len, found) = if i + 3 < data.len()
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1
+        {
+            (4, true)
+        } else if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            (3, true)
+        } else {
+            (0, false)
+        };
+
+        if !found {
+            i += 1;
+            continue;
+        }
+
+        let nal_start = i + start_code_len;
+        if nal_start >= data.len() {
+            break;
+        }
+
+        let nal_type = data[nal_start] & 0x1F;
+        types.push(match nal_type {
+            1 => "non-IDR(1)",
+            2 => "partA(2)",
+            3 => "partB(3)",
+            4 => "partC(4)",
+            5 => "IDR(5)",
+            6 => "SEI(6)",
+            7 => "SPS(7)",
+            8 => "PPS(8)",
+            9 => "AUD(9)",
+            _ => "other",
+        });
+
+        i = nal_start + 1;
+    }
+
+    types
 }

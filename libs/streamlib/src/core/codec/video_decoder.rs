@@ -5,7 +5,7 @@
 //!
 //! Delegates to platform-specific implementations:
 //! - macOS/iOS: VideoToolbox (hardware accelerated)
-//! - Linux: FFmpeg (software or VAAPI/NVDEC)
+//! - Linux: Vulkan Video (GPU hardware decode via VK_KHR_video_decode_h264)
 
 use super::VideoDecoderConfig;
 use crate::_generated_::Videoframe;
@@ -14,19 +14,17 @@ use crate::core::{GpuContext, Result, RuntimeContext};
 /// Platform-agnostic video decoder.
 ///
 /// Wraps platform-specific decoders behind a unified API.
-/// Use [`VideoDecoder::new`] to create an instance, then call
-/// [`VideoDecoder::update_format`] with SPS/PPS before decoding.
 pub struct VideoDecoder {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub(crate) inner: crate::apple::videotoolbox::VideoToolboxDecoder,
 
-    #[cfg(all(target_os = "linux", feature = "ffmpeg"))]
-    pub(crate) inner: crate::linux::ffmpeg::FFmpegDecoder,
+    #[cfg(target_os = "linux")]
+    pub(crate) inner: crate::vulkan::rhi::VulkanVideoDecoder,
 
     // Fallback for unsupported platforms
     #[cfg(not(any(
         any(target_os = "macos", target_os = "ios"),
-        all(target_os = "linux", feature = "ffmpeg")
+        target_os = "linux",
     )))]
     _marker: std::marker::PhantomData<VideoDecoderConfig>,
 }
@@ -36,21 +34,16 @@ pub struct VideoDecoder {
 impl VideoDecoder {
     /// Create a new video decoder.
     pub fn new(config: VideoDecoderConfig, ctx: &RuntimeContext) -> Result<Self> {
-        // VideoToolboxDecoder uses core VideoDecoderConfig
         let inner = crate::apple::videotoolbox::VideoToolboxDecoder::new(config, ctx)?;
         Ok(Self { inner })
     }
 
     /// Update decoder format with SPS/PPS parameter sets.
-    ///
-    /// Must be called before [`VideoDecoder::decode`] when receiving H.264 stream.
     pub fn update_format(&mut self, sps: &[u8], pps: &[u8]) -> Result<()> {
         self.inner.update_format(sps, pps)
     }
 
     /// Decode H.264 NAL units to a video frame.
-    ///
-    /// Returns `Ok(Some(frame))` when a frame is decoded, `Ok(None)` when buffering.
     pub fn decode(
         &mut self,
         nal_units_annex_b: &[u8],
@@ -61,12 +54,16 @@ impl VideoDecoder {
     }
 }
 
-// Linux implementation using FFmpeg
-#[cfg(all(target_os = "linux", feature = "ffmpeg"))]
+// Linux implementation using Vulkan Video
+#[cfg(target_os = "linux")]
 impl VideoDecoder {
     /// Create a new video decoder.
     pub fn new(config: VideoDecoderConfig, ctx: &RuntimeContext) -> Result<Self> {
-        let inner = crate::linux::ffmpeg::FFmpegDecoder::new(config, ctx)?;
+        let inner = crate::vulkan::rhi::VulkanVideoDecoder::new(
+            config,
+            Some(ctx.gpu.clone()),
+            ctx,
+        )?;
         Ok(Self { inner })
     }
 
@@ -89,7 +86,7 @@ impl VideoDecoder {
 // Fallback for unsupported platforms
 #[cfg(not(any(
     any(target_os = "macos", target_os = "ios"),
-    all(target_os = "linux", feature = "ffmpeg")
+    target_os = "linux",
 )))]
 impl VideoDecoder {
     /// Create a new video decoder (unsupported platform).
@@ -123,5 +120,5 @@ impl VideoDecoder {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe impl Send for VideoDecoder {}
 
-#[cfg(all(target_os = "linux", feature = "ffmpeg"))]
+#[cfg(target_os = "linux")]
 unsafe impl Send for VideoDecoder {}

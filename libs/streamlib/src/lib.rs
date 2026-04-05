@@ -128,7 +128,7 @@ pub(crate) mod metal;
 ))]
 pub(crate) mod vulkan;
 
-// Linux platform services (FFmpeg-based encoding)
+// Linux platform services
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 
