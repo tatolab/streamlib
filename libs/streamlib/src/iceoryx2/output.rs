@@ -97,18 +97,6 @@ impl OutputWriter {
                 .send()
                 .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
 
-            // Diagnostic: log video publishes specifically
-            if dest_port == "video" {
-                use std::sync::atomic::{AtomicU64, Ordering as AtOrd};
-                static VIDEO_PUB_COUNT: AtomicU64 = AtomicU64::new(0);
-                let c = VIDEO_PUB_COUNT.fetch_add(1, AtOrd::Relaxed);
-                if c < 3 || c % 100 == 0 {
-                    tracing::info!(
-                        port, dest_port, data_len = data.len(),
-                        "[OutputWriter] Video published #{c}"
-                    );
-                }
-            }
         }
 
         Ok(())
