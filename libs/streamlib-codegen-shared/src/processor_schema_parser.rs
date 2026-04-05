@@ -301,4 +301,61 @@ version: 1.0.0
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(schema.rust_struct_name(), "BlurFilter");
     }
+
+    #[test]
+    fn test_input_port_read_mode_and_buffer_size() {
+        let yaml = r#"
+name: com.example.decoder
+version: 1.0.0
+
+inputs:
+  - name: encoded_video_in
+    schema: com.tatolab.encodedvideoframe@1.0.0
+    read_mode: read_next_in_order
+    buffer_size: 16
+"#;
+
+        let schema = parse_processor_yaml(yaml).unwrap();
+        assert_eq!(schema.inputs.len(), 1);
+        assert_eq!(
+            schema.inputs[0].read_mode,
+            Some("read_next_in_order".to_string())
+        );
+        assert_eq!(schema.inputs[0].buffer_size, Some(16));
+    }
+
+    #[test]
+    fn test_input_port_defaults_without_read_mode_and_buffer_size() {
+        let yaml = r#"
+name: com.example.passthrough
+version: 1.0.0
+
+inputs:
+  - name: video
+    schema: com.streamlib.video.frame@1.0.0
+"#;
+
+        let schema = parse_processor_yaml(yaml).unwrap();
+        assert_eq!(schema.inputs.len(), 1);
+        assert_eq!(schema.inputs[0].read_mode, None);
+        assert_eq!(schema.inputs[0].buffer_size, None);
+    }
+
+    #[test]
+    fn test_input_port_buffer_size_zero_rejected() {
+        let yaml = r#"
+name: com.example.test
+version: 1.0.0
+
+inputs:
+  - name: video
+    schema: com.streamlib.video.frame@1.0.0
+    buffer_size: 0
+"#;
+
+        let result = parse_processor_yaml(yaml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("buffer_size cannot be 0"));
+    }
 }

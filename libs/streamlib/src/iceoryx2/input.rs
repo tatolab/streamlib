@@ -84,6 +84,12 @@ impl InputMailboxes {
 
     /// Add a mailbox for the given port with the specified buffer size and read mode.
     pub fn add_port(&mut self, port: &str, buffer_size: usize, read_mode: ReadMode) {
+        tracing::debug!(
+            port = port,
+            buffer_size = buffer_size,
+            read_mode = ?read_mode,
+            "InputMailboxes: add_port"
+        );
         self.ports.insert(
             port.to_string(),
             PortConfig {
