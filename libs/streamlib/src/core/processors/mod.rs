@@ -55,9 +55,21 @@ pub mod buffer_rechunker;
 pub mod clap_effect;
 pub mod simple_passthrough;
 
+// Codecs
+pub mod h264_encoder;
+pub mod h264_decoder;
+pub mod opus_encoder;
+pub mod opus_decoder;
+
 // WebRTC Streaming
 pub mod webrtc_whep;
 pub mod webrtc_whip;
+
+// MoQ Streaming
+#[cfg(feature = "moq")]
+pub mod moq_publish_track;
+#[cfg(feature = "moq")]
+pub mod moq_subscribe_track;
 
 // TODO: Migrate to iceoryx2 API
 // pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
@@ -77,5 +89,13 @@ pub use buffer_rechunker::BufferRechunkerProcessor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
+pub use h264_encoder::H264EncoderProcessor;
+pub use h264_decoder::H264DecoderProcessor;
+pub use opus_encoder::OpusEncoderProcessor;
+pub use opus_decoder::OpusDecoderProcessor;
 pub use webrtc_whep::WebRtcWhepProcessor;
 pub use webrtc_whip::WebRtcWhipProcessor;
+#[cfg(feature = "moq")]
+pub use moq_publish_track::MoqPublishTrackProcessor;
+#[cfg(feature = "moq")]
+pub use moq_subscribe_track::MoqSubscribeTrackProcessor;

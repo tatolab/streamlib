@@ -5,6 +5,12 @@
 
 pub mod com_streamlib_api_server_config;
 pub mod com_streamlib_clap_effect_config;
+pub mod com_streamlib_h264_decoder_config;
+pub mod com_streamlib_h264_encoder_config;
+pub mod com_streamlib_moq_publish_track_config;
+pub mod com_streamlib_moq_subscribe_track_config;
+pub mod com_streamlib_opus_decoder_config;
+pub mod com_streamlib_opus_encoder_config;
 pub mod com_streamlib_webrtc_whep_config;
 pub mod com_streamlib_webrtc_whip_config;
 pub mod com_tatolab_audio_capture_config;
@@ -26,6 +32,12 @@ pub mod com_tatolab_videoframe;
 
 pub use com_streamlib_api_server_config::ApiServerConfig;
 pub use com_streamlib_clap_effect_config::EffectConfig;
+pub use com_streamlib_h264_decoder_config::H264DecoderConfig;
+pub use com_streamlib_h264_encoder_config::H264EncoderConfig;
+pub use com_streamlib_moq_publish_track_config::MoqPublishTrackConfig;
+pub use com_streamlib_moq_subscribe_track_config::MoqSubscribeTrackConfig;
+pub use com_streamlib_opus_decoder_config::OpusDecoderConfig;
+pub use com_streamlib_opus_encoder_config::OpusEncoderConfig;
 pub use com_streamlib_webrtc_whep_config::WebrtcWhepConfig;
 pub use com_streamlib_webrtc_whip_config::WebrtcWhipConfig;
 pub use com_tatolab_audio_capture_config::AudioCaptureConfig;

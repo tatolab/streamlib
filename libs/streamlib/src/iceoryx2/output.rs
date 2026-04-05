@@ -96,6 +96,7 @@ impl OutputWriter {
             sample
                 .send()
                 .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
+
         }
 
         Ok(())

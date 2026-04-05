@@ -226,16 +226,16 @@ processors:
       name: config
       schema: com.streamlib.webrtc_whep.config@1.0.0
     outputs:
-      - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
-        description: Output video frames (decoded H.264)
-      - name: audio_out
-        schema: com.tatolab.audioframe@1.0.0
-        description: Output audio frames (decoded Opus, stereo)
+      - name: encoded_video_out
+        schema: com.tatolab.encodedvideoframe@1.0.0
+        description: H.264 encoded video frames from WHEP stream
+      - name: encoded_audio_out
+        schema: com.tatolab.encodedaudioframe@1.0.0
+        description: Opus encoded audio frames from WHEP stream
 
   - name: com.streamlib.webrtc_whip
     version: 1.0.0
-    description: "Streams video and audio via WebRTC WHIP"
+    description: "Streams pre-encoded video and audio via WebRTC WHIP"
     execution: reactive
     runtime:
       language: rust
@@ -243,12 +243,116 @@ processors:
       name: config
       schema: com.streamlib.webrtc_whip.config@1.0.0
     inputs:
+      - name: encoded_video_in
+        schema: com.tatolab.encodedvideoframe@1.0.0
+        description: H.264 encoded video frames to stream
+      - name: encoded_audio_in
+        schema: com.tatolab.encodedaudioframe@1.0.0
+        description: Opus encoded audio frames to stream
+
+  # === Codecs ===
+
+  - name: com.streamlib.h264_encoder
+    version: 1.0.0
+    description: "Encodes VideoFrame to EncodedVideoFrame (H.264)"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.h264_encoder.config@1.0.0
+    inputs:
       - name: video_in
         schema: com.tatolab.videoframe@1.0.0
-        description: Input video frames to encode and stream
+        description: Raw video frames to encode
+    outputs:
+      - name: encoded_video_out
+        schema: com.tatolab.encodedvideoframe@1.0.0
+        description: H.264 encoded video frames
+
+  - name: com.streamlib.h264_decoder
+    version: 1.0.0
+    description: "Decodes EncodedVideoFrame (H.264) to VideoFrame"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.h264_decoder.config@1.0.0
+    inputs:
+      - name: encoded_video_in
+        schema: com.tatolab.encodedvideoframe@1.0.0
+        description: H.264 encoded video frames to decode
+    outputs:
+      - name: video_out
+        schema: com.tatolab.videoframe@1.0.0
+        description: Decoded video frames
+
+  - name: com.streamlib.opus_encoder
+    version: 1.0.0
+    description: "Encodes AudioFrame to EncodedAudioFrame (Opus)"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.opus_encoder.config@1.0.0
+    inputs:
       - name: audio_in
         schema: com.tatolab.audioframe@1.0.0
-        description: Input audio frames to encode and stream
+        description: Raw audio frames to encode
+    outputs:
+      - name: encoded_audio_out
+        schema: com.tatolab.encodedaudioframe@1.0.0
+        description: Opus encoded audio frames
+
+  - name: com.streamlib.opus_decoder
+    version: 1.0.0
+    description: "Decodes EncodedAudioFrame (Opus) to AudioFrame"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.opus_decoder.config@1.0.0
+    inputs:
+      - name: encoded_audio_in
+        schema: com.tatolab.encodedaudioframe@1.0.0
+        description: Opus encoded audio frames to decode
+    outputs:
+      - name: audio_out
+        schema: com.tatolab.audioframe@1.0.0
+        description: Decoded audio frames
+
+  # === MoQ Streaming ===
+
+  - name: com.streamlib.moq_publish_track
+    version: 1.0.0
+    description: "Publishes raw bytes from a single graph input to a named MoQ track"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.moq_publish_track.config@1.0.0
+    inputs:
+      - name: data_in
+        schema: any
+        description: Input data to publish to MoQ track (any serialized type)
+
+  - name: com.streamlib.moq_subscribe_track
+    version: 1.0.0
+    description: "Subscribes to a named MoQ track and outputs raw bytes to the graph"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.moq_subscribe_track.config@1.0.0
+    outputs:
+      - name: data_out
+        schema: any
+        description: Received data from MoQ track subscription (any serialized type)
 
   # === Test mock processors ===
 

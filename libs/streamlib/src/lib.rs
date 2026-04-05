@@ -102,10 +102,6 @@ pub use core::{
     TextureUsages,
     TimeContext,
     VideoCodec,
-    VideoDecoder,
-    VideoDecoderConfig,
-    VideoEncoder,
-    VideoEncoderConfig,
     // TODO: Migrate to iceoryx2 API
     // WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
@@ -115,10 +111,7 @@ pub use core::{
 
 pub use core::ApiServerProcessor;
 
-pub use core::{
-    convert_audio_to_sample, convert_video_to_samples, AudioEncoderConfig, AudioEncoderOpus,
-    OpusEncoder,
-};
+pub use core::{convert_audio_to_sample, convert_video_to_samples};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
@@ -171,6 +164,22 @@ pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, Whi
 
 // WebRTC WHIP/WHEP processors (cross-platform)
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
+
+// Codec processors (cross-platform)
+pub use core::processors::{
+    H264EncoderProcessor, H264DecoderProcessor,
+    OpusEncoderProcessor, OpusDecoderProcessor,
+};
+pub use _generated_::{
+    H264EncoderConfig, H264DecoderConfig,
+    OpusEncoderConfig, OpusDecoderConfig,
+};
+
+// MoQ streaming (cross-platform)
+#[cfg(feature = "moq")]
+pub use core::processors::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
+#[cfg(feature = "moq")]
+pub use _generated_::{MoqPublishTrackConfig, MoqSubscribeTrackConfig};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{

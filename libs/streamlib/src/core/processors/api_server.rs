@@ -286,9 +286,14 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
             .on_request(DefaultOnRequest::new().level(Level::INFO))
             .on_response(DefaultOnResponse::new().level(Level::INFO));
 
-        let app = router
+        let router = router
             .route("/ws/events", get(websocket_handler))
-            .route("/api/openapi.json", get(get_openapi_spec))
+            .route("/api/openapi.json", get(get_openapi_spec));
+
+        #[cfg(feature = "moq")]
+        let router = router.route("/api/moq/catalog", get(get_moq_catalog));
+
+        let app = router
             .layer(trace_layer)
             .with_state(state);
 
@@ -634,6 +639,17 @@ async fn get_schema_definition(
 
 async fn get_openapi_spec(State(state): State<AppState>) -> Json<utoipa::openapi::OpenApi> {
     Json(state.openapi)
+}
+
+/// Returns the MoQ broadcast catalog with active published tracks.
+#[cfg(feature = "moq")]
+async fn get_moq_catalog(State(state): State<AppState>) -> Json<crate::core::streaming::MoqBroadcastCatalog> {
+    let sessions = state.runtime_ctx.moq_sessions();
+    let mut catalog = crate::core::streaming::MoqBroadcastCatalog::new();
+    for track_name in sessions.published_track_names() {
+        catalog.add_track(&track_name, "", "", &track_name);
+    }
+    Json(catalog)
 }
 
 // ============================================================================

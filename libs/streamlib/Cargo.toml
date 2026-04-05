@@ -17,11 +17,13 @@ crate-type = ["rlib"]
 default = []
 # GPU backend selection (feature overrides default platform backend)
 backend-metal = []
-backend-vulkan = ["dep:ash", "dep:gpu-allocator"]
+backend-vulkan = ["dep:ash"]
 # FFmpeg-based encoding/decoding (Linux)
 ffmpeg = ["dep:ffmpeg-next"]
 # Vulkan Video hardware encoding (requires GPU with VK_KHR_video_encode_h264)
 vulkan-video = ["backend-vulkan"]
+# MoQ (Media over QUIC) transport layer for network-transparent IPC
+moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
@@ -74,8 +76,7 @@ clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["cla
 rubato = "0.16"
 
 # Vulkan backend (optional, enabled via backend-vulkan feature)
-ash = { version = "0.38", default-features = false, features = ["std", "loaded"], optional = true }
-gpu-allocator = { version = "0.28", optional = true, default-features = false, features = ["vulkan", "std"] }
+ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"], optional = true }
 
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
@@ -85,6 +86,12 @@ webrtc = "0.14.0"  # Full-featured WebRTC implementation
 bytes = "1.5"      # Zero-copy byte buffers for RTP samples
 fastrand = "2.0"   # Fast PRNG for RTP timestamp base
 local-ip-address = "0.6"  # Network interface enumeration for ICE candidates
+
+# MoQ (Media over QUIC) transport layer (optional, enabled via moq feature)
+moq-transport = { workspace = true, optional = true }
+web-transport = { workspace = true, optional = true }
+quinn = { workspace = true, optional = true }
+url = { version = "2", optional = true }
 
 # HTTP client for WHIP signaling (reuses existing hyper from workspace)
 hyper = { workspace = true }  # HTTP client core
@@ -135,8 +142,7 @@ streamlib-broker = { path = "../streamlib-broker" }  # Broker proto types for gR
 streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified telemetry pipeline
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ash = { version = "0.38", default-features = false, features = ["std", "loaded"] }
-gpu-allocator = { version = "0.28", default-features = false, features = ["vulkan", "std"] }
+ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"] }
 libc.workspace = true
 ffmpeg-next = { version = "7.0", optional = true }
 v4l = "0.14"  # V4L2 camera capture (Video for Linux 2)
@@ -195,6 +201,12 @@ schemas = [
     "schemas/com.tatolab.mp4_writer.config@1.0.0.yaml",
     "schemas/com.tatolab.screen_capture.config@1.0.0.yaml",
     "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
+    "schemas/com.streamlib.h264_encoder.config@1.0.0.yaml",
+    "schemas/com.streamlib.h264_decoder.config@1.0.0.yaml",
+    "schemas/com.streamlib.opus_encoder.config@1.0.0.yaml",
+    "schemas/com.streamlib.opus_decoder.config@1.0.0.yaml",
+    "schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml",
+    "schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml",
 ]
 
 # Processor schemas (co-located with Rust source)

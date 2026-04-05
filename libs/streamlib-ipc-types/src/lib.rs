@@ -5,7 +5,7 @@
 
 use iceoryx2::prelude::*;
 
-pub const MAX_PAYLOAD_SIZE: usize = 32768;
+pub const MAX_PAYLOAD_SIZE: usize = 65536;
 pub const MAX_SCHEMA_NAME_SIZE: usize = 128;
 pub const MAX_PORT_KEY_SIZE: usize = 64;
 pub const MAX_EVENT_PAYLOAD_SIZE: usize = 8192;

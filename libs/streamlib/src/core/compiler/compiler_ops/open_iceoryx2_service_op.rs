@@ -292,10 +292,13 @@ fn open_iceoryx2_pubsub(
     {
         let mut dest_guard = dest_processor.lock();
         if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
-            // Always add the port mapping
-            // Default history of 1 - keeps only the most recent payload
-            // Default read mode is SkipToLatest (optimal for video)
-            input_mailboxes.add_port(dest_port, 1, Default::default());
+            // Only add the port if the macro-generated code didn't already
+            // configure it. The macro reads schema metadata (read_mode,
+            // buffer_size) and sets the correct values per port type.
+            // Overwriting here would discard the schema-driven settings.
+            if !input_mailboxes.has_port(dest_port) {
+                input_mailboxes.add_port(dest_port, 1, Default::default());
+            }
 
             // Only set subscriber if this is the first connection to this destination
             // All subsequent connections reuse the same subscriber
@@ -532,7 +535,9 @@ fn open_iceoryx2_subprocess_to_rust(
     {
         let mut dest_guard = dest_processor.lock();
         if let Some(input_mailboxes) = dest_guard.get_iceoryx2_input_mailboxes() {
-            input_mailboxes.add_port(dest_port, 1, Default::default());
+            if !input_mailboxes.has_port(dest_port) {
+                input_mailboxes.add_port(dest_port, 1, Default::default());
+            }
 
             if !input_mailboxes.has_subscriber() {
                 let subscriber = service.create_subscriber()?;

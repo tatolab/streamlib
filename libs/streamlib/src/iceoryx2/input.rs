@@ -77,6 +77,11 @@ impl InputMailboxes {
         }
     }
 
+    /// Check if a port has already been configured.
+    pub fn has_port(&self, port: &str) -> bool {
+        self.ports.contains_key(port)
+    }
+
     /// Add a mailbox for the given port with the specified buffer size and read mode.
     pub fn add_port(&mut self, port: &str, buffer_size: usize, read_mode: ReadMode) {
         self.ports.insert(
@@ -111,10 +116,22 @@ impl InputMailboxes {
             return;
         };
 
-        // Receive and route payloads directly (no collection needed with thread-safe mailboxes)
-        while let Ok(Some(sample)) = subscriber.receive() {
-            let payload = *sample.payload();
-            self.route(payload);
+        // Receive and route payloads directly
+        loop {
+            match subscriber.receive() {
+                Ok(Some(sample)) => {
+                    let payload = *sample.payload();
+                    let routed = self.route(payload);
+                    if !routed {
+                        tracing::warn!("InputMailboxes: received sample but no matching port");
+                    }
+                }
+                Ok(None) => break, // no more samples
+                Err(e) => {
+                    tracing::error!("InputMailboxes: subscriber.receive() FAILED: {:?}", e);
+                    break;
+                }
+            }
         }
     }
 

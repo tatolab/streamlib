@@ -536,7 +536,7 @@ mod tests {
     use std::sync::Arc;
 
     fn make_pixel_buffer(
-        device: &VulkanDevice,
+        device: &Arc<VulkanDevice>,
         width: u32,
         height: u32,
         format: PixelFormat,
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn test_bgra_to_nv12_roundtrip() {
         let device = match VulkanDevice::new() {
-            Ok(d) => d,
+            Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping test - Vulkan not available");
                 return;
