@@ -90,6 +90,9 @@ pub struct MoqPublishSession {
     _config: MoqRelayConfig,
     tracks_writer: moq_transport::serve::TracksWriter,
     track_subgroup_writers: HashMap<String, moq_transport::serve::SubgroupsWriter>,
+    /// Active SubgroupWriter per track — reused across frames within a GOP.
+    /// A new subgroup is created on keyframe; P-frames reuse the existing one.
+    active_subgroup_writers: HashMap<String, moq_transport::serve::SubgroupWriter>,
     /// Keeps the TracksRequest alive so announce can fulfill dynamic subscriptions.
     _tracks_request: moq_transport::serve::TracksRequest,
     /// Keeps the MoQ session event loop alive.
@@ -163,6 +166,7 @@ impl MoqPublishSession {
             _config: config,
             tracks_writer,
             track_subgroup_writers: HashMap::new(),
+            active_subgroup_writers: HashMap::new(),
             _tracks_request: tracks_request,
             _session_task: session_task,
             _announce_task: announce_task,
@@ -173,9 +177,9 @@ impl MoqPublishSession {
     ///
     /// - `track_name`: MoQ track name (typically the schema_name from FramePayload).
     /// - `payload`: Raw bytes to publish.
-    /// - `is_keyframe`: If true, starts a new group (MoQ Group = GOP boundary).
-    ///   In moq-transport, each `append()` starts a new group regardless, but
-    ///   the keyframe flag is retained for semantic clarity.
+    /// - `is_keyframe`: If true, starts a new subgroup (MoQ Group = GOP boundary).
+    ///   P-frames reuse the active subgroup so all frames in a GOP share one
+    ///   subgroup, preventing the subscriber from missing frames.
     pub fn publish_frame(
         &mut self,
         track_name: &str,
@@ -184,6 +188,10 @@ impl MoqPublishSession {
     ) -> Result<()> {
         let subgroups_writer = self.ensure_track_subgroups_writer(track_name)?;
 
+        // One subgroup per frame — moq-transport's SubgroupsReader delivers
+        // only the latest subgroup, so per-GOP grouping causes the subscriber
+        // to block for the entire GOP duration. Per-frame ensures the subscriber
+        // always gets the most recent frame.
         let mut subgroup = subgroups_writer.append(0).map_err(|e| {
             StreamError::Runtime(format!("Failed to create MoQ subgroup: {e}"))
         })?;

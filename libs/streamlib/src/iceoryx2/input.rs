@@ -111,10 +111,22 @@ impl InputMailboxes {
             return;
         };
 
-        // Receive and route payloads directly (no collection needed with thread-safe mailboxes)
-        while let Ok(Some(sample)) = subscriber.receive() {
-            let payload = *sample.payload();
-            self.route(payload);
+        // Receive and route payloads directly
+        loop {
+            match subscriber.receive() {
+                Ok(Some(sample)) => {
+                    let payload = *sample.payload();
+                    let routed = self.route(payload);
+                    if !routed {
+                        tracing::warn!("InputMailboxes: received sample but no matching port");
+                    }
+                }
+                Ok(None) => break, // no more samples
+                Err(e) => {
+                    tracing::error!("InputMailboxes: subscriber.receive() FAILED: {:?}", e);
+                    break;
+                }
+            }
         }
     }
 

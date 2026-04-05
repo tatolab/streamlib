@@ -416,6 +416,18 @@ impl ApplicationHandler for DisplayEventLoopHandler {
             event_loop.exit();
             return;
         }
+
+        // One-time diagnostic: log subscriber and port status
+        static DIAG_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !DIAG_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let has_sub = self.inputs.has_subscriber();
+            let ports: Vec<&str> = self.inputs.port_names().collect();
+            tracing::warn!(
+                "Display {}: DIAG has_subscriber={}, ports={:?}",
+                self.window_id, has_sub, ports
+            );
+        }
+
         if let Some(ref window) = self.window {
             if self.inputs.has_data("video") {
                 // New frame available — render it immediately
@@ -441,6 +453,16 @@ impl DisplayEventLoopHandler {
         let Some(ref ps) = self.pipeline_state else {
             return;
         };
+
+        // Diagnostic: track render_frame calls and has_data status
+        static DIAG_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = DIAG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if count % 1000 == 0 {
+            tracing::info!(
+                "Display {}: render_frame called (count={}), has_data={}",
+                self.window_id, count, self.inputs.has_data("video")
+            );
+        }
 
         // Check if input frame is available — return immediately if not.
         // Frame pacing is driven by the swapchain present mode, not sleep loops.

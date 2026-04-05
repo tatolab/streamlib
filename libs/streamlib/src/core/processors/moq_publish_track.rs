@@ -81,7 +81,14 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
             .ok_or_else(|| StreamError::Runtime("MoQ session not connected".into()))?
             .lock();
 
-        session.publish_frame(&self.track_name, &bytes, false)?;
+        // Detect keyframe: scan for Annex B start code (0x00000001) followed by SPS NAL (type 7).
+        // The bytes are msgpack-serialized Encodedvideoframe — the NAL data is embedded in
+        // the binary field, so we search within the full payload.
+        let is_keyframe = bytes.windows(5).any(|w| {
+            w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 1 && (w[4] & 0x1F) == 7
+        });
+
+        session.publish_frame(&self.track_name, &bytes, is_keyframe)?;
 
         self.frames_published += 1;
         if self.frames_published == 1 {

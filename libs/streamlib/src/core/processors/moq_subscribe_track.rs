@@ -301,7 +301,11 @@ async fn run_receive_loop(
                                 }
                                 Ok(None) => break,
                                 Err(e) => {
-                                    return ReceiveLoopResult::Error(e.to_string());
+                                    tracing::debug!(
+                                        track = %track_name,
+                                        "[MoqSubscribeTrack] Subgroup frame read error, moving to next: {e}"
+                                    );
+                                    break; // skip to next subgroup, don't kill connection
                                 }
                             }
                         }
@@ -310,7 +314,16 @@ async fn run_receive_loop(
                         return ReceiveLoopResult::TrackEnded;
                     }
                     Err(e) => {
-                        return ReceiveLoopResult::Error(e.to_string());
+                        let err_str = e.to_string();
+                        if err_str.contains("cancelled") {
+                            tracing::debug!(
+                                track = %track_name,
+                                "[MoqSubscribeTrack] Cancelled subgroup, skipping: {e}"
+                            );
+                            continue; // skip cancelled subgroup, don't kill connection
+                        }
+                        // Non-cancelled errors (e.g., "closed") need a full reconnect
+                        return ReceiveLoopResult::Error(err_str);
                     }
                 }
             }
