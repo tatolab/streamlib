@@ -18,7 +18,7 @@ use crate::core::rhi::PixelFormat;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::vulkan::rhi::VulkanDevice;
 
-use super::VulkanVideoDecodeSession;
+use super::{VulkanFormatConverter, VulkanVideoDecodeSession};
 
 /// Maximum bitstream input buffer size (256 KB — decode receives full access
 /// unit NALs including SPS/PPS/SEI).
@@ -48,6 +48,8 @@ struct DecodeResources {
     transfer_fence: vk::Fence,
     // Result status query pool
     decode_status_query_pool: vk::QueryPool,
+    // NV12→BGRA format converter for display output
+    nv12_to_bgra_converter: VulkanFormatConverter,
     // Dimensions
     decode_width: u32,
     decode_height: u32,
@@ -70,6 +72,8 @@ pub struct VulkanVideoDecoder {
     cached_sps: Option<Vec<u8>>,
     /// Cached PPS NAL payload (after NAL header byte stripped).
     cached_pps: Option<Vec<u8>>,
+    /// Display height after SPS crop (coded_height - crop_bottom * crop_unit_y).
+    display_height: u32,
     /// DPB tracking: which slots have valid reference pictures.
     /// Maps slot_index → (frame_num, PicOrderCnt) for active references.
     dpb_slot_frame_numbers: Vec<Option<(u32, i32)>>,
@@ -129,6 +133,7 @@ impl VulkanVideoDecoder {
             frame_count: 0,
             cached_sps: None,
             cached_pps: None,
+            display_height: 0,
             dpb_slot_frame_numbers: Vec::new(),
             pending_nal_data: None,
             resources: None,
@@ -337,6 +342,17 @@ impl VulkanVideoDecoder {
         // Initialize DPB tracking
         self.dpb_slot_frame_numbers = vec![None; max_dpb_slots as usize];
 
+        // NV12→BGRA format converter (display expects BGRA)
+        let converter_queue = self.vulkan_device.graphics_queue_secondary()
+            .unwrap_or(self.vulkan_device.queue());
+        let nv12_to_bgra_converter = VulkanFormatConverter::new(
+            &self.device,
+            converter_queue,
+            gfx_family,
+            1, // source bpp (NV12 average)
+            4, // dest bpp (BGRA)
+        )?;
+
         tracing::info!(
             "VulkanVideoDecoder resources initialized: {}x{} H.264 on queue family {}, dpb_slots={}",
             width,
@@ -360,6 +376,7 @@ impl VulkanVideoDecoder {
             transfer_command_buffer,
             transfer_fence,
             decode_status_query_pool,
+            nv12_to_bgra_converter,
             decode_width: width,
             decode_height: height,
             session_initialized: false,
@@ -385,12 +402,14 @@ impl VulkanVideoDecoder {
             if self.cached_pps.is_none() {
                 return Ok(None);
             }
-            let (coded_width, coded_height) = parse_sps_dimensions(sps)?;
+            let (coded_width, coded_height, display_height) = parse_sps_dimensions(sps)?;
             tracing::info!(
-                "VulkanVideoDecoder: SPS-derived coded dimensions: {}x{}",
+                "VulkanVideoDecoder: SPS-derived dimensions: coded={}x{}, display_height={}",
                 coded_width,
-                coded_height
+                coded_height,
+                display_height
             );
+            self.display_height = display_height;
             if let Err(e) = self.init_resources(coded_width, coded_height) {
                 tracing::warn!(
                     "VulkanVideoDecoder: init failed ({}), caching frame for retry",
@@ -547,16 +566,17 @@ impl VulkanVideoDecoder {
         }
 
         // 6. Copy decoded NV12 image to pixel buffer
+        //    Use display height (SPS crop applied) not coded height (MB-aligned).
         let res = self.resources.as_ref().unwrap();
         let decode_width = res.decode_width;
-        let decode_height = res.decode_height;
+        let display_height = self.display_height;
 
-        let (pool_id, dest_buffer) =
-            gpu.acquire_pixel_buffer(decode_width, decode_height, PixelFormat::Nv12VideoRange)?;
+        let (_, nv12_buffer) =
+            gpu.acquire_pixel_buffer(decode_width, display_height, PixelFormat::Nv12VideoRange)?;
 
-        let dest_vk_buffer = dest_buffer.buffer_ref().inner.buffer();
+        let dest_vk_buffer = nv12_buffer.buffer_ref().inner.buffer();
 
-        self.record_transfer_commands(dest_vk_buffer)?;
+        self.record_transfer_commands(dest_vk_buffer, display_height)?;
         let res = self.resources.as_ref().unwrap();
         let gfx_queue = self.vulkan_device.graphics_queue_secondary().unwrap_or(self.vulkan_device.queue());
         unsafe {
@@ -580,6 +600,12 @@ impl VulkanVideoDecoder {
                     StreamError::GpuError(format!("Failed to reset transfer fence: {e}"))
                 })?;
         }
+
+        // 6b. Convert NV12→BGRA for display output
+        let (bgra_pool_id, bgra_buffer) =
+            gpu.acquire_pixel_buffer(decode_width, display_height, PixelFormat::Bgra32)?;
+        let res = self.resources.as_ref().unwrap();
+        res.nv12_to_bgra_converter.convert(&nv12_buffer, &bgra_buffer)?;
 
         // 7. Update DPB
         if nal_info.is_idr {
@@ -616,15 +642,15 @@ impl VulkanVideoDecoder {
             "VulkanVideoDecoder: decoded frame {} ({}x{}, idr={}, ref={})",
             self.frame_count - 1,
             decode_width,
-            decode_height,
+            display_height,
             nal_info.is_idr,
             nal_info.is_reference
         );
 
         Ok(Some(Videoframe {
             width: decode_width,
-            height: decode_height,
-            surface_id: pool_id.to_string(),
+            height: display_height,
+            surface_id: bgra_pool_id.to_string(),
             timestamp_ns: active_timestamp.to_string(),
             frame_index: (self.frame_count - 1).to_string(),
         }))
@@ -965,10 +991,10 @@ impl VulkanVideoDecoder {
     }
 
     /// Record image→buffer copy commands for NV12 readback on the graphics queue.
-    fn record_transfer_commands(&self, dest_vk_buffer: vk::Buffer) -> Result<()> {
+    fn record_transfer_commands(&self, dest_vk_buffer: vk::Buffer, copy_height: u32) -> Result<()> {
         let res = self.resources.as_ref().unwrap();
         let decode_width = res.decode_width;
-        let decode_height = res.decode_height;
+        let decode_height = copy_height;
         let cmd_buf = res.transfer_command_buffer;
 
         unsafe {
@@ -1386,7 +1412,7 @@ fn parse_nal_unit_info(annex_b_data: &[u8]) -> NalUnitInfo {
 /// pic_height_in_map_units_minus1 fields. These are the coded dimensions
 /// (before crop is applied) and represent the actual image size the decoder
 /// must allocate.
-fn parse_sps_dimensions(sps_rbsp: &[u8]) -> Result<(u32, u32)> {
+fn parse_sps_dimensions(sps_rbsp: &[u8]) -> Result<(u32, u32, u32)> {
     if sps_rbsp.len() < 4 {
         return Err(StreamError::Configuration(
             "SPS too short to extract dimensions".into(),
@@ -1448,10 +1474,31 @@ fn parse_sps_dimensions(sps_rbsp: &[u8]) -> Result<(u32, u32)> {
     // pic_height_in_map_units_minus1 (ue)
     let pic_height_in_map_units_minus1 = read_exp_golomb(sps_rbsp, &mut bit_pos)?;
 
-    let width = (pic_width_in_mbs_minus1 + 1) * 16;
-    let height = (pic_height_in_map_units_minus1 + 1) * 16;
+    let coded_width = (pic_width_in_mbs_minus1 + 1) * 16;
+    let coded_height = (pic_height_in_map_units_minus1 + 1) * 16;
 
-    Ok((width, height))
+    // frame_mbs_only_flag
+    let frame_mbs_only_flag = read_bit(sps_rbsp, &mut bit_pos)?;
+    if frame_mbs_only_flag == 0 {
+        bit_pos += 1; // mb_adaptive_frame_field_flag
+    }
+    // direct_8x8_inference_flag
+    bit_pos += 1;
+    // frame_cropping_flag
+    let frame_cropping_flag = read_bit(sps_rbsp, &mut bit_pos)?;
+    let mut crop_bottom = 0u32;
+    if frame_cropping_flag == 1 {
+        read_exp_golomb(sps_rbsp, &mut bit_pos)?; // crop_left
+        read_exp_golomb(sps_rbsp, &mut bit_pos)?; // crop_right
+        read_exp_golomb(sps_rbsp, &mut bit_pos)?; // crop_top
+        crop_bottom = read_exp_golomb(sps_rbsp, &mut bit_pos)?;
+    }
+
+    // Display height: coded_height minus crop (crop_unit_y = 2 for frame_mbs_only)
+    let crop_unit_y = if frame_mbs_only_flag == 1 { 2 } else { 4 };
+    let display_height = coded_height.saturating_sub(crop_bottom * crop_unit_y);
+
+    Ok((coded_width, coded_height, display_height))
 }
 
 fn read_bit(data: &[u8], bit_pos: &mut usize) -> Result<u32> {

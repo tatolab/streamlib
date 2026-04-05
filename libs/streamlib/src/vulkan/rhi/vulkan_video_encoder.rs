@@ -264,13 +264,16 @@ impl VulkanVideoEncoder {
         // NV12 staging buffers created after GPU images to reduce peak memory.
         // Two staging buffers for double-buffered pipeline: while the GPU reads
         // from buffer A for transfer+encode, the CPU/GPU writes to buffer B.
+        // Use 16 bpp (not 12) because the BGRA→NV12 compute shader dispatches
+        // in 32-row blocks (height rounded up), writing past the exact NV12 size.
+        // 16 bpp = w*h*2 provides the necessary headroom.
         let nv12_vk_buffer =
-            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 12, PixelFormat::Nv12VideoRange)?;
+            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 16, PixelFormat::Nv12VideoRange)?;
         let nv12_staging_buffer = RhiPixelBuffer::new(RhiPixelBufferRef {
             inner: Arc::new(nv12_vk_buffer),
         });
         let nv12_vk_buffer_b =
-            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 12, PixelFormat::Nv12VideoRange)?;
+            VulkanPixelBuffer::new(&self.vulkan_device, width, height, 16, PixelFormat::Nv12VideoRange)?;
         let nv12_staging_buffer_b = RhiPixelBuffer::new(RhiPixelBufferRef {
             inner: Arc::new(nv12_vk_buffer_b),
         });
