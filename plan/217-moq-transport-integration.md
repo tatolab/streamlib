@@ -82,11 +82,18 @@ Original plan proposed moq-lite/moq-native/hang — replaced with moq-transport 
 
 ## Remaining Work
 
-### Critical — Blocks Continuous Video
+### Completed
+
+| Issue | Title | Status |
+|-------|-------|--------|
+| #237 | Schema codegen fix | Done — `read_mode` and `buffer_size` wired from schema YAML into macro-generated `add_port()` calls. Continuous video decode verified working. |
+
+### Critical — Blocks Stable Video Streaming
 
 | Issue | Title | Description |
 |-------|-------|-------------|
-| #237 | Schema codegen fix | Wire `read_mode` and `buffer_size` from schema YAML metadata into macro-generated `add_port()` calls. Currently hardcoded to `SkipToLatest` / `buffer_size=1` for all ports, which drops H264 P-frames. |
+| #238 | QUIC keep-alive | Configure `keep_alive_interval` on Quinn transport to prevent Cloudflare relay idle timeout (~10-15s). Root cause of subscribe disconnects that break video decode. Highest priority — single config change, eliminates the disconnect cycle entirely. |
+| #242 | SPS/DPB ref frame mismatch | `VulkanVideoSession` declares `max_num_ref_frames=1` in SPS but encoder uses 2 DPB slots (ping-pong). FFmpeg discards references, making decoder fragile after any frame loss. Compounds with #238. |
 
 ### High — Performance & Quality
 
@@ -99,23 +106,24 @@ Original plan proposed moq-lite/moq-native/hang — replaced with moq-transport 
 
 | Issue | Title | Description |
 |-------|-------|-------------|
-| #238 | QUIC keep-alive | Configure `keep_alive_interval` on Quinn transport to prevent Cloudflare relay idle timeout (~10-15s). Per-GOP grouping mitigates but doesn't eliminate. |
 | #229 | Separate pub/sub examples | Two-binary pattern (like WHIP/WHEP) for multi-machine testing. |
 | #231 | Testing and documentation | Unit tests, integration tests, cargo doc, example READMEs. |
 
 ### Dependency Graph
 
 ```
-#237 (Schema codegen) ──→ Continuous video decode
+#237 (Schema codegen) ──→ ✓ Done
+                              │
+#238 (QUIC keep-alive) ───────┤ ← Immediate next step
+                              │
+#242 (SPS/DPB ref fix) ───────┤ ← Stable video decode
                               │
 #207 (Vulkan decoder) ────────┤
                               ├──→ Broadcast-ready MoQ streaming
-#239 (IPC heap alloc) ────────┤     1080p30 @ 6-8Mbps, zero-copy GPU
-                              │
-#238 (QUIC keep-alive) ───────┘
+#239 (IPC heap alloc) ────────┘     1080p30 @ 6-8Mbps, zero-copy GPU
 ```
 
-#237 is the immediate next step. #207 and #239 are independent and can be parallelized. #238 is nice-to-have.
+#238 is the immediate next step — eliminates the 10-15s disconnect cycle. #242 makes decode robust after any remaining frame loss. #207 and #239 are independent and can be parallelized after.
 
 ---
 

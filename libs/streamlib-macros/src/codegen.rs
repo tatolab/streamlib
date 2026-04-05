@@ -459,9 +459,23 @@ fn generate_from_config_from_schema(
             .iter()
             .map(|port| {
                 let name = &port.name;
-                let history = 1usize; // Default history depth
-                                      // Default read mode (SkipToLatest) - TODO: add read_mode to schema
-                quote! { inputs.add_port(#name, #history, Default::default()); }
+                let buffer_size = port.buffer_size.unwrap_or(1);
+                let read_mode_tokens = match port.read_mode.as_deref() {
+                    Some("read_next_in_order") => {
+                        quote! { ::streamlib::iceoryx2::ReadMode::ReadNextInOrder }
+                    }
+                    Some("skip_to_latest") | None => {
+                        quote! { ::streamlib::iceoryx2::ReadMode::SkipToLatest }
+                    }
+                    Some(unknown) => {
+                        let msg = format!(
+                            "unknown read_mode '{}' on input port '{}', expected 'skip_to_latest' or 'read_next_in_order'",
+                            unknown, name
+                        );
+                        return quote! { compile_error!(#msg); };
+                    }
+                };
+                quote! { inputs.add_port(#name, #buffer_size, #read_mode_tokens); }
             })
             .collect();
         quote! {

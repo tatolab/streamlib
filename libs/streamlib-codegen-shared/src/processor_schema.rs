@@ -247,6 +247,12 @@ pub struct ProcessorPortSchema {
     /// Human-readable description.
     #[serde(default)]
     pub description: Option<String>,
+    /// Read mode for this input port (e.g., "skip_to_latest", "read_next_in_order").
+    #[serde(default)]
+    pub read_mode: Option<String>,
+    /// Ring buffer capacity for this input port.
+    #[serde(default)]
+    pub buffer_size: Option<usize>,
 }
 
 /// Config definition within a processor schema.
