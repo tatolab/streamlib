@@ -271,14 +271,10 @@ impl MoqPublishSession {
         payload: &[u8],
         is_keyframe: bool,
     ) -> Result<()> {
-        // Per-GOP subgroup grouping: start a new subgroup on keyframe (or first
-        // frame), then reuse it for subsequent P-frames. SubgroupReader streams
-        // objects in real-time from in-progress subgroups, so the subscriber
-        // receives each frame as it's written without waiting for the GOP to end.
-        let needs_new_subgroup = is_keyframe
-            || !self.active_subgroup_writers.contains_key(track_name);
-
-        if needs_new_subgroup {
+        // Single subgroup per track: all frames (IDR + P) go into one subgroup.
+        // The subscriber reads all objects from this subgroup in order, receiving
+        // IDR frames naturally as they appear in the stream.
+        if !self.active_subgroup_writers.contains_key(track_name) {
             let subgroups_writer = self.ensure_track_subgroups_writer(track_name)?;
             let subgroup = subgroups_writer.append(0).map_err(|e| {
                 StreamError::Runtime(format!("Failed to create MoQ subgroup: {e}"))

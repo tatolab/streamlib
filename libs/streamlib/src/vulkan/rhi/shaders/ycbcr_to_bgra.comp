@@ -1,0 +1,38 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Combined image sampler with VkSamplerYcbcrConversion — the hardware
+// handles multi-planar NV12 de-tiling and YCbCr→RGB color conversion.
+layout(set = 0, binding = 0) uniform sampler2D ycbcr_image;
+
+layout(set = 0, binding = 1) writeonly buffer BgraOutput {
+    uint data[];
+} bgra_output;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+} pc;
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    // Normalized coordinates (center of texel)
+    vec2 coord = (vec2(pos) + 0.5) / vec2(pc.width, pc.height);
+
+    // The YCbCr conversion sampler returns RGB directly (conversion done by GPU)
+    vec4 rgba = textureLod(ycbcr_image, coord, 0.0);
+
+    // Pack as BGRA (B8G8R8A8_UNORM)
+    uint B = uint(clamp(rgba.b * 255.0, 0.0, 255.0));
+    uint G = uint(clamp(rgba.g * 255.0, 0.0, 255.0));
+    uint R = uint(clamp(rgba.r * 255.0, 0.0, 255.0));
+    uint packed = B | (G << 8u) | (R << 16u) | (255u << 24u);
+
+    bgra_output.data[pos.y * pc.width + pos.x] = packed;
+}

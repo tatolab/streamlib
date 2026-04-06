@@ -1,0 +1,64 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Per-plane sampled images from the DPB multi-planar image
+layout(set = 0, binding = 0) uniform sampler2D y_plane;   // PLANE_0: R8_UNORM (luma)
+layout(set = 0, binding = 1) uniform sampler2D uv_plane;  // PLANE_1: R8G8_UNORM (chroma)
+
+layout(set = 0, binding = 2) writeonly buffer BgraOutput {
+    uint data[];
+} bgra_output;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+    uint flags; // bit 0: is_bgra, bit 1: full_range
+} pc;
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    bool is_bgra = (pc.flags & 1u) != 0u;
+    bool full_range = (pc.flags & 2u) != 0u;
+
+    // Normalized coordinates (center of texel)
+    vec2 coord = (vec2(pos) + 0.5) / vec2(pc.width, pc.height);
+
+    // Y from plane 0 (R8_UNORM → [0,1], scale to [0,255])
+    float Y = textureLod(y_plane, coord, 0.0).r * 255.0;
+
+    // UV from plane 1 (R8G8_UNORM, half resolution — sampler handles interpolation)
+    vec2 uv_sample = textureLod(uv_plane, coord, 0.0).rg;
+    float U = uv_sample.r * 255.0;
+    float V = uv_sample.g * 255.0;
+
+    float R, G, B;
+    if (full_range) {
+        float Cb = U - 128.0;
+        float Cr = V - 128.0;
+        R = clamp(Y + 1.402 * Cr, 0.0, 255.0);
+        G = clamp(Y - 0.344136 * Cb - 0.714136 * Cr, 0.0, 255.0);
+        B = clamp(Y + 1.772 * Cb, 0.0, 255.0);
+    } else {
+        float C = Y - 16.0;
+        float D = U - 128.0;
+        float E = V - 128.0;
+        R = clamp(1.164 * C + 1.596 * E, 0.0, 255.0);
+        G = clamp(1.164 * C - 0.392 * D - 0.813 * E, 0.0, 255.0);
+        B = clamp(1.164 * C + 2.017 * D, 0.0, 255.0);
+    }
+
+    uint pixel_index = pos.y * pc.width + pos.x;
+    uint packed;
+    if (is_bgra) {
+        packed = uint(B) | (uint(G) << 8u) | (uint(R) << 16u) | (255u << 24u);
+    } else {
+        packed = uint(R) | (uint(G) << 8u) | (uint(B) << 16u) | (255u << 24u);
+    }
+    bgra_output.data[pixel_index] = packed;
+}

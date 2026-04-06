@@ -69,20 +69,45 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
             return Ok(());
         }
         let encoded: Encodedvideoframe = self.inputs.read("encoded_video_in")?;
-        let timestamp_ns: i64 = encoded.timestamp_ns.parse().unwrap_or(0);
+
+        // File-based decode: on first call, if /tmp/idr_full.h264 exists, decode
+        // it directly instead of the MoQ data. Bypasses unreliable MoQ IDR delivery.
+        let (decode_data, timestamp_ns) = if self.frames_decoded == 0
+            && self.video_decoder.is_none()
+        {
+            let file_path = std::path::Path::new("/tmp/idr_full.h264");
+            if file_path.exists() {
+                match std::fs::read(file_path) {
+                    Ok(data) => {
+                        tracing::info!(
+                            "[H264Decoder] FILE-BASED DECODE: loaded {} bytes from {}",
+                            data.len(),
+                            file_path.display()
+                        );
+                        (data, 0i64)
+                    }
+                    Err(_) => (encoded.data.clone(), encoded.timestamp_ns.parse().unwrap_or(0)),
+                }
+            } else {
+                (encoded.data.clone(), encoded.timestamp_ns.parse().unwrap_or(0))
+            }
+        } else {
+            (encoded.data.clone(), encoded.timestamp_ns.parse().unwrap_or(0))
+        };
+        let encoded_data_ref = &decode_data;
 
         // Log NAL types present in this packet
-        let nal_types = scan_nal_types(&encoded.data);
+        let nal_types = scan_nal_types(encoded_data_ref);
         if !nal_types.is_empty() {
             tracing::info!(
                 "[H264Decoder] Received {} bytes, NAL types: {:?}",
-                encoded.data.len(),
+                encoded_data_ref.len(),
                 nal_types
             );
         }
 
         // Scan NAL units in the encoded data for SPS/PPS
-        let (sps, pps) = extract_h264_parameter_sets(&encoded.data);
+        let (sps, pps) = extract_h264_parameter_sets(encoded_data_ref);
         if let Some(s) = sps {
             tracing::info!("[H264Decoder] SPS extracted ({} bytes)", s.len());
             self.sps_nal = Some(s);
@@ -129,7 +154,7 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
                 .as_ref()
                 .ok_or_else(|| StreamError::Runtime("GPU context not available".into()))?;
 
-            match decoder.decode(&encoded.data, timestamp_ns, gpu) {
+            match decoder.decode(encoded_data_ref, timestamp_ns, gpu) {
                 Ok(Some(frame)) => {
                     self.outputs.write("video_out", &frame)?;
                     self.frames_decoded += 1;

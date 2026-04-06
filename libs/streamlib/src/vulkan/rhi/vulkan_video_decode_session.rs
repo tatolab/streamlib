@@ -419,7 +419,7 @@ impl VulkanVideoDecodeSession {
         };
 
         // Build StdVideoH264PictureParameterSet from parsed PPS
-        let parsed_pps = parse_pps(pps_bytes)?;
+        let parsed_pps = parse_pps(pps_bytes, parsed_sps.profile_idc)?;
 
         let mut pps_flags = StdVideoH264PpsFlags {
             _bitfield_align_1: [],
@@ -439,6 +439,13 @@ impl VulkanVideoDecodeSession {
             .set_constrained_intra_pred_flag(parsed_pps.constrained_intra_pred_flag as u32);
         pps_flags
             .set_redundant_pic_cnt_present_flag(parsed_pps.redundant_pic_cnt_present_flag as u32);
+        pps_flags.set_transform_8x8_mode_flag(parsed_pps.transform_8x8_mode_flag as u32);
+
+        let weighted_bipred_idc = match parsed_pps.weighted_bipred_idc {
+            1 => ash::vk::native::StdVideoH264WeightedBipredIdc_STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_EXPLICIT,
+            2 => ash::vk::native::StdVideoH264WeightedBipredIdc_STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_IMPLICIT,
+            _ => StdVideoH264WeightedBipredIdc_STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
+        };
 
         let pps = StdVideoH264PictureParameterSet {
             flags: pps_flags,
@@ -448,12 +455,11 @@ impl VulkanVideoDecodeSession {
                 as u8,
             num_ref_idx_l1_default_active_minus1: parsed_pps.num_ref_idx_l1_default_active_minus1
                 as u8,
-            weighted_bipred_idc:
-                StdVideoH264WeightedBipredIdc_STD_VIDEO_H264_WEIGHTED_BIPRED_IDC_DEFAULT,
+            weighted_bipred_idc,
             pic_init_qp_minus26: parsed_pps.pic_init_qp_minus26 as i8,
             pic_init_qs_minus26: parsed_pps.pic_init_qs_minus26 as i8,
             chroma_qp_index_offset: parsed_pps.chroma_qp_index_offset as i8,
-            second_chroma_qp_index_offset: 0,
+            second_chroma_qp_index_offset: parsed_pps.second_chroma_qp_index_offset as i8,
             pScalingLists: ptr::null(),
         };
 
@@ -630,12 +636,15 @@ struct ParsedPps {
     num_ref_idx_l0_default_active_minus1: u32,
     num_ref_idx_l1_default_active_minus1: u32,
     weighted_pred_flag: bool,
+    weighted_bipred_idc: u32,
     pic_init_qp_minus26: i32,
     pic_init_qs_minus26: i32,
     chroma_qp_index_offset: i32,
     deblocking_filter_control_present_flag: bool,
     constrained_intra_pred_flag: bool,
     redundant_pic_cnt_present_flag: bool,
+    transform_8x8_mode_flag: bool,
+    second_chroma_qp_index_offset: i32,
 }
 
 /// Bitstream reader for exp-golomb and fixed-width field extraction.
@@ -850,7 +859,7 @@ fn parse_sps(sps_bytes: &[u8]) -> Result<ParsedSps> {
 }
 
 /// Parse an H.264 PPS NAL unit payload (after NAL header byte is stripped).
-fn parse_pps(pps_bytes: &[u8]) -> Result<ParsedPps> {
+fn parse_pps(pps_bytes: &[u8], profile_idc: u8) -> Result<ParsedPps> {
     if pps_bytes.is_empty() {
         return Err(StreamError::GpuError(
             "PPS NAL unit is empty".into(),
@@ -898,14 +907,54 @@ fn parse_pps(pps_bytes: &[u8]) -> Result<ParsedPps> {
     let num_ref_idx_l0_default_active_minus1 = reader.read_ue()?;
     let num_ref_idx_l1_default_active_minus1 = reader.read_ue()?;
     let weighted_pred_flag = reader.read_bit()? == 1;
-    // weighted_bipred_idc
-    let _ = reader.read_bits(2)?;
+    let weighted_bipred_idc = reader.read_bits(2)?;
     let pic_init_qp_minus26 = reader.read_se()?;
     let pic_init_qs_minus26 = reader.read_se()?;
     let chroma_qp_index_offset = reader.read_se()?;
     let deblocking_filter_control_present_flag = reader.read_bit()? == 1;
     let constrained_intra_pred_flag = reader.read_bit()? == 1;
     let redundant_pic_cnt_present_flag = reader.read_bit()? == 1;
+
+    // High profile additional fields (after redundant_pic_cnt_present_flag)
+    let mut transform_8x8_mode_flag = false;
+    let mut second_chroma_qp_index_offset = chroma_qp_index_offset;
+    if profile_idc == 100 || profile_idc == 110 || profile_idc == 122 || profile_idc == 244
+        || profile_idc == 44 || profile_idc == 83 || profile_idc == 86
+        || profile_idc == 118 || profile_idc == 128
+    {
+        // more_rbsp_data() check — try to read, ignore errors at end of PPS
+        if let Ok(flag) = reader.read_bit() {
+            transform_8x8_mode_flag = flag == 1;
+            // pic_scaling_matrix_present_flag
+            if let Ok(scaling_present) = reader.read_bit() {
+                if scaling_present == 1 {
+                    let count = if transform_8x8_mode_flag { 6 + 2 } else { 6 };
+                    for j in 0..count {
+                        if let Ok(list_present) = reader.read_bit() {
+                            if list_present == 1 {
+                                let size = if j < 6 { 16 } else { 64 };
+                                let mut last_scale = 8i32;
+                                let mut next_scale = 8i32;
+                                for _ in 0..size {
+                                    if next_scale != 0 {
+                                        if let Ok(delta) = reader.read_se() {
+                                            next_scale = (last_scale + delta + 256) % 256;
+                                        }
+                                    }
+                                    if next_scale != 0 {
+                                        last_scale = next_scale;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Ok(val) = reader.read_se() {
+                second_chroma_qp_index_offset = val;
+            }
+        }
+    }
 
     Ok(ParsedPps {
         pic_parameter_set_id,
@@ -915,12 +964,15 @@ fn parse_pps(pps_bytes: &[u8]) -> Result<ParsedPps> {
         num_ref_idx_l0_default_active_minus1,
         num_ref_idx_l1_default_active_minus1,
         weighted_pred_flag,
+        weighted_bipred_idc,
         pic_init_qp_minus26,
         pic_init_qs_minus26,
         chroma_qp_index_offset,
         deblocking_filter_control_present_flag,
         constrained_intra_pred_flag,
         redundant_pic_cnt_present_flag,
+        transform_8x8_mode_flag,
+        second_chroma_qp_index_offset,
     })
 }
 

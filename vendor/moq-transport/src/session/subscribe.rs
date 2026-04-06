@@ -97,7 +97,7 @@ impl Subscribe {
             subscriber_priority: 127, // default to mid value, see: https://github.com/moq-wg/moq-transport/issues/504
             group_order: GroupOrder::Publisher, // defer to publisher send order
             forward: true,            // default to forwarding objects
-            filter_type: FilterType::NextGroupStart,
+            filter_type: FilterType::LargestObject,
             start_location: None,
             end_group_id: None,
             params: Default::default(),

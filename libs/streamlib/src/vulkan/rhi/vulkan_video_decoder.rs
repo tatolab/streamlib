@@ -18,7 +18,7 @@ use crate::core::rhi::PixelFormat;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::vulkan::rhi::VulkanDevice;
 
-use super::{VulkanFormatConverter, VulkanVideoDecodeSession};
+use super::VulkanVideoDecodeSession;
 
 /// Maximum bitstream input buffer size (256 KB — decode receives full access
 /// unit NALs including SPS/PPS/SEI).
@@ -42,14 +42,24 @@ struct DecodeResources {
     decode_command_pool: vk::CommandPool,
     decode_command_buffer: vk::CommandBuffer,
     decode_fence: vk::Fence,
+    // GPU-to-GPU semaphore: decode queue signals, transfer queue waits
+    decode_to_transfer_semaphore: vk::Semaphore,
     // Transfer command resources (image→buffer copy for readback, on graphics queue)
     transfer_command_pool: vk::CommandPool,
     transfer_command_buffer: vk::CommandBuffer,
     transfer_fence: vk::Fence,
     // Result status query pool
     decode_status_query_pool: vk::QueryPool,
-    // NV12→BGRA format converter for display output
-    nv12_to_bgra_converter: VulkanFormatConverter,
+    // DPB→BGRA via VkSamplerYcbcrConversion (hardware NV12→RGB, bypasses vkCmdCopyImageToBuffer)
+    dpb_ycbcr_views: Vec<vk::ImageView>,
+    dpb_to_bgra_pipeline: vk::Pipeline,
+    dpb_to_bgra_pipeline_layout: vk::PipelineLayout,
+    dpb_to_bgra_descriptor_set_layout: vk::DescriptorSetLayout,
+    dpb_to_bgra_descriptor_pool: vk::DescriptorPool,
+    dpb_to_bgra_descriptor_set: vk::DescriptorSet,
+    dpb_to_bgra_shader_module: vk::ShaderModule,
+    dpb_to_bgra_sampler: vk::Sampler,
+    dpb_ycbcr_conversion: vk::SamplerYcbcrConversion,
     // Dimensions
     decode_width: u32,
     decode_height: u32,
@@ -210,7 +220,8 @@ impl VulkanVideoDecoder {
                 height,
                 vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
                     | vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
-                    | vk::ImageUsageFlags::TRANSFER_SRC,
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::SAMPLED,
                 &[self.vd_family, gfx_family],
                 &mut profile_list,
             );
@@ -315,6 +326,15 @@ impl VulkanVideoDecoder {
                 StreamError::GpuError(format!("Failed to create transfer fence: {e}"))
             })?;
 
+        // Semaphore for GPU-to-GPU sync: decode queue → transfer queue
+        let semaphore_info = vk::SemaphoreCreateInfo::default();
+        let decode_to_transfer_semaphore =
+            unsafe { self.device.create_semaphore(&semaphore_info, None) }.map_err(|e| {
+                StreamError::GpuError(format!(
+                    "Failed to create decode-to-transfer semaphore: {e}"
+                ))
+            })?;
+
         // Result status query pool
         let mut status_h264_decode_profile_info = vk::VideoDecodeH264ProfileInfoKHR::default()
             .std_profile_idc(std_profile_idc)
@@ -342,19 +362,148 @@ impl VulkanVideoDecoder {
         // Initialize DPB tracking
         self.dpb_slot_frame_numbers = vec![None; max_dpb_slots as usize];
 
-        // NV12→BGRA format converter (display expects BGRA)
-        let converter_queue = self.vulkan_device.graphics_queue_secondary()
-            .unwrap_or(self.vulkan_device.queue());
-        let nv12_to_bgra_converter = VulkanFormatConverter::new(
-            &self.device,
-            converter_queue,
-            gfx_family,
-            1, // source bpp (NV12 average)
-            4, // dest bpp (BGRA)
-        )?;
+        // VkSamplerYcbcrConversion: hardware-accelerated NV12→RGB conversion
+        // (NVIDIA's recommended approach for reading video decode output)
+        let mut ycbcr_conversion_info = vk::SamplerYcbcrConversionCreateInfo::default()
+            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+            .ycbcr_model(vk::SamplerYcbcrModelConversion::YCBCR_601)
+            .ycbcr_range(vk::SamplerYcbcrRange::ITU_NARROW)
+            .components(vk::ComponentMapping {
+                r: vk::ComponentSwizzle::IDENTITY,
+                g: vk::ComponentSwizzle::IDENTITY,
+                b: vk::ComponentSwizzle::IDENTITY,
+                a: vk::ComponentSwizzle::IDENTITY,
+            })
+            .x_chroma_offset(vk::ChromaLocation::COSITED_EVEN)
+            .y_chroma_offset(vk::ChromaLocation::COSITED_EVEN)
+            .chroma_filter(vk::Filter::NEAREST)
+            .force_explicit_reconstruction(false);
+
+        let dpb_ycbcr_conversion = unsafe {
+            self.device.create_sampler_ycbcr_conversion(&mut ycbcr_conversion_info, None)
+        }
+        .map_err(|e| StreamError::GpuError(format!("Failed to create YCbCr conversion: {e}")))?;
+
+        // Sampler with YCbCr conversion attached
+        let mut sampler_ycbcr_info = vk::SamplerYcbcrConversionInfo::default()
+            .conversion(dpb_ycbcr_conversion);
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::NEAREST)
+            .min_filter(vk::Filter::NEAREST)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .push_next(&mut sampler_ycbcr_info);
+        let dpb_to_bgra_sampler = unsafe { self.device.create_sampler(&sampler_info, None) }
+            .map_err(|e| StreamError::GpuError(format!("Failed to create YCbCr sampler: {e}")))?;
+
+        // Image views for DPB slots with YCbCr conversion + video profile
+        // The video profile chain is CRITICAL — without it, the driver doesn't know
+        // the image uses video decode tiling and samples macroblocks in wrong order.
+        let mut dpb_ycbcr_views = Vec::with_capacity(max_dpb_slots as usize);
+        for slot_idx in 0..max_dpb_slots as usize {
+            let mut view_ycbcr_info = vk::SamplerYcbcrConversionInfo::default()
+                .conversion(dpb_ycbcr_conversion);
+            let view_info = vk::ImageViewCreateInfo::default()
+                .image(dpb_images[slot_idx])
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                )
+                .push_next(&mut view_ycbcr_info);
+            let view = unsafe { self.device.create_image_view(&view_info, None) }
+                .map_err(|e| StreamError::GpuError(format!(
+                    "Failed to create YCbCr image view for DPB slot {}: {}", slot_idx, e
+                )))?;
+            dpb_ycbcr_views.push(view);
+        }
+
+        // DPB→BGRA compute shader (YCbCr conversion done by sampler, shader just packs BGRA)
+        let dpb_to_bgra_spirv = ash::util::read_spv(&mut std::io::Cursor::new(include_bytes!(
+            "shaders/ycbcr_to_bgra.spv"
+        )))
+        .map_err(|e| StreamError::GpuError(format!("Failed to read ycbcr_to_bgra SPIR-V: {e}")))?;
+
+        let dpb_to_bgra_module_info = vk::ShaderModuleCreateInfo::default().code(&dpb_to_bgra_spirv);
+        let dpb_to_bgra_shader_module =
+            unsafe { self.device.create_shader_module(&dpb_to_bgra_module_info, None) }
+                .map_err(|e| StreamError::GpuError(format!("Failed to create ycbcr_to_bgra shader: {e}")))?;
+
+        // Descriptor set layout: 1 combined image sampler (immutable, YCbCr) + 1 storage buffer
+        let immutable_samplers = [dpb_to_bgra_sampler];
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .immutable_samplers(&immutable_samplers),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        ];
+        let descriptor_set_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        let dpb_to_bgra_descriptor_set_layout =
+            unsafe { self.device.create_descriptor_set_layout(&descriptor_set_layout_info, None) }
+                .map_err(|e| StreamError::GpuError(format!("Failed to create YCbCr descriptor set layout: {e}")))?;
+
+        let push_constant_range = vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .offset(0)
+            .size(8); // width, height (no flags needed — YCbCr conversion handles color space)
+        let push_ranges = [push_constant_range];
+        let layouts = [dpb_to_bgra_descriptor_set_layout];
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&layouts)
+            .push_constant_ranges(&push_ranges);
+        let dpb_to_bgra_pipeline_layout =
+            unsafe { self.device.create_pipeline_layout(&pipeline_layout_info, None) }
+                .map_err(|e| StreamError::GpuError(format!("Failed to create YCbCr pipeline layout: {e}")))?;
+
+        let stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(dpb_to_bgra_shader_module)
+            .name(c"main");
+        let pipeline_info = vk::ComputePipelineCreateInfo::default()
+            .stage(stage)
+            .layout(dpb_to_bgra_pipeline_layout);
+        let dpb_to_bgra_pipeline = unsafe {
+            self.device.create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        }
+        .map_err(|(_pipelines, e)| StreamError::GpuError(format!("Failed to create YCbCr pipeline: {e}")))?[0];
+
+        // Descriptor pool and set
+        let pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1),
+        ];
+        let desc_pool_info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(1)
+            .pool_sizes(&pool_sizes);
+        let dpb_to_bgra_descriptor_pool =
+            unsafe { self.device.create_descriptor_pool(&desc_pool_info, None) }
+                .map_err(|e| StreamError::GpuError(format!("Failed to create YCbCr descriptor pool: {e}")))?;
+
+        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(dpb_to_bgra_descriptor_pool)
+            .set_layouts(&layouts);
+        let dpb_to_bgra_descriptor_set =
+            unsafe { self.device.allocate_descriptor_sets(&alloc_info) }
+                .map_err(|e| StreamError::GpuError(format!("Failed to allocate YCbCr descriptor set: {e}")))?[0];
 
         tracing::info!(
-            "VulkanVideoDecoder resources initialized: {}x{} H.264 on queue family {}, dpb_slots={}",
+            "VulkanVideoDecoder resources initialized: {}x{} H.264 on queue family {}, dpb_slots={} (DPB→BGRA direct path)",
             width,
             height,
             self.vd_family,
@@ -372,11 +521,20 @@ impl VulkanVideoDecoder {
             decode_command_pool,
             decode_command_buffer,
             decode_fence,
+            decode_to_transfer_semaphore,
             transfer_command_pool,
             transfer_command_buffer,
             transfer_fence,
             decode_status_query_pool,
-            nv12_to_bgra_converter,
+            dpb_ycbcr_views,
+            dpb_ycbcr_conversion,
+            dpb_to_bgra_pipeline,
+            dpb_to_bgra_pipeline_layout,
+            dpb_to_bgra_descriptor_set_layout,
+            dpb_to_bgra_descriptor_pool,
+            dpb_to_bgra_descriptor_set,
+            dpb_to_bgra_shader_module,
+            dpb_to_bgra_sampler,
             decode_width: width,
             decode_height: height,
             session_initialized: false,
@@ -476,8 +634,7 @@ impl VulkanVideoDecoder {
         }
 
         // 2. Copy only slice NAL data to GPU buffer (strip SPS/PPS — those are
-        //    already in session parameters; NVIDIA rejects bitstream buffers
-        //    containing non-slice NALs alongside slice data).
+        //    already in session parameters).
         let slice_start = nal_info.slice_data_offset;
         let slice_data = &active_nal_data[slice_start..];
         let slice_data_size = slice_data.len();
@@ -498,6 +655,15 @@ impl VulkanVideoDecoder {
         );
         let res = self.resources.as_ref().unwrap();
         unsafe {
+            // Zero the aligned region first to prevent stale start codes from
+            // previous (larger) frames being parsed by the decoder as extra NALs.
+            let alignment = res.video_decode_session.min_bitstream_buffer_size_alignment();
+            let aligned_size = if alignment > 0 {
+                ((slice_data_size as u64 + alignment - 1) & !(alignment - 1)) as usize
+            } else {
+                slice_data_size
+            };
+            std::ptr::write_bytes(res.bitstream_input_buffer_mapped_ptr, 0, aligned_size);
             std::ptr::copy_nonoverlapping(
                 slice_data.as_ptr(),
                 res.bitstream_input_buffer_mapped_ptr,
@@ -505,13 +671,28 @@ impl VulkanVideoDecoder {
             );
         }
 
+        // Debug: dump bitstream for first IDR to verify H.264 validity
+        if self.frame_count == 0 && nal_info.is_idr {
+            // Dump the FULL original packet (with SPS/PPS) for FFmpeg validation
+            let _ = std::fs::write("/tmp/idr_full.h264", active_nal_data);
+            // Dump just the slice data (what goes to GPU)
+            let _ = std::fs::write("/tmp/idr_slice.h264", slice_data);
+            tracing::info!(
+                "VulkanVideoDecoder DEBUG: dumped IDR bitstream — full={} bytes to /tmp/idr_full.h264, slice={} bytes to /tmp/idr_slice.h264",
+                active_nal_data.len(), slice_data_size
+            );
+        }
+
         // 3. Record and submit decode commands (using slice-only buffer size)
         tracing::info!("VulkanVideoDecoder: submitting decode commands (frame={}, slice_bytes={})", self.frame_count, slice_data_size);
-        self.record_decode_commands(&nal_info, slice_data_size)?;
+        self.record_decode_commands(&nal_info, slice_data_size, slice_start)?;
         let res = self.resources.as_ref().unwrap();
         unsafe {
             let cmds = [res.decode_command_buffer];
-            let submit = vk::SubmitInfo::default().command_buffers(&cmds);
+            let signal_semaphores = [res.decode_to_transfer_semaphore];
+            let submit = vk::SubmitInfo::default()
+                .command_buffers(&cmds)
+                .signal_semaphores(&signal_semaphores);
             self.device
                 .queue_submit(self.video_decode_queue, &[submit], res.decode_fence)
                 .map_err(|e| {
@@ -565,49 +746,184 @@ impl VulkanVideoDecoder {
             );
         }
 
-        // 6. Copy decoded NV12 image to pixel buffer
-        //    Use coded height for intermediate buffers (compute shader dispatches
-        //    in 16-block rows, rounding 1080→1088). Display height only in Videoframe.
+        // 6. DPB→BGRA direct conversion via compute shader
+        //    Samples DPB image planes directly, bypassing vkCmdCopyImageToBuffer
+        //    which produces garbled output for multi-planar video decode images on NVIDIA.
         let res = self.resources.as_ref().unwrap();
         let decode_width = res.decode_width;
         let coded_height = res.decode_height;
         let display_height = self.display_height;
+        let dpb_slot = res.last_decoded_dpb_slot;
 
-        let (_, nv12_buffer) =
-            gpu.acquire_pixel_buffer(decode_width, coded_height, PixelFormat::Nv12VideoRange)?;
-
-        let dest_vk_buffer = nv12_buffer.buffer_ref().inner.buffer();
-
-        self.record_transfer_commands(dest_vk_buffer, coded_height)?;
-        let res = self.resources.as_ref().unwrap();
-        let gfx_queue = self.vulkan_device.graphics_queue_secondary().unwrap_or(self.vulkan_device.queue());
-        unsafe {
-            let cmds = [res.transfer_command_buffer];
-            let submit = vk::SubmitInfo::default().command_buffers(&cmds);
-            self.device
-                .queue_submit(gfx_queue, &[submit], res.transfer_fence)
-                .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to submit transfer commands: {e}"))
-                })?;
-            self.device
-                .wait_for_fences(&[res.transfer_fence], true, FENCE_TIMEOUT_NS)
-                .map_err(|e| {
-                    StreamError::GpuError(format!(
-                        "Transfer fence timeout (5s) or error: {e}"
-                    ))
-                })?;
-            self.device
-                .reset_fences(&[res.transfer_fence])
-                .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to reset transfer fence: {e}"))
-                })?;
-        }
-
-        // 6b. Convert NV12→BGRA for display output (coded height for dispatch alignment)
         let (bgra_pool_id, bgra_buffer) =
             gpu.acquire_pixel_buffer(decode_width, coded_height, PixelFormat::Bgra32)?;
+
         let res = self.resources.as_ref().unwrap();
-        res.nv12_to_bgra_converter.convert(&nv12_buffer, &bgra_buffer)?;
+        let gfx_queue = self.vulkan_device.graphics_queue_secondary().unwrap_or(self.vulkan_device.queue());
+
+        // Update descriptor set: bind current DPB slot's YCbCr view + BGRA output buffer
+        let ycbcr_image_info = vk::DescriptorImageInfo::default()
+            .sampler(res.dpb_to_bgra_sampler)
+            .image_view(res.dpb_ycbcr_views[dpb_slot])
+            .image_layout(vk::ImageLayout::GENERAL);
+        let ycbcr_image_infos = [ycbcr_image_info];
+        let bgra_vk_buffer = bgra_buffer.buffer_ref().inner.buffer();
+        let bgra_vk_size = bgra_buffer.buffer_ref().inner.size();
+        let bgra_buf_info = vk::DescriptorBufferInfo::default()
+            .buffer(bgra_vk_buffer)
+            .offset(0)
+            .range(bgra_vk_size);
+        let bgra_buf_infos = [bgra_buf_info];
+
+        let descriptor_writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(res.dpb_to_bgra_descriptor_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&ycbcr_image_infos),
+            vk::WriteDescriptorSet::default()
+                .dst_set(res.dpb_to_bgra_descriptor_set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&bgra_buf_infos),
+        ];
+        unsafe { self.device.update_descriptor_sets(&descriptor_writes, &[]) };
+
+        // Record compute commands: transition DPB → SHADER_READ, dispatch, transition back
+        let cmd_buf = res.transfer_command_buffer;
+        let decoded_image = res.dpb_images[dpb_slot];
+        unsafe {
+            self.device
+                .reset_command_buffer(cmd_buf, vk::CommandBufferResetFlags::empty())
+                .map_err(|e| StreamError::GpuError(format!("Failed to reset compute cmd buffer: {e}")))?;
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.device.begin_command_buffer(cmd_buf, &begin_info)
+                .map_err(|e| StreamError::GpuError(format!("Failed to begin compute cmd buffer: {e}")))?;
+
+            // Layout transition: DPB → GENERAL for compute shader sampling.
+            // No queue family ownership transfer — CONCURRENT sharing mode +
+            // semaphore sync between decode and graphics queue submissions.
+            let barrier_to_shader_read = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .image(decoded_image)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+            self.device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_to_shader_read],
+            );
+
+            // Bind pipeline and descriptor set
+            self.device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, res.dpb_to_bgra_pipeline);
+            self.device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::COMPUTE,
+                res.dpb_to_bgra_pipeline_layout,
+                0,
+                &[res.dpb_to_bgra_descriptor_set],
+                &[],
+            );
+
+            // Push constants: width, height (YCbCr conversion handles color space)
+            let push_data: [u32; 2] = [decode_width, coded_height];
+            let push_bytes: &[u8] = std::slice::from_raw_parts(
+                push_data.as_ptr() as *const u8,
+                std::mem::size_of_val(&push_data),
+            );
+            self.device.cmd_push_constants(
+                cmd_buf,
+                res.dpb_to_bgra_pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                push_bytes,
+            );
+
+            // Dispatch: 16×16 workgroups, 1 pixel per thread
+            let dispatch_x = (decode_width + 15) / 16;
+            let dispatch_y = (coded_height + 15) / 16;
+            self.device.cmd_dispatch(cmd_buf, dispatch_x, dispatch_y, 1);
+
+            // Transition back to DPB layout for future decode use
+            let barrier_back_to_dpb = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::GENERAL)
+                .new_layout(vk::ImageLayout::VIDEO_DECODE_DPB_KHR)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::SHADER_READ)
+                .dst_access_mask(vk::AccessFlags::empty())
+                .image(decoded_image)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+            self.device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_back_to_dpb],
+            );
+
+            self.device.end_command_buffer(cmd_buf)
+                .map_err(|e| StreamError::GpuError(format!("Failed to end compute cmd buffer: {e}")))?;
+
+            // Submit with semaphore wait (decode queue → graphics queue sync)
+            let cmds = [cmd_buf];
+            let wait_semaphores = [res.decode_to_transfer_semaphore];
+            let wait_stages = [vk::PipelineStageFlags::COMPUTE_SHADER];
+            let submit = vk::SubmitInfo::default()
+                .command_buffers(&cmds)
+                .wait_semaphores(&wait_semaphores)
+                .wait_dst_stage_mask(&wait_stages);
+            self.device
+                .queue_submit(gfx_queue, &[submit], res.transfer_fence)
+                .map_err(|e| StreamError::GpuError(format!("Failed to submit DPB→BGRA compute: {e}")))?;
+            self.device
+                .wait_for_fences(&[res.transfer_fence], true, FENCE_TIMEOUT_NS)
+                .map_err(|e| StreamError::GpuError(format!("DPB→BGRA fence timeout: {e}")))?;
+            self.device
+                .reset_fences(&[res.transfer_fence])
+                .map_err(|e| StreamError::GpuError(format!("Failed to reset compute fence: {e}")))?;
+        }
+
+        // Debug: log pixel values every 50 frames + consecutive pairs for change detection
+        if self.frame_count % 50 == 0 || self.frame_count == 10 || (self.frame_count >= 48 && self.frame_count <= 52) {
+            let bgra_ptr = bgra_buffer.buffer_ref().inner.mapped_ptr();
+            // Sample center pixel (row 544, col 960) and corner pixel (row 0, col 0)
+            let center_offset = (544 * decode_width + 960) as usize * 4;
+            let corner_vals: Vec<u8> = (0..4).map(|i| unsafe { *bgra_ptr.add(i) }).collect();
+            let center_vals: Vec<u8> = (0..4).map(|i| unsafe { *bgra_ptr.add(center_offset + i) }).collect();
+            tracing::info!(
+                "VulkanVideoDecoder: frame {} pixel check — corner BGRA={:?}, center BGRA={:?}, dpb_slot={}",
+                self.frame_count, corner_vals, center_vals, dpb_slot
+            );
+        }
+        if self.frame_count == 0 {
+            let bgra_ptr = bgra_buffer.buffer_ref().inner.mapped_ptr();
+            let bgra_size = bgra_buffer.buffer_ref().inner.size() as usize;
+            let bgra_slice = unsafe { std::slice::from_raw_parts(bgra_ptr, bgra_size) };
+            let _ = std::fs::write("/tmp/bgra_f500.raw", bgra_slice);
+            tracing::info!("VulkanVideoDecoder: dumped frame 500 BGRA to /tmp/bgra_f500.raw");
+        }
 
         // 7. Update DPB
         if nal_info.is_idr {
@@ -663,6 +979,7 @@ impl VulkanVideoDecoder {
         &mut self,
         nal_info: &NalUnitInfo,
         nal_data_size: usize,
+        slice_data_offset_in_buffer: usize,
     ) -> Result<()> {
         // Compute setup slot index and snapshot DPB state before borrowing resources mutably.
         let setup_slot_index = self.find_setup_slot_index(nal_info);
@@ -754,17 +1071,26 @@ impl VulkanVideoDecoder {
                 }
             }
 
-            if !dpb_barriers.is_empty() {
-                self.device.cmd_pipeline_barrier(
-                    cmd_buf,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &dpb_barriers,
-                );
-            }
+            // Bitstream buffer barrier: ensure host writes (CPU memcpy) are
+            // visible to the GPU before video decode reads the bitstream.
+            let bitstream_barrier = vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                .dst_access_mask(vk::AccessFlags::MEMORY_READ)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .buffer(res.bitstream_input_buffer)
+                .offset(0)
+                .size(vk::WHOLE_SIZE);
+
+            self.device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::HOST,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[bitstream_barrier],
+                &dpb_barriers,
+            );
 
             // Build decode picture info
             let mut pic_info_flags = StdVideoDecodeH264PictureInfoFlags {
@@ -776,7 +1102,7 @@ impl VulkanVideoDecoder {
             pic_info_flags.set_is_intra(if nal_info.is_idr { 1 } else { 0 });
             pic_info_flags.set_is_reference(if nal_info.is_reference { 1 } else { 0 });
 
-            // Slice offset is 0 because the bitstream buffer contains only
+            // Slice offset: 0 because the bitstream buffer contains only
             // the slice NAL data (SPS/PPS already stripped before GPU copy).
             let slice_offset: u32 = 0;
 
@@ -909,10 +1235,15 @@ impl VulkanVideoDecoder {
                 reference_slots.push(slot_info);
             }
 
-            // All slots that appear in the decode (setup + references)
+            // All slots that appear in the decode (setup + references).
+            // The setup slot MUST use slotIndex = -1 in begin_coding to indicate
+            // it is not yet associated with a DPB slot (per Vulkan spec + all
+            // reference implementations: FFmpeg, NVIDIA samples, mini_video).
+            let mut begin_setup_slot = setup_reference_slot;
+            begin_setup_slot.slot_index = -1;
             let mut all_slots_for_begin: Vec<vk::VideoReferenceSlotInfoKHR<'_>> =
                 Vec::with_capacity(reference_slots.len() + 1);
-            all_slots_for_begin.push(setup_reference_slot);
+            all_slots_for_begin.push(begin_setup_slot);
             all_slots_for_begin.extend_from_slice(&reference_slots);
 
             // Begin video coding session
@@ -979,6 +1310,10 @@ impl VulkanVideoDecoder {
                 cmd_buf,
                 &end_info,
             );
+
+            // No queue family ownership release needed — all reference
+            // implementations (FFmpeg, NVIDIA, mini_video) use QUEUE_FAMILY_IGNORED
+            // and rely on semaphore sync between decode and graphics submissions.
 
             self.device.end_command_buffer(cmd_buf).map_err(|e| {
                 StreamError::GpuError(format!("Failed to end decode command buffer: {e}"))
@@ -1138,6 +1473,11 @@ impl VulkanVideoDecoder {
         unique_families.sort();
         unique_families.dedup();
 
+        // CONCURRENT sharing mode — all reference implementations (FFmpeg, NVIDIA
+        // samples, mini_video) use QUEUE_FAMILY_IGNORED in barriers rather than
+        // explicit queue family ownership transfers. CONCURRENT allows both the
+        // video decode and graphics queues to access the image without ownership
+        // transfer barriers that were causing macroblock scrambling.
         let sharing_mode = if unique_families.len() > 1 {
             vk::SharingMode::CONCURRENT
         } else {
@@ -1260,6 +1600,8 @@ impl Drop for VulkanVideoDecoder {
             unsafe {
                 self.device.destroy_fence(res.decode_fence, None);
                 self.device
+                    .destroy_semaphore(res.decode_to_transfer_semaphore, None);
+                self.device
                     .destroy_command_pool(res.decode_command_pool, None);
                 self.device.destroy_fence(res.transfer_fence, None);
                 self.device
@@ -1275,7 +1617,17 @@ impl Drop for VulkanVideoDecoder {
                 self.vulkan_device
                     .free_device_memory(res.bitstream_input_buffer_memory);
 
+                // Destroy DPB→BGRA YCbCr pipeline resources
+                self.device.destroy_sampler(res.dpb_to_bgra_sampler, None);
+                self.device.destroy_sampler_ycbcr_conversion(res.dpb_ycbcr_conversion, None);
+                self.device.destroy_pipeline(res.dpb_to_bgra_pipeline, None);
+                self.device.destroy_pipeline_layout(res.dpb_to_bgra_pipeline_layout, None);
+                self.device.destroy_descriptor_pool(res.dpb_to_bgra_descriptor_pool, None);
+                self.device.destroy_descriptor_set_layout(res.dpb_to_bgra_descriptor_set_layout, None);
+                self.device.destroy_shader_module(res.dpb_to_bgra_shader_module, None);
+
                 for i in (0..res.dpb_images.len()).rev() {
+                    self.device.destroy_image_view(res.dpb_ycbcr_views[i], None);
                     self.device
                         .destroy_image_view(res.dpb_image_views[i], None);
                     self.device.destroy_image(res.dpb_images[i], None);

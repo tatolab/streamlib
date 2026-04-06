@@ -427,6 +427,12 @@ impl VulkanDevice {
                 }
                 device_extensions.push(vk::KHR_VIDEO_DECODE_QUEUE_NAME.as_ptr());
                 device_extensions.push(vk::KHR_VIDEO_DECODE_H264_NAME.as_ptr());
+                // VK_KHR_video_maintenance1 is required for correct Main/High profile
+                // CABAC decode on NVIDIA — without it, decode produces garbled output.
+                if available_device_ext_names.contains(&vk::KHR_VIDEO_MAINTENANCE1_NAME) {
+                    device_extensions.push(vk::KHR_VIDEO_MAINTENANCE1_NAME.as_ptr());
+                    tracing::info!("VK_KHR_video_maintenance1 enabled");
+                }
                 tracing::info!("Vulkan Video decode extensions enabled (H.264)");
             } else {
                 tracing::info!(

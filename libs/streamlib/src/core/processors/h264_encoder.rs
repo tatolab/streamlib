@@ -72,11 +72,19 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             let width = self.config.width.unwrap_or(frame.width);
             let height = self.config.height.unwrap_or(frame.height);
 
-            let profile = match self.config.profile.as_deref() {
-                Some("baseline") => H264Profile::Baseline,
-                Some("high") => H264Profile::High,
-                _ => H264Profile::Main, // default: Main (better compression than Baseline)
-            };
+            // Baseline only — Main/High (CABAC) decode is broken on NVIDIA
+            // Vulkan Video. See issue #233 for details. AV1 is the path forward
+            // for better compression.
+            let profile = H264Profile::Baseline;
+            if let Some(requested) = self.config.profile.as_deref() {
+                if requested != "baseline" {
+                    tracing::warn!(
+                        "[H264Encoder] Requested profile '{}' not supported — using Baseline (CAVLC). \
+                         Main/High CABAC decode has a known issue on NVIDIA Vulkan Video.",
+                        requested
+                    );
+                }
+            }
 
             let encoder_config = VideoEncoderConfig {
                 width,
@@ -114,6 +122,26 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             Ok(encoded) => {
                 if encoded.data.is_empty() {
                     return Ok(());
+                }
+                // Log NAL types for keyframes to verify IDR production
+                if encoded.is_keyframe {
+                    let mut nal_types = Vec::new();
+                    let d = &encoded.data;
+                    let mut j = 0;
+                    while j + 3 < d.len() {
+                        if (j + 3 < d.len() && d[j] == 0 && d[j+1] == 0 && d[j+2] == 1)
+                            || (j + 4 <= d.len() && d[j] == 0 && d[j+1] == 0 && d[j+2] == 0 && d[j+3] == 1)
+                        {
+                            let sc_len = if d[j+2] == 1 { 3 } else { 4 };
+                            let nh = d[j + sc_len];
+                            nal_types.push(nh & 0x1f);
+                            j += sc_len + 1;
+                        } else { j += 1; }
+                    }
+                    tracing::info!(
+                        "[H264Encoder] Keyframe output: {} bytes, NAL types={:?}",
+                        encoded.data.len(), nal_types
+                    );
                 }
                 self.outputs.write("encoded_video_out", &encoded)?;
                 self.frames_encoded += 1;

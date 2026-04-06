@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     // Video: Camera → H264 Encoder → MoQ Publish
     let camera = runtime.add_processor(CameraProcessor::Processor::node(Default::default()))?;
     let h264_enc = runtime.add_processor(H264EncoderProcessor::Processor::node(H264EncoderConfig {
-        profile: Some("main".to_string()), // Main profile — better compression via CABAC
+        keyframe_interval: Some(10),
         ..Default::default()
     }))?;
     let video_pub = runtime.add_processor(MoqPublishTrackProcessor::Processor::node(
