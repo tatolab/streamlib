@@ -271,9 +271,14 @@ impl MoqPublishSession {
         payload: &[u8],
         is_keyframe: bool,
     ) -> Result<()> {
-        // Single subgroup per track: all frames (IDR + P) go into one subgroup.
-        // The subscriber reads all objects from this subgroup in order, receiving
-        // IDR frames naturally as they appear in the stream.
+        // New subgroup on keyframe (GOP boundary). The subscriber calls
+        // next_subgroup().await which resolves when a new subgroup is created.
+        // Without this, the subscriber exhausts the first subgroup and blocks
+        // forever waiting for the next one.
+        if is_keyframe {
+            self.active_subgroup_writers.remove(track_name);
+        }
+
         if !self.active_subgroup_writers.contains_key(track_name) {
             let subgroups_writer = self.ensure_track_subgroups_writer(track_name)?;
             let subgroup = subgroups_writer.append(0).map_err(|e| {

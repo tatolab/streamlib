@@ -21,9 +21,14 @@ pub struct H264EncoderConfig {
     #[serde(rename = "bitrate_bps")]
     pub bitrate_bps: Option<u32>,
 
-    /// Frames between keyframes (default: 60).
+    /// Frames between keyframes (overrides keyframe_interval_seconds if set).
     #[serde(rename = "keyframe_interval")]
     pub keyframe_interval: Option<u32>,
+
+    /// Seconds between keyframes (default: 2.0). Converted to frames using
+    /// the encoder's fps. Ignored if keyframe_interval (frames) is set.
+    #[serde(rename = "keyframe_interval_seconds")]
+    pub keyframe_interval_seconds: Option<f32>,
 
     /// H.264 profile: baseline, main, or high (default: main).
     #[serde(rename = "profile")]
