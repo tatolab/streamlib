@@ -7,6 +7,7 @@ use std::ffi::{c_char, CStr};
 use std::sync::Arc;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use parking_lot::Mutex;
 
 use ash::vk;
 
@@ -38,6 +39,9 @@ pub struct VulkanDevice {
     video_decode_queue_family_index: Option<u32>,
     video_decode_queue: Option<vk::Queue>,
     graphics_queue_secondary: Option<vk::Queue>,
+    /// Mutex for graphics queue submissions — the display renderer and decoder
+    /// compute shader both submit to graphics queues from different threads.
+    graphics_queue_submit_mutex: Mutex<()>,
     live_allocation_count: AtomicUsize,
 }
 
@@ -557,6 +561,7 @@ impl VulkanDevice {
             video_decode_queue_family_index,
             video_decode_queue,
             graphics_queue_secondary,
+            graphics_queue_submit_mutex: Mutex::new(()),
             live_allocation_count: AtomicUsize::new(0),
         })
     }
@@ -661,6 +666,13 @@ impl VulkanDevice {
     /// Get the secondary graphics queue (for concurrent submissions from decoder).
     pub fn graphics_queue_secondary(&self) -> Option<vk::Queue> {
         self.graphics_queue_secondary
+    }
+
+    /// Lock the graphics queue for submission. Both the decoder's compute shader
+    /// and the display renderer submit to graphics queues from different threads —
+    /// this mutex prevents simultaneous vkQueueSubmit calls.
+    pub fn lock_graphics_queue(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.graphics_queue_submit_mutex.lock()
     }
 
     /// Get the graphics queue family index.

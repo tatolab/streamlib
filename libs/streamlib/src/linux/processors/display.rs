@@ -942,6 +942,9 @@ impl DisplayEventLoopHandler {
                 .signal_semaphores(&signal_semaphores)
                 .push_next(&mut timeline_submit_info);
 
+            // Lock graphics queue mutex to prevent racing with the decoder's
+            // compute shader submission from another thread.
+            let _gfx_lock = self.vulkan_device.lock_graphics_queue();
             if let Err(e) =
                 device.queue_submit(queue, &[submit_info], vk::Fence::null())
             {

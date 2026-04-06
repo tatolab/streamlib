@@ -911,7 +911,10 @@ impl VulkanVideoDecoder {
             self.device.end_command_buffer(cmd_buf)
                 .map_err(|e| StreamError::GpuError(format!("Failed to end compute cmd buffer: {e}")))?;
 
-            // Submit with semaphore wait (decode queue → graphics queue sync)
+            // Submit with semaphore wait (decode queue → graphics queue sync).
+            // Lock the graphics queue mutex to prevent racing with the display
+            // renderer (UNASSIGNED-Threading-MultipleThreads-Write).
+            let _gfx_lock = self.vulkan_device.lock_graphics_queue();
             let cmds = [cmd_buf];
             let wait_semaphores = [res.decode_to_transfer_semaphore];
             let wait_stages = [vk::PipelineStageFlags::COMPUTE_SHADER];
