@@ -25,7 +25,7 @@ use streamlib::{
     // Sources
     CameraProcessor, AudioCaptureProcessor, ChordGeneratorProcessor,
     // Codecs + audio processing
-    H264EncoderProcessor, H264DecoderProcessor,
+    H264BaselineEncoderProcessor, H264BaselineDecoderProcessor,
     OpusEncoderProcessor, OpusDecoderProcessor,
     AudioResamplerProcessor, BufferRechunkerProcessor,
     // MoQ transport
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
 
     // Video: Camera → H264 Encoder → MoQ Publish
     let camera = runtime.add_processor(CameraProcessor::Processor::node(Default::default()))?;
-    let h264_enc = runtime.add_processor(H264EncoderProcessor::Processor::node(H264EncoderConfig {
+    let h264_enc = runtime.add_processor(H264BaselineEncoderProcessor::Processor::node(H264EncoderConfig {
         keyframe_interval: Some(10),
         ..Default::default()
     }))?;
@@ -68,10 +68,10 @@ fn main() -> Result<()> {
 
     runtime.connect(
         output::<CameraProcessor::OutputLink::video>(&camera),
-        input::<H264EncoderProcessor::InputLink::video_in>(&h264_enc),
+        input::<H264BaselineEncoderProcessor::InputLink::video_in>(&h264_enc),
     )?;
     runtime.connect(
-        output::<H264EncoderProcessor::OutputLink::encoded_video_out>(&h264_enc),
+        output::<H264BaselineEncoderProcessor::OutputLink::encoded_video_out>(&h264_enc),
         input::<MoqPublishTrackProcessor::InputLink::data_in>(&video_pub),
     )?;
 
@@ -137,7 +137,7 @@ fn main() -> Result<()> {
     let video_sub = runtime.add_processor(MoqSubscribeTrackProcessor::Processor::node(
         MoqSubscribeTrackConfig { track_name: "video".to_string() },
     ))?;
-    let h264_dec = runtime.add_processor(H264DecoderProcessor::Processor::node(Default::default()))?;
+    let h264_dec = runtime.add_processor(H264BaselineDecoderProcessor::Processor::node(Default::default()))?;
     let display = runtime.add_processor(DisplayProcessor::Processor::node(DisplayConfig {
         width: 1280,
         height: 720,
@@ -147,10 +147,10 @@ fn main() -> Result<()> {
 
     runtime.connect(
         output::<MoqSubscribeTrackProcessor::OutputLink::data_out>(&video_sub),
-        input::<H264DecoderProcessor::InputLink::encoded_video_in>(&h264_dec),
+        input::<H264BaselineDecoderProcessor::InputLink::encoded_video_in>(&h264_dec),
     )?;
     runtime.connect(
-        output::<H264DecoderProcessor::OutputLink::video_out>(&h264_dec),
+        output::<H264BaselineDecoderProcessor::OutputLink::video_out>(&h264_dec),
         input::<DisplayProcessor::InputLink::video>(&display),
     )?;
 

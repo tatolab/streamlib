@@ -18,7 +18,7 @@ use bytes::Bytes;
 // ============================================================================
 
 #[crate::processor("com.streamlib.h264_decoder")]
-pub struct H264DecoderProcessor {
+pub struct H264BaselineDecoderProcessor {
     /// Runtime context.
     runtime_context: Option<RuntimeContext>,
 
@@ -44,7 +44,7 @@ pub struct H264DecoderProcessor {
     diagnostic_frame_count: u64,
 }
 
-impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
+impl crate::core::ReactiveProcessor for H264BaselineDecoderProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         self.runtime_context = Some(ctx);

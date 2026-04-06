@@ -5,7 +5,7 @@
 //
 // Transport-only: accepts pre-encoded video (EncodedVideoFrame) and audio
 // (EncodedAudioFrame), RTP-packetizes them, and sends via WebRTC WHIP.
-// Encoding is handled by upstream H264EncoderProcessor / OpusEncoderProcessor.
+// Encoding is handled by upstream H264BaselineEncoderProcessor / OpusEncoderProcessor.
 
 use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
 use crate::core::streaming::{convert_audio_to_sample, convert_video_to_samples};

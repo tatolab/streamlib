@@ -5,7 +5,7 @@
 //
 // Transport-only: receives video and audio via WebRTC WHEP, depacketizes
 // RTP, and outputs EncodedVideoFrame / EncodedAudioFrame.
-// Decoding is handled by downstream H264DecoderProcessor / OpusDecoderProcessor.
+// Decoding is handled by downstream H264BaselineDecoderProcessor / OpusDecoderProcessor.
 
 use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
 use crate::core::media_clock::MediaClock;

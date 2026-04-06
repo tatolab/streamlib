@@ -167,7 +167,7 @@ pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 // Codec processors (cross-platform)
 pub use core::processors::{
-    H264EncoderProcessor, H264DecoderProcessor,
+    H264BaselineEncoderProcessor, H264BaselineDecoderProcessor,
     OpusEncoderProcessor, OpusDecoderProcessor,
 };
 pub use _generated_::{

@@ -89,8 +89,8 @@ pub use buffer_rechunker::BufferRechunkerProcessor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
-pub use h264_encoder::H264EncoderProcessor;
-pub use h264_decoder::H264DecoderProcessor;
+pub use h264_encoder::H264BaselineEncoderProcessor;
+pub use h264_decoder::H264BaselineDecoderProcessor;
 pub use opus_encoder::OpusEncoderProcessor;
 pub use opus_decoder::OpusDecoderProcessor;
 pub use webrtc_whep::WebRtcWhepProcessor;

@@ -17,7 +17,7 @@ use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 // ============================================================================
 
 #[crate::processor("com.streamlib.h264_encoder")]
-pub struct H264EncoderProcessor {
+pub struct H264BaselineEncoderProcessor {
     /// Runtime context (kept for deferred encoder creation).
     runtime_context: Option<RuntimeContext>,
 
@@ -34,7 +34,7 @@ pub struct H264EncoderProcessor {
     device_lost: bool,
 }
 
-impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
+impl crate::core::ReactiveProcessor for H264BaselineEncoderProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
         self.runtime_context = Some(ctx);
