@@ -332,6 +332,13 @@ impl VulkanVideoEncoder {
             ))
         })?;
 
+        // Reset query pools on host before first use
+        // (VUID-vkGetQueryPoolResults-None-09401).
+        unsafe {
+            self.device.reset_query_pool(encode_feedback_query_pool, 0, 1);
+            self.device.reset_query_pool(encode_status_query_pool, 0, 1);
+        }
+
         // Graphics queue command pool (for buffer→image copy — the dedicated video
         // encode queue family doesn't support transfer operations)
         let gfx_pool_info = vk::CommandPoolCreateInfo::default()

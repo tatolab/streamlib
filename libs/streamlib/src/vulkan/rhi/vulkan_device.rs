@@ -477,13 +477,20 @@ impl VulkanDevice {
         let mut synchronization2_features =
             vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
 
+        // YCbCr conversion is required for Vulkan Video decode DPB→BGRA readback
+        // (VUID-vkCreateSamplerYcbcrConversion-None-01648).
+        let mut ycbcr_features =
+            vk::PhysicalDeviceSamplerYcbcrConversionFeatures::default()
+                .sampler_ycbcr_conversion(true);
+
         #[cfg(target_os = "linux")]
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions)
             .push_next(&mut dynamic_rendering_features)
             .push_next(&mut timeline_semaphore_features)
-            .push_next(&mut synchronization2_features);
+            .push_next(&mut synchronization2_features)
+            .push_next(&mut ycbcr_features);
 
         #[cfg(not(target_os = "linux"))]
         let device_create_info = vk::DeviceCreateInfo::default()

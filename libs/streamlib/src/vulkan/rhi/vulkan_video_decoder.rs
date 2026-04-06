@@ -317,11 +317,15 @@ impl VulkanVideoDecoder {
             })?;
         let transfer_command_buffer = gfx_cmd_buffers[0];
 
-        // Fences (unsignaled)
+        // Fences
         let fence_info = vk::FenceCreateInfo::default();
         let decode_fence = unsafe { self.device.create_fence(&fence_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create decode fence: {e}")))?;
-        let transfer_fence = unsafe { self.device.create_fence(&fence_info, None) }
+        // Transfer fence starts SIGNALED so the first frame's wait_for_fences
+        // (before descriptor set update) returns immediately.
+        let signaled_fence_info = vk::FenceCreateInfo::default()
+            .flags(vk::FenceCreateFlags::SIGNALED);
+        let transfer_fence = unsafe { self.device.create_fence(&signaled_fence_info, None) }
             .map_err(|e| {
                 StreamError::GpuError(format!("Failed to create transfer fence: {e}"))
             })?;
@@ -625,6 +629,15 @@ impl VulkanVideoDecoder {
             nal_info.pic_order_cnt
         );
 
+        // IDR: clear DPB BEFORE building decode commands so begin_coding
+        // doesn't reference evicted slots (VUID-vkCmdBeginVideoCodingKHR-slotIndex-07239).
+        if nal_info.is_idr {
+            tracing::info!("VulkanVideoDecoder: IDR frame — clearing all DPB slots");
+            for slot in self.dpb_slot_frame_numbers.iter_mut() {
+                *slot = None;
+            }
+        }
+
         // Guard: never decode a P-frame when DPB is empty (no reference frames)
         if !nal_info.is_idr && self.dpb_slot_frame_numbers.iter().all(|s| s.is_none()) {
             tracing::warn!(
@@ -760,6 +773,18 @@ impl VulkanVideoDecoder {
 
         let res = self.resources.as_ref().unwrap();
         let gfx_queue = self.vulkan_device.graphics_queue_secondary().unwrap_or(self.vulkan_device.queue());
+
+        // Wait for previous frame's compute shader to finish before updating
+        // the descriptor set (VUID-vkUpdateDescriptorSets-None-03047: descriptor
+        // set must not be in use by a pending command buffer).
+        unsafe {
+            self.device
+                .wait_for_fences(&[res.transfer_fence], true, FENCE_TIMEOUT_NS)
+                .map_err(|e| StreamError::GpuError(format!("DPB→BGRA prev fence wait: {e}")))?;
+            self.device
+                .reset_fences(&[res.transfer_fence])
+                .map_err(|e| StreamError::GpuError(format!("Failed to reset compute fence: {e}")))?;
+        }
 
         // Update descriptor set: bind current DPB slot's YCbCr view + BGRA output buffer
         let ycbcr_image_info = vk::DescriptorImageInfo::default()
@@ -897,12 +922,8 @@ impl VulkanVideoDecoder {
             self.device
                 .queue_submit(gfx_queue, &[submit], res.transfer_fence)
                 .map_err(|e| StreamError::GpuError(format!("Failed to submit DPB→BGRA compute: {e}")))?;
-            self.device
-                .wait_for_fences(&[res.transfer_fence], true, FENCE_TIMEOUT_NS)
-                .map_err(|e| StreamError::GpuError(format!("DPB→BGRA fence timeout: {e}")))?;
-            self.device
-                .reset_fences(&[res.transfer_fence])
-                .map_err(|e| StreamError::GpuError(format!("Failed to reset compute fence: {e}")))?;
+            // Fence wait/reset happens at the START of the next frame's decode
+            // (before updating descriptors) to allow GPU-CPU overlap.
         }
 
         // Debug: log pixel values every 50 frames + consecutive pairs for change detection
@@ -925,13 +946,7 @@ impl VulkanVideoDecoder {
             tracing::info!("VulkanVideoDecoder: dumped frame 500 BGRA to /tmp/bgra_f500.raw");
         }
 
-        // 7. Update DPB
-        if nal_info.is_idr {
-            tracing::info!("VulkanVideoDecoder: IDR frame — clearing all DPB slots");
-            for slot in self.dpb_slot_frame_numbers.iter_mut() {
-                *slot = None;
-            }
-        }
+        // 7. Update DPB (IDR clearing already done before decode commands)
         if nal_info.is_reference {
             // Store the new reference in the SAME slot used for decode setup
             let res = self.resources.as_ref().unwrap();
@@ -1554,6 +1569,15 @@ impl VulkanVideoDecoder {
         image: vk::Image,
         format: vk::Format,
     ) -> Result<vk::ImageView> {
+        // Restrict view usage to decode-only (exclude SAMPLED) so multi-planar
+        // views don't require a YCbCr conversion (VUID-VkImageViewCreateInfo-format-06415).
+        // The separate dpb_ycbcr_views handle sampling with the conversion attached.
+        let mut usage_info = vk::ImageViewUsageCreateInfo::default()
+            .usage(
+                vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
+                    | vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
+                    | vk::ImageUsageFlags::TRANSFER_SRC,
+            );
         let view_info = vk::ImageViewCreateInfo::default()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
@@ -1563,7 +1587,8 @@ impl VulkanVideoDecoder {
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
                     .level_count(1)
                     .layer_count(1),
-            );
+            )
+            .push_next(&mut usage_info);
 
         unsafe { device.create_image_view(&view_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create image view: {e}")))
