@@ -928,29 +928,50 @@ impl VulkanVideoDecoder {
         // 7. Update DPB
         if nal_info.is_idr {
             tracing::info!("VulkanVideoDecoder: IDR frame — clearing all DPB slots");
-            // IDR: clear all DPB slots
             for slot in self.dpb_slot_frame_numbers.iter_mut() {
                 *slot = None;
             }
         }
         if nal_info.is_reference {
-            // Find empty slot or evict oldest
-            let setup_slot = self
-                .dpb_slot_frame_numbers
-                .iter()
-                .position(|s| s.is_none())
-                .unwrap_or(0);
-            if setup_slot < self.dpb_slot_frame_numbers.len() {
-                let evicted = self.dpb_slot_frame_numbers[setup_slot];
-                self.dpb_slot_frame_numbers[setup_slot] =
-                    Some((nal_info.frame_num, nal_info.pic_order_cnt));
-                tracing::info!(
-                    "VulkanVideoDecoder: DPB update — stored ref in slot {} (frame_num={}, poc={}), evicted={:?}",
-                    setup_slot,
-                    nal_info.frame_num,
-                    nal_info.pic_order_cnt,
-                    evicted
-                );
+            // Store the new reference in the SAME slot used for decode setup
+            let res = self.resources.as_ref().unwrap();
+            let setup_slot = res.last_decoded_dpb_slot;
+            let max_active_refs = res.video_decode_session.max_active_reference_pictures() as usize;
+            let evicted = self.dpb_slot_frame_numbers[setup_slot];
+            self.dpb_slot_frame_numbers[setup_slot] =
+                Some((nal_info.frame_num, nal_info.pic_order_cnt));
+            tracing::info!(
+                "VulkanVideoDecoder: DPB update — stored ref in slot {} (frame_num={}, poc={}), evicted={:?}",
+                setup_slot,
+                nal_info.frame_num,
+                nal_info.pic_order_cnt,
+                evicted
+            );
+
+            // H.264 sliding window: evict oldest references when active count
+            // exceeds max_num_ref_frames from SPS. Without this, stale references
+            // accumulate and cause ghosting/glitch artifacts on P-frames.
+            let active_count = self.dpb_slot_frame_numbers.iter().filter(|s| s.is_some()).count();
+            if active_count > max_active_refs {
+                let excess = active_count - max_active_refs;
+                for _ in 0..excess {
+                    // Find slot with smallest frame_num (oldest reference)
+                    if let Some((evict_idx, _)) = self.dpb_slot_frame_numbers
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, s)| s.map(|(fnum, poc)| (i, (fnum, poc))))
+                        .min_by_key(|&(_, (fnum, _))| fnum)
+                    {
+                        tracing::info!(
+                            "VulkanVideoDecoder: DPB sliding window evict — slot {} ({:?}), active={}/{}",
+                            evict_idx,
+                            self.dpb_slot_frame_numbers[evict_idx],
+                            active_count - 1,
+                            max_active_refs
+                        );
+                        self.dpb_slot_frame_numbers[evict_idx] = None;
+                    }
+                }
             }
         }
 
@@ -1453,9 +1474,17 @@ impl VulkanVideoDecoder {
             return 0;
         }
         // Find first empty slot
+        if let Some(idx) = self.dpb_slot_frame_numbers.iter().position(|s| s.is_none()) {
+            return idx;
+        }
+        // No empty slot — evict the slot with the smallest frame_num
+        // (H.264 sliding window: oldest short-term reference is evicted first)
         self.dpb_slot_frame_numbers
             .iter()
-            .position(|s| s.is_none())
+            .enumerate()
+            .filter_map(|(i, s)| s.map(|(fnum, _)| (i, fnum)))
+            .min_by_key(|&(_, fnum)| fnum)
+            .map(|(i, _)| i)
             .unwrap_or(0)
     }
 
