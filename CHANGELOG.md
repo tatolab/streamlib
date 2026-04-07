@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.12](https://github.com/tatolab/streamlib/compare/v0.4.11...v0.4.12) (2026-04-05)
+
+
+### Bug Fixes
+
+* **moq:** configure QUIC keep-alive to prevent Cloudflare relay idle timeout ([#238](https://github.com/tatolab/streamlib/issues/238)) ([ab5fd60](https://github.com/tatolab/streamlib/commit/ab5fd60914bd98ddac9f1c9693a355077d43e588))
+* **moq:** configure QUIC keep-alive to prevent relay idle timeout ([2349c30](https://github.com/tatolab/streamlib/commit/2349c30d17848ec980112baa4d1c1607529a9555))
+
 ## [0.4.11](https://github.com/tatolab/streamlib/compare/v0.4.10...v0.4.11) (2026-04-05)
 
 
