@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.13](https://github.com/tatolab/streamlib/compare/v0.4.12...v0.4.13) (2026-04-15)
+
+
+### Bug Fixes
+
+* quote description in 217 plan to fix amos YAML parse error. ([40cc887](https://github.com/tatolab/streamlib/commit/40cc8872207f427bdac79219ee2348cb8ca0f963))
+
 ## [0.4.12](https://github.com/tatolab/streamlib/compare/v0.4.11...v0.4.12) (2026-04-05)
 
 
