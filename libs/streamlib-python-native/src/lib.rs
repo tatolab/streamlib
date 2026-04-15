@@ -16,7 +16,7 @@ use std::ffi::{c_char, CStr};
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
-use streamlib_ipc_types::FramePayload;
+use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE};
 
 // ============================================================================
 // Context
@@ -38,13 +38,13 @@ pub struct PythonNativeContext {
 }
 
 struct SubscriberState {
-    subscriber: Subscriber<ipc::Service, FramePayload, ()>,
+    subscriber: Subscriber<ipc::Service, [u8], ()>,
     /// Buffered payloads per port name (after poll).
     pending: HashMap<String, Vec<(Vec<u8>, i64)>>,
 }
 
 struct PublisherState {
-    publisher: Publisher<ipc::Service, FramePayload, ()>,
+    publisher: Publisher<ipc::Service, [u8], ()>,
     schema_name: String,
     dest_port: String,
 }
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn slpn_input_subscribe(
     let service = match ctx
         .node
         .service_builder(&service_name_iox)
-        .publish_subscribe::<FramePayload>()
+        .publish_subscribe::<[u8]>()
         .max_publishers(16)
         .subscriber_max_buffer_size(16)
         .open_or_create()
@@ -216,10 +216,20 @@ pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
 
     for (_service_name, state) in ctx.subscribers.iter_mut() {
         while let Ok(Some(sample)) = state.subscriber.receive() {
-            let payload = &*sample;
-            let port_name = payload.port().to_string();
-            let data = payload.data().to_vec();
-            let ts = payload.timestamp_ns;
+            let buf: &[u8] = sample.payload();
+            if buf.len() < FRAME_HEADER_SIZE {
+                eprintln!("[slpn] received frame smaller than header ({} bytes)", buf.len());
+                continue;
+            }
+            let header = FrameHeader::read_from_slice(buf);
+            let port_name = header.port().to_string();
+            let ts = header.timestamp_ns;
+            let data_len = header.len as usize;
+            if FRAME_HEADER_SIZE + data_len > buf.len() {
+                eprintln!("[slpn] frame data truncated: header.len={} buf.len()={}", data_len, buf.len());
+                continue;
+            }
+            let data = buf[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + data_len].to_vec();
 
             state.pending.entry(port_name).or_default().push((data, ts));
             has_data = true;
@@ -357,7 +367,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     let service = match ctx
         .node
         .service_builder(&service_name_iox)
-        .publish_subscribe::<FramePayload>()
+        .publish_subscribe::<[u8]>()
         .max_publishers(16)
         .subscriber_max_buffer_size(16)
         .open_or_create()
@@ -372,7 +382,7 @@ pub unsafe extern "C" fn slpn_output_publish(
         }
     };
 
-    let publisher = match service.publisher_builder().create() {
+    let publisher = match service.publisher_builder().initial_max_slice_len(4 * 1024 * 1024).create() {
         Ok(p) => p,
         Err(e) => {
             eprintln!(
@@ -432,27 +442,26 @@ pub unsafe extern "C" fn slpn_output_write(
         std::slice::from_raw_parts(data, data_len as usize)
     };
 
-    let sample = match state.publisher.loan_uninit() {
+    let total_len = FRAME_HEADER_SIZE + data_slice.len();
+    let mut frame = vec![0u8; total_len];
+    FrameHeader::new(&state.dest_port, &state.schema_name, timestamp_ns, data_slice.len() as u32)
+        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+    frame[FRAME_HEADER_SIZE..].copy_from_slice(data_slice);
+
+    let sample = match state.publisher.loan_slice_uninit(total_len) {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "[slpn:{}] Failed to loan sample for port '{}': {}",
+                "[slpn:{}] Failed to loan slice for port '{}': {:?}",
                 ctx.processor_id, port_name, e
             );
             return -1;
         }
     };
-
-    let sample = sample.write_payload(FramePayload::new(
-        &state.dest_port,
-        &state.schema_name,
-        timestamp_ns,
-        data_slice,
-    ));
-
+    let sample = sample.write_from_slice(&frame);
     if let Err(e) = sample.send() {
         eprintln!(
-            "[slpn:{}] Failed to send sample for port '{}': {}",
+            "[slpn:{}] Failed to send sample for port '{}': {:?}",
             ctx.processor_id, port_name, e
         );
         return -1;
