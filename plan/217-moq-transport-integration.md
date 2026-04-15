@@ -2,7 +2,7 @@
 whoami: amos
 name: MoQ Transport Integration
 status: in_progress
-description: MoQ as network transport via composable processors. Core architecture done. Remaining: schema codegen fix, Vulkan decoder, IPC heap allocation.
+description: "MoQ as network transport via composable processors. Core architecture done."
 github_issue: 217
 dependencies:
   - "down:@github:tatolab/streamlib#197"
