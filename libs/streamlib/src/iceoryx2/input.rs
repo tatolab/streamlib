@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
-use super::FramePayload;
+use super::{FrameHeader, FRAME_HEADER_SIZE};
 use crate::core::error::{Result, StreamError};
 
 /// Thread-local subscriber wrapper.
@@ -22,7 +22,7 @@ use crate::core::error::{Result, StreamError};
 /// 1. The Subscriber is only ever set AFTER the processor is spawned on its execution thread
 /// 2. Once set, the Subscriber is only accessed from that same thread
 /// 3. The wrapper starts with `None` and is populated during wiring on the target thread
-struct SendableSubscriber(UnsafeCell<Option<Subscriber<ipc::Service, FramePayload, ()>>>);
+struct SendableSubscriber(UnsafeCell<Option<Subscriber<ipc::Service, [u8], ()>>>);
 
 // SAFETY: The Subscriber is only accessed from a single thread after being set.
 // The processor lifecycle ensures that:
@@ -37,14 +37,14 @@ impl SendableSubscriber {
         Self(UnsafeCell::new(None))
     }
 
-    fn set(&self, subscriber: Subscriber<ipc::Service, FramePayload, ()>) {
+    fn set(&self, subscriber: Subscriber<ipc::Service, [u8], ()>) {
         // SAFETY: Only called from the processor's execution thread after spawn
         unsafe {
             *self.0.get() = Some(subscriber);
         }
     }
 
-    fn get(&self) -> Option<&Subscriber<ipc::Service, FramePayload, ()>> {
+    fn get(&self) -> Option<&Subscriber<ipc::Service, [u8], ()>> {
         // SAFETY: Only called from the processor's execution thread
         unsafe { (*self.0.get()).as_ref() }
     }
@@ -107,7 +107,7 @@ impl InputMailboxes {
     /// Set the iceoryx2 Subscriber for receiving payloads.
     ///
     /// Note: This should only be called from the processor's execution thread.
-    pub fn set_subscriber(&self, subscriber: Subscriber<ipc::Service, FramePayload, ()>) {
+    pub fn set_subscriber(&self, subscriber: Subscriber<ipc::Service, [u8], ()>) {
         self.subscriber.set(subscriber);
     }
 
@@ -122,13 +122,23 @@ impl InputMailboxes {
             return;
         };
 
-        // Receive and route payloads directly
+        // Receive [u8] slices and route to mailboxes
         loop {
             match subscriber.receive() {
                 Ok(Some(sample)) => {
-                    let payload = *sample.payload();
-                    let routed = self.route(payload);
-                    if !routed {
+                    let slice: &[u8] = sample.payload();
+                    if slice.len() < FRAME_HEADER_SIZE {
+                        tracing::warn!(
+                            "InputMailboxes: received slice too small ({} < {})",
+                            slice.len(),
+                            FRAME_HEADER_SIZE
+                        );
+                        continue;
+                    }
+                    let port_name = FrameHeader::read_port_from_slice(slice);
+                    if let Some(port_config) = self.ports.get(port_name) {
+                        port_config.mailbox.push(slice.to_vec());
+                    } else {
                         tracing::warn!("InputMailboxes: received sample but no matching port");
                     }
                 }
@@ -160,13 +170,15 @@ impl InputMailboxes {
             .get(port)
             .ok_or_else(|| StreamError::Link(format!("Unknown input port: {}", port)))?;
 
-        let payload = match port_config.read_mode {
+        let raw = match port_config.read_mode {
             ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
             ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
         }
         .ok_or_else(|| StreamError::Link(format!("No data available on port: {}", port)))?;
 
-        rmp_serde::from_slice(payload.data())
+        let header = FrameHeader::read_from_slice(&raw);
+        let data = &raw[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize];
+        rmp_serde::from_slice(data)
             .map_err(|e| StreamError::Link(format!("Failed to deserialize frame: {}", e)))
     }
 
@@ -182,13 +194,17 @@ impl InputMailboxes {
             .get(port)
             .ok_or_else(|| StreamError::Link(format!("Unknown input port: {}", port)))?;
 
-        let payload = match port_config.read_mode {
+        let raw = match port_config.read_mode {
             ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
             ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
         };
 
-        match payload {
-            Some(p) => Ok(Some((p.data().to_vec(), p.timestamp_ns))),
+        match raw {
+            Some(r) => {
+                let header = FrameHeader::read_from_slice(&r);
+                let data = r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize].to_vec();
+                Ok(Some((data, header.timestamp_ns)))
+            }
             None => Ok(None),
         }
     }
@@ -204,22 +220,25 @@ impl InputMailboxes {
             .unwrap_or(false)
     }
 
-    /// Drain all payloads from the given port's mailbox.
-    pub fn drain(&self, port: &str) -> impl Iterator<Item = FramePayload> + '_ {
+    /// Drain all raw frame slices from the given port's mailbox.
+    pub fn drain(&self, port: &str) -> impl Iterator<Item = Vec<u8>> + '_ {
         self.ports
             .get(port)
             .into_iter()
             .flat_map(|p| p.mailbox.drain())
     }
 
-    /// Route a payload to the appropriate mailbox based on its port_key.
+    /// Route a raw frame slice to the appropriate mailbox based on port_key in the header.
     ///
     /// Returns true if the payload was routed, false if no matching mailbox exists.
     /// Thread-safe: can be called from any thread.
-    pub fn route(&self, payload: FramePayload) -> bool {
-        let port = payload.port();
+    pub fn route(&self, raw: Vec<u8>) -> bool {
+        if raw.len() < FRAME_HEADER_SIZE {
+            return false;
+        }
+        let port = FrameHeader::read_port_from_slice(&raw);
         if let Some(port_config) = self.ports.get(port) {
-            port_config.mailbox.push(payload);
+            port_config.mailbox.push(raw);
             true
         } else {
             false

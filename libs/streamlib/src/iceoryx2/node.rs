@@ -9,7 +9,7 @@ use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::{EventPayload, FramePayload};
+use super::{EventPayload, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE};
 use crate::core::error::{Result, StreamError};
 
 /// Thread-safe wrapper for iceoryx2 Node.
@@ -55,7 +55,7 @@ impl Iceoryx2Node {
         Ok(Iceoryx2EventService { inner: service })
     }
 
-    /// Open or create a publish-subscribe service for FramePayload.
+    /// Open or create a publish-subscribe service for `[u8]` slices.
     ///
     /// The service name should follow the format: "streamlib/{source_processor}/{dest_processor}"
     pub fn open_or_create_service(&self, service_name: &str) -> Result<Iceoryx2Service> {
@@ -66,7 +66,7 @@ impl Iceoryx2Node {
 
         let service = node
             .service_builder(&service_name)
-            .publish_subscribe::<FramePayload>()
+            .publish_subscribe::<[u8]>()
             .max_publishers(16)
             .subscriber_max_buffer_size(16)
             .open_or_create()
@@ -76,11 +76,11 @@ impl Iceoryx2Node {
     }
 }
 
-/// Handle to an iceoryx2 publish-subscribe service.
+/// Handle to an iceoryx2 publish-subscribe service for `[u8]` slices.
 pub struct Iceoryx2Service {
     inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
         ipc::Service,
-        FramePayload,
+        [u8],
         (),
     >,
 }
@@ -89,9 +89,10 @@ impl Iceoryx2Service {
     /// Create a publisher for this service.
     pub fn create_publisher(
         &self,
-    ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, FramePayload, ()>> {
+    ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>> {
         self.inner
             .publisher_builder()
+            .initial_max_slice_len(MAX_PAYLOAD_SIZE + FRAME_HEADER_SIZE)
             .create()
             .map_err(|e| StreamError::Runtime(format!("Failed to create publisher: {:?}", e)))
     }
@@ -99,7 +100,7 @@ impl Iceoryx2Service {
     /// Create a subscriber for this service.
     pub fn create_subscriber(
         &self,
-    ) -> Result<iceoryx2::port::subscriber::Subscriber<ipc::Service, FramePayload, ()>> {
+    ) -> Result<iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>> {
         self.inner
             .subscriber_builder()
             .buffer_size(16)

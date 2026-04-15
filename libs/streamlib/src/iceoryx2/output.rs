@@ -10,7 +10,7 @@ use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::FramePayload;
+use super::{FrameHeader, FRAME_HEADER_SIZE};
 use crate::core::error::{Result, StreamError};
 use crate::core::media_clock::MediaClock;
 
@@ -23,7 +23,7 @@ pub struct OutputWriter {
     /// Map from output port name to downstream connections.
     /// Each connection is (schema, dest_port, publisher).
     connections:
-        Mutex<HashMap<String, Vec<(String, String, Publisher<ipc::Service, FramePayload, ()>)>>>,
+        Mutex<HashMap<String, Vec<(String, String, Publisher<ipc::Service, [u8], ()>)>>>,
 }
 
 // OutputWriter is Send + Sync via Mutex
@@ -47,7 +47,7 @@ impl OutputWriter {
         output_port: &str,
         schema: &str,
         dest_port: &str,
-        publisher: Publisher<ipc::Service, FramePayload, ()>,
+        publisher: Publisher<ipc::Service, [u8], ()>,
     ) {
         self.connections
             .lock()
@@ -86,17 +86,20 @@ impl OutputWriter {
             .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
 
         for (schema, dest_port, publisher) in port_connections {
-            let payload = FramePayload::new(dest_port, schema, timestamp_ns, &data);
+            let total_len = FRAME_HEADER_SIZE + data.len();
+            let mut frame = vec![0u8; total_len];
+            FrameHeader::new(dest_port, schema, timestamp_ns, data.len() as u32)
+                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+            frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
 
             let sample = publisher
-                .loan_uninit()
-                .map_err(|e| StreamError::Link(format!("Failed to loan sample: {:?}", e)))?;
+                .loan_slice_uninit(total_len)
+                .map_err(|e| StreamError::Link(format!("Failed to loan slice: {:?}", e)))?;
 
-            let sample = sample.write_payload(payload);
+            let sample = sample.write_from_slice(&frame);
             sample
                 .send()
                 .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
-
         }
 
         Ok(())
@@ -112,13 +115,17 @@ impl OutputWriter {
             .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
 
         for (schema, dest_port, publisher) in port_connections {
-            let payload = FramePayload::new(dest_port, schema, timestamp_ns, data);
+            let total_len = FRAME_HEADER_SIZE + data.len();
+            let mut frame = vec![0u8; total_len];
+            FrameHeader::new(dest_port, schema, timestamp_ns, data.len() as u32)
+                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+            frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
 
             let sample = publisher
-                .loan_uninit()
-                .map_err(|e| StreamError::Link(format!("Failed to loan sample: {:?}", e)))?;
+                .loan_slice_uninit(total_len)
+                .map_err(|e| StreamError::Link(format!("Failed to loan slice: {:?}", e)))?;
 
-            let sample = sample.write_payload(payload);
+            let sample = sample.write_from_slice(&frame);
             sample
                 .send()
                 .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
