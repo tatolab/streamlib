@@ -23,8 +23,12 @@ optionalProperties:
     type: uint32
   keyframe_interval:
     metadata:
-      description: "Frames between keyframes (default: 60)"
+      description: "Frames between keyframes (overrides keyframe_interval_seconds if set)"
     type: uint32
+  keyframe_interval_seconds:
+    metadata:
+      description: "Seconds between keyframes (default: 2.0). Ignored if keyframe_interval is set."
+    type: float32
   profile:
     metadata:
       description: "H.264 profile: baseline, main, or high (default: main)"
