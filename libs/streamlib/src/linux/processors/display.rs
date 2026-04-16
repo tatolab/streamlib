@@ -19,6 +19,18 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes};
 
+/// Maximum CPU/GPU frames in flight at once.
+///
+/// Per-frame resources (semaphores, command buffers, descriptor sets, camera
+/// textures) are sized to this constant — independent of swapchain image count.
+/// This is the conventional Vulkan pattern: swapchain image count is a
+/// presentation concern (driven by the compositor's preferred mode), while
+/// frames-in-flight is a CPU/GPU pipelining concern. Decoupling them avoids
+/// over-allocating per-frame resources and keeps input latency low.
+///
+/// 2 is the standard choice — CPU runs at most 1 frame ahead of GPU.
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct LinuxWindowId(pub u64);
 
@@ -534,7 +546,6 @@ impl DisplayEventLoopHandler {
         let queue = self.vulkan_device.queue();
 
         let frame_index = state.current_frame;
-        let image_count = state.swapchain_images.len();
 
         let vulkan_pixel_buffer = &buffer.buffer_ref().inner;
         let src_buffer = vulkan_pixel_buffer.buffer();
@@ -544,9 +555,8 @@ impl DisplayEventLoopHandler {
         // Create or recreate camera texture ring if dimensions changed.
         // Each in-flight frame gets its own device-local texture, avoiding
         // write-after-read hazards between buffer copy and fragment shader.
-        // We allow a SMALLER ring than image_count when NVIDIA refuses more
-        // allocations after swapchain creation — the ring just wraps with
-        // some sync stalls, but the pipeline keeps working.
+        // Sized to MAX_FRAMES_IN_FLIGHT (not swapchain image_count) — see
+        // canonical Vulkan pipelining pattern.
         let need_camera_texture_ring = if self.camera_texture_ring.is_empty() {
             true
         } else {
@@ -569,14 +579,11 @@ impl DisplayEventLoopHandler {
                 }
             }
 
-            // Allocate one camera texture per swapchain image (ring buffer).
+            // Allocate one camera texture per in-flight frame (NOT per swapchain image).
             // These are purely internal device-local textures for fragment shader
-            // sampling — no DMA-BUF export needed. Uses the default VMA pool
-            // which has NO export flags, so it's not affected by NVIDIA's
-            // restriction on DMA-BUF exportable allocations after swapchain
-            // creation.
+            // sampling. Uses the default VMA pool which has NO export flags.
             let allocator = self.vulkan_device.allocator();
-            for ring_idx in 0..image_count {
+            for ring_idx in 0..MAX_FRAMES_IN_FLIGHT {
                 let image_info = vk::ImageCreateInfo::builder()
                     .image_type(vk::ImageType::_2D)
                     .format(vk::Format::B8G8R8A8_UNORM)
@@ -663,10 +670,10 @@ impl DisplayEventLoopHandler {
             }
 
             tracing::info!(
-                "Display {}: camera texture ring created ({} textures for {} swapchain images, {}x{})",
+                "Display {}: camera texture ring created ({}/{} textures, {}x{})",
                 self.window_id,
                 self.camera_texture_ring.len(),
-                image_count,
+                MAX_FRAMES_IN_FLIGHT,
                 src_width,
                 src_height
             );
@@ -696,11 +703,14 @@ impl DisplayEventLoopHandler {
             .build();
         unsafe { device.update_descriptor_sets(&[descriptor_write], &[] as &[vk::CopyDescriptorSet]) };
 
-        // Timeline semaphore wait: ensure frame N-image_count completed before reusing slot N.
-        // On the first image_count frames, wait_value is 0 and the semaphore starts at 0,
-        // so the wait returns immediately (equivalent to fences starting signaled).
+        // Timeline semaphore wait: ensure frame N-MAX_FRAMES_IN_FLIGHT completed
+        // before reusing slot N. On the first MAX_FRAMES_IN_FLIGHT frames,
+        // wait_value is 0 and the semaphore starts at 0, so the wait returns
+        // immediately (equivalent to fences starting signaled).
         state.frame_timeline_value += 1;
-        let wait_value = state.frame_timeline_value.saturating_sub(image_count as u64);
+        let wait_value = state
+            .frame_timeline_value
+            .saturating_sub(MAX_FRAMES_IN_FLIGHT as u64);
         if wait_value > 0 {
             let semaphores = [state.frame_timeline_semaphore];
             let values = [wait_value];
@@ -1047,7 +1057,7 @@ impl DisplayEventLoopHandler {
             // next render_frame() call for this sync slot handles synchronization.
         }
 
-        state.current_frame = (frame_index + 1) % image_count;
+        state.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
         let frame_idx = self.frame_counter.fetch_add(1, Ordering::Relaxed);
 
         // Debug feature: sample frame to PNG.
@@ -1329,14 +1339,14 @@ fn create_swapchain_state(
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
 
-    // Create per-swapchain-image binary semaphores for acquire/present
+    // Per-FRAME synchronization primitives sized to MAX_FRAMES_IN_FLIGHT.
     let image_count = swapchain_images.len();
     let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
-    let mut image_available_semaphores = Vec::with_capacity(image_count);
-    let mut render_finished_semaphores = Vec::with_capacity(image_count);
+    let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+    let mut render_finished_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
 
-    for _ in 0..image_count {
+    for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
@@ -1347,7 +1357,8 @@ fn create_swapchain_state(
     }
 
     // Timeline semaphore for multi-flight frame synchronization (Vulkan 1.2 core).
-    // One semaphore tracks all frames — wait for value N-image_count before reusing slot N.
+    // One semaphore tracks all frames — wait for value N-MAX_FRAMES_IN_FLIGHT
+    // before reusing slot N.
     let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::builder()
         .semaphore_type(vk::SemaphoreType::TIMELINE)
         .initial_value(0)
@@ -1361,11 +1372,11 @@ fn create_swapchain_state(
                 StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e))
             })?;
 
-    // Pre-allocate command buffers (one per swapchain image)
+    // Pre-allocate command buffers (one per in-flight frame).
     let alloc_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(image_count as u32)
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
         .build();
 
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
@@ -1574,15 +1585,15 @@ fn create_swapchain_state(
         device.destroy_shader_module(frag_module, None);
     }
 
-    // Descriptor pool and sets — one per swapchain image to avoid updating
+    // Descriptor pool and sets — one per in-flight frame to avoid updating
     // a descriptor set while a previous frame's command buffer is still pending.
     let pool_size = vk::DescriptorPoolSize::builder()
         .type_(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(image_count as u32)
+        .descriptor_count(MAX_FRAMES_IN_FLIGHT as u32)
         .build();
     let pool_sizes = [pool_size];
     let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
-        .max_sets(image_count as u32)
+        .max_sets(MAX_FRAMES_IN_FLIGHT as u32)
         .pool_sizes(&pool_sizes)
         .build();
     let descriptor_pool =
@@ -1592,7 +1603,7 @@ fn create_swapchain_state(
             })?;
 
     let set_layouts_alloc: Vec<vk::DescriptorSetLayout> =
-        vec![descriptor_set_layout; image_count];
+        vec![descriptor_set_layout; MAX_FRAMES_IN_FLIGHT];
     let ds_alloc_info = vk::DescriptorSetAllocateInfo::builder()
         .descriptor_pool(descriptor_pool)
         .set_layouts(&set_layouts_alloc)
@@ -1728,14 +1739,14 @@ fn recreate_swapchain(
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
 
-    // Create per-swapchain-image binary semaphores for acquire/present
+    // Per-FRAME synchronization primitives sized to MAX_FRAMES_IN_FLIGHT.
     let new_image_count = swapchain_images.len();
     let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
-    let mut image_available_semaphores = Vec::with_capacity(new_image_count);
-    let mut render_finished_semaphores = Vec::with_capacity(new_image_count);
+    let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+    let mut render_finished_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
 
-    for _ in 0..new_image_count {
+    for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
@@ -1759,11 +1770,11 @@ fn recreate_swapchain(
                 StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e))
             })?;
 
-    // Pre-allocate command buffers (one per swapchain image)
+    // Pre-allocate command buffers (one per in-flight frame).
     let alloc_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(new_image_count as u32)
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
         .build();
 
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
