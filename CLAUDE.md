@@ -326,4 +326,15 @@ condition matches what you're seeing.
   Read before trying to test GPU pipeline changes (mocked unit tests
   often miss driver bugs).
 
+- @docs/learnings/vulkanalia-empty-slice-cast.md — Cryptic type
+  inference error (`cannot satisfy _: Cast`) when passing `&[]` to
+  vulkanalia Vulkan methods. Fix: explicit cast `&[] as &[vk::MemoryBarrier]`.
+  Read before writing any `cmd_pipeline_barrier` or similar call with
+  empty barrier arrays.
+- @docs/learnings/pubsub-lazy-init-silent-noop.md — Test hangs
+  indefinitely with no error output. PUBSUB silently no-ops (subscribe
+  buffers, publish drops) without `init()`. Read before writing any test
+  that uses PUBSUB events (shutdown, reconfigure) outside a full
+  `StreamRuntime`.
+
 Index: @docs/learnings/README.md

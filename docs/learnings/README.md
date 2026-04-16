@@ -25,3 +25,7 @@ directory is for the surprises.
   `MAX_FRAMES_IN_FLIGHT = 2`, NOT `swapchain.images.len()`
 - [@docs/learnings/camera-display-e2e-validation.md](camera-display-e2e-validation.md) —
   Validate camera→display end-to-end via virtual camera + PNG sampling
+- [@docs/learnings/vulkanalia-empty-slice-cast.md](vulkanalia-empty-slice-cast.md) —
+  Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
+- [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —
+  Test hangs indefinitely because PUBSUB silently no-ops without `init()`
