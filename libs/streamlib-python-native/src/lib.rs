@@ -331,6 +331,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     port_name: *const c_char,
     dest_port: *const c_char,
     schema_name: *const c_char,
+    max_payload_bytes: usize,
 ) -> i32 {
     let ctx = match ctx.as_mut() {
         Some(c) => c,
@@ -382,7 +383,7 @@ pub unsafe extern "C" fn slpn_output_publish(
         }
     };
 
-    let publisher = match service.publisher_builder().initial_max_slice_len(4 * 1024 * 1024).create() {
+    let publisher = match service.publisher_builder().initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE).create() {
         Ok(p) => p,
         Err(e) => {
             eprintln!(

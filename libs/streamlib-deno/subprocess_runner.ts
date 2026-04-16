@@ -168,6 +168,7 @@ async function main(): Promise<void> {
               cString(output.name),
               cString(output.dest_port),
               cString(output.schema_name),
+              BigInt(output.max_payload_bytes ?? 65536),
             );
             if (result !== 0) {
               console.error(
