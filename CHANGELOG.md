@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.14](https://github.com/tatolab/streamlib/compare/v0.4.13...v0.4.14) (2026-04-16)
+
+
+### Features
+
+* **ipc:** migrate iceoryx2 to slice API — eliminate stack overflow ([#258](https://github.com/tatolab/streamlib/issues/258)) ([a4d7d5e](https://github.com/tatolab/streamlib/commit/a4d7d5eadaa77338767b40484eb999cc5d12a6e8))
+
+
+### Bug Fixes
+
+* **moq:** MoQ subgroup keyframe fix — pin 0.14.1 + keyframe_interval_seconds ([#256](https://github.com/tatolab/streamlib/issues/256)) ([aee51ca](https://github.com/tatolab/streamlib/commit/aee51ca9dc73e876d4137a90a035f6b25136e0a4))
+
 ## [0.4.13](https://github.com/tatolab/streamlib/compare/v0.4.12...v0.4.13) (2026-04-15)
 
 
