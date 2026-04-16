@@ -5,7 +5,7 @@ status: pending
 description: Rebuild camera texture ring, display direct sampling, and texture cache with vulkanalia types. Branch feat/gpu-resident-pipeline from main.
 github_issue: 253
 dependencies:
-  - "down:@github:tatolab/streamlib#252"
+  - "down:@github:tatolab/streamlib#236"
 adapters:
   github: builtin
 ---
@@ -14,7 +14,7 @@ adapters:
 
 ## Branch
 
-Create `feat/gpu-resident-pipeline` from `main` (after #252 merges).
+Create `feat/gpu-resident-pipeline` from `main` (after #236 merges).
 
 ## Changes
 
