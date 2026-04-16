@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: iceoryx2 Slice API Migration
-status: in_review
+status: completed
 description: Replace fixed-size FramePayload with iceoryx2 slice-based publish_subscribe for variable-length payloads. Branch feat/iceoryx2-slice-api from main.
 github_issue: 250
 dependencies:
