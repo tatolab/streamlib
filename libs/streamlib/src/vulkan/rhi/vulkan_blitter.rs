@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use ash::vk;
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
 
 use crate::core::rhi::blitter::RhiBlitter;
 use crate::core::rhi::RhiPixelBuffer;
@@ -9,7 +10,7 @@ use crate::core::{Result, StreamError};
 
 /// Vulkan implementation of [`RhiBlitter`] for GPU copy operations on Linux.
 pub struct VulkanBlitter {
-    device: ash::Device,
+    device: vulkanalia::Device,
     queue: vk::Queue,
     #[allow(dead_code)]
     queue_family_index: u32,
@@ -18,10 +19,11 @@ pub struct VulkanBlitter {
 
 impl VulkanBlitter {
     /// Create a new Vulkan blitter with a dedicated command pool.
-    pub fn new(device: &ash::Device, queue: vk::Queue, queue_family_index: u32) -> Result<Self> {
-        let pool_info = vk::CommandPoolCreateInfo::default()
+    pub fn new(device: &vulkanalia::Device, queue: vk::Queue, queue_family_index: u32) -> Result<Self> {
+        let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(queue_family_index);
+            .queue_family_index(queue_family_index)
+            .build();
 
         let command_pool =
             unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
@@ -53,41 +55,48 @@ impl RhiBlitter for VulkanBlitter {
 
         let copy_size = src_size;
 
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(self.command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
+            .command_buffer_count(1)
+            .build();
 
         let command_buffer = unsafe { self.device.allocate_command_buffers(&alloc_info) }
             .map_err(|e| StreamError::GpuError(format!("Failed to allocate blit command buffer: {e}")))?[0];
 
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
 
         unsafe {
             self.device
                 .begin_command_buffer(command_buffer, &begin_info)
+                .map(|_| ())
                 .map_err(|e| StreamError::GpuError(format!("Failed to begin blit command buffer: {e}")))?;
 
-            let region = vk::BufferCopy::default()
+            let region = vk::BufferCopy::builder()
                 .src_offset(0)
                 .dst_offset(0)
-                .size(copy_size);
+                .size(copy_size)
+                .build();
 
             self.device
                 .cmd_copy_buffer(command_buffer, src_buffer, dest_buffer, &[region]);
 
             self.device
                 .end_command_buffer(command_buffer)
+                .map(|_| ())
                 .map_err(|e| StreamError::GpuError(format!("Failed to end blit command buffer: {e}")))?;
 
             // Timeline semaphore (Vulkan 1.2 core) for targeted blit synchronization.
             // More efficient than fences for GPU-GPU ordering.
-            let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::default()
+            let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::builder()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
-                .initial_value(0);
-            let timeline_semaphore_info = vk::SemaphoreCreateInfo::default()
-                .push_next(&mut timeline_type_info);
+                .initial_value(0)
+                .build();
+            let timeline_semaphore_info = vk::SemaphoreCreateInfo::builder()
+                .push_next(&mut timeline_type_info)
+                .build();
             let timeline_semaphore = self
                 .device
                 .create_semaphore(&timeline_semaphore_info, None)
@@ -95,32 +104,37 @@ impl RhiBlitter for VulkanBlitter {
 
             let signal_semaphores = [timeline_semaphore];
             let signal_values = [1u64];
-            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::default()
-                .signal_semaphore_values(&signal_values);
+            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::builder()
+                .signal_semaphore_values(&signal_values)
+                .build();
 
-            let submit_info = vk::SubmitInfo::default()
+            let submit_info = vk::SubmitInfo::builder()
                 .command_buffers(std::slice::from_ref(&command_buffer))
                 .signal_semaphores(&signal_semaphores)
-                .push_next(&mut timeline_submit_info);
+                .push_next(&mut timeline_submit_info)
+                .build();
 
             self.device
                 .queue_submit(self.queue, &[submit_info], vk::Fence::null())
                 .map_err(|e| {
                     self.device.destroy_semaphore(timeline_semaphore, None);
                     StreamError::GpuError(format!("Failed to submit blit command: {e}"))
-                })?;
+                })
+                .map(|_| ())?;
 
             let wait_semaphores = [timeline_semaphore];
             let wait_values = [1u64];
-            let wait_info = vk::SemaphoreWaitInfo::default()
+            let wait_info = vk::SemaphoreWaitInfo::builder()
                 .semaphores(&wait_semaphores)
-                .values(&wait_values);
+                .values(&wait_values)
+                .build();
             self.device
                 .wait_semaphores(&wait_info, u64::MAX)
                 .map_err(|e| {
                     self.device.destroy_semaphore(timeline_semaphore, None);
                     StreamError::GpuError(format!("Failed to wait for blit timeline semaphore: {e}"))
-                })?;
+                })
+                .map(|_| ())?;
 
             self.device.destroy_semaphore(timeline_semaphore, None);
             self.device
@@ -155,3 +169,88 @@ impl Drop for VulkanBlitter {
 
 unsafe impl Send for VulkanBlitter {}
 unsafe impl Sync for VulkanBlitter {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
+    use crate::vulkan::rhi::{VulkanDevice, VulkanPixelBuffer};
+    use std::sync::Arc;
+
+    fn make_rhi_buffer(
+        device: &Arc<VulkanDevice>,
+        width: u32,
+        height: u32,
+    ) -> RhiPixelBuffer {
+        let buf = VulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
+            .expect("pixel buffer allocation failed");
+        RhiPixelBuffer::new(RhiPixelBufferRef {
+            inner: Arc::new(buf),
+        })
+    }
+
+    #[test]
+    fn test_blit_copy_between_equal_size_buffers() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let blitter = VulkanBlitter::new(
+            device.device(),
+            device.queue(),
+            device.queue_family_index(),
+        )
+        .expect("blitter creation failed");
+
+        let src = make_rhi_buffer(&device, 64, 64);
+        let dst = make_rhi_buffer(&device, 64, 64);
+
+        // Write a known pattern into src
+        let pattern: u8 = 0xAB;
+        let size = src.buffer_ref().inner.size() as usize;
+        unsafe {
+            std::ptr::write_bytes(src.buffer_ref().inner.mapped_ptr(), pattern, size);
+        }
+
+        blitter.blit_copy(&src, &dst).expect("blit_copy failed");
+
+        // Verify dst received the pattern
+        let dst_slice =
+            unsafe { std::slice::from_raw_parts(dst.buffer_ref().inner.mapped_ptr(), size) };
+        assert!(
+            dst_slice.iter().all(|&b| b == pattern),
+            "blit_copy must transfer all bytes from src to dst"
+        );
+    }
+
+    #[test]
+    fn test_blit_copy_rejects_mismatched_buffer_sizes() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let blitter = VulkanBlitter::new(
+            device.device(),
+            device.queue(),
+            device.queue_family_index(),
+        )
+        .expect("blitter creation failed");
+
+        let src = make_rhi_buffer(&device, 64, 64);
+        let dst = make_rhi_buffer(&device, 128, 128); // different size
+
+        let result = blitter.blit_copy(&src, &dst);
+        assert!(
+            result.is_err(),
+            "blit_copy must return Err for mismatched buffer sizes"
+        );
+    }
+}

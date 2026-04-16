@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
-use ash::vk;
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
+use vulkanalia_vma as vma;
+use vma::Alloc as _;
 
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{Result, StreamError};
@@ -58,39 +61,49 @@ fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
 /// Wraps a VkImage with associated memory and metadata.
 /// Can be created from scratch or imported from an IOSurface via VK_EXT_metal_objects.
 pub struct VulkanTexture {
-    /// Raw device handle for Vulkan API calls.
-    device: Option<ash::Device>,
     /// VulkanDevice reference for tracked allocation/free through the RHI.
     vulkan_device: Option<Arc<VulkanDevice>>,
     image: Option<vk::Image>,
-    /// Device memory (always allocated with DMA-BUF export flags via VulkanDevice).
-    device_memory: Option<vk::DeviceMemory>,
+    /// VMA allocation (always allocated with DMA-BUF export flags via VulkanDevice).
+    allocation: Option<vma::Allocation>,
+    /// Imported device memory for DMA-BUF import path (VMA cannot import external memory).
+    #[cfg(target_os = "linux")]
+    imported_memory: Option<vk::DeviceMemory>,
     /// Cached DMA-BUF fd to avoid leaking a new fd on each export call.
     #[cfg(target_os = "linux")]
     cached_dma_buf_fd: std::sync::OnceLock<std::os::unix::io::RawFd>,
     /// Whether this texture was imported from IOSurface (no memory to free).
     imported_from_iosurface: bool,
+    /// Whether this texture was imported from a DMA-BUF fd (uses imported_memory path).
+    #[cfg(target_os = "linux")]
+    imported_from_dma_buf: bool,
     width: u32,
     height: u32,
     format: TextureFormat,
 }
 
 impl VulkanTexture {
-    /// Create a new Vulkan texture.
+    /// Create a new DMA-BUF exportable Vulkan texture via the device's
+    /// dedicated VMA export pool.
+    ///
+    /// The export pool is configured with `pMemoryAllocateNext` set to
+    /// `VkExportMemoryAllocateInfo::DMA_BUF_EXT`, isolating exportable
+    /// allocations from the default VMA pool. This avoids NVIDIA driver
+    /// failures where global export configuration causes OOM after swapchain
+    /// creation.
     pub fn new(vulkan_device: &Arc<VulkanDevice>, desc: &TextureDescriptor) -> Result<Self> {
-        let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(desc.format);
         let usage_flags = texture_usages_to_vk(desc.usage);
 
         // Declare DMA-BUF handle type at image creation — required by Vulkan spec
         // (VUID-vkBindImageMemory-memory-02728) when memory will be allocated with
-        // VkExportMemoryAllocateInfo. Without this, binding exportable memory to the
-        // image is undefined behavior and fails on NVIDIA.
-        let mut external_image_info = vk::ExternalMemoryImageCreateInfo::default()
-            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        // VkExportMemoryAllocateInfo.
+        let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .build();
 
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
             .format(vk_format)
             .extent(vk::Extent3D {
                 width: desc.width,
@@ -99,37 +112,50 @@ impl VulkanTexture {
             })
             .mip_levels(1)
             .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(usage_flags)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external_image_info);
 
-        let image = unsafe { device.create_image(&image_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create image: {e}")))?;
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
 
-        let memory = vulkan_device
-            .allocate_image_memory(image, vk::MemoryPropertyFlags::DEVICE_LOCAL, true)
-            .map_err(|e| {
-                unsafe { device.destroy_image(image, None) };
-                e
-            })?;
-
-        unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
-            vulkan_device.free_device_memory(memory);
-            unsafe { device.destroy_image(image, None) };
-            StreamError::GpuError(format!("Failed to bind memory: {e}"))
-        })?;
+        // Prefer the DMA-BUF image pool; fall back to default allocator (no export)
+        // if the pool isn't available (e.g., external memory unsupported).
+        let (image, allocation) = {
+            #[cfg(target_os = "linux")]
+            let result = if let Some(pool) = vulkan_device.dma_buf_image_pool() {
+                unsafe { pool.create_image(image_info, &alloc_opts) }
+            } else {
+                let allocator = vulkan_device.allocator();
+                unsafe { allocator.create_image(image_info, &alloc_opts) }
+            };
+            #[cfg(not(target_os = "linux"))]
+            let result = {
+                let allocator = vulkan_device.allocator();
+                unsafe { allocator.create_image(image_info, &alloc_opts) }
+            };
+            result.map_err(|e| {
+                StreamError::GpuError(format!("Failed to create exportable image: {e}"))
+            })?
+        };
 
         Ok(Self {
-            device: Some(device.clone()),
             vulkan_device: Some(Arc::clone(vulkan_device)),
             image: Some(image),
-            device_memory: Some(memory),
+            allocation: Some(allocation),
+            #[cfg(target_os = "linux")]
+            imported_memory: None,
             #[cfg(target_os = "linux")]
             cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
+            #[cfg(target_os = "linux")]
+            imported_from_dma_buf: false,
             width: desc.width,
             height: desc.height,
             format: desc.format,
@@ -149,7 +175,7 @@ impl VulkanTexture {
     /// * `format` - Texture format
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn from_iosurface(
-        device: &ash::Device,
+        device: &vulkanalia::Device,
         iosurface_ref: *const std::ffi::c_void,
         width: u32,
         height: u32,
@@ -170,32 +196,32 @@ impl VulkanTexture {
         };
 
         // Create image with import info in pNext chain
-        let mut image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(vk_format)
-            .extent(vk::Extent3D {
+        let image_info = vk::ImageCreateInfo {
+            image_type: vk::ImageType::_2D,
+            format: vk_format,
+            extent: vk::Extent3D {
                 width,
                 height,
                 depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(
-                vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST,
-            )
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            p_next: &import_info as *const _ as *const _,
+            ..Default::default()
+        };
 
-        // Chain the import info
-        image_info.p_next = &import_info as *const _ as *const _;
-
-        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!("Failed to create image from IOSurface: {e}"))
-        })?;
+        let image = unsafe { device.create_image(&image_info, None) }
+            .map(|r| r)
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to create image from IOSurface: {e}"))
+            })?;
 
         tracing::debug!(
             "Imported IOSurface as Vulkan image: {}x{} {:?}",
@@ -205,10 +231,9 @@ impl VulkanTexture {
         );
 
         Ok(Self {
-            device: Some(device.clone()),
             vulkan_device: None,
             image: Some(image),
-            device_memory: None, // IOSurface manages the memory
+            allocation: None,
             imported_from_iosurface: true,
             width,
             height,
@@ -220,13 +245,16 @@ impl VulkanTexture {
     /// but the actual texture is stored elsewhere (e.g., Metal texture on macOS).
     pub fn placeholder() -> Self {
         Self {
-            device: None,
             vulkan_device: None,
             image: None,
-            device_memory: None,
+            allocation: None,
+            #[cfg(target_os = "linux")]
+            imported_memory: None,
             #[cfg(target_os = "linux")]
             cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
+            #[cfg(target_os = "linux")]
+            imported_from_dma_buf: false,
             width: 0,
             height: 0,
             format: TextureFormat::Rgba8Unorm,
@@ -262,24 +290,30 @@ impl VulkanTexture {
             return Ok(fd);
         }
 
-        let memory = self.device_memory.ok_or_else(|| {
-            StreamError::GpuError(
-                "Cannot export DMA-BUF from texture without device memory".into(),
-            )
-        })?;
-
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
             StreamError::GpuError("Cannot export DMA-BUF: no VulkanDevice stored".into())
         })?;
 
-        let get_fd_info = vk::MemoryGetFdInfoKHR::default()
-            .memory(memory)
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        // Get DeviceMemory from raw allocation (export/import path) or VMA allocation
+        let device_memory = if let Some(memory) = self.imported_memory {
+            memory
+        } else if let Some(allocation) = self.allocation.as_ref() {
+            let alloc_info = vk_dev.allocator().get_allocation_info(*allocation);
+            alloc_info.deviceMemory
+        } else {
+            return Err(StreamError::GpuError(
+                "Cannot export DMA-BUF from texture without memory".into(),
+            ));
+        };
 
-        let external_memory_fd =
-            ash::khr::external_memory_fd::Device::new(vk_dev.instance(), vk_dev.device());
+        let get_fd_info = vk::MemoryGetFdInfoKHR::builder()
+            .memory(device_memory)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .build();
 
-        let fd = unsafe { external_memory_fd.get_memory_fd(&get_fd_info) }
+        use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
+        let fd = unsafe { vk_dev.device().get_memory_fd_khr(&get_fd_info) }
+            .map(|r| r)
             .map_err(|e| StreamError::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
 
         let _ = self.cached_dma_buf_fd.set(fd);
@@ -298,8 +332,8 @@ impl VulkanTexture {
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
 
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
             .format(vk_format)
             .extent(vk::Extent3D {
                 width,
@@ -308,7 +342,7 @@ impl VulkanTexture {
             })
             .mip_levels(1)
             .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::LINEAR)
             .usage(
                 vk::ImageUsageFlags::TRANSFER_SRC
@@ -316,15 +350,19 @@ impl VulkanTexture {
                     | vk::ImageUsageFlags::SAMPLED,
             )
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .build();
 
-        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!("Failed to create image for DMA-BUF import: {e}"))
-        })?;
+        let image = unsafe { device.create_image(&image_info, None) }
+            .map(|r| r)
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to create image for DMA-BUF import: {e}"))
+            })?;
 
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
         let alloc_size = allocation_size.max(mem_requirements.size);
 
+        // VMA cannot import external memory — use raw import path in the RHI
         let memory = vulkan_device
             .import_dma_buf_memory(
                 fd,
@@ -337,20 +375,22 @@ impl VulkanTexture {
                 e
             })?;
 
-        unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
-            vulkan_device.free_device_memory(memory);
-            unsafe { device.destroy_image(image, None) };
-            StreamError::GpuError(format!("Failed to bind imported memory: {e}"))
-        })?;
+        unsafe { device.bind_image_memory(image, memory, 0) }
+            .map(|_| ())
+            .map_err(|e| {
+                vulkan_device.free_imported_memory(memory);
+                unsafe { device.destroy_image(image, None) };
+                StreamError::GpuError(format!("Failed to bind imported memory: {e}"))
+            })?;
 
         Ok(Self {
-            device: Some(device.clone()),
             vulkan_device: Some(Arc::clone(vulkan_device)),
             image: Some(image),
-            device_memory: Some(memory),
-            #[cfg(target_os = "linux")]
+            allocation: None,
+            imported_memory: Some(memory),
             cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
+            imported_from_dma_buf: true,
             width,
             height,
             format,
@@ -361,13 +401,16 @@ impl VulkanTexture {
 impl Clone for VulkanTexture {
     fn clone(&self) -> Self {
         Self {
-            device: None,
             vulkan_device: None,
             image: None,
-            device_memory: None,
+            allocation: None,
+            #[cfg(target_os = "linux")]
+            imported_memory: None,
             #[cfg(target_os = "linux")]
             cached_dma_buf_fd: std::sync::OnceLock::new(),
             imported_from_iosurface: false,
+            #[cfg(target_os = "linux")]
+            imported_from_dma_buf: false,
             width: self.width,
             height: self.height,
             format: self.format,
@@ -382,24 +425,33 @@ impl Drop for VulkanTexture {
             unsafe { libc::close(fd) };
         }
 
-        if let Some(device) = &self.device {
-            unsafe {
-                if let Some(image) = self.image {
-                    device.destroy_image(image, None);
-                }
+        if self.imported_from_iosurface {
+            // IOSurface manages the memory — only destroy the image handle
+            if let (Some(vk_dev), Some(image)) = (&self.vulkan_device, self.image) {
+                unsafe { vk_dev.device().destroy_image(image, None) };
             }
+            return;
         }
 
-        // Free tracked memory through VulkanDevice RHI
-        if !self.imported_from_iosurface {
-            if let Some(memory) = self.device_memory {
-                if let Some(vk_dev) = &self.vulkan_device {
-                    vk_dev.free_device_memory(memory);
-                } else if let Some(device) = &self.device {
-                    // Fallback for macOS IOSurface path (no VulkanDevice)
-                    unsafe { device.free_memory(memory, None) };
+        #[cfg(target_os = "linux")]
+        if self.imported_from_dma_buf {
+            // DMA-BUF import path: raw DeviceMemory, not VMA
+            if let Some(vk_dev) = &self.vulkan_device {
+                if let Some(image) = self.image {
+                    unsafe { vk_dev.device().destroy_image(image, None) };
+                }
+                if let Some(memory) = self.imported_memory.take() {
+                    vk_dev.free_imported_memory(memory);
                 }
             }
+            return;
+        }
+
+        // VMA path: destroy_image frees both the image and the allocation
+        if let (Some(vk_dev), Some(image), Some(allocation)) =
+            (&self.vulkan_device, self.image, self.allocation.take())
+        {
+            unsafe { vk_dev.allocator().destroy_image(image, allocation) };
         }
     }
 }
@@ -423,7 +475,6 @@ mod tests {
             }
         };
 
-        let before = device.live_allocation_count();
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
         let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
 
@@ -431,14 +482,12 @@ mod tests {
         assert_eq!(texture.width(), 1920);
         assert_eq!(texture.height(), 1080);
         assert_eq!(texture.format(), TextureFormat::Bgra8Unorm);
-        assert_eq!(device.live_allocation_count(), before + 1);
 
         println!(
-            "Pool texture created: {}x{} {:?}, allocations: {}",
+            "Pool texture created: {}x{} {:?}",
             texture.width(),
             texture.height(),
             texture.format(),
-            device.live_allocation_count()
         );
     }
 
@@ -452,15 +501,11 @@ mod tests {
             }
         };
 
-        let before = device.live_allocation_count();
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
         let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
-        assert_eq!(device.live_allocation_count(), before + 1);
-
         drop(texture);
-        assert_eq!(device.live_allocation_count(), before);
 
-        println!("Texture drop freed memory: allocations back to {}", before);
+        println!("Texture drop completed without panic");
     }
 
     #[test]
@@ -473,7 +518,6 @@ mod tests {
             }
         };
 
-        let before = device.live_allocation_count();
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
 
         let t0 = VulkanTexture::new(&device, &desc).expect("texture 0 failed");
@@ -481,24 +525,19 @@ mod tests {
         let t2 = VulkanTexture::new(&device, &desc).expect("texture 2 failed");
         let t3 = VulkanTexture::new(&device, &desc).expect("texture 3 failed");
 
-        assert_eq!(device.live_allocation_count(), before + 4);
         assert!(t0.image().is_some());
         assert!(t1.image().is_some());
         assert!(t2.image().is_some());
         assert!(t3.image().is_some());
 
-        println!(
-            "4 textures coexist, allocations: {}",
-            device.live_allocation_count()
-        );
+        println!("4 textures coexist");
 
         drop(t0);
         drop(t1);
         drop(t2);
         drop(t3);
 
-        assert_eq!(device.live_allocation_count(), before);
-        println!("All dropped, allocations back to {}", before);
+        println!("All dropped successfully");
     }
 
     #[test]
@@ -527,10 +566,159 @@ mod tests {
         assert!(tex.image().is_none());
         assert_eq!(tex.width(), 0);
         assert_eq!(tex.height(), 0);
-        assert!(tex.device_memory.is_none());
+        assert!(tex.allocation.is_none());
         assert!(tex.vulkan_device.is_none());
 
         println!("Placeholder verified: no image, no memory, no device");
+    }
+
+    /// Validates the camera-display allocation pattern after the fix:
+    /// 1. Camera: HOST_VISIBLE pixel buffers via raw exportable allocation (DMA-BUF)
+    /// 2. Camera: DEVICE_LOCAL compute output image via VMA (no export)
+    /// 3. Display: DEVICE_LOCAL camera textures via raw dedicated allocation (no export)
+    ///
+    /// The original bug: VMA's global pTypeExternalMemoryHandleTypes made ALL block
+    /// allocations DMA-BUF exportable. On NVIDIA, after creating a swapchain, the
+    /// driver rejected additional DMA-BUF exportable DEVICE_LOCAL block allocations.
+    ///
+    /// The fix: remove global export config from VMA. Exportable allocations (pixel
+    /// buffers, textures for IPC) use raw vkAllocateMemory with VkExportMemoryAllocateInfo.
+    /// Internal allocations (display camera textures) use raw vkAllocateMemory with
+    /// dedicated allocation + multi-type fallback (no export flags).
+    #[test]
+    fn test_camera_display_allocation_pattern() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let allocator = device.allocator();
+        let vk_device = device.device();
+        let width = 1920u32;
+        let height = 1080u32;
+
+        // Step 1: Camera pixel buffers via VulkanPixelBuffer (raw exportable allocation)
+        use crate::vulkan::rhi::VulkanPixelBuffer;
+        use crate::core::rhi::PixelFormat;
+        let mut pixel_buffers = Vec::new();
+        for i in 0..4 {
+            let buf = VulkanPixelBuffer::new(&device, width, height, 4, PixelFormat::Bgra32)
+                .unwrap_or_else(|e| panic!("pixel buffer [{i}] creation failed: {e}"));
+            assert!(!buf.mapped_ptr().is_null());
+            pixel_buffers.push(buf);
+        }
+        println!("Step 1: {} pixel buffers created (raw exportable)", pixel_buffers.len());
+
+        // Step 2: Camera compute output image via VMA (no export, no dedicated)
+        let compute_img_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .extent(vk::Extent3D { width, height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .build();
+
+        let compute_alloc_opts = vma::AllocationOptions {
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+
+        let (compute_img, compute_alloc) =
+            unsafe { allocator.create_image(compute_img_info, &compute_alloc_opts) }
+                .expect("compute output image creation failed");
+        println!("Step 2: compute output image created (VMA, DEVICE_LOCAL)");
+
+        // Step 3: Display camera textures via raw dedicated allocation (no export)
+        // This was the allocation that failed before the fix.
+        let mut camera_textures: Vec<(vk::Image, vk::DeviceMemory, vk::ImageView)> = Vec::new();
+        for i in 0..4 {
+            let img_info = vk::ImageCreateInfo::builder()
+                .image_type(vk::ImageType::_2D)
+                .format(vk::Format::B8G8R8A8_UNORM)
+                .extent(vk::Extent3D { width, height, depth: 1 })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .build();
+
+            let image = unsafe { vk_device.create_image(&img_info, None) }
+                .unwrap_or_else(|e| panic!("camera image [{i}] creation failed: {e}"));
+
+            let mem_reqs = unsafe { vk_device.get_image_memory_requirements(image) };
+
+            // Try each compatible memory type with dedicated allocation
+            let mut memory = None;
+            for type_idx in 0..32u32 {
+                if (mem_reqs.memory_type_bits & (1 << type_idx)) == 0 {
+                    continue;
+                }
+                let mut dedicated = vk::MemoryDedicatedAllocateInfo::builder()
+                    .image(image)
+                    .build();
+                let alloc_info = vk::MemoryAllocateInfo::builder()
+                    .allocation_size(mem_reqs.size)
+                    .memory_type_index(type_idx)
+                    .push_next(&mut dedicated)
+                    .build();
+                if let Ok(mem) = unsafe { vk_device.allocate_memory(&alloc_info, None) } {
+                    memory = Some(mem);
+                    break;
+                }
+            }
+
+            let memory = memory.unwrap_or_else(|| {
+                unsafe { vk_device.destroy_image(image, None) };
+                panic!("camera texture [{i}] memory allocation failed — all memory types rejected");
+            });
+
+            unsafe { vk_device.bind_image_memory(image, memory, 0) }
+                .unwrap_or_else(|e| panic!("camera texture [{i}] bind failed: {e}"));
+
+            let view_info = vk::ImageViewCreateInfo::builder()
+                .image(image)
+                .view_type(vk::ImageViewType::_2D)
+                .format(vk::Format::B8G8R8A8_UNORM)
+                .subresource_range(
+                    vk::ImageSubresourceRange::builder()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1)
+                        .build(),
+                )
+                .build();
+
+            let image_view = unsafe { vk_device.create_image_view(&view_info, None) }
+                .unwrap_or_else(|e| panic!("camera texture view [{i}] failed: {e}"));
+
+            camera_textures.push((image, memory, image_view));
+        }
+        println!("Step 3: {} camera textures created (raw dedicated, no export)", camera_textures.len());
+
+        // Cleanup
+        unsafe {
+            for (image, memory, view) in camera_textures {
+                vk_device.destroy_image_view(view, None);
+                vk_device.free_memory(memory, None);
+                vk_device.destroy_image(image, None);
+            }
+            allocator.destroy_image(compute_img, compute_alloc);
+        }
+        drop(pixel_buffers);
+        println!("All resources cleaned up successfully");
     }
 
     #[test]

@@ -161,37 +161,45 @@ Use the `/refine-name` command to get suggestions that follow this pattern. The 
 3. ❌ Methods that do nothing: `fn foo() { /* no-op */ }`
 4. ❌ Compatibility shims for "old code" in new implementations
 5. ❌ Bypassing type safety "just to make it compile"
-6. ❌ Modifying source code to make tests pass — tests must adapt to the API, not vice versa. Never weaken, stub out, or reshape library code so a test stops failing. If the API can't support the test, that's a design signal — report it.
+6. ❌ Reshaping library code to satisfy a test — code and architecture drive tests, not the reverse. If a test is failing because the code changed intentionally, update the test. If a test reveals a real defect, fix the defect.
 7. ❌ Writing tests that paper over broken APIs — if you have to mock half the system or ignore errors to get a test green, the test is lying. A test that passes against a broken API is worse than no test.
 
 **Instead**: Stop, explain the problem, present options, and wait for guidance.
 
-**For testing issues**: When you encounter a situation where the existing API doesn't support what you need to test, STOP and ask the user. Provide:
-1. What you're trying to test
-2. What the current API requires
-3. Why this is a problem
-4. Potential options (without implementing them)
-
 ### Test Philosophy - CRITICAL
 
-**Tests are a GATING FUNCTION, not a goal.**
+Tests are the **first gate in automated development**. They must give high confidence the code works before a single example is run. High-quality tests remove the need for manual validation via examples. Examples showcase features; tests prove the system works.
 
-The purpose of running tests is NOT to "get them passing." The API is actively evolving, and tests serve to:
-1. **Identify cracks** - Where does the current API fall short?
-2. **Surface missing pieces** - What's not implemented yet?
-3. **Validate design decisions** - Does the API feel right when used?
+**Creating, updating, and deleting tests never requires approval. Tests are standard scope for every task, AMOS node, and GitHub issue.**
 
-**When tests fail:**
-1. **DO NOT** automatically fix the test or the code
-2. **DO NOT** add workarounds to make tests pass
-3. **DO** report the failure clearly
-4. **DO** analyze what the failure reveals about the API
-5. **DO** think carefully about the implications
-6. **DO** present options and wait for direction
+When creating a task or issue, include testing goals — the types of tests needed and what conditions they cover (positive, negative, error). Not the exact code, just the intent.
 
-**The correct response to a failing test is analysis, not action.**
+#### What tests validate
 
-Ask: "What is this failure telling us about the design?" - not "How do I make this pass?"
+- **Migrations**: Confirm the migration had the intended effect and introduced no regressions. Understand what changed, then write tests that prove the change is correct.
+- **New features**: Cover positive paths, negative paths, and error/resource conditions (memory allocation failures, invalid input, concurrent access).
+- **Bug fixes**: Reproduce the bug first, then confirm it's gone.
+
+#### Test infrastructure
+
+- **Use fixtures** — pre-recorded video (ffmpeg animated content), test audio files, binary payloads. Tests must not require a live camera or microphone to run.
+- **Use virtualized sources** where hardware is needed — a virtual V4L2 camera playing fixture content, a virtual audio device. Do not write tests that only work on one physical setup.
+- **Generalize across hardware** — if a test works on one GPU it must work on any GPU. Do not hardcode device names, memory sizes, or vendor-specific behavior.
+- **GPU, audio, and display are available** in this environment — tests may use them but must not assume a specific configuration.
+- **Keep tests lightweight** — prefer unit tests over integration tests where coverage is equivalent.
+
+#### Test quality
+
+- **No zero-value tests** — do not test known truths. Every test must exercise real behavior that could plausibly break.
+- **Flag flaky tests** with `#[ignore]` and a comment explaining why. Do not leave flaky tests running silently — they destroy trust in the suite.
+- **Flag tests with side effects** — tests that write files, create IPC services, or mutate global state must clean up. Document side effects explicitly.
+- **Identify suite-degrading tests** — tests that take unexpectedly long or hang must have timeouts. Flag them if they can't be fixed.
+
+#### Code drives tests
+
+When functionality changes, update tests to reflect the new behavior. Never reshape library code to satisfy a test.
+
+**When a test failure indicates a significant code change that deviates from the task goal: STOP. Summarize the issue, proposed fixes, and impact on the goal. Wait for direction before proceeding.**
 
 ### Documentation Standards - MANDATORY
 
@@ -267,7 +275,7 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 The RHI is the **single gateway** to all GPU operations on Linux. Like Unreal Engine's RHI, it gives the runtime absolute control and traceability over every GPU resource.
 
 #### The boundary:
-- **`vulkan/rhi/`** (VulkanDevice, VulkanTexture, VulkanPixelBuffer, VulkanVideoEncoder, etc.) — MAY call Vulkan APIs. All `vkAllocateMemory` calls go through VulkanDevice methods.
+- **`vulkan/rhi/`** (VulkanDevice, VulkanTexture, VulkanPixelBuffer, VulkanVideoEncoder, etc.) — MAY call Vulkan APIs. All GPU memory allocation goes through VulkanDevice via `vulkanalia-vma`.
 - **`core/context/`** (GpuContext, TexturePool, PixelBufferPoolManager) — wraps the RHI with pooling, caps, and lifecycle management. This is what processors see.
 - **Processors** (`core/processors/`, `linux/processors/`, `apple/processors/`) — ONLY interact with GpuContext. They acquire/release resources from managed pools. They NEVER import from `ash`, `vk`, or `vulkan/rhi/` directly.
 
@@ -290,22 +298,43 @@ let texture = ctx.gpu.acquire_texture(&desc)?;
 
 **Exception:** Platform display processors (`linux/processors/display.rs`) may access the underlying Vulkan device handle from GpuContext for swapchain and rendering pipeline setup (this is platform-specific rendering, like Metal rendering on macOS). But they MUST acquire all textures and buffers through GpuContext pools, never allocate GPU memory directly.
 
-### GPU Memory Allocation (Linux/Vulkan) — NON-NEGOTIABLE
-
-**Do NOT use `gpu-allocator` or any third-party memory allocator crate.** All Vulkan memory allocation on Linux MUST use raw `vkAllocateMemory` through VulkanDevice methods in the RHI.
-
-#### Rules:
-1. **All allocations include `VkExportMemoryAllocateInfo`** with `DMA_BUF_EXT` handle type — every texture and buffer is cross-process shareable by default
-2. **All allocation goes through VulkanDevice** — the single authority for GPU memory. VulkanDevice methods handle export flags, memory type selection, and tracking internally
-3. **Processors use GpuContext** — pooled resources with caps (like macOS PixelBufferPool). Processors acquire/release, never allocate
-4. **Allocation count guardrails** — Vulkan has a max allocation count (~4096 on NVIDIA). VulkanDevice tracks live allocations. If this limit is approached, it indicates a processor is thrashing — that's a bug, not a memory issue
-
-#### Why no gpu-allocator:
-- Sub-allocation is incompatible with DMA-BUF export (can't export a sub-region of a shared block)
-- Mixed allocation strategies (raw + sub-allocator) cause VRAM contention on the same memory type
-- This pipeline uses ~30 allocations total — nowhere near the 4096 limit that sub-allocators exist to solve
-- Adds complexity and failure modes without solving any problem this codebase has
 
 ### Custom Commands
 
 - `/refine-name <current_name>` - Get MORE explicit naming suggestions (never shorter)
+
+---
+
+## Hard-won learnings (look these up when triggered)
+
+These docs capture surprising, non-obvious behavior — driver bugs,
+library quirks, allocation patterns. Look them up when the trigger
+condition matches what you're seeing.
+
+- @docs/learnings/nvidia-dma-buf-after-swapchain.md — `VK_ERROR_OUT_OF_DEVICE_MEMORY`
+  from `vmaCreateImage`/`vkAllocateMemory` on NVIDIA Linux when a swapchain
+  has been created. NOT real OOM.
+- @docs/learnings/vma-export-pools.md — Mixing DMA-BUF exportable and
+  non-exportable VMA allocations. Read before adding/changing
+  `pTypeExternalMemoryHandleTypes` or any export memory configuration.
+- @docs/learnings/vulkan-frames-in-flight.md — Per-frame Vulkan resources
+  (semaphores, command buffers, descriptor sets, render-target rings) must
+  be sized to `MAX_FRAMES_IN_FLIGHT = 2`, NOT `swapchain.images.len()`.
+  Read before sizing any per-frame resource.
+- @docs/learnings/camera-display-e2e-validation.md — Validating
+  camera→display end-to-end via virtual camera + AI-readable PNG sampling.
+  Read before trying to test GPU pipeline changes (mocked unit tests
+  often miss driver bugs).
+
+- @docs/learnings/vulkanalia-empty-slice-cast.md — Cryptic type
+  inference error (`cannot satisfy _: Cast`) when passing `&[]` to
+  vulkanalia Vulkan methods. Fix: explicit cast `&[] as &[vk::MemoryBarrier]`.
+  Read before writing any `cmd_pipeline_barrier` or similar call with
+  empty barrier arrays.
+- @docs/learnings/pubsub-lazy-init-silent-noop.md — Test hangs
+  indefinitely with no error output. PUBSUB silently no-ops (subscribe
+  buffers, publish drops) without `init()`. Read before writing any test
+  that uses PUBSUB events (shutdown, reconfigure) outside a full
+  `StreamRuntime`.
+
+Index: @docs/learnings/README.md

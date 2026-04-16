@@ -3,8 +3,12 @@
 
 use crate::_generated_::com_tatolab_display_config::ScalingMode;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
-use ash::vk;
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
+use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands as _;
+use vulkanalia::vk::KhrSwapchainExtensionDeviceCommands as _;
+use vulkanalia_vma as vma;
+use vma::Alloc as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -14,6 +18,18 @@ use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes};
+
+/// Maximum CPU/GPU frames in flight at once.
+///
+/// Per-frame resources (semaphores, command buffers, descriptor sets, camera
+/// textures) are sized to this constant — independent of swapchain image count.
+/// This is the conventional Vulkan pattern: swapchain image count is a
+/// presentation concern (driven by the compositor's preferred mode), while
+/// frames-in-flight is a CPU/GPU pipelining concern. Decoupling them avoids
+/// over-allocating per-frame resources and keeps input latency low.
+///
+/// 2 is the standard choice — CPU runs at most 1 frame ahead of GPU.
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct LinuxWindowId(pub u64);
@@ -120,6 +136,37 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     }
                 };
 
+                let frame_limit = std::env::var("STREAMLIB_DISPLAY_FRAME_LIMIT")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok());
+                let png_sample_dir = std::env::var("STREAMLIB_DISPLAY_PNG_SAMPLE_DIR")
+                    .ok()
+                    .map(std::path::PathBuf::from);
+                let png_sample_every = std::env::var("STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY")
+                    .ok()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(30);
+
+                if let Some(ref dir) = png_sample_dir {
+                    if let Err(e) = std::fs::create_dir_all(dir) {
+                        tracing::warn!(
+                            "Display {}: failed to create PNG sample dir {:?}: {}",
+                            window_id, dir, e
+                        );
+                    } else {
+                        tracing::info!(
+                            "Display {}: PNG sampling enabled — saving every {} frames to {:?}",
+                            window_id, png_sample_every, dir
+                        );
+                    }
+                }
+                if let Some(limit) = frame_limit {
+                    tracing::info!(
+                        "Display {}: frame limit enabled — will exit after {} frames",
+                        window_id, limit
+                    );
+                }
+
                 let mut app = DisplayEventLoopHandler {
                     window: None,
                     vulkan_device,
@@ -136,6 +183,10 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     swapchain_state: None,
                     pipeline_state: None,
                     camera_texture_ring: Vec::new(),
+                    frame_limit,
+                    png_sample_dir,
+                    png_sample_every,
+                    png_samples_saved: 0,
                 };
 
                 if let Err(e) = event_loop.run_app(&mut app) {
@@ -145,12 +196,12 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                 // Clean up camera texture ring resources
                 if !app.camera_texture_ring.is_empty() {
                     let device = app.vulkan_device.device();
+                    let allocator = app.vulkan_device.allocator();
                     for tex in app.camera_texture_ring.drain(..) {
                         unsafe {
                             device.destroy_image_view(tex.image_view, None);
-                            device.destroy_image(tex.image, None);
+                            allocator.destroy_image(tex.image, tex.allocation);
                         }
-                        let _ = app.vulkan_device.free_device_memory(tex.device_memory);
                     }
                 }
 
@@ -234,11 +285,8 @@ struct SwapchainState {
     command_buffers: Vec<vk::CommandBuffer>,
     /// Current frame index cycling through sync sets.
     current_frame: usize,
-    surface_loader: ash::khr::surface::Instance,
-    swapchain_loader: ash::khr::swapchain::Device,
     /// Per-swapchain-image VkImageView for dynamic rendering color attachment.
     swapchain_image_views: Vec<vk::ImageView>,
-    dynamic_rendering_loader: ash::khr::dynamic_rendering::Device,
 }
 
 /// Persistent render pipeline objects that survive swapchain recreation.
@@ -255,7 +303,7 @@ struct PersistentPipelineState {
 struct CameraTextureState {
     image: vk::Image,
     image_view: vk::ImageView,
-    device_memory: vk::DeviceMemory,
+    allocation: vma::Allocation,
     width: u32,
     height: u32,
 }
@@ -280,6 +328,14 @@ struct DisplayEventLoopHandler {
     swapchain_state: Option<SwapchainState>,
     pipeline_state: Option<PersistentPipelineState>,
     camera_texture_ring: Vec<CameraTextureState>,
+    /// Debug feature: auto-exit after N frames rendered (env: STREAMLIB_DISPLAY_FRAME_LIMIT).
+    frame_limit: Option<u64>,
+    /// Debug feature: directory to save sampled PNGs (env: STREAMLIB_DISPLAY_PNG_SAMPLE_DIR).
+    png_sample_dir: Option<std::path::PathBuf>,
+    /// Debug feature: save every Nth frame as PNG (env: STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY, default 30).
+    png_sample_every: u64,
+    /// Internal counter for next PNG sample.
+    png_samples_saved: u64,
 }
 
 impl ApplicationHandler for DisplayEventLoopHandler {
@@ -418,6 +474,20 @@ impl ApplicationHandler for DisplayEventLoopHandler {
             return;
         }
 
+        // Debug feature: auto-exit after frame_limit frames rendered.
+        if let Some(limit) = self.frame_limit {
+            let current = self.frame_counter.load(Ordering::Relaxed);
+            if current >= limit {
+                tracing::info!(
+                    "Display {}: frame limit ({}) reached — exiting",
+                    self.window_id, limit
+                );
+                self.running.store(false, Ordering::Release);
+                event_loop.exit();
+                return;
+            }
+        }
+
         if let Some(ref window) = self.window {
             if self.inputs.has_data("video") {
                 // New frame available — render it immediately
@@ -476,24 +546,22 @@ impl DisplayEventLoopHandler {
         let queue = self.vulkan_device.queue();
 
         let frame_index = state.current_frame;
-        let image_count = state.swapchain_images.len();
 
         let vulkan_pixel_buffer = &buffer.buffer_ref().inner;
         let src_buffer = vulkan_pixel_buffer.buffer();
         let src_width = vulkan_pixel_buffer.width();
         let src_height = vulkan_pixel_buffer.height();
 
-        // Create or recreate camera texture ring if dimensions changed or ring
-        // size no longer matches the swapchain image count (e.g. after resize).
+        // Create or recreate camera texture ring if dimensions changed.
         // Each in-flight frame gets its own device-local texture, avoiding
         // write-after-read hazards between buffer copy and fragment shader.
+        // Sized to MAX_FRAMES_IN_FLIGHT (not swapchain image_count) — see
+        // canonical Vulkan pipelining pattern.
         let need_camera_texture_ring = if self.camera_texture_ring.is_empty() {
             true
         } else {
             let existing = &self.camera_texture_ring[0];
-            existing.width != src_width
-                || existing.height != src_height
-                || self.camera_texture_ring.len() != image_count
+            existing.width != src_width || existing.height != src_height
         };
 
         if need_camera_texture_ring {
@@ -502,26 +570,22 @@ impl DisplayEventLoopHandler {
                 unsafe {
                     let _ = device.device_wait_idle();
                 }
+                let allocator = self.vulkan_device.allocator();
                 for old_tex in self.camera_texture_ring.drain(..) {
                     unsafe {
                         device.destroy_image_view(old_tex.image_view, None);
-                        device.destroy_image(old_tex.image, None);
+                        allocator.destroy_image(old_tex.image, old_tex.allocation);
                     }
-                    let _ = self.vulkan_device.free_device_memory(old_tex.device_memory);
                 }
             }
 
-            // Allocate one camera texture per swapchain image (ring buffer).
-            // Images are created with VkExternalMemoryImageCreateInfo so they can
-            // be DMA-BUF exported — this also avoids an NVIDIA driver bug where
-            // DEVICE_LOCAL dedicated allocations fail after DMA-BUF exportable
-            // buffer allocations on the same device.
-            for ring_idx in 0..image_count {
-                let mut external_image_info = vk::ExternalMemoryImageCreateInfo::default()
-                    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-
-                let image_info = vk::ImageCreateInfo::default()
-                    .image_type(vk::ImageType::TYPE_2D)
+            // Allocate one camera texture per in-flight frame (NOT per swapchain image).
+            // These are purely internal device-local textures for fragment shader
+            // sampling. Uses the default VMA pool which has NO export flags.
+            let allocator = self.vulkan_device.allocator();
+            for ring_idx in 0..MAX_FRAMES_IN_FLIGHT {
+                let image_info = vk::ImageCreateInfo::builder()
+                    .image_type(vk::ImageType::_2D)
                     .format(vk::Format::B8G8R8A8_UNORM)
                     .extent(vk::Extent3D {
                         width: src_width,
@@ -530,99 +594,94 @@ impl DisplayEventLoopHandler {
                     })
                     .mip_levels(1)
                     .array_layers(1)
-                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .samples(vk::SampleCountFlags::_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
                     .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .initial_layout(vk::ImageLayout::UNDEFINED)
-                    .push_next(&mut external_image_info);
+                    .initial_layout(vk::ImageLayout::UNDEFINED);
 
-                let image = match unsafe { device.create_image(&image_info, None) } {
-                    Ok(img) => img,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Display {}: Failed to create camera texture [{}]: {}",
-                            self.window_id,
-                            ring_idx,
-                            e
-                        );
-                        return;
-                    }
+                let alloc_opts = vma::AllocationOptions {
+                    required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    ..Default::default()
                 };
 
-                // Allocate through VulkanDevice RHI — exportable keeps textures
-                // in DEVICE_LOCAL VRAM via the DMA-BUF allocation path.
-                let memory = match self.vulkan_device.allocate_image_memory(
-                    image,
-                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                    true,
-                ) {
-                    Ok(mem) => mem,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Display {}: Failed to allocate camera texture memory [{}]: {}",
-                            self.window_id,
-                            ring_idx,
-                            e
-                        );
-                        unsafe { device.destroy_image(image, None) };
-                        return;
-                    }
-                };
+                let (image, allocation) =
+                    match unsafe { allocator.create_image(image_info, &alloc_opts) } {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Display {}: camera texture [{}] alloc failed: {} \
+                                 (will use partial ring with {} textures)",
+                                self.window_id,
+                                ring_idx,
+                                e,
+                                self.camera_texture_ring.len()
+                            );
+                            // Stop trying — use whatever we got. The ring will
+                            // wrap with sync stalls but the pipeline keeps working.
+                            break;
+                        }
+                    };
 
-                if unsafe { device.bind_image_memory(image, memory, 0) }.is_err() {
-                    self.vulkan_device.free_device_memory(memory);
-                    unsafe { device.destroy_image(image, None) };
-                    return;
-                }
-
-                let view_info = vk::ImageViewCreateInfo::default()
+                let view_info = vk::ImageViewCreateInfo::builder()
                     .image(image)
-                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .view_type(vk::ImageViewType::_2D)
                     .format(vk::Format::B8G8R8A8_UNORM)
                     .subresource_range(
-                        vk::ImageSubresourceRange::default()
+                        vk::ImageSubresourceRange::builder()
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
                             .base_mip_level(0)
                             .level_count(1)
                             .base_array_layer(0)
-                            .layer_count(1),
-                    );
+                            .layer_count(1)
+                            .build(),
+                    )
+                    .build();
 
                 let image_view = match unsafe { device.create_image_view(&view_info, None) } {
                     Ok(view) => view,
                     Err(e) => {
                         tracing::warn!(
-                            "Display {}: Failed to create camera texture view [{}]: {}",
+                            "Display {}: camera texture view [{}] failed: {}",
                             self.window_id,
                             ring_idx,
                             e
                         );
-                        self.vulkan_device.free_device_memory(memory);
-                        unsafe { device.destroy_image(image, None) };
-                        return;
+                        unsafe { allocator.destroy_image(image, allocation) };
+                        break;
                     }
                 };
 
                 self.camera_texture_ring.push(CameraTextureState {
                     image,
                     image_view,
-                    device_memory: memory,
+                    allocation,
                     width: src_width,
                     height: src_height,
                 });
             }
 
-            tracing::debug!(
-                "Display {}: Camera texture ring created ({} textures, {}x{})",
+            if self.camera_texture_ring.is_empty() {
+                tracing::error!(
+                    "Display {}: failed to allocate ANY camera textures — cannot render",
+                    self.window_id
+                );
+                return;
+            }
+
+            tracing::info!(
+                "Display {}: camera texture ring created ({}/{} textures, {}x{})",
                 self.window_id,
-                image_count,
+                self.camera_texture_ring.len(),
+                MAX_FRAMES_IN_FLIGHT,
                 src_width,
                 src_height
             );
         }
 
-        let camera_tex = &self.camera_texture_ring[frame_index];
+        // Wrap frame_index by actual ring size — supports partial ring allocation
+        let ring_len = self.camera_texture_ring.len();
+        let camera_tex = &self.camera_texture_ring[frame_index % ring_len];
 
         // Update descriptor set with camera texture every frame.
         // This is a single descriptor write — negligible CPU cost — and ensures
@@ -630,29 +689,35 @@ impl DisplayEventLoopHandler {
         // Update this frame's descriptor set with the camera texture.
         // Each swapchain image has its own descriptor set to avoid updating
         // a set that's still in use by a pending command buffer.
-        let desc_image_info = vk::DescriptorImageInfo::default()
+        let desc_image_info = vk::DescriptorImageInfo::builder()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(camera_tex.image_view)
-            .sampler(ps.sampler);
+            .sampler(ps.sampler)
+            .build();
         let desc_image_infos = [desc_image_info];
-        let descriptor_write = vk::WriteDescriptorSet::default()
+        let descriptor_write = vk::WriteDescriptorSet::builder()
             .dst_set(ps.descriptor_sets[frame_index])
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&desc_image_infos);
-        unsafe { device.update_descriptor_sets(&[descriptor_write], &[]) };
+            .image_info(&desc_image_infos)
+            .build();
+        unsafe { device.update_descriptor_sets(&[descriptor_write], &[] as &[vk::CopyDescriptorSet]) };
 
-        // Timeline semaphore wait: ensure frame N-image_count completed before reusing slot N.
-        // On the first image_count frames, wait_value is 0 and the semaphore starts at 0,
-        // so the wait returns immediately (equivalent to fences starting signaled).
+        // Timeline semaphore wait: ensure frame N-MAX_FRAMES_IN_FLIGHT completed
+        // before reusing slot N. On the first MAX_FRAMES_IN_FLIGHT frames,
+        // wait_value is 0 and the semaphore starts at 0, so the wait returns
+        // immediately (equivalent to fences starting signaled).
         state.frame_timeline_value += 1;
-        let wait_value = state.frame_timeline_value.saturating_sub(image_count as u64);
+        let wait_value = state
+            .frame_timeline_value
+            .saturating_sub(MAX_FRAMES_IN_FLIGHT as u64);
         if wait_value > 0 {
             let semaphores = [state.frame_timeline_semaphore];
             let values = [wait_value];
-            let wait_info = vk::SemaphoreWaitInfo::default()
+            let wait_info = vk::SemaphoreWaitInfo::builder()
                 .semaphores(&semaphores)
-                .values(&values);
+                .values(&values)
+                .build();
             unsafe {
                 let _ = device.wait_semaphores(&wait_info, u64::MAX);
             }
@@ -664,15 +729,15 @@ impl DisplayEventLoopHandler {
 
         // Acquire next swapchain image
         let image_index = match unsafe {
-            state.swapchain_loader.acquire_next_image(
+            device.acquire_next_image_khr(
                 state.swapchain,
                 u64::MAX,
                 image_available_semaphore,
                 vk::Fence::null(),
             )
         } {
-            Ok((index, _suboptimal)) => index,
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+            Ok((index, _)) => index,
+            Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
                 tracing::debug!("Display {}: Swapchain out of date", self.window_id);
                 return;
             }
@@ -689,15 +754,17 @@ impl DisplayEventLoopHandler {
         let swapchain_image = state.swapchain_images[image_index as usize];
 
         // Reset and re-record the pre-allocated command buffer
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
 
-        let color_subresource_range = vk::ImageSubresourceRange::default()
+        let color_subresource_range = vk::ImageSubresourceRange::builder()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .base_mip_level(0)
             .level_count(1)
             .base_array_layer(0)
-            .layer_count(1);
+            .layer_count(1)
+            .build();
 
         unsafe {
             if device
@@ -715,7 +782,7 @@ impl DisplayEventLoopHandler {
             }
 
             // Transition camera texture: UNDEFINED → TRANSFER_DST_OPTIMAL
-            let barrier_camera_to_transfer = vk::ImageMemoryBarrier::default()
+            let barrier_camera_to_transfer = vk::ImageMemoryBarrier::builder()
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -723,36 +790,39 @@ impl DisplayEventLoopHandler {
                 .image(camera_tex.image)
                 .subresource_range(color_subresource_range)
                 .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .build();
 
             device.cmd_pipeline_barrier(
                 command_buffer,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
-                &[],
-                &[],
+                &[] as &[vk::MemoryBarrier],
+                &[] as &[vk::BufferMemoryBarrier],
                 &[barrier_camera_to_transfer],
             );
 
             // Copy source pixel buffer into device-local camera texture
-            let region = vk::BufferImageCopy::default()
+            let region = vk::BufferImageCopy::builder()
                 .buffer_offset(0)
                 .buffer_row_length(src_width)
                 .buffer_image_height(src_height)
                 .image_subresource(
-                    vk::ImageSubresourceLayers::default()
+                    vk::ImageSubresourceLayers::builder()
                         .aspect_mask(vk::ImageAspectFlags::COLOR)
                         .mip_level(0)
                         .base_array_layer(0)
-                        .layer_count(1),
+                        .layer_count(1)
+                        .build(),
                 )
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
                 .image_extent(vk::Extent3D {
                     width: src_width,
                     height: src_height,
                     depth: 1,
-                });
+                })
+                .build();
 
             device.cmd_copy_buffer_to_image(
                 command_buffer,
@@ -764,7 +834,7 @@ impl DisplayEventLoopHandler {
 
             // Transition camera texture: TRANSFER_DST → SHADER_READ_ONLY
             // Transition swapchain image: UNDEFINED → COLOR_ATTACHMENT_OPTIMAL
-            let barrier_camera_to_shader_read = vk::ImageMemoryBarrier::default()
+            let barrier_camera_to_shader_read = vk::ImageMemoryBarrier::builder()
                 .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -772,12 +842,13 @@ impl DisplayEventLoopHandler {
                 .image(camera_tex.image)
                 .subresource_range(color_subresource_range)
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .build();
 
             // Swapchain images are in PRESENT_SRC_KHR after being presented.
             // On the very first frame they may be UNDEFINED, but PRESENT_SRC_KHR
             // is the correct old_layout for all subsequent frames.
-            let barrier_swapchain_to_color_attachment = vk::ImageMemoryBarrier::default()
+            let barrier_swapchain_to_color_attachment = vk::ImageMemoryBarrier::builder()
                 .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -785,7 +856,8 @@ impl DisplayEventLoopHandler {
                 .image(swapchain_image)
                 .subresource_range(color_subresource_range)
                 .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .build();
 
             device.cmd_pipeline_barrier(
                 command_buffer,
@@ -793,13 +865,13 @@ impl DisplayEventLoopHandler {
                 vk::PipelineStageFlags::FRAGMENT_SHADER
                     | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 vk::DependencyFlags::empty(),
-                &[],
-                &[],
+                &[] as &[vk::MemoryBarrier],
+                &[] as &[vk::BufferMemoryBarrier],
                 &[barrier_camera_to_shader_read, barrier_swapchain_to_color_attachment],
             );
 
             // Begin dynamic rendering on swapchain image
-            let color_attachment = vk::RenderingAttachmentInfo::default()
+            let color_attachment = vk::RenderingAttachmentInfo::builder()
                 .image_view(state.swapchain_image_views[image_index as usize])
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -808,19 +880,19 @@ impl DisplayEventLoopHandler {
                     color: vk::ClearColorValue {
                         float32: [0.0, 0.0, 0.0, 1.0],
                     },
-                });
+                })
+                .build();
             let color_attachments = [color_attachment];
-            let rendering_info = vk::RenderingInfo::default()
+            let rendering_info = vk::RenderingInfo::builder()
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
                     extent: state.swapchain_extent,
                 })
                 .layer_count(1)
-                .color_attachments(&color_attachments);
+                .color_attachments(&color_attachments)
+                .build();
 
-            state
-                .dynamic_rendering_loader
-                .cmd_begin_rendering(command_buffer, &rendering_info);
+            device.cmd_begin_rendering(command_buffer, &rendering_info);
 
             // Set dynamic viewport and scissor
             let viewport = vk::Viewport {
@@ -892,12 +964,10 @@ impl DisplayEventLoopHandler {
             // Draw fullscreen triangle (3 vertices from gl_VertexIndex, no vertex buffer)
             device.cmd_draw(command_buffer, 3, 1, 0, 0);
 
-            state
-                .dynamic_rendering_loader
-                .cmd_end_rendering(command_buffer);
+            device.cmd_end_rendering(command_buffer);
 
             // Transition swapchain image: COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR
-            let barrier_to_present = vk::ImageMemoryBarrier::default()
+            let barrier_to_present = vk::ImageMemoryBarrier::builder()
                 .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -905,15 +975,16 @@ impl DisplayEventLoopHandler {
                 .image(swapchain_image)
                 .subresource_range(color_subresource_range)
                 .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::empty());
+                .dst_access_mask(vk::AccessFlags::empty())
+                .build();
 
             device.cmd_pipeline_barrier(
                 command_buffer,
                 vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                 vk::DependencyFlags::empty(),
-                &[],
-                &[],
+                &[] as &[vk::MemoryBarrier],
+                &[] as &[vk::BufferMemoryBarrier],
                 &[barrier_to_present],
             );
 
@@ -931,16 +1002,18 @@ impl DisplayEventLoopHandler {
             // TimelineSemaphoreSubmitInfo: value 0 is ignored for binary semaphores
             let signal_values = [0u64, state.frame_timeline_value];
             let wait_values = [0u64];
-            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::default()
+            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::builder()
                 .wait_semaphore_values(&wait_values)
-                .signal_semaphore_values(&signal_values);
+                .signal_semaphore_values(&signal_values)
+                .build();
 
-            let submit_info = vk::SubmitInfo::default()
+            let submit_info = vk::SubmitInfo::builder()
                 .wait_semaphores(&wait_semaphores)
                 .wait_dst_stage_mask(&wait_stages)
                 .command_buffers(&command_buffers)
                 .signal_semaphores(&signal_semaphores)
-                .push_next(&mut timeline_submit_info);
+                .push_next(&mut timeline_submit_info)
+                .build();
 
             if let Err(e) =
                 device.queue_submit(queue, &[submit_info], vk::Fence::null())
@@ -957,14 +1030,15 @@ impl DisplayEventLoopHandler {
             let present_wait_semaphores = [render_finished_semaphore];
             let swapchains = [state.swapchain];
             let image_indices = [image_index];
-            let present_info = vk::PresentInfoKHR::default()
+            let present_info = vk::PresentInfoKHR::builder()
                 .wait_semaphores(&present_wait_semaphores)
                 .swapchains(&swapchains)
-                .image_indices(&image_indices);
+                .image_indices(&image_indices)
+                .build();
 
-            match state.swapchain_loader.queue_present(queue, &present_info) {
-                Ok(_) | Err(vk::Result::SUBOPTIMAL_KHR) => {}
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+            match device.queue_present_khr(queue, &present_info) {
+                Ok(_) => {}
+                Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
                     tracing::debug!(
                         "Display {}: Swapchain out of date at present",
                         self.window_id
@@ -983,9 +1057,152 @@ impl DisplayEventLoopHandler {
             // next render_frame() call for this sync slot handles synchronization.
         }
 
-        state.current_frame = (frame_index + 1) % image_count;
-        self.frame_counter.fetch_add(1, Ordering::Relaxed);
+        state.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
+        let frame_idx = self.frame_counter.fetch_add(1, Ordering::Relaxed);
+
+        // Debug feature: sample frame to PNG.
+        // Reads from the HOST_VISIBLE source pixel buffer (BGRA), no GPU readback needed.
+        if let Some(ref dir) = self.png_sample_dir {
+            if frame_idx % self.png_sample_every == 0 {
+                let path = dir.join(format!(
+                    "display_{:03}_frame_{:06}.png",
+                    self.window_id, frame_idx
+                ));
+                let mapped_ptr = vulkan_pixel_buffer.mapped_ptr();
+                if !mapped_ptr.is_null() {
+                    let len = (src_width as usize) * (src_height as usize) * 4;
+                    let bgra = unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
+                    if let Err(e) = save_bgra_as_png(&path, src_width, src_height, bgra) {
+                        tracing::warn!(
+                            "Display {}: PNG sample save failed for frame {}: {}",
+                            self.window_id, frame_idx, e
+                        );
+                    } else {
+                        self.png_samples_saved += 1;
+                        tracing::info!(
+                            "Display {}: saved PNG sample {:?} (frame {}, total saved {})",
+                            self.window_id, path, frame_idx, self.png_samples_saved
+                        );
+                    }
+                }
+            }
+        }
     }
+}
+
+/// Save BGRA pixel data as a PNG file. Used for AI-readable frame sampling.
+fn save_bgra_as_png(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+    bgra: &[u8],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    // Convert BGRA → RGBA in-place buffer
+    let mut rgba = Vec::with_capacity(bgra.len());
+    for chunk in bgra.chunks_exact(4) {
+        rgba.push(chunk[2]); // R = BGRA[2]
+        rgba.push(chunk[1]); // G = BGRA[1]
+        rgba.push(chunk[0]); // B = BGRA[0]
+        rgba.push(chunk[3]); // A
+    }
+    write_png_rgba(path, width, height, &rgba)
+}
+
+/// Minimal PNG writer for 8-bit RGBA images. No dependencies, deflate via uncompressed blocks.
+fn write_png_rgba(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+
+    // PNG signature
+    file.write_all(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])?;
+
+    // IHDR chunk
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.push(8); // bit depth
+    ihdr.push(6); // color type: RGBA
+    ihdr.push(0); // compression
+    ihdr.push(0); // filter
+    ihdr.push(0); // interlace
+    write_chunk(&mut file, b"IHDR", &ihdr)?;
+
+    // Build raw image data with filter byte per row
+    let stride = (width as usize) * 4;
+    let mut raw = Vec::with_capacity((stride + 1) * (height as usize));
+    for y in 0..height as usize {
+        raw.push(0); // filter type: None
+        raw.extend_from_slice(&rgba[y * stride..(y + 1) * stride]);
+    }
+
+    // zlib-wrapped uncompressed deflate (no compression, just framed)
+    let zlib = build_zlib_uncompressed(&raw);
+    write_chunk(&mut file, b"IDAT", &zlib)?;
+
+    // IEND chunk
+    write_chunk(&mut file, b"IEND", &[])?;
+
+    Ok(())
+}
+
+fn write_chunk<W: std::io::Write>(w: &mut W, kind: &[u8; 4], data: &[u8]) -> std::io::Result<()> {
+    w.write_all(&(data.len() as u32).to_be_bytes())?;
+    w.write_all(kind)?;
+    w.write_all(data)?;
+    let crc = crc32(kind, data);
+    w.write_all(&crc.to_be_bytes())?;
+    Ok(())
+}
+
+fn build_zlib_uncompressed(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + 64);
+    // zlib header: deflate, 32K window, no preset dict, fastest
+    out.push(0x78);
+    out.push(0x01);
+
+    // Deflate stored blocks (max 65535 bytes each)
+    let mut offset = 0;
+    while offset < data.len() {
+        let chunk_len = (data.len() - offset).min(65535);
+        let is_last = offset + chunk_len == data.len();
+        out.push(if is_last { 0x01 } else { 0x00 }); // BFINAL/BTYPE bits
+        out.extend_from_slice(&(chunk_len as u16).to_le_bytes());
+        out.extend_from_slice(&(!(chunk_len as u16)).to_le_bytes());
+        out.extend_from_slice(&data[offset..offset + chunk_len]);
+        offset += chunk_len;
+    }
+
+    // Adler-32 checksum of the uncompressed data
+    let adler = adler32(data);
+    out.extend_from_slice(&adler.to_be_bytes());
+    out
+}
+
+fn adler32(data: &[u8]) -> u32 {
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for &byte in data {
+        a = (a + byte as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+fn crc32(kind: &[u8; 4], data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFFFFFF;
+    for &b in kind.iter().chain(data.iter()) {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB88320 & (0u32.wrapping_sub(crc & 1)));
+        }
+    }
+    crc ^ 0xFFFFFFFF
 }
 
 // ---------------------------------------------------------------------------
@@ -999,37 +1216,20 @@ fn create_swapchain_state(
     height: u32,
     vsync: bool,
 ) -> Result<(SwapchainState, PersistentPipelineState)> {
-    let entry = vulkan_device.entry();
     let instance = vulkan_device.instance();
     let device = vulkan_device.device();
     let physical_device = vulkan_device.physical_device();
     let queue_family_index = vulkan_device.queue_family_index();
 
-    // Create surface via ash-window
-    let display_handle = window.display_handle().map_err(|e| {
-        StreamError::GpuError(format!("Failed to get display handle: {}", e))
-    })?;
-    let window_handle = window.window_handle().map_err(|e| {
-        StreamError::GpuError(format!("Failed to get window handle: {}", e))
-    })?;
-
+    // Create surface via vulkanalia window integration
     let surface = unsafe {
-        ash_window::create_surface(
-            entry,
-            instance,
-            display_handle.as_raw(),
-            window_handle.as_raw(),
-            None,
-        )
+        vulkanalia::window::create_surface(instance, window, window)
     }
     .map_err(|e| StreamError::GpuError(format!("Failed to create Vulkan surface: {}", e)))?;
 
-    let surface_loader = ash::khr::surface::Instance::new(entry, instance);
-    let swapchain_loader = ash::khr::swapchain::Device::new(instance, device);
-
     // Check surface support for this queue family
     let surface_supported = unsafe {
-        surface_loader.get_physical_device_surface_support(
+        instance.get_physical_device_surface_support_khr(
             physical_device,
             queue_family_index,
             surface,
@@ -1038,7 +1238,7 @@ fn create_swapchain_state(
     .map_err(|e| StreamError::GpuError(format!("Failed to check surface support: {}", e)))?;
 
     if !surface_supported {
-        unsafe { surface_loader.destroy_surface(surface, None) };
+        unsafe { instance.destroy_surface_khr(surface, None) };
         return Err(StreamError::GpuError(
             "Graphics queue family does not support presentation to this surface".into(),
         ));
@@ -1046,21 +1246,21 @@ fn create_swapchain_state(
 
     // Query surface capabilities
     let capabilities = unsafe {
-        surface_loader.get_physical_device_surface_capabilities(physical_device, surface)
+        instance.get_physical_device_surface_capabilities_khr(physical_device, surface)
     }
     .map_err(|e| {
         StreamError::GpuError(format!("Failed to query surface capabilities: {}", e))
     })?;
 
     let surface_formats = unsafe {
-        surface_loader.get_physical_device_surface_formats(physical_device, surface)
+        instance.get_physical_device_surface_formats_khr(physical_device, surface)
     }
     .map_err(|e| {
         StreamError::GpuError(format!("Failed to query surface formats: {}", e))
     })?;
 
     let present_modes = unsafe {
-        surface_loader.get_physical_device_surface_present_modes(physical_device, surface)
+        instance.get_physical_device_surface_present_modes_khr(physical_device, surface)
     }
     .map_err(|e| {
         StreamError::GpuError(format!("Failed to query present modes: {}", e))
@@ -1107,7 +1307,7 @@ fn create_swapchain_state(
         image_count = capabilities.max_image_count;
     }
 
-    let swapchain_info = vk::SwapchainCreateInfoKHR::default()
+    let swapchain_info = vk::SwapchainCreateInfoKHR::builder()
         .surface(surface)
         .min_image_count(image_count)
         .image_format(surface_format.format)
@@ -1119,32 +1319,34 @@ fn create_swapchain_state(
         .pre_transform(capabilities.current_transform)
         .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
         .present_mode(present_mode)
-        .clipped(true);
+        .clipped(true)
+        .build();
 
-    let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_info, None) }
+    let swapchain = unsafe { device.create_swapchain_khr(&swapchain_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create swapchain: {}", e)))?;
 
-    let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }
+    let swapchain_images = unsafe { device.get_swapchain_images_khr(swapchain) }
         .map_err(|e| {
             StreamError::GpuError(format!("Failed to get swapchain images: {}", e))
         })?;
 
     // Create command pool for this thread
-    let pool_info = vk::CommandPoolCreateInfo::default()
+    let pool_info = vk::CommandPoolCreateInfo::builder()
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-        .queue_family_index(queue_family_index);
+        .queue_family_index(queue_family_index)
+        .build();
 
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
 
-    // Create per-swapchain-image binary semaphores for acquire/present
+    // Per-FRAME synchronization primitives sized to MAX_FRAMES_IN_FLIGHT.
     let image_count = swapchain_images.len();
-    let semaphore_info = vk::SemaphoreCreateInfo::default();
+    let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
-    let mut image_available_semaphores = Vec::with_capacity(image_count);
-    let mut render_finished_semaphores = Vec::with_capacity(image_count);
+    let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+    let mut render_finished_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
 
-    for _ in 0..image_count {
+    for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
@@ -1155,30 +1357,39 @@ fn create_swapchain_state(
     }
 
     // Timeline semaphore for multi-flight frame synchronization (Vulkan 1.2 core).
-    // One semaphore tracks all frames — wait for value N-image_count before reusing slot N.
-    let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::default()
+    // One semaphore tracks all frames — wait for value N-MAX_FRAMES_IN_FLIGHT
+    // before reusing slot N.
+    let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::builder()
         .semaphore_type(vk::SemaphoreType::TIMELINE)
-        .initial_value(0);
-    let timeline_semaphore_info = vk::SemaphoreCreateInfo::default()
-        .push_next(&mut timeline_type_info);
-    let frame_timeline_semaphore = unsafe { device.create_semaphore(&timeline_semaphore_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e)))?;
+        .initial_value(0)
+        .build();
+    let timeline_semaphore_info = vk::SemaphoreCreateInfo::builder()
+        .push_next(&mut timeline_type_info)
+        .build();
+    let frame_timeline_semaphore =
+        unsafe { device.create_semaphore(&timeline_semaphore_info, None) }
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e))
+            })?;
 
-    // Pre-allocate command buffers (one per swapchain image)
-    let alloc_info = vk::CommandBufferAllocateInfo::default()
+    // Pre-allocate command buffers (one per in-flight frame).
+    let alloc_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(image_count as u32);
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
+        .build();
 
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate command buffers: {}", e)))?;
+        .map_err(|e| {
+            StreamError::GpuError(format!("Failed to allocate command buffers: {}", e))
+        })?;
 
     // Create swapchain image views for dynamic rendering color attachments
     let mut swapchain_image_views = Vec::with_capacity(image_count);
     for &image in &swapchain_images {
-        let view_info = vk::ImageViewCreateInfo::default()
+        let view_info = vk::ImageViewCreateInfo::builder()
             .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
+            .view_type(vk::ImageViewType::_2D)
             .format(surface_format.format)
             .components(vk::ComponentMapping {
                 r: vk::ComponentSwizzle::IDENTITY,
@@ -1187,52 +1398,69 @@ fn create_swapchain_state(
                 a: vk::ComponentSwizzle::IDENTITY,
             })
             .subresource_range(
-                vk::ImageSubresourceRange::default()
+                vk::ImageSubresourceRange::builder()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
                     .base_mip_level(0)
                     .level_count(1)
                     .base_array_layer(0)
-                    .layer_count(1),
-            );
+                    .layer_count(1)
+                    .build(),
+            )
+            .build();
         let view = unsafe { device.create_image_view(&view_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create swapchain image view: {}", e)))?;
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to create swapchain image view: {}", e))
+            })?;
         swapchain_image_views.push(view);
     }
 
     // Create sampler for camera texture sampling in fragment shader
-    let sampler_info = vk::SamplerCreateInfo::default()
+    let sampler_info = vk::SamplerCreateInfo::builder()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
         .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
         .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+        .build();
     let sampler = unsafe { device.create_sampler(&sampler_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create sampler: {}", e)))?;
 
     // Descriptor set layout: binding 0 = combined image sampler (fragment stage)
-    let ds_binding = vk::DescriptorSetLayoutBinding::default()
+    let ds_binding = vk::DescriptorSetLayoutBinding::builder()
         .binding(0)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+        .build();
     let ds_bindings = [ds_binding];
-    let ds_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-        .bindings(&ds_bindings);
-    let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&ds_layout_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create descriptor set layout: {}", e)))?;
+    let ds_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+        .bindings(&ds_bindings)
+        .build();
+    let descriptor_set_layout =
+        unsafe { device.create_descriptor_set_layout(&ds_layout_info, None) }
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "Failed to create descriptor set layout: {}",
+                    e
+                ))
+            })?;
 
     // Pipeline layout: push constant for scale (vec2) + offset (vec2) = 16 bytes
-    let push_constant_range = vk::PushConstantRange::default()
+    let push_constant_range = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)
         .offset(0)
-        .size(16);
+        .size(16)
+        .build();
     let set_layouts = [descriptor_set_layout];
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(&set_layouts)
-        .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+        .push_constant_ranges(std::slice::from_ref(&push_constant_range))
+        .build();
     let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create pipeline layout: {}", e)))?;
+        .map_err(|e| {
+            StreamError::GpuError(format!("Failed to create pipeline layout: {}", e))
+        })?;
 
     // Load compiled SPIR-V shaders
     let vert_spv = include_bytes!("shaders/fullscreen.vert.spv");
@@ -1247,70 +1475,86 @@ fn create_swapchain_state(
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
 
-    let vert_module_info = vk::ShaderModuleCreateInfo::default().code(&vert_code);
-    let frag_module_info = vk::ShaderModuleCreateInfo::default().code(&frag_code);
+    let vert_module_info = vk::ShaderModuleCreateInfo::builder()
+        .code(&vert_code)
+        .build();
+    let frag_module_info = vk::ShaderModuleCreateInfo::builder()
+        .code(&frag_code)
+        .build();
 
     let vert_module = unsafe { device.create_shader_module(&vert_module_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create vertex shader module: {}", e)))?;
+        .map_err(|e| {
+            StreamError::GpuError(format!("Failed to create vertex shader module: {}", e))
+        })?;
     let frag_module = unsafe { device.create_shader_module(&frag_module_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create fragment shader module: {}", e)))?;
-
-    let entry_point = c"main";
+        .map_err(|e| {
+            StreamError::GpuError(format!("Failed to create fragment shader module: {}", e))
+        })?;
 
     let shader_stages = [
-        vk::PipelineShaderStageCreateInfo::default()
+        vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::VERTEX)
             .module(vert_module)
-            .name(entry_point),
-        vk::PipelineShaderStageCreateInfo::default()
+            .name(b"main\0")
+            .build(),
+        vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .module(frag_module)
-            .name(entry_point),
+            .name(b"main\0")
+            .build(),
     ];
 
     // No vertex input — fullscreen triangle derives UVs from gl_VertexIndex
-    let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder().build();
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .build();
 
     // Dynamic viewport/scissor — set per-frame, no pipeline recreation on resize
     let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
-        .dynamic_states(&dynamic_states);
+    let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::builder()
+        .dynamic_states(&dynamic_states)
+        .build();
 
     let viewports = [vk::Viewport::default()];
     let scissors = [vk::Rect2D::default()];
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
         .viewports(&viewports)
-        .scissors(&scissors);
+        .scissors(&scissors)
+        .build();
 
-    let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+    let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
         .polygon_mode(vk::PolygonMode::FILL)
         .cull_mode(vk::CullModeFlags::NONE)
         .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
+        .line_width(1.0)
+        .build();
 
-    let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let multisampling = vk::PipelineMultisampleStateCreateInfo::builder()
+        .rasterization_samples(vk::SampleCountFlags::_1)
+        .build();
 
-    let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+    let color_blend_attachment = vk::PipelineColorBlendAttachmentState::builder()
         .color_write_mask(
             vk::ColorComponentFlags::R
                 | vk::ColorComponentFlags::G
                 | vk::ColorComponentFlags::B
                 | vk::ColorComponentFlags::A,
         )
-        .blend_enable(false);
+        .blend_enable(false)
+        .build();
     let color_blend_attachments = [color_blend_attachment];
-    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(&color_blend_attachments);
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+        .attachments(&color_blend_attachments)
+        .build();
 
     // Dynamic rendering: specify color attachment format via pNext
     let color_attachment_formats = [surface_format.format];
-    let mut pipeline_rendering_info = vk::PipelineRenderingCreateInfo::default()
-        .color_attachment_formats(&color_attachment_formats);
+    let mut pipeline_rendering_info = vk::PipelineRenderingCreateInfo::builder()
+        .color_attachment_formats(&color_attachment_formats)
+        .build();
 
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+    let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
         .stages(&shader_stages)
         .vertex_input_state(&vertex_input_info)
         .input_assembly_state(&input_assembly)
@@ -1320,7 +1564,8 @@ fn create_swapchain_state(
         .color_blend_state(&color_blend_state)
         .dynamic_state(&dynamic_state_info)
         .layout(pipeline_layout)
-        .push_next(&mut pipeline_rendering_info);
+        .push_next(&mut pipeline_rendering_info)
+        .build();
 
     let graphics_pipeline = unsafe {
         device.create_graphics_pipelines(
@@ -1329,7 +1574,10 @@ fn create_swapchain_state(
             None,
         )
     }
-    .map_err(|(_pipelines, e)| StreamError::GpuError(format!("Failed to create graphics pipeline: {}", e)))?[0];
+    .map_err(|e| {
+        StreamError::GpuError(format!("Failed to create graphics pipeline: {}", e))
+    })?
+    .0[0];
 
     // Shader modules no longer needed after pipeline creation
     unsafe {
@@ -1337,28 +1585,33 @@ fn create_swapchain_state(
         device.destroy_shader_module(frag_module, None);
     }
 
-    // Descriptor pool and sets — one per swapchain image to avoid updating
+    // Descriptor pool and sets — one per in-flight frame to avoid updating
     // a descriptor set while a previous frame's command buffer is still pending.
-    let pool_size = vk::DescriptorPoolSize::default()
-        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(image_count as u32);
+    let pool_size = vk::DescriptorPoolSize::builder()
+        .type_(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(MAX_FRAMES_IN_FLIGHT as u32)
+        .build();
     let pool_sizes = [pool_size];
-    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
-        .max_sets(image_count as u32)
-        .pool_sizes(&pool_sizes);
-    let descriptor_pool = unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create descriptor pool: {}", e)))?;
+    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+        .max_sets(MAX_FRAMES_IN_FLIGHT as u32)
+        .pool_sizes(&pool_sizes)
+        .build();
+    let descriptor_pool =
+        unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) }
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to create descriptor pool: {}", e))
+            })?;
 
     let set_layouts_alloc: Vec<vk::DescriptorSetLayout> =
-        vec![descriptor_set_layout; image_count];
-    let ds_alloc_info = vk::DescriptorSetAllocateInfo::default()
+        vec![descriptor_set_layout; MAX_FRAMES_IN_FLIGHT];
+    let ds_alloc_info = vk::DescriptorSetAllocateInfo::builder()
         .descriptor_pool(descriptor_pool)
-        .set_layouts(&set_layouts_alloc);
+        .set_layouts(&set_layouts_alloc)
+        .build();
     let descriptor_sets = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate descriptor sets: {}", e)))?;
-
-    // Dynamic rendering loader
-    let dynamic_rendering_loader = ash::khr::dynamic_rendering::Device::new(instance, device);
+        .map_err(|e| {
+            StreamError::GpuError(format!("Failed to allocate descriptor sets: {}", e))
+        })?;
 
     tracing::info!(
         "Swapchain created: {}x{}, format {:?}, present mode {:?}, {} images",
@@ -1383,10 +1636,7 @@ fn create_swapchain_state(
             frame_timeline_value: 0,
             command_buffers,
             current_frame: 0,
-            surface_loader,
-            swapchain_loader,
             swapchain_image_views,
-            dynamic_rendering_loader,
         },
         PersistentPipelineState {
             graphics_pipeline,
@@ -1407,18 +1657,15 @@ fn recreate_swapchain(
     height: u32,
     vsync: bool,
 ) -> Result<SwapchainState> {
-    let entry = vulkan_device.entry();
     let instance = vulkan_device.instance();
     let device = vulkan_device.device();
     let physical_device = vulkan_device.physical_device();
     let queue_family_index = vulkan_device.queue_family_index();
 
     let surface = old_state.surface;
-    let surface_loader = ash::khr::surface::Instance::new(entry, instance);
-    let swapchain_loader = ash::khr::swapchain::Device::new(instance, device);
 
     let capabilities = unsafe {
-        surface_loader.get_physical_device_surface_capabilities(physical_device, surface)
+        instance.get_physical_device_surface_capabilities_khr(physical_device, surface)
     }
     .map_err(|e| {
         StreamError::GpuError(format!("Failed to query surface capabilities: {}", e))
@@ -1440,7 +1687,7 @@ fn recreate_swapchain(
     };
 
     let present_modes = unsafe {
-        surface_loader.get_physical_device_surface_present_modes(physical_device, surface)
+        instance.get_physical_device_surface_present_modes_khr(physical_device, surface)
     }
     .map_err(|e| {
         StreamError::GpuError(format!("Failed to query present modes: {}", e))
@@ -1459,7 +1706,7 @@ fn recreate_swapchain(
         image_count = capabilities.max_image_count;
     }
 
-    let swapchain_info = vk::SwapchainCreateInfoKHR::default()
+    let swapchain_info = vk::SwapchainCreateInfoKHR::builder()
         .surface(surface)
         .min_image_count(image_count)
         .image_format(old_state.swapchain_format)
@@ -1472,32 +1719,34 @@ fn recreate_swapchain(
         .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
         .present_mode(present_mode)
         .clipped(true)
-        .old_swapchain(old_state.swapchain);
+        .old_swapchain(old_state.swapchain)
+        .build();
 
-    let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_info, None) }
+    let swapchain = unsafe { device.create_swapchain_khr(&swapchain_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to recreate swapchain: {}", e)))?;
 
-    let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }
+    let swapchain_images = unsafe { device.get_swapchain_images_khr(swapchain) }
         .map_err(|e| {
             StreamError::GpuError(format!("Failed to get swapchain images: {}", e))
         })?;
 
     // Create new command pool
-    let pool_info = vk::CommandPoolCreateInfo::default()
+    let pool_info = vk::CommandPoolCreateInfo::builder()
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-        .queue_family_index(queue_family_index);
+        .queue_family_index(queue_family_index)
+        .build();
 
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
 
-    // Create per-swapchain-image binary semaphores for acquire/present
+    // Per-FRAME synchronization primitives sized to MAX_FRAMES_IN_FLIGHT.
     let new_image_count = swapchain_images.len();
-    let semaphore_info = vk::SemaphoreCreateInfo::default();
+    let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
-    let mut image_available_semaphores = Vec::with_capacity(new_image_count);
-    let mut render_finished_semaphores = Vec::with_capacity(new_image_count);
+    let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+    let mut render_finished_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
 
-    for _ in 0..new_image_count {
+    for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
@@ -1508,29 +1757,37 @@ fn recreate_swapchain(
     }
 
     // Timeline semaphore for multi-flight frame synchronization
-    let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::default()
+    let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::builder()
         .semaphore_type(vk::SemaphoreType::TIMELINE)
-        .initial_value(0);
-    let timeline_semaphore_info = vk::SemaphoreCreateInfo::default()
-        .push_next(&mut timeline_type_info);
-    let frame_timeline_semaphore = unsafe { device.create_semaphore(&timeline_semaphore_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e)))?;
+        .initial_value(0)
+        .build();
+    let timeline_semaphore_info = vk::SemaphoreCreateInfo::builder()
+        .push_next(&mut timeline_type_info)
+        .build();
+    let frame_timeline_semaphore =
+        unsafe { device.create_semaphore(&timeline_semaphore_info, None) }
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e))
+            })?;
 
-    // Pre-allocate command buffers (one per swapchain image)
-    let alloc_info = vk::CommandBufferAllocateInfo::default()
+    // Pre-allocate command buffers (one per in-flight frame).
+    let alloc_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(new_image_count as u32);
+        .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32)
+        .build();
 
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate command buffers: {}", e)))?;
+        .map_err(|e| {
+            StreamError::GpuError(format!("Failed to allocate command buffers: {}", e))
+        })?;
 
     // Create swapchain image views for dynamic rendering color attachments
     let mut swapchain_image_views = Vec::with_capacity(new_image_count);
     for &image in &swapchain_images {
-        let view_info = vk::ImageViewCreateInfo::default()
+        let view_info = vk::ImageViewCreateInfo::builder()
             .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
+            .view_type(vk::ImageViewType::_2D)
             .format(old_state.swapchain_format)
             .components(vk::ComponentMapping {
                 r: vk::ComponentSwizzle::IDENTITY,
@@ -1539,19 +1796,21 @@ fn recreate_swapchain(
                 a: vk::ComponentSwizzle::IDENTITY,
             })
             .subresource_range(
-                vk::ImageSubresourceRange::default()
+                vk::ImageSubresourceRange::builder()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
                     .base_mip_level(0)
                     .level_count(1)
                     .base_array_layer(0)
-                    .layer_count(1),
-            );
+                    .layer_count(1)
+                    .build(),
+            )
+            .build();
         let view = unsafe { device.create_image_view(&view_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create swapchain image view: {}", e)))?;
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to create swapchain image view: {}", e))
+            })?;
         swapchain_image_views.push(view);
     }
-
-    let dynamic_rendering_loader = ash::khr::dynamic_rendering::Device::new(instance, device);
 
     Ok(SwapchainState {
         surface,
@@ -1566,10 +1825,7 @@ fn recreate_swapchain(
         frame_timeline_value: 0,
         command_buffers,
         current_frame: 0,
-        surface_loader,
-        swapchain_loader,
         swapchain_image_views,
-        dynamic_rendering_loader,
     })
 }
 
@@ -1592,9 +1848,7 @@ fn destroy_swapchain_resources_only(
         }
         // Command buffers are freed when the command pool is destroyed
         device.destroy_command_pool(state.command_pool, None);
-        state
-            .swapchain_loader
-            .destroy_swapchain(state.swapchain, None);
+        device.destroy_swapchain_khr(state.swapchain, None);
     }
 }
 
@@ -1603,6 +1857,7 @@ fn destroy_swapchain_state(
     vulkan_device: &crate::vulkan::rhi::VulkanDevice,
     state: &SwapchainState,
 ) {
+    let instance = vulkan_device.instance();
     let device = vulkan_device.device();
     unsafe {
         let _ = device.device_wait_idle();
@@ -1618,11 +1873,7 @@ fn destroy_swapchain_state(
         }
         // Command buffers are freed when the command pool is destroyed
         device.destroy_command_pool(state.command_pool, None);
-        state
-            .swapchain_loader
-            .destroy_swapchain(state.swapchain, None);
-        state
-            .surface_loader
-            .destroy_surface(state.surface, None);
+        device.destroy_swapchain_khr(state.swapchain, None);
+        instance.destroy_surface_khr(state.surface, None);
     }
 }

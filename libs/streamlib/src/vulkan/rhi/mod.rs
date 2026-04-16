@@ -33,3 +33,6 @@ pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
 mod vulkan_format_converter;
 pub use vulkan_format_converter::VulkanFormatConverter;
+
+#[cfg(all(test, target_os = "linux"))]
+mod vulkan_swapchain_alloc_repro_test;

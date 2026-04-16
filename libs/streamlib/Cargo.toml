@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 default = []
 # GPU backend selection (feature overrides default platform backend)
 backend-metal = []
-backend-vulkan = ["dep:ash"]
+backend-vulkan = ["dep:vulkanalia"]
 # MoQ (Media over QUIC) transport layer for network-transparent IPC
 moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url", "dep:rustls-native-certs"]
 
@@ -72,7 +72,7 @@ clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["cla
 rubato = "0.16"
 
 # Vulkan backend (optional, enabled via backend-vulkan feature)
-ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"], optional = true }
+vulkanalia = { workspace = true, optional = true }
 
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
@@ -139,14 +139,14 @@ streamlib-broker = { path = "../streamlib-broker" }  # Broker proto types for gR
 streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified telemetry pipeline
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"] }
+vulkanalia = { workspace = true }
+vulkanalia-vma = { workspace = true }
 libc.workspace = true
 v4l = "0.14"  # V4L2 camera capture (Video for Linux 2)
 opus = "0.3"  # Opus audio codec encoder/decoder
 cpal = "0.15"  # Cross-platform audio I/O (uses ALSA on Linux)
 winit = "0.30"  # Window creation and event loop for display processor
-ash-window = "0.13"  # Vulkan surface creation from winit window handles
-raw-window-handle = "0.6"  # Raw window handle types for ash-window
+raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # TODO: extract broker protocol helpers (send_request, framing) to a shared crate
 # to avoid this inverted dependency (streamlib depending on streamlib-broker)
 streamlib-broker = { path = "../streamlib-broker" }

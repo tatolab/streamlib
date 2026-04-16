@@ -1,14 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use ash::vk;
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
 
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer};
 use crate::core::{Result, StreamError};
 
 /// Vulkan format converter for pixel buffer format conversion via GPU compute.
 pub struct VulkanFormatConverter {
-    device: ash::Device,
+    device: vulkanalia::Device,
     queue: vk::Queue,
     queue_family_index: u32,
     command_pool: vk::CommandPool,
@@ -27,32 +28,30 @@ pub struct VulkanFormatConverter {
 impl VulkanFormatConverter {
     /// Create a new format converter with GPU compute pipelines.
     pub fn new(
-        device: &ash::Device,
+        device: &vulkanalia::Device,
         queue: vk::Queue,
         queue_family_index: u32,
         source_bytes_per_pixel: u32,
         dest_bytes_per_pixel: u32,
     ) -> Result<Self> {
         // Command pool
-        let pool_info = vk::CommandPoolCreateInfo::default()
+        let pool_info = vk::CommandPoolCreateInfo::builder()
             .queue_family_index(queue_family_index)
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .build();
 
         let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {e}")))?;
 
-        // Load SPIR-V shader modules
-        let nv12_to_bgra_spirv =
-            ash::util::read_spv(&mut std::io::Cursor::new(include_bytes!(
-                "shaders/nv12_to_bgra.spv"
-            )))
-            .map_err(|e| {
-                unsafe { device.destroy_command_pool(command_pool, None) };
-                StreamError::GpuError(format!("Failed to read nv12_to_bgra SPIR-V: {e}"))
-            })?;
+        // Load SPIR-V shader (inline conversion — no ash::util dependency)
+        let nv12_to_bgra_bytes = include_bytes!("shaders/nv12_to_bgra.spv");
+        let nv12_to_bgra_spirv: Vec<u32> = nv12_to_bgra_bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
 
         let nv12_to_bgra_module_info =
-            vk::ShaderModuleCreateInfo::default().code(&nv12_to_bgra_spirv);
+            vk::ShaderModuleCreateInfo::builder().code(&nv12_to_bgra_spirv).build();
         let nv12_to_bgra_shader_module =
             unsafe { device.create_shader_module(&nv12_to_bgra_module_info, None) }.map_err(
                 |e| {
@@ -65,20 +64,22 @@ impl VulkanFormatConverter {
 
         // Descriptor set layout: binding 0 = input SSBO, binding 1 = output SSBO
         let bindings = [
-            vk::DescriptorSetLayoutBinding::default()
+            vk::DescriptorSetLayoutBinding::builder()
                 .binding(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
-            vk::DescriptorSetLayoutBinding::default()
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .build(),
+            vk::DescriptorSetLayoutBinding::builder()
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .build(),
         ];
 
         let descriptor_set_layout_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+            vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings).build();
 
         let descriptor_set_layout =
             unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) }
@@ -93,16 +94,18 @@ impl VulkanFormatConverter {
                 })?;
 
         // Push constant range: width (u32) + height (u32) + flags (u32) = 12 bytes
-        let push_constant_range = vk::PushConstantRange::default()
+        let push_constant_range = vk::PushConstantRange::builder()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(12);
+            .size(12)
+            .build();
 
         let set_layouts = [descriptor_set_layout];
         let push_constant_ranges = [push_constant_range];
-        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
             .set_layouts(&set_layouts)
-            .push_constant_ranges(&push_constant_ranges);
+            .push_constant_ranges(&push_constant_ranges)
+            .build();
 
         let pipeline_layout =
             unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }.map_err(|e| {
@@ -115,14 +118,16 @@ impl VulkanFormatConverter {
             })?;
 
         // Create NV12→BGRA compute pipeline
-        let nv12_to_bgra_stage = vk::PipelineShaderStageCreateInfo::default()
+        let nv12_to_bgra_stage = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(nv12_to_bgra_shader_module)
-            .name(c"main");
+            .name(b"main\0")
+            .build();
 
-        let nv12_to_bgra_pipeline_info = vk::ComputePipelineCreateInfo::default()
+        let nv12_to_bgra_pipeline_info = vk::ComputePipelineCreateInfo::builder()
             .stage(nv12_to_bgra_stage)
-            .layout(pipeline_layout);
+            .layout(pipeline_layout)
+            .build();
 
         let nv12_to_bgra_pipeline = unsafe {
             device.create_compute_pipelines(
@@ -131,7 +136,7 @@ impl VulkanFormatConverter {
                 None,
             )
         }
-        .map_err(|(_, e)| {
+        .map_err(|e| {
             unsafe {
                 device.destroy_pipeline_layout(pipeline_layout, None);
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
@@ -139,16 +144,19 @@ impl VulkanFormatConverter {
                 device.destroy_command_pool(command_pool, None);
             }
             StreamError::GpuError(format!("Failed to create nv12_to_bgra pipeline: {e}"))
-        })?[0];
+        })?
+        .0[0];
 
         // Descriptor pool (1 set, 2 storage buffers)
-        let pool_sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(2)];
+        let pool_sizes = [vk::DescriptorPoolSize::builder()
+            .type_(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(2)
+            .build()];
 
-        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(1)
-            .pool_sizes(&pool_sizes);
+            .pool_sizes(&pool_sizes)
+            .build();
 
         let descriptor_pool =
             unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) }.map_err(|e| {
@@ -163,9 +171,10 @@ impl VulkanFormatConverter {
             })?;
 
         // Allocate descriptor set
-        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
-            .set_layouts(&set_layouts);
+            .set_layouts(&set_layouts)
+            .build();
 
         let descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info) }
             .map_err(|e| {
@@ -181,10 +190,11 @@ impl VulkanFormatConverter {
             })?[0];
 
         // Command buffer
-        let cmd_alloc_info = vk::CommandBufferAllocateInfo::default()
+        let cmd_alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
+            .command_buffer_count(1)
+            .build();
 
         let compute_command_buffer =
             unsafe { device.allocate_command_buffers(&cmd_alloc_info) }.map_err(|e| {
@@ -200,7 +210,9 @@ impl VulkanFormatConverter {
             })?[0];
 
         // Fence (pre-signaled so the first convert() can wait+reset without hanging)
-        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+        let fence_info = vk::FenceCreateInfo::builder()
+            .flags(vk::FenceCreateFlags::SIGNALED)
+            .build();
         let compute_fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| {
             unsafe {
                 device.destroy_descriptor_pool(descriptor_pool, None);
@@ -291,34 +303,38 @@ impl VulkanFormatConverter {
         }
 
         // Update descriptor set to bind source and destination buffers
-        let src_buffer_info = vk::DescriptorBufferInfo::default()
+        let src_buffer_info = vk::DescriptorBufferInfo::builder()
             .buffer(src_buffer)
             .offset(0)
-            .range(src_size);
+            .range(src_size)
+            .build();
         let src_buffer_infos = [src_buffer_info];
 
-        let dst_buffer_info = vk::DescriptorBufferInfo::default()
+        let dst_buffer_info = vk::DescriptorBufferInfo::builder()
             .buffer(dst_buffer)
             .offset(0)
-            .range(dst_size);
+            .range(dst_size)
+            .build();
         let dst_buffer_infos = [dst_buffer_info];
 
         let descriptor_writes = [
-            vk::WriteDescriptorSet::default()
+            vk::WriteDescriptorSet::builder()
                 .dst_set(self.descriptor_set)
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&src_buffer_infos),
-            vk::WriteDescriptorSet::default()
+                .buffer_info(&src_buffer_infos)
+                .build(),
+            vk::WriteDescriptorSet::builder()
                 .dst_set(self.descriptor_set)
                 .dst_binding(1)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&dst_buffer_infos),
+                .buffer_info(&dst_buffer_infos)
+                .build(),
         ];
 
         unsafe {
             self.device
-                .update_descriptor_sets(&descriptor_writes, &[]);
+                .update_descriptor_sets(&descriptor_writes, &[] as &[vk::CopyDescriptorSet]);
         }
 
         // Record command buffer
@@ -332,11 +348,13 @@ impl VulkanFormatConverter {
                     StreamError::GpuError(format!("Failed to reset command buffer: {e}"))
                 })?;
 
-            let begin_info = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            let begin_info = vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                .build();
 
             self.device
                 .begin_command_buffer(self.compute_command_buffer, &begin_info)
+                .map(|_| ())
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to begin command buffer: {e}"))
                 })?;
@@ -379,16 +397,20 @@ impl VulkanFormatConverter {
 
             self.device
                 .end_command_buffer(self.compute_command_buffer)
+                .map(|_| ())
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to end command buffer: {e}"))
                 })?;
 
             // Submit and wait for completion
             let command_buffers = [self.compute_command_buffer];
-            let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+            let submit_info = vk::SubmitInfo::builder()
+                .command_buffers(&command_buffers)
+                .build();
 
             self.device
                 .queue_submit(self.queue, &[submit_info], self.compute_fence)
+                .map(|_| ())
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to submit compute dispatch: {e}"))
                 })?;
@@ -397,6 +419,7 @@ impl VulkanFormatConverter {
             // buffer data is visible before the caller submits dependent work.
             self.device
                 .wait_for_fences(&[self.compute_fence], true, u64::MAX)
+                .map(|_| ())
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to wait for compute fence: {e}"))
                 })?;
@@ -439,3 +462,38 @@ impl Drop for VulkanFormatConverter {
 // Safety: Vulkan handles are thread-safe
 unsafe impl Send for VulkanFormatConverter {}
 unsafe impl Sync for VulkanFormatConverter {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vulkan::rhi::VulkanDevice;
+
+    #[test]
+    fn test_new_creates_compute_pipeline_successfully() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        // NV12 source (1.5 bytes/pixel average) → BGRA32 destination (4 bytes/pixel).
+        // This exercises the full vulkanalia builder chain: shader module creation,
+        // descriptor set layout, pipeline layout, compute pipeline, and command pool —
+        // validating the ash → vulkanalia migration of the most complex RHI file.
+        let result = VulkanFormatConverter::new(
+            device.device(),
+            device.queue(),
+            device.queue_family_index(),
+            2, // source: NV12 packed as 2 bytes/pixel for dispatch sizing
+            4, // dest: BGRA32
+        );
+
+        assert!(
+            result.is_ok(),
+            "VulkanFormatConverter::new must succeed: {:?}",
+            result.err()
+        );
+    }
+}
