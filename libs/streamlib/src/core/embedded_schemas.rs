@@ -75,6 +75,27 @@ pub fn get_embedded_schema_definition(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Extract `max_payload_bytes` from a schema's metadata section.
+///
+/// Strips any version suffix (e.g. `com.tatolab.audioframe@1.0.0` → `com.tatolab.audioframe`)
+/// before lookup. Returns [`MAX_PAYLOAD_SIZE`] if the schema is unknown or has no declaration.
+pub fn max_payload_bytes_for_schema(schema_name: &str) -> usize {
+    use crate::iceoryx2::MAX_PAYLOAD_SIZE;
+    let base_name = schema_name.split('@').next().unwrap_or(schema_name);
+    if let Some(yaml) = get_embedded_schema_definition(base_name) {
+        if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(yaml) {
+            if let Some(n) = value
+                .get("metadata")
+                .and_then(|m| m.get("max_payload_bytes"))
+                .and_then(|v| v.as_u64())
+            {
+                return n as usize;
+            }
+        }
+    }
+    MAX_PAYLOAD_SIZE as usize
+}
+
 /// List all embedded schema names.
 pub fn list_embedded_schema_names() -> Vec<&'static str> {
     vec![

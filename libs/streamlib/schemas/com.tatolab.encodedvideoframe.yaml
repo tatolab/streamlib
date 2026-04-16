@@ -9,6 +9,7 @@ metadata:
   description: "Encoded video frame with H.264/H.265 NAL unit data"
   read_mode: read_next_in_order
   buffer_size: 16
+  max_payload_bytes: 524288
 
 properties:
   data:

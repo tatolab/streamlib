@@ -10,6 +10,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContext;
+use crate::core::embedded_schemas::max_payload_bytes_for_schema;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
@@ -236,19 +237,8 @@ fn open_iceoryx2_pubsub(
         dest_proc_id
     );
 
-    // Create iceoryx2 Service, Publisher, and Subscriber using the Node
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let service = iceoryx2_node.open_or_create_service(&service_name)?;
-
-    // Create Publisher for source processor (each upstream gets its own publisher)
-    let publisher = service.create_publisher()?;
-    tracing::debug!(
-        "Created iceoryx2 Publisher for '{}' -> service '{}'",
-        source_proc_id,
-        service_name
-    );
-
-    // Look up schema for the output port from the registry
+    // Look up schema for the output port before creating the publisher so we can size
+    // the shared memory slot correctly via max_payload_bytes_for_schema.
     let output_schema = {
         let source_proc_type = graph
             .traversal_mut()
@@ -272,6 +262,18 @@ fn open_iceoryx2_pubsub(
         "Output port '{}' has schema '{}'",
         source_port,
         output_schema
+    );
+
+    // Create iceoryx2 Service, Publisher, and Subscriber using the Node
+    let iceoryx2_node = runtime_ctx.iceoryx2_node();
+    let service = iceoryx2_node.open_or_create_service(&service_name)?;
+
+    // Create Publisher sized for this schema's declared max payload.
+    let publisher = service.create_publisher(max_payload_bytes_for_schema(&output_schema))?;
+    tracing::debug!(
+        "Created iceoryx2 Publisher for '{}' -> service '{}'",
+        source_proc_id,
+        service_name
     );
 
     // Configure source OutputWriter with port mapping and publisher
@@ -379,6 +381,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 .unwrap_or_default()
         };
 
+        let max_payload = max_payload_bytes_for_schema(&output_schema);
         let source_proc_arc = get_single_processor(graph, source_proc_id)?;
         let mut source_guard = source_proc_arc.lock();
         if let Some(deno_host) = source_guard
@@ -390,6 +393,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 "dest_port": dest_port,
                 "dest_service_name": service_name,
                 "schema_name": output_schema,
+                "max_payload_bytes": max_payload,
             }));
         } else if let Some(python_native_host) = source_guard
             .as_any_mut()
@@ -402,6 +406,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                     "dest_port": dest_port,
                     "dest_service_name": service_name,
                     "schema_name": output_schema,
+                    "max_payload_bytes": max_payload,
                 }));
         }
     }
@@ -496,6 +501,7 @@ fn open_iceoryx2_subprocess_to_rust(
                 .unwrap_or_default()
         };
 
+        let max_payload = max_payload_bytes_for_schema(&output_schema);
         let source_proc_arc = get_single_processor(graph, source_proc_id)?;
         let mut source_guard = source_proc_arc.lock();
         if let Some(deno_host) = source_guard
@@ -507,6 +513,7 @@ fn open_iceoryx2_subprocess_to_rust(
                 "dest_port": dest_port,
                 "dest_service_name": service_name,
                 "schema_name": output_schema,
+                "max_payload_bytes": max_payload,
             }));
             tracing::debug!(
                 "Stored output wiring on Deno processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
@@ -523,6 +530,7 @@ fn open_iceoryx2_subprocess_to_rust(
                     "dest_port": dest_port,
                     "dest_service_name": service_name,
                     "schema_name": output_schema,
+                    "max_payload_bytes": max_payload,
                 }));
             tracing::debug!(
                 "Stored output wiring on Python native processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
@@ -588,13 +596,7 @@ fn open_iceoryx2_rust_to_subprocess(
         dest_proc_id
     );
 
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let service = iceoryx2_node.open_or_create_service(&service_name)?;
-
-    // Create Publisher for source processor (Rust side)
-    let publisher = service.create_publisher()?;
-
-    // Look up schema for the output port
+    // Look up schema before creating the publisher to size the slot correctly.
     let output_schema = {
         let source_proc_type = graph
             .traversal_mut()
@@ -613,6 +615,12 @@ fn open_iceoryx2_rust_to_subprocess(
             })
             .unwrap_or_default()
     };
+
+    let iceoryx2_node = runtime_ctx.iceoryx2_node();
+    let service = iceoryx2_node.open_or_create_service(&service_name)?;
+
+    // Create Publisher sized for this schema's declared max payload.
+    let publisher = service.create_publisher(max_payload_bytes_for_schema(&output_schema))?;
 
     // Configure source OutputWriter with port mapping and publisher
     {

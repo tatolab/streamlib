@@ -87,7 +87,7 @@ def load_native_lib(lib_path):
     # Output
     lib.slpn_output_publish.argtypes = [
         ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
-        ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
     ]
     lib.slpn_output_publish.restype = ctypes.c_int32
     lib.slpn_output_write.argtypes = [

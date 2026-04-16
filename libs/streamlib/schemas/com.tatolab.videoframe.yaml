@@ -9,6 +9,7 @@ metadata:
   description: "Video frame for IPC - references GPU surface by ID"
   read_mode: skip_to_latest
   buffer_size: 4
+  max_payload_bytes: 65536
 
 properties:
   surface_id:

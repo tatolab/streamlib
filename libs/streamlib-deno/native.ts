@@ -43,7 +43,7 @@ const symbols = {
 
   // Output
   sldn_output_publish: {
-    parameters: ["pointer", "buffer", "buffer", "buffer", "buffer"] as const,
+    parameters: ["pointer", "buffer", "buffer", "buffer", "buffer", "usize"] as const,
     result: "i32" as const,
   },
   sldn_output_write: {

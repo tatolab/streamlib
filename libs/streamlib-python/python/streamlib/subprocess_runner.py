@@ -93,6 +93,7 @@ def _setup_native_context(msg, native_lib_path, processor_id):
             port_name.encode("utf-8"),
             dest_port.encode("utf-8"),
             schema_name.encode("utf-8"),
+            out.get("max_payload_bytes", 65536),
         )
         if result != 0:
             _logger.error("Failed to create publisher for '%s'", dest_service)
