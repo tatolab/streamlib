@@ -7,9 +7,6 @@ pub mod audio_clock;
 pub mod processors;
 pub mod thread_priority;
 
-#[cfg(feature = "ffmpeg")]
-pub mod ffmpeg;
-
 pub use audio_clock::LinuxTimerFdAudioClock;
 
 pub use processors::{
