@@ -128,7 +128,7 @@ pub(crate) mod metal;
 ))]
 pub(crate) mod vulkan;
 
-// Linux platform services (FFmpeg-based encoding)
+// Linux platform services
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 
@@ -166,14 +166,8 @@ pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, Whi
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 // Codec processors (cross-platform)
-pub use core::processors::{
-    H264EncoderProcessor, H264DecoderProcessor,
-    OpusEncoderProcessor, OpusDecoderProcessor,
-};
-pub use _generated_::{
-    H264EncoderConfig, H264DecoderConfig,
-    OpusEncoderConfig, OpusDecoderConfig,
-};
+pub use core::processors::{OpusEncoderProcessor, OpusDecoderProcessor};
+pub use _generated_::{OpusEncoderConfig, OpusDecoderConfig};
 
 // MoQ streaming (cross-platform)
 #[cfg(feature = "moq")]

@@ -16,7 +16,5 @@ pub use audio_codec::AudioCodec;
 pub use mp4_muxer::Mp4Muxer;
 pub use mp4_muxer_config::Mp4MuxerConfig;
 pub use video_codec::{H264Profile, VideoCodec, FOURCC_H264};
-pub(crate) use video_decoder::VideoDecoder;
 pub(crate) use video_decoder_config::VideoDecoderConfig;
-pub(crate) use video_encoder::VideoEncoder;
 pub(crate) use video_encoder_config::VideoEncoderConfig;

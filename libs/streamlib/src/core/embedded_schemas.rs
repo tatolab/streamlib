@@ -59,12 +59,6 @@ pub fn get_embedded_schema_definition(name: &str) -> Option<&'static str> {
         "com.streamlib.webrtc_whep.config@1.0.0" => Some(include_str!(
             "../../schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml"
         )),
-        "com.streamlib.h264_encoder.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.h264_encoder.config@1.0.0.yaml"
-        )),
-        "com.streamlib.h264_decoder.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.h264_decoder.config@1.0.0.yaml"
-        )),
         "com.streamlib.opus_encoder.config@1.0.0" => Some(include_str!(
             "../../schemas/com.streamlib.opus_encoder.config@1.0.0.yaml"
         )),
@@ -120,8 +114,6 @@ pub fn list_embedded_schema_names() -> Vec<&'static str> {
         "com.tatolab.mp4_writer.config@1.0.0",
         "com.tatolab.screen_capture.config@1.0.0",
         "com.tatolab.simple_passthrough.config@1.0.0",
-        "com.streamlib.h264_encoder.config@1.0.0",
-        "com.streamlib.h264_decoder.config@1.0.0",
         "com.streamlib.opus_encoder.config@1.0.0",
         "com.streamlib.opus_decoder.config@1.0.0",
     ]

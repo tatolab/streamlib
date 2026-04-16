@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Remove Vulkan Video and FFmpeg Codec Code
-status: pending
+status: in_review
 description: Strip all custom encoder/decoder code from streamlib in preparation for nvpro-vulkan-video integration. Branch refactor/remove-vulkan-video-code from main.
 github_issue: 251
 dependencies:

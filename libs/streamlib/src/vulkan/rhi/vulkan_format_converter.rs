@@ -15,13 +15,11 @@ pub struct VulkanFormatConverter {
     source_bytes_per_pixel: u32,
     dest_bytes_per_pixel: u32,
     nv12_to_bgra_pipeline: vk::Pipeline,
-    bgra_to_nv12_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
     nv12_to_bgra_shader_module: vk::ShaderModule,
-    bgra_to_nv12_shader_module: vk::ShaderModule,
     compute_command_buffer: vk::CommandBuffer,
     compute_fence: vk::Fence,
 }
@@ -53,15 +51,6 @@ impl VulkanFormatConverter {
                 StreamError::GpuError(format!("Failed to read nv12_to_bgra SPIR-V: {e}"))
             })?;
 
-        let bgra_to_nv12_spirv =
-            ash::util::read_spv(&mut std::io::Cursor::new(include_bytes!(
-                "shaders/bgra_to_nv12.spv"
-            )))
-            .map_err(|e| {
-                unsafe { device.destroy_command_pool(command_pool, None) };
-                StreamError::GpuError(format!("Failed to read bgra_to_nv12 SPIR-V: {e}"))
-            })?;
-
         let nv12_to_bgra_module_info =
             vk::ShaderModuleCreateInfo::default().code(&nv12_to_bgra_spirv);
         let nv12_to_bgra_shader_module =
@@ -70,21 +59,6 @@ impl VulkanFormatConverter {
                     unsafe { device.destroy_command_pool(command_pool, None) };
                     StreamError::GpuError(format!(
                         "Failed to create nv12_to_bgra shader module: {e}"
-                    ))
-                },
-            )?;
-
-        let bgra_to_nv12_module_info =
-            vk::ShaderModuleCreateInfo::default().code(&bgra_to_nv12_spirv);
-        let bgra_to_nv12_shader_module =
-            unsafe { device.create_shader_module(&bgra_to_nv12_module_info, None) }.map_err(
-                |e| {
-                    unsafe {
-                        device.destroy_shader_module(nv12_to_bgra_shader_module, None);
-                        device.destroy_command_pool(command_pool, None);
-                    }
-                    StreamError::GpuError(format!(
-                        "Failed to create bgra_to_nv12 shader module: {e}"
                     ))
                 },
             )?;
@@ -110,7 +84,6 @@ impl VulkanFormatConverter {
             unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) }
                 .map_err(|e| {
                     unsafe {
-                        device.destroy_shader_module(bgra_to_nv12_shader_module, None);
                         device.destroy_shader_module(nv12_to_bgra_shader_module, None);
                         device.destroy_command_pool(command_pool, None);
                     }
@@ -135,14 +108,13 @@ impl VulkanFormatConverter {
             unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }.map_err(|e| {
                 unsafe {
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(bgra_to_nv12_shader_module, None);
                     device.destroy_shader_module(nv12_to_bgra_shader_module, None);
                     device.destroy_command_pool(command_pool, None);
                 }
                 StreamError::GpuError(format!("Failed to create pipeline layout: {e}"))
             })?;
 
-        // Create compute pipelines
+        // Create NV12→BGRA compute pipeline
         let nv12_to_bgra_stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(nv12_to_bgra_shader_module)
@@ -163,39 +135,10 @@ impl VulkanFormatConverter {
             unsafe {
                 device.destroy_pipeline_layout(pipeline_layout, None);
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                device.destroy_shader_module(bgra_to_nv12_shader_module, None);
                 device.destroy_shader_module(nv12_to_bgra_shader_module, None);
                 device.destroy_command_pool(command_pool, None);
             }
             StreamError::GpuError(format!("Failed to create nv12_to_bgra pipeline: {e}"))
-        })?[0];
-
-        let bgra_to_nv12_stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(bgra_to_nv12_shader_module)
-            .name(c"main");
-
-        let bgra_to_nv12_pipeline_info = vk::ComputePipelineCreateInfo::default()
-            .stage(bgra_to_nv12_stage)
-            .layout(pipeline_layout);
-
-        let bgra_to_nv12_pipeline = unsafe {
-            device.create_compute_pipelines(
-                vk::PipelineCache::null(),
-                &[bgra_to_nv12_pipeline_info],
-                None,
-            )
-        }
-        .map_err(|(_, e)| {
-            unsafe {
-                device.destroy_pipeline(nv12_to_bgra_pipeline, None);
-                device.destroy_pipeline_layout(pipeline_layout, None);
-                device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                device.destroy_shader_module(bgra_to_nv12_shader_module, None);
-                device.destroy_shader_module(nv12_to_bgra_shader_module, None);
-                device.destroy_command_pool(command_pool, None);
-            }
-            StreamError::GpuError(format!("Failed to create bgra_to_nv12 pipeline: {e}"))
         })?[0];
 
         // Descriptor pool (1 set, 2 storage buffers)
@@ -210,11 +153,9 @@ impl VulkanFormatConverter {
         let descriptor_pool =
             unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) }.map_err(|e| {
                 unsafe {
-                    device.destroy_pipeline(bgra_to_nv12_pipeline, None);
                     device.destroy_pipeline(nv12_to_bgra_pipeline, None);
                     device.destroy_pipeline_layout(pipeline_layout, None);
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(bgra_to_nv12_shader_module, None);
                     device.destroy_shader_module(nv12_to_bgra_shader_module, None);
                     device.destroy_command_pool(command_pool, None);
                 }
@@ -230,11 +171,9 @@ impl VulkanFormatConverter {
             .map_err(|e| {
                 unsafe {
                     device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(bgra_to_nv12_pipeline, None);
                     device.destroy_pipeline(nv12_to_bgra_pipeline, None);
                     device.destroy_pipeline_layout(pipeline_layout, None);
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(bgra_to_nv12_shader_module, None);
                     device.destroy_shader_module(nv12_to_bgra_shader_module, None);
                     device.destroy_command_pool(command_pool, None);
                 }
@@ -251,11 +190,9 @@ impl VulkanFormatConverter {
             unsafe { device.allocate_command_buffers(&cmd_alloc_info) }.map_err(|e| {
                 unsafe {
                     device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(bgra_to_nv12_pipeline, None);
                     device.destroy_pipeline(nv12_to_bgra_pipeline, None);
                     device.destroy_pipeline_layout(pipeline_layout, None);
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(bgra_to_nv12_shader_module, None);
                     device.destroy_shader_module(nv12_to_bgra_shader_module, None);
                     device.destroy_command_pool(command_pool, None);
                 }
@@ -267,11 +204,9 @@ impl VulkanFormatConverter {
         let compute_fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| {
             unsafe {
                 device.destroy_descriptor_pool(descriptor_pool, None);
-                device.destroy_pipeline(bgra_to_nv12_pipeline, None);
                 device.destroy_pipeline(nv12_to_bgra_pipeline, None);
                 device.destroy_pipeline_layout(pipeline_layout, None);
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                device.destroy_shader_module(bgra_to_nv12_shader_module, None);
                 device.destroy_shader_module(nv12_to_bgra_shader_module, None);
                 device.destroy_command_pool(command_pool, None);
             }
@@ -286,13 +221,11 @@ impl VulkanFormatConverter {
             source_bytes_per_pixel,
             dest_bytes_per_pixel,
             nv12_to_bgra_pipeline,
-            bgra_to_nv12_pipeline,
             pipeline_layout,
             descriptor_set_layout,
             descriptor_pool,
             descriptor_set,
             nv12_to_bgra_shader_module,
-            bgra_to_nv12_shader_module,
             compute_command_buffer,
             compute_fence,
         })
@@ -300,7 +233,7 @@ impl VulkanFormatConverter {
 
     /// Convert pixel data from source buffer to destination buffer via GPU compute.
     ///
-    /// Supports NV12 ↔ RGBA/BGRA conversions for codec I/O.
+    /// Supports NV12 → RGBA/BGRA conversion for decoded video display.
     pub fn convert(&self, source: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
         let src_ref = source.buffer_ref();
         let dst_ref = dest.buffer_ref();
@@ -318,19 +251,8 @@ impl VulkanFormatConverter {
             ));
         }
 
-        // Determine pipeline and flags based on conversion direction
-        let (pipeline, is_bgra_to_nv12, flags) = match (src_format, dst_format) {
-            // RGBA/BGRA → NV12
-            (
-                PixelFormat::Rgba32 | PixelFormat::Bgra32,
-                PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange,
-            ) => {
-                let is_bgra = matches!(src_format, PixelFormat::Bgra32);
-                let full_range = matches!(dst_format, PixelFormat::Nv12FullRange);
-                let flags = (is_bgra as u32) | ((full_range as u32) << 1);
-                (self.bgra_to_nv12_pipeline, true, flags)
-            }
-            // NV12 → RGBA/BGRA
+        // NV12 → RGBA/BGRA
+        let (pipeline, flags) = match (src_format, dst_format) {
             (
                 PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange,
                 PixelFormat::Rgba32 | PixelFormat::Bgra32,
@@ -338,7 +260,7 @@ impl VulkanFormatConverter {
                 let is_bgra = matches!(dst_format, PixelFormat::Bgra32);
                 let full_range = matches!(src_format, PixelFormat::Nv12FullRange);
                 let flags = (is_bgra as u32) | ((full_range as u32) << 1);
-                (self.nv12_to_bgra_pipeline, false, flags)
+                (self.nv12_to_bgra_pipeline, flags)
             }
             _ => {
                 return Err(StreamError::NotSupported(format!(
@@ -449,15 +371,9 @@ impl VulkanFormatConverter {
                 push_bytes,
             );
 
-            // Dispatch compute: 16×16 workgroups.
-            // BGRA→NV12 shader processes 4×2 pixel blocks per thread
-            // (each workgroup covers 64 pixels wide × 32 pixels tall);
-            // NV12→BGRA shader processes 1 pixel per thread.
-            let (dispatch_x, dispatch_y) = if is_bgra_to_nv12 {
-                ((width / 4 + 15) / 16, (height / 2 + 15) / 16)
-            } else {
-                ((width + 15) / 16, (height + 15) / 16)
-            };
+            // NV12→BGRA shader processes 1 pixel per thread, 16×16 workgroups
+            let dispatch_x = (width + 15) / 16;
+            let dispatch_y = (height + 15) / 16;
             self.device
                 .cmd_dispatch(self.compute_command_buffer, dispatch_x, dispatch_y, 1);
 
@@ -509,15 +425,11 @@ impl Drop for VulkanFormatConverter {
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device
-                .destroy_pipeline(self.bgra_to_nv12_pipeline, None);
-            self.device
                 .destroy_pipeline(self.nv12_to_bgra_pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            self.device
-                .destroy_shader_module(self.bgra_to_nv12_shader_module, None);
             self.device
                 .destroy_shader_module(self.nv12_to_bgra_shader_module, None);
         }
@@ -527,134 +439,3 @@ impl Drop for VulkanFormatConverter {
 // Safety: Vulkan handles are thread-safe
 unsafe impl Send for VulkanFormatConverter {}
 unsafe impl Sync for VulkanFormatConverter {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::rhi::{PixelFormat, RhiPixelBufferRef};
-    use crate::vulkan::rhi::{VulkanDevice, VulkanPixelBuffer};
-    use std::sync::Arc;
-
-    fn make_pixel_buffer(
-        device: &Arc<VulkanDevice>,
-        width: u32,
-        height: u32,
-        format: PixelFormat,
-    ) -> Option<RhiPixelBuffer> {
-        let bpp = format.bits_per_pixel() / 8;
-        let buf = VulkanPixelBuffer::new(device, width, height, bpp, format).ok()?;
-        let ref_ = RhiPixelBufferRef {
-            inner: Arc::new(buf),
-        };
-        Some(RhiPixelBuffer::new(ref_))
-    }
-
-    #[test]
-    fn test_bgra_to_nv12_roundtrip() {
-        let device = match VulkanDevice::new() {
-            Ok(d) => Arc::new(d),
-            Err(_) => {
-                println!("Skipping test - Vulkan not available");
-                return;
-            }
-        };
-
-        let width = 4u32;
-        let height = 4u32;
-
-        let src_bgra = match make_pixel_buffer(&device, width, height, PixelFormat::Bgra32) {
-            Some(b) => b,
-            None => {
-                println!("Skipping test - failed to create source buffer");
-                return;
-            }
-        };
-
-        // NV12 size: width * height (Y) + width * height/2 (UV)
-        let nv12_buf = match VulkanPixelBuffer::new(&device, width, height, 1, PixelFormat::Nv12FullRange) {
-            Ok(b) => b,
-            Err(_) => {
-                println!("Skipping test - failed to create NV12 buffer");
-                return;
-            }
-        };
-        // NV12 buffer needs to be large enough for Y + UV planes.
-        // VulkanPixelBuffer allocates width * height * bpp, so with bpp=1 we get width*height.
-        // We actually need width*height*3/2. Use a workaround: allocate with bpp=2 for enough space.
-        let nv12_buf = match VulkanPixelBuffer::new(&device, width, height, 2, PixelFormat::Nv12FullRange) {
-            Ok(b) => b,
-            Err(_) => {
-                println!("Skipping test - failed to create NV12 buffer");
-                return;
-            }
-        };
-        let nv12 = RhiPixelBuffer::new(RhiPixelBufferRef {
-            inner: Arc::new(nv12_buf),
-        });
-
-        let dest_bgra = match make_pixel_buffer(&device, width, height, PixelFormat::Bgra32) {
-            Some(b) => b,
-            None => {
-                println!("Skipping test - failed to create dest buffer");
-                return;
-            }
-        };
-
-        // Write a known BGRA color (red: B=0, G=0, R=255, A=255)
-        let src_ptr = src_bgra.buffer_ref().inner.mapped_ptr();
-        unsafe {
-            for i in 0..(width * height) as usize {
-                let offset = i * 4;
-                *src_ptr.add(offset) = 0;     // B
-                *src_ptr.add(offset + 1) = 0; // G
-                *src_ptr.add(offset + 2) = 255; // R
-                *src_ptr.add(offset + 3) = 255; // A
-            }
-        }
-
-        let converter = match VulkanFormatConverter::new(
-            device.device(),
-            device.queue(),
-            device.queue_family_index(),
-            4, // source bpp (BGRA)
-            1, // dest bpp (NV12 average)
-        ) {
-            Ok(c) => c,
-            Err(_) => {
-                println!("Skipping test - failed to create converter");
-                return;
-            }
-        };
-
-        // BGRA → NV12
-        let result = converter.convert(&src_bgra, &nv12);
-        assert!(result.is_ok(), "BGRA → NV12 conversion failed: {:?}", result.err());
-
-        // NV12 → BGRA (roundtrip)
-        let converter_back = VulkanFormatConverter::new(
-            device.device(),
-            device.queue(),
-            device.queue_family_index(),
-            1,
-            4,
-        )
-        .unwrap();
-
-        let result = converter_back.convert(&nv12, &dest_bgra);
-        assert!(result.is_ok(), "NV12 → BGRA conversion failed: {:?}", result.err());
-
-        // Check roundtrip: red pixel should survive within tolerance
-        let dest_ptr = dest_bgra.buffer_ref().inner.mapped_ptr();
-        unsafe {
-            let b = *dest_ptr;
-            let g = *dest_ptr.add(1);
-            let r = *dest_ptr.add(2);
-            // YUV conversion is lossy — allow tolerance of ~10
-            assert!(r > 240, "Red channel too low after roundtrip: {r}");
-            assert!(g < 20, "Green channel too high after roundtrip: {g}");
-            assert!(b < 20, "Blue channel too high after roundtrip: {b}");
-        }
-
-        println!("BGRA → NV12 → BGRA roundtrip passed");
-    }
-}
