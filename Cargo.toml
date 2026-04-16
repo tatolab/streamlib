@@ -21,7 +21,7 @@ members = [
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
-    "examples/moq-roundtrip",             # Example: MoQ roundtrip test (publish + subscribe via relay)
+    # "examples/moq-roundtrip",             # Example: MoQ roundtrip test — temporarily disabled pending H.264 processor rewrite in #254
     # "examples/whep-player",     # Example: WHEP (WebRTC egress) player (uses WebRTC WHEP)
     # "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization (uses CameraProcessor, etc.)
     # "examples/graph-json-export",         # Example: Graph data structure JSON export (uses custom processors with old syntax)
