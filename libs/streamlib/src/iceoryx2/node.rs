@@ -9,7 +9,7 @@ use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::{EventPayload, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE};
+use super::{EventPayload, FRAME_HEADER_SIZE};
 use crate::core::error::{Result, StreamError};
 
 /// Thread-safe wrapper for iceoryx2 Node.
@@ -87,12 +87,17 @@ pub struct Iceoryx2Service {
 
 impl Iceoryx2Service {
     /// Create a publisher for this service.
+    ///
+    /// `max_payload_bytes` sets the per-slot shared memory capacity (data only, header is added
+    /// internally). Use [`crate::core::embedded_schemas::max_payload_bytes_for_schema`] to derive
+    /// this value from the output port's schema declaration.
     pub fn create_publisher(
         &self,
+        max_payload_bytes: usize,
     ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>> {
         self.inner
             .publisher_builder()
-            .initial_max_slice_len(MAX_PAYLOAD_SIZE + FRAME_HEADER_SIZE)
+            .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
             .create()
             .map_err(|e| StreamError::Runtime(format!("Failed to create publisher: {:?}", e)))
     }

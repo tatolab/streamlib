@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: MoQ Subgroup Keyframe Fix
-status: pending
+status: completed
 description: "Bump moq-transport to 0.14.1 (includes LargestObject filter fix) and apply per-GOP subgroup creation. Branch fix/moq-subgroup-keyframe from main."
 github_issue: 249
 dependencies: []

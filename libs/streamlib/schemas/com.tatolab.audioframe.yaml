@@ -9,6 +9,7 @@ metadata:
   description: "Audio frame with interleaved samples (1-8 channels)"
   read_mode: read_next_in_order
   buffer_size: 32
+  max_payload_bytes: 65536
 
 properties:
   samples:
