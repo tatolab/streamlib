@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.15](https://github.com/tatolab/streamlib/compare/v0.4.14...v0.4.15) (2026-04-16)
+
+
+### Bug Fixes
+
+* **vulkan:** VMA pool isolation for DMA-BUF allocations ([cab6a00](https://github.com/tatolab/streamlib/commit/cab6a000865918324e175854947f0fbe1fd8fef7))
+
 ## [0.4.14](https://github.com/tatolab/streamlib/compare/v0.4.13...v0.4.14) (2026-04-16)
 
 
