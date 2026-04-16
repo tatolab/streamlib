@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use ash::vk;
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
+use vulkanalia_vma as vma;
+use vma::Alloc as _;
+
 use crate::core::rhi::PixelFormat;
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
@@ -208,8 +212,6 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         };
 
         // Cap capture resolution to 1920x1080 for real-time encoding performance.
-        // The initial negotiation picks the highest to probe DMA-BUF capability;
-        // now re-negotiate to a manageable resolution for encoding.
         let fmt = if fmt.width > 1920 || fmt.height > 1080 {
             let mut capped = fmt.clone();
             capped.width = 1920;
@@ -257,9 +259,29 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
                 })?;
 
         // Set a poll timeout so the capture thread can check is_capturing periodically.
-        // Without this, stream.next() blocks indefinitely on poll(), causing stop() to deadlock
-        // if the camera stops producing frames (USB disconnect, device error).
         stream.set_timeout(std::time::Duration::from_secs(1));
+
+        // Pre-allocate the pixel buffer pool BEFORE the display has a chance to
+        // create its swapchain. NVIDIA limits DMA-BUF exportable allocations
+        // after swapchain creation; pre-allocating here ensures the pool buffers
+        // are created while DMA-BUF allocations are still freely available.
+        // We acquire-and-release one buffer to trigger lazy pool creation.
+        match gpu_context.acquire_pixel_buffer(capture_width, capture_height, PixelFormat::Bgra32) {
+            Ok((pool_id, buffer)) => {
+                tracing::info!(
+                    "Camera {}: pre-allocated pixel buffer pool ({}x{} BGRA32) — pool_id={}",
+                    self.camera_name, capture_width, capture_height, pool_id
+                );
+                drop(buffer);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Camera {}: failed to pre-allocate pixel buffer pool: {} \
+                     (will retry from capture thread)",
+                    self.camera_name, e
+                );
+            }
+        }
 
         self.is_capturing.store(true, Ordering::Release);
 
@@ -334,6 +356,7 @@ fn capture_thread_loop(
 ) {
     let vulkan_device = &gpu_context.device().inner;
     let device = vulkan_device.device();
+    let allocator = vulkan_device.allocator();
     let queue = vulkan_device.queue();
     let queue_family_index = vulkan_device.queue_family_index();
 
@@ -365,142 +388,68 @@ fn capture_thread_loop(
     // Create double-buffered input SSBOs (HOST_VISIBLE) for raw V4L2 data upload.
     // CPU uploads frame N+1 to SSBO[1] while GPU processes frame N on SSBO[0].
     // -----------------------------------------------------------------------
-    let input_buffer_info = vk::BufferCreateInfo::default()
+    let input_buffer_info = vk::BufferCreateInfo::builder()
         .size(input_alloc_size)
         .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .build();
+
+    // MAPPED: persistent CPU mapping; HOST_ACCESS_SEQUENTIAL_WRITE: VMA picks host-visible type
+    let input_alloc_opts = vma::AllocationOptions {
+        flags: vma::AllocationCreateFlags::MAPPED
+            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+        required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+            | vk::MemoryPropertyFlags::HOST_COHERENT,
+        ..Default::default()
+    };
 
     let mut input_buffers = [vk::Buffer::null(); 2];
-    let mut input_memories = [vk::DeviceMemory::null(); 2];
+    let mut input_allocations: [Option<vma::Allocation>; 2] = [None, None];
     let mut input_mapped_ptrs = [std::ptr::null_mut::<u8>(); 2];
 
     for i in 0..2 {
-        let input_buffer = match unsafe { device.create_buffer(&input_buffer_info, None) } {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("[Camera {}] Failed to create input SSBO[{}]: {}", camera_name, i, e);
-                for j in 0..i {
-                    unsafe {
-                        vulkan_device.unmap_device_memory(input_memories[j]);
-                        vulkan_device.free_device_memory(input_memories[j]);
-                        device.destroy_buffer(input_buffers[j], None);
+        let (input_buffer, allocation) =
+            match unsafe { allocator.create_buffer(input_buffer_info, &input_alloc_opts) } {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("[Camera {}] Failed to create input SSBO[{}]: {}", camera_name, i, e);
+                    for j in 0..i {
+                        if let Some(alloc) = input_allocations[j].take() {
+                            unsafe { allocator.destroy_buffer(input_buffers[j], alloc) };
+                        }
                     }
+                    return;
                 }
-                return;
-            }
-        };
+            };
 
-        let input_mem_reqs = unsafe { device.get_buffer_memory_requirements(input_buffer) };
-
-        let input_memory_type = match vulkan_device.find_memory_type(
-            input_mem_reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        ) {
-            Ok(idx) => idx,
-            Err(e) => {
-                eprintln!("[Camera {}] No suitable memory type for input SSBO[{}]: {}", camera_name, i, e);
-                unsafe { device.destroy_buffer(input_buffer, None) };
-                for j in 0..i {
-                    unsafe {
-                        vulkan_device.unmap_device_memory(input_memories[j]);
-                        vulkan_device.free_device_memory(input_memories[j]);
-                        device.destroy_buffer(input_buffers[j], None);
-                    }
-                }
-                return;
-            }
-        };
-
-        let input_memory = match vulkan_device.allocate_buffer_memory(
-            input_buffer,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            false,
-        ) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("[Camera {}] Failed to allocate input SSBO[{}] memory: {}", camera_name, i, e);
-                unsafe { device.destroy_buffer(input_buffer, None) };
-                for j in 0..i {
-                    unsafe {
-                        vulkan_device.unmap_device_memory(input_memories[j]);
-                        vulkan_device.free_device_memory(input_memories[j]);
-                        device.destroy_buffer(input_buffers[j], None);
-                    }
-                }
-                return;
-            }
-        };
-
-        if let Err(e) = unsafe { device.bind_buffer_memory(input_buffer, input_memory, 0) } {
-            eprintln!("[Camera {}] Failed to bind input SSBO[{}] memory: {}", camera_name, i, e);
-            unsafe {
-                vulkan_device.free_device_memory(input_memory);
-                device.destroy_buffer(input_buffer, None);
-            }
-            for j in 0..i {
-                unsafe {
-                    vulkan_device.unmap_device_memory(input_memories[j]);
-                    vulkan_device.free_device_memory(input_memories[j]);
-                    device.destroy_buffer(input_buffers[j], None);
-                }
-            }
-            return;
-        }
-
-        let input_mapped_ptr = match vulkan_device.map_device_memory(input_memory, input_alloc_size) {
-            Ok(ptr) => ptr,
-            Err(e) => {
-                eprintln!("[Camera {}] Failed to map input SSBO[{}]: {}", camera_name, i, e);
-                unsafe {
-                    vulkan_device.free_device_memory(input_memory);
-                    device.destroy_buffer(input_buffer, None);
-                }
-                for j in 0..i {
-                    unsafe {
-                        vulkan_device.unmap_device_memory(input_memories[j]);
-                        vulkan_device.free_device_memory(input_memories[j]);
-                        device.destroy_buffer(input_buffers[j], None);
-                    }
-                }
-                return;
-            }
-        };
+        let alloc_info = allocator.get_allocation_info(allocation);
+        let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
 
         input_buffers[i] = input_buffer;
-        input_memories[i] = input_memory;
-        input_mapped_ptrs[i] = input_mapped_ptr;
+        input_allocations[i] = Some(allocation);
+        input_mapped_ptrs[i] = mapped_ptr;
     }
 
     // -----------------------------------------------------------------------
     // Create compute pipeline
     // -----------------------------------------------------------------------
 
-    // Shader module
-    let spirv_code = match ash::util::read_spv(&mut std::io::Cursor::new(shader_spirv)) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("[Camera {}] Failed to read SPIR-V: {}", camera_name, e);
-            unsafe {
-                for k in 0..2 {
-                    vulkan_device.unmap_device_memory(input_memories[k]);
-                    vulkan_device.free_device_memory(input_memories[k]);
-                    device.destroy_buffer(input_buffers[k], None);
-                }
-            }
-            return;
-        }
-    };
+    // Inline SPIR-V conversion (replaces ash::util::read_spv)
+    let spirv_code: Vec<u32> = shader_spirv
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
 
-    let shader_module_info = vk::ShaderModuleCreateInfo::default().code(&spirv_code);
+    let shader_module_info = vk::ShaderModuleCreateInfo::builder().code(&spirv_code).build();
     let shader_module = match unsafe { device.create_shader_module(&shader_module_info, None) } {
         Ok(m) => m,
         Err(e) => {
             eprintln!("[Camera {}] Failed to create shader module: {}", camera_name, e);
             unsafe {
                 for k in 0..2 {
-                    vulkan_device.unmap_device_memory(input_memories[k]);
-                    vulkan_device.free_device_memory(input_memories[k]);
-                    device.destroy_buffer(input_buffers[k], None);
+                    if let Some(alloc) = input_allocations[k].take() {
+                        allocator.destroy_buffer(input_buffers[k], alloc);
+                    }
                 }
             }
             return;
@@ -509,20 +458,22 @@ fn capture_thread_loop(
 
     // Descriptor set layout: binding 0 = input SSBO, binding 1 = output storage image
     let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
+        vk::DescriptorSetLayoutBinding::builder()
             .binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .build(),
+        vk::DescriptorSetLayoutBinding::builder()
             .binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .build(),
     ];
 
     let descriptor_set_layout_info =
-        vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings).build();
 
     let descriptor_set_layout =
         match unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) } {
@@ -532,9 +483,9 @@ fn capture_thread_loop(
                 unsafe {
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
+                        if let Some(alloc) = input_allocations[k].take() {
+                            allocator.destroy_buffer(input_buffers[k], alloc);
+                        }
                     }
                 }
                 return;
@@ -542,16 +493,18 @@ fn capture_thread_loop(
         };
 
     // Push constant range: width + height (2 × uint32 = 8 bytes)
-    let push_constant_range = vk::PushConstantRange::default()
+    let push_constant_range = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(8);
+        .size(8)
+        .build();
 
     let set_layouts = [descriptor_set_layout];
     let push_constant_ranges = [push_constant_range];
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(&set_layouts)
-        .push_constant_ranges(&push_constant_ranges);
+        .push_constant_ranges(&push_constant_ranges)
+        .build();
 
     let pipeline_layout =
         match unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) } {
@@ -562,9 +515,9 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
+                        if let Some(alloc) = input_allocations[k].take() {
+                            allocator.destroy_buffer(input_buffers[k], alloc);
+                        }
                     }
                 }
                 return;
@@ -572,29 +525,31 @@ fn capture_thread_loop(
         };
 
     // Compute pipeline
-    let stage_info = vk::PipelineShaderStageCreateInfo::default()
+    let stage_info = vk::PipelineShaderStageCreateInfo::builder()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(shader_module)
-        .name(c"main");
+        .name(b"main\0")
+        .build();
 
-    let compute_pipeline_info = vk::ComputePipelineCreateInfo::default()
+    let compute_pipeline_info = vk::ComputePipelineCreateInfo::builder()
         .stage(stage_info)
-        .layout(pipeline_layout);
+        .layout(pipeline_layout)
+        .build();
 
     let compute_pipeline = match unsafe {
         device.create_compute_pipelines(vk::PipelineCache::null(), &[compute_pipeline_info], None)
     } {
-        Ok(pipelines) => pipelines[0],
-        Err((_, e)) => {
+        Ok((pipelines, _)) => pipelines[0],
+        Err(e) => {
             eprintln!("[Camera {}] Failed to create compute pipeline: {}", camera_name, e);
             unsafe {
                 device.destroy_pipeline_layout(pipeline_layout, None);
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    vulkan_device.unmap_device_memory(input_memories[k]);
-                    vulkan_device.free_device_memory(input_memories[k]);
-                    device.destroy_buffer(input_buffers[k], None);
+                    if let Some(alloc) = input_allocations[k].take() {
+                        allocator.destroy_buffer(input_buffers[k], alloc);
+                    }
                 }
             }
             return;
@@ -603,17 +558,20 @@ fn capture_thread_loop(
 
     // Descriptor pool (1 set, 1 storage buffer + 1 storage image)
     let pool_sizes = [
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1),
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1),
+        vk::DescriptorPoolSize::builder()
+            .type_(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .build(),
+        vk::DescriptorPoolSize::builder()
+            .type_(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1)
+            .build(),
     ];
 
-    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
         .max_sets(1)
-        .pool_sizes(&pool_sizes);
+        .pool_sizes(&pool_sizes)
+        .build();
 
     let descriptor_pool =
         match unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) } {
@@ -626,9 +584,9 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
+                        if let Some(alloc) = input_allocations[k].take() {
+                            allocator.destroy_buffer(input_buffers[k], alloc);
+                        }
                     }
                 }
                 return;
@@ -636,9 +594,10 @@ fn capture_thread_loop(
         };
 
     // Allocate descriptor set
-    let alloc_info = vk::DescriptorSetAllocateInfo::default()
+    let alloc_info = vk::DescriptorSetAllocateInfo::builder()
         .descriptor_pool(descriptor_pool)
-        .set_layouts(&set_layouts);
+        .set_layouts(&set_layouts)
+        .build();
 
     let descriptor_set = match unsafe { device.allocate_descriptor_sets(&alloc_info) } {
         Ok(sets) => sets[0],
@@ -651,9 +610,9 @@ fn capture_thread_loop(
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    vulkan_device.unmap_device_memory(input_memories[k]);
-                    vulkan_device.free_device_memory(input_memories[k]);
-                    device.destroy_buffer(input_buffers[k], None);
+                    if let Some(alloc) = input_allocations[k].take() {
+                        allocator.destroy_buffer(input_buffers[k], alloc);
+                    }
                 }
             }
             return;
@@ -663,9 +622,10 @@ fn capture_thread_loop(
     // -----------------------------------------------------------------------
     // Create command pool + command buffer + fence for compute dispatch
     // -----------------------------------------------------------------------
-    let pool_info = vk::CommandPoolCreateInfo::default()
+    let pool_info = vk::CommandPoolCreateInfo::builder()
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-        .queue_family_index(queue_family_index);
+        .queue_family_index(queue_family_index)
+        .build();
 
     let compute_command_pool = match unsafe { device.create_command_pool(&pool_info, None) } {
         Ok(p) => p,
@@ -678,19 +638,20 @@ fn capture_thread_loop(
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    vulkan_device.unmap_device_memory(input_memories[k]);
-                    vulkan_device.free_device_memory(input_memories[k]);
-                    device.destroy_buffer(input_buffers[k], None);
+                    if let Some(alloc) = input_allocations[k].take() {
+                        allocator.destroy_buffer(input_buffers[k], alloc);
+                    }
                 }
             }
             return;
         }
     };
 
-    let cmd_alloc_info = vk::CommandBufferAllocateInfo::default()
+    let cmd_alloc_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(compute_command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(1);
+        .command_buffer_count(1)
+        .build();
 
     let compute_command_buffer =
         match unsafe { device.allocate_command_buffers(&cmd_alloc_info) } {
@@ -705,16 +666,18 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
+                        if let Some(alloc) = input_allocations[k].take() {
+                            allocator.destroy_buffer(input_buffers[k], alloc);
+                        }
                     }
                 }
                 return;
             }
         };
 
-    let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+    let fence_info = vk::FenceCreateInfo::builder()
+        .flags(vk::FenceCreateFlags::SIGNALED)
+        .build();
     let mut compute_fences = [vk::Fence::null(); 2];
     for i in 0..2 {
         compute_fences[i] = match unsafe { device.create_fence(&fence_info, None) } {
@@ -735,9 +698,9 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
+                        if let Some(alloc) = input_allocations[k].take() {
+                            allocator.destroy_buffer(input_buffers[k], alloc);
+                        }
                     }
                 }
                 return;
@@ -748,8 +711,8 @@ fn capture_thread_loop(
     // -----------------------------------------------------------------------
     // Create DEVICE_LOCAL storage image for compute output (fast VRAM writes)
     // -----------------------------------------------------------------------
-    let compute_output_image_info = vk::ImageCreateInfo::default()
-        .image_type(vk::ImageType::TYPE_2D)
+    let compute_output_image_info = vk::ImageCreateInfo::builder()
+        .image_type(vk::ImageType::_2D)
         .format(vk::Format::R8G8B8A8_UNORM)
         .extent(vk::Extent3D {
             width,
@@ -758,55 +721,28 @@ fn capture_thread_loop(
         })
         .mip_levels(1)
         .array_layers(1)
-        .samples(vk::SampleCountFlags::TYPE_1)
+        .samples(vk::SampleCountFlags::_1)
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .initial_layout(vk::ImageLayout::UNDEFINED);
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .build();
 
-    let compute_output_image =
-        match unsafe { device.create_image(&compute_output_image_info, None) } {
-            Ok(img) => img,
-            Err(e) => {
-                eprintln!(
-                    "[Camera {}] Failed to create compute output image: {}",
-                    camera_name, e
-                );
-                unsafe {
-                    for k in 0..2 {
-                        device.destroy_fence(compute_fences[k], None);
-                    }
-                    device.destroy_command_pool(compute_command_pool, None);
-                    device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(compute_pipeline, None);
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(shader_module, None);
-                    for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
-                    }
-                }
-                return;
-            }
-        };
+    let compute_output_alloc_opts = vma::AllocationOptions {
+        required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        ..Default::default()
+    };
 
-    let compute_output_mem_reqs =
-        unsafe { device.get_image_memory_requirements(compute_output_image) };
-
-    let compute_output_memory_type = match vulkan_device.find_memory_type(
-        compute_output_mem_reqs.memory_type_bits,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    ) {
-        Ok(idx) => idx,
+    let (compute_output_image, mut compute_output_allocation) = match unsafe {
+        allocator.create_image(compute_output_image_info, &compute_output_alloc_opts)
+    } {
+        Ok(r) => r,
         Err(e) => {
             eprintln!(
-                "[Camera {}] No device-local memory for compute output image: {}",
+                "[Camera {}] Failed to create compute output image: {}",
                 camera_name, e
             );
             unsafe {
-                device.destroy_image(compute_output_image, None);
                 for k in 0..2 {
                     device.destroy_fence(compute_fences[k], None);
                 }
@@ -817,88 +753,29 @@ fn capture_thread_loop(
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 device.destroy_shader_module(shader_module, None);
                 for k in 0..2 {
-                    vulkan_device.unmap_device_memory(input_memories[k]);
-                    vulkan_device.free_device_memory(input_memories[k]);
-                    device.destroy_buffer(input_buffers[k], None);
+                    if let Some(alloc) = input_allocations[k].take() {
+                        allocator.destroy_buffer(input_buffers[k], alloc);
+                    }
                 }
             }
             return;
         }
     };
 
-    let compute_output_image_memory =
-        match vulkan_device.allocate_image_memory(
-            compute_output_image,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            false,
-        ) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!(
-                    "[Camera {}] Failed to allocate compute output image memory: {}",
-                    camera_name, e
-                );
-                unsafe {
-                    device.destroy_image(compute_output_image, None);
-                    for k in 0..2 {
-                        device.destroy_fence(compute_fences[k], None);
-                    }
-                    device.destroy_command_pool(compute_command_pool, None);
-                    device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(compute_pipeline, None);
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(shader_module, None);
-                    for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
-                    }
-                }
-                return;
-            }
-        };
-
-    if let Err(e) =
-        unsafe { device.bind_image_memory(compute_output_image, compute_output_image_memory, 0) }
-    {
-        eprintln!(
-            "[Camera {}] Failed to bind compute output image memory: {}",
-            camera_name, e
-        );
-        unsafe {
-            vulkan_device.free_device_memory(compute_output_image_memory);
-            device.destroy_image(compute_output_image, None);
-            for k in 0..2 {
-                device.destroy_fence(compute_fences[k], None);
-            }
-            device.destroy_command_pool(compute_command_pool, None);
-            device.destroy_descriptor_pool(descriptor_pool, None);
-            device.destroy_pipeline(compute_pipeline, None);
-            device.destroy_pipeline_layout(pipeline_layout, None);
-            device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-            device.destroy_shader_module(shader_module, None);
-            for k in 0..2 {
-                vulkan_device.unmap_device_memory(input_memories[k]);
-                vulkan_device.free_device_memory(input_memories[k]);
-                device.destroy_buffer(input_buffers[k], None);
-            }
-        }
-        return;
-    }
-
-    let compute_output_view_info = vk::ImageViewCreateInfo::default()
+    let compute_output_view_info = vk::ImageViewCreateInfo::builder()
         .image(compute_output_image)
-        .view_type(vk::ImageViewType::TYPE_2D)
+        .view_type(vk::ImageViewType::_2D)
         .format(vk::Format::R8G8B8A8_UNORM)
         .subresource_range(
-            vk::ImageSubresourceRange::default()
+            vk::ImageSubresourceRange::builder()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                 .base_mip_level(0)
                 .level_count(1)
                 .base_array_layer(0)
-                .layer_count(1),
-        );
+                .layer_count(1)
+                .build(),
+        )
+        .build();
 
     let compute_output_image_view =
         match unsafe { device.create_image_view(&compute_output_view_info, None) } {
@@ -909,8 +786,7 @@ fn capture_thread_loop(
                     camera_name, e
                 );
                 unsafe {
-                    vulkan_device.free_device_memory(compute_output_image_memory);
-                    device.destroy_image(compute_output_image, None);
+                    allocator.destroy_image(compute_output_image, compute_output_allocation);
                     for k in 0..2 {
                         device.destroy_fence(compute_fences[k], None);
                     }
@@ -921,9 +797,9 @@ fn capture_thread_loop(
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
-                        vulkan_device.unmap_device_memory(input_memories[k]);
-                        vulkan_device.free_device_memory(input_memories[k]);
-                        device.destroy_buffer(input_buffers[k], None);
+                        if let Some(alloc) = input_allocations[k].take() {
+                            allocator.destroy_buffer(input_buffers[k], alloc);
+                        }
                     }
                 }
                 return;
@@ -931,33 +807,37 @@ fn capture_thread_loop(
         };
 
     // Write descriptor set — input SSBO binding will be updated per-frame for double buffering
-    let input_buffer_descriptor = vk::DescriptorBufferInfo::default()
+    let input_buffer_descriptor = vk::DescriptorBufferInfo::builder()
         .buffer(input_buffers[0])
         .offset(0)
-        .range(input_alloc_size);
+        .range(input_alloc_size)
+        .build();
     let input_buffer_infos = [input_buffer_descriptor];
 
-    let output_image_descriptor = vk::DescriptorImageInfo::default()
+    let output_image_descriptor = vk::DescriptorImageInfo::builder()
         .image_layout(vk::ImageLayout::GENERAL)
         .image_view(compute_output_image_view)
-        .sampler(vk::Sampler::null());
+        .sampler(vk::Sampler::null())
+        .build();
     let output_image_infos = [output_image_descriptor];
 
     let descriptor_writes = [
-        vk::WriteDescriptorSet::default()
+        vk::WriteDescriptorSet::builder()
             .dst_set(descriptor_set)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&input_buffer_infos),
-        vk::WriteDescriptorSet::default()
+            .buffer_info(&input_buffer_infos)
+            .build(),
+        vk::WriteDescriptorSet::builder()
             .dst_set(descriptor_set)
             .dst_binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .image_info(&output_image_infos),
+            .image_info(&output_image_infos)
+            .build(),
     ];
 
     unsafe {
-        device.update_descriptor_sets(&descriptor_writes, &[]);
+        device.update_descriptor_sets(&descriptor_writes, &[] as &[vk::CopyDescriptorSet]);
     }
 
     let dispatch_x = (width + 15) / 16;
@@ -972,9 +852,7 @@ fn capture_thread_loop(
     // -----------------------------------------------------------------------
     // Runtime DMABUF probe — try exporting V4L2 MMAP buffer as DMA-BUF fd
     // and importing into Vulkan. If either step fails, fall back to the
-    // existing MMAP + memcpy path. This is the runtime driver probe for
-    // Phase 6: AMD/Intel Mesa drivers typically support cross-device DMA-BUF,
-    // NVIDIA proprietary drivers do not.
+    // existing MMAP + memcpy path.
     // -----------------------------------------------------------------------
     let device_fd = stream.handle().fd();
     let mut use_dmabuf = false;
@@ -1008,10 +886,11 @@ fn capture_thread_loop(
                 let probe_fd = expbuf.fd;
 
                 // Step 2: Try importing the DMA-BUF fd as a VkBuffer (SSBO)
-                let buffer_info = vk::BufferCreateInfo::default()
+                let buffer_info = vk::BufferCreateInfo::builder()
                     .size(input_alloc_size)
                     .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .build();
 
                 match device.create_buffer(&buffer_info, None) {
                     Ok(buffer) => {
@@ -1025,7 +904,7 @@ fn capture_thread_loop(
                         ) {
                             Ok(memory) => {
                                 match device.bind_buffer_memory(buffer, memory, 0) {
-                                    Ok(()) => {
+                                    Ok(_) => {
                                         dmabuf_fds[0] = expbuf.fd;
                                         dmabuf_imported_buffers[0] = buffer;
                                         dmabuf_imported_memories[0] = memory;
@@ -1036,7 +915,7 @@ fn capture_thread_loop(
                                             "[Camera {}] DMA-BUF bind failed: {} — using MMAP path",
                                             camera_name, e
                                         );
-                                        vulkan_device.free_device_memory(memory);
+                                        vulkan_device.free_imported_memory(memory);
                                         device.destroy_buffer(buffer, None);
                                         libc::close(probe_fd);
                                         false
@@ -1092,10 +971,11 @@ fn capture_thread_loop(
                     {
                         false
                     } else {
-                        let buffer_info = vk::BufferCreateInfo::default()
+                        let buffer_info = vk::BufferCreateInfo::builder()
                             .size(input_alloc_size)
                             .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
-                            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                            .build();
 
                         match device.create_buffer(&buffer_info, None) {
                             Ok(buffer) => {
@@ -1109,14 +989,14 @@ fn capture_thread_loop(
                                 ) {
                                     Ok(memory) => {
                                         match device.bind_buffer_memory(buffer, memory, 0) {
-                                            Ok(()) => {
+                                            Ok(_) => {
                                                 dmabuf_fds[i] = expbuf.fd;
                                                 dmabuf_imported_buffers[i] = buffer;
                                                 dmabuf_imported_memories[i] = memory;
                                                 true
                                             }
                                             Err(_) => {
-                                                vulkan_device.free_device_memory(memory);
+                                                vulkan_device.free_imported_memory(memory);
                                                 device.destroy_buffer(buffer, None);
                                                 libc::close(expbuf.fd);
                                                 false
@@ -1159,7 +1039,7 @@ fn capture_thread_loop(
                             dmabuf_imported_buffers[i] = vk::Buffer::null();
                         }
                         if dmabuf_imported_memories[i] != vk::DeviceMemory::null() {
-                            vulkan_device.free_device_memory(dmabuf_imported_memories[i]);
+                            vulkan_device.free_imported_memory(dmabuf_imported_memories[i]);
                             dmabuf_imported_memories[i] = vk::DeviceMemory::null();
                         }
                         if dmabuf_fds[i] >= 0 {
@@ -1186,7 +1066,6 @@ fn capture_thread_loop(
     let mut ping_pong_index: usize = 0;
 
     // In DMABUF mode, manually start the V4L2 stream via raw ioctls
-    // (the mmap stream allocated buffers but we bypass stream.next())
     if use_dmabuf {
         unsafe {
             for i in 0..V4L2_BUFFER_COUNT {
@@ -1336,30 +1215,34 @@ fn capture_thread_loop(
         let output_vk_buffer = pooled_buffer.buffer_ref().inner.buffer();
 
         // ---- Step 3: Update descriptor set with selected input SSBO ----
-        let input_buffer_descriptor = vk::DescriptorBufferInfo::default()
+        let input_buffer_descriptor = vk::DescriptorBufferInfo::builder()
             .buffer(input_ssbo_buffer)
             .offset(0)
-            .range(input_alloc_size);
+            .range(input_alloc_size)
+            .build();
         let input_buffer_infos = [input_buffer_descriptor];
-        let input_descriptor_write = vk::WriteDescriptorSet::default()
+        let input_descriptor_write = vk::WriteDescriptorSet::builder()
             .dst_set(descriptor_set)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&input_buffer_infos);
+            .buffer_info(&input_buffer_infos)
+            .build();
         unsafe {
-            device.update_descriptor_sets(&[input_descriptor_write], &[]);
+            device.update_descriptor_sets(&[input_descriptor_write], &[] as &[vk::CopyDescriptorSet]);
         }
 
         // ---- Step 4: Record and submit compute dispatch ----
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
 
-        let color_subresource_range = vk::ImageSubresourceRange::default()
+        let color_subresource_range = vk::ImageSubresourceRange::builder()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .base_mip_level(0)
             .level_count(1)
             .base_array_layer(0)
-            .layer_count(1);
+            .layer_count(1)
+            .build();
 
         unsafe {
             if device
@@ -1394,12 +1277,13 @@ fn capture_thread_loop(
             // after V4L2 DMA write (GPU caches may have stale data).
             let dmabuf_input_barrier = if use_dmabuf {
                 Some(
-                    vk::BufferMemoryBarrier::default()
-                        .src_access_mask(vk::AccessFlags::NONE)
+                    vk::BufferMemoryBarrier::builder()
+                        .src_access_mask(vk::AccessFlags::empty())
                         .dst_access_mask(vk::AccessFlags::SHADER_READ)
                         .buffer(input_ssbo_buffer)
                         .offset(0)
-                        .size(input_alloc_size),
+                        .size(input_alloc_size)
+                        .build(),
                 )
             } else {
                 None
@@ -1411,7 +1295,7 @@ fn capture_thread_loop(
                 };
 
             // Transition storage image: UNDEFINED → GENERAL (discard old contents)
-            let image_barrier_to_general = vk::ImageMemoryBarrier::default()
+            let image_barrier_to_general = vk::ImageMemoryBarrier::builder()
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::GENERAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1419,14 +1303,15 @@ fn capture_thread_loop(
                 .image(compute_output_image)
                 .subresource_range(color_subresource_range)
                 .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
+                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .build();
 
             device.cmd_pipeline_barrier(
                 compute_command_buffer,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::DependencyFlags::empty(),
-                &[],
+                &[] as &[vk::MemoryBarrier],
                 dmabuf_buffer_barriers,
                 &[image_barrier_to_general],
             );
@@ -1463,7 +1348,7 @@ fn capture_thread_loop(
             device.cmd_dispatch(compute_command_buffer, dispatch_x, dispatch_y, 1);
 
             // Transition storage image: GENERAL → TRANSFER_SRC_OPTIMAL
-            let image_barrier_to_transfer = vk::ImageMemoryBarrier::default()
+            let image_barrier_to_transfer = vk::ImageMemoryBarrier::builder()
                 .old_layout(vk::ImageLayout::GENERAL)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1471,36 +1356,39 @@ fn capture_thread_loop(
                 .image(compute_output_image)
                 .subresource_range(color_subresource_range)
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .build();
 
             device.cmd_pipeline_barrier(
                 compute_command_buffer,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
-                &[],
-                &[],
+                &[] as &[vk::MemoryBarrier],
+                &[] as &[vk::BufferMemoryBarrier],
                 &[image_barrier_to_transfer],
             );
 
             // Copy storage image → pooled pixel buffer (for IPC sharing)
-            let copy_region = vk::BufferImageCopy::default()
+            let copy_region = vk::BufferImageCopy::builder()
                 .buffer_offset(0)
                 .buffer_row_length(width)
                 .buffer_image_height(height)
                 .image_subresource(
-                    vk::ImageSubresourceLayers::default()
+                    vk::ImageSubresourceLayers::builder()
                         .aspect_mask(vk::ImageAspectFlags::COLOR)
                         .mip_level(0)
                         .base_array_layer(0)
-                        .layer_count(1),
+                        .layer_count(1)
+                        .build(),
                 )
                 .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
                 .image_extent(vk::Extent3D {
                     width,
                     height,
                     depth: 1,
-                });
+                })
+                .build();
 
             device.cmd_copy_image_to_buffer(
                 compute_command_buffer,
@@ -1511,21 +1399,22 @@ fn capture_thread_loop(
             );
 
             // Buffer barrier: transfer write → host/transfer read
-            let buffer_barrier = vk::BufferMemoryBarrier::default()
+            let buffer_barrier = vk::BufferMemoryBarrier::builder()
                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::TRANSFER_READ)
                 .buffer(output_vk_buffer)
                 .offset(0)
-                .size(output_buffer_size);
+                .size(output_buffer_size)
+                .build();
 
             device.cmd_pipeline_barrier(
                 compute_command_buffer,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
-                &[],
+                &[] as &[vk::MemoryBarrier],
                 &[buffer_barrier],
-                &[],
+                &[] as &[vk::ImageMemoryBarrier],
             );
 
             if device.end_command_buffer(compute_command_buffer).is_err() {
@@ -1541,7 +1430,9 @@ fn capture_thread_loop(
 
             // Submit and wait for completion
             let command_buffers = [compute_command_buffer];
-            let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+            let submit_info = vk::SubmitInfo::builder()
+                .command_buffers(&command_buffers)
+                .build();
 
             if let Err(e) = device.queue_submit(queue, &[submit_info], current_fence) {
                 if frame_num == 0 {
@@ -1634,7 +1525,7 @@ fn capture_thread_loop(
                     device.destroy_buffer(dmabuf_imported_buffers[i], None);
                 }
                 if dmabuf_imported_memories[i] != vk::DeviceMemory::null() {
-                    vulkan_device.free_device_memory(dmabuf_imported_memories[i]);
+                    vulkan_device.free_imported_memory(dmabuf_imported_memories[i]);
                 }
                 if dmabuf_fds[i] >= 0 {
                     libc::close(dmabuf_fds[i]);
@@ -1643,8 +1534,7 @@ fn capture_thread_loop(
         }
 
         device.destroy_image_view(compute_output_image_view, None);
-        device.destroy_image(compute_output_image, None);
-        vulkan_device.free_device_memory(compute_output_image_memory);
+        allocator.destroy_image(compute_output_image, compute_output_allocation);
         for k in 0..2 {
             device.destroy_fence(compute_fences[k], None);
         }
@@ -1655,9 +1545,9 @@ fn capture_thread_loop(
         device.destroy_descriptor_set_layout(descriptor_set_layout, None);
         device.destroy_shader_module(shader_module, None);
         for k in 0..2 {
-            vulkan_device.unmap_device_memory(input_memories[k]);
-            vulkan_device.free_device_memory(input_memories[k]);
-            device.destroy_buffer(input_buffers[k], None);
+            if let Some(alloc) = input_allocations[k].take() {
+                allocator.destroy_buffer(input_buffers[k], alloc);
+            }
         }
     }
 }

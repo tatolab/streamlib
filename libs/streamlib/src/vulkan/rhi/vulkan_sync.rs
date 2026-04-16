@@ -3,7 +3,8 @@
 
 //! Vulkan synchronization primitives and Metal interop.
 
-use ash::vk;
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
 
 use crate::core::{Result, StreamError};
 
@@ -13,7 +14,7 @@ use crate::core::{Result, StreamError};
 /// for cross-API synchronization.
 #[allow(dead_code)]
 pub struct VulkanSemaphore {
-    device: ash::Device,
+    device: vulkanalia::Device,
     semaphore: vk::Semaphore,
     /// Whether this was imported from Metal (affects cleanup)
     #[allow(dead_code)]
@@ -23,8 +24,8 @@ pub struct VulkanSemaphore {
 #[allow(dead_code)]
 impl VulkanSemaphore {
     /// Create a new Vulkan semaphore.
-    pub fn new(device: &ash::Device) -> Result<Self> {
-        let semaphore_info = vk::SemaphoreCreateInfo::default();
+    pub fn new(device: &vulkanalia::Device) -> Result<Self> {
+        let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
         let semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {e}")))?;
@@ -46,7 +47,7 @@ impl VulkanSemaphore {
     /// * `mtl_shared_event` - Raw pointer to MTLSharedEvent (id<MTLSharedEvent>)
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn from_metal_shared_event(
-        device: &ash::Device,
+        device: &vulkanalia::Device,
         mtl_shared_event: *const std::ffi::c_void,
     ) -> Result<Self> {
         if mtl_shared_event.is_null() {
@@ -103,7 +104,7 @@ unsafe impl Sync for VulkanSemaphore {}
 /// Vulkan fence wrapper for CPU-GPU synchronization.
 #[allow(dead_code)]
 pub struct VulkanFence {
-    device: ash::Device,
+    device: vulkanalia::Device,
     fence: vk::Fence,
 }
 
@@ -114,14 +115,14 @@ impl VulkanFence {
     /// # Arguments
     /// * `device` - The Vulkan device
     /// * `signaled` - Whether to create the fence in signaled state
-    pub fn new(device: &ash::Device, signaled: bool) -> Result<Self> {
+    pub fn new(device: &vulkanalia::Device, signaled: bool) -> Result<Self> {
         let flags = if signaled {
             vk::FenceCreateFlags::SIGNALED
         } else {
             vk::FenceCreateFlags::empty()
         };
 
-        let fence_info = vk::FenceCreateInfo::default().flags(flags);
+        let fence_info = vk::FenceCreateInfo::builder().flags(flags).build();
 
         let fence = unsafe { device.create_fence(&fence_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create fence: {e}")))?;
@@ -138,12 +139,14 @@ impl VulkanFence {
     /// * `timeout_ns` - Timeout in nanoseconds (u64::MAX for no timeout)
     pub fn wait(&self, timeout_ns: u64) -> Result<()> {
         unsafe { self.device.wait_for_fences(&[self.fence], true, timeout_ns) }
+            .map(|_| ())
             .map_err(|e| StreamError::GpuError(format!("Failed to wait for fence: {e}")))
     }
 
     /// Reset the fence to unsignaled state.
     pub fn reset(&self) -> Result<()> {
         unsafe { self.device.reset_fences(&[self.fence]) }
+            .map(|_| ())
             .map_err(|e| StreamError::GpuError(format!("Failed to reset fence: {e}")))
     }
 

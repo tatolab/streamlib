@@ -3,7 +3,8 @@
 
 //! Vulkan command queue wrapper for RHI.
 
-use ash::vk;
+use vulkanalia::prelude::v1_4::*;
+use vulkanalia::vk;
 
 use crate::core::{Result, StreamError};
 
@@ -13,18 +14,19 @@ use super::VulkanCommandBuffer;
 ///
 /// Manages the Vulkan queue and command pool for allocating command buffers.
 pub struct VulkanCommandQueue {
-    device: ash::Device,
+    device: vulkanalia::Device,
     queue: vk::Queue,
     command_pool: vk::CommandPool,
 }
 
 impl VulkanCommandQueue {
     /// Create a new command queue wrapper.
-    pub fn new(device: ash::Device, queue: vk::Queue, queue_family_index: u32) -> Self {
+    pub fn new(device: vulkanalia::Device, queue: vk::Queue, queue_family_index: u32) -> Self {
         // Create command pool for this queue family
-        let pool_info = vk::CommandPoolCreateInfo::default()
+        let pool_info = vk::CommandPoolCreateInfo::builder()
             .queue_family_index(queue_family_index)
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .build();
 
         let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
             .expect("Failed to create command pool");
@@ -38,10 +40,11 @@ impl VulkanCommandQueue {
 
     /// Create a new command buffer from this queue.
     pub fn create_command_buffer(&self) -> Result<VulkanCommandBuffer> {
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(self.command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
+            .command_buffer_count(1)
+            .build();
 
         let command_buffers = unsafe { self.device.allocate_command_buffers(&alloc_info) }
             .map_err(|e| {
@@ -51,8 +54,9 @@ impl VulkanCommandQueue {
         let command_buffer = command_buffers[0];
 
         // Begin the command buffer immediately (single-use pattern)
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
 
         unsafe {
             self.device
@@ -86,3 +90,45 @@ impl Drop for VulkanCommandQueue {
 // VulkanCommandQueue is Send + Sync because Vulkan handles are thread-safe
 unsafe impl Send for VulkanCommandQueue {}
 unsafe impl Sync for VulkanCommandQueue {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vulkan::rhi::VulkanDevice;
+
+    #[test]
+    fn test_creates_command_buffer() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let queue = device.create_command_queue_wrapper();
+        let result = queue.create_command_buffer();
+        assert!(result.is_ok(), "command buffer allocation must succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_empty_command_buffer_commit_and_wait_completes() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let queue = device.create_command_queue_wrapper();
+        let cmd = queue
+            .create_command_buffer()
+            .expect("command buffer allocation failed");
+
+        // commit_and_wait on an empty command buffer must complete without panic.
+        // This validates the vulkanalia timeline semaphore submit/wait path
+        // introduced during the ash → vulkanalia migration.
+        cmd.commit_and_wait();
+    }
+}

@@ -48,8 +48,9 @@ fn run_typed_mode() -> Result<()> {
     // =========================================================================
 
     println!("📷 Adding camera processor...");
+    let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id: None, // Use default camera (macOS: first AVFoundation device, Linux: /dev/video0)
+        device_id,
         ..Default::default()
     }))?;
     println!("✓ Camera added: {}\n", camera);

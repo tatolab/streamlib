@@ -23,7 +23,12 @@ pub struct VulkanPixelBufferPool {
 }
 
 impl VulkanPixelBufferPool {
-    /// Create a new pool, pre-allocating the given number of buffers.
+    /// Create a new pool, pre-allocating up to `pre_allocate` buffers.
+    ///
+    /// Returns successfully if AT LEAST 1 buffer was allocated. NVIDIA limits
+    /// DMA-BUF exportable allocations after swapchain creation, so partial
+    /// pre-allocation is acceptable — the pool degrades gracefully under
+    /// memory pressure rather than failing the entire pipeline.
     pub fn new(
         device: Arc<VulkanDevice>,
         width: u32,
@@ -34,11 +39,49 @@ impl VulkanPixelBufferPool {
     ) -> Result<Self> {
         let mut buffers = Vec::with_capacity(pre_allocate);
         let mut buffer_to_pool_id = HashMap::with_capacity(pre_allocate);
+        let mut last_err: Option<StreamError> = None;
 
         for i in 0..pre_allocate {
-            let buffer = VulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format)?;
-            buffers.push(Arc::new(buffer));
-            buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
+            match VulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format) {
+                Ok(buffer) => {
+                    buffers.push(Arc::new(buffer));
+                    buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "VulkanPixelBufferPool: allocation {}/{} failed: {} \
+                         (likely NVIDIA DMA-BUF limit after swapchain creation)",
+                        i + 1, pre_allocate, e
+                    );
+                    last_err = Some(e);
+                    break;
+                }
+            }
+        }
+
+        if buffers.is_empty() {
+            return Err(last_err.unwrap_or_else(|| {
+                StreamError::BufferError(
+                    "VulkanPixelBufferPool: failed to allocate any buffers".into(),
+                )
+            }));
+        }
+
+        if buffers.len() < pre_allocate {
+            tracing::warn!(
+                "VulkanPixelBufferPool: degraded to {} buffers (requested {}). \
+                 Pipeline will run with reduced parallelism.",
+                buffers.len(),
+                pre_allocate
+            );
+        } else {
+            tracing::info!(
+                "VulkanPixelBufferPool: pre-allocated {} buffers ({}x{} {:?})",
+                buffers.len(),
+                width,
+                height,
+                format
+            );
         }
 
         Ok(Self {
@@ -99,3 +142,86 @@ impl VulkanPixelBufferPool {
 // Safety: All fields are Send + Sync (Arc, AtomicUsize, Mutex)
 unsafe impl Send for VulkanPixelBufferPool {}
 unsafe impl Sync for VulkanPixelBufferPool {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vulkan::rhi::VulkanDevice;
+
+    #[test]
+    fn test_pool_acquire_returns_buffer() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let pool = VulkanPixelBufferPool::new(
+            Arc::clone(&device),
+            64, 64, 4, PixelFormat::Bgra32, 3,
+        )
+        .expect("pool creation failed");
+
+        let result = pool.acquire();
+        assert!(result.is_ok(), "acquire must succeed on a fresh pool");
+
+        let (pool_id, buf) = result.unwrap();
+        assert_eq!(buf.width, 64);
+        assert_eq!(buf.height, 64);
+        assert_ne!(pool_id, PixelBufferPoolId::new(), "pool id must be stable, not a fresh zero-id");
+    }
+
+    #[test]
+    fn test_pool_exhaustion_returns_error() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let pool = VulkanPixelBufferPool::new(
+            Arc::clone(&device),
+            64, 64, 4, PixelFormat::Bgra32, 1,
+        )
+        .expect("pool creation failed");
+
+        // Hold the only buffer so all buffers are externally referenced
+        let (_id, _held) = pool.acquire().expect("first acquire must succeed");
+
+        let result = pool.acquire();
+        assert!(
+            result.is_err(),
+            "acquire must return Err when all buffers are in use"
+        );
+    }
+
+    #[test]
+    fn test_pool_reuses_buffer_after_release() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let pool = VulkanPixelBufferPool::new(
+            Arc::clone(&device),
+            64, 64, 4, PixelFormat::Bgra32, 1,
+        )
+        .expect("pool creation failed");
+
+        let (_id, buf) = pool.acquire().expect("first acquire must succeed");
+        drop(buf); // release back to pool (Arc strong_count returns to 1)
+
+        let result = pool.acquire();
+        assert!(
+            result.is_ok(),
+            "acquire must succeed after the previously acquired buffer is released"
+        );
+    }
+}

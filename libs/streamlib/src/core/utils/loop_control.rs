@@ -98,31 +98,49 @@ mod tests {
 
     #[test]
     fn test_shutdown_event_exits_loop() {
+        use crate::iceoryx2::Iceoryx2Node;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
         use std::sync::Arc;
+        use std::time::Duration;
+
+        // Ensure PUBSUB has an iceoryx2 backend. If already initialized by a
+        // parallel test this is a no-op (OnceLock ignores the second set).
+        if let Ok(node) = Iceoryx2Node::new() {
+            PUBSUB.init("test-loop-control", node);
+        }
 
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
+        let (done_tx, done_rx) = mpsc::channel::<std::result::Result<(), ()>>();
 
-        let handle = std::thread::spawn(move || {
-            shutdown_aware_loop(|| {
+        std::thread::spawn(move || {
+            let result = shutdown_aware_loop(|| {
                 counter_clone.fetch_add(1, Ordering::Relaxed);
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(Duration::from_millis(10));
                 Ok::<LoopControl, ()>(LoopControl::Continue)
-            })
+            });
+            done_tx.send(result).ok();
         });
 
-        // Let loop run a few iterations
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Give the iceoryx2 subscriber thread time to open the service and
+        // start polling before we send the shutdown event.
+        std::thread::sleep(Duration::from_millis(150));
 
         // Publish shutdown event
         let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
         PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
 
-        // Wait for loop to exit
-        let result = handle.join();
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
+        // Wait for loop to exit with a hard timeout so the test fails clearly
+        // rather than hanging indefinitely when PUBSUB is not functional.
+        match done_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(result) => assert!(result.is_ok(), "Loop returned an error"),
+            Err(_) => panic!(
+                "test_shutdown_event_exits_loop: loop did not exit within 5 s \
+                 after shutdown event — PUBSUB may be uninitialized or the \
+                 iceoryx2 subscriber thread failed to open its service"
+            ),
+        }
 
         // Loop should have run at least once but stopped after shutdown
         let final_count = counter.load(Ordering::Relaxed);

@@ -78,6 +78,10 @@ objc2-core-graphics = "0.3.2"
 objc2-vision = "0.3.2"
 libc = "0.2.177"
 
+# Vulkan bindings (tatolab fork for VMA 3.3.0 patch)
+vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched", features = ["libloading", "provisional", "window"] }
+vulkanalia-vma = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched" }
+
 # Shader compilation
 # TODO: Add when implementing HLSL shader compilation:
 #   - hassle-rs (DXC wrapper for HLSL → SPIR-V)
@@ -103,3 +107,7 @@ streamlib-telemetry = { path = "libs/streamlib-telemetry" }
 
 # YUV/RGB conversion - REMOVED (now using GPU-accelerated VTPixelTransferSession)
 # yuv = "0.8"
+
+[patch.crates-io]
+vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched" }
+vulkanalia-sys = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched" }
