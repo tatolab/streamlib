@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Migrate RHI from ash to vulkanalia
-status: in_review
+status: completed
 description: Replace ash 0.38 (Vulkan 1.3) with vulkanalia 0.35 (Vulkan 1.4) throughout the RHI. Branch refactor/ash-to-vulkanalia from main.
 github_issue: 252
 dependencies:
