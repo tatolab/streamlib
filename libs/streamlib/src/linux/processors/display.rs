@@ -47,6 +47,7 @@ pub struct LinuxDisplayProcessor {
     frame_counter: Arc<AtomicU64>,
     render_thread: Option<JoinHandle<()>>,
     event_loop_proxy: Arc<OnceLock<EventLoopProxy<()>>>,
+    stop_called: Arc<AtomicBool>,
 }
 
 impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
@@ -68,6 +69,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
 
             self.running = Arc::new(AtomicBool::new(false));
             self.event_loop_proxy = Arc::new(OnceLock::new());
+            self.stop_called = Arc::new(AtomicBool::new(false));
 
             tracing::info!(
                 "Display {}: Setup complete ({}x{})",
@@ -96,6 +98,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         let running = Arc::clone(&self.running);
         let frame_counter = Arc::clone(&self.frame_counter);
         let event_loop_proxy = Arc::clone(&self.event_loop_proxy);
+        let stop_called = Arc::clone(&self.stop_called);
         let window_id = self.window_id.0;
         let width = self.width;
         let height = self.height;
@@ -199,6 +202,21 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     tracing::error!("Display {}: Event loop error: {}", window_id, e);
                 }
 
+                // If the event loop exited on its own (frame_limit, window close,
+                // error), publish RuntimeShutdown so the runtime stops. Skip when
+                // stop() triggered the exit — the runtime is already shutting down
+                // and iceoryx2 may be mid-teardown.
+                if !stop_called.load(Ordering::Acquire) {
+                    use crate::core::pubsub::{Event, RuntimeEvent, PUBSUB};
+                    tracing::info!(
+                        "Display {}: Event loop exited, requesting runtime shutdown",
+                        window_id
+                    );
+                    let shutdown_event =
+                        Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
+                    PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
+                }
+
                 // Clean up camera texture ring resources
                 if !app.camera_texture_ring.is_empty() {
                     let device = app.vulkan_device.device();
@@ -246,6 +264,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         tracing::trace!("Display {}: stop() called", self.window_id.0);
 
         self.running.store(false, Ordering::Release);
+        self.stop_called.store(true, Ordering::Release);
 
         // Wake the event loop so it observes running=false and calls exit().
         // Without this, the loop may be blocked in a platform event wait
@@ -255,9 +274,20 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         }
 
         if let Some(handle) = self.render_thread.take() {
-            handle
-                .join()
-                .map_err(|_| StreamError::Runtime("Render thread panicked".into()))?;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                handle
+                    .join()
+                    .map_err(|_| StreamError::Runtime("Render thread panicked".into()))?;
+            } else {
+                tracing::warn!(
+                    "Display {}: Render thread did not exit within 2s, detaching",
+                    self.window_id.0
+                );
+            }
         }
 
         tracing::info!("Display {}: Stopped", self.window_id.0);

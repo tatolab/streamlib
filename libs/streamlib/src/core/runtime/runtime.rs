@@ -1012,13 +1012,11 @@ impl StreamRuntime {
             }
         }
 
-        let listener = ShutdownListener {
-            flag: shutdown_flag_clone.clone(),
-        };
-        PUBSUB.subscribe(
-            topics::RUNTIME_GLOBAL,
-            Arc::new(parking_lot::Mutex::new(listener)),
-        );
+        let shutdown_listener: Arc<parking_lot::Mutex<dyn EventListener>> =
+            Arc::new(parking_lot::Mutex::new(ShutdownListener {
+                flag: shutdown_flag_clone.clone(),
+            }));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener));
 
         // On macOS, run the NSApplication event loop (required for GUI)
         #[cfg(target_os = "macos")]
